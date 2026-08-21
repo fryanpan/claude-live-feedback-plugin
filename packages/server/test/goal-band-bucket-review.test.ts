@@ -326,7 +326,10 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       const { ws } = board({ lead: null });
       submit(ws.id, [{ key: 'g1', title: 'Ship it' }]);
       // Seat the lead explicitly so the bystander cannot claim an empty seat.
-      store.setLeadAgent(ws.id, LEAD, { actor: PERSON });
+      // LEAD has no attachment record yet, so it must SELF-declare — the one
+      // form the unknown-id guard exempts (declare-then-attach bootstrap).
+      const seat = store.setLeadAgent(ws.id, LEAD, { actor: { id: LEAD, name: LEAD } });
+      if (!seat.ok) throw new Error('fixture: declaration refused');
       const bystander = store.attachAgent(ws.id, { agentId: OTHER, runtime: 'claude-code-local' });
       expect(bystander.ok && bystander.pendingBucketReview).toBeUndefined();
       expect(existsSync(pendingBucketReviewPath(dataDir, ws.id))).toBe(true);
@@ -354,9 +357,15 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       submit(ws.id, [{ key: 'g1', title: 'Ship it' }]);
       store.attachAgent(ws.id, { agentId: OTHER, runtime: 'claude-code-local' });
       requests.length = 0;
-      // OTHER claimed the empty seat by attaching; hand it to LEAD, who is
-      // NOT live — nothing goes out, the request keeps waiting.
-      store.setLeadAgent(ws.id, LEAD, { actor: PERSON });
+      // OTHER claimed the empty seat by attaching; the seat moves to LEAD,
+      // who is NOT live — nothing goes out, the request keeps waiting. LEAD
+      // has no attachment record, so it SELF-declares (the unknown-id guard
+      // exempts that), with takeover because OTHER is live in the seat.
+      const seat = store.setLeadAgent(ws.id, LEAD, {
+        actor: { id: LEAD, name: LEAD },
+        takeover: true,
+      });
+      if (!seat.ok) throw new Error('fixture: declaration refused');
       expect(bucketReviews().length).toBe(0);
       // Now LEAD is live and the seat moves to them: it goes out.
       store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });

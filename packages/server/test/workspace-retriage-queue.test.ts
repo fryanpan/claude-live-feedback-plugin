@@ -238,7 +238,11 @@ describe('durable goal-edit re-triage', () => {
     const res = store.setWorkspaceGoal(ws.id, 'New goal.', { actor: PERSON });
     if (!res.ok) throw new Error('unexpected');
 
-    store.setLeadAgent(ws.id, OTHER, { actor: PERSON });
+    // OTHER has not attached yet, so the seat change is a SELF-declaration —
+    // the one form that needs no attachment record (declare-then-attach is a
+    // legal bootstrap order). A person naming a never-attached id is refused.
+    const seat = store.setLeadAgent(ws.id, OTHER, { actor: { id: OTHER, name: 'Bystander' } });
+    if (!seat.ok) throw new Error('fixture: declaration refused');
     const nowLead = store.attachAgent(ws.id, { agentId: OTHER, runtime: 'claude-code-local' });
     if (!nowLead.ok) throw new Error('fixture');
     expect(nowLead.pendingRetriage?.batchId).toBe(res.retriage.batchId ?? '');
@@ -275,7 +279,10 @@ describe('durable goal-edit re-triage', () => {
     const res = store.setWorkspaceGoal(ws.id, 'New goal.', { actor: PERSON });
     if (!res.ok) throw new Error('unexpected');
 
-    store.setLeadAgent(ws.id, OTHER, { actor: PERSON }); // OTHER never attached
+    // OTHER never attached, so it takes the seat by SELF-declaring (the form
+    // that needs no attachment record); it is still away until it attaches.
+    const seat = store.setLeadAgent(ws.id, OTHER, { actor: { id: OTHER, name: 'Bystander' } });
+    if (!seat.ok) throw new Error('fixture: declaration refused');
     expect(store.getPendingRetriage(ws.id)?.taskIds.length).toBe(1);
     const attach = store.attachAgent(ws.id, { agentId: OTHER, runtime: 'claude-code-local' });
     if (!attach.ok) throw new Error('fixture');

@@ -750,14 +750,24 @@ describe('attachment routes + triage bridge', () => {
     expect(sse.events).toContain('triage.requested');
   });
 
-  it('POSITIVE CONTROL — naming an ABSENT agent as lead still queues voice and re-triage', async () => {
+  it('POSITIVE CONTROL — naming an UNREACHABLE agent as lead still queues voice and re-triage', async () => {
     // The asymmetry that keeps delivery honest. Handing the seat to an agent
-    // who is not there must NOT create an attachment for it: with one, the
+    // who is not on the wire must NOT forge its liveness: otherwise the
     // board would report a live lead, voice would route to 'agent', and the
     // note would reach nobody at all — strictly worse than a queue, because
     // nothing anywhere would say it had been missed.
-    const wsId = await makeWorkspace('third-party-hub');
+    //
+    // The handover target has to be an id the board has a RECORD of (a
+    // never-seen id is now refused outright — the unknown-lead-agent guard),
+    // so this agent attached once but holds no stream: registered, named
+    // lead, and unreachable, which is exactly the case queuing exists for.
+    // The seat starts with a seeded lead so the attach cannot claim it.
+    const wsId = await makeWorkspace('third-party-hub', 'agent-original');
     await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'An open row' });
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-elsewhere',
+      runtime: 'claude-code-local',
+    });
     const seat = await put(`/api/workspaces/${wsId}/lead`, {
       leadAgentId: 'agent-elsewhere',
       author: PERSON,
@@ -767,7 +777,9 @@ describe('attachment routes + triage bridge', () => {
     const list = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
       attachments: AgentAttachment[];
     };
-    expect(list.attachments).toHaveLength(0);
+    // Only the agent's OWN attach is on record — neither the seeded seat nor
+    // the handover invented one.
+    expect(list.attachments.map((a) => a.agentId)).toEqual(['agent-elsewhere']);
 
     const voice = (await (
       await post(`/api/workspaces/${wsId}/voice`, {
