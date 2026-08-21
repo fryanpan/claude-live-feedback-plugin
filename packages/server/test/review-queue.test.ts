@@ -949,6 +949,49 @@ describe('reviewThreadItems — a row is an ask, not a reply', () => {
       ]),
     ).toEqual([]);
   });
+
+  // One ask naming two roster people is still ONE question on ONE thread —
+  // `findAsk` returns the first matching span and the thread pushes at most
+  // one row, so a wider audience must never mean a duplicated row.
+  it('emits exactly one row when the ask addresses two known people', () => {
+    // A second person on the seed doc, so the roster holds two names. The
+    // author is spelled out because the `comment` fixture's `kind: 'person'`
+    // shorthand always names Jordan.
+    const casey = {
+      id: 'person-casey',
+      name: 'Casey',
+      kind: 'person',
+      color: '#000000',
+    } as unknown as Comment['author'];
+    const rows = reviewThreadItems({
+      tasks: [{ id: 'tk-m', title: 'Ship the widget', bodyDocId: 'task:tk-m' }],
+      docs: [{ docId: 'd-seed', title: 'Plan' }],
+      source: {
+        threadsOf: (docId: string) =>
+          docId === 'task:tk-m'
+            ? [
+                thread({
+                  id: 'th-8',
+                  comments: [comment({ text: 'Jordan and Casey — ship it?', ts: T0 + 5 })],
+                }),
+              ]
+            : docId === 'd-seed'
+              ? [
+                  thread({
+                    id: 'th-seed',
+                    comments: [
+                      comment({ kind: 'person', text: 'here', ts: T0 }),
+                      comment({ author: casey, text: 'also here', ts: T0 + 1 }),
+                    ],
+                  }),
+                ]
+              : [],
+      },
+    }).filter((i) => i.threadId !== 'th-seed');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].direct).toBe(true);
+    expect(rows[0].ask).toContain('ship it?');
+  });
 });
 
 // ── Ticket-borne review items join the same declared band ───────────────────

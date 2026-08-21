@@ -1188,7 +1188,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // true exactly when the comment carries the declaration. Read from
             // the item rather than discovered from that function's error
             // string: it decides which existing room write voice calls, and a
-            // plain open question (the `unreplied` band — most of the queue)
+            // plain open question (the `unreplied` band — since the membership
+            // narrowing, direct asks only rather than most of the queue)
             // gets a plain threaded reply instead of a silent deferral.
             answerable: item.review !== undefined,
             ask: item.ask,
