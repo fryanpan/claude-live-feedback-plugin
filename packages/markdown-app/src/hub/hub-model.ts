@@ -6,6 +6,7 @@
  */
 import type { ReviewPayload } from '@feedback/core';
 import type { StoredGoalSummary } from '@feedback/core/goal-summary';
+import { tabTitle } from '../tab-title.ts';
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
 
@@ -2017,6 +2018,25 @@ export function paneForNav(nav: HubNav): HubPane {
  *  way back. */
 export function tabForNav(nav: HubNav): BoardTab | undefined {
   return nav === 'mine' ? 'mine' : nav === 'tasks' ? 'all' : undefined;
+}
+
+/** What each destination adds to the browser tab. Tasks adds nothing: it is
+ *  the board itself, so its title is just the workspace's name. */
+const NAV_TAB_LABEL: Record<HubNav, string> = {
+  home: 'Home',
+  tasks: '',
+  mine: 'My Tasks',
+  activity: 'Activity',
+};
+
+/**
+ * The browser tab's title for a hub. The workspace name leads, because that
+ * is what tells two open hubs apart; the pane follows, so that moving between
+ * Home, Tasks and Activity is visible in the tab strip rather than only in
+ * the URL.
+ */
+export function hubTabTitle(workspaceName: string, nav: HubNav): string {
+  return tabTitle(workspaceName, NAV_TAB_LABEL[nav]);
 }
 
 /** The brief as `GET /api/workspaces/:id/home` ships it. */
