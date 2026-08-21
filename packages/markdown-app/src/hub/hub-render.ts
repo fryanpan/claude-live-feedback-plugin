@@ -14,8 +14,7 @@ import {
   transitionUnproven,
 } from '@feedback/core';
 import type { ReviewShape } from '@feedback/core';
-import {
-} from '@feedback/core/goal-summary';
+import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
 import {
   type ComposerSelection,
