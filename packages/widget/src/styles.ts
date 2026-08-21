@@ -28,8 +28,13 @@ export const widgetStyles = `
   transition: transform 120ms ease;
 }
 .fab:hover { transform: scale(1.06); }
-.fab.open { transform: rotate(45deg); }
 .fab-icon { display:block; line-height: 1; }
+/* Closed shows the speech bubble; open swaps to a plain close glyph. The old
+   pencil rotated 45deg when open — a bubble tilted that way just looks broken,
+   so the swap replaces the rotation outright. */
+.fab .fab-icon-close { display: none; font-size: 26px; }
+.fab.open .fab-icon-bubble { display: none; }
+.fab.open .fab-icon-close { display: block; }
 
 .panel {
   position: fixed;
