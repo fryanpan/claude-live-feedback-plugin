@@ -4042,7 +4042,11 @@ export function renderTaskDetail(
     note.className = 'hub-blocked-note';
     const k = document.createElement('span');
     k.className = 'hub-decide-k hub-blocked-k';
-    k.textContent = 'Blocked';
+    // "Blocking", because this task IS the blocker: `handlers.blocked` is a
+    // humanBlockerRow — the reader's own open task other work waits on — and
+    // the line beside the chip says so ("Blocking 2 tasks: …"). "Blocked"
+    // here asserted the opposite dependency direction, on the same card.
+    k.textContent = 'Blocking';
     const line = document.createElement('p');
     line.textContent = blockedNoteLine(handlers.blocked);
     note.append(k, line);
