@@ -367,6 +367,23 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * counting words can undercount a field somebody wrote well (a false gap, i.e.
  * noise on a good payload), never pass a field that is absent.
  */
+/**
+ * The one mapping between the agent-facing vocabulary and the stored one.
+ *
+ * Bryan renamed the field to `review_type` and the open-ended kind to
+ * `"question"` (2026-08-21) so the value stops colliding with "review item",
+ * the general term. The stored spelling stays `shape: 'review'` — ~168
+ * persisted docs and every pre-rename bundle already say it, and a stored
+ * vocabulary migration would rewrite records for no reader's benefit. So:
+ * new spellings are accepted at every door and normalized here; old spellings
+ * are accepted forever for the callers nobody can restart.
+ */
+export function normalizeReviewType(value: unknown): ReviewShape | undefined {
+  if (value === 'decision') return 'decision';
+  if (value === 'review' || value === 'question') return 'review';
+  return undefined;
+}
+
 export function checkReviewPayload(input: unknown): ReviewCheck {
   const errors: string[] = [];
   const gaps: ReviewGap[] = [];
@@ -377,10 +394,10 @@ export function checkReviewPayload(input: unknown): ReviewCheck {
   }
   const p = input;
 
-  const shape = p.shape;
-  if (shape !== 'decision' && shape !== 'review') {
+  const shape = normalizeReviewType(p.review_type ?? p.shape);
+  if (shape === undefined) {
     fail(
-      "review.shape must be 'decision' (a choice between named options) or 'review' (read this and tell me what you think).",
+      "review.review_type must be 'decision' (a choice between named options) or 'question' (read this and tell me what you think). The legacy spellings — field 'shape', value 'review' — are accepted too.",
     );
   }
 
@@ -556,8 +573,8 @@ export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
  */
 export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   if (!isPlainObject(value)) return undefined;
-  const shape = value.shape;
-  if (shape !== 'decision' && shape !== 'review') return undefined;
+  const shape = normalizeReviewType(value.review_type ?? value.shape);
+  if (shape === undefined) return undefined;
   const headline = value.headline;
   const why = value.why;
   if (typeof headline !== 'string' || headline.trim() === '') return undefined;

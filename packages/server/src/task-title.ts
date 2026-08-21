@@ -2,7 +2,7 @@
  * Title helpers that survived the format-check removal.
  *
  * This module used to derive "title gaps" — a code-written check of the
- * title standard (`<Person> can <achieve goal X> by <describe action>`).
+ * title standard (now `<persona> can <do x> so that <goal y>`).
  * Bryan moved that judgment into an LLM prompt on 2026-08-18 (the
  * `claude-workspaces:reviewing-task-shape` skill): the server now ROUTES every
  * attributed create/rename/body edit to the workspace lead as a

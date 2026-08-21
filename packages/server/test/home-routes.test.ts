@@ -390,3 +390,118 @@ describe('home routes — generated brief (stub summarizer)', () => {
     expect(last.system).toContain('Only ever write ONE sentence.');
   });
 });
+
+describe('the queue count matches what Home places — thread rows', () => {
+  /**
+   * The brief's closing line is `homeQueueTotal`'s only surface (presence /
+   * absence — the line never states a number), and that count is a PROMISE
+   * about the list Home renders. This suite pins the promise across the
+   * 2026-08-21 membership change end-to-end: a status note ships no row and
+   * counts nothing; a surviving direct ask and a declared item each ship one
+   * row, are placed by the browser, and flip the line; a person's reply
+   * drains the direct ask and flips it back. Before the change the count
+   * included inferred rows Home never drew — "something needs you" printed
+   * over a list that showed nothing.
+   */
+  let h: ReturnType<typeof makeHarness>;
+  let ws: string;
+  let taskId: string;
+
+  beforeAll(async () => {
+    h = makeHarness();
+    ws = await makeWorkspace(h);
+    const created = await h.post(`/api/workspaces/${ws}/tasks`, {
+      title: 'Sweep the cache dir',
+      body: 'Agent can sweep the cache dir so that the disk stops filling up.',
+      author: AGENT,
+      assignee: AGENT.name,
+    });
+    expect(created.status).toBe(200);
+    taskId = ((await created.json()) as { task: { id: string } }).task.id;
+  });
+  afterAll(async () => {
+    await h.handle.stop();
+    rmSync(h.dataDir, { recursive: true, force: true });
+  });
+
+  const briefLine = async (): Promise<string> => {
+    const res = await h.local(`/api/workspaces/${ws}/home?user=Bryan`);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as HomePayload).brief.markdown;
+  };
+  const rows = async (): Promise<Array<Record<string, unknown>>> => {
+    const res = await h.local(`/api/workspaces/${ws}/review-items`);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { items: Array<Record<string, unknown>> }).items;
+  };
+
+  it('counts a status note as nothing, because Home draws nothing for it', async () => {
+    const opened = await h.post(`/api/docs/task:${taskId}/threads`, {
+      anchor: { kind: 'subject' },
+      text: 'Started on the sweep; nothing needs a look yet.',
+      author: AGENT,
+    });
+    expect(opened.status).toBe(200);
+    // The route ships no row for it, so the count agrees with the empty list.
+    expect(await rows()).toEqual([]);
+    expect(await briefLine()).toContain('Nothing is queued for your review right now.');
+  });
+
+  it('counts a surviving direct ask, and stops when a person answers it', async () => {
+    // A person speaks first — that seeds the roster of addressable names the
+    // ask detector reads — then the agent asks them by name.
+    const opened = await h.post(`/api/docs/task:${taskId}/threads`, {
+      anchor: { kind: 'subject' },
+      text: 'How is the sweep going?',
+      author: PERSON,
+    });
+    expect(opened.status).toBe(200);
+    const threadId = ((await opened.json()) as { thread: { id: string } }).thread.id;
+    const asked = await h.post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
+      text: 'Bryan — should the sweep also purge the staging dir?',
+      author: AGENT,
+    });
+    expect(asked.status).toBe(200);
+
+    const shipped = await rows();
+    expect(shipped).toHaveLength(1);
+    expect(shipped[0]).toMatchObject({ kind: 'task-thread', band: 'unreplied', direct: true });
+    expect(await briefLine()).toContain('What needs your review is queued below.');
+
+    // The person's reply ends the unanswered run — no resolve, no flag.
+    const answered = await h.post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
+      text: 'Yes, purge it too.',
+      author: PERSON,
+    });
+    expect(answered.status).toBe(200);
+    expect(await rows()).toEqual([]);
+    expect(await briefLine()).toContain('Nothing is queued for your review right now.');
+  });
+
+  it('counts a declared item until it is resolved', async () => {
+    const declared = await h.post(`/api/docs/task:${taskId}/threads`, {
+      anchor: { kind: 'subject' },
+      text: 'The sweep schedule needs a call before this merges.',
+      author: AGENT,
+      review: {
+        shape: 'review',
+        headline: 'Pick the sweep schedule',
+        why: 'The cron line ships with this change.',
+      },
+    });
+    expect(declared.status).toBe(200);
+    const threadId = ((await declared.json()) as { thread: { id: string } }).thread.id;
+
+    const shipped = await rows();
+    expect(shipped).toHaveLength(1);
+    expect(shipped[0]).toMatchObject({ kind: 'task-thread', band: 'declared' });
+    expect(await briefLine()).toContain('What needs your review is queued below.');
+
+    const resolved = await h.post(`/api/docs/task:${taskId}/threads/${threadId}/resolve`, {
+      author: PERSON,
+    });
+    expect(resolved.status).toBe(200);
+    expect(await rows()).toEqual([]);
+    expect(await briefLine()).toContain('Nothing is queued for your review right now.');
+  });
+});

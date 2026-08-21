@@ -48,11 +48,12 @@ function decision(overrides: Partial<HubTask> = {}): HubTask {
 /**
  * A thread an agent DECLARED as a review item.
  *
- * Declaring is what puts a thread in the queue now, so this is the shape the
- * walkthrough sees; `note()` below is the undeclared twin, which lands in the
- * demoted band and never reaches a card. The headline repeats the `ask`
- * because `ask` IS the headline for a declared item — the queue reads the
- * author's words rather than deriving a title from the comment.
+ * Declaring is one of the two ways a thread reaches the queue (the other is a
+ * surviving direct ask — the server ships nothing else since 2026-08-21, and
+ * the client places every row it ships); `note()` below is the undeclared
+ * twin. The headline repeats the `ask` because `ask` IS the headline for a
+ * declared item — the queue reads the author's words rather than deriving a
+ * title from the comment.
  */
 function threadItem(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
   const base: ReviewThreadItem = {
@@ -324,8 +325,10 @@ describe('the walkthrough matches the approved mockup', () => {
 
     renderReviewWalkthrough(root, reviewQueue([], [threadItem({ direct: true })], NOW), 0, walk());
     // A declared item reads as what it declared, not as the surface it arrived
-    // on — the same words a declared decision on a task would carry.
-    expect((root.querySelector('.hub-walk-k-review') as HTMLElement).textContent).toBe('Review');
+    // on — the same words a declared decision on a task would carry. The label
+    // is 'Question' since Bryan's 2026-08-21 rename; the tone token (and so
+    // the class name) deliberately stays 'review'.
+    expect((root.querySelector('.hub-walk-k-review') as HTMLElement).textContent).toBe('Question');
     // The chip is left out rather than filled with a placeholder when there
     // is no body of work to name.
     expect(root.querySelector('.hub-walk-k-count')).toBeNull();
@@ -544,19 +547,18 @@ describe('renderReviewWalkthrough — comments', () => {
   // A typed question is regularly a paragraph. The mockup's card is a SHORT
   // title plus the ask in full, and we have no short title to read — so the
   // heading is derived and the quote carries the words.
-  // The FALLBACK path: a card built from a thread that declared nothing. The
-  // banding keeps those out of `queue.items`, so this drives the renderer
-  // directly rather than through `reviewQueue` — the branch is what stops an
-  // undeclared item, if one ever reaches a card, from showing a clipped
-  // heading with the comment itself nowhere on the page.
-  it('headlines a long question and keeps the whole of it in the quote', () => {
+  // This is also the MEMBERSHIP pin: a direct ask that nobody declared is a
+  // real queue row now (the server only ships surviving asks, and the client
+  // places every row it ships), so Review All reaches this card through
+  // `reviewQueue` itself — no forced queue, no shelf it could hide on.
+  it('walks an undeclared direct ask, headlined short with the whole question quoted', () => {
     const ask =
       'The card head puts the wait at the end of the line, which wraps onto its own row at 430px. ' +
       'Do you want it kept there, or moved under the title where it has the width?';
-    const undeclared = reviewQueue([], [note({ ask, direct: true })], NOW);
-    expect(undeclared.items).toHaveLength(0);
-    const forced = { ...undeclared, items: undeclared.unreplied, total: 1 };
-    renderReviewWalkthrough(root, forced, 0, walk());
+    const queue = reviewQueue([], [note({ ask, direct: true })], NOW);
+    expect(queue.items).toHaveLength(1);
+    expect(queue.total).toBe(1);
+    renderReviewWalkthrough(root, queue, 0, walk());
     const title = (root.querySelector('.hub-walk-title') as HTMLElement).textContent ?? '';
     expect(title.length).toBeLessThan(ask.length);
     expect(title.startsWith('The card head puts the wait')).toBe(true);
@@ -571,10 +573,12 @@ describe('renderReviewWalkthrough — comments', () => {
   // delivering something that is not. A DECLARED item is the opposite case:
   // a declaration IS an ask, in so many words, whatever `direct` measured.
   it('does not call an inferred status note a question, but a declaration is always an ask', () => {
+    // Through `reviewQueue` itself: the demoted shelf this used to force a row
+    // out of is gone since 2026-08-21 — the client places every row the server
+    // ships — so the inferred card is reached the way a reader reaches it.
     const undeclared = reviewQueue([], [note({ ask: 'Merged and deployed.' })], NOW);
-    expect(undeclared.items).toHaveLength(0);
-    const forced = { ...undeclared, items: undeclared.unreplied, total: 1 };
-    renderReviewWalkthrough(root, forced, 0, walk());
+    expect(undeclared.items).toHaveLength(1);
+    renderReviewWalkthrough(root, undeclared, 0, walk());
     const meta = root.querySelector('.hub-walk-wait') as HTMLElement;
     expect(meta.textContent).toContain('Posted by Helper');
     expect(meta.textContent).not.toMatch(/asked/i);
