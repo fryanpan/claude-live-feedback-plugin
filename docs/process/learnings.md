@@ -625,6 +625,12 @@ Every count that went wrong had one.
 - Can't add new inline marks by default. Replacement strings with `**bold**`
   / `*italic*` / `[link](url)` syntax land as literal characters unless you
   pass `parseInlineMarks: true`, which interprets them as marks.
+- **`find` matches the doc's PLAIN text, so markdown in the find string never
+  matches.** Searching for `**Gap:** the queue dumps me…` returns `no-match`
+  against a doc that plainly contains it, because the bold is a mark and not
+  characters. Strip the syntax from `find` (keep it in `replace`, with
+  `parseInlineMarks`). The failure is silent in the worst way: `no-match` reads
+  as "the text isn't there" rather than "you spelled it wrong".
 - **It used to DELETE marks that were already there, silently — that half is
   fixed, and it was data loss rather than a missing feature.** Until the
   covering-marks fix, the replacement was re-inserted with NO attributes, and
@@ -3040,3 +3046,56 @@ Every count that went wrong had one.
   without having looked. This is the neighbouring case and the reason it is
   filed separately: **there was no check at all, and its absence looked the same
   as a passing one.**
+
+## A client-rendered route answers 200 for every id it recognises, so a status check cannot tell the right URL from the wrong one
+
+Measured 2026-08-21, linking three mockups from a task. Mockups are served at
+`/mockup/<docId>`; I wrote `/review/<docId>`, checked all three with
+`curl -o /dev/null -w '%{http_code}'`, got `200 200 200`, and told Bryan they
+were "verified live". He opened them and none of them worked.
+
+`/review/` is the markdown-editor route. It recognises a real docId and returns
+the SPA shell — status 200, correct content-type, a page that renders the wrong
+application around content that was never markdown. The check even had a
+negative control (`/review/definitely-not-a-doc` → 404), and the control
+**passed while proving nothing**: it showed the route rejects an unknown id, not
+that it rejects a *valid id belonging to another route*. That is the discrimination
+the claim needed and the one the probe never made.
+
+- **On any client-rendered surface, a status code is a claim about routing, not
+  about content.** Verify by fetching the body and grepping for something only
+  the real page contains — here, `<title>Home pane — catch up, then decide` — or
+  by comparing served bytes against the source file. `705` bytes against a
+  `60,903`-byte file is unambiguous; `200` is not.
+- **Pick the route whose 404 is meaningful.** `/mockup/<id>` really does 404 for
+  a wrong or unbound id, so the same one-line check is sound there and vacuous
+  next door. Before trusting a status probe, ask which failures it is *able* to
+  express.
+- Same family as "a negative test needs a positive control", with the twist that
+  here a control existed. **A control only licenses the claim it actually
+  discriminates.** Mine separated "id exists" from "id doesn't"; the claim I made
+  was about "right route" versus "wrong route".
+
+### The bug the vacuous check was hiding
+
+Chasing the same links turned up why one of them was really broken, and it is
+worth its own note: **`bind_mock`'s tool description documents behaviour that
+has no implementation.** It says *"Idempotent — calling twice on the same docId
+is safe; just updates the bound source path."* Rebinding an existing docId to a
+new path returns `200` with the OLD `sourceUrl` still in the response, and goes
+on serving the old (here: missing) file.
+
+In `rooms.ts`, a restored room reconciles only `setId` against the incoming
+`init`; `sourceUrl` is assigned solely in the new-room branch. So the field is
+write-once in practice, and the repair verb for a moved file cannot repair it.
+
+- **A tool description is not evidence about the tool.** It is the most
+  authoritative-sounding text in the loop and nothing tests it, so a sentence
+  can outlive the behaviour it described — or, as here, describe behaviour that
+  never shipped. When a tool reports success and the world did not change, read
+  the code before re-reading the docstring.
+- The trigger that exposed it was an unrelated rename (`live-feedback` →
+  `claude-workspaces` in the state dir) moving a bound file out from under its
+  doc. Blast radius was measured before filing — exactly **one** doc carried a
+  stale path — because "the rename orphaned the bindings" is the more dramatic
+  claim and was not the true one.
