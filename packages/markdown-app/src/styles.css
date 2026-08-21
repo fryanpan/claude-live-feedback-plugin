@@ -5064,6 +5064,38 @@ body.threads-resizing {
 .thread-tag {
   color: var(--fg-muted);
 }
+/* "Decision needed", on its own row above the head — outside both folding
+   slots, so a reader scanning the column sees it without opening anything.
+
+   Its own row and not a chip beside the name: the head is a flex row in a
+   300px column, and sharing it clipped the author to about seven characters at
+   1180px, which is where two different askers stopped being distinguishable.
+   ~18px, and only on the cards that carry a decision. */
+.thread-flag-row {
+  display: flex;
+  margin-bottom: 4px;
+}
+/* The same amber tone tokens as `.thread-item-k-decision` inside the opened
+   item card, because it is the same fact stated one fold earlier. Sized to its
+   text rather than to the row, so it reads as a chip and not as a banner. */
+.thread-decision-flag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  color: var(--warn-fg, #b25e09);
+  background: var(--warn-wash, #fff4e5);
+}
+/* Answered: the same fact, no longer a request. Muted so an open decision is
+   the only amber thing in the column. */
+.thread-decision-flag.is-answered {
+  color: var(--fg-muted);
+  background: var(--bg-hover);
+}
 /* Lines truncate rather than wrap, so a card cannot exceed its rows at any
    width. Shared by every one-line row on the card. */
 .thread .clip {
@@ -6224,6 +6256,119 @@ body.composer-open #editor > .ProseMirror ::selection {
 }
 .thread-view-reply textarea:focus {
   border-color: var(--accent);
+}
+
+/* ================= LONG-THREAD MODAL (desktop / tablet) =================
+   The balloon column is 300px. An 80-character measure wrapped into it is
+   about six words a line, so a long exchange — or a decision, whose options
+   are buttons — is unreadable there at any height. Above the threshold in
+   long-thread.ts the thread stops expanding in place and opens here.
+
+   Sized for the tablet tier deliberately, because that is where almost every
+   screen lands and its scarce axis is HEIGHT: an iPad in landscape is 1180x820
+   with roughly 750px usable. So the width is generous (760px against the
+   column's 300) and the height is capped BELOW the viewport with the scroll
+   inside the body — the document behind must never be what moves when the
+   reader reaches the reply box.
+
+   Sibling of the full-screen thread view above, not a variant of it: that one
+   is the phone's slide-up sheet and owns ≤1100px. This one is never shown
+   there — the caller checks the width, because a modal on top of a sheet is
+   two dismissable layers over one conversation. */
+
+.thread-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1190;
+  background: rgba(15, 18, 22, 0.42);
+}
+.thread-modal {
+  position: fixed;
+  z-index: 1200;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(760px, calc(100vw - 64px));
+  max-height: min(84vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.thread-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--sans);
+}
+.thread-modal-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.thread-modal-close {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 20px;
+  line-height: 1;
+}
+/* The one scroller. `min-height: 0` because a flex item's default `auto`
+   floor is its content, which would push the modal past its own max-height
+   and put the scrollbar on the page instead of in here. */
+.thread-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 18px;
+}
+/* The card is the drawer's card, and in here it is the whole content — no
+   second border around it inside a bordered dialog, and no hover lift or
+   pointer, because it is not a thing you click to open any more. */
+.thread-modal-body .thread {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: default;
+  box-shadow: none;
+  background: transparent;
+}
+.thread-modal-body .thread:hover {
+  background: transparent;
+}
+/* Room to read: the prose in here gets the measure the column could not give
+   it, and the reply box gets more than two rows. */
+.thread-modal-body .thread-message,
+.thread-modal-body .comment .body,
+.thread-modal-body .thread-item-body {
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+.thread-modal-body .thread-reply textarea,
+.thread-modal-body .thread-reply .md-composer-surface {
+  min-height: 76px;
+}
+/* Options side by side once there is width for them — the shape that made a
+   decision unreadable in a 300px column. */
+.thread-modal-body .thread-item-options {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.thread-modal-body .thread-item-option {
+  /* `width: 100%` on the base rule is what makes a column of buttons; in a row
+     it would pin every option to a full line and defeat the wrap. */
+  width: auto;
+  flex: 1 1 240px;
 }
 
 /* ================= UTILITIES ================= */
