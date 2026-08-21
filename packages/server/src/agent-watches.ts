@@ -212,6 +212,22 @@ export class AgentWatches {
     return { agentId, watches: this.entries(rec), added, removed };
   }
 
+  /**
+   * The reverse question: which agents hold this key durably? This is what
+   * ADDRESSES a queued comment — the durable watch set is the standing
+   * statement "deliver this board's events to me", surviving the stream that
+   * carries them. Shared identities are excluded for the same reason `list`
+   * refuses them: a category is not somebody a delivery can be owed to.
+   */
+  agentsWatching(key: string): string[] {
+    const out: string[] = [];
+    for (const [agentId, rec] of Object.entries(this.state.agents)) {
+      if (SHARED_AGENT_IDS.has(agentId)) continue;
+      if (rec.watches[key]) out.push(agentId);
+    }
+    return out;
+  }
+
   private entries(rec: AgentRecord): WatchEntry[] {
     return Object.entries(rec.watches)
       .map(([key, meta]) => ({ key, since: meta.since }))
