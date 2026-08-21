@@ -367,3 +367,48 @@ describe('the markdown composer is styled', () => {
     }
   });
 });
+
+/**
+ * A mount changes the composer's height, and in production it ALWAYS happens
+ * in a microtask — the loader cache stores the promise — so whatever measured
+ * the box (a thread card's slot height, a balloon column's stack) measured the
+ * bare textarea and is stale the moment the editor lands. The mount announces
+ * itself so those measurements can follow. The silent version shipped: a
+ * reply box hidden on a doc comment balloon — the grown face clipped by a
+ * slot height written before the editor existed.
+ */
+describe('announcing the mount', () => {
+  function listenOnForm(): Event[] {
+    const seen: Event[] = [];
+    form.addEventListener('lf-composer-mounted', (e) => seen.push(e));
+    return seen;
+  }
+
+  it('fires one bubbling lf-composer-mounted event when the async chunk lands', async () => {
+    setComposerEditorLoader(() => Promise.resolve(realChunk));
+    const seen = listenOnForm();
+    attachMarkdownComposer(ta);
+    // POSITIVE CONTROL: nothing is mounted yet, and nothing has announced.
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).toBeNull();
+    expect(seen).toHaveLength(0);
+    await frame();
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  it('announces a synchronous mount the same way', () => {
+    setComposerEditorLoader(() => realChunk);
+    const seen = listenOnForm();
+    attachMarkdownComposer(ta);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('says nothing when the chunk never arrives — the textarea did not change height', async () => {
+    setComposerEditorLoader(() => Promise.reject(new Error('offline')));
+    const seen = listenOnForm();
+    attachMarkdownComposer(ta);
+    await frame();
+    expect(surfaceOf(ta)).toBeNull(); // giveUp ran: plain textarea again
+    expect(seen).toHaveLength(0);
+  });
+});

@@ -1,5 +1,6 @@
 import { type Thread, formatTime, suggestOps, threadRenderKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
+import { COMPOSER_MOUNTED_EVENT } from '../md-composer.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { type ReviewChrome, showToast } from '../review-chrome.ts';
 import { MORPH_MS, isFoldingTap, sizeThreadSlots } from '../thread-morph.ts';
@@ -917,6 +918,15 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     text.classList.toggle('is-clamped', !expanded);
     toggle.textContent = expanded ? 'Show less' : 'Show more';
     positionBalloons(); // heights changed — restack without rebuilding
+  });
+
+  // A reply composer's editor chunk mounts in a microtask, AFTER this column
+  // measured the card it lives in: the detail face grows under a written slot
+  // height and `overflow: hidden` eats the reply box. Re-measure the subtree
+  // and restack — the cards below the grown one all move.
+  scope.listen(marginEl, COMPOSER_MOUNTED_EVENT, () => {
+    sizeThreadSlots(marginEl);
+    restackThroughMorph();
   });
 
   scope.listen(window, 'resize', scheduleRelayout);
