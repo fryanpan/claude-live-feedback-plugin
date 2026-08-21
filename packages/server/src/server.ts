@@ -2199,6 +2199,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             visitorShareId ?? undefined,
             visitor ? redactHubEventForVisitor : undefined,
             streamAgentId,
+            sseLastEventId(req, url),
           );
         }
         // --- SSE ---
@@ -2206,7 +2207,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const docId = decodeURIComponent(pathname.slice('/events/'.length));
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
           if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-          return openSseStream(sse, docId, visitorShareId ?? undefined);
+          return openSseStream(
+            sse,
+            docId,
+            visitorShareId ?? undefined,
+            undefined,
+            undefined,
+            sseLastEventId(req, url),
+          );
         }
 
         // --- REST: docs ---
@@ -5195,6 +5203,15 @@ function isValidDocId(s: string): boolean {
 
 /** `scheme://host` with the default port normalized away, or the raw
  *  concatenation when it doesn't parse (which then simply matches nothing). */
+/** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
+ *  native EventSource sends back by itself once frames carry `id:` lines,
+ *  else the `lastEventId` query param for hand-rolled fetch-stream consumers
+ *  (the MCP watch loop). Absent/empty → a fresh subscription, no replay. */
+function sseLastEventId(req: Request, url: URL): string | undefined {
+  const v = req.headers.get('last-event-id') ?? url.searchParams.get('lastEventId');
+  return v ? v : undefined;
+}
+
 function canonicalOrigin(scheme: string, host: string): string {
   try {
     return new URL(`${scheme}://${host}`).origin;
