@@ -21,7 +21,7 @@
  * already been bitten by.
  */
 import type { Comment, ReviewPayload, TaskReviewItem, Thread } from '@feedback/core';
-import { isReviewItemOpen, reviewAnswered } from '@feedback/core';
+import { isReviewItemOpen, pendingDeclaration } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** How much of the question rides along to the strip. Enough to recognise the
@@ -232,40 +232,24 @@ export function unansweredRun(thread: Thread): Comment[] {
 }
 
 /**
- * The declaration on this thread that nobody has answered, or null.
+ * "Which declaration is pending" — `pendingDeclaration` — now lives in
+ * `@feedback/core` (re-exported below), because the doc panel needs the SAME
+ * answer this queue gives: for one release the browser kept its own copy of
+ * the rule (raw array order, buried asks resurrected, thread status ignored)
+ * and could offer an Answer composer for an item this queue had retired.
+ * One copy, imported by both halves, is what stops that drifting back.
  *
- * The NEWEST declaration decides, and only it: an agent that asks again has
- * moved on from what it asked before, so an older unanswered payload buried
- * under a newer answered one is history rather than a live question. This is
- * the same "newest declaration wins" rule the row already used — it is only
- * asked over the whole thread now instead of over the unanswered run.
- *
- * That widening is the fix for the defect this module made possible. The run
- * ends the moment a person types anything, and the task panel's single
- * composer aims at the newest comment's thread — which on a task an agent just
- * asked about is the ask's own thread. So "one sec, reading it" retired a
- * decision that had never been answered, permanently, with no surface anywhere
- * reporting it. An authored ask is retired by an ANSWER (`reviewAnswered`) or
- * by its thread being resolved, and by nothing else.
- *
- * Deliberately NOT extended to the inferred band. A thread whose newest
- * comment is a status note has no author's claim that anything is being asked,
- * and adjacency is the only signal there is; keeping those past a person's
- * reply would put every finished conversation on the board back on the strip,
- * which is the failure the declared band exists to undo.
+ * The rule's own rationale — newest declaration wins, ts order not array
+ * order, resolved threads retire their asks — is documented on the function
+ * in core. What stays HERE is the half about this queue: the widening past
+ * `unansweredRun` (a declared ask survives "one sec, reading it") is
+ * deliberately NOT extended to the inferred band. A thread whose newest
+ * comment is a status note has no author's claim that anything is being
+ * asked, and adjacency is the only signal there is; keeping those past a
+ * person's reply would put every finished conversation on the board back on
+ * the strip, which is the failure the declared band exists to undo.
  */
-export function pendingDeclaration(thread: Thread): Comment | null {
-  if (thread.status !== 'open') return null;
-  // By time, for the reason `unansweredRun` sorts: array order is a CRDT's
-  // merge order, not a clock.
-  const byTime = [...(thread.comments ?? [])].sort((a, b) => a.ts - b.ts);
-  for (let i = byTime.length - 1; i >= 0; i -= 1) {
-    const c = byTime[i];
-    if (c?.review === undefined) continue;
-    return reviewAnswered(c.review) ? null : c;
-  }
-  return null;
-}
+export { pendingDeclaration };
 
 /**
  * Does this text ask one of `people` something — as opposed to thinking out

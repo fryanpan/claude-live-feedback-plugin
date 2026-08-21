@@ -123,6 +123,60 @@ describe('answering a review item from the doc thread', () => {
     expect(replyWith(container, 'Oldest first.')).toBe('Answer');
     expect(replies[0]?.[2]).toBe(second.id);
   });
+
+  // The two cases where this panel used to disagree with the server's queue
+  // (review-queue.ts) about whether anything is pending. Both read
+  // `pendingDeclaration` from core now — the doc surface must never offer an
+  // Answer composer for an item Home has retired, because answering it
+  // stamps a comment no queue was showing.
+
+  it('an answered NEWER ask retires a buried unanswered one — Reply, not Answer', () => {
+    const buried = comment(bot, 'Which way?', ask());
+    const settled = comment(
+      bot,
+      'Scratch that — feed order?',
+      ask({ headline: 'Feed order', answeredAt: ts, answerText: 'Oldest first.' }),
+    );
+    const { panel, container, replies } = mountPanel();
+    panel.setThreads([makeThread([buried, settled])]);
+    panel.setActive('t1');
+    expect(replyWith(container, 'One more thought.')).toBe('Reply');
+    expect(replies[0]?.[2]).toBeUndefined();
+  });
+
+  it('a resolved thread has nothing pending, even with an unanswered declaration', () => {
+    const declaring = comment(bot, 'Which way?', ask());
+    const resolved: Thread = { ...makeThread([declaring]), status: 'resolved' };
+    const { panel, container, replies } = mountPanel();
+    panel.setTab('resolved');
+    panel.setThreads([resolved]);
+    panel.setActive('t1');
+    expect(replyWith(container, 'Still wondering.')).toBe('Reply');
+    expect(replies[0]?.[2]).toBeUndefined();
+  });
+
+  it('a retired decision keeps its card but not its tappable options', () => {
+    const buriedDecision = comment(
+      bot,
+      'Which way?',
+      ask({
+        shape: 'decision',
+        options: [
+          { id: 'o1', label: 'Alphabetical' },
+          { id: 'o2', label: 'By arrival' },
+        ],
+      }),
+    );
+    const resolved: Thread = { ...makeThread([buriedDecision]), status: 'resolved' };
+    const { panel, container } = mountPanel();
+    panel.setTab('resolved');
+    panel.setThreads([resolved]);
+    panel.setActive('t1');
+    // The card still renders (the record of what was asked)…
+    expect(container.querySelector('.thread-item-card')).not.toBeNull();
+    // …but a tap that would answer a retired item is not offered.
+    expect(container.querySelector('.thread-item-option')).toBeNull();
+  });
 });
 
 describe('the full item interface in the carrying thread', () => {

@@ -170,33 +170,50 @@ export function reviewItemBodyMarkdown(
 }
 
 /**
- * Which comment in a thread is the one a person's next reply ANSWERS.
+ * The declaration on this thread that nobody has answered, or null.
  *
- * Three surfaces show the same review item — Home, the task, and the doc
- * thread that carries it — and each of them has to name a `commentId` for
- * `/answer` to stamp. Home already picked one per item because its queue is
- * built one item at a time. The doc panel has a single reply box against a
- * whole conversation, so it needs this: the ask those words are about.
+ * ONE rule, read by every surface. The server's queue (review-queue.ts) and
+ * the doc panel's reply box (threads.ts) each need to answer "which item is
+ * pending on this thread", and for one release they answered it differently —
+ * the doc panel scanned raw array order, skipped answered declarations to
+ * find buried ones, and ignored thread status, so it could render a full
+ * Answer composer for an item Home had already retired. Answering it stamped
+ * a comment no queue was offering. Both halves import this now; a second
+ * copy of the rule is how they drift again.
  *
- * Scanned from the END, because a later ask supersedes an earlier one, and
- * skipping answered ones on the way back means a follow-up that answered
- * nothing does not hide the question still waiting underneath it.
+ * The rule itself, unchanged from the server's:
  *
- * `undefined` means "nothing here to answer" — an ordinary thread, or one
- * whose asks are all settled — and the caller posts a plain comment. That is
- * the honest fallback rather than a default target: inventing one would let a
- * remark stamp an answer nobody gave.
+ * - The NEWEST declaration decides, and only it. An agent that asks again
+ *   has moved on from what it asked before, so an older unanswered payload
+ *   buried under a newer answered one is history rather than a live question.
+ * - By time, not by array position. Comment order in a Yjs array is a CRDT's
+ *   merge order, not a clock — "the last element" answers a question about
+ *   array layout, not about who spoke last.
+ * - A non-open thread has nothing pending: an authored ask is retired by an
+ *   ANSWER (`reviewAnswered`) or by its thread being resolved, and by
+ *   nothing else.
+ *
+ * `null` means "nothing here to answer" — an ordinary thread, a retired one,
+ * or one whose newest ask is settled — and the caller posts a plain comment.
+ * That is the honest fallback rather than a default target: inventing one
+ * would let a remark stamp an answer nobody gave.
+ *
+ * Generic over the comment shape (rather than importing `Comment`) so this
+ * module stays pure and dependency-free — the MCP tool, the REST route and
+ * the browser all check the same rule.
  */
-export function pendingReviewCommentId(
-  comments: ReadonlyArray<{ id: string; review?: ReviewPayload }>,
-): string | undefined {
-  for (let i = comments.length - 1; i >= 0; i -= 1) {
-    const c = comments[i];
-    if (!c?.review) continue;
-    if (reviewAnswered(c.review)) continue;
-    return c.id;
+export function pendingDeclaration<C extends { ts: number; review?: ReviewPayload }>(thread: {
+  status: string;
+  comments?: ReadonlyArray<C>;
+}): C | null {
+  if (thread.status !== 'open') return null;
+  const byTime = [...(thread.comments ?? [])].sort((a, b) => a.ts - b.ts);
+  for (let i = byTime.length - 1; i >= 0; i -= 1) {
+    const c = byTime[i];
+    if (c?.review === undefined) continue;
+    return reviewAnswered(c.review) ? null : c;
   }
-  return undefined;
+  return null;
 }
 
 /** A question asked back AT a review item instead of answering it. The item
