@@ -11,6 +11,7 @@ import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
+import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 import { voiceRequestLine } from './voice-line.ts';
@@ -3594,17 +3595,19 @@ async function runSseLoop(
     const w = watchers.get(label);
     if (w) w.open = open;
   };
-  // The wire id of the last frame this loop saw, presented back on every
-  // reconnect. This loop is a hand-rolled fetch stream, not a native
+  // The wire id of the last frame this loop DELIVERED, presented back on
+  // every reconnect. This loop is a hand-rolled fetch stream, not a native
   // EventSource, so nothing sends `Last-Event-ID` for us — without this line
   // the 1.5s retry below reconnects fast and resumes WITH A HOLE: everything
-  // broadcast inside the gap used to be lost permanently.
-  let lastEventId: string | undefined;
+  // broadcast inside the gap used to be lost permanently. Delivered, not
+  // seen: the cursor advances only after `handleFrame` resolves (see
+  // sse-cursor.ts for the loss that committing it early caused).
+  const cursor: SseCursor = { lastEventId: undefined };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
-        ...(lastEventId ? { headers: { 'Last-Event-ID': lastEventId } } : {}),
+        ...(cursor.lastEventId ? { headers: { 'Last-Event-ID': cursor.lastEventId } } : {}),
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -3622,19 +3625,13 @@ async function runSseLoop(
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          const meta = frameMeta(frame);
-          if (meta.event === 'replay.gap') {
-            // The server could not prove coverage, so the id we were holding
-            // points at nothing it can replay. Drop it — presenting it again
-            // on the next reconnect would just buy another gap notice — and
-            // drop the dedup window with it, since after a refetch-worthy gap
-            // every held key may collide with a genuinely new event.
-            lastEventId = undefined;
-            shouldForwardFrame.reset();
-          } else if (meta.id !== undefined) {
-            lastEventId = meta.id;
-          }
-          await handleFrame(frame);
+          // Deliver, THEN advance the cursor — a frame whose delivery threw
+          // must be re-presented on reconnect, not skipped past. On a
+          // delivered gap the cursor drops (the held id points at nothing
+          // the server can replay) and the dedup window drops with it, since
+          // after a refetch-worthy gap every held key may collide with a
+          // genuinely new event.
+          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
           sep = buf.indexOf('\n\n');
         }
       }
@@ -3696,17 +3693,6 @@ function startSseLoop(label: string, path: string, controller: AbortController):
  *  for an older one), why the fallback needs a window, and why anything it
  *  cannot identify is forwarded rather than dropped. */
 const shouldForwardFrame = createFrameDedup();
-
-/** The `id:` line and event name of one raw SSE frame — what the reconnect
- *  logic needs before the frame is parsed as JSON. */
-function frameMeta(raw: string): { id?: string; event?: string } {
-  const meta: { id?: string; event?: string } = {};
-  for (const line of raw.split('\n')) {
-    if (line.startsWith('id:')) meta.id = line.slice(3).trim();
-    else if (line.startsWith('event:')) meta.event = line.slice(6).trim();
-  }
-  return meta;
-}
 
 async function handleFrame(raw: string): Promise<void> {
   // Only forward data frames — ignore keepalive ':ok' comments.
