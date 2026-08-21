@@ -615,6 +615,53 @@ describe('inline title editing', () => {
     spy.mockRestore();
   });
 
+  // …and the guard must let go again. A finished selection stands until the
+  // NEXT mousedown, so "is anything selected right now?" is still true on the
+  // following click — the row swallowed that one too and read as dead. The
+  // question is not whether a selection exists but whether THIS gesture made
+  // it, which is a comparison across mousedown and click, not a single read.
+  it('opens on the click AFTER a drag-select, not on the one that made it', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', title: 'Select me' })], filters),
+      h,
+    );
+    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const nothing = { isCollapsed: true, anchorNode: null } as unknown as Selection;
+    const words = {
+      isCollapsed: false,
+      anchorNode: title.firstChild,
+      focusNode: title.firstChild,
+      anchorOffset: 0,
+      focusOffset: 6,
+    } as unknown as Selection;
+    const spy = vi.spyOn(document, 'getSelection').mockReturnValue(nothing);
+
+    // Gesture one, the drag that makes the selection: nothing selected when
+    // the button goes down, words selected by the time the click lands.
+    row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    spy.mockReturnValue(words);
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+
+    // Gesture two, a plain click with that selection still standing: both
+    // reads see the same words, so this gesture selected nothing and the row
+    // opens.
+    row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(h.onOpenTask).toHaveBeenCalledTimes(1);
+
+    // And a second drag still suppresses — the guard keys on the change, so
+    // back-to-back selections are not mistaken for a stale one.
+    row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    spy.mockReturnValue({ ...words, focusOffset: 4 } as unknown as Selection);
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(h.onOpenTask).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   // Restored deliberately — and it re-opens the bug that removed it, so the
   // gate is the pointer, not the title.
   it('the rename zone renames in place; Enter commits', () => {
@@ -681,7 +728,17 @@ describe('inline title editing', () => {
     const title = root.querySelector('.hub-task-title') as HTMLElement;
     expect(title.hasAttribute('tabindex')).toBe(false);
     const zone = root.querySelector('.hub-title-edit') as HTMLButtonElement;
-    zone.click(); // what Enter/Space on a focused <button> dispatches
+    // Enter and Space reach a focused <button> by different routes, and only
+    // one of them is a bare click. Space activates on keyUP, so `zone.click()`
+    // is the whole of it; Enter fires a keydown that BUBBLES first and is
+    // activated afterwards, so a row handler listening for Enter sees it
+    // before the button does. This test used to call `zone.click()` alone
+    // under the comment "what Enter/Space on a focused <button> dispatches" —
+    // half true, and the half it got wrong is exactly the half that shipped
+    // broken. Drive both halves, in the browser's order.
+    zone.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+    zone.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(title.querySelector('input')).not.toBeNull();
     // …and starting an edit must not also open the task behind it.
     expect(h.onOpenTask).not.toHaveBeenCalled();
@@ -704,6 +761,38 @@ describe('inline title editing', () => {
     // The rename zone element is still there (inert) — the anatomy does not
     // change shape between pointers, only what the controls do.
     expect(root.querySelector('.hub-title-edit')).not.toBeNull();
+  });
+});
+
+// The row is a tab stop and Enter on it opens the task — but so is every
+// control inside it, and a keydown from any of them bubbles through the row
+// on its way out. The row therefore has to say which Enters are its own.
+describe('Enter on a task row', () => {
+  const rowIn = () => root.querySelector('.hub-task-row') as HTMLElement;
+  const enter = (from: HTMLElement) =>
+    from.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+  it('opens the task when the row itself has the focus', () => {
+    const h = handlers();
+    const t = task({ goal: 'g-pr' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    enter(rowIn());
+    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
+  });
+
+  // The defect this pair exists for: Enter on the focused pencil opened the
+  // detail panel instead of starting a rename. The pencil stops propagation
+  // on CLICK, and the browser synthesizes that click only after the keydown
+  // has already bubbled — so the row won the race every time, and the
+  // control's own guard never got to run.
+  it('leaves the task closed when a control inside the row has the focus', () => {
+    const h = handlers();
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
+    enter(root.querySelector('.hub-title-edit') as HTMLElement);
+    enter(root.querySelector('.hub-status-select') as HTMLElement);
+    enter(root.querySelector('.hub-row-assignee') as HTMLElement);
+    enter(root.querySelector('.hub-drag-handle') as HTMLElement);
+    expect(h.onOpenTask).not.toHaveBeenCalled();
   });
 });
 

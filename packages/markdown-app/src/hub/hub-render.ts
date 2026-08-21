@@ -693,6 +693,35 @@ function renderTaskLinks(task: HubTask): HTMLElement | null {
   return wrap.childElementCount > 0 ? wrap : null;
 }
 
+/** Where a live, non-empty selection sits inside `el` — or null for none. */
+type SelectionMark = {
+  anchor: Node | null;
+  focus: Node | null;
+  anchorOffset: number;
+  focusOffset: number;
+};
+
+function selectionInside(el: HTMLElement): SelectionMark | null {
+  const sel = typeof document.getSelection === 'function' ? document.getSelection() : null;
+  if (!sel || sel.isCollapsed || !sel.anchorNode || !el.contains(sel.anchorNode)) return null;
+  return {
+    anchor: sel.anchorNode,
+    focus: sel.focusNode,
+    anchorOffset: sel.anchorOffset,
+    focusOffset: sel.focusOffset,
+  };
+}
+
+function sameSelection(a: SelectionMark | null, b: SelectionMark | null): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.anchor === b.anchor &&
+    a.focus === b.focus &&
+    a.anchorOffset === b.anchorOffset &&
+    a.focusOffset === b.focusOffset
+  );
+}
+
 export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLElement {
   const row = document.createElement('div');
   row.className = `hub-task-row hub-status-${task.status}${task.status === 'done' ? ' hub-done' : ''}`;
@@ -824,17 +853,35 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   ownerCtl.append(avatar, assignee);
 
   row.append(handle, editZone, statusCtl, title, taskBadges(task), ownerCtl);
+
+  // A click that ends a drag-select fires like any other; opening the panel
+  // then would destroy the selection the reader just made to copy a title.
+  // But the question is whether THIS gesture made the selection, not whether
+  // one exists: a finished selection stands until the next mousedown, so a
+  // single read at click time also swallows the click AFTER the drag, and the
+  // row reads as dead. Compare the two ends of the gesture instead — changed
+  // during it means this click selected something, unchanged means it is
+  // somebody else's selection and the row opens.
+  let selAtDown = selectionInside(row);
+  row.addEventListener('mousedown', () => {
+    selAtDown = selectionInside(row);
+  });
   row.addEventListener('click', () => {
-    // A click that ends a drag-select fires like any other; opening the panel
-    // then would destroy the selection the reader just made to copy a title.
-    const sel = typeof document.getSelection === 'function' ? document.getSelection() : null;
-    if (sel && !sel.isCollapsed && sel.anchorNode && row.contains(sel.anchorNode)) return;
+    const selAtClick = selectionInside(row);
+    if (selAtClick && !sameSelection(selAtClick, selAtDown)) return;
     handlers.onOpenTask(task);
   });
   row.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !(ev.target as HTMLElement).closest('input')) {
-      handlers.onOpenTask(task);
-    }
+    if (ev.key !== 'Enter') return;
+    // Every control in the row is its own tab stop, and Enter on a focused
+    // control fires a keydown that bubbles through here BEFORE the browser
+    // synthesizes the control's activation — so a row that takes every Enter
+    // beats each of them to it, and their `stopPropagation` on click arrives
+    // far too late to matter. Space never showed this: a button activates on
+    // keyUP, so the click it dispatches is the whole of the gesture. The row
+    // takes Enter only when the focus is on the row itself.
+    if ((ev.target as HTMLElement).closest('input, button, select, textarea')) return;
+    handlers.onOpenTask(task);
   });
   return row;
 }
