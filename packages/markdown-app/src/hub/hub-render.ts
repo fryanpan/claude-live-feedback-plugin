@@ -89,6 +89,58 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 };
 
 /**
+ * Which character of `el`'s text the pointer landed on, or `undefined` when
+ * the engine will not say. Asana's rule, and Bryan's: clicking a task's name
+ * puts the caret where the click was — not at the end, not over a select-all
+ * — so the gesture that starts a rename has to carry a position with it.
+ *
+ * Two spellings of the same question. `caretPositionFromPoint` is the
+ * standard; `caretRangeFromPoint` is WebKit's older one and for years the
+ * only one Safari had — and Safari is what an iPad reviews on, so the
+ * fallback is load-bearing rather than decoration. A DOM with no layout
+ * engine (happy-dom, where the unit suite runs) has neither and returns
+ * `undefined`, which every caller reads as "put it at the end".
+ */
+function caretOffsetIn(el: HTMLElement, x: number, y: number): number | undefined {
+  // Both are declared as required members of `Document`, and neither is
+  // present everywhere it is declared — Safari shipped only the second for
+  // years, and happy-dom has neither. So the guard is a runtime one.
+  const doc = el.ownerDocument;
+  let node: Node | null = null;
+  let offset = 0;
+  if (typeof doc.caretPositionFromPoint === 'function') {
+    const pos = doc.caretPositionFromPoint(x, y);
+    if (!pos) return undefined;
+    node = pos.offsetNode;
+    offset = pos.offset;
+  } else if (typeof doc.caretRangeFromPoint === 'function') {
+    const range = doc.caretRangeFromPoint(x, y);
+    if (!range) return undefined;
+    node = range.startContainer;
+    offset = range.startOffset;
+  }
+  if (!node || node.nodeType !== Node.TEXT_NODE || !el.contains(node)) return undefined;
+  // The offset a text node reports is its OWN, and the input holds the whole
+  // title — so count the text that comes before the node the hit landed in.
+  // One text node is the common case here; the walk is what keeps it honest
+  // for a title that ever renders as more than one.
+  let before = 0;
+  const stack: Node[] = [el];
+  const seen: Node[] = [];
+  while (stack.length > 0) {
+    const n = stack.pop() as Node;
+    const kids = Array.from(n.childNodes);
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    if (n !== el && n.nodeType === Node.TEXT_NODE) seen.push(n);
+  }
+  for (const t of seen) {
+    if (t === node) return before + offset;
+    before += t.textContent?.length ?? 0;
+  }
+  return undefined;
+}
+
+/**
  * Swap a title element for an input; Enter commits, Escape or blur cancels
  * (§3.9: tap the title text to edit, Enter commits). Cancel restores the
  * original text — the caller re-renders on commit anyway.
@@ -97,6 +149,10 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
  * pointer-only gesture. That handler stops propagation for the same reason
  * the click one does: on a task row, an un-stopped Enter would open the task
  * behind the editor it just opened.
+ *
+ * The starter takes a caret offset: a rename entered by clicking the words
+ * opens with the cursor on the character that was clicked, and one entered by
+ * a key opens with the cursor at the end.
  */
 function wireInPlaceTitle(
   el: HTMLElement,
@@ -106,12 +162,19 @@ function wireInPlaceTitle(
   opts?: {
     /** `false` detaches the edit from the element's own click/Enter — the
      *  caller owns the entry gesture and calls the returned starter. The task
-     *  row uses this so a single click on the title can mean "open" while an
-     *  explicit pencil button carries the rename (t-uUQLoTLVNdB9). */
+     *  row uses this so a click on the row can mean "open" while a click on
+     *  the title's own words means "rename" (t-QcOPJhD8_PPN). */
     selfStart?: boolean;
+    /** How the committed or restored text is put back. The default is a bare
+     *  text node; the task row hands back its own inline element, because
+     *  which element the words live in is what tells a click on them apart
+     *  from a click on the empty half of the title cell. Leaving the edit
+     *  must not quietly flatten that structure. */
+    render?: (text: string) => Node;
   },
-): () => void {
-  const begin = (): void => {
+): (caret?: number) => void {
+  const put = opts?.render ?? ((text: string): Node => document.createTextNode(text));
+  const begin = (caret?: number): void => {
     if (el.querySelector('input')) return;
     const original = current();
     const input = document.createElement('input');
@@ -121,9 +184,11 @@ function wireInPlaceTitle(
     input.value = original;
     el.replaceChildren(input);
     input.focus();
-    input.setSelectionRange(original.length, original.length);
+    const at =
+      typeof caret === 'number' ? Math.max(0, Math.min(original.length, caret)) : original.length;
+    input.setSelectionRange(at, at);
     const restore = () => {
-      el.replaceChildren(document.createTextNode(original));
+      el.replaceChildren(put(original));
     };
     input.addEventListener('keydown', (ke) => {
       if (ke.key === 'Enter' || ke.key === 'Escape') {
@@ -145,7 +210,7 @@ function wireInPlaceTitle(
           // text put the reader straight back into edit mode — Enter saved and
           // never exited, every time. Removing the input also settles its own
           // blur handler, which is guarded on `el.contains(input)`.
-          el.replaceChildren(document.createTextNode(v));
+          el.replaceChildren(put(v));
           commit(v);
         } else restore();
       } else if (ke.key === 'Escape') {
@@ -172,7 +237,7 @@ function wireInPlaceTitle(
     });
     el.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      begin();
+      begin(caretOffsetIn(el, ev.clientX, ev.clientY));
     });
   }
   return begin;
@@ -740,6 +805,24 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   row.dataset.taskId = task.id;
   row.tabIndex = 0;
 
+  // A click that ends a drag-select fires like any other, and neither of this
+  // row's two gestures may act on it: opening the panel would destroy the
+  // selection the reader just made to copy a title, and swapping the words for
+  // an input would too. But the question is whether THIS gesture made the
+  // selection, not whether one exists: a finished selection stands until the
+  // next mousedown, so a single read at click time also swallows the click
+  // AFTER the drag, and the row reads as dead. Compare the two ends of the
+  // gesture instead — changed during it means this click selected something,
+  // unchanged means it is somebody else's selection and the row acts.
+  let selAtDown = selectionInside(row);
+  const selectedByThisClick = (): boolean => {
+    const now = selectionInside(row);
+    return now !== null && !sameSelection(now, selAtDown);
+  };
+  row.addEventListener('mousedown', () => {
+    selAtDown = selectionInside(row);
+  });
+
   // A dropdown over every status, not a tap-to-cycle mark. The cycle assumed
   // the workflow was linear (todo → in-progress → done → todo), so sending a
   // finished task back to todo cost two transitions and wrote two audit events
@@ -800,51 +883,76 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   }
   handle.addEventListener('click', (ev) => ev.stopPropagation());
 
-  // ── Then the rename zone — the slot that used to be a 16px "open" sliver.
-  // Inverted deliberately (t-uUQLoTLVNdB9): on a desktop row the title spans
-  // most of ~1282px and its click used to stop propagation into a rename, so
-  // the row's biggest target was the one click that could NOT open the task,
-  // and the only open affordance was this sliver. Now a single click on the
-  // title (or anywhere on the row) opens, and this explicit pencil carries
-  // the deliberate gesture — renaming. As a real <button> it is also the
-  // keyboard path to a rename, which used to live on the title's Enter.
-  const editZone = document.createElement('button');
-  editZone.type = 'button';
-  editZone.className = 'hub-title-edit';
-  editZone.textContent = '✎';
+  // ── Then the open caret, in the slot the rename pencil used to hold. Asana's
+  // desktop affordance, asked for by name: a caret that appears on hover and
+  // always opens the task. It needs no click handler — the row's own opens,
+  // and this click bubbles into it — so it is a <button> for the cursor and
+  // the hit area rather than for a behaviour of its own.
+  //
+  // Deliberately NOT a tab stop: Enter on the focused row already opens the
+  // task, so a focusable twin would be a stop that says nothing new. That is
+  // the one thing lost with the pencil, which was the keyboard's only path to
+  // a rename — `r` (or F2) on the focused row is that path now, below.
+  const openCaret = document.createElement('button');
+  openCaret.type = 'button';
+  openCaret.className = 'hub-task-open';
+  openCaret.textContent = '›';
+  openCaret.tabIndex = -1;
+  openCaret.setAttribute('aria-hidden', 'true');
+  openCaret.title = 'Open this task';
 
   const title = document.createElement('span');
   title.className = 'hub-task-title';
-  title.textContent = task.title;
   // Inline editing stays fine-pointer-only. On a phone the title tap has
   // always meant "open" ("I can't open a task to see what's inside" is the
   // bug that removed tap-to-rename an hour before it first shipped), and
   // renaming lives in the detail panel one tap away, where the title is a
   // full-width target. `finePointer()` is NOT a width breakpoint — see it.
-  // On a fine pointer the title now opens too; only the pencil renames.
   const editable = (handlers.inlineTitleEdit ?? finePointer)();
+
+  // The words live in an INLINE child rather than loose in the title cell,
+  // and that is what makes Bryan's rule expressible: everything on the row
+  // except the actual text opens the task, *including the whitespace to the
+  // right of the text*. The cell is the grid's `minmax(0, 1fr)` track, so it
+  // spans every pixel between the status mark and the badges — on a 1282px
+  // row a six-word title leaves most of that cell empty, and a handler on the
+  // cell could not tell the empty half from the words. The browser's own
+  // hit-testing tells them apart for free: a click on the empty part has the
+  // CELL as its target, never reaches this child, and bubbles on to the row's
+  // open handler.
+  let beginRename: ((caret?: number) => void) | null = null;
+  const titleText = (text: string): HTMLElement => {
+    const span = document.createElement('span');
+    span.className = 'hub-task-title-text';
+    span.textContent = text;
+    if (editable) {
+      span.addEventListener('click', (ev) => {
+        // The one click on this row that does not open the task.
+        ev.stopPropagation();
+        if (selectedByThisClick()) return;
+        beginRename?.(caretOffsetIn(span, ev.clientX, ev.clientY));
+      });
+    }
+    return span;
+  };
+  title.append(titleText(task.title));
+
   if (editable) {
-    title.title = 'Click to open · ✎ renames';
-    editZone.setAttribute('aria-label', `Rename ${task.title}`);
-    editZone.title = 'Rename this task';
-    const beginRename = wireInPlaceTitle(
+    title.title = 'Click the words to rename · anywhere else opens the task';
+    beginRename = wireInPlaceTitle(
       title,
       () => task.title,
       (v) => handlers.onTitleCommit(task, v),
       undefined,
-      { selfStart: false },
+      // The row owns the entry gesture: `selfStart` would put the rename on
+      // the whole cell, which is the half of it that opens. `render` keeps the
+      // words in their own element when an edit ends — a bare text node would
+      // hand the empty-cell click and the on-the-words click back to the same
+      // target until the next board repaint.
+      { selfStart: false, render: titleText },
     );
-    editZone.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      beginRename();
-    });
   } else {
     title.title = 'Tap to open';
-    // Inert, never absent: auto-placement fills consecutive grid tracks, so
-    // dropping the child would slide every later cell one track left — the
-    // same rule the done row's drag handle follows.
-    editZone.disabled = true;
-    editZone.setAttribute('aria-hidden', 'true');
   }
 
   // ── Far right: who has it, and the gesture that hands it over — the same
@@ -864,25 +972,30 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   avatar.setAttribute('aria-hidden', 'true');
   ownerCtl.append(avatar, assignee);
 
-  row.append(handle, editZone, statusCtl, title, taskBadges(task), ownerCtl);
+  row.append(handle, openCaret, statusCtl, title, taskBadges(task), ownerCtl);
 
-  // A click that ends a drag-select fires like any other; opening the panel
-  // then would destroy the selection the reader just made to copy a title.
-  // But the question is whether THIS gesture made the selection, not whether
-  // one exists: a finished selection stands until the next mousedown, so a
-  // single read at click time also swallows the click AFTER the drag, and the
-  // row reads as dead. Compare the two ends of the gesture instead — changed
-  // during it means this click selected something, unchanged means it is
-  // somebody else's selection and the row opens.
-  let selAtDown = selectionInside(row);
-  row.addEventListener('mousedown', () => {
-    selAtDown = selectionInside(row);
-  });
   row.addEventListener('click', () => {
-    const selAtClick = selectionInside(row);
-    if (selAtClick && !sameSelection(selAtClick, selAtDown)) return;
+    if (selectedByThisClick()) return;
     handlers.onOpenTask(task);
   });
+  if (editable) {
+    row.addEventListener('keydown', (ev) => {
+      // The pencil was the keyboard's rename and it is gone, so these two
+      // spellings are. `r` is the one that matters: it joins the row's
+      // existing single-letter set (j/k move, o opens, s status, a assignee)
+      // and it is reachable on the Magic Keyboard Bryan reviews from, which
+      // has no function row at all. F2 rides along because it is what a file
+      // manager and a spreadsheet rename with, and it costs one clause.
+      // Enter stays "open", so nothing races for the same press.
+      if (ev.key !== 'F2' && ev.key !== 'r') return;
+      // A letter key belongs to whatever is being typed into, not to the row
+      // it happens to sit inside — including this row's own title input.
+      if ((ev.target as HTMLElement).closest('input, textarea, select')) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      beginRename?.();
+    });
+  }
   row.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter') return;
     // Every control in the row is its own tab stop, and Enter on a focused
