@@ -275,3 +275,84 @@ describe('the modal keeps up with the doc', () => {
     expect(h.root().querySelector('.thread-modal-title')?.textContent).toBe('Decision');
   });
 });
+
+/**
+ * Tab must not walk out of a dialog that claims `aria-modal="true"`.
+ *
+ * Measured on the staging build before this trap existed: four stops inside
+ * the card and then straight out into the page behind it — the thread view's
+ * close button, the back link, the doc switcher — all of it under a scrim the
+ * keyboard cannot see and cannot dismiss.
+ */
+describe('focus stays inside the dialog', () => {
+  function openWith(): { h: Harness; items: HTMLElement[] } {
+    const h = mount();
+    h.panel.setActive('t1');
+    h.modal.open(thread('t1', [comment('The long one')]));
+    const items = Array.from(
+      h.root().querySelectorAll<HTMLElement>('button, textarea, [contenteditable]'),
+    );
+    return { h, items };
+  }
+
+  const tab = (shift = false): boolean => {
+    // `cancelable: true` is not decoration — without it `preventDefault()` is
+    // a no-op and `defaultPrevented` stays false however well the trap works.
+    const ev = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      shiftKey: shift,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  };
+
+  it('has something to trap — the control that proves the rest is not vacuous', () => {
+    const { items } = openWith();
+    expect(items.length).toBeGreaterThan(2);
+  });
+
+  it('wraps forward from the last control to the first', () => {
+    const { h, items } = openWith();
+    const first = items[0];
+    items[items.length - 1].focus();
+    expect(tab()).toBe(true);
+    expect(document.activeElement).toBe(first);
+    expect(h.root().contains(document.activeElement)).toBe(true);
+  });
+
+  it('wraps backward from the first control to the last', () => {
+    const { items } = openWith();
+    items[0].focus();
+    expect(tab(true)).toBe(true);
+    expect(document.activeElement).toBe(items[items.length - 1]);
+  });
+
+  it('leaves a Tab in the middle of the dialog to the browser', () => {
+    const { items } = openWith();
+    items[0].focus();
+    expect(tab()).toBe(false);
+  });
+
+  it('pulls focus back when it is already outside', () => {
+    const { h, items } = openWith();
+    const stray = document.createElement('button');
+    document.body.appendChild(stray);
+    cleanups.push(() => stray.remove());
+    stray.focus();
+    expect(tab()).toBe(true);
+    expect(document.activeElement).toBe(items[0]);
+    expect(h.root().contains(document.activeElement)).toBe(true);
+  });
+
+  it('does not touch Tab while the dialog is down', () => {
+    mount();
+    const stray = document.createElement('button');
+    document.body.appendChild(stray);
+    cleanups.push(() => stray.remove());
+    stray.focus();
+    expect(tab()).toBe(false);
+    expect(document.activeElement).toBe(stray);
+  });
+});

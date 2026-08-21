@@ -171,6 +171,76 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
 
   scope.listen(root.querySelector('.thread-modal-close') as HTMLElement, 'click', close);
   scope.listen(scrim, 'click', close);
+  /**
+   * Everything inside the dialog a Tab could land on.
+   *
+   * The `display`/`visibility` filter is what keeps the reply box's hidden
+   * `<textarea>` out of the list — every composer is a markdown editor, and
+   * the textarea it replaced is still in the DOM behind a `display: none`
+   * class. In a browser `getComputedStyle` reports that and the element drops
+   * out; under happy-dom no stylesheet is loaded so it stays in, which is
+   * harmless: the trap only reads the two ENDS of this list, and the textarea
+   * is never at either end.
+   */
+  const FOCUSABLE = [
+    'a[href]',
+    'button:not([disabled])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[contenteditable]:not([contenteditable="false"])',
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(', ');
+
+  function focusables(): HTMLElement[] {
+    return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => {
+      // A folded face is `inert`, and its contents are not reachable.
+      if (el.hasAttribute('inert') || el.closest('[inert]')) return false;
+      if (el.getAttribute('aria-hidden') === 'true') return false;
+      const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null;
+      return !cs || (cs.display !== 'none' && cs.visibility !== 'hidden');
+    });
+  }
+
+  /**
+   * Keep Tab inside the dialog.
+   *
+   * `aria-modal="true"` is a promise to assistive tech and nothing more — it
+   * moves no focus on its own. Measured before this existed: four stops inside
+   * the card and then out into the page behind, where every control sits under
+   * a scrim the keyboard can neither see nor dismiss.
+   *
+   * Bound to `document` rather than to the dialog on purpose, so the branch
+   * that matters most still fires: focus that is ALREADY outside gets pulled
+   * back, which a listener scoped to the dialog could never see.
+   */
+  scope.listen(document, 'keydown', (ev) => {
+    const ke = ev as KeyboardEvent;
+    if (ke.key !== 'Tab' || openId === null) return;
+    const items = focusables();
+    if (items.length === 0) {
+      ev.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || !root.contains(active)) {
+      ev.preventDefault();
+      (ke.shiftKey ? last : first).focus();
+      return;
+    }
+    // Anywhere but the two ends, the browser's own order is right — only the
+    // edges need turning back.
+    if (ke.shiftKey && active === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ke.shiftKey && active === last) {
+      ev.preventDefault();
+      first.focus();
+    }
+  });
+
   // Escape closes the TOP layer and only the top layer.
   //
   // `stopImmediatePropagation`, not `stopPropagation`: the chrome's own
