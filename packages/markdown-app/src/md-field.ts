@@ -27,8 +27,19 @@ import { renderCommentMarkdown } from './comment-markdown.ts';
  * that empties the box programmatically (`ta.value = ''`) fires no event, so
  * the sender calls this right after — same for a restore that puts refused
  * words back.
+ *
+ * IDEMPOTENT, because not every composer is built fresh for its caller: the
+ * doc's new-comment box is shell DOM that outlives each document, while
+ * `mountReviewChrome` runs once per navigation. A second attach would wrap
+ * the wrapper — a second affordance row and a second preview under one box,
+ * with the live listener on the outer copy. Re-attaching returns a refresh
+ * for the field that is already there.
  */
 export function attachMarkdownField(ta: HTMLTextAreaElement): () => void {
+  const already = ta.parentElement;
+  if (already?.classList.contains('md-field')) {
+    return makeRefresh(ta, already.querySelector<HTMLElement>('.md-preview'));
+  }
   const field = document.createElement('div');
   field.className = 'md-field';
 
@@ -51,7 +62,16 @@ export function attachMarkdownField(ta: HTMLTextAreaElement): () => void {
   ta.replaceWith(field);
   field.append(ta, affordance, preview);
 
-  const refresh = (): void => {
+  const refresh = makeRefresh(ta, preview);
+  ta.addEventListener('input', refresh);
+  return refresh;
+}
+
+/** Fill the preview in from the box, or empty it. Shared by the attach path
+ *  and the re-attach path so both spell "hidden while empty" once. */
+function makeRefresh(ta: HTMLTextAreaElement, preview: HTMLElement | null): () => void {
+  return () => {
+    if (!preview) return;
     if (ta.value.trim() === '') {
       preview.hidden = true;
       preview.innerHTML = '';
@@ -62,6 +82,4 @@ export function attachMarkdownField(ta: HTMLTextAreaElement): () => void {
     // `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
     preview.innerHTML = renderCommentMarkdown(ta.value);
   };
-  ta.addEventListener('input', refresh);
-  return refresh;
 }
