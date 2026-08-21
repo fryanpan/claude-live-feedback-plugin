@@ -94,7 +94,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.78';
+const PLUGIN_VERSION = '0.1.79';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -3933,6 +3933,12 @@ interface ChannelPayload {
   // instead of `threadId` + `thread`.
   sid?: string;
   suggestion?: { author?: { name?: string }; kind?: string; snippet?: string };
+  // doc.sync_error: a disk↔doc sync failure on a bound file. `message` names
+  // what happened and how to recover; `backupPath` is where the overwritten
+  // external bytes were saved, when a backup applied.
+  path?: string;
+  backupPath?: string;
+  message?: string;
 }
 
 /** Hub/workspace event families formatted by emitHubChannelMessage. Thread
@@ -4121,6 +4127,30 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   }
   const p = (rawPayload ?? {}) as ChannelPayload;
   const docId = p.docId ?? 'unknown';
+
+  // A recorded syncError means somebody's write into the bound file just
+  // lost — rendered as a sentence naming the file, what happened, and where
+  // the overwritten bytes went, because the bare-slug fallback below would
+  // bury exactly the event whose whole point is being noticed.
+  if (event === 'doc.sync_error') {
+    const where = p.path ?? docId;
+    const body = `[sync error] ${where}: ${p.message ?? 'disk↔doc sync failed — call get_doc for details'}`;
+    await server.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        source: 'claude-workspaces',
+        sent_at: new Date().toISOString(),
+        content: body,
+        meta: {
+          doc_id: docId,
+          event,
+          ...(p.path ? { path: p.path } : {}),
+          ...(p.backupPath ? { backup_path: p.backupPath } : {}),
+        },
+      },
+    });
+    return;
+  }
 
   if (event.startsWith('suggestion.')) {
     const sid = p.sid ?? '';
