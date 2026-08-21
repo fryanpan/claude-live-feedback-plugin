@@ -6833,6 +6833,24 @@ body.redline-mode #toggle-suggest-mode {
   cursor: pointer;
 }
 
+/* An OPEN balloon is capped against the screen and scrolls inside itself.
+   A declared thread's balloon is the full item interface — head, opening
+   message, item card, options, answer composer, foot — and measured ~700px on
+   the staging build. Bryan reads on an iPad in landscape with about 750px of
+   usable height, so on any anchor past the first screenful the composer and
+   the Answer button started below the fold, and reaching them scrolled the
+   DOCUMENT, which moves the balloon out from under the reader. Clamping puts
+   that scroll inside the card instead, where the item head and the composer
+   stay reachable and the anchor stays put. `layoutBalloons` measures
+   `offsetHeight`, which honours a max-height, so the column stacks the
+   clamped height rather than the natural one. Same `min(<n>vh, <n>px)` shape
+   as every other thing in this file that can outgrow its viewport. */
+.lf-balloon-comment.expanded {
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* Balloon hover/focus: a subtle lift so the margin reads as a column of
    interactive cards, matching the drawer's own :hover treatment. Keyed off
    `.lf-balloon` (not `.lf-balloon-del`, which has no click target of its
