@@ -525,15 +525,32 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // place (and the inline one underneath it) rather than launching a
       // third, separate full-screen view of the same conversation.
     },
-    onReply: async (id, text) => {
-      await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ author: user, text }),
-        },
-      );
+    onReply: async (id, text, answersCommentId) => {
+      // Two routes, one reply. `/answer` posts the SAME comment and
+      // additionally stamps `answeredAt` on the declaring comment, which is
+      // what takes the item off the Home queue. The panel decides which by
+      // handing back an id or not; sending one the server did not declare is
+      // refused rather than invented, so there is nothing to guess here.
+      //
+      // Until this branch existed, every doc reply went to `/comments`, so a
+      // review item could be read in the doc, answered in the person's own
+      // words, and stay queued — which is exactly what happened four times on
+      // `board-review-2026-08-19`.
+      const base = `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}`;
+      const res = await fetch(answersCommentId ? `${base}/answer` : `${base}/comments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          author: user,
+          text,
+          ...(answersCommentId ? { commentId: answersCommentId } : {}),
+        }),
+      });
+      // A failed answer must not read as a posted one: the reply is already
+      // out of the box by the time this resolves, so silence would lose it.
+      if (!res.ok && answersCommentId) {
+        showToast('Answer failed to post — try again');
+      }
     },
     onResolve: async (id) => {
       try {
