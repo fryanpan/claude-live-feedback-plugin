@@ -408,24 +408,30 @@ describe('what the tool schemas tell an agent', () => {
   });
 });
 
-describe('the agent-facing skills describe the entity, not the old model', () => {
-  // The review-item CALL SHAPES moved out of the hub's SKILL.md and into its
-  // sibling `tool-reference.md` when the hub was split (the skill file keeps
-  // the judgment, the reference keeps the argument lists). The pin follows the
-  // content: it reads the file that now has to carry these literals.
-  const hub = readFileSync(
-    join(HERE, '../../plugin/skills/running-a-workspace-hub/tool-reference.md'),
-    'utf8',
-  );
+describe('the shipped guidance describes the entity, not the old model', () => {
+  // These literals used to live in a `running-a-workspace-hub` skill. The
+  // skill is gone: a tool's own description is read at the moment the tool is
+  // about to be called, which is when this matters, and it costs nothing on
+  // every other turn. The pin follows the content to the surviving home.
+  const bundle = readFileSync(BUNDLE, 'utf8');
   const board = readFileSync(
     join(HERE, '../../plugin/skills/working-in-a-workspace/SKILL.md'),
     'utf8',
   );
 
-  it('the hub skill teaches add_review_item and the 0..n cardinality', () => {
-    expect(hub).toContain('add_review_item');
-    expect(hub).toContain('answer_review_item');
-    expect(hub.toLowerCase()).toContain('more than one');
+  it('add_review_item teaches the 0..n cardinality in its own description', () => {
+    expect(SRC).toContain('A ticket carries 0..n review items and SEVERAL can be open at once');
+    // And it reaches a peer, who loads the BUNDLE and never the source.
+    expect(bundle).toContain('A ticket carries 0..n review items and SEVERAL can be open at once');
+  });
+
+  it('answer_review_item says what makes several open questions answerable apart', () => {
+    expect(SRC).toContain(
+      'Naming `reviewItemId` is what makes several open questions on one ticket answerable independently',
+    );
+    expect(bundle).toContain(
+      'Naming `reviewItemId` is what makes several open questions on one ticket answerable independently',
+    );
   });
 
   it('the general skill says a TICKET takes review items too, not only a thread', () => {
@@ -433,5 +439,21 @@ describe('the agent-facing skills describe the entity, not the old model', () =>
     // And it teaches the current payload vocabulary, not the old field names.
     expect(board).toContain('review_type: "decision"');
     expect(board).toContain('review_type: "question"');
+  });
+
+  it('no retired skill is named anywhere in the shipped surface', () => {
+    // A tool description or a surviving skill that still points at a deleted
+    // directory tells an agent to go read something that is not installed.
+    for (const gone of [
+      'running-a-workspace-hub',
+      'handling-a-goal-change',
+      'reviewing-task-shape',
+    ]) {
+      expect(SRC).not.toContain(gone);
+      expect(board).not.toContain(gone);
+    }
+    // POSITIVE CONTROL: the same probe finds a skill that DOES ship, so a
+    // green run above means "absent", not "the haystack was empty".
+    expect(SRC).toContain('claude-workspaces:leading-a-workspace');
   });
 });
