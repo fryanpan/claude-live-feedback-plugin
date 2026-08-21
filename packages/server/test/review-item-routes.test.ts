@@ -15,7 +15,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ReviewPayload, Thread, User } from '@feedback/core';
+import type * as Y from 'yjs';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { ThreadSummarizer } from '../src/summarize.ts';
 
 const AGENT: User = {
   id: 'agent-onboarding',
@@ -314,6 +316,25 @@ describe('POST /threads/:id/answer', () => {
     expect(stored.comments[0]?.review?.answeredWith).toBe('below');
   });
 
+  it('stamps who answered and their words onto the declaration — the record survives reload', async () => {
+    // "Answered by you: …" is rendered from the declaration, not from
+    // re-deriving which reply was the answer — so the name and the words have
+    // to be ON the stored payload, read back through a second request.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, DECISION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+      author: PERSON,
+      text: 'Move below',
+      commentId: seeded.comments[0]?.id,
+      optionId: 'below',
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const review = (await firstThread(docId)).comments[0]?.review;
+    expect(review?.answeredBy).toBe(PERSON.name);
+    expect(review?.answerText).toBe('Move below');
+    expect(typeof review?.answeredAt).toBe('number');
+  });
+
   it('accepts a typed answer with no option id — it is not a lesser answer', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId, DECISION);
@@ -358,5 +379,244 @@ describe('POST /threads/:id/answer', () => {
     });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe('not-a-review-item');
+  });
+});
+
+describe('POST /threads/:id/answer/undo', () => {
+  /** Seed a declared item and answer it, returning the declaring comment id. */
+  async function answered(docId: string): Promise<{ threadId: string; commentId: string }> {
+    const seeded = await seedThread(docId, DECISION);
+    const commentId = seeded.comments[0]?.id ?? '';
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+      author: PERSON,
+      text: 'Move below',
+      commentId,
+      optionId: 'below',
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    return { threadId: seeded.id, commentId };
+  }
+
+  it('clears the stamps, keeps the reply, and moves the answer into answerHistory', async () => {
+    const docId = await mkdoc();
+    const { threadId, commentId } = await answered(docId);
+    const res = await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, {
+      author: PERSON,
+      commentId,
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+
+    const stored = await firstThread(docId);
+    const review = stored.comments[0]?.review;
+    // Unanswered again — this is what re-offers the item on every surface,
+    // because every queue derives from these stamps and nothing else.
+    expect(review?.answeredAt).toBeUndefined();
+    expect(review?.answeredWith).toBeUndefined();
+    expect(review?.answeredBy).toBeUndefined();
+    expect(review?.answerText).toBeUndefined();
+    // SOFT delete: the words are user content, so they move rather than drop.
+    expect(review?.answerHistory).toHaveLength(1);
+    expect(review?.answerHistory?.[0]?.answerText).toBe('Move below');
+    expect(review?.answerHistory?.[0]?.answeredWith).toBe('below');
+    expect(review?.answerHistory?.[0]?.answeredBy).toBe(PERSON.name);
+    expect(review?.answerHistory?.[0]?.undoneBy).toBe(PERSON.name);
+    // The reply comment stays in the thread — undo takes back the STAMP, not
+    // the conversation.
+    expect(stored.comments).toHaveLength(2);
+    expect(stored.comments[1]?.text).toBe('Move below');
+  });
+
+  it('a re-answer after undo stamps fresh and keeps the history', async () => {
+    const docId = await mkdoc();
+    const { threadId, commentId } = await answered(docId);
+    await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, {
+      author: PERSON,
+      commentId,
+    });
+    const res = await post(`/api/docs/${docId}/threads/${threadId}/answer`, {
+      author: PERSON,
+      text: 'Keep above after all',
+      commentId,
+      optionId: 'above',
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const review = (await firstThread(docId)).comments[0]?.review;
+    expect(review?.answeredWith).toBe('above');
+    expect(review?.answerText).toBe('Keep above after all');
+    expect(review?.answerHistory).toHaveLength(1);
+  });
+
+  it('400s an item nobody has answered — two racing undos must not both be told they took something back', async () => {
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, DECISION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer/undo`, {
+      author: PERSON,
+      commentId: seeded.comments[0]?.id,
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('not-answered');
+  });
+
+  it('400s a comment that declared nothing', async () => {
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer/undo`, {
+      author: PERSON,
+      commentId: seeded.comments[0]?.id,
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('not-a-review-item');
+  });
+
+  it('400s without author or commentId', async () => {
+    const docId = await mkdoc();
+    const { threadId, commentId } = await answered(docId);
+    expect(
+      (await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, { commentId })).status,
+    ).toBe(400);
+    expect(
+      (await post(`/api/docs/${docId}/threads/${threadId}/answer/undo`, { author: PERSON })).status,
+    ).toBe(400);
+  });
+});
+
+describe('answer + undo drive the shared queue — retire everywhere, reopen everywhere', () => {
+  /** The one Home derivation: the workspace review-items route, which reads
+   *  the stamps off the declaration. No second state to sync is the design. */
+  async function queueItems(workspaceId: string): Promise<Array<{ threadId?: string }>> {
+    const res = await fetch(`${base}/api/workspaces/${workspaceId}/review-items`);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { items: Array<{ threadId?: string }> }).items;
+  }
+
+  it('an answer retires the item from the queue and an undo re-offers it', async () => {
+    const ws = await post('/api/workspaces', { name: 'undo-rt', goal: 'Round-trip the record.' });
+    expect(ws.status, await ws.clone().text()).toBe(200);
+    const { workspace } = (await ws.json()) as { workspace: { id: string } };
+    const docId = await mkdoc();
+    expect((await post(`/api/workspaces/${workspace.id}/docs`, { docId })).status).toBe(200);
+
+    const seeded = await seedThread(docId, DECISION);
+    const commentId = seeded.comments[0]?.id ?? '';
+    // On the queue while unanswered — the positive control for both zeros.
+    expect((await queueItems(workspace.id)).some((i) => i.threadId === seeded.id)).toBe(true);
+
+    const answer = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+      author: PERSON,
+      text: 'Move below',
+      commentId,
+      optionId: 'below',
+    });
+    expect(answer.status, await answer.clone().text()).toBe(200);
+    expect((await queueItems(workspace.id)).some((i) => i.threadId === seeded.id)).toBe(false);
+
+    const undo = await post(`/api/docs/${docId}/threads/${seeded.id}/answer/undo`, {
+      author: PERSON,
+      commentId,
+    });
+    expect(undo.status, await undo.clone().text()).toBe(200);
+    expect((await queueItems(workspace.id)).some((i) => i.threadId === seeded.id)).toBe(true);
+  });
+});
+
+describe('undo respects the visitor gate — a share visitor cannot spend the API key', () => {
+  // Mirrors summary-pending-flag.test.ts: the `summaryPendingTs` marker is
+  // stamped by `scheduleSummary`, which every thread event funnels through
+  // unless the write was gated (`generate: false` — what routes pass for
+  // share visitors). Nothing here touches the network: stub fetch, literal
+  // key, debounce long enough that no generation lands mid-test.
+  let gatedHandle: ServerHandle;
+  let gatedDir: string;
+  let gatedBase: string;
+  let summarizer: ThreadSummarizer;
+
+  const stubFetch = (async () =>
+    new Response(
+      JSON.stringify({ content: [{ type: 'text', text: '{"topic":"t","discussion":"d"}' }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )) as unknown as typeof fetch;
+
+  beforeAll(() => {
+    gatedDir = mkdtempSync(join(tmpdir(), 'review-undo-gate-'));
+    summarizer = new ThreadSummarizer({
+      apiKey: 'test-key-never-sent-anywhere',
+      fetchImpl: stubFetch,
+      debounceMs: 10 * 60_000,
+    });
+    gatedHandle = createServer({ port: 0, dataDir: gatedDir, summarizer });
+    gatedBase = `http://localhost:${gatedHandle.port}`;
+  });
+  afterAll(async () => {
+    summarizer.dispose();
+    await gatedHandle.stop();
+    rmSync(gatedDir, { recursive: true, force: true });
+  });
+
+  function markerOf(docId: string, threadId: string): unknown {
+    const room = gatedHandle.rooms.get(docId);
+    const threads = room?.ydoc.getMap('threads') as Y.Map<Y.Map<unknown>> | undefined;
+    return threads?.get(threadId)?.get('summaryPendingTs');
+  }
+
+  it('a gated undo schedules nothing; an ungated one still funnels through the event', async () => {
+    const docId = 'undo-gate-doc';
+    const file = join(gatedDir, `${docId}.md`);
+    writeFileSync(file, BODY);
+    const created = await fetch(`${gatedBase}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
+    });
+    expect(created.status).toBe(200);
+    const seeded = await fetch(`${gatedBase}/api/docs/${docId}/threads/by_find`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: AGENT,
+        text: 'Needs a call.',
+        find: SNIPPET,
+        review: DECISION,
+      }),
+    });
+    expect(seeded.status, await seeded.clone().text()).toBe(200);
+    const thread = ((await seeded.json()) as { thread: Thread }).thread;
+    const commentId = thread.comments[0]?.id ?? '';
+
+    const answered = await gatedHandle.rooms.answerReviewItem(
+      docId,
+      thread.id,
+      commentId,
+      PERSON,
+      'Move below',
+      'below',
+    );
+    expect(answered.ok).toBe(true);
+    const afterAnswer = markerOf(docId, thread.id);
+    // Positive control: the ungated answer DID reach scheduleSummary.
+    expect(typeof afterAnswer).toBe('number');
+
+    // The visitor gate, exactly as the route passes it (`generate: !visitor`).
+    const gated = gatedHandle.rooms.undoReviewItemAnswer(docId, thread.id, commentId, PERSON, {
+      generate: false,
+    });
+    expect(gated.ok).toBe(true);
+    expect(markerOf(docId, thread.id)).toBe(afterAnswer);
+
+    // Second positive control, so the zero above cannot be the probe going
+    // blind: an UNGATED undo moves the marker, proving undo reaches the same
+    // event funnel agents watch.
+    const reAnswered = await gatedHandle.rooms.answerReviewItem(
+      docId,
+      thread.id,
+      commentId,
+      PERSON,
+      'Move below again',
+      'below',
+    );
+    expect(reAnswered.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 2));
+    const ungated = gatedHandle.rooms.undoReviewItemAnswer(docId, thread.id, commentId, PERSON);
+    expect(ungated.ok).toBe(true);
+    expect(markerOf(docId, thread.id)).not.toBe(afterAnswer);
   });
 });

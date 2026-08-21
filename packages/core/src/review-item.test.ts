@@ -276,6 +276,67 @@ describe('readReviewPayload — loose on the way out, so nothing already stored 
       ).toBeUndefined();
     }
   });
+
+  it('carries the answer record — answeredBy and answerText — through', () => {
+    // The record's face: "Answered by you: Move below" has to survive a
+    // reload, so the words and the name live on the declaration itself.
+    const p = readReviewPayload(
+      decision({ answeredAt: 1_700_000_000_000, answeredBy: 'Jordan', answerText: 'Move below' }),
+    );
+    expect(p?.answeredBy).toBe('Jordan');
+    expect(p?.answerText).toBe('Move below');
+  });
+
+  it('drops an answeredBy or answerText that is not a string', () => {
+    for (const junk of [7, null, {}, ['Jordan']]) {
+      const p = readReviewPayload(
+        decision({ answeredBy: junk as never, answerText: junk as never }),
+      );
+      expect(p?.answeredBy).toBeUndefined();
+      expect(p?.answerText).toBeUndefined();
+    }
+  });
+
+  it('round-trips answerHistory, dropping malformed entries instead of throwing', () => {
+    const kept = {
+      answeredAt: 1_700_000_000_000,
+      answeredBy: 'Jordan',
+      answerText: 'Move below',
+      answeredWith: 'dim',
+      undoneAt: 1_700_000_100_000,
+      undoneBy: 'Jordan',
+    };
+    const p = readReviewPayload(
+      decision({
+        answerHistory: [
+          kept,
+          'not an object',
+          // No undoneAt: a history row IS an undo record; without the stamp
+          // there is nothing it records.
+          { answeredAt: 1, undoneBy: 'Jordan' },
+          // undoneBy arrived as a number — a peer can sync anything here.
+          { answeredAt: 1, undoneAt: 2, undoneBy: 7 },
+        ] as never,
+      }),
+    );
+    expect(p?.answerHistory).toEqual([kept]);
+  });
+
+  it('keeps a minimal history entry — the optional fields degrade, the record stays', () => {
+    const p = readReviewPayload(
+      decision({ answerHistory: [{ answeredAt: 1, undoneAt: 2, undoneBy: 'Jordan' }] as never }),
+    );
+    expect(p?.answerHistory).toEqual([{ answeredAt: 1, undoneAt: 2, undoneBy: 'Jordan' }]);
+  });
+
+  it('drops the answerHistory key entirely when none survive', () => {
+    expect(
+      readReviewPayload(decision({ answerHistory: ['junk'] as never }))?.answerHistory,
+    ).toBeUndefined();
+    expect(
+      readReviewPayload(decision({ answerHistory: 'junk' as never }))?.answerHistory,
+    ).toBeUndefined();
+  });
 });
 
 /**

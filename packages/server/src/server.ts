@@ -4425,6 +4425,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               }
               return j(200, { thread: res.thread });
             }
+            // Taking an answer back. The stamps move into the declaration's
+            // `answerHistory` (soft delete — the words are user content) and
+            // the reply comment stays in the thread. Un-stamping is what
+            // re-offers the item on every surface: each queue derives
+            // "waiting on you" from the stamps, so there is no second state
+            // to sync. Same visitor gating as /answer — a share visitor's
+            // click must not spend the API key.
+            if (threadRest === '/answer/undo' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const user = authorFor(body?.author);
+              const commentId = body?.commentId as string | undefined;
+              if (!user || !commentId) return j(400, { error: 'author + commentId required' });
+              const res = rooms.undoReviewItemAnswer(docId, threadId, commentId, user, {
+                generate: !visitor,
+              });
+              if (!res.ok) {
+                return j(res.error === 'no-doc' ? 404 : 400, { error: res.error });
+              }
+              return j(200, { thread: res.thread });
+            }
             if (threadRest === '/summary' && req.method === 'POST') {
               // On-demand generation. The scheduled path is debounced and
               // fire-and-forget; this one blocks and reports what happened,
