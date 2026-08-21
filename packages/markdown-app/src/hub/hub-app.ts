@@ -327,6 +327,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>o or Enter</dt><dd>open the focused task</dd>
           <dt>s</dt><dd>open the focused task's status dropdown</dd>
           <dt>a</dt><dd>open the focused task's assignee picker</dd>
+          <dt>r or F2</dt><dd>rename the focused task in place — clicking its title does the same, with the cursor where you clicked</dd>
           <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
           <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
           <dt>c</dt><dd>capture a task — type it however you like, Enter files it</dd>
