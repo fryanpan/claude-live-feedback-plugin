@@ -164,7 +164,7 @@ describe('parseTrackerMarkdown (golden file)', () => {
   // must become an ordinary band of its own, NOT be adopted into the reserved
   // bucket — a heading matching the current label is not a declaration that
   // the author meant the catch-all.
-  it("a heading named Backlog becomes its own band, not the reserved bucket", () => {
+  it('a heading named Backlog becomes its own band, not the reserved bucket', () => {
     const m = parseTrackerMarkdown(
       'Intro.\n\n# Backlog\n\n| Task | Status |\n| --- | --- |\n| Sweep the stalls | todo |\n',
       emptyWorkspace,
