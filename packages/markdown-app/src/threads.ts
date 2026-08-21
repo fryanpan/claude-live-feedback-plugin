@@ -5,7 +5,7 @@ import {
   type Thread,
   type User,
   formatTime,
-  pendingReviewCommentId,
+  pendingDeclaration,
   reviewAnswered,
   reviewItemBodyMarkdown,
   summaryKey,
@@ -505,14 +505,18 @@ export class ThreadPanel {
     // The ask these words will answer, if there is one. Computed once here
     // because the panel is the only half that holds the conversation — the
     // chrome sees an id and a string and cannot work it out for itself.
-    const answering = pendingReviewCommentId(t.comments);
+    // `pendingDeclaration` is the SAME rule the server's queue reads (core
+    // exports one copy): newest declaration wins, ts order not array order,
+    // and a resolved thread has nothing pending. Anything looser here offers
+    // an Answer composer for an item no queue is showing — answering it
+    // stamps a comment Home never offered.
+    const pending = pendingDeclaration(t);
+    const answering = pending?.id;
     // The item this thread CARRIES, pending or settled: the outstanding ask
     // when there is one, else the latest declaration (whose answered record
     // is what the reader should meet). A thread nobody declared anything on
     // has neither, and renders exactly as it always did.
-    const itemComment = answering
-      ? t.comments.find((c) => c.id === answering)
-      : latestDeclaredComment(t.comments);
+    const itemComment = pending ?? latestDeclaredComment(t.comments);
     if (answering) reply.classList.add('answering');
     const ta = document.createElement('textarea');
     ta.rows = 2;
@@ -557,7 +561,7 @@ export class ThreadPanel {
     // the composer returns to its usual place as a plain Reply.
     const detailFace: Node[] = [];
     if (itemComment?.review) {
-      const card = this.itemCard(t, itemComment, itemComment.review);
+      const card = this.itemCard(t, itemComment, itemComment.review, pending !== null);
       if (answering) card.append(reply);
       detailFace.push(card);
       if (t.comments.length > 1) {
@@ -581,7 +585,7 @@ export class ThreadPanel {
    * names, hub anatomy: the vocabulary must read as one component wherever an
    * item is met.
    */
-  private itemCard(t: Thread, c: Comment, review: ReviewPayload): HTMLElement {
+  private itemCard(t: Thread, c: Comment, review: ReviewPayload, pending: boolean): HTMLElement {
     const card = div('thread-item-card');
     const head = div('thread-item-head');
     // New UI text says Question; the class token stays `review` (stored
@@ -621,7 +625,11 @@ export class ThreadPanel {
       return card;
     }
 
-    if (review.options && review.options.length > 0) {
+    // Tappable options only while the item is actually PENDING by the shared
+    // rule. A retired ask (its thread resolved, or a newer declaration
+    // answered over it) keeps its card as a record, but offering its options
+    // would answer an item no queue is showing.
+    if (pending && review.options && review.options.length > 0) {
       const opts = div('thread-item-options');
       for (const o of review.options) {
         const b = btn('', 'thread-item-option', () =>
@@ -805,13 +813,14 @@ function btn(label: string, cls: string, on: () => void): HTMLButtonElement {
 
 /**
  * The newest declared comment in the thread, answered or not — the one whose
- * card (and, once settled, whose record) the reader should meet. Scanned from
- * the end for the same reason `pendingReviewCommentId` is: a later ask
- * supersedes an earlier one.
+ * card (and, once settled, whose record) the reader should meet. Newest by
+ * ts, for the same reason `pendingDeclaration` sorts: a later ask supersedes
+ * an earlier one, and a Yjs array's order is a merge order, not a clock.
  */
 function latestDeclaredComment(comments: ReadonlyArray<Comment>): Comment | undefined {
-  for (let i = comments.length - 1; i >= 0; i -= 1) {
-    if (comments[i]?.review) return comments[i];
+  const byTime = [...comments].sort((a, b) => a.ts - b.ts);
+  for (let i = byTime.length - 1; i >= 0; i -= 1) {
+    if (byTime[i]?.review) return byTime[i];
   }
   return undefined;
 }
