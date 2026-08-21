@@ -191,14 +191,14 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       expect(req.newBands).toEqual([{ id: G.g1a, title: 'Mobile pass' }]);
     });
 
-    it('a task swept to Chores by the same edit is in the bucket it asks about', () => {
+    it('a task swept to Backlog by the same edit is in the bucket it asks about', () => {
       const ws = store.createWorkspace('board', 'North star.', { leadAgentId: LEAD });
       store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
       const { ids: G } = submit(ws.id, [{ key: 'old', title: 'Old band' }]);
       const t = store.createTask(ws.id, { title: 'ported from the old band', goal: G.old });
       if (!t.ok) throw new Error('fixture');
       requests.length = 0;
-      // Replace the band: the open task is swept to Chores AND a band appears.
+      // Replace the band: the open task is swept to Backlog AND a band appears.
       submit(ws.id, [{ key: 'new', title: 'New band' }], {}, { drop: [G.old as string] });
       const req = bucketReviews()[0];
       if (req?.kind !== 'bucket-review') throw new Error('expected a bucket review');

@@ -24,7 +24,7 @@ ordinary work loop this interrupts, read
 north-star **goal** (a sentence or two of prose) and an ordered list of
 **goals** you place tasks into — rows like "2.1 Delivery" with optional
 subgoals. This skill calls a row a **band**, to keep it distinct from the
-north-star text. A placement names one band. Chores is the reserved band for
+north-star text. A placement names one band. Backlog is the reserved band for
 work that serves no band.
 
 ## The order to do this in
@@ -133,12 +133,12 @@ vocabulary you are about to place tasks into, and its ids are what
 
 Two traps in that list:
 
-- **Chores appears only when something is already in it.** Its id is the
+- **Backlog appears only when something is already in it.** Its id is the
   literal string `"chores"`, it is reserved, and it is not a row you can read
   out of `goals` on a board where nothing is parked. Do not conclude from its
   absence that you cannot park anything there.
 - **Not every row is a band.** Each row carries `reorderable`. It is `false` on
-  the rows the read *appends* rather than orders — Chores, and a goal id left
+  the rows the read *appends* rather than orders — Backlog, and a goal id left
   behind on a done task by an earlier removal — and those look exactly like a
   band otherwise. They matter in step 6.
 
@@ -198,7 +198,7 @@ omits, repeats or invents an id — naming the offending ids so you re-read
 instead of guessing.
 
 **Scope it as "every row at my scope whose `reorderable` is true", never
-"every depth-0 row".** Chores and orphaned goal rows sit at depth 0, look
+"every depth-0 row".** Backlog and orphaned goal rows sit at depth 0, look
 exactly like a band, and are not in the ordered list. That one filter is the
 whole rule; send either kind back and you get a 400 that tells you which it
 was — `chores` in `reservedIds` (a permanent bucket you drop from the order),
@@ -206,7 +206,7 @@ an orphaned id in `unknownIds` (the band really was removed).
 
 `set_goal_list` is a full **replace** keyed by ID, and that is the whole hazard:
 any band id you leave out is removed, and its open tasks land at the bottom of
-Chores while its done tasks orphan onto an id that no longer exists. Including a
+Backlog while its done tasks orphan onto an id that no longer exists. Including a
 band another writer added since you last read the list — which is exactly the
 case a goal change makes likely, because a goal edit usually means somebody is
 on the board right now. So:
@@ -230,7 +230,7 @@ on the board right now. So:
 
 A goal-list edit is not a north-star change and fires no re-triage of its own.
 But if a `workspace.goals_changed` line in your channel reported N tasks moved
-to Chores, those N have lost their band just as surely — sweep them too.
+to Backlog, those N have lost their band just as surely — sweep them too.
 
 ## 7. Flagging what the new goal makes obsolete
 
@@ -244,7 +244,7 @@ changed.**
   undelivered work to clear it out writes a false row into the audit trail, and
   the trail keeps both the close and the reopen — so the mistake is not
   erasable, and every "done" on the board gets a little less trustworthy.
-- **Do not silently re-place it into Chores and move on.** Chores is where
+- **Do not silently re-place it into Backlog and move on.** Backlog is where
   unbanded work lives, so the move itself is right — it is the *silence* that
   turns a judgment into a disappearance.
 - **Leave `assignee` and `status` alone.** A task another agent has
@@ -253,7 +253,7 @@ changed.**
 
 What flagging actually is, concretely — all three parts:
 
-1. **Park it in Chores**, with the `batchId`, like any other move:
+1. **Park it in Backlog**, with the `batchId`, like any other move:
 
    ```
    set_task_goal(taskId, goal: "chores", batchId: "<batchId>")
@@ -269,7 +269,7 @@ What flagging actually is, concretely — all three parts:
    create_thread(
      docId: "task:<taskId>",
      text: "Goal changed <date>. This was placed under <band> to serve "
-         + "<old aim>; the new goal does not cover that. Parked in Chores "
+         + "<old aim>; the new goal does not cover that. Parked in Backlog "
          + "rather than closed — reopen it under a band, or say it can go.",
    )
    ```
