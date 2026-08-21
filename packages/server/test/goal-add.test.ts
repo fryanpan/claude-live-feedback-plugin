@@ -185,7 +185,7 @@ describe('TaskStore.addGoal', () => {
     if (!mine.ok) return;
 
     expect(goalIds(wsId)).toEqual([launch, perf, other.goal.id, mine.goal.id]);
-    // The other writer's task is still in its band rather than swept to Chores.
+    // The other writer's task is still in its band rather than swept to Backlog.
     expect(store.getTask(otherTask.task.id)?.goal).toBe(other.goal.id);
 
     // The control that makes the assertion above non-vacuous: the full replace

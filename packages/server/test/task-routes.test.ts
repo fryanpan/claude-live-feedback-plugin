@@ -1080,7 +1080,7 @@ describe('hub workspace + task routes', () => {
   });
 
   describe('GET /api/workspaces/:id (goal summary)', () => {
-    it('returns the ordered goals with counts, parent then subgoals, Chores last', async () => {
+    it('returns the ordered goals with counts, parent then subgoals, Backlog last', async () => {
       const { wsId, G } = await (async () => {
         const r = await post('/api/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
         const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;

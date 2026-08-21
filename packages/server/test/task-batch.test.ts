@@ -4,7 +4,7 @@
  *
  * Tested through the REAL route, because everything this feature can get
  * wrong lives in the route layer: a batch endpoint that quietly drops
- * per-item `goal`/`order` (every task piled at the bottom of Chores), one
+ * per-item `goal`/`order` (every task piled at the bottom of Backlog), one
  * that forgets the owner rule the single-create route enforces, or one that
  * rejects the whole burst over a single bad row — the failure mode that makes
  * a capture tool useless, since re-sending means finding which of eight
@@ -149,7 +149,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     expect(titles).toEqual(['Jordan owns me']);
   });
 
-  it('honours per-row placement instead of piling the batch into Chores', async () => {
+  it('honours per-row placement instead of piling the batch into Backlog', async () => {
     const { wsId, G } = await seedWorkspace();
     await jj<BatchResult>(
       await post(`/api/workspaces/${wsId}/tasks/batch`, {
@@ -157,7 +157,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
         tasks: [
           { title: 'Placed on a goal', goal: G.index, order: 7 },
           { title: 'Placed on its parent', goal: G.ship },
-          // The other direction: an unplaced row still rests in Chores, the
+          // The other direction: an unplaced row still rests in Backlog, the
           // way a single create does.
           { title: 'Unplaced' },
         ],

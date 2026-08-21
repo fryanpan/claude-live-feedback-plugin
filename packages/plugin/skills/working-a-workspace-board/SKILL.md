@@ -72,7 +72,7 @@ subscribed anyway, and `takeover: true` is there for when you mean it.
 
 Before you pick up anything, call `get_workspace(workspaceId)`. It returns the
 goal list **in priority order** with per-goal counts — parent goals then their
-subgoals, Chores last. The first row is the highest band.
+subgoals, Backlog last. The first row is the highest band.
 
 Then call `next_tasks(workspaceId, {assignee: "<your name>"})`. It gives you
 the queue already sorted by goal band → task order, already filtered to what
@@ -252,7 +252,7 @@ for the same rows in one call, and that gap is a tooling choice rather than a
 floor.
 
 Every rule above still applies per row — omit `assignee` and that row is yours,
-give it a `goal` and it lands there instead of in Chores. It returns the created
+give it a `goal` and it lands there instead of in Backlog. It returns the created
 tasks **in board order**, so you see the ranking you just produced without a
 second read.
 

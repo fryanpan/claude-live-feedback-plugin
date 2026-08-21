@@ -948,7 +948,7 @@ function wireBoardReorder(
   }
 }
 
-/** Goals-as-sections, Chores last (already ordered by the model); done rows
+/** Goals-as-sections, Backlog last (already ordered by the model); done rows
  *  stay in place, drawn done — finishing a task doesn't move it (§3.9). */
 export function renderBoard(
   container: HTMLElement,
@@ -991,7 +991,7 @@ export function renderBoard(
     if (section.tasks.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'hub-section-empty';
-      empty.textContent = section.isChores ? 'No chores.' : 'No tasks yet.';
+      empty.textContent = section.isChores ? 'Nothing in the backlog.' : 'No tasks yet.';
       sec.append(empty);
     } else {
       for (const task of section.tasks) sec.append(renderTaskRow(task, handlers));
@@ -1009,7 +1009,7 @@ export function renderBoard(
  * beside the tap-to-rename the section titles already have.
  *
  * It appends after the last REAL band rather than at the very end, because
- * Chores is a fixed catch-all that always renders last: a band added after it
+ * Backlog is a fixed catch-all that always renders last: a band added after it
  * would be the only thing below the bucket for work that has no band.
  *
  * Enter files it, Escape abandons it, and blurring an empty box closes it —
@@ -1075,7 +1075,7 @@ export interface UnplacedStripHandlers {
 /**
  * "3 tasks have no goal yet · oldest waiting 6d", directly above the board.
  *
- * Above it on purpose. The tasks this counts rest at the BOTTOM of Chores,
+ * Above it on purpose. The tasks this counts rest at the BOTTOM of Backlog,
  * which is the last thing on the page and the reason the bucket goes unread —
  * a notice rendered down there would inherit exactly the invisibility it
  * exists to fix.
@@ -2431,7 +2431,7 @@ export interface DetailHandlers {
   /** The agents currently attached to this workspace — see `BoardHandlers`. */
   knownAgentIds?: string[];
   /** Names the goal the way the board's own section header does — pass
-   *  `hub-model`'s `goalLabel`, which resolves subgoals and Chores. The panel
+   *  `hub-model`'s `goalLabel`, which resolves subgoals and Backlog. The panel
    *  is where a reader goes to find out what a task is FOR, so an id is a
    *  fact about the store rather than an answer. Optional, and without it the
    *  row falls back to the id — a missing lookup must not blank it. */

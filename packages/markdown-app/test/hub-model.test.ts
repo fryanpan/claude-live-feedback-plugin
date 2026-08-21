@@ -88,12 +88,12 @@ const filters: BoardFilters = {
 };
 
 describe('boardSections', () => {
-  it('orders sections by goal priority, subgoals nested after their parent, Chores last', () => {
+  it('orders sections by goal priority, subgoals nested after their parent, Backlog last', () => {
     const sections = boardSections(GOALS, [], filters);
     expect(sections.map((s) => s.id)).toEqual(['g-pr', 'g-pr-tickets', 'g-blog', CHORES_ID]);
     expect(sections.map((s) => s.depth)).toEqual([0, 1, 0, 0]);
     expect(sections[3]?.isChores).toBe(true);
-    expect(sections[3]?.title).toBe('Chores');
+    expect(sections[3]?.title).toBe('Backlog');
   });
 
   it('places tasks in their goal or subgoal section, sorted by fractional order', () => {
@@ -105,7 +105,7 @@ describe('boardSections', () => {
     expect(sections[1]?.tasks.map((t) => t.id)).toEqual([sub.id]);
   });
 
-  it('renders a task whose goal id no longer exists under Chores rather than dropping it', () => {
+  it('renders a task whose goal id no longer exists under Backlog rather than dropping it', () => {
     const orphan = task({ goal: 'g-deleted' });
     const sections = boardSections(GOALS, [orphan], filters);
     // Positive control: the task is somewhere at all.
@@ -120,12 +120,12 @@ describe('goalLabel', () => {
     expect(goalLabel(GOALS, 'g-pr-tickets')).toBe('1.1 Post-PR tickets');
   });
 
-  // Anything boardSections drops into Chores has to READ as Chores. A row
+  // Anything boardSections drops into Backlog has to READ as Backlog. A row
   // sitting under a header that says one thing while its detail panel says
   // another is the same defect as printing the raw id.
-  it('says Chores for the catch-all and for a goal that no longer exists', () => {
-    expect(goalLabel(GOALS, CHORES_ID)).toBe('Chores');
-    expect(goalLabel(GOALS, 'g-deleted')).toBe('Chores');
+  it('says Backlog for the catch-all and for a goal that no longer exists', () => {
+    expect(goalLabel(GOALS, CHORES_ID)).toBe('Backlog');
+    expect(goalLabel(GOALS, 'g-deleted')).toBe('Backlog');
     // The pairing this has to hold: same input, same answer as the board.
     const section = boardSections(GOALS, [task({ goal: 'g-deleted' })], filters).find((s) =>
       s.tasks.some((t) => t.goal === 'g-deleted'),
@@ -1206,11 +1206,11 @@ describe('reviewQueue — task priority is the primary key', () => {
   // in the four gates reads them together, so this is the only thing standing
   // between them and a silent drift — including the fallback, which is the
   // half most likely to be changed in one place.
-  it('goalRank agrees with the board’s section order, Chores and strays last', () => {
+  it('goalRank agrees with the board’s section order, Backlog and strays last', () => {
     const rank = goalRank(GOALS);
     const sectionIds = boardSections(GOALS, [], filters).map((s) => s.id);
     expect(sectionIds.map(rank)).toEqual(sectionIds.map((_, i) => i));
-    // A goal id no section carries renders under Chores on the board, so it
+    // A goal id no section carries renders under Backlog on the board, so it
     // must rank there too rather than at the front.
     expect(rank('g-deleted')).toBe(rank(CHORES_ID));
   });
@@ -1914,9 +1914,9 @@ describe('unplacedNotice — the quiet bucket says how many and how long', () =>
     expect(unplacedNotice([b, a], NOW)?.oldestTaskId).toBe('t-aaa');
   });
 
-  it('reads unplacedSince, not "is it in Chores" — the proxy that was wrong both ways', () => {
+  it('reads unplacedSince, not "is it in Backlog" — the proxy that was wrong both ways', () => {
     // Direction 1: an explicit `goal: 'chores'` IS a placement. It sits in
-    // Chores with no marker and must not be counted.
+    // Backlog with no marker and must not be counted.
     const deliberateChore = task({ goal: CHORES_ID });
     // Direction 2: a task swept out of a removed band keeps the
     // `triagedAgainst` of the placement it lost, so the old predicate never
