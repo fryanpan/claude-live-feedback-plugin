@@ -149,4 +149,4 @@ If Vite / webpack strips `<script>` tags in HTML, add the widget to
   thread or doc comment the mockup answers (with a `review` payload when
   you're asking someone to look), bare URL on its own line — see "Present
   the work itself in context" in the
-  `claude-workspaces:working-a-workspace-board` skill.
+  `claude-workspaces:working-in-a-workspace` skill.
