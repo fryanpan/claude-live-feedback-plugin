@@ -791,7 +791,7 @@ function reviewHeader(review: Comment['review']): HTMLElement | null {
   if (!review) return null;
   const box = div('comment-review');
   const kind = span('comment-review-k');
-  kind.textContent = review.shape === 'decision' ? 'Decision' : 'Review';
+  kind.textContent = review.shape === 'decision' ? 'Decision' : 'Question';
   const headline = div('comment-review-headline');
   headline.textContent = review.headline;
   const why = div('comment-review-why');

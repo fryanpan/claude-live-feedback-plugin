@@ -18,6 +18,7 @@
 import {
   type ReviewPayload,
   checkReviewPayload,
+  readReviewPayload,
   reviewGapAdvice,
   reviewPayloadMessage,
 } from '@feedback/core';
@@ -125,7 +126,11 @@ export function parseReview(
   const check = checkReviewPayload(raw);
   if (!check.ok) return { ok: false, message: reviewPayloadMessage(check) };
   const advice = reviewGapAdvice(check.gaps);
-  return { ok: true, review: raw as ReviewPayload, ...(advice !== undefined ? { advice } : {}) };
+  // Same reader the store uses: the agent-facing spellings (`review_type`,
+  // 'question') normalize to the stored vocabulary here, not downstream.
+  const review = readReviewPayload(raw);
+  if (!review) return { ok: false, message: reviewPayloadMessage(check) };
+  return { ok: true, review, ...(advice !== undefined ? { advice } : {}) };
 }
 
 /**

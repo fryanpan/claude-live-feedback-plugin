@@ -22,30 +22,22 @@ Every review has exactly three honest outcomes:
 
 ## The standard
 
-**Title** — the row's one-line name, and the thing a person scanning thirty
-rows actually reads:
+The standard itself is stated once, in
+`claude-workspaces:working-in-a-workspace` ("Writing Clear Tasks"): title
+**`<persona> can <do x> so that <goal y>`** — one persona (Agent, Bryan,
+Collaborator), 20 words or less — and a body under 250 words that opens with
+a **Problem Statement** and carries specific, falsifiable **Acceptance
+Criteria**. What this skill adds is how to judge a row against it:
 
-- Shape: **`<Person> can <achieve goal X> by <describe action>`** — say WHO
-  it is for, WHAT they get, and HOW. e.g. *"Bryan can review across tasks
-  faster with clearer task descriptions and UX"*, *"Agents can revise goal
-  priority with a tool to reorder goals"*.
-- Length: **ideally under 70 characters, 100 is the hard ceiling**, and never
-  clipped mid-word — *"For tasks, I get dumped o…"* is a machine artifact,
-  not a name.
-- The failure this exists to stop is a title that states an OBSERVATION
-  ("A decision-answered event promises a link checklist" names something
-  somebody noticed): ten of those in a column give no sense of the plan, and
-  the board cannot be prioritised.
-
-**Body** — what the row owes the next reader:
-
-- **Opens with the user story** — `<persona> can <do x> so that <goal y>`,
-  one persona (Agent, Bryan, Collaborator).
-- **About a quarter the length agents write by default.** Phone-readable:
-  Bryan reviews on his phone, and a body that needs scrolling to find the
-  point has buried it.
-- **A concrete, falsifiable done-when.** "Done when titles read as stories"
-  can be checked; "improve title quality" cannot.
+- The failure the title shape exists to stop is a title that states an
+  OBSERVATION ("A decision-answered event promises a link checklist" names
+  something somebody noticed): ten of those in a column give no sense of the
+  plan, and the board cannot be prioritised.
+- Never clipped mid-word — *"For tasks, I get dumped o…"* is a machine
+  artifact, not a name.
+- **Phone-readable brevity is part of the standard, not polish.** Bryan
+  reviews on his phone, and a body that needs scrolling to find the point
+  has buried it.
 - A body written from measurement names a probe, a port, or a number, and
   dates its claim. A body written from inference reads as confident prose —
   and this project has shipped a week where three of those premises were

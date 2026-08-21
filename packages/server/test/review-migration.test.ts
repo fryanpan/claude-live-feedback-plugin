@@ -305,44 +305,50 @@ describe('against a running server, through the real routes', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('reads the queue and classifies what is really on it', async () => {
+  /**
+   * Since 2026-08-21 the queue route itself admits only asks — a receipt
+   * never reaches it, so the script has nothing left to resolve. The queue is
+   * derived per request, which is what lets the old rows triage themselves:
+   * membership changed, so they simply stopped being rows. These tests pin
+   * that the script stays a correct no-op over the new route rather than
+   * mis-resolving the questions that remain.
+   */
+  it('reads the queue and finds only the question on it', async () => {
     const rows = await fetchQueueRows(base, workspaceId);
-    // Assert the shape before the behaviour: a reader that found nothing would
-    // report "no receipts to resolve" for the wrong reason.
-    expect(rows.map((r) => r.docId).sort()).toEqual([receiptDoc, questionDoc].sort());
+    // The receipt thread is real and open, but it is not a row any more.
+    expect(rows.map((r) => r.docId)).toEqual([questionDoc]);
 
     const plan = triageThreads(await fetchQueueThreads(base, rows));
     const byDoc = new Map(plan.triaged.map((t) => [t.docId, t.disposition]));
-    expect(byDoc.get(receiptDoc)).toBe('receipt');
     expect(byDoc.get(questionDoc)).toBe('question');
-    expect(resolvable(plan).map((r) => r.docId)).toEqual([receiptDoc]);
+    expect(resolvable(plan)).toEqual([]);
   });
 
-  it('resolving takes the row off the queue and leaves every word of it', async () => {
-    const before = await fetchQueueRows(base, workspaceId);
-    const plan = triageThreads(await fetchQueueThreads(base, before));
+  it('a receipt thread stays OPEN and untouched — off the queue is not resolved', async () => {
+    const rows = await fetchQueueRows(base, workspaceId);
+    const plan = triageThreads(await fetchQueueThreads(base, rows));
     const { resolved, failed } = await resolveReceipts(base, 'Migration', resolvable(plan));
     expect(failed).toEqual([]);
-    expect(resolved.map((r) => r.threadId)).toEqual([receiptThread]);
+    expect(resolved).toEqual([]);
 
-    // Soft: the thread is still there, with both comments.
+    // Soft-delete discipline, now with nothing even to soft-delete: the
+    // receipt thread keeps its status and every word. Leaving the queue was a
+    // membership change, not an action taken against the thread.
     const read = await fetch(
       `${base}/api/docs/${encodeURIComponent(receiptDoc)}/threads/${receiptThread}`,
     );
     expect(read.status).toBe(200);
     const { thread: stored } = (await read.json()) as { thread: Thread };
-    expect(stored.status).toBe('resolved');
+    expect(stored.status).toBe('open');
     expect(stored.comments).toHaveLength(2);
     expect(stored.comments[1]?.text).toContain('below the fold');
 
-    // And gone from the queue, which is what makes a second pass a no-op.
-    const after = await fetchQueueRows(base, workspaceId);
-    expect(after.map((r) => r.threadId)).not.toContain(receiptThread);
     // POSITIVE CONTROL: the queue still answers, and still holds the question.
+    const after = await fetchQueueRows(base, workspaceId);
     expect(after.map((r) => r.docId)).toContain(questionDoc);
   });
 
-  it('is idempotent — a second pass finds nothing left to resolve', async () => {
+  it('is idempotent — a second pass still finds nothing to resolve', async () => {
     const rows = await fetchQueueRows(base, workspaceId);
     const plan = triageThreads(await fetchQueueThreads(base, rows));
     expect(resolvable(plan)).toEqual([]);

@@ -6517,6 +6517,7 @@ var require_dist = __commonJS((exports, module) => {
 });
 
 // packages/mcp/src/mcp.ts
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
@@ -13717,6 +13718,59 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
+// packages/mcp/src/attach-backlog.ts
+async function deliverAttachBacklog(workspaceId, backlog, deps) {
+  let comments = 0;
+  for (const row of backlog.queuedComments ?? []) {
+    if (typeof row?.id !== "string")
+      continue;
+    const original = row.payload && typeof row.payload === "object" ? row.payload : undefined;
+    const event = typeof original?.event === "string" ? original.event : typeof row.event === "string" ? row.event : undefined;
+    if (event === undefined)
+      continue;
+    const payload = original ? { ...original } : {
+      event,
+      ...typeof row.docId === "string" ? { docId: row.docId } : {},
+      ...typeof row.threadId === "string" ? { threadId: row.threadId } : {},
+      comment: {
+        ...row.author !== undefined ? { author: row.author } : {},
+        ...typeof row.text === "string" ? { text: row.text } : {},
+        ...typeof row.ts === "number" ? { ts: row.ts } : {}
+      }
+    };
+    payload.workspaceId = workspaceId;
+    payload.commentQueueId = row.id;
+    try {
+      await deps.emit(event, payload);
+    } catch {
+      continue;
+    }
+    comments += 1;
+    try {
+      await deps.ackComment(row.id);
+    } catch {}
+  }
+  let voice = 0;
+  for (const row of backlog.queuedVoice ?? []) {
+    if (typeof row?.transcript !== "string")
+      continue;
+    const applied = typeof row.applied === "string" ? row.applied : undefined;
+    const payload = {
+      route: "agent",
+      transcript: row.transcript,
+      ack: applied ? `Delivered from the queue. Already applied: ${applied}` : "Delivered from the queue.",
+      ...row.context !== undefined ? { context: row.context } : {},
+      ...row.actor !== undefined ? { actor: row.actor } : {},
+      workspaceId
+    };
+    try {
+      await deps.emit("voice.request", payload);
+      voice += 1;
+    } catch {}
+  }
+  return { comments, voice };
+}
+
 // packages/mcp/src/attachment-keepalive.ts
 var DEFAULT_INTERVAL_MS = 120000;
 function createAttachmentKeepalive(opts) {
@@ -13883,7 +13937,8 @@ async function declareWorkspaceLead(args, deps) {
     attached = await deps.http("POST", `${path}/attachments`, {
       agentId: deps.self.id,
       runtime: deps.runtime,
-      pluginVersion: deps.pluginVersion
+      pluginVersion: deps.pluginVersion,
+      processId: deps.processId
     });
     subscription = await deps.watchWorkspace(workspaceId);
   }
@@ -13903,6 +13958,13 @@ async function declareWorkspaceLead(args, deps) {
   if (!declaring)
     return seat;
   const a = attached ?? {};
+  for (const q of a.queuedComments ?? []) {
+    if (typeof q?.id !== "string")
+      continue;
+    try {
+      await deps.http("POST", `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+    } catch {}
+  }
   const warnings = [];
   if (!subscription.open) {
     warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
@@ -13922,6 +13984,14 @@ async function declareWorkspaceLead(args, deps) {
     gating: a.gating,
     untriaged: a.untriaged ?? [],
     queuedVoice: a.queuedVoice ?? [],
+    queuedComments: (a.queuedComments ?? []).map((q) => ({
+      docId: q.docId,
+      ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+      event: q.event,
+      ...q.author !== undefined ? { author: q.author } : {},
+      text: q.text,
+      ts: q.ts
+    })),
     ...a.pendingRetriage ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
     ...a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {},
     ...a.taskReviews !== undefined && a.taskReviews.length > 0 ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
@@ -13990,6 +14060,29 @@ async function deliverThenCommit(frame, deliver, cursor, onGap) {
   } else if (meta2.id !== undefined) {
     cursor.lastEventId = meta2.id;
   }
+}
+
+// packages/mcp/src/task-projection.ts
+function projectTaskRows(tasks, fields) {
+  const rows = tasks;
+  if (!fields || fields.length === 0) {
+    return rows.map(({ body: _body, transitions, ...rest }) => ({
+      ...rest,
+      transitionCount: transitions?.length ?? 0
+    }));
+  }
+  const picked = new Set(["id", ...fields]);
+  return rows.map((t) => {
+    const row = {};
+    for (const key of picked) {
+      if (key === "transitionCount") {
+        row.transitionCount = t.transitions?.length ?? 0;
+      } else if (key in t) {
+        row[key] = t[key];
+      }
+    }
+    return row;
+  });
 }
 
 // packages/mcp/src/thread-create.ts
@@ -14136,7 +14229,8 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.73";
+var PLUGIN_VERSION = "0.1.79";
+var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -14241,10 +14335,15 @@ var REVIEW_ITEM_SCHEMA = {
   type: "object",
   description: "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
   properties: {
+    review_type: {
+      type: "string",
+      enum: ["decision", "question"],
+      description: "'decision' offers named options to pick between (2-6 required). 'question' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask."
+    },
     shape: {
       type: "string",
       enum: ["decision", "review"],
-      description: "'decision' offers named options to pick between (2-6 required). 'review' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask."
+      description: "Legacy spelling of `review_type` ('review' = 'question'). Accepted forever so old callers keep working; new calls should send `review_type`."
     },
     headline: {
       type: "string",
@@ -14260,11 +14359,11 @@ var REVIEW_ITEM_SCHEMA = {
     },
     detail: {
       type: "string",
-      description: "The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a review."
+      description: "The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a question."
     },
     options: {
       type: "array",
-      description: "For 'decision' only: 2-6 options. Refused on a 'review'.",
+      description: "For 'decision' only: 2-6 options. Refused on a 'question'.",
       items: {
         type: "object",
         properties: {
@@ -14279,7 +14378,7 @@ var REVIEW_ITEM_SCHEMA = {
       }
     }
   },
-  required: ["shape", "headline", "why"]
+  required: ["headline", "why"]
 };
 var TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
@@ -14289,8 +14388,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "list_docs",
-      description: "List review docs currently registered on the server.",
-      inputSchema: { type: "object", properties: {} }
+      description: "List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or grouping id) — omit it to list every doc on the server.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: {
+            type: "string",
+            description: "Only docs in this workspace. Matches hub-board membership and the grouping workspaceId folder binds / diff reviews stamp on their members. An unknown id returns an empty list."
+          }
+        }
+      }
     },
     {
       name: "list_threads",
@@ -14395,7 +14502,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_doc",
-      description: "Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits.",
+      description: 'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits. On a big doc this result is BODY-SIZED (real docs have returned 320KB, past tool-result caps) — when you only need health/shape ("is it bound, is it wedged, how big, what is pending"), call doc_status instead and read the body only if you actually need the text.',
+      inputSchema: {
+        type: "object",
+        properties: { docId: { type: "string" } },
+        required: ["docId"]
+      }
+    },
+    {
+      name: "doc_status",
+      description: "Cheap doc health check — the doc's metadata and counts WITHOUT any of the body (no plainText, no blocks, no thread text), a few hundred bytes where get_doc can run to hundreds of KB. Returns {docId, type, title?, bound, path?, syncError?, lastActivityAt?, textLength, blockCount, threads: {open, resolved}, pendingSuggestions}. Use it before/instead of get_doc when the question is about the doc rather than its text: is it still bound to disk and where (`bound`/`path`), did the last sync wedge (`syncError` — read it, it names the conflict), how big is what get_doc would return (`textLength`), is anything waiting (`threads.open`, `pendingSuggestions`). Answers 404 for an unknown docId.",
       inputSchema: {
         type: "object",
         properties: { docId: { type: "string" } },
@@ -14630,7 +14746,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "find_and_replace",
-      description: "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
+      description: "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. A no-match comes back with a near-miss `hint` when the doc contains the text up to letter case (`kind: 'case'`) or up to whitespace runs (`kind: 'whitespace'` — double spaces, NBSP, newlines); the hint's `preview` quotes the doc's ACTUAL characters — real newlines included, never flattened to spaces — so copy the find from it and re-issue rather than guessing (or, never, editing the bound file on disk); if the quoted span crosses a paragraph break (contains `\n\n`), the re-issue reports `cross-node` because the break is not editable text — split the edit per block instead. Use `occurrence` (1-indexed) to pick one explicitly, or pass `replaceAll: true` to replace every occurrence in one call — the right tool for a mechanical sweep (the same stale SHA or renamed identifier in dozens of places), which must NEVER be done by writing the bound file on disk. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14640,6 +14756,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextBefore: { type: "string" },
           contextAfter: { type: "string" },
           occurrence: { type: "number" },
+          replaceAll: {
+            type: "boolean",
+            description: "Replace every occurrence in one call — one Yjs transaction, marks carried per site. Use for mechanical sweeps (the same stale SHA in 44 places) instead of looping occurrence-by-occurrence or, worse, editing the bound file on disk. Returns { replaced } (and skippedCrossNode when a match straddled formatting boundaries and was left alone). Mutually exclusive with occurrence and with suggest."
+          },
           parseInlineMarks: { type: "boolean" },
           suggest: {
             type: "boolean",
@@ -14730,13 +14850,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "insert_blocks_after_thread",
-      description: "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'.",
+      description: "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'. If the anchor sits inside a list item, the default placement nests the new blocks under that item — pass placement 'top-level' to insert after the entire list instead.",
       inputSchema: {
         type: "object",
         properties: {
           docId: { type: "string" },
           threadId: { type: "string" },
-          markdown: { type: "string" }
+          markdown: { type: "string" },
+          placement: {
+            type: "string",
+            enum: ["after-block", "top-level"],
+            description: `Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead ("add a section after this list").`
+          }
         },
         required: ["docId", "threadId", "markdown"]
       }
@@ -14779,13 +14904,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "insert_blocks_at_anchor",
-      description: "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element.",
+      description: "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element. CAUTION: an anchor inside a list item nests everything under that item by default — pass placement 'top-level' to insert after the whole list.",
       inputSchema: {
         type: "object",
         properties: {
           docId: { type: "string" },
           anchorId: { type: "string" },
-          markdown: { type: "string" }
+          markdown: { type: "string" },
+          placement: {
+            type: "string",
+            enum: ["after-block", "top-level"],
+            description: `Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead ("add a section after this list").`
+          }
         },
         required: ["docId", "anchorId", "markdown"]
       }
@@ -15019,7 +15149,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               properties: {
                 title: {
                   type: "string",
-                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.'
+                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. The standard: `<persona> can <do x> so that <goal y>` — ONE persona (Agent, Bryan, Collaborator), 20 words or less so it fits every screen. e.g. "Bryan can review across tasks faster so that review sessions stay short", "Agent can reorder goals so that the board\'s priority stays current". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.'
                 },
                 body: {
                   type: "string",
@@ -15097,7 +15227,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: { type: "string", description: "Hub workspace the task lands in." },
           title: {
             type: "string",
-            description: "Override the drafted title. Worth sending: the drafted one is a clip of somebody’s comment, so it names what was SAID rather than what will be done. The standard is `<Person> can <achieve goal X> by <describe action>`, under 70 characters."
+            description: "Override the drafted title. Worth sending: the drafted one is a clip of somebody’s comment, so it names what was SAID rather than what will be done. The standard is `<persona> can <do x> so that <goal y>`, one persona, 20 words or less."
           },
           body: { type: "string", description: "Override the drafted body." },
           assignee: {
@@ -15145,7 +15275,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_tasks",
-      description: `List a hub workspace's tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation.`,
+      description: 'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation. On a big board the default rows still run large (reviews with their quotes and answers, infoRequests, options, evidence ride on every row — a real board hit 122KB); pass `fields` to pick exactly the keys you need.',
       inputSchema: {
         type: "object",
         properties: {
@@ -15153,7 +15283,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           goal: { type: "string" },
           status: { type: "string", enum: ["todo", "in-progress", "done"] },
           assignee: { type: "string" },
-          needs: { type: "string", enum: ["action", "decision"] }
+          needs: { type: "string", enum: ["action", "decision"] },
+          fields: {
+            type: "array",
+            items: { type: "string" },
+            description: "Project each row to just these keys (`id` always included; keys a row lacks are omitted). Use for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB. 'transitionCount' is computable here without hauling transitions. Omit (or pass []) for the historical default trim."
+          }
         },
         required: ["workspaceId"]
       }
@@ -15241,7 +15376,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: "string" },
           title: {
             type: "string",
-            description: "The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `claude-workspaces:reviewing-task-shape` skill."
+            description: "The new one-line name. Omit to keep the current one. Aim for `<persona> can <do x> so that <goal y>` — one persona, 20 words or less, never clipped mid-word; the full standard is in the `claude-workspaces:working-in-a-workspace` skill."
           },
           body: {
             type: "string",
@@ -15516,7 +15651,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "attach_agent",
-      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
+      description: "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then, if you LEAD this workspace, queuedVoice — voice change-requests that arrived while no lead was live (lead-only: a bystander's attach leaves the queue for the seat); act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15623,7 +15758,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await maybeAutoWatch(name, a);
     switch (name) {
       case "list_docs": {
-        const res = await http("GET", "/api/docs");
+        const { workspaceId } = a;
+        const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+        const res = await http("GET", `/api/docs${qs}`);
         return ok(res);
       }
       case "list_threads": {
@@ -15665,6 +15802,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "get_doc": {
         const { docId } = a;
         const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content`);
+        return ok(res);
+      }
+      case "doc_status": {
+        const { docId } = a;
+        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/status`);
         return ok(res);
       }
       case "create_review_doc": {
@@ -15798,6 +15940,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           contextBefore,
           contextAfter,
           occurrence,
+          replaceAll,
           parseInlineMarks,
           suggest
         } = a;
@@ -15807,6 +15950,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...contextBefore !== undefined ? { contextBefore } : {},
           ...contextAfter !== undefined ? { contextAfter } : {},
           ...occurrence !== undefined ? { occurrence } : {},
+          ...replaceAll === true ? { replaceAll: true } : {},
           ...parseInlineMarks === true ? { parseInlineMarks: true } : {},
           ...suggest === true ? { suggest: true, author: suggestionAuthor() } : {}
         });
@@ -15847,8 +15991,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "insert_blocks_after_thread": {
-        const { docId, threadId, markdown } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown });
+        const { docId, threadId, markdown, placement } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`, { markdown, ...placement !== undefined ? { placement } : {} });
         return ok(res);
       }
       case "create_anchor": {
@@ -15868,8 +16012,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "insert_blocks_at_anchor": {
-        const { docId, anchorId, markdown } = a;
-        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown });
+        const { docId, anchorId, markdown, placement } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`, { markdown, ...placement !== undefined ? { placement } : {} });
         return ok(res);
       }
       case "delete_anchor": {
@@ -16037,7 +16181,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           watchWorkspace,
           self: AUTHOR,
           runtime: "claude-code-local",
-          pluginVersion: PLUGIN_VERSION
+          pluginVersion: PLUGIN_VERSION,
+          processId: PROCESS_ID
         }));
       }
       case "attach_doc": {
@@ -16125,7 +16270,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ workspaceId, tasks: res.tasks });
       }
       case "list_tasks": {
-        const { workspaceId, goal, status, assignee, needs } = a;
+        const { workspaceId, goal, status, assignee, needs, fields } = a;
         const qs = new URLSearchParams;
         if (goal !== undefined)
           qs.set("goal", goal);
@@ -16139,10 +16284,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
         return ok({
           workspaceId,
-          tasks: res.tasks.map(({ body: _body, transitions, ...rest }) => ({
-            ...rest,
-            transitionCount: transitions?.length ?? 0
-          }))
+          tasks: projectTaskRows(res.tasks, fields)
         });
       }
       case "task_transition": {
@@ -16373,12 +16515,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           agentId: agentId ?? AUTHOR.id,
           runtime: runtime ?? "claude-code-local",
           ...capabilities !== undefined ? { capabilities } : {},
-          pluginVersion: PLUGIN_VERSION
+          pluginVersion: PLUGIN_VERSION,
+          processId: PROCESS_ID
         });
         if (agentId === undefined || agentId === AUTHOR.id)
           markAttached(workspaceId);
         if (subscribe !== false)
           await watchWorkspace(workspaceId);
+        for (const q of res.queuedComments ?? []) {
+          if (typeof q?.id !== "string")
+            continue;
+          try {
+            await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+          } catch {}
+        }
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
@@ -16386,6 +16536,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           queuedVoice: res.queuedVoice ?? [],
+          queuedComments: (res.queuedComments ?? []).map((q) => ({
+            docId: q.docId,
+            ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+            event: q.event,
+            ...q.author !== undefined ? { author: q.author } : {},
+            text: q.text,
+            ts: q.ts
+          })),
           ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
           ...res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {},
           ...res.taskReviews !== undefined && res.taskReviews.length > 0 ? { taskReviews: res.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
@@ -16483,13 +16641,24 @@ async function ensureWatchesRestored() {
       const reattached = [];
       for (const workspaceId of boardsToReattach(lastCoverage)) {
         try {
-          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+          const attachRes = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
             agentId: AUTHOR.id,
             runtime: "claude-code-local",
-            pluginVersion: PLUGIN_VERSION
+            pluginVersion: PLUGIN_VERSION,
+            processId: PROCESS_ID
           });
           markAttached(workspaceId);
           reattached.push(workspaceId);
+          await deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (shouldForwardFrame.shouldForward(ev, payload)) {
+                await emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
+            }
+          });
         } catch {}
       }
       if (reattached.length > 0)
@@ -16680,9 +16849,18 @@ async function handleFrame(raw) {
     });
     return;
   }
-  if (!shouldForwardFrame.shouldForward(ev, payload))
+  if (shouldForwardFrame.shouldForward(ev, payload)) {
+    await emitChannelMessage(ev, payload);
+  }
+  await ackCommentRow(payload);
+}
+async function ackCommentRow(payload) {
+  const p = payload;
+  if (typeof p?.commentQueueId !== "string" || typeof p?.workspaceId !== "string")
     return;
-  await emitChannelMessage(ev, payload);
+  try {
+    await http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`, {});
+  } catch {}
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
 async function emitHubChannelMessage(event, rawPayload) {
@@ -16775,6 +16953,25 @@ async function emitChannelMessage(event, rawPayload) {
   }
   const p = rawPayload ?? {};
   const docId = p.docId ?? "unknown";
+  if (event === "doc.sync_error") {
+    const where2 = p.path ?? docId;
+    const body2 = `[sync error] ${where2}: ${p.message ?? "disk↔doc sync failed — call get_doc for details"}`;
+    await server.notification({
+      method: "notifications/claude/channel",
+      params: {
+        source: "claude-workspaces",
+        sent_at: new Date().toISOString(),
+        content: body2,
+        meta: {
+          doc_id: docId,
+          event,
+          ...p.path ? { path: p.path } : {},
+          ...p.backupPath ? { backup_path: p.backupPath } : {}
+        }
+      }
+    });
+    return;
+  }
   if (event.startsWith("suggestion.")) {
     const sid = p.sid ?? "";
     const action2 = event.slice("suggestion.".length);
@@ -16802,12 +16999,13 @@ async function emitChannelMessage(event, rawPayload) {
   }
   const threadId = p.threadId ?? "";
   const snippet = p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? "";
-  const author = p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
-  const text = p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
+  const statusChange = event === "thread.resolved" || event === "thread.reopened";
+  const author = statusChange ? p.actor?.name ?? "" : p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
+  const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
   const header = snippet ? `on "${truncate2(snippet, 60)}"` : "";
-  const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}] thread ${threadId} ${header}`.trim();
+  const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}]${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
     params: {

@@ -744,18 +744,17 @@ export interface ReviewThreadItem {
    */
   kind: 'task-thread' | 'doc-thread' | 'task-review';
   /**
-   * Which half of the queue this came from.
+   * How this row earned its place. Since 2026-08-21 membership is the
+   * SERVER's call and every shipped row is an ask: `declared` — an agent
+   * said in so many words that it is asking for something, by putting a
+   * `review` payload on its comment; `unreplied` — the inferred half, which
+   * now fires only on a direct question to a named person that nobody has
+   * answered (the old any-agent-comment rule accumulated one permanent row
+   * per thing the agents got right, which is what this feature removed).
    *
-   * `declared` — an agent said in so many words that it is asking for
-   * something, by putting a `review` payload on its comment. `unreplied` —
-   * the older INFERRED rule: an agent comment nobody has replied to. The
-   * second one fires on exactly what a finished exchange looks like, so it
-   * accumulated one permanent row per thing the agents got right, which is
-   * what this feature exists to stop.
-   *
-   * Absent on a payload from a server older than the field, which reads as
-   * `unreplied` — every pre-existing row keeps its pre-existing meaning
-   * rather than being promoted into a queue it never declared for.
+   * Absent on a payload from a server older than the field. The row is still
+   * placed — the server shipped it, so hiding it here would be the
+   * vanishing-row bug — it just never renders as a declared card.
    */
   band?: 'declared' | 'unreplied';
   /** The declaration itself, on a `declared` item. */
@@ -830,9 +829,9 @@ export interface ReviewItem {
   decision?: DecisionRow;
   /** Set on either thread kind — where the reply gets written. */
   thread?: ReviewThreadItem;
-  /** Set when an agent DECLARED this as a review item. Its presence is what
-   *  separates the queue proper from the inferred `unreplied` list below, so
-   *  every reader can ask one question rather than re-deriving the rule. */
+  /** Set when an agent DECLARED this as a review item. Presence decides how
+   *  the row RENDERS (the authored card vs the derived line) — never whether
+   *  it is in the queue, which is the server's membership call. */
   review?: ReviewPayload;
 }
 
@@ -852,19 +851,19 @@ export function reviewRow(item: ReviewItem): DecisionRow | undefined {
 }
 
 export interface ReviewQueue {
-  items: ReviewItem[];
   /**
-   * Agent comments nobody has replied to that declared NOTHING.
-   *
-   * They are deliberately not `items`: this is the inferred rule the declared
-   * queue replaces, and it fires on exactly what a finished exchange looks
-   * like. But they are not dropped either — 105 of them existed the day this
-   * shipped, a handful holding real questions, and a row that silently stops
-   * being rendered is indistinguishable from data loss to whoever wrote it.
-   * So they render under their own heading, out of the count and out of the
-   * walkthrough, where nobody has to work them and anybody can look.
+   * Every row, in the one order. There used to be an `unreplied` shelf
+   * beside this for rows the inferred rule produced — kept out of the count
+   * and the walkthrough because that rule fired on every agent comment,
+   * including exactly what a finished exchange looks like. The server stopped
+   * shipping those on 2026-08-21 (a thread row is now a declared item or a
+   * surviving direct ask, nothing else), which left the shelf holding real
+   * questions that NOTHING rendered — a computed ask invisible on Home. So
+   * the shelf is retired: a row the server ships is placed here or it does
+   * not exist anywhere, and "every row names something waiting on a person"
+   * is the server's promise, not one the client re-derives.
    */
-  unreplied: ReviewItem[];
+  items: ReviewItem[];
   total: number;
   /** How many are holding other work up right now: decisions with dependents,
    *  and nothing else. Not threads — a comment blocks nothing structurally.
@@ -1060,12 +1059,6 @@ export function reviewQueue(
   // answer, only work to do — so it surfaces as state on its own task: the
   // detail panel's blocked note, built from the same `humanBlockerRows`.
 
-  // Ranked exactly like the declared ones — same comparator, same keys — and
-  // then split at the end. Ranking them apart would make the two lists
-  // disagree about what "important" means the first time one of them learned
-  // something the other did not.
-  const inferred: Array<{ item: ReviewItem; rank: AskRank }> = [];
-
   for (const t of threadItems) {
     // A row of a kind this queue does not place is SKIPPED, not half-built.
     // The route also ships TICKET-borne review items (`task-review`) now, and
@@ -1111,11 +1104,15 @@ export function reviewQueue(
         t.threadId,
       ),
     };
-    (declared ? ranked : inferred).push(entry);
+    // Placed regardless of band. Declaring changes what the row LOOKS like
+    // (the authored card above vs the derived line), never whether it exists:
+    // membership was decided by the server when it shipped the row, and a
+    // client-side second opinion is where the shelf full of invisible
+    // questions came from.
+    ranked.push(entry);
   }
 
   ranked.sort((a, b) => compareAsk(a.rank, b.rank));
-  inferred.sort((a, b) => compareAsk(a.rank, b.rank));
   const items = ranked.map((r) => r.item);
 
   // Only decisions with dependents count as blocking. A thread blocks nothing
@@ -1124,7 +1121,6 @@ export function reviewQueue(
   // the list below does not hold.
   return {
     items,
-    unreplied: inferred.map((r) => r.item),
     total: items.length,
     blocking: decisions.blocking,
   };
@@ -2168,7 +2164,7 @@ export function reviewBadge(kind: ReviewKind): { label: string; tone: string } {
  */
 export function reviewItemBadge(item: ReviewItem): { label: string; tone: string } {
   if (item.review?.shape === 'decision') return { label: 'Decision', tone: 'decision' };
-  if (item.review?.shape === 'review') return { label: 'Review', tone: 'review' };
+  if (item.review?.shape === 'review') return { label: 'Question', tone: 'review' };
   return reviewBadge(item.kind);
 }
 
