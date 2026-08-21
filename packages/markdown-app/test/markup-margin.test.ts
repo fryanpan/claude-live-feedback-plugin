@@ -1487,3 +1487,50 @@ describe('mountMarkupMargin — suggestion chip mobile-only class / 430px', () =
     // the balloon column and reveals the chip ≤1100px.
   });
 });
+
+describe('mountMarkupMargin — a composer mounting re-measures the balloon that holds it', () => {
+  /* The reply composer's editor chunk mounts in a microtask, AFTER the
+     column measured this card: the slot-b detail face grows under a written
+     slot height, and `.thread-slot { overflow: hidden }` eats the reply box.
+     Measured in the field as a reply box hidden on a doc comment balloon.
+     The mount bubbles `lf-composer-mounted`; the margin owns re-measuring
+     its own subtree and restacking the column. */
+  it('re-sizes the slots when lf-composer-mounted bubbles out of a card', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Please clarify this.',
+    );
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon.lf-balloon-comment') as HTMLElement;
+    clickToExpand(balloon);
+    expect(balloon.classList.contains('expanded')).toBe(true);
+
+    const slotB = balloon.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const face = balloon.querySelector<HTMLElement>('.slot-b > .face-detail') as HTMLElement;
+    // The editor landed and the reply box grew from 2 rows to a mounted surface.
+    Object.defineProperty(face, 'offsetHeight', { get: () => 80, configurable: true });
+    // POSITIVE CONTROL: the slot still holds the pre-mount measurement.
+    expect(slotB.style.height).not.toBe('80px');
+
+    const ta = balloon.querySelector('.slot-b .face-detail textarea') as HTMLElement;
+    ta.dispatchEvent(new CustomEvent('lf-composer-mounted', { bubbles: true }));
+    expect(slotB.style.height).toBe('80px');
+  });
+});

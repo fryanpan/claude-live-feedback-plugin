@@ -63,6 +63,16 @@ export interface ComposerEditorModule {
   createComposerEditor: (opts: CreateComposerEditorOpts) => ComposerEditor;
 }
 
+/**
+ * Bubbles from a composer's wrapper the moment its editor mounts. The mount
+ * changes the composer's height, and in production it always happens in a
+ * microtask (the loader cache holds the chunk's promise) — after whatever
+ * measured the box took its measurement. A thread card's slot height is a
+ * number WE wrote against the bare textarea; without this announcement the
+ * mounted surface grows under it and `overflow: hidden` clips the reply box.
+ */
+export const COMPOSER_MOUNTED_EVENT = 'lf-composer-mounted';
+
 type Loader = () => ComposerEditorModule | Promise<ComposerEditorModule>;
 
 const defaultLoader: Loader = () => import('./md-composer-chunk.ts');
@@ -245,6 +255,7 @@ function mount(field: Field, mod: ComposerEditorModule): void {
     field.editor.focus(field.pendingFocus.sel, field.pendingFocus.opts);
     field.pendingFocus = null;
   }
+  wrap.dispatchEvent(new CustomEvent(COMPOSER_MOUNTED_EVENT, { bubbles: true }));
 }
 
 /** The chunk never arrived. Leave the plain textarea — it is already on
