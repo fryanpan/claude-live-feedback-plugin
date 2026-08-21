@@ -115,6 +115,36 @@ export function reviewAnswered(review: ReviewPayload): boolean {
   return review.answeredAt !== undefined || review.answeredWith !== undefined;
 }
 
+/**
+ * Which comment in a thread is the one a person's next reply ANSWERS.
+ *
+ * Three surfaces show the same review item — Home, the task, and the doc
+ * thread that carries it — and each of them has to name a `commentId` for
+ * `/answer` to stamp. Home already picked one per item because its queue is
+ * built one item at a time. The doc panel has a single reply box against a
+ * whole conversation, so it needs this: the ask those words are about.
+ *
+ * Scanned from the END, because a later ask supersedes an earlier one, and
+ * skipping answered ones on the way back means a follow-up that answered
+ * nothing does not hide the question still waiting underneath it.
+ *
+ * `undefined` means "nothing here to answer" — an ordinary thread, or one
+ * whose asks are all settled — and the caller posts a plain comment. That is
+ * the honest fallback rather than a default target: inventing one would let a
+ * remark stamp an answer nobody gave.
+ */
+export function pendingReviewCommentId(
+  comments: ReadonlyArray<{ id: string; review?: ReviewPayload }>,
+): string | undefined {
+  for (let i = comments.length - 1; i >= 0; i -= 1) {
+    const c = comments[i];
+    if (!c?.review) continue;
+    if (reviewAnswered(c.review)) continue;
+    return c.id;
+  }
+  return undefined;
+}
+
 /** A question asked back AT a review item instead of answering it. The item
  *  stays open and stays counted — that is the whole point of it being its own
  *  thing rather than an answer carrying a flag. */

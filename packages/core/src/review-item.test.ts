@@ -5,6 +5,7 @@ import {
   type TaskReviewItem,
   checkReviewPayload,
   isReviewItemOpen,
+  pendingReviewCommentId,
   readReviewPayload,
   readTaskReviewItem,
   reviewAnswered,
@@ -522,5 +523,62 @@ describe('the writer’s gate is exactly as strict as it was', () => {
     expect(c.ok).toBe(true);
     expect(c.errors).toEqual([]);
     expect(c.gaps).toContain('lookFor');
+  });
+});
+
+/**
+ * The doc surface's answer target.
+ *
+ * A person meets a review item three ways — on Home, on the task, and in the
+ * doc thread that carries it — and until now only the first two could answer
+ * one. The doc panel posted every reply to `/comments`, so a thread could
+ * render the declaration, take his words, and leave the item in the queue
+ * exactly as it was. Four declared items on `board-review-2026-08-19` have a
+ * human reply each and zero `answeredAt` stamps.
+ *
+ * `/answer` needs to be told WHICH comment it is answering, so the predicate
+ * that picks it is the whole of the doc surface's new logic.
+ */
+describe('pendingReviewCommentId', () => {
+  const ask = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
+    shape: 'review',
+    headline: 'Read the stall rota before Thursday',
+    why: 'The rota goes out Thursday and nobody has checked it',
+    ...over,
+  });
+
+  it('is undefined when nothing in the thread declared anything', () => {
+    expect(pendingReviewCommentId([{ id: 'c1' }, { id: 'c2' }])).toBeUndefined();
+  });
+
+  it('names the declaring comment when one is unanswered', () => {
+    expect(pendingReviewCommentId([{ id: 'c1', review: ask() }, { id: 'c2' }])).toBe('c1');
+  });
+
+  it('is undefined once that item has been answered', () => {
+    const answered = ask({ answeredAt: 1_700_000_000_000 });
+    expect(pendingReviewCommentId([{ id: 'c1', review: answered }])).toBeUndefined();
+  });
+
+  it('reads an option tapped before answeredAt existed as answered too', () => {
+    const tapped = ask({ shape: 'decision', answeredWith: 'goal' });
+    expect(pendingReviewCommentId([{ id: 'c1', review: tapped }])).toBeUndefined();
+  });
+
+  it('takes the LATEST unanswered ask, not the first', () => {
+    const comments = [
+      { id: 'c1', review: ask({ answeredAt: 1 }) },
+      { id: 'c2', review: ask({ headline: 'And now the feed order' }) },
+      { id: 'c3' },
+    ];
+    expect(pendingReviewCommentId(comments)).toBe('c2');
+  });
+
+  it('still finds an older ask the newest comment did not answer', () => {
+    const comments = [
+      { id: 'c1', review: ask() },
+      { id: 'c2', review: ask({ answeredAt: 2 }) },
+    ];
+    expect(pendingReviewCommentId(comments)).toBe('c1');
   });
 });

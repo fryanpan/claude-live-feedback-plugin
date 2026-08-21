@@ -4,6 +4,7 @@ import {
   type Thread,
   type User,
   formatTime,
+  pendingReviewCommentId,
   summaryKey,
   threadSummary,
 } from '@feedback/core';
@@ -28,7 +29,14 @@ export interface ThreadPanelOpts {
   container: HTMLElement;
   currentUser: User;
   onThreadClick: (threadId: string) => void;
-  onReply: (threadId: string, text: string) => void;
+  /**
+   * `answersCommentId` is set when this reply ANSWERS a review item declared
+   * in the thread — the doc's half of the same contract Home already keeps.
+   * The chrome routes those through `/answer` so the item leaves the queue;
+   * without an id it posts a plain comment, which is what a thread with
+   * nothing outstanding should do.
+   */
+  onReply: (threadId: string, text: string, answersCommentId?: string) => void;
   onResolve: (threadId: string) => void;
   onReopen: (threadId: string) => void;
   onReanchor: (threadId: string) => void;
@@ -476,14 +484,21 @@ export class ThreadPanel {
     for (const c of t.comments.slice(1)) comments.appendChild(commentRow(c));
 
     const reply = div('thread-reply');
+    // The ask these words will answer, if there is one. Computed once here
+    // because the panel is the only half that holds the conversation — the
+    // chrome sees an id and a string and cannot work it out for itself.
+    const answering = pendingReviewCommentId(t.comments);
+    if (answering) reply.classList.add('answering');
     const ta = document.createElement('textarea');
     ta.rows = 2;
-    ta.placeholder = `Reply as ${this.opts.currentUser.name}…`;
+    ta.placeholder = answering
+      ? `Answer as ${this.opts.currentUser.name}…`
+      : `Reply as ${this.opts.currentUser.name}…`;
     if (pendingReply) ta.value = pendingReply;
     const submitReply = () => {
       const text = ta.value.trim();
       if (!text) return;
-      this.opts.onReply(t.id, text);
+      this.opts.onReply(t.id, text, answering);
       ta.value = '';
     };
     ta.addEventListener('keydown', (ev) => {
@@ -494,7 +509,7 @@ export class ThreadPanel {
     });
     reply.appendChild(ta);
     const actions = div('thread-actions');
-    actions.appendChild(btn('Reply', 'primary', submitReply));
+    actions.appendChild(btn(answering ? 'Answer' : 'Reply', 'primary', submitReply));
     // Resolve/Reopen is NOT here — one control, in the foot, outside the
     // slots. Re-anchoring is a repair, not a reply, and belongs with the
     // conversation it is repairing.
