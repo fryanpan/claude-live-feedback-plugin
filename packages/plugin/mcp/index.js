@@ -14229,7 +14229,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.77";
+var PLUGIN_VERSION = "0.1.78";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -16980,12 +16980,13 @@ async function emitChannelMessage(event, rawPayload) {
   }
   const threadId = p.threadId ?? "";
   const snippet = p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? "";
-  const author = p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
-  const text = p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
+  const statusChange = event === "thread.resolved" || event === "thread.reopened";
+  const author = statusChange ? p.actor?.name ?? "" : p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
+  const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
   const header = snippet ? `on "${truncate2(snippet, 60)}"` : "";
-  const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}] thread ${threadId} ${header}`.trim();
+  const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}]${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
     params: {
