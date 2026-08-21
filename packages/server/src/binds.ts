@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path';
-import type { DocMeta, DocType } from '@feedback/core';
+import { type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
 import {
   MAX_GROUP_DETAILS,
   assignGroups,
@@ -354,7 +354,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
   // working-tree mode only the base is pinned — the target side is live
   // by design.)
   for (const meta of host.list()) {
-    if (meta.workspaceId !== reviewId || meta.type !== 'diff') continue;
+    if (reviewIdOf(meta) !== reviewId || meta.type !== 'diff') continue;
     if (meta.diffBase !== base || (meta.diffTarget ?? null) !== target) {
       return { ok: false, error: 'review-exists-different-range' };
     }
@@ -599,7 +599,7 @@ export type RefreshWorkspaceResult =
  * the flag and reports it under `restored`.
  */
 export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWorkspaceResult {
-  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+  const members = host.list().filter((m) => reviewIdOf(m) === workspaceId);
   // No members means nothing is bound — which is also the state a folder
   // bound while EMPTY is left in (a documented degenerate success that
   // creates no docs). The root can't be recovered from the hashed
@@ -694,7 +694,7 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
   const stale: Array<WorkspaceMemberRef & { openThreads: number }> = [];
   const restored: WorkspaceMemberRef[] = [];
   for (const meta of host.list()) {
-    if (meta.workspaceId !== workspaceId) continue;
+    if (reviewIdOf(meta) !== workspaceId) continue;
     const ref: WorkspaceMemberRef = {
       docId: meta.docId,
       ...(meta.relPath ? { relPath: meta.relPath } : {}),
@@ -767,7 +767,7 @@ export function setWorkspaceGroups(
   workspaceId: string,
   groups: Array<{ title: string; paths: string[]; details?: string }>,
 ): SetWorkspaceGroupsResult {
-  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+  const members = host.list().filter((m) => reviewIdOf(m) === workspaceId);
   if (members.length === 0) return { ok: false, error: 'not-found' };
   const diffMembers = members.filter(
     (m): m is typeof m & { relPath: string } => m.type === 'diff' && !!m.relPath,
@@ -868,7 +868,7 @@ function rememberWorkspaceConfig(
   if (opts.maxFiles !== undefined) next.push(['workspaceMaxFiles', opts.maxFiles]);
   if (next.length === 0) return;
   for (const m of host.list()) {
-    if (m.workspaceId === workspaceId) writeMeta(host, m.docId, next);
+    if (reviewIdOf(m) === workspaceId) writeMeta(host, m.docId, next);
   }
 }
 
