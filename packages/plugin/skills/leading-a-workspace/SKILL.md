@@ -47,6 +47,6 @@ set_workspace_lead(workspaceId)          // no second argument
 
 Everything on the board then reaches you:
 
-- Events for tasks, review items, comments, docs, voice requests, re-triage asks, bucket reviews, task reviews
+- Events for tasks, review items, comments, docs, voice requests, bucket reviews, task reviews
 - Includes events from resources created later — you listen to everything
 - If you disconnect, events that happen in the meantime will remain queued for when you reconnect
