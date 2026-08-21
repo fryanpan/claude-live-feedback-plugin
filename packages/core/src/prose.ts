@@ -242,9 +242,21 @@ function findSegmentForOffset(segments: TextSegment[], offset: number): TextSegm
 
 export interface ReplaceResult {
   ok: boolean;
-  error?: 'no-match' | 'ambiguous' | 'cross-node' | 'out-of-range' | 'occurrence-out-of-range';
+  error?:
+    | 'no-match'
+    | 'ambiguous'
+    | 'cross-node'
+    | 'out-of-range'
+    | 'occurrence-out-of-range'
+    | 'replace-all-with-occurrence';
   /** For ambiguous results, a short preview of each candidate's neighbourhood. */
   candidates?: Array<{ docOffset: number; preview: string }>;
+  /** replaceAll only: how many occurrences were replaced. */
+  replaced?: number;
+  /** replaceAll only, present when non-zero: matches that straddled two
+   *  Y.XmlText nodes and were left untouched. The sweep is still ok — but a
+   *  count the caller cannot see is a match silently skipped. */
+  skippedCrossNode?: number;
   /** Mark keys (bold/italic/code/link/strike) that covered only PART of the
    *  replaced text, so they could not be carried onto the replacement. Present
    *  only when non-empty — a formatting loss this call could not avoid has to
@@ -252,6 +264,23 @@ export interface ReplaceResult {
   marksDropped?: string[];
   /** Human-readable companion to `marksDropped`. */
   warning?: string;
+  /** On `no-match` only: a NEAR miss a fallback scan found. `kind: 'case'`
+   *  means the pattern is in the doc up to letter case; `kind: 'whitespace'`
+   *  means it matches once whitespace runs are collapsed (double spaces,
+   *  NBSP, newlines). `preview` shows the DOC's actual characters — newlines
+   *  included, NOT flattened to spaces — so the caller can re-issue the find
+   *  verbatim instead of falling back to a raw disk write. A preview that
+   *  spans a block boundary quotes the flattened text's `\n\n` separator;
+   *  re-issuing that find reports `cross-node` (the separator is not
+   *  editable text), which is a terminal answer rather than a loop. Absent
+   *  when the text is genuinely not there. */
+  hint?: NoMatchHint;
+}
+
+/** See `ReplaceResult.hint`. */
+export interface NoMatchHint {
+  kind: 'case' | 'whitespace';
+  preview: string;
 }
 
 /** A contiguous slice of one Y.XmlText, in document order. */
@@ -421,17 +450,66 @@ export function findAndReplace(
     contextAfter?: string;
     /** 1-indexed. When omitted, requires a unique match. */
     occurrence?: number;
+    /** Replace EVERY occurrence in one transaction instead of requiring a
+     *  unique match. Mutually exclusive with `occurrence`. Default false. */
+    replaceAll?: boolean;
     /** Parse inline markdown in `replace` into Yjs marks. Default false. */
     parseInlineMarks?: boolean;
     transactionOrigin?: unknown;
   },
 ): ReplaceResult {
+  if (opts.replaceAll === true && opts.occurrence != null) {
+    // The two answer opposite questions — "which one" vs "all of them" —
+    // and guessing which the caller meant would silently do the other.
+    return { ok: false, error: 'replace-all-with-occurrence' };
+  }
   const fragment = getProseFragment(doc);
   const { matches, crossNode, plainText } = locateMatches(fragment, opts);
 
   if (matches.length === 0) {
     if (crossNode > 0) return { ok: false, error: 'cross-node' };
-    return { ok: false, error: 'no-match' };
+    const hint = noMatchHint(plainText, opts);
+    return hint ? { ok: false, error: 'no-match', hint } : { ok: false, error: 'no-match' };
+  }
+
+  if (opts.replaceAll === true) {
+    // locateMatches allows overlapping matches (context disambiguation needs
+    // them); a sweep must not apply two matches over the same characters.
+    // Keep greedy left-to-right, like String.replaceAll.
+    const kept: LocatedMatch[] = [];
+    let lastEnd = -1;
+    for (const m of matches) {
+      if (m.docOffset < lastEnd) continue;
+      kept.push(m);
+      lastEnd = m.docOffset + m.length;
+    }
+    const droppedUnion = new Set<string>();
+    doc.transact(() => {
+      // Apply in DESCENDING docOffset order so every earlier offset — both
+      // the doc-wide walk offsets and each node-local offsetInNode — is
+      // still valid when its turn comes: edits only ever land at or above
+      // the position about to be edited next.
+      for (let i = kept.length - 1; i >= 0; i--) {
+        const m = kept[i]!;
+        // Per-site mark carry, read immediately before this site's delete —
+        // a bold occurrence stays bold, a plain one stays plain.
+        const siteMarks = coveringInlineMarks([
+          { node: m.segment.node, offset: m.offsetInNode, length: m.length },
+        ]);
+        for (const k of siteMarks.dropped) droppedUnion.add(k);
+        m.segment.node.delete(m.offsetInNode, m.length);
+        insertTextWithMarks(m.segment.node, m.offsetInNode, opts.replace, {
+          parseInlineMarks: opts.parseInlineMarks === true,
+          attributes: siteMarks.attributes,
+        });
+      }
+    }, opts.transactionOrigin ?? 'agent');
+    return {
+      ok: true,
+      replaced: kept.length,
+      ...(crossNode > 0 ? { skippedCrossNode: crossNode } : {}),
+      ...marksReport([...droppedUnion]),
+    };
   }
 
   let chosen: LocatedMatch;
@@ -468,13 +546,86 @@ export function findAndReplace(
   return { ok: true, ...marksReport(marks.dropped) };
 }
 
-function preview(text: string, at: number, length: number): string {
+/**
+ * `verbatim` keeps newlines as-is instead of flattening them to spaces.
+ * The flattened form is for DISPLAY (ambiguous-match candidate lists); a
+ * near-miss hint must quote the doc's characters byte-for-byte, because the
+ * caller is told to re-issue the find from it — flattening a newline there
+ * hands back the exact string that just failed, an infinite loop.
+ */
+function preview(text: string, at: number, length: number, verbatim = false): string {
   const pad = 24;
   const start = Math.max(0, at - pad);
   const end = Math.min(text.length, at + length + pad);
   const prefix = start > 0 ? '…' : '';
   const suffix = end < text.length ? '…' : '';
-  return prefix + text.slice(start, end).replace(/\n/g, ' ') + suffix;
+  const body = text.slice(start, end);
+  return prefix + (verbatim ? body : body.replace(/\n/g, ' ')) + suffix;
+}
+
+/**
+ * Fallback scans behind a bare no-match: is the pattern in the doc up to
+ * letter case, or up to whitespace runs? A mechanical sweep that mis-cases a
+ * SHA, or single-spaces a double-spaced sentence, otherwise learns nothing
+ * from `no-match` — and the measured next move was a raw disk write against
+ * the bound file. The scan covers the FULL pattern (context included),
+ * because that is the string that failed to match; the preview quotes the
+ * doc's own characters so the caller can re-issue the find verbatim.
+ *
+ * Returns undefined when the exact pattern IS present (the no-match then has
+ * a different cause — e.g. a segment-boundary straddle — and a "case" hint
+ * would mislead) and when the text is genuinely absent. Case+whitespace
+ * combined misses are deliberately not chased: two stacked normalizations
+ * make the preview an ever-looser guess.
+ */
+function noMatchHint(
+  plainText: string,
+  opts: { find: string; contextBefore?: string; contextAfter?: string },
+): NoMatchHint | undefined {
+  const pattern = (opts.contextBefore ?? '') + opts.find + (opts.contextAfter ?? '');
+  if (pattern.length === 0 || plainText.includes(pattern)) return undefined;
+
+  const ci = plainText.toLowerCase().indexOf(pattern.toLowerCase());
+  if (ci >= 0) return { kind: 'case', preview: preview(plainText, ci, pattern.length, true) };
+
+  const hay = collapseWhitespace(plainText);
+  const needle = collapseWhitespace(pattern).text;
+  if (needle.length === 0) return undefined;
+  const wi = hay.text.indexOf(needle);
+  if (wi >= 0) {
+    const startOrig = hay.map[wi] ?? 0;
+    const endOrig =
+      wi + needle.length < hay.map.length
+        ? (hay.map[wi + needle.length] ?? plainText.length)
+        : plainText.length;
+    return {
+      kind: 'whitespace',
+      preview: preview(plainText, startOrig, endOrig - startOrig, true),
+    };
+  }
+  return undefined;
+}
+
+/** Collapse every whitespace run (space, NBSP, tab, newline — all of `\s`)
+ *  to a single space. `map[i]` is the original index of collapsed char `i`
+ *  (a run maps to its first character), so a hit in the collapsed text can
+ *  be quoted from the original. */
+function collapseWhitespace(text: string): { text: string; map: number[] } {
+  let out = '';
+  const map: number[] = [];
+  let i = 0;
+  while (i < text.length) {
+    map.push(i);
+    if (/\s/.test(text[i] as string)) {
+      out += ' ';
+      i++;
+      while (i < text.length && /\s/.test(text[i] as string)) i++;
+    } else {
+      out += text[i] as string;
+      i++;
+    }
+  }
+  return { text: out, map };
 }
 
 /** Resolve a serialized Y.RelativePosition to an absolute position in
@@ -1739,17 +1890,31 @@ function serializeBlockquote(node: Y.XmlElement): string {
   return parts.length > 0 ? parts.join('\n>\n') : '>';
 }
 
+/** Where insertBlocksAfterAnchor splices relative to the anchor's block. */
+export type BlockPlacement = 'after-block' | 'top-level';
+
 /**
  * Insert one or more markdown-parsed blocks AFTER the block containing
  * the anchor. Use this for "add a paragraph after this heading" or
  * "add a section here" — the anchor tells the agent where in the doc
  * structure to splice, and the markdown describes the new content.
+ *
+ * `placement` (default 'after-block') picks the splice point:
+ * - 'after-block': immediately after the anchor's INNERMOST block, inside
+ *   that block's parent. For an anchor inside a list item's paragraph the
+ *   parent is the listItem, so the new blocks NEST under the item — which
+ *   has broken document structure twice when the caller meant "after the
+ *   list". Kept as the default because it is the historical behavior.
+ * - 'top-level': after the anchor's TOP-LEVEL block, at fragment level —
+ *   "after the whole list / table / blockquote". For an anchor already in
+ *   a top-level block the two placements are identical.
  */
 export function insertBlocksAfterAnchor(
   doc: Y.Doc,
   opts: {
     anchorRel: Uint8Array;
     markdown: string;
+    placement?: BlockPlacement;
     transactionOrigin?: unknown;
   },
 ): AnchoredEditResult {
@@ -1759,8 +1924,11 @@ export function insertBlocksAfterAnchor(
   const { segments } = walkProse(fragment);
   const seg = segments.find((s) => s.node === raw.node);
   if (!seg || !seg.block) return { ok: false, error: 'no-host-block' };
-  const block = seg.block;
-  const parent = block.parent as Y.XmlFragment | Y.XmlElement | null;
+  // walkProse guarantees topBlock is set for any segment with a block, but
+  // fall through to the after-block path rather than crash if it isn't.
+  const topLevel = opts.placement === 'top-level' && seg.topBlock != null;
+  const block = topLevel ? (seg.topBlock as Y.XmlElement) : seg.block;
+  const parent = (topLevel ? fragment : block.parent) as Y.XmlFragment | Y.XmlElement | null;
   if (!parent) return { ok: false, error: 'no-host-block' };
   const siblings = parent.toArray();
   const idx = siblings.indexOf(block);
