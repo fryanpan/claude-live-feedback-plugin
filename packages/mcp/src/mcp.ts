@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
@@ -7,6 +8,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { readRenamedEnv } from '../../core/src/env-names.ts';
 import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
+import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
@@ -91,6 +93,17 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * fourth version site, and this file's history is that version sites drift.
  */
 const PLUGIN_VERSION = '0.1.71';
+
+/**
+ * One nonce per PROCESS, minted at module load and sent on every attach.
+ * The server compares it against the attachment's recorded nonce to answer
+ * the question the ack grace window turns on: is this attach a fresh process
+ * (bypass the grace — whatever was in flight went to a process that is gone)
+ * or the same live one re-attaching (respect it — a frame already on the
+ * wire to THIS process must not be handed over a second time through the
+ * attach response). See AgentAttachment.processId on the server side.
+ */
+const PROCESS_ID = randomUUID();
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -2521,6 +2534,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               self: AUTHOR,
               runtime: 'claude-code-local',
               pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
             },
           ),
         );
@@ -3092,6 +3106,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             // loaded at launch, not by what its machine's cache holds now.
             // Reporting it is what lets the board say a merge never arrived.
             pluginVersion: PLUGIN_VERSION,
+            // Same-process re-attaches must not re-hand rows still in
+            // flight to this very process — see PROCESS_ID.
+            processId: PROCESS_ID,
           },
         )) as {
           attachment?: { agentId?: string };
@@ -3443,13 +3460,44 @@ async function ensureWatchesRestored(): Promise<void> {
       const reattached: string[] = [];
       for (const workspaceId of boardsToReattach(lastCoverage)) {
         try {
-          await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
-            agentId: AUTHOR.id,
-            runtime: 'claude-code-local',
-            pluginVersion: PLUGIN_VERSION,
-          });
+          const attachRes = (await http(
+            'POST',
+            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
+            {
+              agentId: AUTHOR.id,
+              runtime: 'claude-code-local',
+              pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
+            },
+          )) as {
+            queuedComments?: BacklogCommentRow[];
+            queuedVoice?: Array<{ transcript?: unknown }>;
+          };
           markAttached(workspaceId);
           reattached.push(workspaceId);
+          // This POST is the fourth attach site, and the only one whose
+          // response body no tool call reads — yet the server just drained
+          // the backlog into it (voice destructively; comment rows marked
+          // emitted). Dropping it here is the ticket's own failure mode one
+          // layer down: the respawned session the queue waited for arrives,
+          // and the arrival itself eats the delivery. So forward each row as
+          // the channel notification its SSE frame would have been, acking a
+          // comment row only after its emit succeeded — same order, same
+          // reason as handleFrame.
+          await deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (shouldForwardFrame.shouldForward(ev, payload)) {
+                await emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await http(
+                'POST',
+                `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
+                {},
+              );
+            },
+          });
         } catch {
           // Best effort, exactly like the watch restore: the notice below
           // reads the coverage AFTER this, so a failure shows up as a board

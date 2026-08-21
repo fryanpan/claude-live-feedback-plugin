@@ -6517,6 +6517,7 @@ var require_dist = __commonJS((exports, module) => {
 });
 
 // packages/mcp/src/mcp.ts
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
@@ -13717,6 +13718,59 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
+// packages/mcp/src/attach-backlog.ts
+async function deliverAttachBacklog(workspaceId, backlog, deps) {
+  let comments = 0;
+  for (const row of backlog.queuedComments ?? []) {
+    if (typeof row?.id !== "string")
+      continue;
+    const original = row.payload && typeof row.payload === "object" ? row.payload : undefined;
+    const event = typeof original?.event === "string" ? original.event : typeof row.event === "string" ? row.event : undefined;
+    if (event === undefined)
+      continue;
+    const payload = original ? { ...original } : {
+      event,
+      ...typeof row.docId === "string" ? { docId: row.docId } : {},
+      ...typeof row.threadId === "string" ? { threadId: row.threadId } : {},
+      comment: {
+        ...row.author !== undefined ? { author: row.author } : {},
+        ...typeof row.text === "string" ? { text: row.text } : {},
+        ...typeof row.ts === "number" ? { ts: row.ts } : {}
+      }
+    };
+    payload.workspaceId = workspaceId;
+    payload.commentQueueId = row.id;
+    try {
+      await deps.emit(event, payload);
+    } catch {
+      continue;
+    }
+    comments += 1;
+    try {
+      await deps.ackComment(row.id);
+    } catch {}
+  }
+  let voice = 0;
+  for (const row of backlog.queuedVoice ?? []) {
+    if (typeof row?.transcript !== "string")
+      continue;
+    const applied = typeof row.applied === "string" ? row.applied : undefined;
+    const payload = {
+      route: "agent",
+      transcript: row.transcript,
+      ack: applied ? `Delivered from the queue. Already applied: ${applied}` : "Delivered from the queue.",
+      ...row.context !== undefined ? { context: row.context } : {},
+      ...row.actor !== undefined ? { actor: row.actor } : {},
+      workspaceId
+    };
+    try {
+      await deps.emit("voice.request", payload);
+      voice += 1;
+    } catch {}
+  }
+  return { comments, voice };
+}
+
 // packages/mcp/src/attachment-keepalive.ts
 var DEFAULT_INTERVAL_MS = 120000;
 function createAttachmentKeepalive(opts) {
@@ -13883,7 +13937,8 @@ async function declareWorkspaceLead(args, deps) {
     attached = await deps.http("POST", `${path}/attachments`, {
       agentId: deps.self.id,
       runtime: deps.runtime,
-      pluginVersion: deps.pluginVersion
+      pluginVersion: deps.pluginVersion,
+      processId: deps.processId
     });
     subscription = await deps.watchWorkspace(workspaceId);
   }
@@ -14129,6 +14184,7 @@ function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
 var PLUGIN_VERSION = "0.1.71";
+var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -16029,7 +16085,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           watchWorkspace,
           self: AUTHOR,
           runtime: "claude-code-local",
-          pluginVersion: PLUGIN_VERSION
+          pluginVersion: PLUGIN_VERSION,
+          processId: PROCESS_ID
         }));
       }
       case "attach_doc": {
@@ -16365,7 +16422,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           agentId: agentId ?? AUTHOR.id,
           runtime: runtime ?? "claude-code-local",
           ...capabilities !== undefined ? { capabilities } : {},
-          pluginVersion: PLUGIN_VERSION
+          pluginVersion: PLUGIN_VERSION,
+          processId: PROCESS_ID
         });
         if (agentId === undefined || agentId === AUTHOR.id)
           markAttached(workspaceId);
@@ -16490,13 +16548,24 @@ async function ensureWatchesRestored() {
       const reattached = [];
       for (const workspaceId of boardsToReattach(lastCoverage)) {
         try {
-          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+          const attachRes = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
             agentId: AUTHOR.id,
             runtime: "claude-code-local",
-            pluginVersion: PLUGIN_VERSION
+            pluginVersion: PLUGIN_VERSION,
+            processId: PROCESS_ID
           });
           markAttached(workspaceId);
           reattached.push(workspaceId);
+          await deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (shouldForwardFrame.shouldForward(ev, payload)) {
+                await emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
+            }
+          });
         } catch {}
       }
       if (reattached.length > 0)
