@@ -33,6 +33,14 @@
              See docs/process/tailnet-https.md. -->
         <key>CW_PUBLIC_BASE_URL</key>
         <string>{{PUBLIC_BASE_URL}}</string>
+        <!-- Link-mode sharing: the single public hostname the Cloudflare
+             tunnel serves /s/<token> links on. Empty disables link mode.
+             Baked in like the base URL above because the rename reinstall
+             regenerated the plist without it and external sharing silently
+             regressed — an env var only the old plist carried does not
+             survive a template that never learned it. -->
+        <key>CF_SHARE_PUBLIC_HOSTNAME</key>
+        <string>{{SHARE_PUBLIC_HOSTNAME}}</string>
     </dict>
 
     <key>RunAtLoad</key>
