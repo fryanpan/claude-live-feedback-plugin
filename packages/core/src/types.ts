@@ -371,5 +371,36 @@ export interface SuggestionWebhookPayload {
   eid?: string;
 }
 
+/**
+ * Broadcast on the doc's event channels when a disk↔doc sync failure is
+ * recorded on a bound file (conflict reassert, parse failure, dropped
+ * suggestions). Before this event existed the `syncError` was only readable
+ * via get_doc or a later edit response — surfaces the party who just LOST
+ * content (whoever ran the git command or saved in the editor) never
+ * touches. The watching agent does, so the loss is announced where the
+ * watchers already are.
+ */
+export interface DocSyncErrorPayload {
+  event: 'doc.sync_error';
+  docId: string;
+  doc: DocMeta;
+  /** The bound file the failure is about — `relPath` when the doc carries
+   *  one (diff/folder members), else the binding's path. */
+  path: string;
+  /** Where the overwritten external bytes were saved (clobber-backups),
+   *  absent when no backup applies (parse failures) or the backup failed —
+   *  `message` says which. */
+  backupPath?: string;
+  /** Same text `getDoc().syncError` reports: what happened and how to
+   *  recover. */
+  message: string;
+  /** ms epoch the failure was recorded — mirrors `syncError.at`. */
+  at: number;
+  /** Per-room and per-epoch; see ThreadWebhookPayload.seq. */
+  seq: number;
+  /** See ThreadWebhookPayload.eid. */
+  eid?: string;
+}
+
 /** Payload POSTed to a host integration webhook. */
-export type WebhookPayload = ThreadWebhookPayload | SuggestionWebhookPayload;
+export type WebhookPayload = ThreadWebhookPayload | SuggestionWebhookPayload | DocSyncErrorPayload;
