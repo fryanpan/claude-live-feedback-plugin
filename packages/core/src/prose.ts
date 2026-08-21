@@ -264,6 +264,19 @@ export interface ReplaceResult {
   marksDropped?: string[];
   /** Human-readable companion to `marksDropped`. */
   warning?: string;
+  /** On `no-match` only: a NEAR miss a fallback scan found. `kind: 'case'`
+   *  means the pattern is in the doc up to letter case; `kind: 'whitespace'`
+   *  means it matches once whitespace runs are collapsed (double spaces,
+   *  NBSP, newlines). `preview` shows the DOC's actual characters, so the
+   *  caller can re-issue the find verbatim instead of falling back to a raw
+   *  disk write. Absent when the text is genuinely not there. */
+  hint?: NoMatchHint;
+}
+
+/** See `ReplaceResult.hint`. */
+export interface NoMatchHint {
+  kind: 'case' | 'whitespace';
+  preview: string;
 }
 
 /** A contiguous slice of one Y.XmlText, in document order. */
@@ -451,7 +464,8 @@ export function findAndReplace(
 
   if (matches.length === 0) {
     if (crossNode > 0) return { ok: false, error: 'cross-node' };
-    return { ok: false, error: 'no-match' };
+    const hint = noMatchHint(plainText, opts);
+    return hint ? { ok: false, error: 'no-match', hint } : { ok: false, error: 'no-match' };
   }
 
   if (opts.replaceAll === true) {
@@ -535,6 +549,68 @@ function preview(text: string, at: number, length: number): string {
   const prefix = start > 0 ? '…' : '';
   const suffix = end < text.length ? '…' : '';
   return prefix + text.slice(start, end).replace(/\n/g, ' ') + suffix;
+}
+
+/**
+ * Fallback scans behind a bare no-match: is the pattern in the doc up to
+ * letter case, or up to whitespace runs? A mechanical sweep that mis-cases a
+ * SHA, or single-spaces a double-spaced sentence, otherwise learns nothing
+ * from `no-match` — and the measured next move was a raw disk write against
+ * the bound file. The scan covers the FULL pattern (context included),
+ * because that is the string that failed to match; the preview quotes the
+ * doc's own characters so the caller can re-issue the find verbatim.
+ *
+ * Returns undefined when the exact pattern IS present (the no-match then has
+ * a different cause — e.g. a segment-boundary straddle — and a "case" hint
+ * would mislead) and when the text is genuinely absent. Case+whitespace
+ * combined misses are deliberately not chased: two stacked normalizations
+ * make the preview an ever-looser guess.
+ */
+function noMatchHint(
+  plainText: string,
+  opts: { find: string; contextBefore?: string; contextAfter?: string },
+): NoMatchHint | undefined {
+  const pattern = (opts.contextBefore ?? '') + opts.find + (opts.contextAfter ?? '');
+  if (pattern.length === 0 || plainText.includes(pattern)) return undefined;
+
+  const ci = plainText.toLowerCase().indexOf(pattern.toLowerCase());
+  if (ci >= 0) return { kind: 'case', preview: preview(plainText, ci, pattern.length) };
+
+  const hay = collapseWhitespace(plainText);
+  const needle = collapseWhitespace(pattern).text;
+  if (needle.length === 0) return undefined;
+  const wi = hay.text.indexOf(needle);
+  if (wi >= 0) {
+    const startOrig = hay.map[wi] ?? 0;
+    const endOrig =
+      wi + needle.length < hay.map.length
+        ? (hay.map[wi + needle.length] ?? plainText.length)
+        : plainText.length;
+    return { kind: 'whitespace', preview: preview(plainText, startOrig, endOrig - startOrig) };
+  }
+  return undefined;
+}
+
+/** Collapse every whitespace run (space, NBSP, tab, newline — all of `\s`)
+ *  to a single space. `map[i]` is the original index of collapsed char `i`
+ *  (a run maps to its first character), so a hit in the collapsed text can
+ *  be quoted from the original. */
+function collapseWhitespace(text: string): { text: string; map: number[] } {
+  let out = '';
+  const map: number[] = [];
+  let i = 0;
+  while (i < text.length) {
+    map.push(i);
+    if (/\s/.test(text[i] as string)) {
+      out += ' ';
+      i++;
+      while (i < text.length && /\s/.test(text[i] as string)) i++;
+    } else {
+      out += text[i] as string;
+      i++;
+    }
+  }
+  return { text: out, map };
 }
 
 /** Resolve a serialized Y.RelativePosition to an absolute position in

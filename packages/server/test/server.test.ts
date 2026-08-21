@@ -193,6 +193,41 @@ describe('server REST', () => {
     expect(edited.blocks[0]?.text).toBe('Hello, Bryan!');
   });
 
+  it('find_and_replace no-match 409 carries the near-miss hint through unchanged', async () => {
+    const file = join(dataDir, 'hint-test.md');
+    writeFileSync(file, 'Deploy pinned to SHA a1B2c3D4 since Monday.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-hint', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+
+    const res = await fetch(`${base}/api/docs/md-hint/find_and_replace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'sha A1b2C3d4', replace: 'sha e5F6a7B8' }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as {
+      error?: string;
+      hint?: { kind: string; preview: string };
+    };
+    expect(body.error).toBe('no-match');
+    expect(body.hint?.kind).toBe('case');
+    expect(body.hint?.preview).toContain('SHA a1B2c3D4');
+
+    // Genuinely absent text: still a bare no-match, no hint key at all.
+    const absent = await fetch(`${base}/api/docs/md-hint/find_and_replace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'entirely elsewhere', replace: 'x' }),
+    });
+    expect(absent.status).toBe(409);
+    const absentBody = (await absent.json()) as Record<string, unknown>;
+    expect(absentBody.error).toBe('no-match');
+    expect('hint' in absentBody).toBe(false);
+  });
+
   it('keeps applying external edits across successive rename-based saves', async () => {
     // Editors — and Claude Code's own Edit tool — save via write-temp +
     // atomic rename, which replaces the file's inode. A file-level fs.watch
