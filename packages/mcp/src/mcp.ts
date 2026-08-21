@@ -678,7 +678,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'find_and_replace',
       description:
-        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
+        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly, or pass `replaceAll: true` to replace every occurrence in one call — the right tool for a mechanical sweep (the same stale SHA or renamed identifier in dozens of places), which must NEVER be done by writing the bound file on disk. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -688,6 +688,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextBefore: { type: 'string' },
           contextAfter: { type: 'string' },
           occurrence: { type: 'number' },
+          replaceAll: {
+            type: 'boolean',
+            description:
+              'Replace every occurrence in one call — one Yjs transaction, marks carried per site. Use for mechanical sweeps (the same stale SHA in 44 places) instead of looping occurrence-by-occurrence or, worse, editing the bound file on disk. Returns { replaced } (and skippedCrossNode when a match straddled formatting boundaries and was left alone). Mutually exclusive with occurrence and with suggest.',
+          },
           parseInlineMarks: { type: 'boolean' },
           suggest: {
             type: 'boolean',
@@ -2138,6 +2143,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           contextBefore,
           contextAfter,
           occurrence,
+          replaceAll,
           parseInlineMarks,
           suggest,
         } = a as {
@@ -2147,6 +2153,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           contextBefore?: string;
           contextAfter?: string;
           occurrence?: number;
+          replaceAll?: boolean;
           parseInlineMarks?: boolean;
           suggest?: boolean;
         };
@@ -2156,6 +2163,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(contextBefore !== undefined ? { contextBefore } : {}),
           ...(contextAfter !== undefined ? { contextAfter } : {}),
           ...(occurrence !== undefined ? { occurrence } : {}),
+          ...(replaceAll === true ? { replaceAll: true } : {}),
           ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
           ...(suggest === true ? { suggest: true, author: suggestionAuthor() } : {}),
         });
