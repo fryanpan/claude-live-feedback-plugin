@@ -77,12 +77,26 @@ export class SseHub {
     if (set.size === 0) this.byDoc.delete(docId);
   }
 
-  broadcast(docId: string, payload: SsePayload): void {
+  /**
+   * `forSink` lets ONE broadcast say something extra to a specific
+   * subscriber: called per sink with who opened it, its return replaces the
+   * payload for that sink alone (undefined keeps the base payload). What
+   * needs it is delivery bookkeeping — the comment queue stamps each
+   * addressed agent's own row id onto ITS copy of the frame, so the receipt
+   * can name exactly one row, while a browser tab (no agentId) gets the
+   * plain event. It must not change the event name.
+   */
+  broadcast(
+    docId: string,
+    payload: SsePayload,
+    forSink?: (who: { shareId?: string; agentId?: string }) => SsePayload | undefined,
+  ): void {
     const set = this.byDoc.get(docId);
     if (!set) return;
-    for (const sink of set.keys()) {
+    for (const [sink, who] of set) {
       try {
-        sink.write(payload.event, payload);
+        const p = forSink?.(who) ?? payload;
+        sink.write(p.event, p);
       } catch (err) {
         console.error('[sse] write failed:', err);
       }

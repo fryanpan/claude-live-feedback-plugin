@@ -318,7 +318,12 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     const delivered = heard.frames.find((f) => f.data.commentQueueId === rowId);
     expect(delivered).toBeDefined();
     expect(delivered?.event).toBe('thread.created');
-    expect((delivered?.data.comment as { text?: string })?.text).toBe('This contradicts the goal.');
+    // The frame is the ORIGINAL broadcast payload replayed — and a
+    // thread.created carries its opening comment inside the thread, not on
+    // the payload's `comment` field (rooms.ts fireEvent call sites).
+    const threadComments = (delivered?.data.thread as { comments?: Array<{ text?: string }> })
+      ?.comments;
+    expect(threadComments?.[threadComments.length - 1]?.text).toBe('This contradicts the goal.');
     expect(delivered?.data.workspaceId).toBe(workspaceId);
 
     // The receipt — sent by the receiving process once the frame is in its
