@@ -314,8 +314,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'list_docs',
-      description: 'List review docs currently registered on the server.',
-      inputSchema: { type: 'object', properties: {} },
+      description:
+        'List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or grouping id) — omit it to list every doc on the server.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'Only docs in this workspace. Matches hub-board membership and the grouping workspaceId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
+          },
+        },
+      },
     },
     {
       name: 'list_threads',
@@ -1882,7 +1892,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await maybeAutoWatch(name, a);
     switch (name) {
       case 'list_docs': {
-        const res = await http('GET', '/api/docs');
+        // The param has to reach the wire: this handler used to issue a bare
+        // GET, so a caller's workspaceId was accepted and silently dropped —
+        // a board-scoped question answered with the whole server.
+        const { workspaceId } = a as { workspaceId?: string };
+        const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+        const res = await http('GET', `/api/docs${qs}`);
         return ok(res);
       }
       case 'list_threads': {
