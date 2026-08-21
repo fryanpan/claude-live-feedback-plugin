@@ -1271,7 +1271,7 @@ async function main(): Promise<void> {
    * edit one title in it, and PUT the whole thing back — which is a full
    * REPLACE keyed by id built from a read that may be minutes old. A band
    * another writer added in between was simply absent from the clone, so the
-   * replace removed it: its open tasks to Chores, its done tasks orphaned.
+   * replace removed it: its open tasks to Backlog, its done tasks orphaned.
    * The rename route touches one row by id and cannot move a task, so the
    * stale copy stops being able to do damage at all.
    */

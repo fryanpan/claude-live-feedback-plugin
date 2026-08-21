@@ -220,7 +220,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(changed[1]?.actor).toMatchObject({ name: 'Search Revamp', kind: 'agent' });
     });
 
-    it('moves open tasks of a vanished goal to Chores and reports them', async () => {
+    it('moves open tasks of a vanished goal to Backlog and reports them', async () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g2);
       const res = await jj<{ movedToChores: string[] }>(
@@ -367,7 +367,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(orderOf(mover.id)).toBeLessThan(orderOf(top.id));
       expect(orderOf(top.id)).toBeLessThan(orderOf(bottom.id));
 
-      // Chores is a section on the board like any other; dropping into it is
+      // Backlog is a section on the board like any other; dropping into it is
       // the same call with the reserved id.
       const chores = await jj<{ task: Task; changed: boolean }>(
         await post(`/api/tasks/${mover.id}/goal`, {

@@ -104,7 +104,7 @@ describe('TaskStore', () => {
   });
 
   describe('createTask', () => {
-    it('defaults to Chores, agent assignee, todo status, and an audit-ready shape', () => {
+    it('defaults to Backlog, agent assignee, todo status, and an audit-ready shape', () => {
       const ws = store.createWorkspace('ws');
       const res = store.createTask(ws.id, { title: 'Wire the store' });
       expect(res.ok).toBe(true);

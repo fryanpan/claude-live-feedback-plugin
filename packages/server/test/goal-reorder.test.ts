@@ -3,7 +3,7 @@
  *
  * `setGoalList` is a full REPLACE: reordering with it means restating every
  * id and title, and any id a stale caller leaves out sends that goal's open
- * tasks to the bottom of Chores. `reorderGoals` exists so the most ordinary
+ * tasks to the bottom of Backlog. `reorderGoals` exists so the most ordinary
  * gesture on a board — "move this band above that one" — cannot do that. Its
  * whole contract is that `order` must be EXACTLY the ids already at one
  * scope: anything omitted, repeated, or invented is refused with the
@@ -299,7 +299,7 @@ describe('TaskStore.reorderGoals', () => {
     expect(events.filter((e) => e.type === 'task.regrouped')).toHaveLength(0);
 
     // Positive control for the assertion above: the SAME omission expressed
-    // through set_goal_list is exactly what dumps a goal's tasks into Chores,
+    // through set_goal_list is exactly what dumps a goal's tasks into Backlog,
     // which is the hazard reorderGoals cannot express.
     // `drop` names the band being removed — the acknowledgement the guard
     // now asks for. It changes who has to SAY the removal, not what one does.
@@ -374,7 +374,7 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
     expect(rows.every((r) => r.reorderable === true)).toBe(true);
   });
 
-  it('marks the Chores row NOT reorderable — it is appended, never ordered', () => {
+  it('marks the Backlog row NOT reorderable — it is appended, never ordered', () => {
     const { rows, G } = rowsFor((s, wsId) => {
       s.createTask(wsId, { title: 'Rotate the API key', goal: CHORES_GOAL_ID });
     });
@@ -393,7 +393,7 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
       const t = s.createTask(wsId, { title: 'Trim the bundle', goal: ids.perf });
       if (!t.ok) throw new Error('create failed');
       // Only a DONE task survives a removal in place; an open one is swept
-      // into Chores, which is the other synthetic row.
+      // into Backlog, which is the other synthetic row.
       s.transition(t.task.id, 'in-progress', { actor: PERSON });
       s.transition(t.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
       const board = boardFor(ids);
@@ -683,7 +683,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
       (await jj<{ goalSummary: GoalSummaryRow[] }>(await fetch(`${base}/api/workspaces/${wsId}`)))
         .goalSummary;
 
-    /** A board with the two synthetic rows on it: Chores holding work, and a
+    /** A board with the two synthetic rows on it: Backlog holding work, and a
      *  goal id left behind on a done task. Without these the round trip
      *  passes for the wrong reason — there is nothing to filter out. */
     async function seedBoardWithBuckets(): Promise<{ wsId: string; G: Bands }> {
