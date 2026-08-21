@@ -392,9 +392,18 @@ export class ThreadPanel {
     // may address a card by a document-unique id — drive them all from this.
     el.setAttribute('data-thread-id', t.id);
 
+    // Which comment's declaration the full item card will carry — the
+    // outstanding ask when there is one, else the latest declaration (whose
+    // answered record is what the reader should meet). Computed HERE, above
+    // both slots, because it is what tells the rest of the card not to state
+    // the same question a second time: the card already says the kind, the
+    // headline and the why in full.
+    const pending = pendingDeclaration(t);
+    const itemComment = pending ?? latestDeclaredComment(t.comments);
+
     el.appendChild(this.head(t, status));
-    el.appendChild(this.slotA(t, summary.topic));
-    el.appendChild(this.slotB(t, summary, status, pendingReply));
+    el.appendChild(this.slotA(t, summary.topic, itemComment?.id));
+    el.appendChild(this.slotB(t, summary, status, { pending, itemComment, pendingReply }));
     el.appendChild(this.foot(t, status));
     syncFaceVisibility(el, this.activeId === t.id);
 
@@ -471,7 +480,7 @@ export class ThreadPanel {
   }
 
   /** Slot A: the topic line becomes the opening message, in place. */
-  private slotA(t: Thread, topic: string): HTMLElement {
+  private slotA(t: Thread, topic: string, itemCommentId?: string): HTMLElement {
     const topicEl = div('thread-topic clip');
     // Plain text, never HTML: the snippet is doc content, untrusted.
     topicEl.textContent = topic;
@@ -481,10 +490,15 @@ export class ThreadPanel {
     // only emits a fixed safe tag set, so innerHTML is safe here.
     msg.innerHTML = renderCommentMarkdown(t.comments[0]?.text ?? '');
 
-    // A thread whose OPENING comment declared reads as a request from the
-    // collapsed card, without opening it — which is the state this pane is in
-    // most of the time.
-    const header = reviewHeader(t.comments[0]?.review);
+    // The banner an opening declaration carries — SUPPRESSED when slot B's
+    // item card is already carrying this same declaration, which is the usual
+    // case for a declared thread. Both render the kind chip, the headline and
+    // the why, so leaving both in place stated the question twice and pushed
+    // the interface that answers it below the fold. Kept for a declaration no
+    // card is showing (a superseded ask, still part of the history): there,
+    // nothing else says it was ever asked.
+    const opening = t.comments[0];
+    const header = opening && opening.id !== itemCommentId ? reviewHeader(opening.review) : null;
     return slot('slot-a', [topicEl], header ? [header, msg] : [msg]);
   }
 
@@ -497,8 +511,15 @@ export class ThreadPanel {
       participants: Participants | null;
     },
     status: 'open' | 'resolved' | 'orphan',
-    pendingReply?: string,
+    item: {
+      /** The outstanding ask by the shared rule, or null. */
+      pending: Comment | null;
+      /** Whose declaration the item card carries, pending or settled. */
+      itemComment: Comment | undefined;
+      pendingReply?: string;
+    },
   ): HTMLElement {
+    const { pending, itemComment, pendingReply } = item;
     const summaryFace: HTMLElement[] = [];
     // The only row that comes and goes — with nobody but the author in the
     // thread there is nobody to list. Both LINES are always rendered.
@@ -510,24 +531,20 @@ export class ThreadPanel {
     summaryFace.push(discussion);
 
     const comments = div('comments');
-    for (const c of t.comments.slice(1)) comments.appendChild(commentRow(c));
+    // Same suppression as slot A, one row further down: a reply that declared
+    // the ask the item card is carrying must not repeat its chip, headline and
+    // why in the history directly beneath the card that just said them.
+    for (const c of t.comments.slice(1))
+      comments.appendChild(commentRow(c, c.id === itemComment?.id));
 
     const reply = div('thread-reply');
-    // The ask these words will answer, if there is one. Computed once here
-    // because the panel is the only half that holds the conversation — the
-    // chrome sees an id and a string and cannot work it out for itself.
-    // `pendingDeclaration` is the SAME rule the server's queue reads (core
-    // exports one copy): newest declaration wins, ts order not array order,
-    // and a resolved thread has nothing pending. Anything looser here offers
-    // an Answer composer for an item no queue is showing — answering it
-    // stamps a comment Home never offered.
-    const pending = pendingDeclaration(t);
+    // The ask these words will answer, if there is one. `pendingDeclaration`
+    // (computed by the caller, above both slots) is the SAME rule the server's
+    // queue reads (core exports one copy): newest declaration wins, ts order
+    // not array order, and a resolved thread has nothing pending. Anything
+    // looser here offers an Answer composer for an item no queue is showing —
+    // answering it stamps a comment Home never offered.
     const answering = pending?.id;
-    // The item this thread CARRIES, pending or settled: the outstanding ask
-    // when there is one, else the latest declaration (whose answered record
-    // is what the reader should meet). A thread nobody declared anything on
-    // has neither, and renders exactly as it always did.
-    const itemComment = pending ?? latestDeclaredComment(t.comments);
     if (answering) reply.classList.add('answering');
     const ta = document.createElement('textarea');
     ta.rows = 2;
@@ -799,8 +816,14 @@ function reviewHeader(review: Comment['review']): HTMLElement | null {
   return box;
 }
 
-/** One reply, in slot B's detail face. The opening message is slot A's. */
-function commentRow(c: Comment): HTMLElement {
+/**
+ * One reply, in slot B's detail face. The opening message is slot A's.
+ *
+ * `carriedByItemCard` says the item card above this row is already stating
+ * this comment's declaration in full, so the row shows the words and not a
+ * second copy of the ask.
+ */
+function commentRow(c: Comment, carriedByItemCard = false): HTMLElement {
   const row = div(c.review ? 'comment comment-declared' : 'comment');
   const authorRow = div('author');
   const swatch = span('swatch');
@@ -817,7 +840,7 @@ function commentRow(c: Comment): HTMLElement {
   // only emits a fixed safe tag set, so innerHTML is safe here.
   body.innerHTML = renderCommentMarkdown(c.text);
 
-  const header = reviewHeader(c.review);
+  const header = carriedByItemCard ? null : reviewHeader(c.review);
   // Above the words, not instead of them: the text is what the agent said,
   // the declaration is what it is asking for.
   row.append(authorRow, ...(header ? [header] : []), body);

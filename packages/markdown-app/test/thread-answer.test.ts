@@ -264,6 +264,71 @@ describe('the full item interface in the carrying thread', () => {
     expect(words.querySelector('em')?.textContent).toBe('emphatic');
   });
 
+  /**
+   * The question is stated ONCE, by the item card.
+   *
+   * Slot A rendered a two-line review banner (chip + headline + why) above the
+   * opening comment, and slot B rendered the full item card carrying the same
+   * chip, the same headline and the same why underneath it — so an expanded
+   * declared thread read banner, comment, card: the ask twice over, with the
+   * interface that answers it pushed down behind both. Bryan's design point
+   * for this card is the opposite ("the full review item interface, with the
+   * comment history secondary").
+   */
+  describe('the ask is stated once', () => {
+    const declaringComment = () => comment(bot, 'Which way do you want it?', decision());
+
+    it('drops the banner above the opening comment when the item card carries the ask', () => {
+      const declaring = declaringComment();
+      const { panel, container } = mountPanel();
+      panel.setThreads([makeThread([declaring])]);
+      panel.setActive('t1');
+      expect(container.querySelector('.thread-item-card')).not.toBeNull();
+      expect(container.querySelector('.comment-review')).toBeNull();
+      // The headline appears exactly once on the whole card.
+      const headlines = Array.from(container.querySelectorAll('*')).filter(
+        (n) => n.children.length === 0 && n.textContent === 'Pick the rota order',
+      );
+      expect(headlines).toHaveLength(1);
+    });
+
+    it('drops it in the history too, when a REPLY is the ask the card carries', () => {
+      // The newest declaration owns the card wherever it sits in the thread;
+      // repeating its banner in "Earlier in this thread" is the same
+      // duplication one row further down.
+      const opening = comment(alice, 'This paragraph reads oddly.');
+      const asked = comment(bot, 'Which way do you want it?', decision());
+      const { panel, container } = mountPanel();
+      panel.setThreads([makeThread([opening, asked])]);
+      panel.setActive('t1');
+      expect(container.querySelector('.thread-item-card')).not.toBeNull();
+      expect(container.querySelector('.comments .comment-review')).toBeNull();
+    });
+
+    it('keeps the banner on a SUPERSEDED ask, which no card is showing', () => {
+      // A positive control for the suppression: the older question is still
+      // part of the history and nothing else would say it was ever asked.
+      const older = comment(bot, 'And the feed order?', ask({ headline: 'Feed order' }));
+      const newer = comment(bot, 'Which way do you want it?', decision());
+      const { panel, container } = mountPanel();
+      panel.setThreads([makeThread([older, newer])]);
+      panel.setActive('t1');
+      expect(container.querySelector('.thread-item-card')).not.toBeNull();
+      expect(container.querySelector('.comment-review-headline')?.textContent).toBe('Feed order');
+    });
+
+    it('never showed the banner on the COLLAPSED face, so nothing folded loses it', () => {
+      // Why the suppression is safe to make unconditional: the banner was
+      // only ever built into slot A's DETAIL face — the summary face a folded
+      // card shows is the topic line and nothing else.
+      const { panel, container } = mountPanel();
+      panel.setThreads([makeThread([declaringComment()])]);
+      expect(container.querySelector('.thread.expanded')).toBeNull();
+      expect(container.querySelector('.slot-a .face-summary .comment-review')).toBeNull();
+      expect(container.querySelector('.slot-a .face-summary .thread-topic')).not.toBeNull();
+    });
+  });
+
   it('renders the record without an Undo when nothing is wired to take the answer back', () => {
     const settled = comment(
       bot,
