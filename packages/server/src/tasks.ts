@@ -2769,8 +2769,10 @@ export class TaskStore {
       if (delivered) this.clearPendingBucketReview(state);
     }
     // Waiting task reviews are addressed to the same seat. Re-deliver each
-    // to the new live occupant; whatever fails to go out stays queued.
-    const reviews = this.getPendingTaskReviews(workspaceId);
+    // to the new live occupant; whatever fails to go out stays queued. Rows
+    // the new occupant itself wrote are pruned at the read — author ==
+    // addressee is never delivered (see `getPendingTaskReviews`).
+    const reviews = this.getPendingTaskReviews(workspaceId, { excludeActorId: next });
     if (reviews && this.hasLiveLeadAttachment(workspaceId)) {
       const undelivered = reviews.filter((r) => {
         const reviewTask = state.tasks.get(r.taskId);
@@ -3901,13 +3903,30 @@ export class TaskStore {
    * rows that have since gone done (or vanished) drop out — same reasoning
    * as `getPendingRetriage`, "which rows still need a look" is a question
    * about the CURRENT board, not about a snapshot taken when they queued.
+   *
+   * `excludeActorId` is the addressee about to receive the queue, and rows
+   * IT wrote are pruned the same way — dropped, not deferred. The live path
+   * already refuses to address the lead's own write back to the lead ("its
+   * rewrites ARE the review"), but a write queues precisely when the seat is
+   * empty or its holder is away, so the queue meets its addressee only here
+   * — and without this check an agent that wrote while nobody was home and
+   * then took the seat was handed a review of its own edit. That is the
+   * self-review loop Bryan named on 2026-08-21 ("I have no idea why this is
+   * flagged for me?"), reaching an agent through the sidecar instead of a
+   * browser through the broadcast. Dropping is correct rather than lossy:
+   * the moment the author holds the seat, the row is a lead's own write,
+   * which the request path never routes either.
    */
-  getPendingTaskReviews(workspaceId: string): PendingTaskReview[] | undefined {
+  getPendingTaskReviews(
+    workspaceId: string,
+    opts?: { excludeActorId?: string },
+  ): PendingTaskReview[] | undefined {
     const state = this.workspaces.get(workspaceId);
     if (!state?.pendingTaskReviews) return undefined;
     const live = state.pendingTaskReviews.filter((r) => {
       const task = state.tasks.get(r.taskId);
-      return task !== undefined && task.status !== 'done';
+      if (task === undefined || task.status === 'done') return false;
+      return opts?.excludeActorId === undefined || r.actor?.id !== opts.excludeActorId;
     });
     if (live.length === 0) {
       this.clearPendingTaskReviews(state);
@@ -5369,8 +5388,12 @@ export class TaskStore {
     // The correction loop's durable half: writes whose live request never
     // reached anyone (or that arrived while the lead was away), drained the
     // same way the re-triage is — delivered in the one payload a fresh
-    // attachment is guaranteed to read, then cleared.
-    const taskReviews = lead ? this.getPendingTaskReviews(workspaceId) : undefined;
+    // attachment is guaranteed to read, then cleared. The attaching lead's
+    // own queued writes are pruned at the read: author == addressee is never
+    // delivered (see `getPendingTaskReviews`).
+    const taskReviews = lead
+      ? this.getPendingTaskReviews(workspaceId, { excludeActorId: opts.agentId })
+      : undefined;
     if (taskReviews) this.clearPendingTaskReviews(state);
     // The voice queue is the same ask with the same addressee: only the lead
     // drains it. A bystander attaching leaves the notes where they are for

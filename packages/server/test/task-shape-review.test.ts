@@ -27,6 +27,7 @@ import { eventsLogPath, pendingTaskReviewsPath } from '../src/tasks.ts';
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 const LEAD_ID = 'lead-agent';
 const LEAD_AUTHOR = { id: LEAD_ID, name: 'Lead Agent' };
+const HELPER = { id: 'helper-agent', name: 'Helper Agent' };
 
 const TITLE = 'Reviewers can scan the board fast by clearer titles';
 const BODY =
@@ -368,6 +369,89 @@ describe('task shape review requests (the routing loop)', () => {
     const bystander = await attach(ws, 'second-agent');
     expect(bystander.lead).toBe(false);
     expect(bystander.taskReviews).toBeUndefined();
+  });
+
+  it('the drain never hands a lead a review of its OWN queued write — author == addressee is dropped, not delivered', async () => {
+    // The other half of the no-self-review rule. The live path already
+    // excludes the lead's own writes at request time, but a write QUEUES
+    // whenever the seat is empty or the lead is away — and the queue meets
+    // its addressee only at the next attach. Without an author check there,
+    // an agent that writes while nobody is home and then claims the empty
+    // seat is handed a review of its own edit: the same "review what you
+    // just wrote yourself" loop Bryan hit on the browser (2026-08-21),
+    // wearing the sidecar instead of the broadcast.
+    const ws = await makeWorkspace('self-drain-board');
+    // Nobody attached: both writes queue.
+    const ownRes = await post(`/api/workspaces/${ws}/tasks`, {
+      author: HELPER,
+      title: TITLE,
+      body: BODY,
+      goal: 'chores',
+    });
+    const own = ((await ownRes.json()) as { task: { id: string } }).task;
+    const otherRes = await post(`/api/workspaces/${ws}/tasks`, {
+      author: PERSON,
+      title: 'Jordan can watch the queue drain by this row surviving it',
+      body: BODY,
+      goal: 'chores',
+    });
+    const other = ((await otherRes.json()) as { task: { id: string } }).task;
+    const sidecar = pendingTaskReviewsPath(dataDir, ws);
+    const queued = JSON.parse(readFileSync(sidecar, 'utf8')) as { pending: PendingReviewRow[] };
+    expect(queued.pending.map((r) => r.taskId)).toEqual([own.id, other.id]);
+
+    // The writer attaches first and claims the empty seat. The positive
+    // control rides in the same drain: the person-authored row IS handed
+    // over, so the missing row below is an exclusion rather than a torn-down
+    // queue.
+    const attachRes = await attach(ws, HELPER.id);
+    expect(attachRes.lead).toBe(true);
+    expect((attachRes.taskReviews ?? []).map((r) => r.taskId)).toEqual([other.id]);
+    // Dropped means dropped — the self row must not sit in the sidecar
+    // waiting to be handed to the same agent on its next attach either.
+    expect(existsSync(sidecar)).toBe(false);
+  });
+
+  it('a lead HANDOVER never replays an agent its own queued write — the rest of the queue still goes out', async () => {
+    // Same rule at the second seam: `set_workspace_lead` re-addresses the
+    // waiting queue to the new occupant, and the new occupant can be the
+    // author of a row in it.
+    const ws = await makeWorkspace('self-handover-board');
+    await attach(ws, LEAD_ID);
+    // The lead holds the seat but no stream — both writes queue.
+    const ownRes = await post(`/api/workspaces/${ws}/tasks`, {
+      author: HELPER,
+      title: TITLE,
+      body: BODY,
+      goal: 'chores',
+    });
+    const own = ((await ownRes.json()) as { task: { id: string } }).task;
+    const otherRes = await post(`/api/workspaces/${ws}/tasks`, {
+      author: PERSON,
+      title: 'Jordan can watch the handover replay by this row arriving',
+      body: BODY,
+      goal: 'chores',
+    });
+    const other = ((await otherRes.json()) as { task: { id: string } }).task;
+    const sidecar = pendingTaskReviewsPath(dataDir, ws);
+    expect(existsSync(sidecar)).toBe(true);
+
+    // The writer comes online as a bystander (the held seat is not claimed),
+    // then takes the seat. The replay must re-ask it the person's row and
+    // NEVER its own.
+    await attach(ws, HELPER.id);
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${HELPER.id}`));
+    await local(`/api/workspaces/${ws}/lead`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', host: `localhost:${handle.port}` },
+      body: JSON.stringify({ leadAgentId: HELPER.id, author: HELPER, takeover: true }),
+    });
+    await settle();
+    sse.stop();
+    const frames = reviewFrames(sse.data);
+    expect(frames.map((f) => f.taskId)).toEqual([other.id]);
+    expect(frames[0]?.leadAgentId).toBe(HELPER.id);
+    expect(frames.some((f) => f.taskId === own.id)).toBe(false);
   });
 
   it('several offline writes to one row coalesce: one pending ask, FIRST ts, LATEST trigger', async () => {
