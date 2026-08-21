@@ -16,10 +16,16 @@ call looks identical to a working board and proves nothing about whether the
 product works. If a tool you need does not exist, that is a blocker to report
 and a task to file.
 
-This skill is the tool contract. **REQUIRED BACKGROUND:**
-`claude-workspaces:working-in-a-workspace` and
+**The call shapes are in `tool-reference.md`, next to this file** — standing up
+a board, the goal verbs, filing work, review items, triage, adopting an
+existing tracker. Open it when you know what you want to do and need the
+argument list. This file is the part you need before that: which surface is
+which, how the loop runs, and what a goal edit asks of the seat.
+
+**REQUIRED BACKGROUND:** `claude-workspaces:working-in-a-workspace` and
 `claude-workspaces:leading-a-workspace`. The first is the discipline every
-agent owes an existing board; the second is what the lead seat adds.
+agent owes an existing board — including the task standard every create and
+rewrite here answers to; the second is what the lead seat adds.
 
 ## First: two different things are called "workspace"
 
@@ -36,402 +42,13 @@ agent owes an existing board; the second is what the lead seat adds.
 review/bind id, and the whole review attaches as one unit.
 
 **`share_workspace` and `share_link` are the exception: they take the HUB id,
-and only the hub id.** A board is the unit of sharing (Bryan, 2026-08-17: "a
-review must be filed on a board before it can be shared"), so a grouping id
-comes back `410 grouping_sharing_removed`. `bind_folder` and
-`create_diff_review` already report the board they filed onto as
-`hubWorkspaceId` — that is the id to share. Everything filed on that board
-travels with the share, so when a review should not carry the rest of the
-board, give it its own: `create_workspace` makes an empty one in about a
-second.
-
-## Stand up the board
-
-```
-create_workspace(
-  name: "search-revamp",              // required, short handle
-  goal: "Cut p95 search latency below 200ms without losing recall.",
-)
-→ { workspaceId, name, goal, leadAgentId }
-```
-
-- `goal` is the **north-star statement every triage decision is judged
-  against**. Markdown, a sentence or two. Keep it current with
-  `set_workspace_goal`.
-- **You become the board's lead agent** unless you pass `leadAgentId`. The lead
-  is the addressee for goal-edit re-triage (see the last section). Hand the
-  seat over later with `set_workspace_lead(workspaceId, leadAgentId)` — naming
-  somebody else is a pure handover and moves nothing but the seat.
-- The call auto-subscribes this session to the workspace event channel
-  (`task.*`, `decision.answered`, `triage.requested`, `workspace.goal_updated`,
-  …), which arrives on the same channel as thread events. Pass
-  `subscribe: false` to skip.
-- **If you did not create the board, declare yourself on it** with
-  `set_workspace_lead(workspaceId)` — see "Declare yourself once" below. That
-  is the whole of your session-start setup.
-
-Then give it sections:
-
-```
-set_goal_list(workspaceId, goals: [
-  { title: "Cut p95 latency",
-    subgoals: [{ title: "Index shape" }] },
-  { title: "Hold recall at parity", dueAt: 1767225600000 },
-])
-→ created: [{ id: "g-7Kf9xQ2mVbNc", title: "Cut p95 latency" }, …]
-```
-
-- **You do not name a goal's id — the server does.** Send an entry with NO
-  `id` and an opaque one is minted and handed back in `created`; that is the
-  only place you learn it, so keep it (or re-read `get_workspace`). To keep a
-  band you already have, send its `id` exactly as `get_workspace` reports it.
-  An id this board does not hold is **refused** with `unknown-goal-id`,
-  because that is how a re-key arrives: nothing here can give an existing band
-  a different id, and nothing here lets you choose one. The human-visible
-  handle is the **title**, and that is editable — see `rename_goal` below.
-- **Order IS priority.** The first goal is the highest band. To CHANGE that
-  order, use `reorder_goals` (below) rather than this call — it fires the same
-  `workspace.goals_changed`, never a re-triage, and it cannot lose a goal.
-- One subgoal level, maximum. `dueAt` is epoch ms and optional at every
-  level — never invent one.
-- `"chores"` is **reserved**: it always renders last and must not appear in the
-  list you pass. It is the one goal id you can say out loud — every other one
-  you look up.
-- **Destructive edge, now gated:** this is a full REPLACE, so any id you leave
-  out is removed — including a goal another writer added since you last read.
-  If a removed id still holds tasks the call is **refused** with
-  `would-strand-tasks`, naming each band and how many open and done tasks it
-  holds, and nothing is written. Removing a band that holds work is therefore
-  a second, deliberate call that lists its id in `drop`; removing an empty one
-  needs no ceremony. On success the result reports `movedToChores` (open tasks
-  swept to the bottom of Backlog — re-place each with `set_task_goal` rather
-  than leaving them piled) and `strandedDone` (done tasks still pointing at
-  the removed id, which is what leaves a bare row in `get_workspace`).
-
-## Rename a goal with `rename_goal`, not `set_goal_list`
-
-```
-rename_goal(workspaceId, goal: "latency", title: "Cut p95 latency to 200ms")
-rename_goal(workspaceId, goal: "index",   title: "Index shape", dueAt: null)
-```
-
-- **The id never changes, so nothing moves.** A task's band IS its goal id.
-- This is the reason the verb exists: `set_goal_list` is keyed by id, so
-  giving a band a new id there is not a rename at all — it is a removal plus
-  an addition, and it is refused outright (`unknown-goal-id`) because ids are
-  generated and permanent. A title is the only part of a band anyone was ever
-  really renaming, and `rename_goal` is where that belongs.
-- `dueAt` is optional: a number sets it, `null` clears it, omitting it leaves
-  it alone. `chores` is refused — its label is fixed.
-
-## Change priority with `reorder_goals`, not `set_goal_list`
-
-```
-reorder_goals(workspaceId, order: ["recall", "latency"])
-reorder_goals(workspaceId, order: ["shape", "index"], parent: "latency")
-```
-
-- **Permutation only.** `order` must be exactly the goal ids already at one
-  scope — the top-level list, or the subgoals of `parent`. Ids, no titles.
-- An order that omits, repeats or invents an id is **refused**, naming the
-  offending ids. That refusal is the feature: a list that changed under you
-  makes you re-read rather than silently dropping somebody's goal.
-- Nothing is created, renamed, removed or reparented, and **no task moves** —
-  the Backlog hazard above cannot happen here.
-- Get the ids from `get_workspace`, whose rows carry `depth` and, on
-  subgoals, `parent`.
-
-## Read the board before you decide anything
-
-```
-get_workspace(workspaceId)
-→ { workspaceId, name, goal, goalUpdatedAt, leadAgentId, pendingRetriage?, goals }
-```
-
-`goals` is the **ordered** list with per-goal todo / in-progress / done counts,
-parent goals followed by their subgoals, Backlog last. `list_tasks` returns goal
-**ids** only — without `get_workspace` the ordering is invisible and you will
-work the wrong band. It is deliberately cheap (goals and counts, no tasks);
-pair it with `next_tasks`, which carries the tasks and their full descriptions.
-
-## File work
-
-`create_tasks` is the create verb, and it always takes a LIST — one task is a
-one-row list, so there is never a choice to make about which tool to reach for.
-
-```
-create_tasks(workspaceId, tasks: [
-  {
-    title: "Cache the tokenizer between queries",
-    body: "Agent can reuse a warm tokenizer so that p95 drops without a reindex.\n\n"
-        + "Done when: a repeated query allocates no new tokenizer, and the "
-        + "latency benchmark shows the p95 delta.",
-    goal: "latency",          // OMIT to route through triage
-    key: "warm-cache",        // so a later ROW can depend on this one
-    links: [{ kind: "url", url: "https://example.test/pr/41" }],
-  },
-  {
-    title: "Benchmark the p95 after the cache lands",
-    goal: "latency",
-    after: ["#warm-cache"],   // a row of this batch, by key; or [0] by index
-    afterEnforce: ["#warm-cache"],
-  },
-])
-→ { created: [{ title, taskId, goal, order, status, assignee, placed, … }],
-    failures: [{ index, title, error, message }],
-    placement?: { unplaced, triageDelivered, goals } }
-```
-
-Only `workspaceId` and a `title` per row are required. What matters:
-
-- **`body` — write one on every task**, even though the schema does not demand
-  it. A bare title is not pickup-able by an agent that was not in the
-  conversation. Shape it as a compact user story: `<persona> can <do x> so that
-  <goal y>`, **one** persona (Agent / Bryan / Collaborator), plus falsifiable
-  "done when" criteria for anything handed to someone else or parked beyond
-  today. Work you will finish within the hour needs the story line and nothing
-  more. It renders on the task and comes back whole from `next_tasks` — do not
-  create a separate doc to hold it.
-- **`goal` — omit it when you have not judged placement yet.** The task lands
-  UNPLACED at the bottom of Backlog and a triage request goes to the live
-  workspace agent (possibly you). An explicit goal — *even `"chores"`* — is a
-  placement and skips triage. The create says which happened: `placed` is
-  whether YOU named a goal (not whether the goal is `chores`), `triagePending`
-  is whether the request actually reached a live attachment, and `goals` — the
-  ordered bands — comes back when nothing placed it, so `set_task_goal` is the
-  next call rather than a `get_workspace` first.
-- **`key` + `after` — a row can depend on another row of the SAME batch**, by
-  key (`"#warm-cache"`) or by index (`0`, or `"#0"`). Backwards only: rows are
-  created in order, so a forward reference is refused, and so is a reference to
-  a row that failed — a task carrying a dependency that never blocks it is
-  worse than a refusal. An entry with no `#` is still a task id you hold.
-- **`quote` — the human's VERBATIM words**, for chat-born asks. Kept on the
-  task forever. Do not paraphrase it.
-- `after` / `afterEnforce`: `afterEnforce` is a **subset** of `after`. An id in
-  `afterEnforce` alone is refused rather than silently widening `after`.
-- `links` kinds: `{kind:'doc',docId}` · `{kind:'thread',docId,threadId}` ·
-  `{kind:'task',taskId}` · `{kind:'diff',workspaceId}` ·
-  `{kind:'url',url}`. Use `url` for anything off this server — a pull request,
-  a dashboard, a decision page; http(s) only. Refs are not existence-checked; a
-  malformed one is dropped into `ignoredLinks` and the task is still created.
-- `order` is a fractional position within the goal.
-
-**Thread-born asks use `promote_to_task(docId, threadId, workspaceId)`** instead
-— it captures the origin ref, takes the latest **human** comment as the quote
-(agent replies never become the quote), and drafts a title and body from it.
-Same goal semantics: omit `goal` to route through triage.
-
-### Every task body is a live review doc
-
-A task's description is backed by a real markdown room with
-`docId = "task:<taskId>"` (`packages/server/src/task-projection.ts`). So the
-normal doc tools work on it: `create_thread` / `post_reply` to have the
-conversation next to the work, `get_doc` to read it. (You do **not** need
-`watch_doc("task:t-abc123")` to hear its comments — declaring yourself on the
-board covers every doc filed there, this one included.) Edits snapshot back into the task body. This is how
-"ask for feedback on the task, not in chat" is actually done from an agent —
-there is no `comment_on_task` tool.
-
-**Omit `find` to comment on the task itself.** A description you want to
-question is often empty, or the thing you want to ask about is the task rather
-than a phrase inside it, so `create_thread` takes no anchor text in that case:
-
-```
-create_thread(
-  docId: "task:t-abc123",
-  text: "This assumes the index ships first — is that still true after the retriage?",
-)
-```
-
-The thread appears in the task's Discussion on the board, and it never
-orphans, however the description is later rewritten. Pass `find` when you do
-want the comment pinned to a specific line; an EMPTY `find` is an error rather
-than a shortcut to this, so a variable that came out blank can't quietly turn
-into a comment on the whole task.
-
-## Asking a person something: review items on a ticket
-
-**A ticket HAS review items — it is not itself the question.** A ticket can
-carry more than one, and more than one can be open at the same time. The
-title names the WORK; each item carries its own blurb (`headline` + `why`)
-above its own options, and is answered on its own.
-
-```
-create_tasks(workspaceId, tasks: [
-  {
-    title: "Bryan can keep p95 flat under cold queries",
-    assignee: "human",
-    goal: "latency",
-    body: "The tokenizer cache is the last thing between us and a flat p95.",
-    review: {
-      shape: "decision",
-      headline: "Pick the tokenizer cache eviction policy",
-      why: "The latency work is blocked until this is answered",
-      lookFor: "Whether a 300ms cold-start stall is acceptable",
-      detail: "Memory is the constraint: one-per-index costs ~40MB steady "
-            + "state and never stalls; LRU holds ~8MB but can stall a cold "
-            + "query by 300ms.",
-      options: [
-        { id: "o-lru", label: "LRU", detail: "8MB steady, up to 300ms on a cold query" },
-        { id: "o-per-index", label: "One per index", detail: "40MB steady, no stall" },
-      ],
-    },
-  },
-])
-```
-
-A question that comes up **after** the ticket exists hangs on it the same way:
-
-```
-add_review_item(taskId, review: { shape, headline, why, lookFor?, detail?, options? })
-→ { taskId, reviewItemId, reviewAdvice? }
-```
-
-`headline` is one line ≤70 chars and `why` one line ≤90 — the two lines a
-phone shows. Over-long or multi-line is **refused** rather than clipped, since
-a clipped headline is the unreadable row this replaced. A missing `lookFor`
-is accepted and comes back as advisory `reviewAdvice`. `shape: 'decision'`
-needs 2–6 options with caller-supplied ids; `shape: 'review'` asks someone to
-read or look at something and answer in their own words, and refuses options.
-
-**Answer it verbatim**, naming which item:
-
-```
-answer_review_item(taskId, reviewItemId, text: "<their exact words>",
-                   answeredWith?: "<option id they picked>")
-→ { taskId, reviewItemId, recorded: true, links: [...] }
-
-request_more_info(taskId, reviewItemId, question: "<what they want to know>")
-```
-
-`request_more_info` is what keeps the options from being a closed set: the
-item stays open, stays counted, and you owe the context. Never paraphrase an
-answer — when they picked an option, pass its **label** as `text` and its id
-as `answeredWith`. The returned `links` are a ready-made propagation
-checklist: act on each, or create a task for it, and prioritize them right
-away. Neither verb transitions the ticket — close it with `task_transition`
-once the propagation is handled.
-
-### The older one-question-per-ticket decision
-
-A ticket with `needs: 'decision'` and a human assignee IS the decision: the
-title has to double as the question and a second open question has nowhere to
-go. It still works exactly as it did, and everything already filed this way
-keeps answering — a ticket with no review items of its own reads as one
-derived item, so it shows up on the same queue.
-
-```
-create_tasks(workspaceId, tasks: [
-  {
-    title: "Pick the tokenizer cache eviction policy",
-    assignee: "human",
-    needs: "decision",
-    goal: "latency",
-    body: "Do we evict the tokenizer cache by LRU or keep one per index forever?\n\n"
-        + "Memory is the constraint: one-per-index costs ~40MB steady state and "
-        + "never stalls; LRU holds ~8MB but can stall a cold query by 300ms.\n\n"
-        + "- LRU: cheap memory, occasional cold-start stall\n"
-        + "- One per index: predictable latency, 5x the memory\n\n"
-        + "The latency work is blocked until this is answered.",
-    options: [
-      { label: "LRU", detail: "8MB steady, up to 300ms on a cold query" },
-      { label: "One per index", detail: "40MB steady, no stall" },
-    ],
-  },
-])
-```
-
-**The body is REQUIRED and has a shape**: the question in one line, what is at
-stake in two or three, the options with what each one costs, then what is
-blocked until it is answered. Only the first part is enforced — a body with no
-question mark anywhere is **refused**, because the failure this catches is
-filing a progress report as a decision (field populated, every check passes,
-and the person asked to decide has nothing to decide from). The other three
-come back as advisory `shapeGaps` on a successful create.
-
-`options` are candidate answers: `[{label, detail?}]`. `label` is the text
-recorded verbatim if it is picked; `detail` is what picking it costs. Supply
-them whenever you have candidates — two or more, or don't bother. They are a
-shortcut, never a closed set; writing a different answer stays available.
-
-**Record the answer verbatim** when they tell you in chat or voice (in the UI
-they answer directly):
-
-```
-answer_decision(taskId, text: "<their exact words>", optionId?: "<option they picked>")
-→ { taskId, recorded: true, links: [...] }
-```
-
-Never paraphrase. When they picked an option, pass the option's **label** as
-`text` and its id as `optionId` — the answer is still the text. The returned
-`links` are a **ready-made propagation checklist**: act on each, or create a
-task for it, and prioritize them right away. `answer_decision` does **not**
-transition the task — close it with `task_transition` once the propagation is
-handled. It also takes an optional `reviewItemId` for a ticket carrying
-several items; omit it — as every caller written before that field did — and
-the answer lands on the ticket's own decision exactly as it always has.
-
-**Say that a decision is blocking work**, or it reads as parked however loudly
-its body says otherwise:
-
-```
-set_task_dependencies(taskId: "<the BLOCKED task>", after: ["<the decision>"],
-                      afterEnforce: ["<the decision>"])
-```
-
-That edge is the only record of "this decision is holding work up now" — the
-board derives a decision's urgency from what points at it, and there is
-deliberately no urgency field. It replaces the whole edge set, so pass the full
-list; an empty `after` clears the edges.
-
-## Triage: shape it, then place it
-
-Triage is **two** verbs, and shaping is the one that gets skipped. A row
-captured from a pasted paragraph or a dictation keeps its clipped title and its
-raw body however well you place it, and every component reports success either
-way. Placement alone does not make a row pickup-able.
-
-**Shape first.**
-
-```
-rewrite_task(taskId, body: "…", title: "…", reason: "…")
-```
-
-- **Read the row's own words.** `next_tasks` carries the full body; `quote`
-  carries what was actually said when any of it was dictated.
-- **Decide how many tasks it is — zero, one, or several.** *"Anyway, make a
-  ticket from this"* is an instruction about neighbouring text, and files
-  **zero** tasks. A paragraph holding two complaints is two. This is a
-  judgement, and it is why the step is yours: capture makes exactly one row
-  per submit and cannot tell an idea from an aside.
-- **Write it like a task somebody else will pick up** — `<persona> can <do x>
-  so that <goal y>`, plus falsifiable done-when criteria — and give it a title
-  that names the work rather than starting the sentence.
-- **The original words are safe.** The first rewrite of a row copies its
-  pre-rewrite words into `quote` automatically, and a quote that is already
-  there is never overwritten. So shaping can never be the only record of what
-  was said — which is what makes rewriting somebody else's capture a
-  reasonable thing to do without asking first.
-- **When one capture is several tasks**, the row you were handed keeps the
-  first result — retitled and rewritten in place, so any comment thread on it
-  stays on the thing it was about. File the rest with `create_tasks` and
-  `link_refs` them back to it. **When it is zero tasks**, do not delete the
-  row: close it with `task_transition` and say on it what the words were an
-  instruction *for*. Nothing here ever destroys a capture.
-
-**Then place.**
-
-```
-set_task_goal(taskId, goal: "latency", position: 2.5, batchId?)
-```
-
-- **Pick the spot, not just the bucket.** `position` is fractional — there is
-  always room between two tasks; omitted means bottom of the goal.
-- It stamps `triagedAgainst` with the goal text you judged against and clears
-  the triage-pending marker. Every move is recorded and fires `task.regrouped`,
-  so regroup freely — the safety is the record, not asking first. When a move
-  would cross a human's earlier placement, leave a comment on the task doc
-  referencing it.
+and only the hub id.** A board is the unit of sharing — a review must be filed
+on a board before it can be shared — so a grouping id comes back
+`410 grouping_sharing_removed`. `bind_folder` and `create_diff_review` already
+report the board they filed onto as `hubWorkspaceId` — that is the id to share.
+Everything filed on that board travels with the share, so when a review should
+not carry the rest of the board, give it its own: `create_workspace` makes an
+empty one in about a second.
 
 ## The work loop
 
@@ -445,12 +62,12 @@ set_workspace_lead(workspaceId)          // no second argument
     pendingRetriage?, pendingBucketReview?, taskReviews? }
 ```
 
-**One call at session start, and everything on this board reaches you** — task
-and decision events, thread events on every doc filed here, voice notes,
-re-triage asks. Including **docs created later**: coverage is resolved when an
-event fires, against what the board holds at that moment, so a doc filed on
-the board an hour from now is covered by the declaration you already made.
-There is no per-surface subscribe to remember and nothing to redo.
+**What the seat then covers is the lead skill's contract; this is how the call
+behaves and how it fails.** One call at session start, and the wiring is done:
+there is no per-surface subscribe to remember and nothing to redo. The reason
+it reaches docs created later is that coverage is resolved when an event
+fires, against what the board holds at that moment — so a doc filed on the
+board an hour from now needs no second call.
 
 **It survives a respawn.** The subscription is persisted against your agent
 identity (`CW_AGENT_NAME`) and re-wired when your session comes back, so the
@@ -480,7 +97,8 @@ seat accumulated — same fields, same meaning as `attach_agent` below, and
   mean to take it. (A seat whose holder has gone quiet is *not* protected —
   recovering an abandoned board is exactly what declaring is for.)
 - **Use the bare one-argument form to declare yourself.** Passing
-  `leadAgentId` is a *handover* to somebody else: it moves the seat and does
+  `leadAgentId` is a *handover* to somebody else:
+  `set_workspace_lead(workspaceId, leadAgentId)` moves the seat and does
   nothing else, because attaching on an absent agent's behalf would make the
   board report a live lead that is not there.
 - **`watch_doc` is for docs OUTSIDE your board** — a peer's review you want to
@@ -530,7 +148,7 @@ Defaults: `agentId` = this agent's MCP identity, `runtime` =
 - `gating` — a one-line summary of open decisions gating tasks.
 - `untriaged` — task ids to sweep. Sweeping one means **shaping it and then
   placing it**, not filing it under a goal and moving on. See "Triage: shape
-  it, then place it" above.
+  it, then place it" in `tool-reference.md`.
 - `queuedVoice` — voice change-requests that arrived while no agent was live.
   Act on each transcript **verbatim**.
 - `lead` — whether you hold the lead seat. An **empty** seat is claimed by the
@@ -565,12 +183,9 @@ only `enforce` ones hold it back) and `ready`. Hard-blocked rows are omitted
 unless `includeBlocked: true`. Call it at the top of a session **and again
 whenever a line of work finishes** — priorities move while you work.
 
-**The lead decides the shape of the fan-out.** That queue reaches everyone
-identically; what this seat adds is deciding how many lines run at once and in
-what order their merges land. The default is every ready row that doesn't
-collide — staffing the top of the queue in parallel is the lead's job, per
-`claude-workspaces:leading-a-workspace`. Two
-things only the lead can do about it:
+**How wide to run the fan-out is the lead's call**, per
+`claude-workspaces:leading-a-workspace`. Two readings only the board can give
+you, so they are here rather than there:
 
 - **Make the board judgeable.** A batch is planned by reading descriptions
   against each other, so thin bodies are what forces a session to run serial.
@@ -578,8 +193,8 @@ things only the lead can do about it:
   `after` / `afterEnforce` — the queue can only respect an edge that exists.
 - **Watch what the board says is running.** Several `in-progress` rows with
   one agent attached is a batch nobody is actually working; one `in-progress`
-  row with a long ready queue behind it is the failure this default exists to
-  prevent. `list_attachments` and the per-goal counts are the reading.
+  row with a long ready queue behind it is the failure the parallel default
+  exists to prevent. `list_attachments` and the per-goal counts are the reading.
 
 `assign_task` is also how a line gets an owner — a staffed batch is several
 tasks each assigned to the agent running it, so `next_tasks(assignee: …)`
@@ -599,13 +214,13 @@ task_transition(taskId, to: "done", note: "merged in #142",
 - **Attach `evidence` (`{commit}` and/or `{threadRef}`) on forward moves** or
   the move comes back `unproven: true` — allowed, but shaded on the board.
 - **Got the evidence wrong, or forgot it? Don't re-send the transition** — it
-  refuses with `same-status`. Use `amend_evidence(taskId, evidence, note?)`,
-  which APPENDS a correction to the move that already happened: the original
-  row keeps what it said (a wrong sha is struck, not deleted), your correction
-  sits beside it attributed and timestamped, and the `unproven` shading
-  clears. A false sha is the case worth caring about — it reads as proof, so
-  nothing looks wrong until someone tries to follow it. Nothing validates that
-  a sha resolves; this server has no checkout to look it up in.
+  refuses with `same-status`. `amend_evidence` APPENDS a correction to the move
+  that already happened: the original row keeps what it said (a wrong sha is
+  struck, not deleted), your correction sits beside it attributed and
+  timestamped, and the `unproven` shading clears. A false sha is the case worth
+  caring about — it reads as proof, so nothing looks wrong until someone tries
+  to follow it. Nothing validates that a sha resolves; this server has no
+  checkout to look it up in.
 - Open `after` dependencies come back in `blockers`; an edge marked **enforce
   refuses the transition (409)** until the blocking task closes. Read the
   message, it names what to unblock.
@@ -641,20 +256,14 @@ set_workspace_goal(workspaceId, goal: "<new north-star statement>")
 
 A queued request is delivered as `pendingRetriage` on the lead's next
 `attach_agent` — or immediately, if `set_workspace_lead` hands the seat to an
-agent who is already live. When you receive one:
+agent who is already live. `get_workspace` also surfaces `pendingRetriage`, but
+**reading it there does not drain it** — only `attach_agent` does.
 
-```
-for each taskId in pendingRetriage.taskIds:
-    set_task_goal(taskId, goal: "<placement against the NEW goal>",
-                  batchId: pendingRetriage.batchId)
-```
-
-**Echo the `batchId` on every move.** It ties each placement to the goal edit
-that asked for it, so the activity view reads N moves as one goal edit instead
-of N unexplained regroupings.
-
-`get_workspace` also surfaces `pendingRetriage`, but **reading it there does not
-drain it** — only `attach_agent` does.
+**What the lead then owes is `claude-workspaces:handling-a-goal-change`** — the
+whole sweep, in order, including the parts that are easy to get wrong: saving
+the payload before it is gone, re-reading the goal from the board rather than
+the event, re-affirming placements that did not move, and flagging obsoleted
+work without closing somebody else's task.
 
 ### A new band asks the bucket to be re-looked-at
 
@@ -689,28 +298,3 @@ answer.** The ask is to LOOK; placing everything because you were asked is how
 the bucket stops meaning anything. It is deliberately not auto-assigned —
 that would stamp a ranking decision no human made, invisibly, and the bucket
 exists precisely because nobody has made that call yet.
-
-The calls above are the write half. What the lead actually owes on a goal
-change — re-reading the goal, sweeping every open task, reordering without
-losing a band, and flagging what the edit made obsolete *without* closing
-somebody's work — is `claude-workspaces:handling-a-goal-change`.
-
-## Adopting an existing tracker
-
-A hand-maintained markdown tracker (group headings + status tables) moves onto
-a board without re-keying:
-
-```
-import_tasks_markdown(workspaceId, path: "/abs/path/to/TRACKER.md")   // DRY RUN
-import_tasks_markdown(workspaceId, path: "...", apply: true)          // for real
-```
-
-**The default is a dry run** — it returns the mapping (headings → goals, rows →
-tasks with normalized status, what was skipped, which columns were ignored) and
-creates nothing. Review that mapping with the human first. Apply appends new
-goals (existing ones matched by title are reused, never clobbered), creates the
-tasks as explicit placements (no triage), walks imported statuses through the
-transition gate, and **stamps the source file** with a banner + hub link so the
-old tracker cannot quietly stay a second source of truth. A stamped file
-refuses re-import (409). Headings map to goals; rows before any heading land in
-Backlog; a leading H1 is the document title, not a group.
