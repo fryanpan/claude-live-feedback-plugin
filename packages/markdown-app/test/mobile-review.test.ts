@@ -291,6 +291,35 @@ describe('inline placement', () => {
   });
 });
 
+describe('an inline card repaints when its review item changes', () => {
+  const ask = (over: Record<string, unknown> = {}) =>
+    ({
+      shape: 'review',
+      headline: 'Read the stall rota',
+      why: 'It goes out Thursday.',
+      ...over,
+    }) as NonNullable<Comment['review']>;
+
+  it('drops the answered record when the answer is taken back', () => {
+    // Undo un-stamps the declaration and touches nothing else — no comment
+    // added, no clock moved — so a card key built from counts and timestamps
+    // comes out identical and the reused node keeps saying "Answered by …".
+    // On a phone the inline card IS the comment surface, so that is the whole
+    // screen still showing a settled item the reader has just reopened.
+    const declaring = { ...comment(bob, 'Which way?'), review: ask({ answeredAt: seq }) };
+    const threads = [thread('t1', { comments: [declaring] })];
+    const h = harness(threads);
+    expect(h.placed()[0].el.querySelector('.thread-answered')).not.toBeNull();
+
+    threads[0] = thread('t1', {
+      comments: [{ ...declaring, review: ask() }],
+      lastActivity: declaring.ts,
+    });
+    h.mobile.refresh();
+    expect(h.placed()[0].el.querySelector('.thread-answered')).toBeNull();
+  });
+});
+
 // --- shared expand state ------------------------------------------------------
 
 describe('expand state is shared between the inline copy and the sheet copy', () => {
