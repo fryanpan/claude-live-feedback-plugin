@@ -65,11 +65,22 @@ function inline(escaped: string): string {
  * set of known-safe tags.
  */
 export function renderCommentMarkdownInline(text: string): string {
-  return inline(escapeHtml(text.replace(/\s+/g, ' ').trim()));
+  return inline(escapeHtml(absorbHardBreaks(text).replace(/\s+/g, ' ').trim()));
+}
+
+/**
+ * Backslash-newline is markdown's own spelling of a hard line break, and it
+ * is what tiptap-markdown's serializer emits — so stored comments carry it,
+ * and rendered literally it reads as "line\" plus a lone "\" line. Absorb it
+ * as the break it means: a plain newline, which this renderer already turns
+ * into <br> (and a doubled one into a paragraph split).
+ */
+function absorbHardBreaks(text: string): string {
+  return text.replace(/\\\r?\n/g, '\n');
 }
 
 export function renderCommentMarkdown(text: string): string {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const lines = absorbHardBreaks(text).replace(/\r\n/g, '\n').split('\n');
   const html: string[] = [];
   let listOpen = false;
   let para: string[] = [];
