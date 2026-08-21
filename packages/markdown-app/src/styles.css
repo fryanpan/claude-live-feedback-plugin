@@ -5743,6 +5743,12 @@ body.composer-open #editor .ProseMirror ::selection {
   font-size: 13.5px;
   line-height: 1.55;
   overflow-wrap: anywhere;
+  /* A growing preview must never push the textarea being typed in off the
+     top of the screen — measured doing exactly that at 820px viewport height
+     around 20 wrapped paragraphs. Same clamp shape as the balloon. */
+  max-height: min(35vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 /* Belt and braces: happy-dom honours the property, and a stylesheet that
    loses this rule would leave an empty accent-barred box under every
