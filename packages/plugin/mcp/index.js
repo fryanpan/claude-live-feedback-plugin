@@ -13969,6 +13969,29 @@ function frameKey(event, payload) {
   return `${event}#${p.docId}#${p.seq}`;
 }
 
+// packages/mcp/src/sse-cursor.ts
+function frameMeta(raw) {
+  const meta2 = {};
+  for (const line of raw.split(`
+`)) {
+    if (line.startsWith("id:"))
+      meta2.id = line.slice(3).trim();
+    else if (line.startsWith("event:"))
+      meta2.event = line.slice(6).trim();
+  }
+  return meta2;
+}
+async function deliverThenCommit(frame, deliver, cursor, onGap) {
+  await deliver(frame);
+  const meta2 = frameMeta(frame);
+  if (meta2.event === "replay.gap") {
+    cursor.lastEventId = undefined;
+    onGap();
+  } else if (meta2.id !== undefined) {
+    cursor.lastEventId = meta2.id;
+  }
+}
+
 // packages/mcp/src/thread-create.ts
 function threadCreateRequest(input, author) {
   const doc2 = encodeURIComponent(input.docId);
@@ -16561,12 +16584,12 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
     if (w)
       w.open = open;
   };
-  let lastEventId;
+  const cursor = { lastEventId: undefined };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
-        ...lastEventId ? { headers: { "Last-Event-ID": lastEventId } } : {}
+        ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -16587,14 +16610,7 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          const meta2 = frameMeta(frame);
-          if (meta2.event === "replay.gap") {
-            lastEventId = undefined;
-            shouldForwardFrame.reset();
-          } else if (meta2.id !== undefined) {
-            lastEventId = meta2.id;
-          }
-          await handleFrame(frame);
+          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
           sep = buf.indexOf(`
 
 `);
@@ -16629,17 +16645,6 @@ function startSseLoop(label, path, controller) {
   });
 }
 var shouldForwardFrame = createFrameDedup();
-function frameMeta(raw) {
-  const meta2 = {};
-  for (const line of raw.split(`
-`)) {
-    if (line.startsWith("id:"))
-      meta2.id = line.slice(3).trim();
-    else if (line.startsWith("event:"))
-      meta2.event = line.slice(6).trim();
-  }
-  return meta2;
-}
 async function handleFrame(raw) {
   const lines = raw.split(`
 `);
