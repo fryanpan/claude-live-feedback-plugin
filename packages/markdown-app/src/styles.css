@@ -4346,7 +4346,17 @@ a.hub-link-chip:hover {
   bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
-  max-width: min(80vw, 420px);
+  /* Twice the 420px it used to cap at. This box holds a LIVE transcript: the
+     interim result is rewritten on every word, so a narrow box re-wraps the
+     whole sentence under the reader several times a second and the text moves
+     faster than it can be followed. Width is what buys the fix — the same
+     sentence in two long lines re-flows at the tail instead of everywhere.
+     A pair, not a number: 840px is the ceiling the tablet and the laptop
+     reach, and the vw cap is what a phone gets, where doubling would be wider
+     than the screen. 92 rather than 100 leaves the gutter the floating form
+     sits in (`left: 16px`) — and covers a classic scrollbar, which vw counts
+     and the client area does not. */
+  max-width: min(92vw, 840px);
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);

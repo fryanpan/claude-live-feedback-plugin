@@ -15,6 +15,11 @@
  * whenever the system takes the touch over — and both settle the hold the
  * same way. A `blur` (tab switch mid-hold) settles it too, so the mic can
  * never wedge open.
+ *
+ * A Space this capture has a claim to never scrolls the page: the default is
+ * held back at keydown (the only moment that can keep the page still) and a
+ * press that turns out to be a tap is paid its page-down back on release. See
+ * `onKeyDown` for why the two halves cannot be collapsed into one.
  */
 
 export interface VoiceContext {
@@ -116,6 +121,11 @@ export interface VoiceCaptureOpts {
    * quick-add box is a button and opts out.
    */
   spaceHotkey?: boolean;
+  /**
+   * Perform the scroll a native Space would have done, for a press that turned
+   * out to be a tap. Injectable because no test environment resolves layout.
+   */
+  scrollPage?: (target: EventTarget | null, direction: 1 | -1) => void;
 }
 
 export interface VoiceCapture {
@@ -283,6 +293,47 @@ export function spaceHoldTargetsPage(path: readonly (EventTarget | undefined)[])
   return inner.getAttribute(SPACE_HOLD_PAGE_ATTR) === 'page';
 }
 
+/**
+ * How much of the screen a native Space page-down leaves behind. Browsers
+ * scroll a viewport height less a couple of lines, so the reader keeps their
+ * place across the jump; this is that overlap.
+ */
+const SPACE_SCROLL_OVERLAP_PX = 40;
+
+/**
+ * The box a native Space would have scrolled, or null for the viewport.
+ *
+ * `null` is the answer for the page itself, and it is not a fallback: a hub
+ * page sets `overflow: auto` on <body>, which PROPAGATES to the viewport — so
+ * the body element is not the scroller and `body.scrollBy()` moves nothing at
+ * all. Only the marked page-like containers need the walk, and one of them
+ * (the task detail panel) really is its own scrollport.
+ */
+export function spaceScrollTarget(from: EventTarget | null | undefined): Element | null {
+  if (!(from instanceof Element)) return null;
+  const doc = from.ownerDocument;
+  const view = doc.defaultView;
+  let el: Element | null = from;
+  while (el && el !== doc.body && el !== doc.documentElement) {
+    const overflowY = view?.getComputedStyle(el).overflowY;
+    if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/** The deferred half of the Space guard: the page-down the browser was not
+ *  allowed to do, once the release has said the press was a tap. */
+export function defaultSpaceScroll(target: EventTarget | null, direction: 1 | -1): void {
+  const box = spaceScrollTarget(target);
+  const height = box ? box.clientHeight : window.innerHeight;
+  const dy = direction * Math.max(0, height - SPACE_SCROLL_OVERLAP_PX);
+  if (box) box.scrollBy(0, dy);
+  else if (typeof window.scrollBy === 'function') window.scrollBy(0, dy);
+}
+
 export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   const { button, indicator } = opts;
   const createRecognition = opts.createRecognition ?? defaultRecognitionFactory;
@@ -388,6 +439,9 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   const endHold = (): void => {
     if (!holding) return;
     holding = false;
+    // However the hold ends — release, blur, destroy — the next Space keyup is
+    // not this one's, so the claim is dropped with the hold.
+    spaceStartedHold = false;
     button.classList.remove('voice-active');
     if (!rec) {
       finalized = true;
@@ -436,9 +490,9 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
   };
 
   /**
-   * The document-level hotkey. Two rules beyond the typing guard, both from
-   * the accidental-trigger report (t-Mym15-yQ3QxJ — "voice triggers while I'm
-   * typing, basically everywhere"):
+   * The document-level hotkey. Three rules beyond the typing guard. The first
+   * two are from the accidental-trigger report (t-Mym15-yQ3QxJ — "voice
+   * triggers while I'm typing, basically everywhere"):
    *
    * 1. The press must land on the PAGE (`spaceHoldTargetsPage`), not on some
    *    focused control. This is what catches the report's worst case: a board
@@ -447,12 +501,32 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
    *    deliberate hotkey.
    * 2. The press must be a HOLD. keydown only ARMS a timer; the engine starts
    *    SPACE_HOLD_ARM_MS later, and a keyup before that disarms — so a tap
-   *    does nothing at all. No preventDefault until the hold is real, so a
-   *    tap also keeps its native behaviour (scrolling, mostly) instead of
-   *    being eaten by a feature it never asked for.
+   *    does nothing at all.
+   * 3. **A press the page owns does not scroll the page.** Every dictation
+   *    used to open with the board jumping a screen, because the native
+   *    page-down fires at KEYDOWN and the hold only arms 250ms later — by
+   *    which time the scroll has already happened and no amount of
+   *    preventDefault afterwards can take it back. So the default is
+   *    suppressed at keydown, on the one press this capture has a claim to,
+   *    and the ending says what the press was: a hold records, and a tap gets
+   *    its page-down replayed on release. Nothing is taken away — rule 1 keeps
+   *    this off every press that belongs to a field or a control, which still
+   *    reach the browser untouched.
    */
   let armTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Where a still-arming press landed, and which way it would scroll — read
+   *  by the release, when a tap has to be paid back its page-down. */
+  let armedTap: { target: EventTarget | null; direction: 1 | -1 } | null = null;
+  /**
+   * Whether the LIVE hold was started by this hotkey. A hold started from the
+   * mic button belongs to the button's own release: a stray Space keyup used
+   * to end it, cutting the utterance off mid-sentence on a tablet, where the
+   * button is how dictation starts.
+   */
+  let spaceStartedHold = false;
+  const scrollPage = opts.scrollPage ?? defaultSpaceScroll;
   const disarm = (): void => {
+    armedTap = null;
     if (armTimer) {
       clearTimeout(armTimer);
       armTimer = null;
@@ -471,19 +545,35 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     const path = eventPath(ev);
     if (typingInPath(path)) return;
     if (!spaceHoldTargetsPage(path)) return;
-    if (armTimer || holding) return;
+    if (armTimer) return;
+    if (holding) {
+      // Dictation is already running — from the mic button, or from a first
+      // key still down. The page must not move under a recording.
+      ev.preventDefault();
+      return;
+    }
+    ev.preventDefault();
+    armedTap = { target: path[0] ?? null, direction: ev.shiftKey ? -1 : 1 };
     armTimer = setTimeout(() => {
       armTimer = null;
+      armedTap = null;
       beginHold();
+      // False when the origin gate refused: nothing is holding, so no later
+      // keyup should try to settle anything.
+      spaceStartedHold = holding;
     }, SPACE_HOLD_ARM_MS);
   };
   const onKeyUp = (ev: KeyboardEvent): void => {
     if (ev.code !== 'Space') return;
     if (armTimer) {
-      // A tap: nothing started, so there is nothing to settle or report.
+      // A tap: nothing started, so there is nothing to settle or report — but
+      // the scroll held back at keydown is owed, and this is where it is paid.
+      const tap = armedTap;
       disarm();
+      if (tap) scrollPage(tap.target, tap.direction);
       return;
     }
+    if (!spaceStartedHold) return;
     endHold();
   };
   const onBlur = (): void => {
