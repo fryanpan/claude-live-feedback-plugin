@@ -319,7 +319,7 @@ describe('the indicator follows the mic', () => {
   });
 
   it('is not clipped by the nav it now hangs off', () => {
-    // The indicator is up to 420px wide and overflows a 170px rail by design.
+    // The indicator is up to 840px wide and overflows a 170px rail by design.
     // An `overflow-x` on the nav would clip it — and would also make the nav a
     // scroll container, which silently breaks the dock's `position: sticky`.
     expect(rule('.hub-nav')).not.toMatch(/overflow/);
