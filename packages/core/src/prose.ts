@@ -242,9 +242,21 @@ function findSegmentForOffset(segments: TextSegment[], offset: number): TextSegm
 
 export interface ReplaceResult {
   ok: boolean;
-  error?: 'no-match' | 'ambiguous' | 'cross-node' | 'out-of-range' | 'occurrence-out-of-range';
+  error?:
+    | 'no-match'
+    | 'ambiguous'
+    | 'cross-node'
+    | 'out-of-range'
+    | 'occurrence-out-of-range'
+    | 'replace-all-with-occurrence';
   /** For ambiguous results, a short preview of each candidate's neighbourhood. */
   candidates?: Array<{ docOffset: number; preview: string }>;
+  /** replaceAll only: how many occurrences were replaced. */
+  replaced?: number;
+  /** replaceAll only, present when non-zero: matches that straddled two
+   *  Y.XmlText nodes and were left untouched. The sweep is still ok — but a
+   *  count the caller cannot see is a match silently skipped. */
+  skippedCrossNode?: number;
   /** Mark keys (bold/italic/code/link/strike) that covered only PART of the
    *  replaced text, so they could not be carried onto the replacement. Present
    *  only when non-empty — a formatting loss this call could not avoid has to
@@ -421,17 +433,65 @@ export function findAndReplace(
     contextAfter?: string;
     /** 1-indexed. When omitted, requires a unique match. */
     occurrence?: number;
+    /** Replace EVERY occurrence in one transaction instead of requiring a
+     *  unique match. Mutually exclusive with `occurrence`. Default false. */
+    replaceAll?: boolean;
     /** Parse inline markdown in `replace` into Yjs marks. Default false. */
     parseInlineMarks?: boolean;
     transactionOrigin?: unknown;
   },
 ): ReplaceResult {
+  if (opts.replaceAll === true && opts.occurrence != null) {
+    // The two answer opposite questions — "which one" vs "all of them" —
+    // and guessing which the caller meant would silently do the other.
+    return { ok: false, error: 'replace-all-with-occurrence' };
+  }
   const fragment = getProseFragment(doc);
   const { matches, crossNode, plainText } = locateMatches(fragment, opts);
 
   if (matches.length === 0) {
     if (crossNode > 0) return { ok: false, error: 'cross-node' };
     return { ok: false, error: 'no-match' };
+  }
+
+  if (opts.replaceAll === true) {
+    // locateMatches allows overlapping matches (context disambiguation needs
+    // them); a sweep must not apply two matches over the same characters.
+    // Keep greedy left-to-right, like String.replaceAll.
+    const kept: LocatedMatch[] = [];
+    let lastEnd = -1;
+    for (const m of matches) {
+      if (m.docOffset < lastEnd) continue;
+      kept.push(m);
+      lastEnd = m.docOffset + m.length;
+    }
+    const droppedUnion = new Set<string>();
+    doc.transact(() => {
+      // Apply in DESCENDING docOffset order so every earlier offset — both
+      // the doc-wide walk offsets and each node-local offsetInNode — is
+      // still valid when its turn comes: edits only ever land at or above
+      // the position about to be edited next.
+      for (let i = kept.length - 1; i >= 0; i--) {
+        const m = kept[i]!;
+        // Per-site mark carry, read immediately before this site's delete —
+        // a bold occurrence stays bold, a plain one stays plain.
+        const siteMarks = coveringInlineMarks([
+          { node: m.segment.node, offset: m.offsetInNode, length: m.length },
+        ]);
+        for (const k of siteMarks.dropped) droppedUnion.add(k);
+        m.segment.node.delete(m.offsetInNode, m.length);
+        insertTextWithMarks(m.segment.node, m.offsetInNode, opts.replace, {
+          parseInlineMarks: opts.parseInlineMarks === true,
+          attributes: siteMarks.attributes,
+        });
+      }
+    }, opts.transactionOrigin ?? 'agent');
+    return {
+      ok: true,
+      replaced: kept.length,
+      ...(crossNode > 0 ? { skippedCrossNode: crossNode } : {}),
+      ...marksReport([...droppedUnion]),
+    };
   }
 
   let chosen: LocatedMatch;

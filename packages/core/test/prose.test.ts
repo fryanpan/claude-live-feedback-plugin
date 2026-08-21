@@ -280,6 +280,137 @@ describe('findAndReplace — parseInlineMarks', () => {
   });
 });
 
+describe('findAndReplace — replaceAll', () => {
+  it('replaces every occurrence across several blocks in one call', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'About deadbeef1234', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'The sha deadbeef1234 is stale.' },
+      { tag: 'paragraph', text: 'deadbeef1234 appears here and deadbeef1234 there.' },
+      { tag: 'paragraph', text: 'Unrelated paragraph.' },
+      { tag: 'paragraph', text: 'Tail mention: deadbeef1234.' },
+    ]);
+    const res = findAndReplace(doc, {
+      find: 'deadbeef1234',
+      replace: 'cafef00dbeef',
+      replaceAll: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(5);
+    const text = walkProse(getProseFragment(doc)).plainText;
+    expect(text).not.toContain('deadbeef1234');
+    expect(text).toContain('About cafef00dbeef');
+    expect(text).toContain('cafef00dbeef appears here and cafef00dbeef there.');
+    expect(text).toContain('Tail mention: cafef00dbeef.');
+  });
+
+  it('carries marks per site — a bold occurrence stays bold, a plain one stays plain', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      const p1 = new Y.XmlElement('paragraph');
+      const t1 = new Y.XmlText();
+      t1.insert(0, 'oldsha is stale');
+      t1.format(0, 6, { bold: {} });
+      p1.insert(0, [t1]);
+      const p2 = new Y.XmlElement('paragraph');
+      const t2 = new Y.XmlText();
+      t2.insert(0, 'see oldsha here');
+      p2.insert(0, [t2]);
+      frag.push([p1, p2]);
+    });
+    const res = findAndReplace(doc, { find: 'oldsha', replace: 'newsha', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(2);
+    // Neither site was partially formatted, so no marks were dropped.
+    expect(res.marksDropped).toBeUndefined();
+    const delta1 = firstParaDelta(doc);
+    expect(delta1[0]?.insert).toBe('newsha');
+    expect(delta1[0]?.attributes).toHaveProperty('bold');
+    const p2 = getProseFragment(doc).toArray()[1] as Y.XmlElement;
+    const t2 = p2.toArray()[0] as Y.XmlText;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const delta2 = t2.toDelta() as Array<{ insert: string; attributes?: Record<string, unknown> }>;
+    expect(delta2.map((op) => op.insert).join('')).toBe('see newsha here');
+    for (const op of delta2) {
+      expect(Object.keys(op.attributes ?? {})).toEqual([]);
+    }
+  });
+
+  it('stays correct at every site when the replacement is longer (same node, reverse-order proof)', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'x1 then x1 then x1' }]);
+    const res = findAndReplace(doc, { find: 'x1', replace: 'longer-token', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(3);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe(
+      'longer-token then longer-token then longer-token',
+    );
+  });
+
+  it('stays correct at every site when the replacement is shorter', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'longtoken a longtoken b longtoken' }]);
+    const res = findAndReplace(doc, { find: 'longtoken', replace: 'x', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(3);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('x a x b x');
+  });
+
+  it('refuses the occurrence + replaceAll combination', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'a a a' }]);
+    const res = findAndReplace(doc, { find: 'a', replace: 'X', replaceAll: true, occurrence: 2 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('replace-all-with-occurrence');
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('a a a');
+  });
+
+  it('skips a cross-node match and reports it in skippedCrossNode', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      // One paragraph whose text is split across TWO Y.XmlText leaves so the
+      // match "ab" straddles the node boundary.
+      const p1 = new Y.XmlElement('paragraph');
+      const t1a = new Y.XmlText();
+      t1a.insert(0, 'xa');
+      const t1b = new Y.XmlText();
+      t1b.insert(0, 'by');
+      p1.insert(0, [t1a, t1b]);
+      const p2 = new Y.XmlElement('paragraph');
+      const t2 = new Y.XmlText();
+      t2.insert(0, 'ab whole');
+      p2.insert(0, [t2]);
+      frag.push([p1, p2]);
+    });
+    const res = findAndReplace(doc, { find: 'ab', replace: 'Z', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(1);
+    expect(res.skippedCrossNode).toBe(1);
+    const text = walkProse(frag).plainText;
+    expect(text).toContain('Z whole');
+    expect(text).toContain('xab'); // the straddling match is untouched
+  });
+
+  it('applies overlapping candidates non-overlapping, left to right', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'aaaa' }]);
+    const res = findAndReplace(doc, { find: 'aa', replace: 'b', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(2);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('bb');
+  });
+
+  it('still reports no-match when nothing matches', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'hello' }]);
+    const res = findAndReplace(doc, { find: 'absent', replace: 'x', replaceAll: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+  });
+});
+
 /** Build a text-range anchor on the FIRST text node covering [from, to). */
 function anchorIn(doc: Y.Doc, from: number, to: number) {
   const frag = getProseFragment(doc);

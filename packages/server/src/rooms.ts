@@ -2338,6 +2338,8 @@ export class Rooms {
       contextBefore?: string;
       contextAfter?: string;
       occurrence?: number;
+      /** Replace EVERY occurrence in one transaction. See prose.findAndReplace. */
+      replaceAll?: boolean;
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {

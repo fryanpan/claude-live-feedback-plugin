@@ -46,3 +46,45 @@ describe('MCP tool wiring', () => {
     expect([...dispatched].filter((n) => !declared.has(n))).toEqual([]);
   });
 });
+
+/** The `case 'x': {` block for one tool, up to the next case. */
+function handlerFor(tool: string): string {
+  const start = SRC.indexOf(`case '${tool}': {`);
+  expect(start, `no handler for ${tool}`).toBeGreaterThan(-1);
+  const rest = SRC.slice(start + 1);
+  return rest.slice(0, rest.indexOf('case '));
+}
+
+/** The declaration block for one tool, up to the next tool entry. */
+function declarationFor(tool: string): string {
+  const start = SRC.indexOf(`name: '${tool}',\n      description:`);
+  expect(start, `no declaration for ${tool}`).toBeGreaterThan(-1);
+  const rest = SRC.slice(start);
+  return rest.slice(0, rest.indexOf('},\n    {'));
+}
+
+describe('find_and_replace forwards replaceAll', () => {
+  // Positive control: the extractor really is reading that handler.
+  it('found the handler, and it is the one that calls the find_and_replace route', () => {
+    expect(handlerFor('find_and_replace')).toContain('/find_and_replace');
+  });
+
+  it('the handler puts replaceAll into the POST body instead of dropping it', () => {
+    const handler = handlerFor('find_and_replace');
+    const bodyStart = handler.indexOf("await http('POST'");
+    expect(bodyStart, 'handler does not POST').toBeGreaterThan(-1);
+    // The forward, not just the `as { … }` type annotation naming the field.
+    expect(handler.slice(bodyStart)).toMatch(/replaceAll === true \? \{ replaceAll: true \}/);
+  });
+
+  it('the tool declares replaceAll and its description names the bulk-sweep use', () => {
+    const decl = declarationFor('find_and_replace');
+    expect(decl).toContain('replaceAll: {');
+    expect(decl.toLowerCase()).toContain('every occurrence');
+  });
+
+  it('the committed bundle carries the forward too (peers load the bundle, not the source)', () => {
+    const bundle = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
+    expect(bundle).toContain('replaceAll');
+  });
+});

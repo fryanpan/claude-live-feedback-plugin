@@ -4710,7 +4710,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const contextAfter = body?.contextAfter ? String(body.contextAfter) : undefined;
             const occurrence =
               typeof body?.occurrence === 'number' ? Number(body.occurrence) : undefined;
+            const replaceAll = body?.replaceAll === true;
             if (body?.suggest === true) {
+              if (replaceAll) {
+                // Bulk suggestions are out of scope: the suggestion model is
+                // one proposal per span, each individually acceptable.
+                return j(400, {
+                  error: 'replaceAll cannot be combined with suggest — propose spans one at a time',
+                });
+              }
               const author = parseSuggestionAuthor(
                 visitor ? { author: authorFor(body?.author) } : body,
               );
@@ -4732,6 +4740,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               contextBefore,
               contextAfter,
               occurrence,
+              replaceAll,
               parseInlineMarks: body?.parseInlineMarks === true,
             });
             // Piggy-back any pending sync trouble on the response: agents act
