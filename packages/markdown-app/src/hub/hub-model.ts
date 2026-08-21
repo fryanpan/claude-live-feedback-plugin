@@ -1147,6 +1147,17 @@ export function blockedNoteLine(row: BlockerRow): string {
 // ── Where the walkthrough is standing ──────────────────────────────────────
 
 /**
+ * The walkthrough aimed at nothing — what "closed" is spelled as.
+ *
+ * `walkPosition` answers -1 for this pair whatever the queue holds, and -1 is
+ * what puts the Home page back on screen. It is a named constant because two
+ * places close the walkthrough for two different reasons — the card's own
+ * close button, and arriving at Home from the nav — and a second hand-written
+ * spelling is how one of them ends up leaving half the aim behind.
+ */
+export const CLOSED_WALK = { index: -1, key: null } as const;
+
+/**
  * The position the walkthrough should render, given where it was AIMED.
  *
  * The queue is re-derived on every render and shrinks underneath the reader —
