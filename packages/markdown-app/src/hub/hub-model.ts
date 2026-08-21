@@ -111,9 +111,9 @@ export interface HubTask {
    *  than a flag, so a reading can say how long the wait has been and not
    *  only that there is one. Cleared the moment a goal is named; absent on
    *  every placed task. The server is the only writer — never re-derive it
-   *  from "is this row under Chores", the proxy it replaced, which was wrong
+   *  from "is this row under Backlog", the proxy it replaced, which was wrong
    *  in both directions (an explicit `goal: 'chores'` IS a placement, and a
-   *  task swept into Chores by a band removal keeps its old
+   *  task swept into Backlog by a band removal keeps its old
    *  `triagedAgainst`). */
   unplacedSince?: number;
   createdAt: number;
@@ -180,9 +180,19 @@ export interface HubWorkspaceInfo {
  *  rendered last, never in goals[], not reorderable or deletable. */
 export const CHORES_ID = 'chores';
 
-/** The one spelling of the Chores header, shared by the section and by
- *  anything else that has to name the goal a task sits under. */
-export const CHORES_TITLE = 'Chores';
+/**
+ * The one spelling of the Backlog header, shared by the section and by
+ * anything else that has to name the goal a task sits under.
+ *
+ * The constant is still `CHORES_*` because **the id is still `chores`** and
+ * deliberately stays that way (Bryan, 2026-08-21, asked only for the label).
+ * That id is written into every task's `goal` field and into every `.ydoc`,
+ * and plugin bundles in the field send `goal: "chores"` on the shared REST
+ * route from sessions nobody here can restart — so renaming it is a data
+ * migration plus a compatibility break, in exchange for nothing anyone can
+ * see. Label and id are allowed to disagree; that is what this pair is.
+ */
+export const CHORES_TITLE = 'Backlog';
 
 // ── Done visibility ────────────────────────────────────────────────────────
 
@@ -307,7 +317,7 @@ export function taskVisible(task: HubTask, f: BoardFilters): boolean {
   return true;
 }
 
-// ── Board sections (goals ARE the sections; Chores last) ───────────────────
+// ── Board sections (goals ARE the sections; Backlog last) ───────────────────
 
 export interface BoardSection {
   id: string;
@@ -325,9 +335,9 @@ function byBoardOrder(a: HubTask, b: HubTask): number {
 
 /**
  * Goal order IS priority order (§3.2): sections follow goals[], each goal's
- * subgoals nested directly after it, Chores always last. A task whose goal id
+ * subgoals nested directly after it, Backlog always last. A task whose goal id
  * matches no section (transient state while a goal-list edit lands) renders
- * under Chores — dropping it would be the store-has-it/surface-can't-show-it
+ * under Backlog — dropping it would be the store-has-it/surface-can't-show-it
  * bug all over again.
  */
 export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilters): BoardSection[] {
@@ -371,10 +381,10 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
 
 /**
  * Where a goal sits in board priority order — the index of its section, with
- * Chores and any unrecognised goal id last.
+ * Backlog and any unrecognised goal id last.
  *
  * Lives beside `boardSections` and repeats its traversal on purpose: both
- * answer "which band is this task in", and the Chores fallback has to be the
+ * answer "which band is this task in", and the Backlog fallback has to be the
  * same answer in both, or the review queue would order asks differently from
  * the board they are about. A test asserts the two agree, including the
  * fallback, since nothing else would catch the drift.
@@ -399,9 +409,9 @@ export function goalRank(goals: HubGoal[]): (goalId: string) => number {
  * row actually sits under.
  *
  * It lives next to `boardSections` and shares its fallback on purpose: every
- * goal id that has no section (the Chores catch-all, a goal deleted out from
- * under a task) renders under Chores, so anything naming a goal elsewhere has
- * to say Chores too. Two places deciding that independently is how a row ends
+ * goal id that has no section (the Backlog catch-all, a goal deleted out from
+ * under a task) renders under Backlog, so anything naming a goal elsewhere has
+ * to say Backlog too. Two places deciding that independently is how a row ends
  * up under one header while its detail panel claims another.
  */
 export function goalLabel(goals: HubGoal[], goalId: string): string {
@@ -421,7 +431,7 @@ export interface UnplacedNotice {
   oldestSince: number;
   /** The longest-waiting task, so the strip can take a reader straight to it.
    *  Named rather than assumed: both writers of `unplacedSince` land a task in
-   *  Chores today, but "scroll to the Chores header" would bake that proxy
+   *  Backlog today, but "scroll to the Backlog header" would bake that proxy
    *  back into the surface through the back door. */
   oldestTaskId: string;
   /** "3 tasks have no goal yet" — how many. */
@@ -432,7 +442,7 @@ export interface UnplacedNotice {
 
 /**
  * The bucket's whole risk is that it is QUIET. Unplaced work rests at the
- * bottom of Chores, which is the band nobody scrolls to, so the failure mode
+ * bottom of Backlog, which is the band nobody scrolls to, so the failure mode
  * is tasks accumulating there for weeks while every check comes back correct.
  *
  * So this is a reading rather than an obligation: it fires on every render,

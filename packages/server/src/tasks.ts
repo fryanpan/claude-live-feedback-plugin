@@ -495,7 +495,7 @@ export interface Task {
    * Triage-pending marker (§3.4). Stamped ONLY at the moment a triage
    * request is actually emitted to a live attachment — the grounded-pending
    * rule from the summaries incident: never promise work that isn't queued.
-   * No attachment → no marker; the task simply sits in Chores. Cleared on
+   * No attachment → no marker; the task simply sits in Backlog. Cleared on
    * hydrate (a restart kills the emitted request, so the promise must not
    * outlive it) and by the agent's eventual placement.
    */
@@ -655,7 +655,7 @@ export type AmendEvidenceResult =
  */
 export interface TaskPlacement {
   /** The caller named a goal — even `'chores'`. False means it fell to the
-   *  Chores resting state without anyone judging it. */
+   *  Backlog resting state without anyone judging it. */
   placed: boolean;
   /** A triage request for this task reached a live attachment. Always false
    *  for a placed task, which asks for no triage. */
@@ -1069,7 +1069,7 @@ export type AttachAgentResult =
       ok: true;
       attachment: AgentAttachment;
       gating: GatingSummary;
-      /** Open Chores tasks no triage has placed — what the agent sweeps
+      /** Open Backlog tasks no triage has placed — what the agent sweeps
        *  after attaching (§3.4). */
       untriaged: string[];
       /** Voice change-requests that arrived while no agent was live (§2.4
@@ -1446,7 +1446,7 @@ export interface WorkspaceGoalsChangedEvent {
   oldGoals: WorkspaceGoal[];
   newGoals: WorkspaceGoal[];
   actor: TaskActor;
-  /** Open tasks whose goal id disappeared, moved to Chores. */
+  /** Open tasks whose goal id disappeared, moved to Backlog. */
   movedToChores: string[];
   ts: number;
 }
@@ -1843,7 +1843,7 @@ export type SetGoalListResult =
        *  The only way a caller learns a new band's id — which is the point:
        *  they never chose it. */
       created: Array<{ id: string; title: string; parent?: string }>;
-      /** Open tasks whose goal or subgoal id disappeared, moved to Chores —
+      /** Open tasks whose goal or subgoal id disappeared, moved to Backlog —
        *  reported so the caller can re-place them (§3.2 edit contract). */
       movedToChores: string[];
       /** DONE tasks left pointing at a goal id the list no longer has. They
@@ -1940,7 +1940,7 @@ export type ReorderGoalsResult =
        *  `reorderable: false` for the same reason. */
       reservedIds: string[];
       /** Ids at this scope that `order` left out. These are precisely the
-       *  goals `setGoalList` would have emptied into Chores. */
+       *  goals `setGoalList` would have emptied into Backlog. */
       missingIds: string[];
       /** Ids repeated within `order`. */
       duplicateIds: string[];
@@ -2010,7 +2010,7 @@ export const LEGACY_REVIEW_ITEM_ID = 'r-legacy';
  * which put PRIORITY — the fastest-moving property a board has — inside the
  * identity. Renaming a band then meant re-keying it, and re-keying it through
  * the full-replace `setGoalList` reads as one goal removed and a different one
- * added: the band's open tasks swept to Chores, its done tasks orphaned. The
+ * added: the band's open tasks swept to Backlog, its done tasks orphaned. The
  * `would-strand-tasks` refusal defends against that; generated ids make it
  * unexpressible, which is the stronger move.
  *
@@ -2908,7 +2908,7 @@ export class TaskStore {
     this.applyTitle(task, task.title);
 
     // Triage hook (§3.4): an OMITTED goal means "needs placing" — the task
-    // has already landed at the bottom of Chores (the resting state; the
+    // has already landed at the bottom of Backlog (the resting state; the
     // human is never blocked on placement), and the server emits a triage
     // request for the attached agent to act on. The pending marker is
     // stamped ONLY when that request actually reached a live attachment.
@@ -2969,17 +2969,17 @@ export class TaskStore {
    * (§3.4), and the bucket a later "a goal became apparent" re-look reads.
    *
    * Keyed on `unplacedSince`, which replaced the proxy this used to select on
-   * ("in Chores and `triagedAgainst` unset"). That proxy was wrong in BOTH
+   * ("in Backlog and `triagedAgainst` unset"). That proxy was wrong in BOTH
    * directions, and each was reproduced before the field existed:
    *
    *  - it re-asked forever about a task whose caller explicitly said
    *    `goal: 'chores'` — a placement, per `placement.placed`;
-   *  - it never surfaced a task swept into Chores by a band removal, because
+   *  - it never surfaced a task swept into Backlog by a band removal, because
    *    that task KEEPS the `triagedAgainst` of its old placement, pointing at
    *    a goal id that no longer exists.
    *
    * No `goal === chores` clause: the two writers of `unplacedSince` both land
-   * the task in Chores, so the clause would be a second spelling of the same
+   * the task in Backlog, so the clause would be a second spelling of the same
    * fact — and a future writer that got it wrong would be hidden by it rather
    * than surfaced.
    */
@@ -4184,7 +4184,7 @@ export class TaskStore {
     // the sidecar either way, same as the hydrate-time clear.
     task.triagePendingTs = undefined;
     // Somebody has now named this task's band — including a confirm-in-place
-    // into Chores, which is a judgement rather than a fallback. The owed
+    // into Backlog, which is a judgement rather than a fallback. The owed
     // review is answered, so it must not be asked again.
     task.unplacedSince = undefined;
     task.updatedAt = ts;
@@ -4221,7 +4221,7 @@ export class TaskStore {
    * of it moves an id.
    *
    * 'chores' is reserved and never present in goals[]; open tasks whose goal
-   * or subgoal id disappears are moved to Chores, each emitting a
+   * or subgoal id disappears are moved to Backlog, each emitting a
    * `task.regrouped` batched (via `partOf`) under the one
    * `workspace.goals_changed` event, and the result reports the moved ids so
    * the caller can re-place them. Deliberately NO re-triage request fires —
@@ -4232,7 +4232,7 @@ export class TaskStore {
    * This is a full replace keyed by id, so the natural way to rename a band —
    * submit the list with a new id and the new title — reads here as one goal
    * removed and a different one added: the old band's open tasks swept to
-   * Chores, its done tasks left pointing at an id that is gone, and a
+   * Backlog, its done tasks left pointing at an id that is gone, and a
    * successful-looking result. The damage is proportional to how much the
    * band held, and it surfaces days later as "why is my top band empty".
    * `renameGoal` is the non-destructive way to change a title; this guard is
@@ -4341,7 +4341,7 @@ export class TaskStore {
         if (task.status === 'done') doneTasks += 1;
         else openTasks += 1;
       }
-      // Both halves count. The open one is swept to Chores (loud-ish, it is
+      // Both halves count. The open one is swept to Backlog (loud-ish, it is
       // reported); the done one silently orphans, and is the half nothing
       // used to mention.
       if (openTasks + doneTasks > 0) {
@@ -4374,7 +4374,7 @@ export class TaskStore {
     };
     workspace.goals = goals;
 
-    // Open tasks whose goal id disappeared land at the bottom of Chores.
+    // Open tasks whose goal id disappeared land at the bottom of Backlog.
     // Done tasks stay put — same rule as re-triage (§3.4), their placement
     // is history, not a claim about current priorities.
     const newIds = new Set([...ids, CHORES_GOAL_ID]);
@@ -4696,7 +4696,7 @@ export class TaskStore {
    *
    * The whole contract is that nothing can move. A task's band is its goal
    * ID, and no reachable input here changes an id, so a rename cannot sweep
-   * open work to Chores and cannot orphan a done task. That is the point:
+   * open work to Backlog and cannot orphan a done task. That is the point:
    * before this existed, the natural gesture for "rename this band" was to
    * submit the full list with a new id, which the store reads as a removal
    * plus an addition and which strands everything the band held.
@@ -4832,7 +4832,7 @@ export class TaskStore {
    * board that adds a band by submitting the full list submits the list IT
    * last read — and any band added by someone else in between is absent from
    * that list, which the store reads as a removal and which sweeps that
-   * band's open tasks into Chores. Here the list is rebuilt from the LIVE
+   * band's open tasks into Backlog. Here the list is rebuilt from the LIVE
    * `workspace.goals` at call time, so the only difference between what goes
    * in and what was already there is the one entry being added. A concurrent
    * writer can be raced on ORDER; it cannot be raced out of existence.
@@ -4907,7 +4907,7 @@ export class TaskStore {
    * PERMUTATION ONLY, and that constraint is the entire point. `setGoalList`
    * is a full replace, so reordering through it means restating every id and
    * title, and any id a stale caller omits sends that goal's open tasks to
-   * the bottom of Chores — the most ordinary gesture on a board carrying the
+   * the bottom of Backlog — the most ordinary gesture on a board carrying the
    * most destructive edge in the API. Here an `order` that is not exactly
    * the current id set (same ids, same count) is REFUSED with the unknown /
    * missing / duplicated ids named, rather than merged best-effort. So a
@@ -5209,7 +5209,7 @@ export class TaskStore {
    * (workspaceId, agentId). Attach is itself a tool call, so both liveness
    * clocks start at now: a freshly attached agent reads as active, never as
    * unresponsive-from-birth. The result carries the §3.3 one-line summary of
-   * open gating decisions and the untriaged Chores tasks to sweep (§3.4) —
+   * open gating decisions and the untriaged Backlog tasks to sweep (§3.4) —
    * a fresh context learns the gates exist without thinking to read the
    * board.
    */
@@ -5853,13 +5853,13 @@ export class TaskStore {
           if (typeof task?.id !== 'string') continue;
           // A restart killed any in-flight triage request, so its marker
           // must not outlive it (grounded-pending, §3.4): the task goes back
-          // to plainly sitting in Chores until an agent attaches and sweeps.
+          // to plainly sitting in Backlog until an agent attaches and sweeps.
           task.triagePendingTs = undefined;
           // `unplacedSince` is deliberately NOT cleared here — see the field.
           // But every task written before it existed lacks it, and the sweep
           // now keys on it, so a writer-only fix would empty the bucket for
           // the entire existing board at the deploy. Reproduce the membership
-          // rule the old predicate used (Chores + open + never placed) and
+          // rule the old predicate used (Backlog + open + never placed) and
           // date it from `createdAt`, the only honest timestamp available.
           //
           // It over-includes a legacy explicit `goal: 'chores'` create, and

@@ -6,7 +6,7 @@
  * `goal`, and the response is `{ task: { goal: "chores", ... } }` and nothing
  * else. The agent that just generated the work — the one party that still
  * knows why the task exists and is best placed to rank it — cannot tell
- * "Chores because I asked for Chores" from "Chores because I named nothing
+ * "Backlog because I asked for Backlog" from "Backlog because I named nothing
  * and now nobody will ever place it", and does not know the bands exist
  * without a second `get_workspace` it has no reason to make.
  *
