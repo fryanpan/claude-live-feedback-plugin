@@ -9,6 +9,7 @@ import {
   summaryPending,
 } from '@feedback/core';
 import type * as Y from 'yjs';
+import { attachMarkdownField } from './md-field.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
@@ -718,6 +719,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   composerAvatar.style.background = user.color;
   composerAvatar.textContent = (user.name[0] ?? '?').toUpperCase();
 
+  // Every composer is a markdown editor (design point 4), and this is the one
+  // a reviewer reaches first — select text, tap the pill, type. Comments
+  // RENDER markdown, so the box has to say so and show what the words become.
+  // `attachMarkdownField` is idempotent because `#composer` is shell DOM that
+  // outlives the document while this function runs once per navigation.
+  const refreshComposerPreview = attachMarkdownField(composerText);
+
   /** Selection captured when the composer opened — survives the editor
    *  losing its DOM selection while the user types the comment. */
   let composerSelection: ChromeSelection | null = null;
@@ -737,6 +745,10 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     document.body.classList.add('composer-open');
     opts.hidePill?.();
     composerText.value = '';
+    // Emptying the box in code fires no `input`, so the preview has to be
+    // told — otherwise the previous comment's rendering sits under a blank
+    // composer.
+    refreshComposerPreview();
     // preventScroll stops iOS's auto-scroll-to-focus from yanking the page.
     setTimeout(() => composerText.focus({ preventScroll: true }), 30);
     opts.onComposerOpened?.();
