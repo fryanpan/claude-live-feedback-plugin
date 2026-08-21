@@ -13,6 +13,7 @@ import { attachMarkdownComposer, focusMarkdownComposer } from './md-composer.ts'
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
+import { setTabTitle, tabName } from './tab-title.ts';
 import { installSlotRemeasure, sizeThreadSlots } from './thread-morph.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
@@ -942,6 +943,12 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     const mobile = window.matchMedia('(max-width: 720px)').matches;
     docTitleEl.textContent = mobile ? mobileLabel(full) : full;
     docTitleEl.title = full;
+    // The browser tab names the DOC, not the product — otherwise every open
+    // review reads the same until it truncates. This is the one place all
+    // three surfaces resolve a label, and it re-runs per navigation and on
+    // every meta change, so the tab follows an in-place doc swap and a
+    // late-arriving title without either boot wiring it separately.
+    setTabTitle(document, tabName(full));
   }
   on(window.matchMedia('(max-width: 720px)'), 'change', () => renderDocLabel());
 
