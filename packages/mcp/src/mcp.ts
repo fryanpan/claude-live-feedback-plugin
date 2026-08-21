@@ -13,6 +13,7 @@ import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
+import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 import { voiceRequestLine } from './voice-line.ts';
@@ -92,7 +93,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.71';
+const PLUGIN_VERSION = '0.1.73';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -3681,10 +3682,19 @@ async function runSseLoop(
     const w = watchers.get(label);
     if (w) w.open = open;
   };
+  // The wire id of the last frame this loop DELIVERED, presented back on
+  // every reconnect. This loop is a hand-rolled fetch stream, not a native
+  // EventSource, so nothing sends `Last-Event-ID` for us — without this line
+  // the 1.5s retry below reconnects fast and resumes WITH A HOLE: everything
+  // broadcast inside the gap used to be lost permanently. Delivered, not
+  // seen: the cursor advances only after `handleFrame` resolves (see
+  // sse-cursor.ts for the loss that committing it early caused).
+  const cursor: SseCursor = { lastEventId: undefined };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
+        ...(cursor.lastEventId ? { headers: { 'Last-Event-ID': cursor.lastEventId } } : {}),
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -3702,7 +3712,13 @@ async function runSseLoop(
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          await handleFrame(frame);
+          // Deliver, THEN advance the cursor — a frame whose delivery threw
+          // must be re-presented on reconnect, not skipped past. On a
+          // delivered gap the cursor drops (the held id points at nothing
+          // the server can replay) and the dedup window drops with it, since
+          // after a refetch-worthy gap every held key may collide with a
+          // genuinely new event.
+          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
           sep = buf.indexOf('\n\n');
         }
       }
@@ -3780,6 +3796,26 @@ async function handleFrame(raw: string): Promise<void> {
   try {
     payload = JSON.parse(dataParts.join('\n'));
   } catch {
+    return;
+  }
+  if (ev === 'replay.gap') {
+    // An explicit hole: the server is saying it CANNOT replay what this
+    // session missed while disconnected. Surface it as its own channel line —
+    // the doc-shaped formatter below would render it as a garbled comment —
+    // so the agent refetches (get_doc / list_threads / next_tasks) instead of
+    // trusting the stream to have been complete. No receipt: a gap notice
+    // carries no queue row, and acking one would claim delivery of the very
+    // frames it is reporting as missing.
+    const p = (payload ?? {}) as { docId?: string };
+    await server.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        source: 'claude-workspaces',
+        sent_at: new Date().toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? 'a watched channel'} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: 'replay.gap', ...(p.docId ? { doc_id: p.docId } : {}) },
+      },
+    });
     return;
   }
   if (shouldForwardFrame.shouldForward(ev, payload)) {
