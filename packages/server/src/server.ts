@@ -2291,7 +2291,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
         }
         if (pathname === '/api/docs' && req.method === 'GET') {
-          return j(200, { docs: rooms.list().map(withReviewUrl) });
+          // `?workspaceId=` scopes the listing. Without honouring it here,
+          // list_docs accepted the param and silently answered a board-scoped
+          // question with every doc on the server. It matches either kind of
+          // id a caller holds under the name "workspace": the grouping tag in
+          // meta (folder binds, diff reviews) or a hub board the doc is filed
+          // under — resolved via hubBoardsForDoc so the answer is the same
+          // set the event fan-out and coverage readout already use.
+          const workspaceId = url.searchParams.get('workspaceId');
+          const all = rooms.list();
+          const docs = workspaceId
+            ? all.filter(
+                (m) => m.workspaceId === workspaceId || hubBoardsForDoc(m.docId).has(workspaceId),
+              )
+            : all;
+          return j(200, { docs: docs.map(withReviewUrl) });
         }
 
         // --- REST: workspaces (hub create OR folder bind) ---
