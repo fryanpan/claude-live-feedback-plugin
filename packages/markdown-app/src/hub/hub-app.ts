@@ -48,6 +48,7 @@ import {
   boardSections,
   clientDriftNotice,
   goalLabel,
+  hubTabTitle,
   humanBlockerRows,
   initialsOf,
   navFromPath,
@@ -452,6 +453,19 @@ async function main(): Promise<void> {
         createdAt: Number(wsMap.get('createdAt') ?? 0),
       };
     }
+    syncTabTitle();
+  }
+
+  /**
+   * Name the browser tab after this workspace and the pane showing in it.
+   *
+   * Called from both writers of what it reads — `setNav` (the reader moved)
+   * and `readProjection` (the workspace was renamed under them) — because a
+   * title set once at boot is wrong the moment either happens, and this page
+   * never reloads.
+   */
+  function syncTabTitle(): void {
+    document.title = hubTabTitle(state.info?.name ?? workspaceId, state.nav);
   }
 
   // ── Region renders ──────────────────────────────────────────────────────
@@ -678,6 +692,7 @@ async function main(): Promise<void> {
     const tab = tabForNav(nav);
     if (tab !== undefined) state.tab = tab;
     if (push && !same) history.pushState(null, '', navPath(workspaceId, nav));
+    syncTabTitle();
     renderHomeRegion();
     renderBoardRegion();
     renderActivityRegion();
