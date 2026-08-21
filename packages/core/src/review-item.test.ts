@@ -135,21 +135,31 @@ describe('checkReviewPayload — what refuses', () => {
     expect(c.errors.join(' ')).toContain('used twice');
   });
 
-  // The two word budgets are Bryan's own numbers and they DIFFER by shape, so
-  // a fixture that passed both would not tell them apart. This pair asserts
-  // the same body is accepted for one shape and refused for the other.
-  it('applies the 50-word body budget to a decision and the 150-word one to a review', () => {
-    const body = Array.from({ length: 120 }, (_, i) => `word${i}`).join(' ');
-    expect(checkReviewPayload(decision({ detail: body })).ok).toBe(false);
-    expect(checkReviewPayload(review({ detail: body })).ok).toBe(true);
+  // The old shape budgets (50 words for a decision, 150 for a review) REFUSED,
+  // which pushed the real context into the thread body while the card kept a
+  // compressed copy that said something else — the exact split this module
+  // exists to prevent. The targets are advisory now; only a length no card
+  // could ever be — the sanity ceiling — refuses. These pin the acceptance
+  // side, well past both old budgets, for both shapes.
+  it('accepts a detail past the old shape targets — length advice never refuses', () => {
+    const long = Array.from({ length: 400 }, (_, i) => `word${i}`).join(' ');
+    expect(checkReviewPayload(decision({ detail: long })).ok).toBe(true);
+    expect(checkReviewPayload(review({ detail: long })).ok).toBe(true);
   });
 
-  it('refuses a body over the review budget too', () => {
-    const body = Array.from(
-      { length: REVIEW_LIMITS.detailWords.review + 1 },
-      (_, i) => `w${i}`,
-    ).join(' ');
-    expect(checkReviewPayload(review({ detail: body })).ok).toBe(false);
+  it('refuses only a detail past the sanity ceiling, for either shape', () => {
+    const absurd = Array.from({ length: REVIEW_LIMITS.detailMaxWords + 1 }, (_, i) => `w${i}`).join(
+      ' ',
+    );
+    for (const payload of [decision({ detail: absurd }), review({ detail: absurd })]) {
+      const c = checkReviewPayload(payload);
+      expect(c.ok).toBe(false);
+      expect(c.errors.join(' ')).toContain(String(REVIEW_LIMITS.detailMaxWords));
+    }
+    const atCeiling = Array.from({ length: REVIEW_LIMITS.detailMaxWords }, (_, i) => `w${i}`).join(
+      ' ',
+    );
+    expect(checkReviewPayload(review({ detail: atCeiling })).ok).toBe(true);
   });
 
   it('refuses an unknown shape', () => {
@@ -418,11 +428,10 @@ describe('reviewFromDecisionTask — one spelling, derived mechanically from the
     expect(readReviewPayload(p)).toEqual(p);
   });
 
-  it('does not re-litigate the body word budget a legacy task never had', () => {
-    const long = Array.from(
-      { length: REVIEW_LIMITS.detailWords.decision + 40 },
-      (_, i) => `w${i}`,
-    ).join(' ');
+  it('does not re-litigate the body sanity ceiling a legacy task never had', () => {
+    const long = Array.from({ length: REVIEW_LIMITS.detailMaxWords + 40 }, (_, i) => `w${i}`).join(
+      ' ',
+    );
     const p = reviewFromDecisionTask(decisionTask({ body: long }));
     expect(p.detail).toBe(long);
     expect(readReviewPayload(p)?.detail).toBe(long);

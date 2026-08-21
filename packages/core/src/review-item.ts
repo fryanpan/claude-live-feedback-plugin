@@ -70,9 +70,12 @@ export interface ReviewPayload {
   /** What to review FOR. Shown on the opened card, not on the row. */
   lookFor?: string;
   /**
-   * The body. Under 50 words for a `decision` (context before the options),
-   * under 150 for a `review` (the markdown summary, inline links included).
-   * One field because it plays one role; the budget is the shape's.
+   * The body — the ask's real context, markdown, inline links included. Aim
+   * for ~50 words on a `decision` (context before the options), ~150 on a
+   * `review`; both are targets, not gates, and only the sanity ceiling
+   * (`REVIEW_LIMITS.detailMaxWords`) refuses. One field because it plays one
+   * role; the card renders all of it, so the words here and the words the
+   * reader sees are the same words.
    */
   detail?: string;
   /** `decision` only, at least two — a "choice" of one is a statement. */
@@ -306,15 +309,38 @@ export function isReviewItemOpen(item: TaskReviewItem): boolean {
   return item.answer === undefined;
 }
 
-/** Every limit in one place, exported so a card can show a counter that
- *  cannot disagree with the gate. */
+/**
+ * Every limit in one place, exported so a card can show a counter that
+ * cannot disagree with the gate.
+ *
+ * The unit mix is a rule, not an accident: **characters for the one-line row
+ * fields, words for bodies.** A row field's budget tracks RENDERED WIDTH —
+ * how much fits one line on a phone — and width is a property of characters.
+ * A body's budget tracks READING EFFORT, which is a property of words; the
+ * card wraps, so width never enters into it.
+ */
 export const REVIEW_LIMITS = {
   /** ~1 line at 430px/16px, where a line runs about 50 characters. */
   headline: 70,
   why: 90,
   lookFor: 90,
-  /** Words of body, by shape. Bryan's numbers, verbatim. */
-  detailWords: { decision: 50, review: 150 },
+  /**
+   * Words of body, by shape — Bryan's numbers, verbatim, as the TARGET an
+   * author should aim for. ADVISORY since 2026-08-21: exceeding a target no
+   * longer refuses. It used to (a 400), and a real ask often carries three or
+   * four verified facts before the question makes sense — so the full context
+   * went into the thread body and a compressed copy into `detail`, the two
+   * said different things, and the card (what Bryan acts from) was the weaker
+   * one. The bug was never that 150 is small; it is that exceeding it pushed
+   * content somewhere the card does not show.
+   */
+  detailTargetWords: { decision: 50, review: 150 },
+  /**
+   * The one detail length that still refuses — a sanity ceiling an honest ask
+   * cannot reach (13x the review target), there to bounce a pasted document
+   * or a runaway generation, never to compress a real question's context.
+   */
+  detailMaxWords: 2000,
   optionLabelWords: 3,
   /** A 1–3 word label still has to fit a full-width button at 430px. */
   optionLabelChars: 28,
@@ -352,7 +378,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * response to a chore is to route around it — there, by filing the decision as
  * an action instead. So only what the ROW is made of refuses.
  *
- * - **Refused**: `headline`, `why`, every stated length, and a `decision` with
+ * - **Refused**: `headline`, `why`, the one-line lengths, a detail past the
+ *   sanity ceiling, and a `decision` with
  *   fewer than two options. These are the reported bug. A missing or over-long
  *   headline is precisely how the title went back to being a clip of prose,
  *   and truncating it here would re-introduce the clipping under a different
@@ -439,11 +466,18 @@ export function checkReviewPayload(input: unknown): ReviewCheck {
     gaps.push('detail');
   } else if (typeof detail !== 'string') {
     fail('review.detail must be a markdown string.');
-  } else if (shape === 'decision' || shape === 'review') {
-    const max = REVIEW_LIMITS.detailWords[shape];
+  } else {
+    // Length only refuses at the sanity ceiling. The shape targets in
+    // REVIEW_LIMITS.detailTargetWords are advice the tool description gives,
+    // not a gate: refusing at the target made authors split the ask — full
+    // context in the thread, a compressed copy here — and the card showed the
+    // weaker half. The card renders everything, so the honest move is to
+    // accept the detail the author actually has.
     const n = words(detail);
-    if (n > max) {
-      fail(`review.detail is ${n} words; the limit for a '${shape}' item is ${max}.`);
+    if (n > REVIEW_LIMITS.detailMaxWords) {
+      fail(
+        `review.detail is ${n} words; past ${REVIEW_LIMITS.detailMaxWords} it is a document, not a card. Keep the ask's real context here — the card renders all of it — and link out to anything book-length instead of pasting it.`,
+      );
     }
   }
 
