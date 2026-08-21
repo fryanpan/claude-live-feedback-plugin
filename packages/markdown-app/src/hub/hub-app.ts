@@ -49,6 +49,7 @@ import {
   boardSections,
   clientDriftNotice,
   goalLabel,
+  humanBlockerRows,
   initialsOf,
   navFromPath,
   navPath,
@@ -490,9 +491,9 @@ async function main(): Promise<void> {
    * (`?thread=`), not the doc's top.
    */
   function openReviewItem(item: ReviewItem): void {
-    // A decision and a human-owned blocker are both a task — `reviewRow` is
-    // the one reader for "which task is this row about", so a new band cannot
-    // land in the strip with a chip that taps into nothing.
+    // `reviewRow` is the one reader for "which task is this row about", so a
+    // future band that carries a task row cannot land in the strip with a
+    // chip that taps into nothing.
     const row = reviewRow(item);
     if (row) {
       boardHandlers.onOpenTask(row.task);
@@ -831,6 +832,10 @@ async function main(): Promise<void> {
         // `panelAsks` owns which rows qualify — by taskId, and only the kinds
         // whose answer path this panel actually implements.
         asks: task ? panelAsks(state.reviewItems, task.id) : [],
+        // A blocker is task state (design point 5): when the open task is a
+        // person's own open work other tasks wait on, the panel — and only
+        // the panel — says so, via the amber blocked note.
+        blocked: task ? humanBlockerRows(taskList()).find((r) => r.task.id === task.id) : undefined,
         // The workspace's audit rows; the panel takes this task's out of them.
         // The same list the Activity view reads — one log, two surfaces.
         activity: state.events,

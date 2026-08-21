@@ -151,9 +151,12 @@ describe('humanBlockerRows', () => {
     ];
     const ids = humanBlockerRows(tasks).map((r) => r.task.id);
     expect(ids).not.toContain('t-twin');
-    // Positive control on the same list: the band is finding something.
+    // Positive control on the same list: the rows are finding something.
     expect(ids).toContain('t-person');
-    expect(reviewQueue(tasks, [], NOW).blocking).toBe(1);
+    // And the queue reads NONE of it any more — a blocker is task state
+    // (design point 5), so it neither lists nor counts here.
+    expect(reviewQueue(tasks, [], NOW).blocking).toBe(0);
+    expect(reviewQueue(tasks, [], NOW).total).toBe(0);
   });
 });
 

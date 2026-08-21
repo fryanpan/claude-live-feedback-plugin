@@ -1332,14 +1332,6 @@ body.hub-body {
   font-size: 12px;
   line-height: 1;
 }
-/* A person's own task that other work is waiting on. It is blocking by
-   definition — that is the condition for being in the band at all — so it is
-   drawn as blocking rather than waiting on the derived class to say so, and
-   tinted apart from a decision because the move it asks for is different. */
-.hub-decision-chip.hub-review-blocker {
-  border-color: var(--yellow);
-  background: color-mix(in srgb, var(--yellow) 12%, var(--bg));
-}
 /* The ask is what tells you whether to open it: a title alone is the
    container, not the question. Second, quieter, and clipped. */
 .hub-review-ask {
@@ -1598,12 +1590,6 @@ body.hub-body {
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-}
-/* Answering in place is the default; going to the surface is the escape. On a
-   blocker there is nothing to answer, so this is the card's primary button and
-   keeps the `hub-btn` look it is given. */
-.hub-walk-open {
-  align-self: flex-start;
 }
 /* The inline `Task: <title> ↗` link (mockup `.desc a`). A button, because it
    acts rather than navigates — dressed as the link it reads as. */
@@ -2775,6 +2761,29 @@ body.hub-body {
    became a single value with a dropdown, which fits a column. */
 .hub-detail-field:last-child {
   grid-column: 1 / -1;
+}
+/* --- the blocked note: a blocker is task state, and this is its one surface
+   (design point 5). Amber like the mock's `.hub-blocked-note` — the warn
+   tokens the decision badge already uses, so "needs a person" reads as one
+   colour family. Not on Home, not in the walkthrough, not a row badge. --- */
+.hub-blocked-note {
+  margin: 16px 0 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn-fg, #b25e09) 30%, transparent);
+  border-radius: 8px;
+  background: var(--warn-wash, #fff4e5);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.hub-blocked-note p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+/* The chip keeps `.hub-decide-k`'s pill shape; on the amber wash it goes
+   ink-on-panel so it stays legible over the note's own tint. */
+.hub-blocked-k {
+  color: var(--warn-fg, #b25e09);
+  background: var(--bg, #fff);
 }
 /* All four values are controls, so they get one box shape and one height and
    the row scans as a row. 36px is the thumb floor; `max-width: 100%` and
