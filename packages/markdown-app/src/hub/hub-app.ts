@@ -22,6 +22,7 @@ import {
   type ActivityEvent,
   type ActivityFilter,
   type BoardTab,
+  CLOSED_WALK,
   type ClientRelease,
   DEFAULT_DONE_WINDOW,
   DONE_WINDOWS,
@@ -691,6 +692,17 @@ async function main(): Promise<void> {
     state.view = nav === 'activity' ? 'activity' : 'board';
     const tab = tabForNav(nav);
     if (tab !== undefined) state.tab = tab;
+    // Arriving at Home means arriving at the TOP of Home. The walkthrough is a
+    // page inside Home with no URL of its own, so `/workspaces/<id>/home` names
+    // the Home page and nothing else — every way of asking for that address
+    // (the nav item, the board banner's "go home", Back onto it) has to show
+    // it. Deliberately outside the `same` guard below: tapping Home while
+    // already on Home is exactly the case that used to do nothing at all, with
+    // the reader stuck on a review card and only its own close button out.
+    if (nav === 'home') closeWalkthrough();
+    // No history entry for the reset — main Home and the walkthrough share one
+    // URL, so a push here would leave a Back step that re-renders the page it
+    // came from. `same` gates the pushState and only that.
     if (push && !same) history.pushState(null, '', navPath(workspaceId, nav));
     syncTabTitle();
     renderHomeRegion();
@@ -988,6 +1000,19 @@ async function main(): Promise<void> {
   }
 
   /**
+   * Put the walkthrough away and forget the sitting's tally.
+   *
+   * Does not render — the two callers render different amounts afterwards
+   * (`setNav` repaints every region anyway), and a render in here would run
+   * twice on the path that matters.
+   */
+  function closeWalkthrough(): void {
+    state.walkIndex = CLOSED_WALK.index;
+    state.walkKey = CLOSED_WALK.key;
+    state.walkProgress = { cleared: 0, last: null };
+  }
+
+  /**
    * The walkthrough re-derives its queue from the live projection on every
    * render, and the position is an INDEX into that queue rather than a task
    * id. So answering the card you're on drops it out of the queue and the
@@ -1040,9 +1065,7 @@ async function main(): Promise<void> {
           renderWalkthrough();
         },
         onClose: () => {
-          state.walkIndex = -1;
-          state.walkKey = null;
-          state.walkProgress = { cleared: 0, last: null };
+          closeWalkthrough();
           renderWalkthrough();
         },
         contextLabel: walkContextLabel,
