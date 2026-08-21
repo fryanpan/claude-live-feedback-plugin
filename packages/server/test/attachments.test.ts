@@ -731,7 +731,7 @@ describe('attachment routes + triage bridge', () => {
     await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'An open row' });
     await declareSelf(wsId, 'agent-self');
 
-    const sse = listen(await local(`/events/workspace/${wsId}`));
+    const sse = listen(await local(`/events/workspace/${wsId}?agentId=agent-self`));
     const r = await put(`/api/workspaces/${wsId}/goal`, {
       goal: 'Cut token usage per session in half.',
       author: PERSON,
