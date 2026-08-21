@@ -13903,6 +13903,13 @@ async function declareWorkspaceLead(args, deps) {
   if (!declaring)
     return seat;
   const a = attached ?? {};
+  for (const q of a.queuedComments ?? []) {
+    if (typeof q?.id !== "string")
+      continue;
+    try {
+      await deps.http("POST", `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+    } catch {}
+  }
   const warnings = [];
   if (!subscription.open) {
     warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
@@ -13922,6 +13929,14 @@ async function declareWorkspaceLead(args, deps) {
     gating: a.gating,
     untriaged: a.untriaged ?? [],
     queuedVoice: a.queuedVoice ?? [],
+    queuedComments: (a.queuedComments ?? []).map((q) => ({
+      docId: q.docId,
+      ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+      event: q.event,
+      ...q.author !== undefined ? { author: q.author } : {},
+      text: q.text,
+      ts: q.ts
+    })),
     ...a.pendingRetriage ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
     ...a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {},
     ...a.taskReviews !== undefined && a.taskReviews.length > 0 ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
@@ -16356,6 +16371,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           markAttached(workspaceId);
         if (subscribe !== false)
           await watchWorkspace(workspaceId);
+        for (const q of res.queuedComments ?? []) {
+          if (typeof q?.id !== "string")
+            continue;
+          try {
+            await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+          } catch {}
+        }
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
@@ -16363,6 +16385,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           queuedVoice: res.queuedVoice ?? [],
+          queuedComments: (res.queuedComments ?? []).map((q) => ({
+            docId: q.docId,
+            ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+            event: q.event,
+            ...q.author !== undefined ? { author: q.author } : {},
+            text: q.text,
+            ts: q.ts
+          })),
           ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
           ...res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {},
           ...res.taskReviews !== undefined && res.taskReviews.length > 0 ? { taskReviews: res.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
@@ -16642,9 +16672,18 @@ async function handleFrame(raw) {
   } catch {
     return;
   }
-  if (!shouldForwardFrame.shouldForward(ev, payload))
+  if (shouldForwardFrame.shouldForward(ev, payload)) {
+    await emitChannelMessage(ev, payload);
+  }
+  await ackCommentRow(payload);
+}
+async function ackCommentRow(payload) {
+  const p = payload;
+  if (typeof p?.commentQueueId !== "string" || typeof p?.workspaceId !== "string")
     return;
-  await emitChannelMessage(ev, payload);
+  try {
+    await http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`, {});
+  } catch {}
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
 async function emitHubChannelMessage(event, rawPayload) {
