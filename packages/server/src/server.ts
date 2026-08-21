@@ -5568,7 +5568,7 @@ to an HTML file. Once bound, the file is served here without any symlink dance.<
  * used to probe which slugs exist.
  */
 function renderLinkNotFound(): string {
-  return `<!doctype html><meta charset="utf-8"><title>Link not available</title>
+  return `<!doctype html><meta charset="utf-8"><title>Link not available · Workspaces</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:12vh auto;padding:0 1.5rem;color:#222}
 h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
 @media(prefers-color-scheme:dark){body{background:#111;color:#eee}p{color:#aaa}}</style>
@@ -5577,8 +5577,10 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
 }
 
 /**
- * The hub page shell (§3.9). Tab title is `<workspace> · Workspace Hub` —
- * the browser tab is a workspace switcher. Everything dynamic renders
+ * The hub page shell (§3.9). Tab title is `<workspace> · Workspaces` — the
+ * browser tab is a workspace switcher, so the WORKSPACE leads and the product
+ * name trails, where truncation can take it. (`hub-app.ts` extends the same
+ * title with the open pane once the bundle runs.) Everything dynamic renders
  * client-side from the ws:<id> ydoc projection + REST; the shell only names
  * the workspace and loads the bundle.
  *
@@ -5627,7 +5629,7 @@ function renderHubShell(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-    <title>${safeName} · Workspace Hub</title>
+    <title>${safeName} · Workspaces</title>
     <link rel="stylesheet" href="/app/styles.css" />
   </head>
   <body class="hub-body">

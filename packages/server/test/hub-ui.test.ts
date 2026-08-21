@@ -76,8 +76,11 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       // …and the raw (unescaped) name never reaches the markup.
       expect(html).not.toContain('a<b workspace');
       expect(html).toContain('/app/hub.js');
-      // §3.9: the browser tab is a workspace switcher.
-      expect(html).toContain('Workspace Hub');
+      // §3.9: the browser tab is a workspace switcher — so the WORKSPACE
+      // leads the title and the product name trails it. Every tab used to
+      // open with the same word and truncate before reaching the part that
+      // differs.
+      expect(html).toContain('<title>a&lt;b workspace · Workspaces</title>');
     });
 
     // Every hub carries the widget, and every hub's widget writes to the SAME
