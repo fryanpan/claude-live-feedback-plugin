@@ -20,8 +20,7 @@ const boom = async (): Promise<void> => {
 };
 
 const FRAME = 'id: boot1:7\nevent: thread.created\ndata: {"event":"thread.created"}';
-const GAP =
-  'event: replay.gap\ndata: {"event":"replay.gap","docId":"doc-a","action":"refetch"}';
+const GAP = 'event: replay.gap\ndata: {"event":"replay.gap","docId":"doc-a","action":"refetch"}';
 const NO_ID = 'event: triage.requested\ndata: {"event":"triage.requested"}';
 
 describe('deliverThenCommit', () => {
