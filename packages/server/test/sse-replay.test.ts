@@ -22,7 +22,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { REPLAY_MAX_EVENTS, SseHub } from '../src/sse.ts';
+import { REPLAY_MAX_EVENTS, SseHub, openSseStream } from '../src/sse.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
@@ -192,6 +192,38 @@ describe('SSE Last-Event-ID replay', () => {
     ]);
     await second.stop();
   });
+
+  // NEGATIVE CONTROL, and the steady-state case: a keepalive-driven reopen
+  // where NOTHING was missed. The current id must answer with an empty, ok
+  // replay — no duplicate of the last-seen event, no replay.gap — because a
+  // spurious gap here would turn every ordinary reconnect into a full
+  // refetch, and a duplicate would re-announce the same comment on every
+  // wifi blink. A mutation test showed the other five tests all stay green
+  // if `replayAfter` misclassifies the newest id as evicted; this one is
+  // what goes red.
+  it('reconnecting with the current id is a clean no-op: no replay, no gap, live continues', async () => {
+    const first = listenFrames(await get('/events/doc-replay'));
+    await settle(150);
+    await comment('Nothing after this.');
+    await settle();
+    const lastId = first.frames.find((f) => f.event === 'thread.created')?.id as string;
+    expect(typeof lastId).toBe('string');
+    await first.stop();
+
+    // No broadcasts in the gap — the reconnect has nothing to catch up on.
+    const second = listenFrames(await get('/events/doc-replay', { 'Last-Event-ID': lastId }));
+    await settle();
+    expect(second.frames.filter((f) => f.event === 'thread.created').length).toBe(0);
+    expect(second.frames.some((f) => f.event === 'replay.gap')).toBe(false);
+
+    // …and the stream is genuinely live, not quietly dead.
+    await comment('First new thing.');
+    await settle();
+    expect(second.frames.filter((f) => f.event === 'thread.created').map(commentText)).toEqual([
+      'First new thing.',
+    ]);
+    await second.stop();
+  });
 });
 
 describe('SseHub replay buffer bounds', () => {
@@ -232,5 +264,111 @@ describe('SseHub replay buffer bounds', () => {
     const res = hub.replayAfter('doc-y', (events[0] as { id: string }).id);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.events.length).toBe(1);
+  });
+});
+
+describe('SseHub replay negative control', () => {
+  it('the newest id yields an empty ok replay — never a gap, never a duplicate', () => {
+    const hub = new SseHub();
+    hub.broadcast('doc-nc', { event: 'thread.created', n: 1 } as never);
+    hub.broadcast('doc-nc', { event: 'thread.created', n: 2 } as never);
+    const current = hub.lastIdOn('doc-nc') as string;
+    const res = hub.replayAfter('doc-nc', current);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.events).toEqual([]);
+  });
+});
+
+/**
+ * Addressed frames (`sendToAgent`) in the replay buffer. Before this, only
+ * `broadcast` buffered — so the one frame with a single accountable
+ * recipient (a lead-addressed triage request) was the one frame a reconnect
+ * could silently lose: a dead-but-unnoticed socket doesn't throw on enqueue,
+ * `sent > 0` read as delivered, and the lead's reconnect came back clean
+ * with neither the frame nor a gap.
+ */
+describe('SseHub addressed-frame replay', () => {
+  const CH = 'ws~replay-agent';
+
+  it('replays an addressed frame to its recipient only — anonymous and other-agent streams never see it', () => {
+    const hub = new SseHub();
+    hub.broadcast(CH, { event: 'task.created', n: 1 } as never);
+    const anchor = hub.lastIdOn(CH) as string;
+    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'goal-retriage' } as never);
+    hub.broadcast(CH, { event: 'task.updated', n: 2 } as never);
+
+    // The addressee catches up on both.
+    const lead = hub.replayAfter(CH, anchor, 'lead-1');
+    expect(lead.ok).toBe(true);
+    if (lead.ok) {
+      expect(lead.events.map((e) => e.payload.event)).toEqual(['triage.requested', 'task.updated']);
+      // Buffered addressed frames carry ids like any other — a recipient's
+      // cursor legitimately advances on them.
+      expect(lead.events.every((e) => e.id.length > 0)).toBe(true);
+    }
+    // A browser tab (no agentId) replays exactly what its live feed carried.
+    const anon = hub.replayAfter(CH, anchor);
+    expect(anon.ok).toBe(true);
+    if (anon.ok) expect(anon.events.map((e) => e.payload.event)).toEqual(['task.updated']);
+    // …and so does a different agent.
+    const other = hub.replayAfter(CH, anchor, 'lead-2');
+    expect(other.ok).toBe(true);
+    if (other.ok) expect(other.events.map((e) => e.payload.event)).toEqual(['task.updated']);
+  });
+
+  it('an addressed frame id is a valid cursor for its recipient', () => {
+    const hub = new SseHub();
+    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'task-review' } as never);
+    const cursor = hub.lastIdOn(CH) as string;
+    hub.broadcast(CH, { event: 'task.updated', n: 3 } as never);
+    const res = hub.replayAfter(CH, cursor, 'lead-1');
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.events.map((e) => e.payload.event)).toEqual(['task.updated']);
+  });
+
+  it('buffers even when the agent holds no stream — sent=0 parks the frame for the reconnect, not the void', () => {
+    const hub = new SseHub();
+    const sent = hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested' } as never);
+    expect(sent).toBe(0); // still the honest answer the caller queues on
+    expect(hub.eventsOn(CH).length).toBe(1);
+  });
+
+  it('an agent stream reconnecting replays the addressed frame it missed, with its id on the wire', async () => {
+    const hub = new SseHub();
+    hub.broadcast(CH, { event: 'task.created', n: 1 } as never);
+    const anchor = hub.lastIdOn(CH) as string;
+    // The disconnect window: the lead holds no stream (or a dead one) while
+    // the addressed request goes out.
+    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'goal-retriage' } as never);
+
+    const l = listenFrames(openSseStream(hub, CH, undefined, undefined, 'lead-1', anchor));
+    await settle(150);
+    const replayed = l.frames.filter((f) => f.event === 'triage.requested');
+    expect(replayed.length).toBe(1);
+    expect(typeof replayed[0]?.id).toBe('string');
+    expect((replayed[0]?.id ?? '').length).toBeGreaterThan(0);
+    expect(l.frames.some((f) => f.event === 'replay.gap')).toBe(false);
+    await l.stop();
+
+    // Control: an anonymous stream presenting the same anchor replays nothing
+    // — the addressed frame is not leaked to a browser tab's catch-up.
+    const tab = listenFrames(openSseStream(hub, CH, undefined, undefined, undefined, anchor));
+    await settle(150);
+    expect(tab.frames.filter((f) => f.event === 'triage.requested').length).toBe(0);
+    expect(tab.frames.some((f) => f.event === 'replay.gap')).toBe(false);
+    await tab.stop();
+  });
+
+  it('a live addressed write carries its id, so the recipient cursor advances past it', async () => {
+    const hub = new SseHub();
+    const l = listenFrames(openSseStream(hub, CH, undefined, undefined, 'lead-1'));
+    await settle(150);
+    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
+    await settle(150);
+    const got = l.frames.filter((f) => f.event === 'triage.requested');
+    expect(got.length).toBe(1);
+    expect(typeof got[0]?.id).toBe('string');
+    expect((got[0]?.id ?? '').length).toBeGreaterThan(0);
+    await l.stop();
   });
 });

@@ -819,7 +819,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // the lead holding no stream (its clock is fresh and SOMEBODY is on
       // the wire), and a `true` there would mark the task triage-pending
       // against a delivery that never happened. 0 is a real answer: the ask
-      // parks and the lead drains it on their next attach.
+      // parks and the lead drains it on their next attach. And `> 0` can
+      // still lie — a socket that died without the server noticing doesn't
+      // throw on enqueue — which is why sendToAgent also buffers the frame:
+      // the lead's reconnect replays it (or gets an honest replay.gap)
+      // instead of a clean-looking stream missing the one addressed message.
       return sse.sendToAgent(`ws~${req.workspaceId}`, req.leadAgentId, frame) > 0;
     }
     sse.broadcast(`ws~${req.workspaceId}`, frame);
