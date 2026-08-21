@@ -13969,6 +13969,29 @@ function frameKey(event, payload) {
   return `${event}#${p.docId}#${p.seq}`;
 }
 
+// packages/mcp/src/sse-cursor.ts
+function frameMeta(raw) {
+  const meta2 = {};
+  for (const line of raw.split(`
+`)) {
+    if (line.startsWith("id:"))
+      meta2.id = line.slice(3).trim();
+    else if (line.startsWith("event:"))
+      meta2.event = line.slice(6).trim();
+  }
+  return meta2;
+}
+async function deliverThenCommit(frame, deliver, cursor, onGap) {
+  await deliver(frame);
+  const meta2 = frameMeta(frame);
+  if (meta2.event === "replay.gap") {
+    cursor.lastEventId = undefined;
+    onGap();
+  } else if (meta2.id !== undefined) {
+    cursor.lastEventId = meta2.id;
+  }
+}
+
 // packages/mcp/src/thread-create.ts
 function threadCreateRequest(input, author) {
   const doc2 = encodeURIComponent(input.docId);
@@ -14113,7 +14136,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.71";
+var PLUGIN_VERSION = "0.1.73";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -16561,10 +16584,12 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
     if (w)
       w.open = open;
   };
+  const cursor = { lastEventId: undefined };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
-        signal
+        signal,
+        ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -16585,7 +16610,7 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          await handleFrame(frame);
+          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
           sep = buf.indexOf(`
 
 `);
@@ -16640,6 +16665,19 @@ async function handleFrame(raw) {
     payload = JSON.parse(dataParts.join(`
 `));
   } catch {
+    return;
+  }
+  if (ev === "replay.gap") {
+    const p = payload ?? {};
+    await server.notification({
+      method: "notifications/claude/channel",
+      params: {
+        source: "claude-workspaces",
+        sent_at: new Date().toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? "a watched channel"} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: "replay.gap", ...p.docId ? { doc_id: p.docId } : {} }
+      }
+    });
     return;
   }
   if (!shouldForwardFrame.shouldForward(ev, payload))
