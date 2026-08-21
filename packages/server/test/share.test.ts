@@ -1,12 +1,17 @@
 /**
  * Access-mode sharing through the real route table.
  *
- * **A workspace is the unit of sharing** (2026-08-17), so every share minted
- * here goes through `POST /api/share/workspace` over a folder bind. This file
- * used to drive `POST /api/share/doc`, which is now a 410 that names the
- * replacement — asserted below rather than deleted, because an older plugin
- * bundle's `share_doc` still POSTs there and the useful behaviour is the
- * refusal, not a 404 that reads as "your server is broken".
+ * **A BOARD is the unit of sharing** (2026-08-17), so every share minted here
+ * goes through `POST /api/share/workspace` over a board id. This file used to
+ * drive `POST /api/share/doc`, which is now a 410 that names the replacement —
+ * asserted below rather than deleted, because an older plugin bundle's
+ * `share_doc` still POSTs there and the useful behaviour is the refusal, not a
+ * 404 that reads as "your server is broken".
+ *
+ * The fixture is a board with a folder bind FILED on it, because a folder bind
+ * is a grouping and a grouping can no longer be shared alone (its own 410 is
+ * asserted in grouping-share-removed.test.ts). Sharing the board is what
+ * reaches the bind's member docs — see host-scope.test.ts for the scope half.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -71,8 +76,11 @@ describe('share REST endpoints', () => {
   let folder: string;
   let base: string;
   let cfState: { apps: CfAccessApp[]; policies: CfAccessPolicy[] };
-  /** A folder bind — the unit of sharing, and the fixture every share below
-   *  is minted over. `entryDocId` is its only member. */
+  /** The BOARD — the unit of sharing, and what every share below is minted
+   *  over. */
+  let boardId: string;
+  /** A folder bind FILED on that board. It is a GROUPING, so it is not
+   *  shareable on its own; `entryDocId` is its only member. */
   let workspaceId: string;
   let entryDocId: string;
 
@@ -95,10 +103,21 @@ describe('share REST endpoints', () => {
     });
     base = `http://localhost:${handle.port}`;
 
+    // A board first — `POST /api/workspaces` with a `name` rather than a
+    // `folderPath`. This is the only id the share routes accept.
+    const board = await fetch(`${base}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Share test board' }),
+    });
+    expect(board.status).toBe(200);
+    boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    expect(boardId).toBeTruthy();
+
     const bind = await fetch(`${base}/api/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder }),
+      body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
     });
     expect(bind.status).toBe(200);
     const bound = (await bind.json()) as {
@@ -108,6 +127,8 @@ describe('share REST endpoints', () => {
     workspaceId = bound.workspaceId;
     entryDocId = bound.files[0]?.docId ?? '';
     expect(entryDocId).not.toBe('');
+    // The bind is a grouping, filed on the board — never the board itself.
+    expect(workspaceId).not.toBe(boardId);
   });
 
   afterAll(async () => {
@@ -164,11 +185,11 @@ describe('share REST endpoints', () => {
     // It created NOTHING on the way out — no Access app, no policy…
     expect(cfState.apps).toHaveLength(apps);
     expect(cfState.policies).toHaveLength(policies);
-    // …and no registry row. Positive control: the workspace form of the same
+    // …and no registry row. Positive control: the BOARD form of the same
     // request does mint one, so this route is refusing rather than the whole
     // share stack being dead.
     const ok = await shareWorkspace({
-      workspaceId,
+      workspaceId: boardId,
       allowDomains: ['@partner-org.example'],
       name: 'control-slug',
     });
@@ -187,8 +208,21 @@ describe('share REST endpoints', () => {
       allowDomains: ['@partner-org.example'],
     });
     expect(r.status).toBe(404);
-    // Positive control: the real workspace id on the same route mints.
-    const ok = await shareWorkspace({ workspaceId, allowDomains: ['@partner-org.example'] });
+    // The 404 has to keep meaning "no such id". A GROUPING is a real id that
+    // is no longer shareable, and it answers 410 by name — if the two collapsed
+    // into one reply, a peer whose diff review stopped sharing would read it as
+    // "your review vanished".
+    const grouping = await shareWorkspace({
+      workspaceId,
+      allowDomains: ['@partner-org.example'],
+    });
+    expect(grouping.status).toBe(410);
+    expect(((await grouping.json()) as { error: string }).error).toBe('grouping_sharing_removed');
+    // Positive control: the board id on the same route mints.
+    const ok = await shareWorkspace({
+      workspaceId: boardId,
+      allowDomains: ['@partner-org.example'],
+    });
     expect(ok.status).toBe(200);
     await fetch(
       `${base}/api/share/${((await ok.json()) as { share: { shareId: string } }).share.shareId}`,
@@ -197,10 +231,13 @@ describe('share REST endpoints', () => {
   });
 
   it('rejects share with empty allowDomains', async () => {
-    const r = await shareWorkspace({ workspaceId, allowDomains: [] });
+    const r = await shareWorkspace({ workspaceId: boardId, allowDomains: [] });
     expect(r.status).toBe(400);
     // Positive control: one domain and the same call succeeds.
-    const ok = await shareWorkspace({ workspaceId, allowDomains: ['@partner-org.example'] });
+    const ok = await shareWorkspace({
+      workspaceId: boardId,
+      allowDomains: ['@partner-org.example'],
+    });
     expect(ok.status).toBe(200);
     await fetch(
       `${base}/api/share/${((await ok.json()) as { share: { shareId: string } }).share.shareId}`,
@@ -208,11 +245,17 @@ describe('share REST endpoints', () => {
     );
   });
 
-  it('creates a share for a bound workspace, opening on its entry doc', async () => {
+  it('creates a share for a board, opening on the board itself', async () => {
+    // This used to end "…opening on its entry doc", over a folder bind. Both
+    // halves moved: the shareable id is the BOARD, and a board share lands on
+    // `/workspaces/<id>` because there is no entry doc to choose. `docId` is
+    // kept on the record only so legacy rows still parse; a row minted today
+    // carries the empty string, and asserting that is what keeps a landing
+    // address from quietly becoming a grant again.
     const apps = cfState.apps.length;
     const policies = cfState.policies.length;
     const r = await shareWorkspace({
-      workspaceId,
+      workspaceId: boardId,
       allowDomains: ['@partner-org.example'],
       name: 'fixed-slug',
     });
@@ -222,11 +265,11 @@ describe('share REST endpoints', () => {
     };
     expect(share.hostname).toBe('share-fixed-slug.tunnel.fryanpan.com');
     expect(share.url).toBe(
-      `https://share-fixed-slug.tunnel.fryanpan.com/review/${encodeURIComponent(entryDocId)}`,
+      `https://share-fixed-slug.tunnel.fryanpan.com/workspaces/${encodeURIComponent(boardId)}`,
     );
-    // Scope comes from the workspace; the entry doc is only a landing address.
-    expect(share.workspaceId).toBe(workspaceId);
-    expect(share.docId).toBe(entryDocId);
+    // Scope comes from the board, and from nothing else.
+    expect(share.workspaceId).toBe(boardId);
+    expect(share.docId).toBe('');
     expect(cfState.apps).toHaveLength(apps + 1);
     expect(cfState.policies).toHaveLength(policies + 1);
   });
@@ -235,7 +278,7 @@ describe('share REST endpoints', () => {
     const r = await fetch(`${base}/api/share`);
     const { shares } = (await r.json()) as { shares: { workspaceId: string }[] };
     expect(shares.length).toBeGreaterThanOrEqual(1);
-    expect(shares.some((s) => s.workspaceId === workspaceId)).toBe(true);
+    expect(shares.some((s) => s.workspaceId === boardId)).toBe(true);
   });
 
   it('revokes a share via DELETE', async () => {
@@ -254,18 +297,24 @@ describe('share REST endpoints', () => {
   });
 
   it('persists shares across server restart', async () => {
-    // A second folder bind, so the persisted record is a workspace share
-    // distinguishable from the fixture one.
+    // A second board with its own folder bind filed on it, so the persisted
+    // record is distinguishable from the fixture one.
     const persistFolder = mkdtempSync(join(tmpdir(), 'share-test-persist-'));
     writeFileSync(join(persistFolder, 'persist.md'), '# persist\n');
+    const board = await fetch(`${base}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Persist board' }),
+    });
+    const persistBoardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
     const bind = await fetch(`${base}/api/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: persistFolder }),
+      body: JSON.stringify({ folderPath: persistFolder, hubWorkspaceId: persistBoardId }),
     });
-    const persistWorkspaceId = ((await bind.json()) as { workspaceId: string }).workspaceId;
+    expect(bind.status).toBe(200);
     const mk = await shareWorkspace({
-      workspaceId: persistWorkspaceId,
+      workspaceId: persistBoardId,
       allowDomains: ['@partner-org.example'],
       name: 'p',
     });
@@ -284,7 +333,7 @@ describe('share REST endpoints', () => {
     const list = await fetch(`${base}/api/share`).then(
       (r) => r.json() as Promise<{ shares: { workspaceId: string }[] }>,
     );
-    expect(list.shares.some((s) => s.workspaceId === persistWorkspaceId)).toBe(true);
+    expect(list.shares.some((s) => s.workspaceId === persistBoardId)).toBe(true);
     rmSync(persistFolder, { recursive: true, force: true });
   });
 });

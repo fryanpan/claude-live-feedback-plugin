@@ -42,11 +42,11 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { type ServerHandle, createServer } from '../src/server.ts';
 import type { CfAccessApp, CfAccessPolicy } from '../src/share/cf-api.ts';
 import { CfApi } from '../src/share/cf-api.ts';
 import { SHARE_COOKIE, loadCookieKey, signSession } from '../src/share/link-session.ts';
 import type { Share } from '../src/share/types.ts';
-import { type ServerHandle, createServer } from '../src/server.ts';
 
 const PUBLIC_HOST = 'feedback.example.test';
 const BASE_HOST = 'example.test';
@@ -369,9 +369,9 @@ describe('a grouping cannot be shared on its own', () => {
       // A member of the grouping the cookie names — the exact doc it used to
       // open.
       expect((await asLegacy(`/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status).toBe(401);
-      expect((await asLegacy(`/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`)).status).toBe(
-        401,
-      );
+      expect(
+        (await asLegacy(`/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`)).status,
+      ).toBe(401);
 
       // Positive control, same server and same transport: a cookie for a
       // BOARD share reaches that member, so the 401s above are this change
@@ -405,13 +405,17 @@ describe('a grouping cannot be shared on its own', () => {
       expect(cookie).toBeTruthy();
 
       const asVisitor = (path: string) =>
-        fetch(`${base}${path}`, { headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` } });
+        fetch(`${base}${path}`, {
+          headers: { host: PUBLIC_HOST, cookie: `${SHARE_COOKIE}=${cookie}` },
+        });
 
       // The board page itself.
       expect((await asVisitor(`/workspaces/${encodeURIComponent(boardId)}`)).status).toBe(200);
       // A changed file of the diff review, reachable because the review is
       // FILED on the shared board — never because anything named the doc.
-      expect((await asVisitor(`/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status).toBe(200);
+      expect((await asVisitor(`/api/docs/${encodeURIComponent(diffMemberDocId)}`)).status).toBe(
+        200,
+      );
       // And the review's own tree, through the grouping→board hop.
       expect(
         (await asVisitor(`/api/workspaces/${encodeURIComponent(diffGroupingId)}/tree`)).status,

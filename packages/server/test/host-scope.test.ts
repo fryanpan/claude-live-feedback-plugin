@@ -11,13 +11,17 @@
  * that returns the right decision but is wired in the wrong place, or after
  * a route that already answered, would still pass the unit tests.
  *
- * A WORKSPACE is the unit of sharing (2026-08-17). The first suite used to
- * mint a doc-scoped share over `POST /api/share/doc`; that grant is gone, so
- * its fixture is now two one-doc grouping workspaces — `WS_SHARED` holds the
- * doc the visitor was invited to, `WS_OTHER` holds the one they must not
- * reach. Every scope assertion below is unchanged: what a share reaches, and
- * what it must not, is the same question it always was. The removal itself is
- * asserted in its own test ("per-doc sharing is gone").
+ * A BOARD is the unit of sharing (2026-08-17). The first suite used to mint a
+ * doc-scoped share over `POST /api/share/doc`; that grant went first, and the
+ * grouping-scoped share that replaced it went next. So its fixture is now two
+ * one-doc grouping workspaces — `WS_SHARED` holds the doc the visitor was
+ * invited to, `WS_OTHER` holds the one they must not reach — each FILED on a
+ * board of its own, and the share is minted over the board. Every scope
+ * assertion below is unchanged: what a share reaches, and what it must not, is
+ * the same question it always was, and a board share reaches a filed
+ * grouping's members through the grouping→board hop. The removals themselves
+ * are asserted in their own tests ("per-doc sharing is gone", and
+ * grouping-share-removed.test.ts).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -84,10 +88,15 @@ describe('host gate + share scoping over HTTP', () => {
   const OTHER = 'other-doc';
   // Two grouping workspaces, one doc each. Docs sharing a `workspaceId` ARE a
   // grouping workspace (the same shape a diff review has), so this is the
-  // smallest honest workspace share: exactly the reach the old per-doc share
-  // had, expressed in the unit that still exists.
+  // smallest honest review: exactly the reach the old per-doc share had,
+  // expressed in the unit that still exists.
   const WS_SHARED = 'ws-shared-doc';
   const WS_OTHER = 'ws-other-doc';
+  // …and a BOARD for each, because a grouping cannot be shared on its own.
+  // Board ids are server-assigned, so unlike the grouping tags above these
+  // are filled in at setup.
+  let boardShared: string;
+  let boardOther: string;
 
   /** Request against the real server with an arbitrary Host header. */
   const req = (path: string, host: string, init: RequestInit = {}) =>
@@ -153,19 +162,43 @@ describe('host gate + share scoping over HTTP', () => {
       expect(r.status).toBe(200);
     }
 
+    // File each grouping on a board of its own. `attach_doc` links a grouping
+    // id as one row, which is how a review goes on a board; the board is then
+    // the only thing the share routes will accept.
+    const boardHolding = async (name: string, groupingId: string): Promise<string> => {
+      const created = await fetch(`${base}/api/workspaces`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      expect(created.status).toBe(200);
+      const id = ((await created.json()) as { workspace: { id: string } }).workspace.id;
+      expect(id).toBeTruthy();
+      const filed = await fetch(`${base}/api/workspaces/${encodeURIComponent(id)}/docs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ docId: groupingId }),
+      });
+      expect(filed.status).toBe(200);
+      return id;
+    };
+    boardShared = await boardHolding('Shared review', WS_SHARED);
+    boardOther = await boardHolding('Other review', WS_OTHER);
+
     const sr = await fetch(`${base}/api/share/workspace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: WS_SHARED, allowDomains: ['partner.example'] }),
+      body: JSON.stringify({ workspaceId: boardShared, allowDomains: ['partner.example'] }),
     });
     expect(sr.status).toBe(200);
     const shareBody = (await sr.json()) as {
       share: { hostname: string; audience: string; docId: string; workspaceId: string };
     };
-    // The URL still opens the doc — it is the workspace's entry — but the
-    // GRANT is the workspace, which is what every assertion below measures.
-    expect(shareBody.share.docId).toBe(SHARED);
-    expect(shareBody.share.workspaceId).toBe(WS_SHARED);
+    // The URL opens the BOARD. There is no entry doc any more — `docId` is
+    // empty on every record minted today — and the grant was never it: scope
+    // is the board, which is what every assertion below measures.
+    expect(shareBody.share.docId).toBe('');
+    expect(shareBody.share.workspaceId).toBe(boardShared);
     shareHost = shareBody.share.hostname;
     shareJwt = await signJwt(shareBody.share.audience);
   });
@@ -373,7 +406,7 @@ describe('host gate + share scoping over HTTP', () => {
     });
   });
 
-  describe('B. per-doc sharing is gone — a workspace is the unit', () => {
+  describe('B. per-doc and per-grouping sharing are gone — a board is the unit', () => {
     // The suite above used to mint its share with `POST /api/share/doc`. That
     // grant is retired, and these are LOCAL calls (the visitor can reach
     // neither route — a sibling test proves that) so what they measure is the
@@ -414,25 +447,44 @@ describe('host gate + share scoping over HTTP', () => {
       expect(await list()).toHaveLength(before.length);
     });
 
-    it('POSITIVE CONTROL: a workspace share still mints', async () => {
+    it('POSITIVE CONTROL: a BOARD share still mints', async () => {
       // Without this the two refusals above would pass on a server that has
       // stopped minting shares altogether. Access mode, because this fixture
       // configures no `publicHostname` — link mode's own mint is controlled
       // the same way in share-grouping-scope.test.ts.
+      //
+      // Over the BOARD, not the grouping `WS_OTHER` it holds: a grouping is no
+      // longer shareable on its own, so passing one here would make the control
+      // a 410 and the whole suite would pass on a dead share stack.
       const mint = await req('/api/share/workspace', `localhost:${handle.port}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: WS_OTHER, allowDomains: ['partner.example'] }),
+        body: JSON.stringify({ workspaceId: boardOther, allowDomains: ['partner.example'] }),
       });
       expect(mint.status).toBe(200);
       const { share } = (await mint.json()) as {
         share: { shareId: string; workspaceId: string; docId: string };
       };
-      expect(share.workspaceId).toBe(WS_OTHER);
-      expect(share.docId).toBe(OTHER);
+      expect(share.workspaceId).toBe(boardOther);
+      // A board share opens the board, so there is no entry doc on the record.
+      expect(share.docId).toBe('');
       // Clean up so the expiry suite below still finds exactly one Access
       // share on `shareHost`.
       await req(`/api/share/${share.shareId}`, `localhost:${handle.port}`, { method: 'DELETE' });
+    });
+
+    it('refuses the GROUPING the board holds, and says so by name', async () => {
+      // The grouping id is real and the caller is not wrong about it — the
+      // capability is what went away — so it answers 410 rather than the 404 an
+      // unrecognised id gets. Paired with the board control above, which runs
+      // against the same server in the same suite.
+      const r = await req('/api/share/workspace', `localhost:${handle.port}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: WS_OTHER, allowDomains: ['partner.example'] }),
+      });
+      expect(r.status).toBe(410);
+      expect(((await r.json()) as { error: string }).error).toBe('grouping_sharing_removed');
     });
 
     it('refuses a share_link with no workspace at all', async () => {
@@ -482,8 +534,8 @@ describe('host gate + share scoping over HTTP', () => {
 });
 
 /**
- * Workspace shares: the reviewer gets the whole folder — tree, every member,
- * lazy opens — and nothing outside it.
+ * Board shares: the reviewer gets the whole folder filed on the board — tree,
+ * every member, lazy opens — and nothing outside it.
  */
 describe('workspace share over HTTP', () => {
   let handle: ServerHandle;
@@ -492,6 +544,9 @@ describe('workspace share over HTTP', () => {
   let base: string;
   let shareHost: string;
   let shareJwt: string;
+  /** The board the share is minted over. */
+  let boardId: string;
+  /** The folder bind filed on it — a GROUPING, reached through the hop. */
   let workspaceId: string;
   let entryDocId: string;
   let outsideDocId: string;
@@ -533,10 +588,21 @@ describe('workspace share over HTTP', () => {
     });
     base = `http://localhost:${handle.port}`;
 
+    // The board first, then the bind FILED on it in the same call — that is
+    // the whole prerequisite a board-only share adds to this flow.
+    const board = await fetch(`${base}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Folder review' }),
+    });
+    expect(board.status).toBe(200);
+    boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    expect(boardId).toBeTruthy();
+
     const bind = await fetch(`${base}/api/workspaces`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ folderPath: folder }),
+      body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
     });
     expect(bind.status).toBe(200);
     const bound = (await bind.json()) as {
@@ -546,6 +612,7 @@ describe('workspace share over HTTP', () => {
     workspaceId = bound.workspaceId;
     entryDocId = bound.files[0]?.docId ?? '';
     expect(entryDocId).not.toBe('');
+    expect(workspaceId).not.toBe(boardId);
 
     // A doc that is NOT part of the workspace — the thing scoping must hide.
     outsideDocId = 'private-doc';
@@ -560,14 +627,19 @@ describe('workspace share over HTTP', () => {
     const sr = await fetch(`${base}/api/share/workspace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId, allowDomains: ['partner.example'] }),
+      body: JSON.stringify({ workspaceId: boardId, allowDomains: ['partner.example'] }),
     });
     expect(sr.status).toBe(200);
     const shareBody = (await sr.json()) as {
       share: { hostname: string; audience: string; url: string; workspaceId?: string };
     };
     shareHost = shareBody.share.hostname;
-    expect(shareBody.share.workspaceId).toBe(workspaceId);
+    expect(shareBody.share.workspaceId).toBe(boardId);
+    // The share opens the board; the folder is reached because it is filed on
+    // it, which is what every assertion below actually exercises.
+    expect(shareBody.share.url).toBe(
+      `https://${shareHost}/workspaces/${encodeURIComponent(boardId)}`,
+    );
     shareJwt = await new SignJWT({ email: 'reviewer@partner.example' })
       .setProtectedHeader({ alg: 'RS256', kid: KID })
       .setIssuer(`https://${TEAM_DOMAIN}`)
@@ -653,13 +725,21 @@ describe('workspace share over HTTP', () => {
     expect(still.status).toBe(200);
   });
 
-  it('repairs a share URL whose entry doc is gone', async () => {
-    // An Access share hands out /review/<entryDocId> directly and is never
-    // redeemed, so there is no other moment to re-resolve it. Renaming the
-    // entry file used to leave that emailed URL pointing at nothing.
-    // Give the workspace a survivor, then drop the entry doc — the same
-    // "entry is gone" state a renamed entry file produces, reachable here
-    // without the folder (setup deletes it).
+  it('refuses a bookmarked /review/<gone doc> instead of repairing it', async () => {
+    // This used to assert a REPAIR: an Access share handed out
+    // /review/<entryDocId> directly and was never redeemed, so a renamed entry
+    // file left that emailed URL pointing at nothing and the server redirected
+    // it to whatever the workspace's current entry was.
+    //
+    // A board share has no entry doc — its URL is `/workspaces/<board>`, which
+    // cannot go stale when a file is renamed — so there is nothing left to
+    // repair and the whole resolution step is gone. What a stale
+    // `/review/<docId>` gets now is the ordinary out-of-scope 403: the id names
+    // no doc, so it is in no workspace, so the share does not cover it.
+    //
+    // Same setup as before — give the workspace a survivor, then drop the old
+    // entry doc — because the survivor is the positive control: the share is
+    // demonstrably still live and still reaching its members.
     const opened = await asVisitor(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/editable-file`,
       {
@@ -675,17 +755,27 @@ describe('workspace share over HTTP', () => {
     });
 
     const r = await asVisitor(`/review/${encodeURIComponent(entryDocId)}`, { redirect: 'manual' });
-    expect(r.status).toBe(302);
-    expect(r.headers.get('location')).toBe(`/review/${encodeURIComponent(survivor)}`);
+    expect(r.status).toBe(403);
+    expect(await r.json()).toEqual({ error: 'out_of_share_scope' });
+    // Positive control: the surviving member is still reachable, so the 403
+    // above is about that one id and not about a share that stopped working.
+    expect((await asVisitor(`/review/${encodeURIComponent(survivor)}`)).status).not.toBe(403);
   });
 
-  it('does not turn the repair into an oracle for docs outside the share', async () => {
-    // A docId that EXISTS elsewhere must stay a 403, not a redirect —
-    // otherwise the repair would confirm which ids are real.
+  it('gives a doc outside the share the SAME answer as one that is gone', async () => {
+    // The pair is the point, and it survives the repair's removal intact: a
+    // docId that exists elsewhere and a docId that exists nowhere must be
+    // indistinguishable, or a visitor can enumerate which ids are real. The
+    // sibling test above pins the gone half at 403; this pins the exists-
+    // elsewhere half at the same 403, with the same body.
     const r = await asVisitor(`/review/${encodeURIComponent(outsideDocId)}`, {
       redirect: 'manual',
     });
     expect(r.status).toBe(403);
+    expect(await r.json()).toEqual({ error: 'out_of_share_scope' });
+    const never = await asVisitor('/review/no-such-doc-anywhere', { redirect: 'manual' });
+    expect(never.status).toBe(403);
+    expect(await never.json()).toEqual({ error: 'out_of_share_scope' });
   });
 
   it('is not shown the absolute paths or the tailnet host', async () => {
@@ -813,25 +903,57 @@ describe('workspace share over HTTP', () => {
     expect((await req('/api/workspaces', `localhost:${handle.port}`)).status).toBe(200);
   });
 
-  it('rejects an entryDocId that belongs to another workspace', async () => {
-    const r = await fetch(`${base}/api/share/workspace`, {
+  it('rejects an entryDocId — any entryDocId, not just a foreign one', async () => {
+    // This used to be "rejects an entryDocId that belongs to another
+    // workspace", which was a scope check on a field that no longer exists: a
+    // board share opens the board, so there is no entry doc to choose and the
+    // key is refused outright. Widened rather than dropped, because the case
+    // it used to cover is now a strict subset — and the assertion is on the
+    // ERROR TEXT as well as the status, since a 400 alone would still be
+    // satisfied by the old foreign-doc check and say nothing about the removal.
+    for (const candidate of [outsideDocId, entryDocId]) {
+      const r = await fetch(`${base}/api/share/workspace`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: boardId,
+          entryDocId: candidate,
+          allowDomains: ['partner.example'],
+        }),
+      });
+      expect(r.status, candidate).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toContain('entryDocId');
+    }
+    // Positive control: drop the field and the same call mints.
+    const ok = await fetch(`${base}/api/share/workspace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        workspaceId,
-        entryDocId: outsideDocId,
-        allowDomains: ['partner.example'],
-      }),
+      body: JSON.stringify({ workspaceId: boardId, allowDomains: ['partner.example'] }),
     });
-    expect(r.status).toBe(400);
+    expect(ok.status).toBe(200);
+    const { share } = (await ok.json()) as { share: { shareId: string } };
+    await fetch(`${base}/api/share/${share.shareId}`, {
+      method: 'DELETE',
+      headers: { host: `localhost:${handle.port}` },
+    });
   });
 
-  it('404s on an unknown workspace', async () => {
+  it('404s on an unknown workspace, and 410s on the grouping the board holds', async () => {
     const r = await fetch(`${base}/api/share/workspace`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ workspaceId: 'no-such-ws', allowDomains: ['partner.example'] }),
     });
     expect(r.status).toBe(404);
+    // The two must not collapse: the folder bind is a real id whose SHARING
+    // went away, and a peer whose review stopped sharing has to be able to tell
+    // that from "your review vanished".
+    const grouping = await fetch(`${base}/api/share/workspace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId, allowDomains: ['partner.example'] }),
+    });
+    expect(grouping.status).toBe(410);
+    expect(((await grouping.json()) as { error: string }).error).toBe('grouping_sharing_removed');
   });
 });
