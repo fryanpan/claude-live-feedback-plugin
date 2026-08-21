@@ -961,8 +961,12 @@ function findEmphasisClose(r: string, delim: '*' | '**' | '_' | '__'): number {
         p += len;
         continue;
       }
-      // Odd run ≥ 3: `**…` plus our single closer.
-      return innerOpen ? p + len - 1 : p;
+      // Odd run ≥ 3: when an inner 2-char span is open it closes first
+      // (2 chars), then our single closer; anything past those 3 is left
+      // for the caller (`*a**b*****c**` closes at the third char of the
+      // 5-run, leaving `**` to open the next bold). With no inner span our
+      // closer comes first and the rest is the caller's.
+      return innerOpen ? p + 2 : p;
     }
     // want === 2
     if (len === 1) {
@@ -971,9 +975,12 @@ function findEmphasisClose(r: string, delim: '*' | '**' | '_' | '__'): number {
       continue;
     }
     if (len === 2) return p;
-    // Run ≥ 3: our `**` closer plus a single. When an inner italic is open it
-    // closes first (`***`), so our closer is the LAST two.
-    return len % 2 === 1 && innerOpen ? p + len - 2 : p;
+    // Run ≥ 3: when an inner italic is open it closes first (1 char), then
+    // our `**`; anything past those 3 is left for the caller
+    // (`***both****ital*` closes at the second char of the 4-run, leaving
+    // `*` to open the next italic). With no inner span our closer comes
+    // first and the rest is the caller's.
+    return innerOpen ? p + 1 : p;
   }
   return -1;
 }
@@ -1675,7 +1682,9 @@ function textWithMarks(xmlText: Y.XmlText): string {
   // around the italic, doubling the delimiters into `**a ****b**** c**` and
   // corrupting every bound file that held such a run.
   const active: InlineMark[] = [];
-  for (const seg of expelEmphasisWhitespace(delta)) {
+  const segs = expelEmphasisWhitespace(delta);
+  for (let si = 0; si < segs.length; si++) {
+    const seg = segs[si]!;
     const marks = seg.marks;
     let keep = 0;
     while (keep < active.length && marks.some((m) => m.key === active[keep]!.key)) keep++;
@@ -1687,8 +1696,9 @@ function textWithMarks(xmlText: Y.XmlText): string {
     if (!seg.ws) {
       for (const m of marks) {
         if (active.some((a) => a.key === m.key)) continue;
-        out += m.open;
-        active.push(m);
+        const v = unambiguousOpen(m, out, segs, si);
+        out += v.open;
+        active.push(v);
       }
     }
     out += seg.text;
@@ -1701,6 +1711,36 @@ type InlineMark = { key: string; open: string; close: string };
 type InlineSegment = { text: string; marks: InlineMark[]; ws?: boolean };
 
 const EMPHASIS_KEYS = new Set(['bold', 'italic', 'strike']);
+
+/**
+ * Pick the delimiter for a bold/italic mark being OPENED. Closing marks and
+ * reopening one right after glues their delimiters into a single asterisk
+ * run — `[bold+italic][italic]` closes `***` then reopens `*`, and the glued
+ * `****` (or `*****` when bold reopens) is where emphasis died on the round
+ * trip: the runs came back as literal asterisks in task bodies. A glued run
+ * of 3 is unambiguous (the parser reads mixed runs), so the switch fires
+ * only at 4+: the reopened mark takes its underscore form, which cannot glue
+ * with `*`. One exception — underscore emphasis cannot CLOSE against a word
+ * character (`_ital_x` is literal, in CommonMark and in this file's own
+ * parser), so when the mark's span ends flush against a word the asterisk
+ * form stays and findEmphasisClose reads the glued run back instead.
+ */
+function unambiguousOpen(
+  m: InlineMark,
+  out: string,
+  segs: InlineSegment[],
+  si: number,
+): InlineMark {
+  if (m.key !== 'bold' && m.key !== 'italic') return m;
+  const trailing = /\*+$/.exec(out)?.[0].length ?? 0;
+  if (trailing === 0 || trailing + m.open.length < 4) return m;
+  let j = si + 1;
+  while (j < segs.length && segs[j]!.marks.some((n) => n.key === m.key)) j++;
+  const following = j < segs.length ? (segs[j]!.text[0] ?? '') : '';
+  if (/[\w_]/.test(following)) return m;
+  const u = m.open.replace(/\*/g, '_');
+  return { key: m.key, open: u, close: u };
+}
 
 /**
  * Turn a Yjs delta into the segments the serializer walks, moving whitespace

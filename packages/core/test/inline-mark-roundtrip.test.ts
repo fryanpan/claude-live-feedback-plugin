@@ -176,6 +176,37 @@ const CASES: Array<{ name: string; md: string; ops: Op[] }> = [
       ['b', { ...B, ...L('https://y.example') }],
     ],
   },
+  {
+    // A close-then-reopen boundary whose glued asterisk run would reach 4
+    // (`***both****ital*`) switches the reopened mark to its underscore
+    // form — a 4-run is ambiguous and the marks died in it.
+    name: 'bold+italic then italic, no space',
+    md: '***both***_ital_',
+    ops: [
+      ['both', BI],
+      ['ital', I],
+    ],
+  },
+  {
+    name: 'bold then bold+italic then italic, no space',
+    md: '**a*b***_c_',
+    ops: [
+      ['a', B],
+      ['b', BI],
+      ['c', I],
+    ],
+  },
+  {
+    // The 5-run shape: closing bold+italic then reopening bold glued into
+    // `*****` before the fix.
+    name: 'italic then italic+bold then bold, no space',
+    md: '*a**b***__c__',
+    ops: [
+      ['a', I],
+      ['b', BI],
+      ['c', B],
+    ],
+  },
 ];
 
 // Parse-shape only: the serializer normalizes `_x_` to `*x*`, so these are not
@@ -193,6 +224,26 @@ const PARSE_ONLY: Array<{ name: string; md: string; ops: Op[] }> = [
     ops: [
       ['b', B],
       [' x', undefined],
+    ],
+  },
+  {
+    // Glued delimiter runs a pre-fix serializer emitted (and any external
+    // markdown may contain): the 4-run closes bold+italic and opens italic.
+    name: 'glued 4-run: bold+italic then italic',
+    md: '***both****ital*',
+    ops: [
+      ['both', BI],
+      ['ital', I],
+    ],
+  },
+  {
+    // The 5-run from the field: closes bold+italic, reopens bold.
+    name: 'glued 5-run: italic, italic+bold, bold',
+    md: '*a**b*****c**',
+    ops: [
+      ['a', I],
+      ['b', BI],
+      ['c', B],
     ],
   },
 ];
@@ -324,6 +375,69 @@ describe('inline marks round-trip byte-identical AND parse to the meant shape', 
     ).toBe('**a** b\n');
     // Code keeps its whitespace — it is significant there.
     expect(serializeOps([{ insert: ' x ', attributes: C }])).toBe('` x `\n');
+  });
+
+  it('a close-then-reopen boundary never glues an ambiguous 4+ asterisk run (t-N8fCcpqZdJBp)', () => {
+    // Bold emphasis meeting adjacent asterisk delimiters used to serialize as
+    // literal ****/***** runs the parser could not read back, so the marks
+    // died on the round trip. The reopened mark switches to its underscore
+    // form instead.
+    const shapes: Array<{
+      ops: Array<{ insert: string; attributes?: Record<string, unknown> }>;
+      expected: string;
+    }> = [
+      {
+        ops: [
+          { insert: 'both', attributes: BI },
+          { insert: 'ital', attributes: I },
+        ],
+        expected: '***both***_ital_\n',
+      },
+      {
+        ops: [
+          { insert: 'a', attributes: B },
+          { insert: 'b', attributes: BI },
+          { insert: 'c', attributes: I },
+        ],
+        expected: '**a*b***_c_\n',
+      },
+      {
+        // The 5-run shape measured in a task body.
+        ops: [
+          { insert: 'a', attributes: I },
+          { insert: 'b', attributes: BI },
+          { insert: 'c', attributes: B },
+        ],
+        expected: '*a**b***__c__\n',
+      },
+    ];
+    for (const { ops, expected } of shapes) {
+      const out = serializeOps(ops);
+      expect(out).toBe(expected);
+      expect(out).not.toMatch(/\*{4,}/);
+      // And the marks survive the round trip.
+      expect(parsedOps(out.trimEnd())).toEqual(ops.map((o) => [o.insert, o.attributes]));
+      expect(normalizeMarkdown(out)).toBe(out);
+    }
+  });
+
+  it('falls back to a glued run the parser CAN read when underscore cannot close there', () => {
+    // `_ital_x` is not emphasis (underscore cannot close against a word
+    // character), so this shape keeps asterisk delimiters — and the parser
+    // reads the glued run instead of dropping the marks.
+    const ops = [
+      { insert: 'both', attributes: BI },
+      { insert: 'ital', attributes: I },
+      { insert: 'x' },
+    ];
+    const out = serializeOps(ops);
+    expect(out).toBe('***both****ital*x\n');
+    expect(parsedOps(out.trimEnd())).toEqual([
+      ['both', BI],
+      ['ital', I],
+      ['x', undefined],
+    ]);
+    expect(normalizeMarkdown(out)).toBe(out);
   });
 
   it('two adjacent links with different hrefs stay two links', () => {
