@@ -127,10 +127,8 @@ export const BRIEF_EVENT_TYPES: ReadonlySet<string> = new Set([
   'task.evidence_amended',
   'decision.answered',
   'decision.info_requested',
-  'workspace.goal_updated',
   'workspace.goals_changed',
   'workspace.lead_changed',
-  'workspace.retriaged',
 ]);
 
 /** One events.jsonl row, as loosely as the log actually types it. */
@@ -282,7 +280,6 @@ export function deterministicBrief(input: BriefInput): string {
       case 'decision.answered':
         answered.push(linked(input, row));
         break;
-      case 'workspace.goal_updated':
       case 'workspace.goals_changed':
         goalEdits += 1;
         break;
