@@ -345,8 +345,10 @@ describe('the walkthrough matches the approved mockup', () => {
 
     renderReviewWalkthrough(root, reviewQueue([], [threadItem({ direct: true })], NOW), 0, walk());
     // A declared item reads as what it declared, not as the surface it arrived
-    // on — the same words a declared decision on a task would carry.
-    expect((root.querySelector('.hub-walk-k-review') as HTMLElement).textContent).toBe('Review');
+    // on — the same words a declared decision on a task would carry. The label
+    // is 'Question' since Bryan's 2026-08-21 rename; the tone token (and so
+    // the class name) deliberately stays 'review'.
+    expect((root.querySelector('.hub-walk-k-review') as HTMLElement).textContent).toBe('Question');
     // The chip is left out rather than filled with a placeholder when there
     // is no body of work to name.
     expect(root.querySelector('.hub-walk-k-count')).toBeNull();
