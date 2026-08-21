@@ -209,6 +209,74 @@ describe('home routes — deterministic server (no summarizer)', () => {
   });
 });
 
+/**
+ * A blocker is task state, not a review item (commit 6 of this branch took it
+ * out of the client's reviewQueue). The brief's closing line is a promise
+ * about the LIST rendered under it, so the server's count must agree: a
+ * person whose only "item" is their own task other work waits on gets
+ * "Nothing is queued", not a pointer at a queue that renders nothing.
+ */
+describe('home brief queue count — blockers are not review items', () => {
+  let h: ReturnType<typeof makeHarness>;
+  let ws: string;
+
+  beforeAll(async () => {
+    h = makeHarness();
+    ws = await makeWorkspace(h);
+  });
+  afterAll(async () => {
+    await h.handle.stop();
+    rmSync(h.dataDir, { recursive: true, force: true });
+  });
+
+  const briefLine = async (): Promise<string> => {
+    const res = await h.local(`/api/workspaces/${ws}/home?user=Bryan`);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as HomePayload).brief.markdown;
+  };
+
+  it('a person-owned blocker with an open dependent does not count as queued', async () => {
+    const blocker = await h.post(`/api/workspaces/${ws}/tasks`, {
+      title: 'Ship the export fix',
+      author: AGENT,
+      assignee: 'human', // reserved word: unconditionally a person
+    });
+    expect(blocker.status).toBe(200);
+    const blockerId = ((await blocker.json()) as { task: { id: string } }).task.id;
+    const dependent = await h.post(`/api/workspaces/${ws}/tasks`, {
+      title: 'Wire the importer to the fixed export',
+      author: AGENT,
+      assignee: AGENT.name,
+    });
+    expect(dependent.status).toBe(200);
+    const dependentId = ((await dependent.json()) as { task: { id: string } }).task.id;
+    const wired = await h.post(`/api/tasks/${dependentId}/after`, {
+      after: [blockerId],
+      author: AGENT,
+    });
+    expect(wired.status).toBe(200);
+
+    const md = await briefLine();
+    expect(md).toContain('Nothing is queued for your review right now.');
+    expect(md).not.toContain('What needs your review is queued below.');
+  });
+
+  it('positive control: a real open decision flips the same line', async () => {
+    // Proves the probe can see a queued item at all — without this, the
+    // assertion above would also pass on a brief that never counts anything.
+    const decision = await h.post(`/api/workspaces/${ws}/tasks`, {
+      title: 'Which export format do we keep?',
+      body: 'CSV or Parquet? Blocked until answered: the importer wiring.',
+      author: AGENT,
+      assignee: 'human',
+      needs: 'decision',
+    });
+    expect(decision.status).toBe(200);
+    const md = await briefLine();
+    expect(md).toContain('What needs your review is queued below.');
+  });
+});
+
 describe('home routes — generated brief (stub summarizer)', () => {
   let h: ReturnType<typeof makeHarness>;
   let ws: string;
