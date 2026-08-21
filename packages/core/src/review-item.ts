@@ -101,6 +101,38 @@ export interface ReviewPayload {
    * this field existed stays answered.
    */
   answeredAt?: number;
+  /**
+   * Display name of who answered — the record's face. "Answered by you: …"
+   * has to survive a reload, and the reply comment alone cannot carry it:
+   * the reply is one comment among many, and nothing marks it as THE answer
+   * once a follow-up lands under it. No actor ids in projected state, so
+   * this is the name, same as every other `by` in this module.
+   */
+  answeredBy?: string;
+  /** The verbatim words of the answer, duplicated from the reply comment so
+   *  the record renders without re-deriving which reply was the answer. */
+  answerText?: string;
+  /**
+   * Answers that were UNDONE (or displaced by a later answer), oldest first —
+   * the soft-delete half of the stamps above, mirroring the task decision's
+   * `answerHistory`. An undo moves the four answer fields here rather than
+   * dropping them: the words are user content, and this project does not
+   * hard-delete user content. Nothing reads this to decide anything —
+   * `reviewAnswered` still reads only the live stamps — which is what keeps
+   * the record cheap to keep.
+   */
+  answerHistory?: ReviewAnswerUndone[];
+}
+
+/** One undone answer: the stamps as they stood, plus who took them back and
+ *  when. `answeredAt` is 0 for a legacy tap that predates the stamp. */
+export interface ReviewAnswerUndone {
+  answeredAt: number;
+  answeredBy?: string;
+  answerText?: string;
+  answeredWith?: string;
+  undoneAt: number;
+  undoneBy: string;
 }
 
 /**
@@ -501,6 +533,34 @@ export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   // by accident — nor as unanswered, which would put it back on the queue.
   if (typeof value.answeredAt === 'number' && Number.isFinite(value.answeredAt)) {
     out.answeredAt = value.answeredAt;
+  }
+  // The answer record's face. Loose like everything here: a junk-typed value
+  // is dropped rather than thrown, and the item still reads as answered (or
+  // not) from the stamps above — these two only decorate the record.
+  if (typeof value.answeredBy === 'string') out.answeredBy = value.answeredBy;
+  if (typeof value.answerText === 'string') out.answerText = value.answerText;
+
+  if (Array.isArray(value.answerHistory)) {
+    const history: ReviewAnswerUndone[] = [];
+    for (const raw of value.answerHistory) {
+      if (!isPlainObject(raw)) continue;
+      // The undo stamps are what a history row IS — without them it records
+      // nothing — so they are the only fields that can drop a row. The
+      // answer-side fields degrade like they do on the live payload.
+      if (typeof raw.undoneAt !== 'number' || !Number.isFinite(raw.undoneAt)) continue;
+      if (typeof raw.undoneBy !== 'string') continue;
+      if (typeof raw.answeredAt !== 'number' || !Number.isFinite(raw.answeredAt)) continue;
+      const entry: ReviewAnswerUndone = {
+        answeredAt: raw.answeredAt,
+        undoneAt: raw.undoneAt,
+        undoneBy: raw.undoneBy,
+      };
+      if (typeof raw.answeredBy === 'string') entry.answeredBy = raw.answeredBy;
+      if (typeof raw.answerText === 'string') entry.answerText = raw.answerText;
+      if (typeof raw.answeredWith === 'string') entry.answeredWith = raw.answeredWith;
+      history.push(entry);
+    }
+    if (history.length > 0) out.answerHistory = history;
   }
 
   if (Array.isArray(value.options)) {

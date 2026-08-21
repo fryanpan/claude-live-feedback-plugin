@@ -14,6 +14,7 @@ import {
   type Anchor,
   type DocMeta,
   type DocType,
+  type ReviewAnswerUndone,
   type ReviewPayload,
   type Thread,
   type User,
@@ -24,6 +25,7 @@ import {
   listThreads,
   prose,
   readDocMeta,
+  reviewAnswered,
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
@@ -710,16 +712,107 @@ export class Rooms {
     // Stamped BEFORE the reply so the payload is already current when
     // `thread.replied` reaches a watching agent — otherwise the event that
     // says "answered" carries a card that still says "unanswered".
+    const prior = target.review;
+    const ts = Date.now();
+    // A second answer landing over a standing one is a race, not a rewrite
+    // request — two browsers both showing the same card, the slower tap
+    // arriving after the faster one recorded. Last write stands, but the
+    // displaced record moves to `answerHistory` exactly as an undo would move
+    // it: overwriting IS a withdrawal, performed by the overwriting actor,
+    // and a hard delete is the loss that field exists to prevent. Mirrors
+    // `answerDecision` in tasks.ts.
+    const history: ReviewAnswerUndone[] | undefined = reviewAnswered(prior)
+      ? [...(prior.answerHistory ?? []), displacedAnswer(prior, ts, author.name)]
+      : prior.answerHistory;
+    // Rest-destructured rather than deleted: the payload is stored as a plain
+    // value in the ydoc, and an absent key is the only honest spelling of
+    // "unanswered" there.
+    const {
+      answeredAt: _at,
+      answeredWith: _with,
+      answeredBy: _by,
+      answerText: _txt,
+      ...cleared
+    } = prior;
     setCommentReview(room.ydoc, threadId, commentId, {
-      ...target.review,
+      ...cleared,
+      ...(history && history.length > 0 ? { answerHistory: history } : {}),
       // Every answer, tapped or typed. `answeredWith` cannot carry this on its
       // own — it is absent on a typed answer — and an item with no stamp at
       // all is one the queue would go on offering after it was answered.
-      answeredAt: Date.now(),
+      answeredAt: ts,
+      // The record's face: "Answered by <who>: <words>" is rendered from the
+      // declaration, not from re-deriving which reply was the answer, so it
+      // has to survive a reload on the payload itself.
+      answeredBy: author.name,
+      answerText: text,
       ...(optionId !== undefined ? { answeredWith: optionId } : {}),
     });
     const replied = await this.postComment(docId, threadId, author, text, undefined, opts);
     return replied ? { ok: true, thread: replied } : { ok: false, error: 'reply-failed' };
+  }
+
+  /**
+   * Take a thread answer back — the way back from a one-tap act that used to
+   * be permanent, mirroring `withdrawAnswer` on the legacy decision task.
+   *
+   * SOFT delete, per the project rule: the four answer stamps move into the
+   * payload's `answerHistory` with who undid them and when, rather than being
+   * dropped. The reply comment stays in the thread — undo takes back the
+   * STAMP, not the conversation; the words a person posted are user content
+   * either way.
+   *
+   * Un-stamping is the whole mechanism of "Undo reopens it everywhere": every
+   * queue (Home, the task panel, the doc surface) derives "waiting on you"
+   * from `reviewAnswered` on the declaration, so clearing the stamps re-offers
+   * the item on every surface with no second state to sync.
+   *
+   * Refuses when there is nothing to take back rather than succeeding
+   * vacuously: two readers racing the same undo must not both be told they
+   * took something back.
+   */
+  undoReviewItemAnswer(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    author: User,
+    opts?: { generate?: boolean },
+  ): { ok: true; thread: Thread } | { ok: false; error: string } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    const thread = this.getThread(docId, threadId);
+    const target = thread?.comments.find((c) => c.id === commentId);
+    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
+    const prior = target.review;
+    if (!reviewAnswered(prior)) return { ok: false, error: 'not-answered' };
+    // Rest-destructured for the same reason as in `answerReviewItem`: an
+    // absent key, not an undefined value, is what "unanswered" looks like in
+    // the stored payload.
+    const {
+      answeredAt: _at,
+      answeredWith: _with,
+      answeredBy: _by,
+      answerText: _txt,
+      ...cleared
+    } = prior;
+    setCommentReview(room.ydoc, threadId, commentId, {
+      ...cleared,
+      answerHistory: [
+        ...(prior.answerHistory ?? []),
+        displacedAnswer(prior, Date.now(), author.name),
+      ],
+    });
+    const updated = this.getThread(docId, threadId);
+    if (!updated) return { ok: false, error: 'no-doc' };
+    // The same funnel every thread change goes through, so watching agents
+    // and open browsers learn the card is unanswered again. `thread.replied`
+    // rather than a new event name on purpose: the four existing names are
+    // the entire vocabulary every deployed client repaints on, and an undo
+    // announced under a fifth would reach nobody until every session
+    // restarted. No comment payload — nothing was said, a stamp was removed;
+    // the updated thread carries the truth.
+    this.fireEvent(room, 'thread.replied', updated, undefined, opts);
+    return { ok: true, thread: updated };
   }
 
   /**
@@ -3147,6 +3240,24 @@ const DEFAULT_REVIEWER: User = {
  * first, then by open-count descending (attention floats up), then by name
  * ascending. Mirrors the landing page's "what needs my review?" ordering.
  */
+/**
+ * The standing answer on a declaration, packaged as the history entry an undo
+ * (or a displacing re-answer) appends. ONE builder for both callers, so a
+ * displaced answer can never be recorded differently from an undone one.
+ * `answeredAt` falls back to 0 for a legacy option tap that predates the
+ * stamp — the entry still records the words and the option.
+ */
+function displacedAnswer(prior: ReviewPayload, ts: number, by: string): ReviewAnswerUndone {
+  return {
+    answeredAt: prior.answeredAt ?? 0,
+    ...(prior.answeredBy !== undefined ? { answeredBy: prior.answeredBy } : {}),
+    ...(prior.answerText !== undefined ? { answerText: prior.answerText } : {}),
+    ...(prior.answeredWith !== undefined ? { answeredWith: prior.answeredWith } : {}),
+    undoneAt: ts,
+    undoneBy: by,
+  };
+}
+
 /** The workspace's stored exclude prefixes, normalized. Replicated on every
  *  member (there is no workspace registry), so any member answers. */
 function workspaceExcludes(members: DocMeta[]): string[] {
