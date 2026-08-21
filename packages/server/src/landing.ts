@@ -72,8 +72,22 @@ export interface LandingModel {
   windowMs: number;
 }
 
+/**
+ * A row opens the workspace's **Home** pane, not its board.
+ *
+ * The list's whole job is "get me into the right workspace", and the first
+ * question on arrival is *what needs me here* — which is the question Home
+ * answers and the board does not. The board is a task list: correct once you
+ * already know what you came for, and a wall of rows when you don't. Home has
+ * a nav link back to it, so nothing is further away than one tap.
+ *
+ * `/workspaces/<id>` is deliberately left alone as the board (see
+ * `paneFromPath` in the hub client): every link already in the field points
+ * there, so this changes where the LIST sends you, not what any existing URL
+ * means.
+ */
 function toRow(w: LandingWorkspaceInput): LandingWorkspaceRow {
-  return { ...w, href: `/workspaces/${encodeURIComponent(w.id)}` };
+  return { ...w, href: `/workspaces/${encodeURIComponent(w.id)}/home` };
 }
 
 /** Newest first; name then id break ties so the page is deterministic across

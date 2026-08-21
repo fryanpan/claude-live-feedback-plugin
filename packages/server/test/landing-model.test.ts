@@ -78,9 +78,14 @@ describe('ordering', () => {
 });
 
 describe('links', () => {
-  it('a workspace row links to its board, id URL-encoded', () => {
+  it('a workspace row links to its Home pane, id URL-encoded', () => {
     const model = buildLandingModel([ws({ id: 'w/1' })], [], NOW);
-    expect(model.active[0]?.href).toBe(`/workspaces/${encodeURIComponent('w/1')}`);
+    expect(model.active[0]?.href).toBe(`/workspaces/${encodeURIComponent('w/1')}/home`);
+  });
+
+  it('a folded-away workspace opens on Home too', () => {
+    const model = buildLandingModel([ws({ id: 'cold', lastActivity: 0 })], [], NOW);
+    expect(model.inactive[0]?.href).toBe('/workspaces/cold/home');
   });
 
   it('project links go to /projects/<owner> encoded, in label order', () => {
