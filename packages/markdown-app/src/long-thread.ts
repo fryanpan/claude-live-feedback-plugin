@@ -103,6 +103,40 @@ export function threadDecision(t: Thread): ThreadDecisionState {
 }
 
 /**
+ * Hard cap on the outcome the folded card quotes. CSS ellipsizes at the real
+ * width, which is far narrower; this only stops a 5,000-character answer being
+ * poured into the DOM for a one-line slot. Same reasoning, and roughly the
+ * same size, as `DISCUSSION_MAX` in core's summary.
+ */
+export const OUTCOME_MAX = 120;
+
+/**
+ * What was decided, for a thread whose decision has been answered — `null`
+ * when there is no decision, when one is still outstanding, or when the thread
+ * was resolved with the ask still open (a record with no answer in it).
+ *
+ * The `answerText ?? tapped option's label` fallback is the same one the
+ * answered record inside the card uses: an answer tapped before `answerText`
+ * existed recorded only the option id, and that option's label is the verbatim
+ * words it meant.
+ */
+export function decisionOutcome(t: Thread): string | null {
+  if (threadDecision(t) !== 'answered') return null;
+  // The LATEST answered decision. A thread can carry more than one, and the
+  // newest is the one that is still true.
+  const answered = (t.comments ?? []).filter(
+    (c) => c.review?.shape === 'decision' && c.review.answeredAt !== undefined,
+  );
+  const review = answered[answered.length - 1]?.review;
+  if (!review) return null;
+  const text =
+    review.answerText ?? review.options?.find((o) => o.id === review.answeredWith)?.label ?? '';
+  const one = text.replace(/\s+/g, ' ').trim();
+  if (!one) return null;
+  return one.length > OUTCOME_MAX ? `${one.slice(0, OUTCOME_MAX - 1)}…` : one;
+}
+
+/**
  * Should opening this thread open the modal instead of expanding the card?
  *
  * The caller still decides whether a modal is the right treatment for the

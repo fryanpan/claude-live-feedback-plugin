@@ -267,12 +267,57 @@ describe('the modal keeps up with the doc', () => {
     expect(isShown(h.root())).toBe(false);
   });
 
-  it('names the thread it is showing, decision or comment', () => {
+  const title = (h: Harness): string =>
+    h.root().querySelector('.thread-modal-title')?.textContent ?? '';
+
+  // The dialog covers the document, so the one thing a reader cannot do while
+  // it is open is look at the text the thread hangs on. "Comment" told them
+  // nothing they had not just clicked.
+  it('says which text the thread hangs on, since the dialog covers it', () => {
     const h = mount();
-    h.modal.open(thread('t1', [comment('plain')]));
-    expect(h.root().querySelector('.thread-modal-title')?.textContent).toBe('Comment');
+    h.modal.open(
+      thread('t1', [comment('plain')], {
+        anchor: {
+          kind: 'element',
+          fingerprint: undefined as never,
+          snippet: { text: 'the cache warms on boot' },
+        },
+      }),
+    );
+    expect(title(h)).toBe('the cache warms on boot');
+  });
+
+  it('keeps "Decision" for a decision, where the kind outranks the anchor', () => {
+    const h = mount();
     h.modal.open(thread('t2', [comment('which one?', decisionPayload)]));
-    expect(h.root().querySelector('.thread-modal-title')?.textContent).toBe('Decision');
+    expect(title(h)).toBe('Decision');
+  });
+
+  it('falls back to "Comment" when the anchor has no text to quote', () => {
+    const h = mount();
+    h.modal.open(
+      thread('t3', [comment('')], {
+        anchor: { kind: 'element', fingerprint: undefined as never, snippet: { text: '' } },
+      }),
+    );
+    expect(title(h)).toBe('Comment');
+  });
+
+  // Untrusted on the way in — a snippet is document text, and the title is a
+  // heading rather than a sanitizer.
+  it('puts the snippet in as text, never as markup', () => {
+    const h = mount();
+    h.modal.open(
+      thread('t4', [comment('plain')], {
+        anchor: {
+          kind: 'element',
+          fingerprint: undefined as never,
+          snippet: { text: '<img src=x onerror=1>' },
+        },
+      }),
+    );
+    expect(h.root().querySelector('.thread-modal-title')?.querySelector('img')).toBe(null);
+    expect(title(h)).toBe('<img src=x onerror=1>');
   });
 });
 
