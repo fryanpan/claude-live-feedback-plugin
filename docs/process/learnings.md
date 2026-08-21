@@ -1972,6 +1972,34 @@ Every count that went wrong had one.
   not CSS pixels — measure the scale with a `pointerdown` logger and recompute
   from `getBoundingClientRect()` rather than clicking where the picture says.
 
+## A hover state does not survive to the next browser tool call
+
+- **`hover`, then `screenshot` as a separate call, photographs the UNHOVERED
+  page.** Measured on 2026-08-21 while verifying the task row's hover
+  rectangle: immediately after the hover, `row.matches(':hover')` was `true`
+  and the outline computed to `1px solid rgb(209,213,218)`; three seconds
+  later, with the SAME element still attached (`document.contains` true, no
+  repaint, no re-render), it was `false`. The picture then shows a resting row,
+  and the natural reading of it — "my hover CSS doesn't work" — is wrong in the
+  most expensive direction, because the next move is to rewrite a rule that was
+  never broken. It had already cost a pass a day earlier, misfiled then as "the
+  screenshot was taken after the pointer moved on".
+- **The fix is `browser_batch`**: put the hover and the screenshot in one call
+  and the paint is captured while the state holds. `[{hover}, {zoom}]` produced
+  the rectangle, the drag handle and the caret on the first try.
+- **The lasting form of the lesson is that a hover is verified by the CASCADE,
+  not by a photograph.** `getComputedStyle` read in the same call as the hover
+  is the assertion; the screenshot is the illustration. And when you do want a
+  picture of a state you cannot hold — a hover, a `:focus-visible`, a drag —
+  inject a class that replays the same declarations and SAY SO, rather than
+  presenting a forced state as an observed one.
+- Sibling gotcha from the same session, same shape: to see whether a paint is
+  drawing at all, **turn the colour up before you conclude it is missing**. A
+  1px `#d1d5da` outline on a `#eef1f5` hover background is invisible in a JPEG
+  screenshot; re-running it in red showed the geometry immediately — one edge,
+  not four — which is what pointed at the `overflow: hidden` clipping the other
+  three (see `.hub-task-title`'s `padding: 4px; margin: -4px`).
+
 ## A new emitted event reaches the surface as a bare slug
 
 - **`task.body_edited` rode the existing SSE + `events.jsonl` path to the

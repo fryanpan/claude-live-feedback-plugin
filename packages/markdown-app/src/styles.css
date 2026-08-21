@@ -650,8 +650,9 @@ body.hub-body {
    feel free to widen the task list so more can fit"). Measured in a browser,
    not derived — see `task-title-lines-css.test.ts` for the method and the
    numbers. Widening the container is what buys it; the row itself has nothing
-   left to give, its fixed chrome being 134px of handle, open zone, status,
-   owner, gaps and padding. */
+   left to give, its fixed chrome being 134px of handle, status, open caret,
+   owner, gaps and padding. (Still 134px after the caret moved to the right of
+   the row on 2026-08-21: it is 16px wide and it took over a 16px slot.) */
 #hub-root {
   max-width: var(--hub-page-w);
   margin: 0 auto;
@@ -2230,7 +2231,7 @@ body.hub-body {
   font-weight: 600;
 }
 /* A task list is read by SKIMMING down a column, not by reading each row.
-   So the row is a grid with fixed tracks — handle, rename zone, status,
+   So the row is a grid with fixed tracks — handle, open caret, status,
    title, badges, assignee — and every cell in a column lines up with the one
    above it. A flex row with `flex-wrap` (what this was) re-flows per row: a
    long title pushes its own badges to a second line, the next row's don't
@@ -2249,7 +2250,7 @@ body.hub-body {
    each other by parsing this declaration. */
 .hub-task-row {
   display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
   min-height: 40px;
@@ -2268,7 +2269,7 @@ body.hub-body {
   background: var(--bg-hover);
   outline: none;
 }
-/* --- row anatomy: drag handle · rename zone · … · assignee --- */
+/* --- row anatomy: drag handle · status · title · badges · open caret · assignee --- */
 /* The handle is invisible until you go looking for it: a permanent column of
    ⠿ is noise on a list whose job is to be skimmed. Revealed by hovering the
    row (a pointer that can hover), and by focusing the handle itself — a
@@ -2308,39 +2309,32 @@ body.hub-body {
 .hub-drag-handle:disabled {
   visibility: hidden;
 }
-/* The deliberate control after the handle whose only job is RENAMING. This
-   slot used to be a 16px "open" sliver; inverted deliberately: the title is
-   the row's biggest target, so a single click on it (or anywhere on the row)
-   now opens the task, and the pencil here carries the deliberate gesture the
-   title's click used to swallow. It appears with the handle on hover, and on
-   its own focus — a hover-only affordance is no keyboard path at all. */
-.hub-title-edit {
+/* The open caret (Bryan, 2026-08-21: *"do what Asana does on desktop — a caret
+   only on hover, that always opens the task"*), at the RIGHT end of the row,
+   in the track immediately before the assignee bubble. It appears with the
+   drag handle when a pointer that can hover is over the row, and on keyboard
+   focus of the row, because a row you have arrowed onto should say what Enter
+   will do. `opacity` rather than `display`, so the grid track never changes
+   width and the row does not twitch as the pointer crosses it.
+
+   It carries no behaviour of its own: the row's click handler opens the task
+   and this click bubbles into it. The <button> is for the cursor and the hit
+   area. */
+.hub-task-open {
   width: 16px;
   min-height: 34px;
   padding: 0;
   border: none;
   background: none;
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
 }
-.hub-task-row:hover .hub-title-edit,
-.hub-title-edit:focus-visible {
+.hub-task-row:hover .hub-task-open,
+.hub-task-row:focus-visible .hub-task-open {
   opacity: 0.7;
-}
-.hub-title-edit:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: 4px;
-  opacity: 1;
-}
-/* Coarse pointer: renaming lives in the detail panel, so the control is
-   disabled in TS — same rule as the done row's drag handle: the element
-   stays so the grid tracks don't shift; the control goes. */
-.hub-title-edit:disabled {
-  visibility: hidden;
 }
 /* Who has it, at the far right — a picker over everyone it could go to. It is
    invisible by construction: the styling lives on the avatar it sits over
@@ -2504,33 +2498,78 @@ body.hub-body {
 .hub-task-row.hub-drop-after {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
-/* No rename affordance on the title itself any more: on every pointer a
-   click/tap on the words opens the task, and the rename is the pencil's
-   (`.hub-title-edit`, above). The dotted-underline hover and the title's
-   focus ring went with the title's tabindex. */
+/* Only the WORDS of a title rename; the rest of the cell opens the task. The
+   cell is the flexible track and spans the whole gap between the status mark
+   and the badges, so on a wide row most of it is empty space to the right of
+   a short title — and that space is Bryan's example of what must open. The
+   split is structural (an inline child inside the cell, so the browser's hit
+   test decides), and these rules are what make it VISIBLE: the text cursor
+   and a light rectangle mark exactly the region that behaves differently
+   (Bryan, 2026-08-21: *"hovering over the title TEXT shows a subtle rectangle
+   around it"* — Asana's tell that a label is editable).
+
+   The rectangle is an `outline`, not a border and not a box-shadow inset:
+   outlines are drawn outside the box and are the one border-like paint in CSS
+   that occupies no space at all, so the words cannot move as it appears. It is
+   declared transparent in the resting state rather than absent, so the hover
+   only changes a colour — and, just as load-bearing, so it OVERRIDES the UA
+   focus ring the moment this span becomes editable and takes focus.
+
+   Scoped to the same query `finePointer()` asks in TS, because that is the
+   only pointer on which the words are editable at all. */
+.hub-task-title-text {
+  border-radius: 3px;
+  outline: 1px solid transparent;
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .hub-task-title-text {
+    cursor: text;
+  }
+  .hub-task-title-text:hover {
+    outline-color: var(--border);
+  }
+}
+/* Editing: the rectangle goes away and leaves nothing but a caret in the words
+   (Bryan: *"on click the rectangle goes away — you're left with just the text
+   caret at the click position"*). Nothing here may touch a box or a font
+   metric: the whole point of editing this element in place rather than swapping
+   an input in is that the glyphs do not move by a pixel, and a padding or
+   border added for edit mode would put the jump straight back.
+
+   `text-overflow: clip` on the cell for the duration, because an ellipsis is a
+   lie about text you are editing — you would be typing into characters the row
+   is still drawing as "…". */
+.hub-task-title-text:hover[contenteditable],
+.hub-task-title-text[contenteditable] {
+  outline-color: transparent;
+}
+.hub-task-title.hub-title-editing {
+  text-overflow: clip;
+}
 /* A pointer that can't hover can't reveal anything on hover, so on a phone
    the handle is simply THERE — a hidden handle would mean no reorder gesture
    at all on the surface this board is mostly reviewed on. This is the CSS
    half of the question `finePointer()` asks in TS.
 
-   And the rename zone goes, because on a coarse pointer the title is not
-   editable — renaming lives in the detail panel, one tap away — so the
-   pencil has no job here, and a 16px sliver is not a tap target anyway;
-   keeping it would be spending row width — the scarcest thing at 430px — on
-   the appearance of an affordance. The element stays (grid tracks fill
-   consecutively; dropping a child slides every later cell one track left) at
-   zero width; it is also `disabled` in TS, which takes it out of the tab
-   order. Its width goes to the handle, which becomes a 32×36 target a
-   finger can actually hit. */
+   The open caret stays too, and this is the reverse of the call the rename
+   pencil got in this block: the pencil was DEAD on a coarse pointer (renaming
+   lives in the detail panel there), so spending 430px-row width on the
+   appearance of an affordance bought nothing. The caret is not dead — a tap on
+   it opens the task, as a tap anywhere on the row does — and on a surface with
+   no hover it is the only thing that SAYS a row opens. It is sized as an
+   indicator rather than as a target, iOS-list style: the target is the row
+   itself, 402×40px at 430px, and the caret is 14px of the width the title
+   would otherwise get. */
 @media (hover: none), (pointer: coarse) {
   .hub-drag-handle {
     opacity: 1;
     width: 32px;
     min-height: 36px;
   }
-  .hub-title-edit {
-    visibility: hidden;
-    width: 0;
+  .hub-task-open {
+    opacity: 0.55;
+    width: 14px;
     min-height: 36px;
   }
 }
@@ -2553,6 +2592,21 @@ body.hub-body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* The padding and the negative margin are ONE declaration in two lines, and
+     neither survives alone. `overflow: hidden` (which the ellipsis above needs)
+     clips at the PADDING box, and without padding that box is the title's own
+     box to the pixel — so the hover rectangle, drawn 2px outside it, was
+     clipped on three sides and rendered as a single stroke down the right of
+     the words. Measured, not reasoned about: only the right edge had slack,
+     because the cell is the flexible track and the words end well short of it.
+
+     The padding opens 4px of room inside the clip; the negative margin hands
+     the same 4px back to the grid, so the words, the track and the row height
+     all measure identically before and after (verified at 1180x820: dx 0, dy 0,
+     dw 0, row height unchanged). Delete the margin and every title shifts;
+     delete the padding and the rectangle loses three sides again. */
+  padding: 4px;
+  margin: -4px;
 }
 .hub-done {
   opacity: 0.55;
@@ -4143,6 +4197,9 @@ a.hub-link-chip:hover {
    apart. Seven of thirty-three rows came out under half. Since 2026-08-18 the
    risk dot and its 6px gap are gone, so the chrome is 110px and the title
    starts 16px wider — the argument for the block is unchanged, only softened.
+   Then the open caret moved to the right of the row and became visible on a
+   touch pointer (2026-08-21), spending 14px of that: chrome 124px, title 274px.
+   Still the same argument, and 14px less room to make it in.
 
    The phone strip used to keep exactly one mark, the discussion count. That
    badge was removed board-wide on 2026-08-18 at Bryan's request (see the note

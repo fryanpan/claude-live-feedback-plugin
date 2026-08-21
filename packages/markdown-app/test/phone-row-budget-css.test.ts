@@ -15,6 +15,14 @@ import { describe, expect, it } from 'vitest';
  * 2026-08-18, so the chrome is 110px now; the budget got 16px looser, not
  * loose.
  *
+ * Then the pencil's 0-width slot became the open caret and moved to the right
+ * of the row (2026-08-21), which spends 14px of that: chrome is 124px and the
+ * title gets 274px, 68% of the row. Re-measured rather than re-derived — 261px
+ * of title in a 389px row at an emulated ~417px viewport, the same arithmetic
+ * one size down. It is 14px well spent: on a pointer that cannot hover, the
+ * caret is the only thing on the row that SAYS the row opens, which the
+ * pencil — dead on a coarse pointer — never did.
+ *
  * So on a phone the strip is hidden. It used to keep exactly one mark — the
  * discussion count — and that badge was removed from the row board-wide on
  * 2026-08-18 at Bryan's request, so there is nothing left to except. The word
