@@ -135,6 +135,72 @@ describe('findAndReplace', () => {
     expect(res.error).toBe('no-match');
   });
 
+  it('no-match with a case-only difference carries a case hint previewing the actual casing', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Deploy pinned to SHA a1B2c3D4 since Monday.' }]);
+    const res = findAndReplace(doc, { find: 'sha A1b2C3d4', replace: 'sha e5F6a7B8' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('case');
+    // The preview shows the DOC's casing, so the caller can re-issue the find verbatim.
+    expect(res.hint?.preview).toContain('SHA a1B2c3D4');
+  });
+
+  it('no-match against a double-spaced doc carries a whitespace hint', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'alpha  beta gamma' }]);
+    const res = findAndReplace(doc, { find: 'alpha beta', replace: 'alpha delta' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('alpha  beta');
+  });
+
+  it('no-match against NBSP in the doc carries a whitespace hint', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'price:\u00a0100 dollars' }]);
+    const res = findAndReplace(doc, { find: 'price: 100', replace: 'price: 200' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('price:\u00a0100');
+  });
+
+  it('genuinely absent text gets no hint field at all', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Hello world' }]);
+    const res = findAndReplace(doc, { find: 'entirely elsewhere', replace: 'x' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect('hint' in res).toBe(false);
+  });
+
+  it('the hint scans the full pattern, context included', () => {
+    // The find alone exists verbatim; the CONTEXT is what mis-cases. A scan
+    // of the bare find would say nothing useful, so the hint targets the
+    // pattern the caller actually failed to match.
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Alpha beta gamma.' }]);
+    const res = findAndReplace(doc, {
+      find: 'beta',
+      replace: 'delta',
+      contextBefore: 'alpha ',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('case');
+    expect(res.hint?.preview).toContain('Alpha beta');
+  });
+
+  it('replaceAll no-match carries the same hint', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'SHA a1B2c3D4 here and SHA a1B2c3D4 there.' }]);
+    const res = findAndReplace(doc, { find: 'sha a1b2c3d4', replace: 'x', replaceAll: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('case');
+  });
+
   it('surfaces ambiguous matches with candidates', () => {
     const doc = new Y.Doc();
     seedDoc(doc, [
