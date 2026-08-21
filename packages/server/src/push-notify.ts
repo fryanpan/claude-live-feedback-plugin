@@ -88,12 +88,25 @@ export interface PushSendResult {
   disabled: number;
 }
 
+/**
+ * Only the call shape this module makes.
+ *
+ * `typeof fetch` would drag in the Request-object and Bun-specific overloads
+ * that nothing here uses, and a test stub then cannot be written without a
+ * cast — which is a cast standing between the test and the contract it means
+ * to pin.
+ */
+export type PushFetch = (
+  url: string,
+  init: { method: string; headers: Record<string, string>; body: Uint8Array<ArrayBuffer> },
+) => Promise<Response>;
+
 export interface PushNotifierOptions {
   store: PushStore;
   keys: VapidKeys;
   /** RFC 8292 `sub` — who a push service should contact about this sender. */
   subject: string;
-  fetch?: typeof fetch;
+  fetch?: PushFetch;
   now?: () => number;
   log?: (message: string) => void;
 }
@@ -107,7 +120,7 @@ export class PushNotifier {
   private readonly store: PushStore;
   private readonly keys: VapidKeys;
   private readonly subject: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: PushFetch;
   private readonly now: () => number;
   private readonly log: (message: string) => void;
 
@@ -115,7 +128,7 @@ export class PushNotifier {
     this.store = opts.store;
     this.keys = opts.keys;
     this.subject = opts.subject;
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init));
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? (() => {});
   }

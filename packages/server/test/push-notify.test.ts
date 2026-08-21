@@ -13,7 +13,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { b64urlEncode, generateVapidKeys } from '../src/push-crypto.ts';
-import { PUSH_TTL_SECONDS, PushNotifier, reviewItemNotification } from '../src/push-notify.ts';
+import {
+  PUSH_TTL_SECONDS,
+  type PushFetch,
+  PushNotifier,
+  reviewItemNotification,
+} from '../src/push-notify.ts';
 import { PushStore } from '../src/push-store.ts';
 
 const NOW = 1_770_000_000_000;
@@ -97,7 +102,7 @@ describe('reviewItemNotification', () => {
 });
 
 describe('PushNotifier.send', () => {
-  async function notifier(dir: string, fetchImpl: typeof fetch) {
+  async function notifier(dir: string, fetchImpl: PushFetch) {
     const store = new PushStore({ dataDir: dir, now: () => NOW });
     return {
       store,
@@ -138,9 +143,9 @@ describe('PushNotifier.send', () => {
   it('POSTs one encrypted request per enrolled device', async () => {
     const dir = tmp();
     try {
-      const seen: Array<{ url: string; init: RequestInit }> = [];
-      const { store, push } = await notifier(dir, async (input, init) => {
-        seen.push({ url: String(input), init: init ?? {} });
+      const seen: Array<{ url: string; method: string }> = [];
+      const { store, push } = await notifier(dir, async (url, init) => {
+        seen.push({ url, method: init.method });
         return new Response(null, { status: 201 });
       });
       store.save(await sub('https://push.example.com/s/mac'), { userId: 'u', userName: 'Bryan' });
@@ -152,7 +157,7 @@ describe('PushNotifier.send', () => {
         'https://push.example.com/s/mac',
         'https://push.example.com/s/phone',
       ]);
-      expect(seen[0]?.init.method).toBe('POST');
+      expect(seen[0]?.method).toBe('POST');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -163,9 +168,9 @@ describe('PushNotifier.send', () => {
     try {
       let headers: Record<string, string> = {};
       let body: unknown;
-      const { store, push } = await notifier(dir, async (_input, init) => {
-        headers = (init?.headers ?? {}) as Record<string, string>;
-        body = init?.body;
+      const { store, push } = await notifier(dir, async (_url, init) => {
+        headers = init.headers;
+        body = init.body;
         return new Response(null, { status: 201 });
       });
       store.save(await sub('https://push.example.com/s/mac'), { userId: 'u', userName: 'Bryan' });
@@ -188,9 +193,8 @@ describe('PushNotifier.send', () => {
     const dir = tmp();
     try {
       const auds: string[] = [];
-      const { store, push } = await notifier(dir, async (_input, init) => {
-        const h = (init?.headers ?? {}) as Record<string, string>;
-        const jwt = h.Authorization.slice('vapid t='.length).split(',')[0]!;
+      const { store, push } = await notifier(dir, async (_url, init) => {
+        const jwt = init.headers.Authorization.slice('vapid t='.length).split(',')[0]!;
         const claims = JSON.parse(atob(jwt.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/')));
         auds.push(claims.aud);
         return new Response(null, { status: 201 });
@@ -271,8 +275,8 @@ describe('PushNotifier.send', () => {
   it('delivers to the healthy devices even when one is dead', async () => {
     const dir = tmp();
     try {
-      const { store, push } = await notifier(dir, async (input) =>
-        String(input).includes('dead')
+      const { store, push } = await notifier(dir, async (url) =>
+        url.includes('dead')
           ? new Response(null, { status: 410 })
           : new Response(null, { status: 201 }),
       );

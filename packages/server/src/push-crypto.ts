@@ -149,7 +149,7 @@ export interface EncryptPushArgs {
  * ECDH secret and make the server's long-lived identity key a decryption key
  * as well as a signing one.
  */
-export async function encryptPushPayload(args: EncryptPushArgs): Promise<Uint8Array> {
+export async function encryptPushPayload(args: EncryptPushArgs): Promise<Uint8Array<ArrayBuffer>> {
   const { plaintext, uaPublic, authSecret } = args;
 
   if (uaPublic.length !== P256_POINT_BYTES || uaPublic[0] !== 0x04) {

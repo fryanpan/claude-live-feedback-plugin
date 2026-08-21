@@ -5,6 +5,7 @@ import {
   type DocMeta,
   type DocType,
   type ReviewPayload,
+  type TaskReviewItem,
   type User,
   type WebhookPayload,
   agentIdCandidates,
@@ -69,6 +70,8 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
+import { PushNotifier, reviewItemNotification } from './push-notify.ts';
+import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
@@ -700,6 +703,140 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const agentWatches = new AgentWatches({ dataDir });
   if (agentWatches.loadError) {
     console.error(`[agent-watches] ${agentWatches.loadError}`);
+  }
+
+  // --- Push notifications ---------------------------------------------
+  //
+  // Devices enrolled for "a review item just landed". The store is cheap and
+  // synchronous; the VAPID identity is not (it may have to mint a keypair),
+  // so the notifier is built once, lazily, behind a cached promise. Building
+  // it eagerly would make `createServer` async for a feature nobody has
+  // necessarily turned on.
+  const pushStore = new PushStore({ dataDir });
+  if (pushStore.loadError) {
+    console.error(`[push] ${pushStore.loadError}`);
+  }
+  let pushNotifierPromise: Promise<PushNotifier | null> | null = null;
+
+  /**
+   * The RFC 8292 `sub` claim: who a push service should contact about this
+   * sender. This server's own origin is the standard non-email answer.
+   *
+   * Returns undefined on a plain-HTTP origin, and that disables the whole
+   * feature rather than papering over it — a service worker cannot register
+   * outside a secure context, so there is nothing on the other end to deliver
+   * to. Prod sets CW_PUBLIC_BASE_URL to the HTTPS tailnet name for exactly
+   * the reason `public-host.ts` gives about the microphone; the same override
+   * is what makes push reachable.
+   */
+  function pushSubject(): string | undefined {
+    const override = process.env.CW_PUSH_SUBJECT?.trim();
+    if (override) return override;
+    const base = externalBaseUrl();
+    return base.startsWith('https://') ? base : undefined;
+  }
+
+  function pushNotifier(): Promise<PushNotifier | null> {
+    pushNotifierPromise ??= (async () => {
+      const subject = pushSubject();
+      if (!subject) return null;
+      try {
+        return new PushNotifier({
+          store: pushStore,
+          keys: await loadOrCreateVapidKeys(dataDir),
+          subject,
+          log: (message) => console.error(`[push] ${message}`),
+        });
+      } catch (err) {
+        // A corrupt or unreadable key file. Say so once; the feature stays
+        // off rather than re-minting and invalidating every enrolled device.
+        console.error(`[push] disabled: ${(err as Error).message}`);
+        return null;
+      }
+    })();
+    return pushNotifierPromise;
+  }
+
+  /**
+   * Announce a review item to every enrolled device.
+   *
+   * Deliberately fire-and-forget. The review item is already written by the
+   * time this runs, and the caller is a route about to answer 200; making
+   * that response wait on several third-party push services — or fail
+   * because one of them is down — would trade the durable thing for the
+   * announcement of it.
+   */
+  function announceReviewItem(input: {
+    ask: string;
+    context: string;
+    askedBy: string;
+    url: string | undefined;
+    key: string;
+  }): void {
+    // No link, nothing to click. Criterion 2 of this feature is the click
+    // landing on the item, so a notification without one is not worth sending.
+    if (!input.url) return;
+    void (async () => {
+      try {
+        const notifier = await pushNotifier();
+        if (!notifier) return;
+        await notifier.send(
+          reviewItemNotification({ ...input, url: input.url as string, now: Date.now() }),
+        );
+      } catch (err) {
+        console.error(`[push] announce failed: ${(err as Error).message}`);
+      }
+    })();
+  }
+
+  /** Where a comment-borne review item opens. A task discussion opens the
+   *  TICKET — the board reveals the thread from its own state — while a doc
+   *  thread opens the doc at the comment rather than at its top. */
+  function reviewThreadLink(docId: string, threadId: string): string | undefined {
+    const base = threadUrl(docId, false);
+    if (!base) return undefined;
+    if (docId.startsWith('task:')) return base;
+    return `${base}?thread=${encodeURIComponent(threadId)}`;
+  }
+
+  /** What the reader is being asked ABOUT: the ticket's title for a task
+   *  discussion, the doc's label otherwise. Same choice `reviewThreadItems`
+   *  makes when it builds the queue row. */
+  function reviewThreadContext(docId: string): string {
+    if (docId.startsWith('task:')) {
+      const task = taskStore.getTask(docId.slice('task:'.length));
+      if (task) return task.title;
+    }
+    return rooms.get(docId)?.meta.title ?? 'A document';
+  }
+
+  /** One spelling of "a declaration just landed on a comment", for the three
+   *  routes that can carry one. */
+  function announceThreadReview(
+    docId: string,
+    threadId: string,
+    review: ReviewPayload,
+    author: User,
+  ): void {
+    announceReviewItem({
+      ask: review.headline,
+      context: reviewThreadContext(docId),
+      askedBy: author.name,
+      url: reviewThreadLink(docId, threadId),
+      key: `${docId}:${threadId}`,
+    });
+  }
+
+  /** The same, for a declaration that hangs on a TICKET rather than a
+   *  comment. Both land in the reviewer's queue, so both are announced. */
+  function announceTaskReview(task: Task, item: TaskReviewItem, author: User): void {
+    announceReviewItem({
+      ask: item.review.headline,
+      context: task.title,
+      askedBy: author.name,
+      url: `${externalBaseUrl()}${taskDeepLink(task.workspaceId, task.id)}`,
+      key: `${task.id}:${item.id}`,
+    });
   }
   // Every store event rides the existing SSE pipeline on the workspace
   // channel (`ws~<workspaceId>`, the same channel doc thread events use for
@@ -2923,9 +3060,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // refusal here is unreachable and the ticket cannot land holding a
           // question the caller was told was rejected.
           if (parsed.review !== undefined) {
-            taskStore.addReviewItem(res.task.id, parsed.review, {
-              actor: authorFor(body?.author) ?? ANONYMOUS_ACTOR,
-            });
+            const actor = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
+            const added = taskStore.addReviewItem(res.task.id, parsed.review, { actor });
+            if (added.ok) announceTaskReview(added.task, added.item, actor);
             // `createTask` already emitted `task.created` — and therefore
             // already projected this ticket, a moment before it had any
             // review items. `addReviewItem` emits nothing, so without this the
@@ -3076,9 +3213,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // by one and dropped by the other is the "accepted it, returned
             // 200, discarded it" bug this file's header is about.
             if (parsed.review !== undefined) {
-              taskStore.addReviewItem(res.task.id, parsed.review, {
-                actor: createdBy ?? ANONYMOUS_ACTOR,
-              });
+              const actor = createdBy ?? ANONYMOUS_ACTOR;
+              const added = taskStore.addReviewItem(res.task.id, parsed.review, { actor });
+              if (added.ok) announceTaskReview(added.task, added.item, actor);
               attachedReview = true;
             }
             if (parsed.reviewAdvice !== undefined) {
@@ -3359,6 +3496,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
           }
           taskProjection.ensureWorkspace(res.task.workspaceId);
+          announceTaskReview(res.task, res.item, author);
           // `reviewAdvice`, the same key a comment-borne declaration answers
           // with. The divergent `shapeGaps` vocabulary stays exactly where it
           // is for the callers that already read it — this is a new door, and
@@ -3984,6 +4122,55 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // checkout it rebuilds the same bundles, republishes the same client,
         // and prints a successful deploy. See deploy.ts.
         //
+        // --- Push notifications ---
+        //
+        // Three verbs: what key to subscribe against, enrol a device, retire
+        // one. Enrolment is per browser-per-device, so the hub calls these
+        // from a settings toggle rather than at page load.
+        if (pathname === '/api/push/key' && req.method === 'GET') {
+          const notifier = await pushNotifier();
+          return notifier
+            ? j(200, { available: true, publicKey: notifier.publicKey() })
+            : // Named rather than a bare false, because "why is the toggle
+              // greyed out" has exactly one answer worth giving: this origin
+              // is not one a service worker can register on.
+              j(200, { available: false, reason: 'insecure-origin' });
+        }
+        if (pathname === '/api/push/subscriptions' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const user = authorFor(body?.author);
+          if (!user) return j(400, { error: 'author required' });
+          const subscription = body?.subscription as
+            | { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
+            | undefined;
+          if (!subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys.auth) {
+            return j(400, {
+              error: 'subscription with endpoint + keys.p256dh + keys.auth required',
+            });
+          }
+          try {
+            pushStore.save(
+              {
+                endpoint: subscription.endpoint,
+                keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
+              },
+              { userId: user.id, userName: user.name },
+            );
+          } catch (err) {
+            return j(400, { error: (err as Error).message });
+          }
+          return j(200, { ok: true });
+        }
+        if (pathname === '/api/push/subscriptions' && req.method === 'DELETE') {
+          const body = await safeJson(req);
+          const endpoint = body?.endpoint as string | undefined;
+          if (!endpoint) return j(400, { error: 'endpoint required' });
+          // Soft, per the project rule — the row stays with `disabledAt` set,
+          // and re-enabling on this device revives it rather than duplicating.
+          pushStore.disable(endpoint, 'unsubscribed');
+          return j(200, { ok: true });
+        }
+
         // Unlike the refresh above, this one DOES interrupt: it ends this
         // process a moment after answering. That is why the response is sent
         // before the restart fires and why the result is written to disk —
@@ -4466,6 +4653,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 generate: !visitor,
                 ...(declared.review ? { review: declared.review } : {}),
               });
+              if (t && declared.review) announceThreadReview(docId, t.id, declared.review, user);
               const handoff = threadUrl(docId, Boolean(visitor));
               return t
                 ? j(200, {
@@ -4647,6 +4835,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               generate: !visitor,
               ...(declared.review ? { review: declared.review } : {}),
             });
+            if (t && declared.review) announceThreadReview(docId, t.id, declared.review, user);
             const handoff = threadUrl(docId, Boolean(visitor));
             return t
               ? j(200, {
@@ -4680,6 +4869,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Visitor-authored text becomes the entire prompt on this route.
               { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
             );
+            if (res.ok && declared.review) {
+              announceThreadReview(docId, res.thread.id, declared.review, author);
+            }
             const findHandoff = threadUrl(docId, Boolean(visitor));
             return res.ok
               ? j(200, {
