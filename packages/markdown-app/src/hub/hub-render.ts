@@ -141,6 +141,135 @@ function caretOffsetIn(el: HTMLElement, x: number, y: number): number | undefine
 }
 
 /**
+ * Put a collapsed caret at `offset` inside `el`'s text, or at the end when no
+ * offset is given. The editing counterpart of `caretOffsetIn`.
+ *
+ * Reads the selection off the WINDOW rather than the document, deliberately:
+ * several tests stub `document.getSelection` with a bare object to drive the
+ * drag-select guard, and a stub that cannot hold a range must not take the
+ * caret with it. Every capability is checked before it is used, so a DOM that
+ * has no real selection simply leaves the caret wherever focus put it.
+ */
+function placeCaretIn(el: HTMLElement, offset?: number): void {
+  const doc = el.ownerDocument;
+  const sel = doc.defaultView?.getSelection?.();
+  if (!sel || typeof sel.removeAllRanges !== 'function' || typeof sel.addRange !== 'function') {
+    return;
+  }
+  if (typeof doc.createRange !== 'function') return;
+  const node = el.firstChild;
+  const range = doc.createRange();
+  if (node && node.nodeType === Node.TEXT_NODE) {
+    const len = node.textContent?.length ?? 0;
+    range.setStart(node, typeof offset === 'number' ? Math.max(0, Math.min(len, offset)) : len);
+  } else {
+    range.selectNodeContents(el);
+  }
+  range.collapse(typeof offset === 'number' && node !== null);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/** Whether this engine understands `contenteditable="plaintext-only"`. */
+let plaintextOnly: boolean | undefined;
+function editableMode(): 'plaintext-only' | 'true' {
+  if (plaintextOnly === undefined) {
+    plaintextOnly = false;
+    try {
+      const probe = document.createElement('div');
+      probe.contentEditable = 'plaintext-only';
+      plaintextOnly = probe.contentEditable === 'plaintext-only';
+    } catch {
+      // Firefox before 136 THROWS on the unsupported value rather than
+      // ignoring it — and the attribute form is worse there than the throw,
+      // because an unrecognised keyword makes the element inherit instead of
+      // becoming editable at all. So the probe decides, once.
+      plaintextOnly = false;
+    }
+  }
+  return plaintextOnly ? 'plaintext-only' : 'true';
+}
+
+/**
+ * Rename the words WHERE THEY ARE, by making the element that already holds
+ * them editable. Enter commits, Escape or blur cancels.
+ *
+ * This exists rather than reusing `wireInPlaceTitle` because of one
+ * requirement that an `<input>` cannot satisfy structurally (Bryan,
+ * 2026-08-21): *"Entering edit mode must NOT shift the text — zero layout
+ * jump."* Swapping a span for an input means matching font, weight,
+ * line-height, padding, border and baseline between two different box types,
+ * and getting it right today says nothing about the next font change —
+ * `.hub-title-input` currently adds 4px of padding and a 1px border, which is
+ * exactly the 5px sideways jump this replaces. Here the element, its text node
+ * and its box are never replaced at all: one attribute changes. Zero shift is
+ * then a property of the DOM rather than a number two rules have to agree on.
+ *
+ * The second thing it buys is Asana's transition — the hover rectangle is on
+ * this same element, so it can simply turn off while editing and leave the
+ * reader with nothing but a caret in the text they clicked.
+ */
+function wireWordsInPlace(
+  el: HTMLElement,
+  current: () => string,
+  commit: (v: string) => void,
+  onEdit?: (editing: boolean) => void,
+): (caret?: number) => void {
+  let original = '';
+  let editing = false;
+
+  // Listeners are attached ONCE and gated on `editing`, rather than added per
+  // edit and removed on exit: a rename that ends by committing also ends by
+  // blurring, and handlers registered per-edit accumulate a set at a time.
+  const end = (text: string, save: boolean): void => {
+    if (!editing) return;
+    editing = false;
+    el.removeAttribute('contenteditable');
+    el.textContent = text;
+    onEdit?.(false);
+    if (save) commit(text);
+  };
+
+  el.addEventListener('keydown', (ev) => {
+    if (!editing) return;
+    if (ev.key !== 'Enter' && ev.key !== 'Escape') {
+      // Every other key belongs to the edit. The row above listens for `r`
+      // and F2, and this element is a SPAN — the "am I inside a text field"
+      // guards that watch for input/textarea do not cover it.
+      ev.stopPropagation();
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.key === 'Escape') {
+      end(original, false);
+      return;
+    }
+    const v = (el.textContent ?? '').trim();
+    if (v && v !== original) end(v, true);
+    else end(original, false);
+  });
+
+  // Blur cancels: an accidental click away must never rewrite a title.
+  el.addEventListener('blur', () => end(original, false));
+
+  // There is deliberately no paste handler. `plaintext-only` flattens the
+  // clipboard where it applies, and where it does not, both endings read
+  // `el.textContent` — so pasted markup can look wrong for the length of the
+  // edit but can never reach the task. A handler would buy the cosmetic half
+  // at the cost of the native undo stack.
+  return (caret?: number): void => {
+    if (editing) return;
+    original = current();
+    editing = true;
+    el.setAttribute('contenteditable', editableMode());
+    onEdit?.(true);
+    el.focus();
+    placeCaretIn(el, caret);
+  };
+}
+
+/**
  * Swap a title element for an input; Enter commits, Escape or blur cancels
  * (§3.9: tap the title text to edit, Enter commits). Cancel restores the
  * original text — the caller re-renders on commit anyway.
@@ -153,27 +282,17 @@ function caretOffsetIn(el: HTMLElement, x: number, y: number): number | undefine
  * The starter takes a caret offset: a rename entered by clicking the words
  * opens with the cursor on the character that was clicked, and one entered by
  * a key opens with the cursor at the end.
+ *
+ * The goal strip and the task detail panel use this. The task ROW does not —
+ * see `wireWordsInPlace` for why an input cannot serve it.
  */
 function wireInPlaceTitle(
   el: HTMLElement,
   current: () => string,
   commit: (v: string) => void,
   keepKey?: string,
-  opts?: {
-    /** `false` detaches the edit from the element's own click/Enter — the
-     *  caller owns the entry gesture and calls the returned starter. The task
-     *  row uses this so a click on the row can mean "open" while a click on
-     *  the title's own words means "rename" (t-QcOPJhD8_PPN). */
-    selfStart?: boolean;
-    /** How the committed or restored text is put back. The default is a bare
-     *  text node; the task row hands back its own inline element, because
-     *  which element the words live in is what tells a click on them apart
-     *  from a click on the empty half of the title cell. Leaving the edit
-     *  must not quietly flatten that structure. */
-    render?: (text: string) => Node;
-  },
 ): (caret?: number) => void {
-  const put = opts?.render ?? ((text: string): Node => document.createTextNode(text));
+  const put = (text: string): Node => document.createTextNode(text);
   const begin = (caret?: number): void => {
     if (el.querySelector('input')) return;
     const original = current();
@@ -223,23 +342,21 @@ function wireInPlaceTitle(
     });
     input.addEventListener('click', (ce) => ce.stopPropagation());
   };
-  if (opts?.selfStart !== false) {
-    el.addEventListener('keydown', (ev) => {
-      // Only a key pressed on the element ITSELF starts an edit. "Is there an
-      // input here" was the whole guard, and it is a fact that can change
-      // between the key being handled and this handler seeing it bubble.
-      if (ev.target !== el) return;
-      if (el.querySelector('input')) return; // the input owns its own keys
-      if (ev.key !== 'Enter' && ev.key !== 'F2') return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      begin();
-    });
-    el.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      begin(caretOffsetIn(el, ev.clientX, ev.clientY));
-    });
-  }
+  el.addEventListener('keydown', (ev) => {
+    // Only a key pressed on the element ITSELF starts an edit. "Is there an
+    // input here" was the whole guard, and it is a fact that can change
+    // between the key being handled and this handler seeing it bubble.
+    if (ev.target !== el) return;
+    if (el.querySelector('input')) return; // the input owns its own keys
+    if (ev.key !== 'Enter' && ev.key !== 'F2') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    begin();
+  });
+  el.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    begin(caretOffsetIn(el, ev.clientX, ev.clientY));
+  });
   return begin;
 }
 
@@ -883,11 +1000,16 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   }
   handle.addEventListener('click', (ev) => ev.stopPropagation());
 
-  // ── Then the open caret, in the slot the rename pencil used to hold. Asana's
-  // desktop affordance, asked for by name: a caret that appears on hover and
-  // always opens the task. It needs no click handler — the row's own opens,
-  // and this click bubbles into it — so it is a <button> for the cursor and
-  // the hit area rather than for a behaviour of its own.
+  // ── The open caret. Asana's desktop affordance, asked for by name: a caret
+  // that appears on hover and always opens the task. It needs no click handler
+  // — the row's own opens, and this click bubbles into it — so it is a
+  // <button> for the cursor and the hit area rather than for a behaviour of
+  // its own.
+  //
+  // It sits at the RIGHT end, immediately before the assignee bubble (Bryan,
+  // 2026-08-21, twice: not in the gap on the left, and *"right BEFORE the
+  // profile bubble"*). It is appended in that position below, so the reading
+  // order is title · whitespace · caret · bubble.
   //
   // Deliberately NOT a tab stop: Enter on the focused row already opens the
   // task, so a focusable twin would be a stop that says nothing new. That is
@@ -900,6 +1022,13 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   openCaret.tabIndex = -1;
   openCaret.setAttribute('aria-hidden', 'true');
   openCaret.title = 'Open this task';
+  // `tabIndex = -1` keeps it off the tab ring but leaves it CLICK-focusable,
+  // and a button that takes focus on click keeps it after the panel it opened
+  // is closed — measured at 430px: a blue focus ring standing on an
+  // `aria-hidden` glyph, with nothing to do with the row the reader is now on.
+  // Cancelling the mousedown default is the standard way to say "clickable,
+  // never focusable"; the click still fires and still bubbles to the row.
+  openCaret.addEventListener('mousedown', (ev) => ev.preventDefault());
 
   const title = document.createElement('span');
   title.className = 'hub-task-title';
@@ -921,36 +1050,30 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   // CELL as its target, never reaches this child, and bubbles on to the row's
   // open handler.
   let beginRename: ((caret?: number) => void) | null = null;
-  const titleText = (text: string): HTMLElement => {
-    const span = document.createElement('span');
-    span.className = 'hub-task-title-text';
-    span.textContent = text;
-    if (editable) {
-      span.addEventListener('click', (ev) => {
-        // The one click on this row that does not open the task.
-        ev.stopPropagation();
-        if (selectedByThisClick()) return;
-        beginRename?.(caretOffsetIn(span, ev.clientX, ev.clientY));
-      });
-    }
-    return span;
-  };
-  title.append(titleText(task.title));
+  const words = document.createElement('span');
+  words.className = 'hub-task-title-text';
+  words.textContent = task.title;
+  title.append(words);
 
   if (editable) {
     title.title = 'Click the words to rename · anywhere else opens the task';
-    beginRename = wireInPlaceTitle(
-      title,
+    // The words are edited in place — this element becomes editable and is
+    // never swapped for an input, which is what makes entering edit mode cost
+    // zero layout shift. See `wireWordsInPlace`.
+    beginRename = wireWordsInPlace(
+      words,
       () => task.title,
       (v) => handlers.onTitleCommit(task, v),
-      undefined,
-      // The row owns the entry gesture: `selfStart` would put the rename on
-      // the whole cell, which is the half of it that opens. `render` keeps the
-      // words in their own element when an edit ends — a bare text node would
-      // hand the empty-cell click and the on-the-words click back to the same
-      // target until the next board repaint.
-      { selfStart: false, render: titleText },
+      (on) => title.classList.toggle('hub-title-editing', on),
     );
+    words.addEventListener('click', (ev) => {
+      // The one click on this row that does not open the task.
+      ev.stopPropagation();
+      if (selectedByThisClick()) return;
+      // Already editing: this click is the reader moving their own caret, and
+      // `beginRename` no-ops on it. Stopping the bubble above is the whole job.
+      beginRename?.(caretOffsetIn(words, ev.clientX, ev.clientY));
+    });
   } else {
     title.title = 'Tap to open';
   }
@@ -972,7 +1095,7 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   avatar.setAttribute('aria-hidden', 'true');
   ownerCtl.append(avatar, assignee);
 
-  row.append(handle, openCaret, statusCtl, title, taskBadges(task), ownerCtl);
+  row.append(handle, statusCtl, title, taskBadges(task), openCaret, ownerCtl);
 
   row.addEventListener('click', () => {
     if (selectedByThisClick()) return;
@@ -989,8 +1112,10 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
       // Enter stays "open", so nothing races for the same press.
       if (ev.key !== 'F2' && ev.key !== 'r') return;
       // A letter key belongs to whatever is being typed into, not to the row
-      // it happens to sit inside — including this row's own title input.
-      if ((ev.target as HTMLElement).closest('input, textarea, select')) return;
+      // it happens to sit inside. `[contenteditable]` is in the list because
+      // the title being renamed IS one — an editable span, which none of the
+      // usual "is this a text field" selectors match.
+      if ((ev.target as HTMLElement).closest('input, textarea, select, [contenteditable]')) return;
       ev.preventDefault();
       ev.stopPropagation();
       beginRename?.();
