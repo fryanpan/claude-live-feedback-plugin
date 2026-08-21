@@ -121,13 +121,15 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
     const second = await addUnplaced(wsId, 'audit the empty states');
 
     // POSITIVE CONTROL: with the lead live the ask is delivered, not queued.
-    // Live is attached AND reachable — the ask is a broadcast on the
-    // workspace channel, which the MCP joins right after it attaches.
+    // Live is attached AND reachable — and reachable means the LEAD's own
+    // stream, which is why this one names itself on the query string. The ask
+    // is addressed, not broadcast: a stream that did not name an agent is a
+    // browser tab as far as the hub can tell, and never receives it.
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: LEAD,
       runtime: 'claude-code-local',
     });
-    const stream = await openWorkspaceStream(baseUrl, wsId);
+    const stream = await openWorkspaceStream(baseUrl, wsId, {}, LEAD);
     const live = await setGoals(wsId, [{ key: 'g1', title: 'Ship the review surface' }]);
     expect(live.bucketReview?.requested).toBe(true);
     expect(live.bucketReview?.queued).toBe(false);
@@ -264,7 +266,7 @@ describe('a new goal band asks the bucket to be re-looked-at, over HTTP', () => 
 
     const seen: Array<Record<string, unknown>> = [];
     const ctl = new AbortController();
-    const stream = await local(`/events/workspace/${wsId}`, { signal: ctl.signal });
+    const stream = await local(`/events/workspace/${wsId}?agentId=${LEAD}`, { signal: ctl.signal });
     const reader = (stream.body as ReadableStream<Uint8Array>).getReader();
     const dec = new TextDecoder();
     const pump = (async () => {
