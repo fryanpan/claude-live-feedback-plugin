@@ -14113,7 +14113,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.71";
+var PLUGIN_VERSION = "0.1.72";
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -14218,10 +14218,15 @@ var REVIEW_ITEM_SCHEMA = {
   type: "object",
   description: "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
   properties: {
+    review_type: {
+      type: "string",
+      enum: ["decision", "question"],
+      description: "'decision' offers named options to pick between (2-6 required). 'question' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask."
+    },
     shape: {
       type: "string",
       enum: ["decision", "review"],
-      description: "'decision' offers named options to pick between (2-6 required). 'review' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask."
+      description: "Legacy spelling of `review_type` ('review' = 'question'). Accepted forever so old callers keep working; new calls should send `review_type`."
     },
     headline: {
       type: "string",
@@ -14237,11 +14242,11 @@ var REVIEW_ITEM_SCHEMA = {
     },
     detail: {
       type: "string",
-      description: "The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a review."
+      description: "The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a question."
     },
     options: {
       type: "array",
-      description: "For 'decision' only: 2-6 options. Refused on a 'review'.",
+      description: "For 'decision' only: 2-6 options. Refused on a 'question'.",
       items: {
         type: "object",
         properties: {
@@ -14256,7 +14261,7 @@ var REVIEW_ITEM_SCHEMA = {
       }
     }
   },
-  required: ["shape", "headline", "why"]
+  required: ["headline", "why"]
 };
 var TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
@@ -14996,7 +15001,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               properties: {
                 title: {
                   type: "string",
-                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.'
+                  description: 'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. The standard: `<persona> can <do x> so that <goal y>` — ONE persona (Agent, Bryan, Collaborator), 20 words or less so it fits every screen. e.g. "Bryan can review across tasks faster so that review sessions stay short", "Agent can reorder goals so that the board\'s priority stays current". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.'
                 },
                 body: {
                   type: "string",
@@ -15074,7 +15079,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: { type: "string", description: "Hub workspace the task lands in." },
           title: {
             type: "string",
-            description: "Override the drafted title. Worth sending: the drafted one is a clip of somebody’s comment, so it names what was SAID rather than what will be done. The standard is `<Person> can <achieve goal X> by <describe action>`, under 70 characters."
+            description: "Override the drafted title. Worth sending: the drafted one is a clip of somebody’s comment, so it names what was SAID rather than what will be done. The standard is `<persona> can <do x> so that <goal y>`, one persona, 20 words or less."
           },
           body: { type: "string", description: "Override the drafted body." },
           assignee: {
@@ -15218,7 +15223,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           taskId: { type: "string" },
           title: {
             type: "string",
-            description: "The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `claude-workspaces:reviewing-task-shape` skill."
+            description: "The new one-line name. Omit to keep the current one. Aim for `<persona> can <do x> so that <goal y>` — one persona, 20 words or less, never clipped mid-word; the full standard is in the `claude-workspaces:working-in-a-workspace` skill."
           },
           body: {
             type: "string",

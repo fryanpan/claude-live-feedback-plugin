@@ -3755,8 +3755,8 @@ export class TaskStore {
    * The correction loop's trigger. Called after an attributed write of a
    * title or body; the workspace's LEAD is asked to review the row over the
    * same delivery bridge every triage request rides. The JUDGMENT — does
-   * the title read as `<Person> can <achieve goal X> by <action>`, does the
-   * body open with the story — lives in the reviewing skill's prompt, not
+   * the title read as `<persona> can <do x> so that <goal y>`, does the
+   * body open with a problem statement — lives in the reviewing skill's prompt, not
    * here (Bryan, 2026-08-18: the code-written format check moved into an
    * LLM prompt), so EVERY write routes and the reviewer decides fine as-is
    * / rewrite / ask the filer. Decision rows route too: they are exempt

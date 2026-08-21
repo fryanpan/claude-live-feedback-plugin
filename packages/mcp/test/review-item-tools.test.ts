@@ -404,7 +404,7 @@ describe('what the tool schemas tell an agent', () => {
 
   it('reuses ONE review-item schema in the source rather than declaring a second', () => {
     expect(SRC).toContain('...REVIEW_ITEM_SCHEMA');
-    expect(SRC.match(/required: \['shape', 'headline', 'why'\]/g)?.length).toBe(1);
+    expect(SRC.match(/required: \['headline', 'why'\]/g)?.length).toBe(1);
   });
 });
 
