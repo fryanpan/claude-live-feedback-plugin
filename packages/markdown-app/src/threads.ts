@@ -8,7 +8,7 @@ import {
   pendingDeclaration,
   reviewAnswered,
   reviewItemBodyMarkdown,
-  summaryKey,
+  threadRenderKey,
   threadSummary,
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
@@ -252,18 +252,17 @@ export class ThreadPanel {
 
   /** Cheap fingerprint used to short-circuit renders when nothing user-visible changed.
    *
-   *  The topic line is derived from the anchor snippet, which moves when the
-   *  doc is edited — independently of every other term here. Leave it out and
-   *  an edited anchor keeps a stale topic on screen until some unrelated
-   *  change happens to force a repaint. Whatever `threadSummary` reads has to
-   *  be in the key, which is why the key comes from `summaryKey` and not from
-   *  a field picked out here — a generated summary would otherwise arrive
-   *  without moving any term this compares. */
+   *  Every term comes from `threadRenderKey` rather than from fields picked
+   *  out here, and that is the whole point: the two things this panel shows
+   *  which move on their own — a generated summary landing, an answer being
+   *  stamped or taken back — change no count and no clock, so a
+   *  hand-assembled key comes out identical across both and the card never
+   *  repaints. The balloon margin memoizes the same card off the same
+   *  function, so the two cannot drift. */
   private computeKey(): string {
     const parts: string[] = [];
     for (const t of this.threads) {
-      const status = this.statusMap.get(t.id);
-      parts.push(`${t.id}:${status}:${t.commentCount}:${t.lastActivity}:${summaryKey(t)}`);
+      parts.push(threadRenderKey(t));
     }
     // `synced` belongs in the key: the empty state's TEXT depends on it while
     // the thread list stays `[]` either side of the transition, so leaving it

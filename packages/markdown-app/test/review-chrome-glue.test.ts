@@ -1,4 +1,4 @@
-import { type ReviewPayload, createThread } from '@feedback/core';
+import { type ReviewPayload, createThread, setCommentReview } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { MountScope } from '../src/mount-scope.ts';
@@ -118,6 +118,7 @@ function harness(review?: ReviewPayload) {
   chrome.redrawThreads();
   return {
     posts,
+    ydoc,
     setStatus: (s: number, body = '{}') => {
       status = s;
       responseBody = body;
@@ -237,5 +238,39 @@ describe('mountReviewChrome onUndoAnswer — /answer/undo and the race swallow',
     await flush();
     expect(toast().textContent).toBe('Undo failed — try again');
     expect(toast().classList.contains('hidden')).toBe(false);
+  });
+
+  /**
+   * The undo has to LAND on the doc surface, not just on the wire.
+   *
+   * `onUndoAnswer` deliberately keeps no client state — the comment on it
+   * says "the doc's own websocket repaint is what re-renders the thread as
+   * pending again". That was true of the fetch and false of the render: an
+   * undo un-stamps the declaration and touches nothing else, so the panel's
+   * memo key (id, status, commentCount, lastActivity, summary) came out
+   * IDENTICAL either side of it and `render()` short-circuited. Home
+   * repainted (it refetches), the doc kept saying "Answered by you: …" until
+   * a reload — the one surface where the reader had just pressed the button.
+   */
+  it('repaints the card as pending when the undo lands over the socket', () => {
+    const { ydoc } = harness(settled());
+    expect(document.querySelector('#threads-list .thread-answered')).not.toBeNull();
+    // What the server writes on /answer/undo: the four stamps move into
+    // answerHistory and the payload is unanswered again.
+    setCommentReview(ydoc, 't1', 'c1', {
+      ...ask(),
+      answerHistory: [
+        {
+          answeredAt: 1_700_000_000_000,
+          answeredBy: 'U',
+          answerText: 'Alphabetical.',
+          undoneAt: 1_700_000_001_000,
+          undoneBy: 'U',
+        },
+      ],
+    });
+    expect(document.querySelector('#threads-list .thread-answered')).toBeNull();
+    const control = document.querySelector<HTMLElement>('#threads-list .thread-actions button');
+    expect((control?.textContent ?? '').trim()).toBe('Answer');
   });
 });

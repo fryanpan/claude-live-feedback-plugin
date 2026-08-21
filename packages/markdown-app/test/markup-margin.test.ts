@@ -1,4 +1,11 @@
-import { type Thread, type User, createThread, prose, suggestOps } from '@feedback/core';
+import {
+  type Thread,
+  type User,
+  createThread,
+  prose,
+  setCommentReview,
+  suggestOps,
+} from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
@@ -585,6 +592,61 @@ describe('mountMarkupMargin — comment balloons', () => {
     margin.relayout();
 
     expect(topic()).toBe('Alpha bravo');
+  });
+
+  it('repaints when an answer is taken back — nothing else in the key moves', async () => {
+    // The balloon memoizes the same card the drawer does. An undo un-stamps
+    // the declaration and touches nothing else: no comment added, no clock
+    // moved, no summary line changed — so a key built by hand from counts and
+    // timestamps was identical either side of it, and the balloon went on
+    // showing the answered record after the reader pressed Undo.
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      '',
+      'Alpha bravo gamma.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'Which way do you want it?',
+    );
+    const declared = {
+      shape: 'review' as const,
+      headline: 'Pick the rota order',
+      why: 'It goes out Thursday.',
+    };
+    const commentId = (
+      (ydoc.getMap('threads').get(thread.id) as Y.Map<unknown>).get('comments') as Y.Array<
+        Y.Map<unknown>
+      >
+    )
+      .get(0)
+      .get('id') as string;
+    setCommentReview(ydoc, thread.id, commentId, {
+      ...declared,
+      answeredAt: Date.now(),
+      answeredBy: 'Alice',
+      answerText: 'Alphabetical.',
+    });
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => [],
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+    // Positive control: the record really is on the balloon to begin with.
+    expect(parent.querySelector('.lf-balloon-comment .thread-answered')).not.toBeNull();
+
+    setCommentReview(ydoc, thread.id, commentId, declared);
+    margin.relayout();
+
+    expect(parent.querySelector('.lf-balloon-comment .thread-answered')).toBeNull();
   });
 
   it('does not render a balloon for a resolved thread', async () => {
