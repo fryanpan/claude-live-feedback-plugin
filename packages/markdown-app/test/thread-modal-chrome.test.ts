@@ -261,3 +261,123 @@ describe('narrow viewports keep the surface they already have', () => {
     expect(modalOpen()).toBe(false);
   });
 });
+
+/**
+ * Escape means the same thing whichever surface the thread opened on.
+ *
+ * The dialog took Escape from the day it shipped; an inline-expanded card
+ * never had it, so the gesture that dismissed a thread depended on its word
+ * count — under the threshold you had to find the caret, over it you could
+ * press a key. Nothing about the card tells a reader which one they are
+ * looking at.
+ */
+function pressEscape(): void {
+  document.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+  );
+}
+
+describe('Escape dismisses the thread, whatever it opened in', () => {
+  it('collapses a card that expanded in place', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(chrome.threadsPanel.getActive()).toBe('t1');
+    pressEscape();
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+  });
+
+  it('still closes the dialog, and still leaves nothing selected', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: words(LONG_THREAD_WORDS + 20) });
+    tapCard();
+    expect(modalOpen()).toBe(true);
+    pressEscape();
+    expect(modalOpen()).toBe(false);
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+  });
+
+  it('collapses the card before it closes the drawer, innermost first', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    chrome.openDrawer();
+    tapCard();
+    pressEscape();
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+    // One press, one layer. The drawer is still the reader's list.
+    expect(document.getElementById('shell')?.classList.contains('threads-open')).toBe(true);
+    pressEscape();
+    expect(document.getElementById('shell')?.classList.contains('threads-open')).toBe(false);
+  });
+
+  // The control: with nothing expanded, Escape must still reach the drawer on
+  // the first press rather than being swallowed by an empty selection.
+  it('goes straight to the drawer when no card is expanded', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    chrome.openDrawer();
+    pressEscape();
+    expect(document.getElementById('shell')?.classList.contains('threads-open')).toBe(false);
+  });
+});
+
+/**
+ * The floating mic and an open comment card want the same corner.
+ *
+ * Measured at 430px: `.voice-mic` is `position: fixed` bottom-left over the
+ * document, and a thread at that width opens as a FULL-WIDTH inline card whose
+ * reply box reaches the bottom-left too — so the 44px launcher sat on top of
+ * the composer. It is bottom-left precisely to stay out of the deep-work path,
+ * which holds on a wide screen and stops holding when the card is the width of
+ * the viewport.
+ *
+ * The class carries the width test rather than the stylesheet repeating the
+ * 1100px constant: a second copy of that number is exactly the drift this
+ * project has already been bitten by.
+ */
+const micHidden = (): boolean => document.body.classList.contains('thread-card-open');
+
+describe('the doc mic yields to an open card where they would overlap', () => {
+  it('stands down while a card is open at phone width', () => {
+    setViewportWidth(430);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(true);
+  });
+
+  it('comes back when the card folds', () => {
+    setViewportWidth(430);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    tapCard();
+    chrome.threadsPanel.setActive(null);
+    expect(micHidden()).toBe(false);
+  });
+
+  // The control: on a wide screen the card opens in a 300px column nowhere
+  // near the corner, so taking the mic away would be a loss for nothing.
+  it('keeps the mic on a desktop width, where nothing overlaps', () => {
+    setViewportWidth(1180);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(false);
+  });
+
+  it('follows the viewport when it crosses the band with a card open', () => {
+    setViewportWidth(1180);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(false);
+    setViewportWidth(430);
+    window.matchMedia('(max-width: 1100px)').dispatchEvent(new Event('change'));
+    expect(micHidden()).toBe(true);
+  });
+
+  it('leaves nothing stuck on the document after the chrome goes away', () => {
+    setViewportWidth(430);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(true);
+    for (const s of scopes.splice(0)) s.dispose();
+    expect(micHidden()).toBe(false);
+  });
+});

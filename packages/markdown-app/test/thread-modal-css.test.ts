@@ -143,3 +143,32 @@ describe('the modal hides the way the rest of the app hides', () => {
     expect(overrides).not.toContain('.thread-modal');
   });
 });
+
+/**
+ * The stylesheet's half of "the mic yields to an open card".
+ *
+ * The chrome's half — which widths set the class, and when it is dropped — is
+ * in `thread-modal-chrome.test.ts`. This is the half that can silently go
+ * missing: the class would still be applied, and nothing anywhere would move.
+ */
+describe('the floating mic stands down under an open card', () => {
+  // Read off the raw stylesheet rather than through `rule()`: this one rule
+  // deliberately carries two selectors, and the helper matches a single one.
+  it('hides the mic, and the readout that rides above it', () => {
+    const block =
+      /body\.thread-card-open \.voice-mic,\s*body\.thread-card-open \.voice-indicator\s*\{([^}]*)\}/.exec(
+        declarationsOnly(CSS),
+      );
+    expect(block?.[1]).toMatch(/display:\s*none/);
+  });
+
+  // The 1100px band lives in review-chrome.ts and must not be copied here —
+  // a width constant that exists twice is one that drifts. The rule is
+  // unconditional precisely because the class already carries the test.
+  it('states no width of its own', () => {
+    const at = CSS.indexOf('body.thread-card-open');
+    expect(at).toBeGreaterThan(-1);
+    const region = CSS.slice(Math.max(0, at - 400), at);
+    expect(region).not.toMatch(/@media[^{]*max-width:\s*1100px[^{]*\{\s*$/);
+  });
+});

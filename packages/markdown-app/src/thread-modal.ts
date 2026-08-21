@@ -1,4 +1,4 @@
-import { type Thread, threadRenderKey } from '@feedback/core';
+import { type Thread, threadRenderKey, threadSummary } from '@feedback/core';
 import { threadDecision } from './long-thread.ts';
 import { isFoldingTap, sizeThreadSlots, syncFaceVisibility } from './thread-morph.ts';
 
@@ -120,7 +120,15 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     // A slot has no intrinsic height; nothing renders until it is measured,
     // and it can only be measured once it is in the document.
     sizeThreadSlots(bodyEl);
-    titleEl.textContent = threadDecision(t) === 'none' ? 'Comment' : 'Decision';
+    // The dialog covers the document, so the anchor snippet is the one thing
+    // the reader can no longer go and look at — "Comment" told them nothing
+    // they had not just clicked. `threadSummary` is the shared seam every
+    // other surface titles its card from, so the dialog and the balloon it
+    // came out of cannot disagree about what a thread is about. A decision
+    // keeps its kind: there the WHAT outranks the WHERE.
+    // textContent, never innerHTML: a snippet is document text and untrusted.
+    titleEl.textContent =
+      threadDecision(t) === 'none' ? threadSummary(t).topic || 'Comment' : 'Decision';
     renderedKey = threadRenderKey(t);
   }
 

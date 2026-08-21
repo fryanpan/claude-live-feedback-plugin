@@ -13,7 +13,7 @@ import {
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
 import { askedMetaLine } from './hub/hub-model.ts';
-import { threadDecision } from './long-thread.ts';
+import { decisionOutcome, threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
 import {
   isFoldingTap,
@@ -459,6 +459,24 @@ export class ThreadPanel {
       ? 'This thread is waiting on a decision'
       : 'This thread carries a decision that has been answered';
     row.appendChild(flag);
+
+    // WHAT was decided, next to the fact that something was. Reported from a
+    // walkthrough: an answered decision's folded card led with "No replies
+    // yet" — true, since an answer is a payload on the item rather than a
+    // reply, and useless. The outcome was two folds away inside the answered
+    // record, on the detail face. It rides here rather than replacing the
+    // discussion line, whose job is where the conversation GOT TO: a decision
+    // with an answer and three replies still has a last reply worth showing.
+    const outcome = decisionOutcome(t);
+    if (outcome) {
+      const words = span('thread-decision-outcome clip');
+      // Plain text: an answer is a person's words and this row does not escape
+      // them. `clip` ellipsizes whatever the column's real width turns out to
+      // be; `decisionOutcome` has already capped the length.
+      words.textContent = outcome;
+      words.title = outcome;
+      row.appendChild(words);
+    }
     return row;
   }
 

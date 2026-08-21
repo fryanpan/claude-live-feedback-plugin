@@ -573,6 +573,31 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
    * expand authority, it carries the anchor highlight, and it is what makes
    * the card the modal builds render open rather than folded.
    */
+  /**
+   * Tell the document that a comment card is open over it, in the band where
+   * the card is the full width of the viewport.
+   *
+   * One consumer today: the floating hold-to-talk mic. `.voice-mic` is fixed
+   * bottom-LEFT specifically to stay out of the deep-work path, which is true
+   * while the composer is a 300px column on the right and stops being true at
+   * 430px, where the card and its reply box span the screen and the 44px
+   * launcher lands on top of them.
+   *
+   * The CLASS carries the width test and the stylesheet just reads it. A media
+   * query there would be a second copy of the 1100px constant, and a width
+   * constant that exists twice is one this project has already watched drift.
+   */
+  function syncCardOpenClass(activeId: string | null): void {
+    document.body.classList.toggle('thread-card-open', activeId !== null && inlineCardsVisible());
+  }
+  // The class is on <body>, which outlives this chrome — a router swap that
+  // left it set would take the mic away on a page with no card on it.
+  {
+    const drop = () => document.body.classList.remove('thread-card-open');
+    if (opts.scope) opts.scope.onCleanup(drop);
+    else modalCleanups.push(drop);
+  }
+
   function maybeOpenModal(id: string): boolean {
     if (inlineCardsVisible()) return false;
     const t = collectThreads().find((x) => x.id === id);
@@ -592,6 +617,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // own tap handler — so the highlight used to stay lit with no card open.
     onActiveChange: (id) => {
       refreshThreadDecorations(id);
+      syncCardOpenClass(id);
       // The selection moved off whatever the modal is showing — a different
       // thread, or nothing. The modal is a view of ONE thread and the panel's
       // selection is the authority, so it follows rather than argues.
@@ -755,6 +781,9 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // same thread — and page zoom moves a reviewer across this line, so it is
     // not a hypothetical transition.
     if (inlineCardsVisible()) threadModal.close();
+    // Recomputed rather than left alone: the same zoom that moves the tier
+    // decides whether the floating mic and an open card are in each other's way.
+    syncCardOpenClass(threadsPanel.getActive());
   });
 
   // A card's folding slots hold a height we MEASURED, so anything that
@@ -1052,8 +1081,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       openComposer();
     }
     if (ke.key === 'Escape') {
+      // Innermost first, one layer per press. The expanded card sits between
+      // the full-screen thread view and the drawer: the view covers it, and it
+      // is inside the drawer's list. Its branch used to be missing entirely,
+      // so which gesture dismissed a thread depended on its WORD COUNT — over
+      // the threshold it opened as a dialog and Escape worked, under it you
+      // had to find the caret, and nothing about the card says which it is.
+      // The dialog never reaches here: its own handler stops the event
+      // immediately, on this same node.
       if (!composer.classList.contains('hidden')) hideComposer();
       else if (!threadView.classList.contains('hidden')) closeThreadView();
+      else if (threadsPanel.getActive()) threadsPanel.setActive(null);
       else if (shell.classList.contains('threads-open')) closeDrawer();
     }
   });
