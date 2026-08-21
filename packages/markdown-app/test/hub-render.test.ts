@@ -14,6 +14,7 @@ import {
   boardSections,
   clientDriftNotice,
   goalLabel,
+  humanBlockerRows,
   pluginDriftNotice,
   reviewQueue,
   unplacedNotice,
@@ -203,6 +204,22 @@ describe('renderBoard', () => {
       .join(' ');
     expect(badgeText).not.toContain('decision');
     expect(badgeText).not.toContain('action');
+  });
+
+  // Design point 5's board half. The mock added an amber `blocked` row badge
+  // and flagged it as its one invention; the directive keeps the board's
+  // badge discipline, so the blocked state lives in the task PANEL's note and
+  // the row gains nothing.
+  it('adds no blocked badge to a human-owned task other work waits on', () => {
+    const h = handlers();
+    const gate = task({ goal: 'g-pr', assignee: 'human', dueAt: NOW + 86_400_000 });
+    const waiting = task({ goal: 'g-pr', after: [gate.id] });
+    renderBoard(root, boardSections(GOALS, [gate, waiting], filters), h);
+    const row = root.querySelector(`.hub-task-row[data-task-id="${gate.id}"]`);
+    expect(row).not.toBeNull();
+    expect(row?.querySelector('.hub-badge-due')).not.toBeNull(); // control: badges render
+    expect(row?.querySelector('.hub-badge-blocked')).toBeNull();
+    expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toMatch(/blocked/i);
   });
 
   // Display-only flattening. The goal LIST still nests — `boardSections`
@@ -1062,7 +1079,11 @@ describe('renderHomeReview', () => {
     expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
       'Which repo does this land in?',
     );
-    expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe('waiting 2 days');
+    // The subline is the asked-by meta now — one spelling with the card head.
+    expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
+      'Asked by Helper 2 days ago',
+    );
+    expect(rows[0]?.querySelector('.hub-review-row-sub')?.textContent).toBe('Asked moments ago');
     (rows[1] as HTMLElement).click();
     expect(h.onOpen).toHaveBeenCalledTimes(1);
   });
@@ -1152,13 +1173,11 @@ describe('renderHomeReview', () => {
     expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
   });
 
-  // The header is two lines and both of them belong on the surface being
-  // SCANNED. A "why it matters" that is one tap away is not a header — the
-  // queue row is where the reader decides what to open, which is the exact
-  // judgement that line exists to serve.
-  it('puts the declared why on the queue row, not only on the card it opens', () => {
-    // The undeclared note renders too now; it waited less, so it ranks after
-    // the declared item and the declared why is the first row's second line.
+  // ONE anatomy (approved design): the row is title + asked-by meta, and the
+  // why lives in the card's markdown body rather than as a third row line.
+  // Membership is still the SERVER's call, so the undeclared note renders a
+  // row too; it waited less, so the declared item is the one at the top.
+  it('sublines the row with the asked-by meta and renders no separate why line', () => {
     renderHomeReview(
       root,
       reviewQueue([], [threadItem(), note({ since: NOW - 3_600_000 })], NOW),
@@ -1168,8 +1187,9 @@ describe('renderHomeReview', () => {
     );
     const rows = [...root.querySelectorAll('.hub-review-row')];
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.querySelector('.hub-review-row-why')?.textContent).toBe(
-      threadItem().review?.why,
+    expect(rows[0]?.querySelector('.hub-review-row-why')).toBeNull();
+    expect(rows[0]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
+      'Asked by Helper 2 days ago',
     );
   });
 });
@@ -1571,6 +1591,46 @@ describe('renderTaskDetail', () => {
     onTitleCommit: vi.fn(),
     onAnswer: vi.fn(),
     onAssign: vi.fn(),
+  });
+
+  // Design point 5's panel half: the blocked state lives HERE, on the task,
+  // as the amber note under the key fields — not on Home, not in the
+  // walkthrough, not as a row badge.
+  it('shows the blocked note, with the count and the names, when the open task holds work up', () => {
+    const gate = task({ assignee: 'human', title: 'Turn on the tunnel' });
+    const tasks = [
+      gate,
+      task({ title: 'Ship the widget', after: [gate.id] }),
+      task({ title: 'Wire the badge', after: [gate.id] }),
+    ];
+    // The row the app hands down — the same derivation the old Home band used.
+    const row = humanBlockerRows(tasks).find((r) => r.task.id === gate.id);
+    expect(row).toBeDefined(); // the fixture is not vacuous
+    renderTaskDetail(root, gate, { ...detailHandlers(), blocked: row });
+    const note = root.querySelector<HTMLElement>('.hub-blocked-note');
+    expect(note).not.toBeNull();
+    // The chip must agree with the sentence beside it: this task IS the
+    // blocker ("Blocking 2 tasks: …"), so a chip reading "Blocked" would
+    // assert the opposite dependency direction.
+    expect(note?.querySelector('.hub-decide-k')?.textContent).toBe('Blocking');
+    expect(note?.textContent).toContain('Blocking 2 tasks: Ship the widget, Wire the badge');
+    // Under the key fields, above everything else — where the reader looks
+    // for what state the task is in.
+    expect(note?.previousElementSibling?.className).toContain('hub-detail-fields');
+  });
+
+  it('renders no blocked note on an agent task or a task nothing waits on', () => {
+    const agentGate = task({ assignee: 'Helper', title: 'Land the schema change' });
+    const idle = task({ assignee: 'human', title: 'Read the retro' });
+    const tasks = [agentGate, idle, task({ after: [agentGate.id] })];
+    for (const open of [agentGate, idle]) {
+      // Asserted through the same derivation the app uses, not a bare absent
+      // param: neither task earns a row, so the panel is handed nothing.
+      const row = humanBlockerRows(tasks).find((r) => r.task.id === open.id);
+      expect(row).toBeUndefined();
+      renderTaskDetail(root, open, { ...detailHandlers(), blocked: row });
+      expect(root.querySelector('.hub-blocked-note')).toBeNull();
+    }
   });
 
   /**
@@ -2141,9 +2201,11 @@ describe('renderTaskDetail — discussion', () => {
     const desc = root.querySelector('.hub-detail-body');
     expect(desc).toBeTruthy();
     expect(ask!.compareDocumentPosition(desc!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // …and it says who is waiting, and how long they have been.
-    expect(root.querySelector('.hub-decide-meta')?.textContent).toContain('Live Feedback');
-    expect(root.querySelector('.hub-decide-meta')?.textContent).toContain('1h ago');
+    // …and it says who is waiting, and how long they have been — the same
+    // asked-by spelling every card head carries.
+    expect(root.querySelector('.hub-decide-meta')?.textContent).toBe(
+      'Asked by Live Feedback 1 hour ago',
+    );
   });
 
   /** "Answer without leaving the screen you landed on." A button that scrolls
@@ -2177,13 +2239,74 @@ describe('renderTaskDetail — discussion', () => {
   });
 
   /**
-   * Measured on the live board 2026-08-17: 23 review items, **0** of them
-   * `direct` — every one an ellipsis-clipped PR announcement ("Done in PR
-   * #154 — …") presented under a heading that reads as a question. Giving a
-   * status note the words "what we need from you" is the reported defect, so
-   * the heading has to tell the two apart.
+   * The card sits directly under the panel's own `.hub-detail-title`, so a
+   * headline that came out as the ticket title prints the same words twice in
+   * a row — which is the whole of what the reader sees before the body. It is
+   * a real shape and not a contrived one: `panelReviewQueue` falls back to
+   * `task.title` for a decision whose body yields no blurb.
    */
-  it('does not call a status note a question', () => {
+  it('drops a headline that only repeats the ticket title the panel already shows', () => {
+    const t = task({ id: 't-1', title: 'Rename the catch-all band' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({
+        asks: [
+          askItem({
+            review: {
+              shape: 'review' as const,
+              headline: 'Rename the catch-all band',
+              why: 'Two bands answer to the same word and the picker shows both.',
+            },
+          }),
+        ],
+        now: NOW,
+      }),
+      { loading: false, threads: [thread()] },
+    );
+    expect(root.querySelector('.hub-detail-title')?.textContent).toBe('Rename the catch-all band');
+    expect(root.querySelector('.hub-decide-headline')).toBeNull();
+    // Nothing was swallowed with it: the card still carries the why, which is
+    // the condition the drop is gated on.
+    expect(root.querySelector('.hub-decide-body')?.textContent).toContain('Two bands answer');
+  });
+
+  /** The control: a headline that says something the title does not is the
+   *  ordinary case and still renders, so the absence above is a comparison
+   *  rather than a card that stopped drawing its heading. */
+  it('keeps a headline that says more than the ticket title', () => {
+    const t = task({ id: 't-1', title: 'Rename the catch-all band' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({
+        asks: [
+          askItem({
+            review: {
+              shape: 'review' as const,
+              headline: 'Call it Backlog, or something narrower?',
+              why: 'Two bands answer to the same word and the picker shows both.',
+            },
+          }),
+        ],
+        now: NOW,
+      }),
+      { loading: false, threads: [thread()] },
+    );
+    expect(root.querySelector('.hub-decide-headline')?.textContent).toBe(
+      'Call it Backlog, or something narrower?',
+    );
+  });
+
+  /**
+   * The "Flagged for you — not addressed to you by name" heading is gone (mock
+   * direction). It hedged because an item whose `direct` came back false might
+   * not be a question at all — measured on the live board 2026-08-17: 23
+   * review items, **0** of them `direct`. The server decides membership now, so
+   * the row it hedged about does not arrive, and the apology was sitting in the
+   * reader's most prominent line.
+   */
+  it('heads an item nobody was named on with the plain review heading', () => {
     renderTaskDetail(
       root,
       task({ id: 't-1' }),
@@ -2194,19 +2317,14 @@ describe('renderTaskDetail — discussion', () => {
       { loading: false, threads: [thread()] },
     );
     const kicker = root.querySelector('.hub-decide-kicker')?.textContent ?? '';
-    expect(kicker).not.toContain('Waiting on your review');
-    // Says what is TRUE of the flag — nobody is named — rather than the
-    // stronger claim that no question is present, which `direct` cannot
-    // support at 1-in-3 recall.
-    expect(kicker).toContain('not addressed to you by name');
-    expect(kicker).not.toContain('no question');
-    // The words are still shown — labelled honestly, not withheld.
+    expect(kicker).toBe('Waiting on your review');
+    expect(kicker).not.toContain('not addressed to you by name');
+    // The words are still shown — the heading changed, nothing was withheld.
     expect(root.querySelector('.hub-decide-headline')?.textContent).toContain('PR #154');
   });
 
-  /** The positive control for the case above: the same renderer DOES give a
-   *  real question the question heading, so the absence just asserted is a
-   *  decision rather than a renderer that can only produce one string. */
+  /** The pair to the case above: a direct question reads identically, which is
+   *  the point of dropping the third heading rather than an accident of it. */
   it('calls a direct question a question', () => {
     renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [askItem()], now: NOW }), {
       loading: false,
@@ -2239,7 +2357,7 @@ describe('renderTaskDetail — discussion', () => {
     ...over,
   });
 
-  it('renders the declared review payload in the review queue, links and all', () => {
+  it('renders the declared review payload as one markdown body, links and all', () => {
     renderTaskDetail(
       root,
       task({ id: 't-1' }),
@@ -2252,20 +2370,27 @@ describe('renderTaskDetail — discussion', () => {
     const card = root.querySelector('.hub-decide-card');
     expect(card).toBeTruthy();
     expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain('rollup query');
-    // Why it matters — the second half of the two-line header, which the panel
-    // dropped entirely.
-    expect(card?.querySelector('.hub-decide-why')?.textContent).toContain('blocks the nightly job');
-    // What to review for.
-    expect(card?.querySelector('.hub-decide-lookfor')?.textContent).toContain(
-      'drops rows when a session has no events',
-    );
+    // ONE body (approved design): why, lookFor and detail composed as
+    // markdown, no labelled sub-sections and none of the old paragraphs.
+    expect(card?.querySelector('.hub-decide-why')).toBeNull();
+    expect(card?.querySelector('.hub-decide-lookfor')).toBeNull();
+    expect(card?.querySelector('.hub-decide-detail')).toBeNull();
+    const body = card?.querySelector('.hub-decide-body') as HTMLElement;
+    const text = body.textContent ?? '';
+    const why = text.indexOf('blocks the nightly job');
+    const look = text.indexOf('drops rows when a session has no events');
+    expect(why).toBeGreaterThanOrEqual(0);
+    expect(look).toBeGreaterThan(why);
     // The detail is markdown, so the link to the thing under review is a real
-    // link rather than bracket soup — the reason the detail exists at all, and
-    // the half that a plain-text `why + detail` join silently swallowed.
-    const link = card?.querySelector('.hub-decide-detail a') as HTMLAnchorElement | null;
+    // link rather than bracket soup — the reason the detail exists at all.
+    const link = body.querySelector('a') as HTMLAnchorElement | null;
     expect(link).toBeTruthy();
     expect(link?.getAttribute('href')).toBe('https://example.test/pr/12');
     expect(link?.textContent).toBe('the rollup PR');
+    // The head badge is the item's kind, in the new UI vocabulary: a declared
+    // `review` shape reads Question (the class token stays `review`).
+    expect(card?.querySelector('.hub-decide-k')?.textContent).toBe('Question');
+    expect(card?.querySelector('.hub-decide-k')?.className).toContain('hub-decide-k-review');
   });
 
   it('offers a declared item’s options as one-tap answers on its own thread', () => {
@@ -2328,9 +2453,8 @@ describe('renderTaskDetail — discussion', () => {
     expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain(
       'should we drop threading',
     );
-    expect(card?.querySelector('.hub-decide-why')).toBeNull();
-    expect(card?.querySelector('.hub-decide-detail')).toBeNull();
-    expect(card?.querySelector('.hub-decide-lookfor')).toBeNull();
+    // Nothing declared means nothing composed: no body at all, not an empty one.
+    expect(card?.querySelector('.hub-decide-body')).toBeNull();
     expect(card?.querySelectorAll('.hub-decide-option')).toHaveLength(0);
     const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
     expect(form.querySelector('.hub-decide-form-hint')?.textContent).toBe(
@@ -2418,9 +2542,10 @@ describe('renderTaskDetail — discussion', () => {
     expect(declared.querySelector('.hub-comment-review-headline')?.textContent).toBe(
       'Where should the trial banner live?',
     );
-    expect(declared.querySelector('.hub-comment-review-why')?.textContent).toBe(
-      'Blocks the rework; both screens are built either way.',
-    );
+    // The why paragraph is gone from the comment stream — it lives in the
+    // review card at the top of the panel now, and a second copy here was the
+    // duplication the one-card anatomy removes.
+    expect(declared.querySelector('.hub-comment-review-why')).toBeNull();
     // Above the words, not instead of them — the text is what the agent said.
     expect(declared.querySelector('.hub-comment-body')?.textContent).toContain(
       'Both screens are built',
@@ -2492,6 +2617,32 @@ describe('renderTaskDetail — discussion', () => {
       'This assumes the index ships first.',
       undefined,
     );
+  });
+
+  /** Design point 4: every composer is a markdown field with a live preview. */
+  it('the discussion composer is a markdown field', () => {
+    renderTaskDetail(root, task(), detailHandlers(), { loading: false, threads: [] });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    const preview = form.querySelector('.md-preview') as HTMLElement;
+    expect(preview.hidden).toBe(true);
+    ta.value = '**two hops**';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(preview.hidden).toBe(false);
+    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+  });
+
+  it('the review card answer box is a markdown field too', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      detailHandlers({ asks: [askItem({ threadId: 'th-1' })], now: NOW }),
+      { loading: false, threads: [thread({ id: 'th-1' })] },
+    );
+    const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance')).not.toBeNull();
+    expect(form.querySelector('.md-preview')).not.toBeNull();
   });
 
   /**
@@ -3450,6 +3601,177 @@ describe('the panel’s review queue', () => {
         ),
       ).toHaveLength(0);
       expect(panelReviewQueue(task(), undefined)).toHaveLength(0);
+    });
+
+    /**
+     * The answered record stays IN the panel (approved design): a declared
+     * item somebody answered renders below the open ones as the record —
+     * "Answered by …" with a persistent Undo — read off the declaring
+     * comment's own stamps, which is the only place they survive a reload.
+     */
+    it('admits an answered declared item from the discussion, ranked after the open ones', () => {
+      const t = task({ id: 't-1' });
+      const q = panelReviewQueue(t, [ask({ threadId: 'th-open' })], {
+        loading: false,
+        threads: [
+          {
+            id: 'th-done',
+            comments: [
+              {
+                id: 'c-9',
+                author: 'Harbor agent',
+                text: 'Both screens are built.',
+                ts: NOW - 7_200_000,
+                review: {
+                  shape: 'decision',
+                  headline: 'Where should the banner live?',
+                  why: 'Blocks the rework.',
+                  answeredAt: NOW - 3_600_000,
+                  answeredBy: 'Jordan',
+                  answerText: 'Keep it above the fold',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(q.map((i) => i.id)).toEqual(['thread:th-open', 'answered:th-done:c-9']);
+      const done = q[1];
+      expect(done?.answered).toEqual({
+        by: 'Jordan',
+        text: 'Keep it above the fold',
+        at: NOW - 3_600_000,
+      });
+      expect(done?.commentId).toBe('c-9');
+      expect(done?.threadId).toBe('th-done');
+    });
+
+    it('does not admit an unanswered declared comment twice, nor a plain comment at all', () => {
+      const t = task({ id: 't-1' });
+      const q = panelReviewQueue(t, [ask({ threadId: 'th-open' })], {
+        loading: false,
+        threads: [
+          {
+            id: 'th-open',
+            comments: [
+              {
+                id: 'c-1',
+                author: 'Harbor agent',
+                text: 'Asked here.',
+                ts: NOW - 7_200_000,
+                // Unanswered declaration: the asks row already carries it.
+                review: { shape: 'review', headline: 'Read this', why: 'Ships Friday.' },
+              },
+              { id: 'c-2', author: 'Jordan', text: 'Reading now.', ts: NOW - 3_600_000 },
+            ],
+          },
+        ],
+      });
+      expect(q.map((i) => i.id)).toEqual(['thread:th-open']);
+    });
+  });
+
+  describe('the answered record in place, with its persistent Undo', () => {
+    const answeredThread = (over: Record<string, unknown> = {}) => ({
+      id: 'th-done',
+      comments: [
+        {
+          id: 'c-9',
+          author: 'Harbor agent',
+          text: 'Both screens are built.',
+          ts: NOW - 7_200_000,
+          review: {
+            shape: 'decision' as const,
+            headline: 'Where should the banner live?',
+            why: 'Blocks the rework.',
+            answeredAt: NOW - 3_600_000,
+            answeredBy: 'Jordan',
+            answerText: 'Keep it **above** the fold',
+            ...over,
+          },
+        },
+      ],
+    });
+
+    it('renders the record under the item card it answers, marked Answered', () => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        handlers({ selfName: 'Jordan', onUndoThreadAnswer: vi.fn() }),
+        { loading: false, threads: [answeredThread()] },
+      );
+      const card = shown();
+      expect(card?.dataset.reviewItemId).toBe('answered:th-done:c-9');
+      // The item interface first: head row and body, same anatomy as an open one.
+      expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain(
+        'Where should the banner live?',
+      );
+      expect(card?.querySelector('.hub-decide-body')?.textContent).toContain('Blocks the rework.');
+      // The record, in place: "Answered by you" for the reader's own answer,
+      // rendered markdown-inline.
+      const rec = card?.querySelector('.hub-detail-answered') as HTMLElement;
+      expect(rec.textContent).toContain('Answered by you');
+      expect(rec.textContent).toContain('Keep it above the fold');
+      expect(rec.querySelector('strong')?.textContent).toBe('above');
+      // No composer and no options on a settled item — the record replaces them.
+      expect(card?.querySelector('.hub-decide-form')).toBeNull();
+      expect(card?.querySelectorAll('.hub-decide-option')).toHaveLength(0);
+      // The kicker says what this card is.
+      expect(root.querySelector('.hub-decide-kicker')?.textContent).toBe('Answered');
+    });
+
+    it("names the answerer when it wasn't you", () => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        handlers({ selfName: 'Sam', onUndoThreadAnswer: vi.fn() }),
+        { loading: false, threads: [answeredThread()] },
+      );
+      expect(shown()?.querySelector('.hub-detail-answered')?.textContent).toContain(
+        'Answered by Jordan',
+      );
+    });
+
+    it('wires the persistent Undo to the thread-answer undo handler', () => {
+      const onUndoThreadAnswer = vi.fn().mockResolvedValue(true);
+      const t = task({ id: 't-1' });
+      renderTaskDetail(root, t, handlers({ selfName: 'Jordan', onUndoThreadAnswer }), {
+        loading: false,
+        threads: [answeredThread()],
+      });
+      const undo = shown()?.querySelector('.hub-detail-undo-answer') as HTMLButtonElement;
+      expect(undo).toBeTruthy();
+      undo.click();
+      expect(onUndoThreadAnswer).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't-1' }),
+        expect.objectContaining({ commentId: 'c-9', threadId: 'th-done' }),
+      );
+    });
+
+    it('falls back to the tapped option label when a legacy answer has no text', () => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        handlers({ selfName: 'Jordan', onUndoThreadAnswer: vi.fn() }),
+        {
+          loading: false,
+          threads: [
+            answeredThread({
+              answeredBy: undefined,
+              answerText: undefined,
+              answeredAt: undefined,
+              answeredWith: 'above',
+              options: [
+                { id: 'above', label: 'Keep above' },
+                { id: 'below', label: 'Move below' },
+              ],
+            }),
+          ],
+        },
+      );
+      const rec = shown()?.querySelector('.hub-detail-answered') as HTMLElement;
+      expect(rec.textContent).toContain('Answered');
+      expect(rec.textContent).toContain('Keep above');
     });
   });
 

@@ -1,13 +1,19 @@
 import {
   type Comment,
   type Participants,
+  type ReviewPayload,
   type Thread,
   type User,
   formatTime,
-  summaryKey,
+  pendingDeclaration,
+  reviewAnswered,
+  reviewItemBodyMarkdown,
+  threadRenderKey,
   threadSummary,
 } from '@feedback/core';
-import { renderCommentMarkdown } from './comment-markdown.ts';
+import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
+import { askedMetaLine } from './hub/hub-model.ts';
+import { attachMarkdownField } from './md-field.ts';
 import {
   isFoldingTap,
   morphThread,
@@ -28,7 +34,39 @@ export interface ThreadPanelOpts {
   container: HTMLElement;
   currentUser: User;
   onThreadClick: (threadId: string) => void;
-  onReply: (threadId: string, text: string) => void;
+  /**
+   * `answersCommentId` is set when this reply ANSWERS a review item declared
+   * in the thread — the doc's half of the same contract Home already keeps.
+   * The chrome routes those through `/answer` so the item leaves the queue;
+   * without an id it posts a plain comment, which is what a thread with
+   * nothing outstanding should do.
+   *
+   * `optionId` rides along when the answer came from TAPPING one of a
+   * decision's offered options — provenance only, same contract as the hub:
+   * the answer is always the verbatim `text`, and a typed answer sending no
+   * id is not answering any less.
+   *
+   * The return value says whether the post LANDED: resolve `false` and the
+   * panel puts the typed words back in the box (every hub composer restores
+   * verbatim on refusal; this one used to clear first and toast 'try again'
+   * over an empty textarea). Anything else — `true`, `undefined`, a
+   * fire-and-forget handler — means posted. Typed `unknown` rather than a
+   * union with `void`, so existing handlers that return nothing stay valid.
+   */
+  onReply: (
+    threadId: string,
+    text: string,
+    answersCommentId?: string,
+    optionId?: string,
+  ) => unknown;
+  /**
+   * Take a recorded answer back. `commentId` names the declaring comment the
+   * stamps live on; the chrome routes it through `/answer/undo`, which moves
+   * them into `answerHistory` (soft delete) and re-offers the item on every
+   * queue. Optional because read-only surfaces render the record without
+   * offering a button that could only fail.
+   */
+  onUndoAnswer?: (threadId: string, commentId: string) => void;
   onResolve: (threadId: string) => void;
   onReopen: (threadId: string) => void;
   onReanchor: (threadId: string) => void;
@@ -214,18 +252,17 @@ export class ThreadPanel {
 
   /** Cheap fingerprint used to short-circuit renders when nothing user-visible changed.
    *
-   *  The topic line is derived from the anchor snippet, which moves when the
-   *  doc is edited — independently of every other term here. Leave it out and
-   *  an edited anchor keeps a stale topic on screen until some unrelated
-   *  change happens to force a repaint. Whatever `threadSummary` reads has to
-   *  be in the key, which is why the key comes from `summaryKey` and not from
-   *  a field picked out here — a generated summary would otherwise arrive
-   *  without moving any term this compares. */
+   *  Every term comes from `threadRenderKey` rather than from fields picked
+   *  out here, and that is the whole point: the two things this panel shows
+   *  which move on their own — a generated summary landing, an answer being
+   *  stamped or taken back — change no count and no clock, so a
+   *  hand-assembled key comes out identical across both and the card never
+   *  repaints. The balloon margin memoizes the same card off the same
+   *  function, so the two cannot drift. */
   private computeKey(): string {
     const parts: string[] = [];
     for (const t of this.threads) {
-      const status = this.statusMap.get(t.id);
-      parts.push(`${t.id}:${status}:${t.commentCount}:${t.lastActivity}:${summaryKey(t)}`);
+      parts.push(threadRenderKey(t));
     }
     // `synced` belongs in the key: the empty state's TEXT depends on it while
     // the thread list stays `[]` either side of the transition, so leaving it
@@ -355,9 +392,18 @@ export class ThreadPanel {
     // may address a card by a document-unique id — drive them all from this.
     el.setAttribute('data-thread-id', t.id);
 
+    // Which comment's declaration the full item card will carry — the
+    // outstanding ask when there is one, else the latest declaration (whose
+    // answered record is what the reader should meet). Computed HERE, above
+    // both slots, because it is what tells the rest of the card not to state
+    // the same question a second time: the card already says the kind, the
+    // headline and the why in full.
+    const pending = pendingDeclaration(t);
+    const itemComment = pending ?? latestDeclaredComment(t.comments);
+
     el.appendChild(this.head(t, status));
-    el.appendChild(this.slotA(t, summary.topic));
-    el.appendChild(this.slotB(t, summary, status, pendingReply));
+    el.appendChild(this.slotA(t, summary.topic, itemComment?.id));
+    el.appendChild(this.slotB(t, summary, status, { pending, itemComment, pendingReply }));
     el.appendChild(this.foot(t, status));
     syncFaceVisibility(el, this.activeId === t.id);
 
@@ -434,7 +480,7 @@ export class ThreadPanel {
   }
 
   /** Slot A: the topic line becomes the opening message, in place. */
-  private slotA(t: Thread, topic: string): HTMLElement {
+  private slotA(t: Thread, topic: string, itemCommentId?: string): HTMLElement {
     const topicEl = div('thread-topic clip');
     // Plain text, never HTML: the snippet is doc content, untrusted.
     topicEl.textContent = topic;
@@ -444,10 +490,15 @@ export class ThreadPanel {
     // only emits a fixed safe tag set, so innerHTML is safe here.
     msg.innerHTML = renderCommentMarkdown(t.comments[0]?.text ?? '');
 
-    // A thread whose OPENING comment declared reads as a request from the
-    // collapsed card, without opening it — which is the state this pane is in
-    // most of the time.
-    const header = reviewHeader(t.comments[0]?.review);
+    // The banner an opening declaration carries — SUPPRESSED when slot B's
+    // item card is already carrying this same declaration, which is the usual
+    // case for a declared thread. Both render the kind chip, the headline and
+    // the why, so leaving both in place stated the question twice and pushed
+    // the interface that answers it below the fold. Kept for a declaration no
+    // card is showing (a superseded ask, still part of the history): there,
+    // nothing else says it was ever asked.
+    const opening = t.comments[0];
+    const header = opening && opening.id !== itemCommentId ? reviewHeader(opening.review) : null;
     return slot('slot-a', [topicEl], header ? [header, msg] : [msg]);
   }
 
@@ -460,8 +511,15 @@ export class ThreadPanel {
       participants: Participants | null;
     },
     status: 'open' | 'resolved' | 'orphan',
-    pendingReply?: string,
+    item: {
+      /** The outstanding ask by the shared rule, or null. */
+      pending: Comment | null;
+      /** Whose declaration the item card carries, pending or settled. */
+      itemComment: Comment | undefined;
+      pendingReply?: string;
+    },
   ): HTMLElement {
+    const { pending, itemComment, pendingReply } = item;
     const summaryFace: HTMLElement[] = [];
     // The only row that comes and goes — with nobody but the author in the
     // thread there is nobody to list. Both LINES are always rendered.
@@ -473,18 +531,48 @@ export class ThreadPanel {
     summaryFace.push(discussion);
 
     const comments = div('comments');
-    for (const c of t.comments.slice(1)) comments.appendChild(commentRow(c));
+    // Same suppression as slot A, one row further down: a reply that declared
+    // the ask the item card is carrying must not repeat its chip, headline and
+    // why in the history directly beneath the card that just said them.
+    for (const c of t.comments.slice(1))
+      comments.appendChild(commentRow(c, c.id === itemComment?.id));
 
     const reply = div('thread-reply');
+    // The ask these words will answer, if there is one. `pendingDeclaration`
+    // (computed by the caller, above both slots) is the SAME rule the server's
+    // queue reads (core exports one copy): newest declaration wins, ts order
+    // not array order, and a resolved thread has nothing pending. Anything
+    // looser here offers an Answer composer for an item no queue is showing —
+    // answering it stamps a comment Home never offered.
+    const answering = pending?.id;
+    if (answering) reply.classList.add('answering');
     const ta = document.createElement('textarea');
     ta.rows = 2;
-    ta.placeholder = `Reply as ${this.opts.currentUser.name}…`;
+    ta.placeholder = answering
+      ? `Answer as ${this.opts.currentUser.name}…`
+      : `Reply as ${this.opts.currentUser.name}…`;
     if (pendingReply) ta.value = pendingReply;
+    reply.appendChild(ta);
+    // Every composer speaks markdown (design point 4); refresh covers the
+    // programmatic clear below, which fires no `input` event.
+    const refreshPreview = attachMarkdownField(ta);
     const submitReply = () => {
       const text = ta.value.trim();
       if (!text) return;
-      this.opts.onReply(t.id, text);
+      const posted = this.opts.onReply(t.id, text, answering);
       ta.value = '';
+      refreshPreview();
+      // A refused post hands the words back — the chrome's 'try again' toast
+      // must never point at an empty box. Only while the box is still empty,
+      // though: restoring over words typed since would stomp them.
+      void Promise.resolve(posted)
+        .catch(() => false)
+        .then((ok) => {
+          if (ok === false && ta.value === '') {
+            ta.value = text;
+            refreshPreview();
+          }
+        });
     };
     ta.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
@@ -492,9 +580,8 @@ export class ThreadPanel {
         submitReply();
       }
     });
-    reply.appendChild(ta);
     const actions = div('thread-actions');
-    actions.appendChild(btn('Reply', 'primary', submitReply));
+    actions.appendChild(btn(answering ? 'Answer' : 'Reply', 'primary', submitReply));
     // Resolve/Reopen is NOT here — one control, in the foot, outside the
     // slots. Re-anchoring is a repair, not a reply, and belongs with the
     // conversation it is repairing.
@@ -503,7 +590,137 @@ export class ThreadPanel {
     }
     reply.appendChild(actions);
 
-    return slot('slot-b', summaryFace, [comments, reply]);
+    // A thread that carries a review item IS the review item (approved
+    // design, review-flow-mock-v1; Bryan verbatim: "if I open a comment that
+    // has one or more review items in it, I should get the full review item
+    // interface, with the comment history secondary"). The full item card
+    // renders FIRST, the conversation drops below an "Earlier in this
+    // thread" label, and while the item is pending the one composer is the
+    // card's answer box. Once settled the card holds the answered record and
+    // the composer returns to its usual place as a plain Reply.
+    const detailFace: Node[] = [];
+    if (itemComment?.review) {
+      const card = this.itemCard(t, itemComment, itemComment.review, pending !== null);
+      if (answering) card.append(reply);
+      detailFace.push(card);
+      if (t.comments.length > 1) {
+        const label = div('thread-history-label');
+        label.textContent = 'Earlier in this thread';
+        detailFace.push(label);
+      }
+      detailFace.push(comments);
+      if (!answering) detailFace.push(reply);
+    } else {
+      detailFace.push(comments, reply);
+    }
+    return slot('slot-b', summaryFace, detailFace);
+  }
+
+  /**
+   * The FULL review-item interface, in the thread that carries it: the same
+   * one-card anatomy as the hub's walkthrough and task panel — head row (kind
+   * badge, headline, asked-by meta), one markdown body — then the ways to
+   * answer, or the answered record once somebody has. Thread-scoped class
+   * names, hub anatomy: the vocabulary must read as one component wherever an
+   * item is met.
+   */
+  private itemCard(t: Thread, c: Comment, review: ReviewPayload, pending: boolean): HTMLElement {
+    const card = div('thread-item-card');
+    const head = div('thread-item-head');
+    // New UI text says Question; the class token stays `review` (stored
+    // vocabulary and tone classes are unchanged by the rename in flight).
+    const decision = review.shape === 'decision';
+    const kind = span(`thread-item-k thread-item-k-${decision ? 'decision' : 'review'}`);
+    kind.textContent = decision ? 'Decision' : 'Question';
+    head.append(kind);
+    const headline = document.createElement('p');
+    headline.className = 'thread-item-headline';
+    // Plain text, never HTML: the headline is agent-supplied and the API
+    // takes it as a single-line string, not markdown.
+    headline.textContent = review.headline;
+    head.append(headline);
+    const meta = document.createElement('p');
+    meta.className = 'thread-item-meta';
+    // A declaration IS an ask, so this always reads "Asked" — same judgment
+    // the hub's `askedMeta` records for declared items. The clock is the
+    // declaring comment's, which is when the question was put.
+    meta.textContent = askedMetaLine(c.author.name, true, c.ts, Date.now());
+    head.append(meta);
+    card.append(head);
+
+    // ONE body: why + lookFor + detail composed as markdown, same join as
+    // every other surface (`reviewItemBodyMarkdown`).
+    const bodyMarkdown = reviewItemBodyMarkdown(review);
+    if (bodyMarkdown !== '') {
+      const body = div('thread-item-body');
+      // Agent-supplied, untrusted; renderCommentMarkdown escapes first and
+      // only re-adds a fixed safe tag set.
+      body.innerHTML = renderCommentMarkdown(bodyMarkdown);
+      card.append(body);
+    }
+
+    if (reviewAnswered(review)) {
+      card.append(this.answeredRecord(t, c, review));
+      return card;
+    }
+
+    // Tappable options only while the item is actually PENDING by the shared
+    // rule. A retired ask (its thread resolved, or a newer declaration
+    // answered over it) keeps its card as a record, but offering its options
+    // would answer an item no queue is showing.
+    if (pending && review.options && review.options.length > 0) {
+      const opts = div('thread-item-options');
+      for (const o of review.options) {
+        const b = btn('', 'thread-item-option', () =>
+          // The tap answers with the option's VERBATIM label — the id is
+          // provenance the chrome forwards to `/answer`, never the answer.
+          this.opts.onReply(t.id, o.label, c.id, o.id),
+        );
+        const label = span('thread-item-option-label');
+        label.textContent = o.label;
+        b.append(label);
+        if (o.detail) {
+          const detail = span('thread-item-option-detail');
+          detail.textContent = o.detail;
+          b.append(detail);
+        }
+        opts.append(b);
+      }
+      card.append(opts);
+    }
+    return card;
+  }
+
+  /**
+   * The answered RECORD, directly below the item it answers: the same shape a
+   * tapped option and a typed answer produce everywhere — "Answered by you:
+   * …" and a persistent Undo. "you" when the reader answered; the words
+   * render markdown-inline because they are a comment's words. Undo is the
+   * recovery path for a single unconfirmed tap, so it persists rather than
+   * expiring with a toast.
+   */
+  private answeredRecord(t: Thread, c: Comment, review: ReviewPayload): HTMLElement {
+    const wrap = div('thread-answered');
+    const line = document.createElement('p');
+    line.className = 'thread-answered-line';
+    const by = review.answeredBy;
+    const who = by !== undefined && by === this.opts.currentUser.name ? 'you' : by;
+    line.append(document.createTextNode(who ? `Answered by ${who}: “` : 'Answered: “'));
+    const words = span('thread-answer-words');
+    // A legacy tapped answer may predate `answerText`; the tapped option's
+    // label is the verbatim words it recorded.
+    const answerText =
+      review.answerText ?? review.options?.find((o) => o.id === review.answeredWith)?.label ?? '';
+    words.innerHTML = renderCommentMarkdownInline(answerText);
+    line.append(words, document.createTextNode('”'));
+    wrap.append(line);
+    if (this.opts.onUndoAnswer) {
+      const undo = btn('Undo', 'thread-answer-undo', () => this.opts.onUndoAnswer?.(t.id, c.id));
+      undo.title = 'Take this answer back — it reopens the item and keeps a record';
+      undo.setAttribute('aria-label', 'Undo this answer and reopen the review item');
+      wrap.append(undo);
+    }
+    return wrap;
   }
 
   /** Row 4: how much conversation there is, and the one resolve control. */
@@ -599,8 +816,14 @@ function reviewHeader(review: Comment['review']): HTMLElement | null {
   return box;
 }
 
-/** One reply, in slot B's detail face. The opening message is slot A's. */
-function commentRow(c: Comment): HTMLElement {
+/**
+ * One reply, in slot B's detail face. The opening message is slot A's.
+ *
+ * `carriedByItemCard` says the item card above this row is already stating
+ * this comment's declaration in full, so the row shows the words and not a
+ * second copy of the ask.
+ */
+function commentRow(c: Comment, carriedByItemCard = false): HTMLElement {
   const row = div(c.review ? 'comment comment-declared' : 'comment');
   const authorRow = div('author');
   const swatch = span('swatch');
@@ -617,7 +840,7 @@ function commentRow(c: Comment): HTMLElement {
   // only emits a fixed safe tag set, so innerHTML is safe here.
   body.innerHTML = renderCommentMarkdown(c.text);
 
-  const header = reviewHeader(c.review);
+  const header = carriedByItemCard ? null : reviewHeader(c.review);
   // Above the words, not instead of them: the text is what the agent said,
   // the declaration is what it is asking for.
   row.append(authorRow, ...(header ? [header] : []), body);
@@ -631,6 +854,20 @@ function btn(label: string, cls: string, on: () => void): HTMLButtonElement {
   b.textContent = label;
   b.addEventListener('click', on);
   return b;
+}
+
+/**
+ * The newest declared comment in the thread, answered or not — the one whose
+ * card (and, once settled, whose record) the reader should meet. Newest by
+ * ts, for the same reason `pendingDeclaration` sorts: a later ask supersedes
+ * an earlier one, and a Yjs array's order is a merge order, not a clock.
+ */
+function latestDeclaredComment(comments: ReadonlyArray<Comment>): Comment | undefined {
+  const byTime = [...comments].sort((a, b) => a.ts - b.ts);
+  for (let i = byTime.length - 1; i >= 0; i -= 1) {
+    if (byTime[i]?.review) return byTime[i];
+  }
+  return undefined;
 }
 
 function sortByActivity(ts: Thread[]): Thread[] {

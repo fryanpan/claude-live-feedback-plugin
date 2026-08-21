@@ -167,9 +167,7 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
     renderHomeReview(root, queue, strip());
     const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
     expect(
-      rows.map(
-        (c) => c.className.match(/hub-review-(?:decision|task-thread|doc-thread|blocker)/)?.[0],
-      ),
+      rows.map((c) => c.className.match(/hub-review-(?:decision|task-thread|doc-thread)/)?.[0]),
     ).toEqual(['hub-review-decision', 'hub-review-task-thread', 'hub-review-doc-thread']);
     expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
       'Which repo does this land in?',
@@ -191,7 +189,7 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
   });
 });
 
-describe('the blocker band — a person’s own task, holding agent work up', () => {
+describe('a blocker is task state — off Home, out of the walkthrough (design point 5)', () => {
   /** A human task with `n` open tasks waiting on it. */
   function blocked(over: Partial<HubTask> = {}, n = 1): HubTask[] {
     const gate = task({ assignee: 'human', title: 'Turn on the tunnel', ...over });
@@ -201,73 +199,44 @@ describe('the blocker band — a person’s own task, holding agent work up', ()
     return [gate, ...waits];
   }
 
-  it('marks the row as its own kind and says how much is waiting', () => {
-    const onOpen = vi.fn();
-    renderHomeReview(root, q0(blocked({}, 2)), strip({ onOpen }));
-    const row = root.querySelector('.hub-review-row') as HTMLElement;
-    expect(row.className).toContain('hub-review-blocker');
-    expect(row.textContent).toContain('Turn on the tunnel');
-    // The count is read off the edges, the same as a decision row's.
-    expect(row.title).toContain('Blocking 2 tasks');
-    row.click();
-    expect(onOpen).toHaveBeenCalledTimes(1);
+  // A blocker was never a question. Its place is on the TASK — the panel's
+  // amber note — not in a queue whose promise is "things you can clear from
+  // here".
+  it('renders no Home row for a human task other work waits on', () => {
+    // Positive control in the same render: a decision row still appears.
+    const d = decision({ title: 'Blue or green?' });
+    renderHomeReview(root, q0([...blocked({}, 2), d]), strip());
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain('Blue or green?');
+    expect(root.textContent).not.toContain('Turn on the tunnel');
+    expect(root.querySelector('.hub-review-blocker')).toBeNull();
   });
 
-  // Criterion 3 at the surface: widening the band to every human task is the
-  // easy wrong fix, and it shows up here as a strip full of personal backlog.
-  it('a human task nothing waits on never reaches the queue', () => {
-    // Presence first: with an edge, the section carries a row.
-    renderHomeReview(root, q0(blocked()), strip());
-    expect(root.querySelectorAll('.hub-review-row').length).toBeGreaterThan(0);
-    renderHomeReview(root, q0([task({ assignee: 'human', title: 'Read the retro' })]), strip());
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(0);
-    expect(root.textContent).not.toContain('Read the retro');
+  it('does not count a blocker in the blocking number or the total', () => {
+    const alone = q0(blocked({}, 2));
+    expect(alone.total).toBe(0);
+    expect(alone.blocking).toBe(0);
+    // Positive control: a decision with a dependent still counts.
+    const d = decision({ title: 'Blue or green?' });
+    const q = reviewQueue([...blocked({}, 2), d, task({ after: [d.id] })], [], NOW);
+    expect(q.total).toBe(1);
+    expect(q.blocking).toBe(1);
   });
 
-  it('counts as blocking work now, not as something that can wait', () => {
-    const queue = q0(blocked());
-    expect(queue.blocking).toBe(1);
-    renderHomeReview(root, queue, strip());
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
-  });
-
-  // There is no question on a task, so the decision furniture must not appear:
-  // an answer box here would write an `answer` onto work that was never asked.
-  it('walks a blocker without offering to answer it', () => {
-    const onOpenItem = vi.fn();
-    const onStep = vi.fn();
-    const q = q0(blocked({}, 2));
-    renderReviewWalkthrough(root, q, 0, walk({ onOpenItem, onStep }));
-    // Presence first: it IS a card, with the blocks line and the kind on it.
-    const card = root.querySelector('.hub-walk-card') as HTMLElement;
-    expect(card.className).toContain('hub-walk-blocker');
-    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
-      'Turn on the tunnel',
-    );
-    const ctx = root.querySelector('.hub-walk-ctx') as HTMLElement;
-    expect(ctx.textContent).toContain('blocks');
-    expect(ctx.textContent).toContain('Waiting 1');
-    expect(root.querySelector('.hub-walk-answer')).toBeNull();
-    expect(root.querySelector('.hub-walk-info')).toBeNull();
-    expect(root.querySelector('.hub-walk-options')).toBeNull();
-
-    // The way out, and the nav — going through the list must not stop here.
-    const open = root.querySelector('.hub-walk-open') as HTMLElement;
-    expect(open.textContent).toContain('task');
-    open.click();
-    expect(onOpenItem).toHaveBeenCalledWith(q.items[0]);
-    (root.querySelector('.hub-walk-skip') as HTMLElement).click();
-    expect(onStep).toHaveBeenCalledWith(1);
-  });
-
-  it('shows the task’s own description, and says so when there is none', () => {
-    const q = q0(blocked({ body: 'Needs a **cert** first.' }));
+  it('never renders a blocker card in the walkthrough', () => {
+    const d = decision({ title: 'Blue or green?' });
+    const q = reviewQueue([...blocked({}, 2), d], [], NOW);
+    expect(q.items).toHaveLength(1);
     renderReviewWalkthrough(root, q, 0, walk());
-    expect((root.querySelector('.hub-walk-body') as HTMLElement).innerHTML).toContain(
-      '<strong>cert</strong>',
-    );
-    renderReviewWalkthrough(root, q0(blocked()), 0, walk());
-    expect(root.querySelector('.hub-walk-body-empty')).not.toBeNull();
+    // The one card is the decision — there is no blocker card to step onto.
+    expect(root.querySelector('.hub-walk-card')?.className).toContain('hub-walk-decision');
+    expect(root.querySelector('.hub-walk-blocker')).toBeNull();
+    expect(root.querySelector('.hub-walk-open')).toBeNull();
+    // A board holding ONLY a blocker walks straight to the done state.
+    renderReviewWalkthrough(root, q0(blocked({}, 2)), 0, walk());
+    expect(root.querySelector('.hub-walk-card')).toBeNull();
+    expect(root.querySelector('.hub-walk-done')).not.toBeNull();
   });
 });
 
@@ -311,14 +280,14 @@ describe('renderTaskDetail — the same options, from the other entrance', () =>
  * rewording is a regression even when it reads better.
  */
 describe('the walkthrough matches the approved mockup', () => {
-  const withBlocker = () => {
+  const blockingDecision = () => {
     const d = decision({ title: 'Blue or green?' });
     return q0([d, task({ after: [d.id], title: 'Build the badge' })]);
   };
 
   it('is a page with a way back, not a dialog over the board', () => {
     const onClose = vi.fn();
-    renderReviewWalkthrough(root, withBlocker(), 0, walk({ onClose }));
+    renderReviewWalkthrough(root, blockingDecision(), 0, walk({ onClose }));
     // A dialog is what got rejected. Nothing here may claim that role, and
     // the way out is a link rather than a dismiss.
     expect(root.querySelector('[role="dialog"]')).toBeNull();
@@ -334,15 +303,25 @@ describe('the walkthrough matches the approved mockup', () => {
     expect((root.querySelector('.hub-walk-skip') as HTMLElement).textContent).toBe('›');
   });
 
-  it('badges the kind, chips the context, and states the wait as a bare duration', () => {
-    renderReviewWalkthrough(root, withBlocker(), 0, walk({ contextLabel: () => 'Home pane' }));
+  it('badges the kind, chips the context, and puts the asked-by meta in the head', () => {
+    renderReviewWalkthrough(
+      root,
+      blockingDecision(),
+      0,
+      walk({ contextLabel: () => 'Home pane' }),
+      { cleared: 0, last: null },
+      NOW,
+    );
     const badge = root.querySelector('.hub-walk-k-decision') as HTMLElement;
     expect(badge.textContent).toBe('Decision');
     expect((root.querySelector('.hub-walk-k-count') as HTMLElement).textContent).toBe('Home pane');
-    // "2 days", not "waiting 2 days" — the mockup's wait sits as a bare
-    // duration at the end of the head, where the word would be noise.
+    // The head's top-right meta is the one provenance line the card carries:
+    // "Asked by <who> N days ago" — never the bare "waiting" wording.
     const wait = root.querySelector('.hub-walk-wait') as HTMLElement;
     expect(wait.textContent).not.toContain('waiting');
+    // The fixture's decision has no recorded actor, so the meta states the
+    // clock without inventing a name.
+    expect(wait.textContent).toBe('Asked moments ago');
 
     renderReviewWalkthrough(root, reviewQueue([], [threadItem({ direct: true })], NOW), 0, walk());
     // A declared item reads as what it declared, not as the surface it arrived
@@ -356,7 +335,7 @@ describe('the walkthrough matches the approved mockup', () => {
   });
 
   it('says Send and Skip for now, on both card kinds', () => {
-    for (const queue of [withBlocker(), reviewQueue([], [threadItem()], NOW)]) {
+    for (const queue of [blockingDecision(), reviewQueue([], [threadItem()], NOW)]) {
       renderReviewWalkthrough(root, queue, 0, walk());
       const send = root.querySelector('.hub-walk-answer .hub-btn') as HTMLElement;
       expect(send.textContent).toBe('Send');
@@ -371,7 +350,7 @@ describe('the walkthrough matches the approved mockup', () => {
 
   it('Skip for now steps to the next item', () => {
     const onStep = vi.fn();
-    renderReviewWalkthrough(root, withBlocker(), 0, walk({ onStep }));
+    renderReviewWalkthrough(root, blockingDecision(), 0, walk({ onStep }));
     (root.querySelector('.hub-walk-skip-link') as HTMLElement).click();
     expect(onStep).toHaveBeenCalledWith(1);
   });
@@ -398,12 +377,13 @@ describe('renderReviewWalkthrough — decisions', () => {
   /** The task on the card at `index` — the queue orders, the test reads. */
   const taskAt = (q: ReturnType<typeof q0>, i: number) => q.items[i]?.decision?.task;
 
-  it('shows where you are, what it blocks, and the body', () => {
+  it('shows where you are and the body, with no provenance block in between', () => {
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, walk());
     expect((root.querySelector('.hub-walk-pos') as HTMLElement).textContent).toBe('1 of 3');
-    const ctx = root.querySelector('.hub-walk-ctx') as HTMLElement;
-    expect(ctx.textContent).toContain('Build the badge');
+    // The left-bordered ctx block is gone — one head row, one body (approved
+    // design). What the decision blocks still reads off the Home row's title.
+    expect(root.querySelector('.hub-walk-ctx')).toBeNull();
     expect((root.querySelector('.hub-walk-body') as HTMLElement).innerHTML).toContain(
       '<strong>colour</strong>',
     );
@@ -556,8 +536,8 @@ describe('renderReviewWalkthrough — comments', () => {
     // A one-line question fits in the heading, so the card does not also quote
     // it underneath — that is the same words twice on a small screen.
     expect(root.querySelector('.hub-walk-ask')).toBeNull();
-    const why = root.querySelector('.hub-walk-ctx') as HTMLElement;
-    expect(why.textContent).toContain('Asked by Helper');
+    const meta = root.querySelector('.hub-walk-wait') as HTMLElement;
+    expect(meta.textContent).toContain('Asked by Helper');
     // The decision-only furniture is absent: there is no options block and no
     // "not enough to decide" form on a comment.
     expect(root.querySelector('.hub-walk-info')).toBeNull();
@@ -588,15 +568,26 @@ describe('renderReviewWalkthrough — comments', () => {
     expect(title).not.toBe(ask);
   });
 
-  // An agent's closing note reaches this card too — deliberately, since
-  // over-including is the safe direction — but it must not be announced as a
-  // question. "Helper asked you" over a deploy note is the card promising
-  // something answerable and delivering something that is not.
-  it('does not call a status note a question', () => {
+  // An INFERRED note must not be announced as a question — "Helper asked you"
+  // over a deploy note is the card promising something answerable and
+  // delivering something that is not. A DECLARED item is the opposite case:
+  // a declaration IS an ask, in so many words, whatever `direct` measured.
+  it('does not call an inferred status note a question, but a declaration is always an ask', () => {
+    // Through `reviewQueue` itself: the demoted shelf this used to force a row
+    // out of is gone since 2026-08-21 — the client places every row the server
+    // ships — so the inferred card is reached the way a reader reaches it.
+    const undeclared = reviewQueue([], [note({ ask: 'Merged and deployed.' })], NOW);
+    expect(undeclared.items).toHaveLength(1);
+    renderReviewWalkthrough(root, undeclared, 0, walk());
+    const meta = root.querySelector('.hub-walk-wait') as HTMLElement;
+    expect(meta.textContent).toContain('Posted by Helper');
+    expect(meta.textContent).not.toMatch(/asked/i);
+
+    // The declared twin of the same words says Asked — declaring is asking.
     renderReviewWalkthrough(root, queueOf(threadItem({ ask: 'Merged and deployed.' })), 0, walk());
-    const why = root.querySelector('.hub-walk-ctx') as HTMLElement;
-    expect(why.textContent).toContain('Posted by Helper');
-    expect(why.textContent).not.toMatch(/asked/i);
+    expect((root.querySelector('.hub-walk-wait') as HTMLElement).textContent).toContain(
+      'Asked by Helper',
+    );
   });
 
   // Going through the queue must not mean leaving the queue on every item —
@@ -638,8 +629,9 @@ describe('renderReviewWalkthrough — comments', () => {
     expect((root.querySelector('.hub-walk-where-link') as HTMLElement).textContent).toContain(
       'Launch plan',
     );
-    // Not the blocker card's primary button — one class for both turned that
-    // button into bare text on staging.
+    // Not `.hub-walk-open` — that class left with the blocker card, and this
+    // link keeps its own class so a shared selector cannot come back and turn
+    // the button into bare text again (measured on staging at 430px).
     expect(root.querySelector('.hub-walk-open')).toBeNull();
   });
 
@@ -815,6 +807,54 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
 });
 
 /**
+ * Design point 4 (approved design, review-flow-mock-v1): every composer is a
+ * markdown editor with a live preview. The walkthrough has two — the answer
+ * box and the "Tell me more" ask box — and both go through the same
+ * `attachMarkdownField`, so they cannot drift apart.
+ */
+describe('the walkthrough composers are markdown fields', () => {
+  it('the answer box carries the affordance and previews what you type', () => {
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    const preview = form.querySelector('.md-preview') as HTMLElement;
+    expect(preview.hidden).toBe(true);
+    ta.value = '**two hops**';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(preview.hidden).toBe(false);
+    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+  });
+
+  it('a successful send empties the preview along with the box', async () => {
+    const onAnswer = vi.fn(() => Promise.resolve(true));
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Blue, **final**.';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ta.value).toBe('');
+    expect((form.querySelector('.md-preview') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('the Tell me more box is the same editor', () => {
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
+    const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
+    expect(info.querySelector('.md-affordance')).not.toBeNull();
+    expect(info.querySelector('.md-preview')).not.toBeNull();
+  });
+
+  it('a declared item card gets the same composer', () => {
+    const q = reviewQueue([task({ id: 't-1' })], [threadItem()], NOW);
+    renderReviewWalkthrough(root, q, 0, walk());
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance')).not.toBeNull();
+  });
+});
+
+/**
  * The advance is the feature — "when I submit an answer to a request I should
  * go to the next request in priority order" — and the whole difficulty is that
  * the list edits itself underneath the reader. These are pure so the off-by-one
@@ -929,50 +969,73 @@ describe('renderReviewWalkthrough — a declared review item', () => {
       ...over,
     });
 
-  // The enforced two-line header is the whole reason a declaration is refused
-  // when either half is missing: a queue of rows whose titles were clipped out
-  // of comment prose is what this replaced.
-  it('leads with the author’s headline and why, in that order', () => {
+  // ONE anatomy (approved design, review-flow-mock-v1): head row, then one
+  // markdown body composed of why + lookFor + detail — no labelled
+  // sub-sections, no separate why line, no provenance block.
+  it('renders head row plus one markdown body — no labelled sub-blocks', () => {
     renderReviewWalkthrough(root, queueOf(declared()), 0, walk());
     expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
       'Where should the trial banner live?',
     );
-    expect((root.querySelector('.hub-walk-why') as HTMLElement).textContent).toBe(
-      'Blocks the onboarding rework; both screens are built either way.',
-    );
-    // The why sits with the head rather than in the body, so the pair is one
-    // block on a phone.
-    const card = root.querySelector('.hub-walk-card') as HTMLElement;
-    const kids = [...card.children].map((c) => c.className.split(' ')[0]);
-    expect(kids.indexOf('hub-walk-why')).toBe(kids.indexOf('hub-walk-card-head') + 1);
+    // The old furniture is gone outright.
+    expect(root.querySelector('.hub-walk-why')).toBeNull();
+    expect(root.querySelector('.hub-walk-ctx')).toBeNull();
+    expect(root.querySelector('.hub-walk-lookfor')).toBeNull();
+    expect(root.querySelector('.hub-walk-review-detail')).toBeNull();
+    // One body, markdown-rendered, holding all three authored parts in order:
+    // why, then lookFor, then detail.
+    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    const text = body.textContent ?? '';
+    const why = text.indexOf('Blocks the onboarding rework');
+    const look = text.indexOf('Whether moving it below the fold hides the price.');
+    const detail = text.indexOf('it competes with the sign-up button');
+    expect(why).toBeGreaterThanOrEqual(0);
+    expect(look).toBeGreaterThan(why);
+    expect(detail).toBeGreaterThan(look);
+    // Markdown, not glued text — the detail's bold survives.
+    expect(body.querySelector('strong')?.textContent).toBe('sign-up');
+    // The rest of the walkthrough pattern is untouched: options, composer,
+    // stepper, skip.
+    expect(root.querySelectorAll('.hub-walk-option')).toHaveLength(2);
+    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
+    expect(root.querySelector('.hub-walk-skip')).not.toBeNull();
+    expect(root.querySelector('.hub-walk-skip-link')).not.toBeNull();
   });
 
-  it('shows what to review for and the detail, as markdown', () => {
-    renderReviewWalkthrough(root, queueOf(declared()), 0, walk());
-    const look = root.querySelector('.hub-walk-lookfor') as HTMLElement;
-    expect(look.querySelector('.hub-walk-ask-head')?.textContent).toBe('What to review for');
-    expect(look.querySelector('.hub-walk-lookfor-text')?.textContent).toBe(
-      'Whether moving it below the fold hides the price.',
+  it("the head's meta reads Asked by <who> N days ago, singular and plural", () => {
+    renderReviewWalkthrough(
+      root,
+      queueOf(declared({ askedBy: 'Harbor agent', since: NOW - 2 * 86_400_000 })),
+      0,
+      walk(),
+      { cleared: 0, last: null },
+      NOW,
     );
-    const detail = root.querySelector('.hub-walk-review-detail') as HTMLElement;
-    expect(detail.querySelector('strong')?.textContent).toBe('sign-up');
+    expect((root.querySelector('.hub-walk-wait') as HTMLElement).textContent).toBe(
+      'Asked by Harbor agent 2 days ago',
+    );
+    renderReviewWalkthrough(
+      root,
+      queueOf(declared({ askedBy: 'Harbor agent', since: NOW - 86_400_000 })),
+      0,
+      walk(),
+      { cleared: 0, last: null },
+      NOW,
+    );
+    expect((root.querySelector('.hub-walk-wait') as HTMLElement).textContent).toBe(
+      'Asked by Harbor agent 1 day ago',
+    );
   });
 
-  // Both blocks are optional and neither gets a placeholder: an absent
-  // `lookFor` means the author had nothing to add, and "no guidance given"
-  // would be the card inventing a gap.
-  it('renders no block for what the author left out', () => {
+  // The parts are optional and the body composes only what the author wrote:
+  // an absent `lookFor` leaves no gap and no placeholder.
+  it('composes the body from the parts the author actually wrote', () => {
     const bare = threadItem({
       review: { shape: 'review', headline: 'Read the copy', why: 'It ships Tuesday.' },
     });
     renderReviewWalkthrough(root, queueOf(bare), 0, walk());
-    expect(root.querySelector('.hub-walk-lookfor')).toBeNull();
-    expect(root.querySelector('.hub-walk-review-detail')).toBeNull();
-    // Positive control: the required half rendered, so the two absences above
-    // are not a card that rendered nothing.
-    expect((root.querySelector('.hub-walk-why') as HTMLElement).textContent).toBe(
-      'It ships Tuesday.',
-    );
+    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    expect(body.textContent).toBe('It ships Tuesday.');
   });
 
   // One reply path. A tap and typed words must reach the thread the same way,
