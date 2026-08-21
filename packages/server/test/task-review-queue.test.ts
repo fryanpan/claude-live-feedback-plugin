@@ -206,9 +206,18 @@ describe('GET /api/workspaces/:id/review-items — ticket-borne rows', () => {
   it('still ships a task-discussion thread row beside the ticket row', async () => {
     const ws = await seedWorkspace();
     const task = await seedDecision(ws);
-    await jj(
+    // A person opens the thread — which seeds the roster of addressable
+    // names — and the agent asks them directly. Since 2026-08-21 the thread
+    // half of the queue admits only direct asks, not every agent comment.
+    const { thread } = await jj<{ thread: { id: string } }>(
       await post(`/api/docs/task:${task.id}/threads`, {
         anchor: { kind: 'subject' },
+        text: 'Deploy cost needs a look.',
+        author: PERSON,
+      }),
+    );
+    await jj(
+      await post(`/api/docs/task:${task.id}/threads/${thread.id}/comments`, {
         text: 'Jordan — is the cold start acceptable on every deploy?',
         author: AGENT,
       }),

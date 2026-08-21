@@ -1050,7 +1050,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * exactly what the browser's `reviewQueue` places and nothing else:
    *
    *  - person-owned blockers with open dependents,
-   *  - comment-borne review rows (`task-thread` / `doc-thread`),
+   *  - comment-borne review rows (`task-thread` / `doc-thread`) — ALL of
+   *    them, which is true again since 2026-08-21: membership moved into
+   *    `reviewThreadItems` (a row is a declared item or a surviving direct
+   *    ask), and the browser retired its undeclared shelf and places every
+   *    row this route ships. Between those two changes this count briefly
+   *    included inferred rows Home never drew — "something needs you" over a
+   *    list that showed nothing,
    *  - open decisions, which Home draws from the board projection as its own
    *    `decision` rows.
    *
@@ -1280,7 +1286,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // true exactly when the comment carries the declaration. Read from
             // the item rather than discovered from that function's error
             // string: it decides which existing room write voice calls, and a
-            // plain open question (the `unreplied` band — most of the queue)
+            // plain open question (the `unreplied` band — since the membership
+            // narrowing, direct asks only rather than most of the queue)
             // gets a plain threaded reply instead of a silent deferral.
             answerable: item.review !== undefined,
             ask: item.ask,
@@ -2583,13 +2590,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
         }
         // The human's queue, to the board's agent-side `next` below: every
-        // open thread across this workspace's tasks and docs that is waiting
-        // on a person — its newest comment is an agent's, OR it carries a
-        // declared item nobody has answered, which stays whatever else is
-        // said in the thread. Decisions are NOT here — the board already
-        // holds every task, so shipping them again would put the priority
-        // rule in two places; the client merges the two halves and orders
-        // them (see `reviewQueue` in hub-model).
+        // open thread across this workspace's tasks and docs that is ASKING
+        // a person something — an unanswered agent comment with a direct
+        // question in it, OR a declared item nobody has answered, which
+        // stays whatever else is said in the thread. A status note is not a
+        // row (Bryan, 2026-08-21 — see `ReviewBand` in review-queue.ts).
+        // Decisions are NOT here — the board already holds every task, so
+        // shipping them again would put the priority rule in two places;
+        // the client merges the two halves and orders them (see
+        // `reviewQueue` in hub-model).
         //
         // One request rather than one per doc: a board with forty tasks is a
         // board with forty rooms, and the strip has to be right at first

@@ -1131,15 +1131,24 @@ describe('hub workspace + task routes', () => {
       const taskId = ((await t.json()) as { task: { id: string } }).task.id;
       const bodyDoc = `task:${taskId}`;
 
-      // The agent asks. A thread on the task's own body room is the same
-      // surface `create_thread` writes to.
+      // A person opens the thread (which is also what puts them on the
+      // roster of addressable names), then the agent asks them by name. A
+      // thread on the task's own body room is the same surface
+      // `create_thread` writes to — and since 2026-08-21 only a DIRECT ask
+      // reaches the queue, not every agent comment.
       const made = await post(`/api/docs/${encodeURIComponent(bodyDoc)}/threads`, {
-        author: AGENT,
-        text: 'Green or blue for the banner?',
+        author: PERSON,
+        text: 'Banner colour needs a call.',
         anchor: { kind: 'subject' },
       });
       expect(made.status).toBe(200);
       const threadId = ((await made.json()) as { thread: { id: string } }).thread.id;
+      const askedText = 'Bryan — green or blue for the banner?';
+      const askRes = await post(
+        `/api/docs/${encodeURIComponent(bodyDoc)}/threads/${encodeURIComponent(threadId)}/comments`,
+        { author: AGENT, text: askedText },
+      );
+      expect(askRes.status).toBe(200);
 
       const listed = await local(`/api/workspaces/${wsId}/review-items`);
       expect(listed.status).toBe(200);
@@ -1151,7 +1160,7 @@ describe('hub workspace + task routes', () => {
         kind: 'task-thread',
         taskId,
         threadId,
-        ask: 'Green or blue for the banner?',
+        ask: askedText,
       });
 
       // …and a person's reply is the only thing that clears it.
