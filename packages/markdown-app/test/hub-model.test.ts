@@ -821,16 +821,16 @@ describe('reviewQueue', () => {
   // "asked you" is a claim that there is a question. A row that makes it over
   // a status note is the strip promising something it cannot deliver.
   it('says asked you only for a question, and posted otherwise', () => {
-    // The derived second line belongs to the INFERRED band now: a declared
+    // The derived second line belongs to the undeclared rows: a declared
     // item's second line is the one its author wrote.
     const q = reviewQueue(
       [],
       [note({ threadId: 'a', direct: true }), note({ threadId: 'b', kind: 'doc-thread' })],
       T0,
     );
-    expect(q.unreplied[0].why).toContain('asked you');
-    expect(q.unreplied[1].why).toContain('posted');
-    expect(q.unreplied[1].why).not.toContain('asked');
+    expect(q.items[0].why).toContain('asked you');
+    expect(q.items[1].why).toContain('posted');
+    expect(q.items[1].why).not.toContain('asked');
   });
 
   // The clock beside "asked" is the QUESTION's, not the run's. An agent that
@@ -843,15 +843,15 @@ describe('reviewQueue', () => {
       [note({ threadId: 'a', direct: true, since: T0 - 86_400_000, askedAt: T0 - 60_000 })],
       T0,
     );
-    expect(q.unreplied[0].why).toContain('asked you 1m ago');
-    expect(q.unreplied[0].why).not.toContain('1d ago');
+    expect(q.items[0].why).toContain('asked you 1m ago');
+    expect(q.items[0].why).not.toContain('1d ago');
     // The wait itself is unchanged — this is a wording fix, not a re-rank.
-    expect(q.unreplied[0].since).toBe(T0 - 86_400_000);
+    expect(q.items[0].since).toBe(T0 - 86_400_000);
   });
 
   it('falls back to the wait when an older server sends no askedAt', () => {
     const q = reviewQueue([], [note({ threadId: 'a', direct: true, since: T0 - 60_000 })], T0);
-    expect(q.unreplied[0].why).toContain('asked you 1m ago');
+    expect(q.items[0].why).toContain('asked you 1m ago');
   });
 
   // A payload from a server that predates the field must order exactly as it
@@ -1364,7 +1364,7 @@ describe('reviewQueue — task priority is the primary key', () => {
   });
 });
 
-describe('reviewQueue — declared review items vs the inferred band', () => {
+describe('reviewQueue — every row the server ships is placed', () => {
   const T0 = 1_700_000_000_000;
   const base = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem => ({
     kind: 'doc-thread',
@@ -1388,20 +1388,34 @@ describe('reviewQueue — declared review items vs the inferred band', () => {
       ...over,
     });
 
-  // The whole point of the change: only what an agent DECLARED is work.
-  it('puts a declared item in the queue and an undeclared one in unreplied', () => {
-    const q = reviewQueue([], [declared({ threadId: 'a' }), base({ threadId: 'b' })], T0);
-    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['a']);
-    expect(q.unreplied.map((i) => i.thread?.threadId)).toEqual(['b']);
-    // The count and the walkthrough are the queue proper, so a status note
-    // no longer inflates either.
-    expect(q.total).toBe(1);
+  // Membership moved server-side (2026-08-21): the route ships a thread row
+  // only for a declared item or a surviving direct ask, so every row that
+  // arrives names something waiting on a person. The client's job is to PLACE
+  // them all — the old undeclared shelf rendered nowhere, which made a
+  // computed direct ask invisible on Home.
+  it('places a declared item and an undeclared direct ask in the one queue', () => {
+    const q = reviewQueue(
+      [],
+      [
+        declared({ threadId: 'a', since: T0 - 90_000 }),
+        base({ threadId: 'b', direct: true, askedAt: T0 - 30_000 }),
+      ],
+      T0,
+    );
+    // The direct question leads: among rows of equal task priority the
+    // comparator puts an addressed question first, declared or not —
+    // declaring changes the card, not the rank.
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['b', 'a']);
+    expect(q.total).toBe(2);
+    // The shelf is retired outright — a row is in the queue or it does not
+    // exist, and a field nothing renders is where rows go to vanish.
+    expect('unreplied' in q).toBe(false);
   });
 
-  // Nothing vanishes. 105 inferred rows existed the day this shipped, and a
-  // row that stops rendering is indistinguishable from data loss to whoever
-  // wrote it — so the two lists together must still hold every thread.
-  it('accounts for every thread across the two lists, whatever their bands', () => {
+  // Nothing vanishes. A row that stops rendering is indistinguishable from
+  // data loss to whoever wrote it — so the one list must hold every thread
+  // the server shipped, banded or not.
+  it('accounts for every thread in the one list, whatever their bands', () => {
     const items = [
       declared({ threadId: 'a' }),
       base({ threadId: 'b' }),
@@ -1409,47 +1423,70 @@ describe('reviewQueue — declared review items vs the inferred band', () => {
       base({ threadId: 'd', kind: 'task-thread', taskId: 'tk-1', docId: 'task:tk-1' }),
     ];
     const q = reviewQueue([], items, T0);
-    const seen = [...q.items, ...q.unreplied].map((i) => i.thread?.threadId).sort();
+    const seen = q.items.map((i) => i.thread?.threadId).sort();
     expect(seen).toEqual(['a', 'b', 'c', 'd']);
-    // ...and the split really did split, so the assertion above is not
-    // satisfied by everything landing in one list.
-    expect(q.items).toHaveLength(2);
-    expect(q.unreplied).toHaveLength(2);
+    expect(q.total).toBe(4);
   });
 
-  // The two lists are sorted by ONE comparator. Ranking them apart is how
-  // they would come to disagree about what important means.
-  it('ranks the inferred list by the same rule as the queue', () => {
+  // Declared and inferred rank by the ONE comparator, interleaved — being
+  // declared is not a priority band, so an old declared item cannot pin the
+  // top of the queue against a direct question asked days before it.
+  it('ranks declared and undeclared rows by the same rule, interleaved', () => {
     const q = reviewQueue(
       [],
       [
         base({ threadId: 'newer', since: T0 - 1_000 }),
         base({ threadId: 'older', since: T0 - 90_000 }),
-        declared({ threadId: 'd-newer', since: T0 - 1_000 }),
-        declared({ threadId: 'd-older', since: T0 - 90_000 }),
+        declared({ threadId: 'd-newer', since: T0 - 2_000 }),
+        declared({ threadId: 'd-older', since: T0 - 100_000 }),
       ],
       T0,
     );
-    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['d-older', 'd-newer']);
-    expect(q.unreplied.map((i) => i.thread?.threadId)).toEqual(['older', 'newer']);
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual([
+      'd-older',
+      'older',
+      'd-newer',
+      'newer',
+    ]);
   });
 
-  // A payload from a server older than the field carries no band at all. It
-  // must keep its pre-existing meaning rather than be promoted into a queue
-  // it never declared for.
-  it('treats a missing band as unreplied', () => {
+  // Two rows from ONE doc are two asks, not one row with a doc behind it.
+  // Each ranks on its own clock and carries its own question — the data-level
+  // half of telling apart rows that share a title.
+  it('ranks two rows from the same doc independently, each with its own ask', () => {
+    const q = reviewQueue(
+      [],
+      [
+        base({ threadId: 'th-late', since: T0 - 1_000, ask: 'Second question?', direct: true }),
+        base({ threadId: 'th-early', since: T0 - 90_000, ask: 'First question?', direct: true }),
+      ],
+      T0,
+    );
+    expect(q.items.map((i) => i.thread?.threadId)).toEqual(['th-early', 'th-late']);
+    expect(q.items.map((i) => i.ask)).toEqual(['First question?', 'Second question?']);
+    // Same doc, same title — the asks are what distinguish them.
+    expect(q.items[0].title).toBe(q.items[1].title);
+  });
+
+  // A payload from a server older than the band field is still a row the
+  // server chose to ship. With the shelf retired there is exactly one place
+  // for it, and hiding it would be the vanishing-row bug this queue exists
+  // to prevent.
+  it('places a row with no band at all', () => {
     const q = reviewQueue([], [base({ band: undefined })], T0);
-    expect(q.items).toHaveLength(0);
-    expect(q.unreplied).toHaveLength(1);
+    expect(q.items).toHaveLength(1);
+    expect(q.total).toBe(1);
   });
 
-  // A band claiming declared with no payload is a half-written row. The
-  // renderers all read `item.review`, so admitting it would put a card with
-  // no headline at the top of somebody's queue.
-  it('does not admit a declared band with no payload', () => {
+  // A band claiming declared with no payload is a half-written row. It is
+  // still placed — membership is the server's call — but as an ordinary ask
+  // with the derived second line, never as a declared card whose headline
+  // would be blank.
+  it('places a declared band with no payload as an ordinary ask, not a card', () => {
     const q = reviewQueue([], [base({ band: 'declared' })], T0);
-    expect(q.items).toHaveLength(0);
-    expect(q.unreplied).toHaveLength(1);
+    expect(q.items).toHaveLength(1);
+    expect(q.items[0].review).toBeUndefined();
+    expect(q.items[0].why).toContain('ago');
   });
 
   it("takes a declared item's second line from its author, not from the clock", () => {
@@ -1459,7 +1496,7 @@ describe('reviewQueue — declared review items vs the inferred band', () => {
     );
     expect(q.items[0].why).not.toContain('ago');
     // Positive control: the derived line is still what an undeclared row gets.
-    expect(reviewQueue([], [base()], T0).unreplied[0].why).toContain('ago');
+    expect(reviewQueue([], [base()], T0).items[0].why).toContain('ago');
   });
 });
 
