@@ -1,6 +1,6 @@
 ---
 name: working-a-workspace-board
-description: Use when this session is working from a claude-workspaces workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers declaring yourself lead once so every surface reaches you, priority order, taking a whole batch in parallel by default, what actually forces a sequence, what a description owes the next agent, keeping the board current, checking your coverage when it feels quiet, and why finishing a task is not a reason to stop.
+description: Use when this session is working from a claude-workspaces workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list". Covers declaring yourself lead once so every surface reaches you, priority order, taking a whole batch in parallel by default, what actually forces a sequence, what a description owes the next agent, why one pass produces one row rather than one row per finding, keeping the board current, checking your coverage when it feels quiet, and why finishing a task is not a reason to stop.
 ---
 
 # Working a claude-workspaces workspace board
@@ -296,6 +296,49 @@ ordered bands, so the next call is `set_task_goal` rather than a `get_workspace`
 first. (In a batch it's one `placement` block for the whole call, naming the
 unplaced ids.) Don't let it sit: you are the party that still knows why the task
 exists, and placement is cheapest right now.
+
+## One pass produces one row, not one row per finding
+
+The board this rule was written on reached **59 open chores** in a week. A
+peer's board, running the same product and the same tooling, held **2**. Thirty
+times apart on the same week means the difference is filing practice, not a
+missing feature — and two of the 59 were the same finding filed six minutes
+apart by the same agent, which is what a filing reflex looks like from the
+inside.
+
+The reflex is honest. You are working a task, you notice four adjacent things,
+and each one feels like it deserves not to be lost. Filing each one is how it
+survives. It is also how a board stops being a queue: every row costs the next
+reader a read, and a reader who cannot finish the list stops trusting any of
+it. Nobody chose the pile — everybody filed responsibly and the pile is what
+responsible filing sums to.
+
+So, when a pass turns up findings that are not the task you are on:
+
+- **Put them on the task's own thread, not on the board.**
+  `create_thread(docId: "task:<taskId>", …)` keeps the finding attached to the
+  work that produced it, where whoever picks that task up next will actually
+  meet it. Nothing is lost and the queue does not grow.
+- **If it truly needs a row, it is ONE row carrying the bullets.** A pass that
+  found eight things files a single task with eight bullets in its body, never
+  eight tasks. Eight bullets read in one sitting; eight rows read as eight
+  interruptions, and they scatter across bands so nobody ever sees them
+  together again.
+- **Promotion to a row is the lead's call.** Filing your own finding as a row
+  is how a queue quietly reorders itself around whoever is talking. Leave it on
+  the thread; the lead is holding the ranking and can place it against the
+  goals it competes with.
+- **Search before you file.** `list_tasks` plus the noun you are about to
+  write is the whole check. Six minutes is not long enough for a session to
+  remember its own last create — that is measured, not hypothetical.
+
+The honest limit: this stops the pile growing and does nothing about the pile
+you already have. A deep chores band needs a consolidation pass — merge each
+row into the one that covers it, carry the absorbed body into the survivor, and
+close the absorbed rows `done` with a note saying *absorbed, not built* so the
+board reads as reversible rather than as work that shipped. That pass is the
+lead's too, and it is worth an hour: 59 rows came down to 47 in one, with six
+promoted out of chores into a real goal on the way.
 
 ## Keep the board current as you go
 
