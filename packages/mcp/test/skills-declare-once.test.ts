@@ -16,7 +16,14 @@
  * SURVIVE the edit, because the realistic failure of a doc change is not a
  * missing addition but a rewrite that quietly drops what was already there.
  *
- * SHAPE NOTE (2026-08-21): the lead skill is Bryan-authored and deliberately
+ * SPLIT NOTE: the hub skill is two files. `SKILL.md` keeps what must be read
+ * BEFORE a call — the two things called "workspace", the work loop, the goal
+ * edit — and `tool-reference.md` beside it carries the argument lists. Every
+ * pin below still reads the file that actually has to carry the literal, so
+ * the liveness assertions stay on `SKILL.md` and the review-item call shapes
+ * moved with their section (pinned in review-item-tools.test.ts).
+ *
+ * SHAPE NOTE: the lead skill is Bryan-authored and deliberately
  * minimal — four sections, ~45 lines. The operational liveness material
  * (heartbeat, watch_doc-does-not-stand-in, lead-held/takeover, the quiet-board
  * probe) now lives ONLY in the hub skill, so those assertions run on the hub
@@ -26,7 +33,7 @@
  * (the old wrong delivery claims) still run against all three files, because
  * a wrong sentence can come back anywhere.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -34,8 +41,10 @@ import { describe, expect, it } from 'vitest';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILLS = join(HERE, '../../plugin/skills');
 const HUB = readFileSync(join(SKILLS, 'running-a-workspace-hub/SKILL.md'), 'utf8');
+const HUB_REF = readFileSync(join(SKILLS, 'running-a-workspace-hub/tool-reference.md'), 'utf8');
 const LEAD = readFileSync(join(SKILLS, 'leading-a-workspace/SKILL.md'), 'utf8');
 const GENERAL = readFileSync(join(SKILLS, 'working-in-a-workspace/SKILL.md'), 'utf8');
+const GOAL_CHANGE = readFileSync(join(SKILLS, 'handling-a-goal-change/SKILL.md'), 'utf8');
 
 /**
  * One line, lower-cased. Every assertion below that searches for a PHRASE runs
@@ -198,20 +207,82 @@ describe('positive controls — guidance that must survive the edit', () => {
     expect(GENERAL).toContain('review_type: "question"');
   });
 
-  it('no substantive sentence appears in both halves of the split skill', () => {
+  it('no substantive sentence appears in two of the board skills', () => {
     // The split's drift guard, stated mechanically: the lead skill says its
     // shared ground is "deliberately not repeated here", so any long line
-    // present verbatim in both files is a copy that will rot in one place.
-    const lines = (t: string) =>
-      new Set(
-        t
-          .split('\n')
-          .map((l) => l.trim())
-          .filter((l) => l.length > 60 && !l.startsWith('#') && !l.startsWith('---')),
-      );
-    const g = lines(GENERAL);
-    const dup = [...lines(LEAD)].filter((l) => g.has(l));
-    expect(dup).toEqual([]);
+    // present verbatim in two files is a copy that will rot in one place.
+    //
+    // Widened from LEAD-vs-GENERAL to every pair once the hub was split,
+    // because the hub is the file that HAD the copies: its "File work" section
+    // restated the general skill's task standard and its work loop restated
+    // the lead skill's fan-out default.
+    //
+    // FENCED LINES ARE EXEMPT, and that is not a hole. A code block is an API
+    // call, not a sentence — `set_workspace_lead(workspaceId) // no second
+    // argument` legitimately appears wherever the seat is discussed, and
+    // banning it would push the files into paraphrasing the same call two
+    // ways, which is the drift this guard exists to catch.
+    const prose = (t: string) => {
+      const out = new Set<string>();
+      let fenced = false;
+      for (const raw of t.split('\n')) {
+        const l = raw.trim();
+        if (l.startsWith('```')) {
+          fenced = !fenced;
+          continue;
+        }
+        if (fenced || l.length <= 60 || l.startsWith('#') || l.startsWith('---')) continue;
+        out.add(l);
+      }
+      return out;
+    };
+    const files: Array<[string, Set<string>]> = [
+      ['running-a-workspace-hub/SKILL.md', prose(HUB)],
+      ['running-a-workspace-hub/tool-reference.md', prose(HUB_REF)],
+      ['leading-a-workspace', prose(LEAD)],
+      ['working-in-a-workspace', prose(GENERAL)],
+      ['handling-a-goal-change', prose(GOAL_CHANGE)],
+    ];
+    const dups: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      for (let j = i + 1; j < files.length; j++) {
+        const [an, a] = files[i];
+        const [bn, b] = files[j];
+        for (const l of a) if (b.has(l)) dups.push(`${an} + ${bn}: ${l}`);
+      }
+    }
+    expect(dups).toEqual([]);
+  });
+
+  it('the hub reference is shipped and reachable by name from the skill file', () => {
+    // A sibling file linked by name costs nothing until it is opened — and
+    // buys nothing if the skill file stops naming it, which is how a split
+    // turns into an orphan nobody reads.
+    expect(existsSync(join(SKILLS, 'running-a-workspace-hub/tool-reference.md'))).toBe(true);
+    expect(HUB).toContain('tool-reference.md');
+    // The reference must not re-teach what a task should SAY; that is the
+    // general skill's, and restating it there is what the split was for.
+    expect(HUB_REF).toContain('claude-workspaces:working-in-a-workspace');
+  });
+
+  it('the retired task-shape skill is gone and nothing still points at it', () => {
+    // `reviewing-task-shape` was folded into §2 of the lead skill, which
+    // already claimed the task-review ask outright. A dangling skill name in a
+    // triage line or a tool description reads as a skill the agent failed to
+    // find, not as one that no longer exists.
+    expect(existsSync(join(SKILLS, 'reviewing-task-shape'))).toBe(false);
+    for (const [name, raw] of [
+      ['running-a-workspace-hub/SKILL.md', HUB],
+      ['running-a-workspace-hub/tool-reference.md', HUB_REF],
+      ['leading-a-workspace', LEAD],
+      ['working-in-a-workspace', GENERAL],
+      ['handling-a-goal-change', GOAL_CHANGE],
+    ] as const) {
+      expect(`${name}: ${raw}`).not.toContain('reviewing-task-shape');
+    }
+    // Positive control: the assertion above can only mean something if the
+    // lead skill is where the ask now lives.
+    expect(flatten(LEAD)).toMatch(/three honest outcomes/);
   });
 
   it('the hub skill still keeps its work loop and lead-seat sections', () => {

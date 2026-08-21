@@ -14,11 +14,15 @@ So the re-triage is not paperwork after the real work. Until it is done, you do
 not know what the real work is.
 
 This skill is the **contract**: what the lead agent owes when the goal changes.
-For the tool shapes — `set_workspace_goal`, `set_task_goal`, `reorder_goals`,
-`rename_goal`, the lead-agent seat — read
-`claude-workspaces:running-a-workspace-hub`. For the
-ordinary work loop this interrupts, read
-`claude-workspaces:working-in-a-workspace`.
+It exists as its own file because a goal edit is a rare, ordered, once-only
+sweep with its own trigger — nothing else on the board asks you to stop
+mid-task, and none of the eight steps below is derivable from the tool shapes.
+Those shapes — `set_workspace_goal`, `set_task_goal`, `reorder_goals`,
+`rename_goal` — are stated once in `tool-reference.md` alongside
+`claude-workspaces:running-a-workspace-hub`, which also owns the lead-agent
+seat. For the ordinary work loop this interrupts, read
+`claude-workspaces:working-in-a-workspace`; for what the seat owes the rest of
+the time, `claude-workspaces:leading-a-workspace`.
 
 **Vocabulary, because the rest of this depends on it:** a workspace has one
 north-star **goal** (a sentence or two of prose) and an ordered list of
@@ -131,16 +135,11 @@ their subgoals, each with todo / in-progress / done counts. That list is the
 vocabulary you are about to place tasks into, and its ids are what
 `reorder_goals` needs. Read it in the same call.
 
-Two traps in that list:
-
-- **Backlog appears only when something is already in it.** Its id is the
-  literal string `"chores"`, it is reserved, and it is not a row you can read
-  out of `goals` on a board where nothing is parked. Do not conclude from its
-  absence that you cannot park anything there.
-- **Not every row is a band.** Each row carries `reorderable`. It is `false` on
-  the rows the read *appends* rather than orders — Backlog, and a goal id left
-  behind on a done task by an earlier removal — and those look exactly like a
-  band otherwise. They matter in step 6.
+One trap in that list, because it decides where you can park work:
+**Backlog appears only when something is already in it.** Its id is the literal
+string `"chores"`, it is reserved, and it is not a row you can read out of
+`goals` on a board where nothing is parked. Do not conclude from its absence
+that you cannot park anything there.
 
 ## 5. Re-place every open task
 
@@ -185,45 +184,23 @@ text is a task you missed.
 ## 6. Reorder with `reorder_goals`, never `set_goal_list`
 
 A new goal usually changes which band should be worked first. Order **is**
-priority, so say it in the order:
+priority, so say it in the order — with `reorder_goals`, whose argument shape
+and `reorderable` scoping rule are in the hub skill's `tool-reference.md`.
 
-```
-reorder_goals(workspaceId, order: ["<id>", "<id>", …])              // top level
-reorder_goals(workspaceId, order: ["<id>", "<id>"], parent: "<id>")  // subgoals
-```
-
-Permutation only: `order` must be exactly the ids already at that scope. It
-creates nothing, renames nothing, moves no task, and **refuses** an order that
-omits, repeats or invents an id — naming the offending ids so you re-read
-instead of guessing.
-
-**Scope it as "every row at my scope whose `reorderable` is true", never
-"every depth-0 row".** Backlog and orphaned goal rows sit at depth 0, look
-exactly like a band, and are not in the ordered list. That one filter is the
-whole rule; send either kind back and you get a 400 that tells you which it
-was — `chores` in `reservedIds` (a permanent bucket you drop from the order),
-an orphaned id in `unknownIds` (the band really was removed).
-
-`set_goal_list` is a full **replace** keyed by ID, and that is the whole hazard:
-any band id you leave out is removed, and its open tasks land at the bottom of
-Backlog while its done tasks orphan onto an id that no longer exists. Including a
-band another writer added since you last read the list — which is exactly the
-case a goal change makes likely, because a goal edit usually means somebody is
-on the board right now. So:
+The reason the verb matters *here* specifically: `set_goal_list` is a full
+**replace** keyed by ID, so any band id you leave out is removed and its open
+tasks land at the bottom of Backlog. That includes a band another writer added
+since you last read the list — which is exactly the case a goal change makes
+likely, because a goal edit usually means somebody is on the board right now.
+Re-ranking through the replace verb during a sweep is how a lead deletes a
+colleague's band while doing what they were asked. So:
 
 - To change priority: `reorder_goals`, always.
-- To change a band's TITLE: `rename_goal(workspaceId, goal, title)`. It edits in
-  place and cannot move a task. Renaming through `set_goal_list` by giving the
-  band a new id is not a rename and no longer even lands — goal ids are
-  generated and permanent, so an id the board does not hold is refused
-  (`unknown-goal-id`).
+- To change a band's TITLE: `rename_goal`. It edits in place and cannot move a
+  task.
 - To genuinely add / remove a band: `set_goal_list`, with the ids read
-  **immediately** before the call. A NEW band goes in with no `id` at all and
-  the server mints one, returned in `created`. A removal that would strand work is now
-  REFUSED (`would-strand-tasks`) until you name that id in `drop`, so read what
-  the refusal says the band holds before you acknowledge it. Then re-place every
-  id it reports in `movedToChores` rather than leaving them piled, and decide
-  whether the `strandedDone` rows should be re-placed too.
+  **immediately** before the call, and read what a `would-strand-tasks` refusal
+  says the band holds before you acknowledge it.
 - Adding or removing bands changes the owner's structure, not a placement. If
   the new goal seems to need a band that does not exist, ask for it as the
   decision task described in step 7 instead of restructuring the board.
