@@ -16561,10 +16561,12 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
     if (w)
       w.open = open;
   };
+  let lastEventId;
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
-        signal
+        signal,
+        ...lastEventId ? { headers: { "Last-Event-ID": lastEventId } } : {}
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -16585,6 +16587,13 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
+          const meta2 = frameMeta(frame);
+          if (meta2.event === "replay.gap") {
+            lastEventId = undefined;
+            shouldForwardFrame.reset();
+          } else if (meta2.id !== undefined) {
+            lastEventId = meta2.id;
+          }
           await handleFrame(frame);
           sep = buf.indexOf(`
 
@@ -16620,6 +16629,17 @@ function startSseLoop(label, path, controller) {
   });
 }
 var shouldForwardFrame = createFrameDedup();
+function frameMeta(raw) {
+  const meta2 = {};
+  for (const line of raw.split(`
+`)) {
+    if (line.startsWith("id:"))
+      meta2.id = line.slice(3).trim();
+    else if (line.startsWith("event:"))
+      meta2.event = line.slice(6).trim();
+  }
+  return meta2;
+}
 async function handleFrame(raw) {
   const lines = raw.split(`
 `);
@@ -16640,6 +16660,19 @@ async function handleFrame(raw) {
     payload = JSON.parse(dataParts.join(`
 `));
   } catch {
+    return;
+  }
+  if (ev === "replay.gap") {
+    const p = payload ?? {};
+    await server.notification({
+      method: "notifications/claude/channel",
+      params: {
+        source: "claude-workspaces",
+        sent_at: new Date().toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? "a watched channel"} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: "replay.gap", ...p.docId ? { doc_id: p.docId } : {} }
+      }
+    });
     return;
   }
   if (!shouldForwardFrame.shouldForward(ev, payload))

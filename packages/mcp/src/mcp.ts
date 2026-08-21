@@ -3594,10 +3594,17 @@ async function runSseLoop(
     const w = watchers.get(label);
     if (w) w.open = open;
   };
+  // The wire id of the last frame this loop saw, presented back on every
+  // reconnect. This loop is a hand-rolled fetch stream, not a native
+  // EventSource, so nothing sends `Last-Event-ID` for us — without this line
+  // the 1.5s retry below reconnects fast and resumes WITH A HOLE: everything
+  // broadcast inside the gap used to be lost permanently.
+  let lastEventId: string | undefined;
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
+        ...(lastEventId ? { headers: { 'Last-Event-ID': lastEventId } } : {}),
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -3615,6 +3622,18 @@ async function runSseLoop(
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
+          const meta = frameMeta(frame);
+          if (meta.event === 'replay.gap') {
+            // The server could not prove coverage, so the id we were holding
+            // points at nothing it can replay. Drop it — presenting it again
+            // on the next reconnect would just buy another gap notice — and
+            // drop the dedup window with it, since after a refetch-worthy gap
+            // every held key may collide with a genuinely new event.
+            lastEventId = undefined;
+            shouldForwardFrame.reset();
+          } else if (meta.id !== undefined) {
+            lastEventId = meta.id;
+          }
           await handleFrame(frame);
           sep = buf.indexOf('\n\n');
         }
@@ -3678,6 +3697,17 @@ function startSseLoop(label: string, path: string, controller: AbortController):
  *  cannot identify is forwarded rather than dropped. */
 const shouldForwardFrame = createFrameDedup();
 
+/** The `id:` line and event name of one raw SSE frame — what the reconnect
+ *  logic needs before the frame is parsed as JSON. */
+function frameMeta(raw: string): { id?: string; event?: string } {
+  const meta: { id?: string; event?: string } = {};
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('id:')) meta.id = line.slice(3).trim();
+    else if (line.startsWith('event:')) meta.event = line.slice(6).trim();
+  }
+  return meta;
+}
+
 async function handleFrame(raw: string): Promise<void> {
   // Only forward data frames — ignore keepalive ':ok' comments.
   const lines = raw.split('\n');
@@ -3693,6 +3723,24 @@ async function handleFrame(raw: string): Promise<void> {
   try {
     payload = JSON.parse(dataParts.join('\n'));
   } catch {
+    return;
+  }
+  if (ev === 'replay.gap') {
+    // An explicit hole: the server is saying it CANNOT replay what this
+    // session missed while disconnected. Surface it as its own channel line —
+    // the doc-shaped formatter below would render it as a garbled comment —
+    // so the agent refetches (get_doc / list_threads / next_tasks) instead of
+    // trusting the stream to have been complete.
+    const p = (payload ?? {}) as { docId?: string };
+    await server.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        source: 'claude-workspaces',
+        sent_at: new Date().toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? 'a watched channel'} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: 'replay.gap', ...(p.docId ? { doc_id: p.docId } : {}) },
+      },
+    });
     return;
   }
   if (!shouldForwardFrame.shouldForward(ev, payload)) return;
