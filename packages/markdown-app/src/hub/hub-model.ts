@@ -2178,7 +2178,7 @@ export function reviewBadge(kind: ReviewKind): { label: string; tone: string } {
  */
 export function reviewItemBadge(item: ReviewItem): { label: string; tone: string } {
   if (item.review?.shape === 'decision') return { label: 'Decision', tone: 'decision' };
-  if (item.review?.shape === 'review') return { label: 'Review', tone: 'review' };
+  if (item.review?.shape === 'review') return { label: 'Question', tone: 'review' };
   return reviewBadge(item.kind);
 }
 
