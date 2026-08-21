@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
@@ -7,10 +8,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { readRenamedEnv } from '../../core/src/env-names.ts';
 import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
+import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
+import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
+import { projectTaskRows } from './task-projection.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 import { voiceRequestLine } from './voice-line.ts';
@@ -90,7 +94,18 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.74';
+const PLUGIN_VERSION = '0.1.77';
+
+/**
+ * One nonce per PROCESS, minted at module load and sent on every attach.
+ * The server compares it against the attachment's recorded nonce to answer
+ * the question the ack grace window turns on: is this attach a fresh process
+ * (bypass the grace — whatever was in flight went to a process that is gone)
+ * or the same live one re-attaching (respect it — a frame already on the
+ * wire to THIS process must not be handed over a second time through the
+ * attach response). See AgentAttachment.processId on the server side.
+ */
+const PROCESS_ID = randomUUID();
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -314,8 +329,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'list_docs',
-      description: 'List review docs currently registered on the server.',
-      inputSchema: { type: 'object', properties: {} },
+      description:
+        'List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or grouping id) — omit it to list every doc on the server.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: {
+            type: 'string',
+            description:
+              'Only docs in this workspace. Matches hub-board membership and the grouping workspaceId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
+          },
+        },
+      },
     },
     {
       name: 'list_threads',
@@ -426,7 +451,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'get_doc',
       description:
-        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits.',
+        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits. On a big doc this result is BODY-SIZED (real docs have returned 320KB, past tool-result caps) — when you only need health/shape ("is it bound, is it wedged, how big, what is pending"), call doc_status instead and read the body only if you actually need the text.',
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' } },
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'doc_status',
+      description:
+        "Cheap doc health check — the doc's metadata and counts WITHOUT any of the body (no plainText, no blocks, no thread text), a few hundred bytes where get_doc can run to hundreds of KB. Returns {docId, type, title?, bound, path?, syncError?, lastActivityAt?, textLength, blockCount, threads: {open, resolved}, pendingSuggestions}. Use it before/instead of get_doc when the question is about the doc rather than its text: is it still bound to disk and where (`bound`/`path`), did the last sync wedge (`syncError` — read it, it names the conflict), how big is what get_doc would return (`textLength`), is anything waiting (`threads.open`, `pendingSuggestions`). Answers 404 for an unknown docId.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -684,7 +719,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'find_and_replace',
       description:
-        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
+        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. A no-match comes back with a near-miss `hint` when the doc contains the text up to letter case (`kind: 'case'`) or up to whitespace runs (`kind: 'whitespace'` — double spaces, NBSP, newlines); the hint's `preview` quotes the doc's ACTUAL characters — real newlines included, never flattened to spaces — so copy the find from it and re-issue rather than guessing (or, never, editing the bound file on disk); if the quoted span crosses a paragraph break (contains `\n\n`), the re-issue reports `cross-node` because the break is not editable text — split the edit per block instead. Use `occurrence` (1-indexed) to pick one explicitly, or pass `replaceAll: true` to replace every occurrence in one call — the right tool for a mechanical sweep (the same stale SHA or renamed identifier in dozens of places), which must NEVER be done by writing the bound file on disk. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -694,6 +729,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextBefore: { type: 'string' },
           contextAfter: { type: 'string' },
           occurrence: { type: 'number' },
+          replaceAll: {
+            type: 'boolean',
+            description:
+              'Replace every occurrence in one call — one Yjs transaction, marks carried per site. Use for mechanical sweeps (the same stale SHA in 44 places) instead of looping occurrence-by-occurrence or, worse, editing the bound file on disk. Returns { replaced } (and skippedCrossNode when a match straddled formatting boundaries and was left alone). Mutually exclusive with occurrence and with suggest.',
+          },
           parseInlineMarks: { type: 'boolean' },
           suggest: {
             type: 'boolean',
@@ -793,13 +833,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_after_thread',
       description:
-        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'.",
+        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'. If the anchor sits inside a list item, the default placement nests the new blocks under that item — pass placement 'top-level' to insert after the entire list instead.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           threadId: { type: 'string' },
           markdown: { type: 'string' },
+          placement: {
+            type: 'string',
+            enum: ['after-block', 'top-level'],
+            description:
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+          },
         },
         required: ['docId', 'threadId', 'markdown'],
       },
@@ -845,13 +891,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_at_anchor',
       description:
-        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element.",
+        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element. CAUTION: an anchor inside a list item nests everything under that item by default — pass placement 'top-level' to insert after the whole list.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           anchorId: { type: 'string' },
           markdown: { type: 'string' },
+          placement: {
+            type: 'string',
+            enum: ['after-block', 'top-level'],
+            description:
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+          },
         },
         required: ['docId', 'anchorId', 'markdown'],
       },
@@ -1261,7 +1313,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_tasks',
       description:
-        'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation.',
+        'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation. On a big board the default rows still run large (reviews with their quotes and answers, infoRequests, options, evidence ride on every row — a real board hit 122KB); pass `fields` to pick exactly the keys you need.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1270,6 +1322,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           status: { type: 'string', enum: ['todo', 'in-progress', 'done'] },
           assignee: { type: 'string' },
           needs: { type: 'string', enum: ['action', 'decision'] },
+          fields: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              "Project each row to just these keys (`id` always included; keys a row lacks are omitted). Use for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB. 'transitionCount' is computable here without hauling transitions. Omit (or pass []) for the historical default trim.",
+          },
         },
         required: ['workspaceId'],
       },
@@ -1882,7 +1940,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     await maybeAutoWatch(name, a);
     switch (name) {
       case 'list_docs': {
-        const res = await http('GET', '/api/docs');
+        // The param has to reach the wire: this handler used to issue a bare
+        // GET, so a caller's workspaceId was accepted and silently dropped —
+        // a board-scoped question answered with the whole server.
+        const { workspaceId } = a as { workspaceId?: string };
+        const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+        const res = await http('GET', `/api/docs${qs}`);
         return ok(res);
       }
       case 'list_threads': {
@@ -1952,6 +2015,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'get_doc': {
         const { docId } = a as { docId: string };
         const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
+        return ok(res);
+      }
+      case 'doc_status': {
+        const { docId } = a as { docId: string };
+        const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/status`);
         return ok(res);
       }
       case 'create_review_doc': {
@@ -2144,6 +2212,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           contextBefore,
           contextAfter,
           occurrence,
+          replaceAll,
           parseInlineMarks,
           suggest,
         } = a as {
@@ -2153,6 +2222,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           contextBefore?: string;
           contextAfter?: string;
           occurrence?: number;
+          replaceAll?: boolean;
           parseInlineMarks?: boolean;
           suggest?: boolean;
         };
@@ -2162,6 +2232,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(contextBefore !== undefined ? { contextBefore } : {}),
           ...(contextAfter !== undefined ? { contextAfter } : {}),
           ...(occurrence !== undefined ? { occurrence } : {}),
+          ...(replaceAll === true ? { replaceAll: true } : {}),
           ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
           ...(suggest === true ? { suggest: true, author: suggestionAuthor() } : {}),
         });
@@ -2234,15 +2305,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'insert_blocks_after_thread': {
-        const { docId, threadId, markdown } = a as {
+        const { docId, threadId, markdown, placement } = a as {
           docId: string;
           threadId: string;
           markdown: string;
+          placement?: 'after-block' | 'top-level';
         };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`,
-          { markdown },
+          { markdown, ...(placement !== undefined ? { placement } : {}) },
         );
         return ok(res);
       }
@@ -2278,15 +2350,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'insert_blocks_at_anchor': {
-        const { docId, anchorId, markdown } = a as {
+        const { docId, anchorId, markdown, placement } = a as {
           docId: string;
           anchorId: string;
           markdown: string;
+          placement?: 'after-block' | 'top-level';
         };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`,
-          { markdown },
+          { markdown, ...(placement !== undefined ? { placement } : {}) },
         );
         return ok(res);
       }
@@ -2527,6 +2600,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               self: AUTHOR,
               runtime: 'claude-code-local',
               pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
             },
           ),
         );
@@ -2691,12 +2765,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ workspaceId, tasks: res.tasks });
       }
       case 'list_tasks': {
-        const { workspaceId, goal, status, assignee, needs } = a as {
+        const { workspaceId, goal, status, assignee, needs, fields } = a as {
           workspaceId: string;
           goal?: string;
           status?: string;
           assignee?: string;
           needs?: string;
+          fields?: string[];
         };
         const qs = new URLSearchParams();
         if (goal !== undefined) qs.set('goal', goal);
@@ -2708,13 +2783,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           'GET',
           `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`,
         )) as { tasks: TaskPayload[] };
-        // Trimmed rows: no body snapshot, no transition history.
+        // Trimmed handler-side, NOT at the route — an old bundle keeps
+        // calling the REST route forever and must keep reading its shape.
+        // Default: no body snapshot, no transition history. With `fields`:
+        // exactly the picked keys per row.
         return ok({
           workspaceId,
-          tasks: res.tasks.map(({ body: _body, transitions, ...rest }) => ({
-            ...rest,
-            transitionCount: transitions?.length ?? 0,
-          })),
+          tasks: projectTaskRows(res.tasks, fields),
         });
       }
       case 'task_transition': {
@@ -3098,12 +3173,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             // loaded at launch, not by what its machine's cache holds now.
             // Reporting it is what lets the board say a merge never arrived.
             pluginVersion: PLUGIN_VERSION,
+            // Same-process re-attaches must not re-hand rows still in
+            // flight to this very process — see PROCESS_ID.
+            processId: PROCESS_ID,
           },
         )) as {
           attachment?: { agentId?: string };
           gating?: unknown;
           untriaged?: string[];
           queuedVoice?: Array<{ transcript: string; ts: number; applied?: string }>;
+          queuedComments?: Array<{
+            id: string;
+            docId: string;
+            threadId?: string;
+            event: string;
+            author?: { id?: string; name?: string };
+            text: string;
+            ts: number;
+          }>;
           lead?: boolean;
           pendingRetriage?: {
             batchId: string;
@@ -3128,6 +3215,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // from here would assert liveness for an agent that may be gone.
         if (agentId === undefined || agentId === AUTHOR.id) markAttached(workspaceId);
         if (subscribe !== false) await watchWorkspace(workspaceId);
+        // These rows are now in this process's hands — this response is their
+        // delivery — so send each receipt. Unlike queuedVoice the server did
+        // NOT drain them: a row it holds until this ack is a row a crash
+        // between the attach and here re-offers after the grace window,
+        // instead of losing with the response body.
+        for (const q of res.queuedComments ?? []) {
+          if (typeof q?.id !== 'string') continue;
+          try {
+            await http(
+              'POST',
+              `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`,
+              {},
+            );
+          } catch {
+            // Left on the queue on purpose — redelivered after the grace.
+          }
+        }
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
@@ -3144,6 +3248,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // the speaker's behalf. Pick up only what the utterance asked for
           // beyond it; redoing it posts the same words twice.
           queuedVoice: res.queuedVoice ?? [],
+          // Comments addressed to YOU that arrived while your stream was
+          // down — a person (or peer) commented on a task or doc you watch or
+          // lead, and nobody was listening. Read each and act on it where it
+          // lives (post_reply on the thread / resolve when addressed). This
+          // response is their delivery; the receipts are already sent.
+          queuedComments: (res.queuedComments ?? []).map((q) => ({
+            docId: q.docId,
+            ...(q.threadId !== undefined ? { threadId: q.threadId } : {}),
+            event: q.event,
+            ...(q.author !== undefined ? { author: q.author } : {}),
+            text: q.text,
+            ts: q.ts,
+          })),
           // A goal edit made while you were away, waiting for you because
           // you lead this board. Walk its taskIds with set_task_goal against
           // the NEW goal, passing its batchId on each so the moves read as
@@ -3410,13 +3527,44 @@ async function ensureWatchesRestored(): Promise<void> {
       const reattached: string[] = [];
       for (const workspaceId of boardsToReattach(lastCoverage)) {
         try {
-          await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
-            agentId: AUTHOR.id,
-            runtime: 'claude-code-local',
-            pluginVersion: PLUGIN_VERSION,
-          });
+          const attachRes = (await http(
+            'POST',
+            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
+            {
+              agentId: AUTHOR.id,
+              runtime: 'claude-code-local',
+              pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
+            },
+          )) as {
+            queuedComments?: BacklogCommentRow[];
+            queuedVoice?: Array<{ transcript?: unknown }>;
+          };
           markAttached(workspaceId);
           reattached.push(workspaceId);
+          // This POST is the fourth attach site, and the only one whose
+          // response body no tool call reads — yet the server just drained
+          // the backlog into it (voice destructively; comment rows marked
+          // emitted). Dropping it here is the ticket's own failure mode one
+          // layer down: the respawned session the queue waited for arrives,
+          // and the arrival itself eats the delivery. So forward each row as
+          // the channel notification its SSE frame would have been, acking a
+          // comment row only after its emit succeeded — same order, same
+          // reason as handleFrame.
+          await deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (shouldForwardFrame.shouldForward(ev, payload)) {
+                await emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await http(
+                'POST',
+                `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
+                {},
+              );
+            },
+          });
         } catch {
           // Best effort, exactly like the watch restore: the notice below
           // reads the coverage AFTER this, so a failure shows up as a board
@@ -3600,10 +3748,19 @@ async function runSseLoop(
     const w = watchers.get(label);
     if (w) w.open = open;
   };
+  // The wire id of the last frame this loop DELIVERED, presented back on
+  // every reconnect. This loop is a hand-rolled fetch stream, not a native
+  // EventSource, so nothing sends `Last-Event-ID` for us — without this line
+  // the 1.5s retry below reconnects fast and resumes WITH A HOLE: everything
+  // broadcast inside the gap used to be lost permanently. Delivered, not
+  // seen: the cursor advances only after `handleFrame` resolves (see
+  // sse-cursor.ts for the loss that committing it early caused).
+  const cursor: SseCursor = { lastEventId: undefined };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
+        ...(cursor.lastEventId ? { headers: { 'Last-Event-ID': cursor.lastEventId } } : {}),
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -3621,7 +3778,13 @@ async function runSseLoop(
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          await handleFrame(frame);
+          // Deliver, THEN advance the cursor — a frame whose delivery threw
+          // must be re-presented on reconnect, not skipped past. On a
+          // delivered gap the cursor drops (the held id points at nothing
+          // the server can replay) and the dedup window drops with it, since
+          // after a refetch-worthy gap every held key may collide with a
+          // genuinely new event.
+          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
           sep = buf.indexOf('\n\n');
         }
       }
@@ -3701,8 +3864,56 @@ async function handleFrame(raw: string): Promise<void> {
   } catch {
     return;
   }
-  if (!shouldForwardFrame.shouldForward(ev, payload)) return;
-  await emitChannelMessage(ev, payload);
+  if (ev === 'replay.gap') {
+    // An explicit hole: the server is saying it CANNOT replay what this
+    // session missed while disconnected. Surface it as its own channel line —
+    // the doc-shaped formatter below would render it as a garbled comment —
+    // so the agent refetches (get_doc / list_threads / next_tasks) instead of
+    // trusting the stream to have been complete. No receipt: a gap notice
+    // carries no queue row, and acking one would claim delivery of the very
+    // frames it is reporting as missing.
+    const p = (payload ?? {}) as { docId?: string };
+    await server.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        source: 'claude-workspaces',
+        sent_at: new Date().toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? 'a watched channel'} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: 'replay.gap', ...(p.docId ? { doc_id: p.docId } : {}) },
+      },
+    });
+    return;
+  }
+  if (shouldForwardFrame.shouldForward(ev, payload)) {
+    await emitChannelMessage(ev, payload);
+  }
+  // The receipt for a durable comment row, AFTER the forward attempt (same
+  // ordering rationale as the voice ack below: an ack sent first would clear
+  // the durable copy on the strength of an intent). Deliberately OUTSIDE the
+  // dedup gate: a redelivered frame reuses the original event's eid — it IS
+  // the same event — so dedup rightly hides the duplicate from the session,
+  // but the receipt must still go back or the server re-offers the row after
+  // every grace window, forever. "The frame is in this process's hands" is
+  // exactly what the receipt asserts, forwarded or collapsed.
+  await ackCommentRow(payload);
+}
+
+/** POST the receipt for a frame that carries a durable comment-queue row id.
+ *  Never throws: a failed ack leaves the row on the queue, so the cost is a
+ *  redelivery after the grace window — late and duplicated beats silently
+ *  dropped, and that asymmetry is why the receipt lives on this side. */
+async function ackCommentRow(payload: unknown): Promise<void> {
+  const p = payload as { commentQueueId?: unknown; workspaceId?: unknown };
+  if (typeof p?.commentQueueId !== 'string' || typeof p?.workspaceId !== 'string') return;
+  try {
+    await http(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
+      {},
+    );
+  } catch {
+    // Left on the queue on purpose — see above.
+  }
 }
 
 interface ChannelPayload {

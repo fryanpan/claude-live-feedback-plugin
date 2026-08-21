@@ -127,7 +127,27 @@ export class SseHub {
     if (set.size === 0) this.byDoc.delete(docId);
   }
 
-  broadcast(docId: string, payload: SsePayload): void {
+  /**
+   * `forSink` lets ONE broadcast say something extra to a specific
+   * subscriber: called per sink with who opened it, its return replaces the
+   * payload for that sink alone (undefined keeps the base payload). What
+   * needs it is delivery bookkeeping — the comment queue stamps each
+   * addressed agent's own row id onto ITS copy of the frame, so the receipt
+   * can name exactly one row, while a browser tab (no agentId) gets the
+   * plain event. It must not change the event name.
+   *
+   * The REPLAY buffer holds the base payload, never a per-sink one: a row id
+   * belongs to the one live stream it was minted for, so replaying it to a
+   * reconnecting subscriber would hand somebody else's receipt out. A
+   * replayed comment frame therefore carries no row id and draws no ack —
+   * the row simply stays queued and is re-offered after the grace window,
+   * which is the durable path doing exactly its job.
+   */
+  broadcast(
+    docId: string,
+    payload: SsePayload,
+    forSink?: (who: { shareId?: string; agentId?: string }) => SsePayload | undefined,
+  ): void {
     // Reuse the broadcast's own `eid` (rooms.ts stamps one per fan-out, so
     // both channels of one broadcast carry the SAME wire id) and mint one for
     // the direct broadcasts that carry none (task/triage frames), keeping a
@@ -138,9 +158,10 @@ export class SseHub {
     this.buffer(docId, id, payload);
     const set = this.byDoc.get(docId);
     if (!set) return;
-    for (const sink of set.keys()) {
+    for (const [sink, who] of set) {
       try {
-        sink.write(payload.event, payload, id);
+        const p = forSink?.(who) ?? payload;
+        sink.write(p.event, p, id);
       } catch (err) {
         console.error('[sse] write failed:', err);
       }

@@ -397,7 +397,10 @@ describe('voice actions, hardened: end to end', () => {
   };
 
   /** A plain agent question — the `unreplied` band, which carries no review
-   *  payload and which `answerReviewItem` refuses outright. */
+   *  payload and which `answerReviewItem` refuses outright. Since 2026-08-21
+   *  the inferred band admits only DIRECT asks, so the question must address
+   *  a person by name — and that person must be in the workspace roster,
+   *  which is why the caller seeds one (see `seedRosterPerson`). */
   const askPlainly = async (docId: string, text: string): Promise<string> => {
     const r = await post(`/api/docs/${docId}/threads`, {
       author: AGENT,
@@ -407,6 +410,18 @@ describe('voice actions, hardened: end to end', () => {
     const payload = (await r.json()) as { thread?: { id: string }; error?: string };
     expect(r.status, payload.error ?? '').toBe(200);
     return payload.thread?.id ?? '';
+  };
+
+  /** The roster of addressable names is derived from who has SPOKEN as a
+   *  person in the workspace — an address to a name the roster has never
+   *  seen matches nothing, deliberately. One person comment seeds it. */
+  const seedRosterPerson = async (docId: string): Promise<void> => {
+    const r = await post(`/api/docs/${docId}/threads`, {
+      author: PERSON,
+      text: 'Watching this one.',
+      anchor: { kind: 'subject' },
+    });
+    expect(r.status).toBe(200);
   };
 
   const threadsOf = async (docId: string): Promise<StoredThread[]> => {
@@ -454,7 +469,11 @@ describe('voice actions, hardened: end to end', () => {
     await declare(injectedDocId, INJECTION);
 
     plainDocId = await newDoc('voice-hard-plain');
-    plainThreadId = await askPlainly(plainDocId, 'Should the rollout wait for the migration?');
+    await seedRosterPerson(await newDoc('voice-hard-roster'));
+    plainThreadId = await askPlainly(
+      plainDocId,
+      'Jordan — should the rollout wait for the migration?',
+    );
 
     answerDocId = await newDoc('voice-hard-answer');
     await declare(answerDocId, 'Which ranking clause ships?');
