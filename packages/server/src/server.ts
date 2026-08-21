@@ -4581,6 +4581,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!doc) return j(404, { error: 'doc not found' });
             return j(200, doc);
           }
+          // Cheap doc health check — metadata + counts, never the body.
+          // Exists because get_doc has returned 320KB for one doc: an agent
+          // that only needs "bound? wedged? how big?" must not have to pay
+          // for (or overflow on) the content to find out.
+          if (rest === 'status' && req.method === 'GET') {
+            const status = rooms.getDocStatus(docId);
+            if (!status) return j(404, { error: 'doc not found' });
+            if (visitor) {
+              // Same rule as `sourceUrl` in PRIVATE_META_KEYS: host-machine
+              // paths are not workspace content. syncError goes with it —
+              // its message can embed the bound path (backup locations,
+              // parse errors naming the file).
+              const { path: _path, syncError: _syncError, ...visitorSafe } = status;
+              return j(200, visitorSafe);
+            }
+            return j(200, status);
+          }
           // Whole-doc rewrite through the live doc — the safe replacement for
           // Write-the-bound-file + reparse_from_disk, which raced the
           // write-back and clobbered (see docs/research/2026-08-03 review).

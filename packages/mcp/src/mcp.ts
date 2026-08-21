@@ -11,6 +11,7 @@ import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
+import { projectTaskRows } from './task-projection.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 import { voiceRequestLine } from './voice-line.ts';
@@ -420,7 +421,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'get_doc',
       description:
-        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits.',
+        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits. On a big doc this result is BODY-SIZED (real docs have returned 320KB, past tool-result caps) — when you only need health/shape ("is it bound, is it wedged, how big, what is pending"), call doc_status instead and read the body only if you actually need the text.',
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' } },
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'doc_status',
+      description:
+        "Cheap doc health check — the doc's metadata and counts WITHOUT any of the body (no plainText, no blocks, no thread text), a few hundred bytes where get_doc can run to hundreds of KB. Returns {docId, type, title?, bound, path?, syncError?, lastActivityAt?, textLength, blockCount, threads: {open, resolved}, pendingSuggestions}. Use it before/instead of get_doc when the question is about the doc rather than its text: is it still bound to disk and where (`bound`/`path`), did the last sync wedge (`syncError` — read it, it names the conflict), how big is what get_doc would return (`textLength`), is anything waiting (`threads.open`, `pendingSuggestions`). Answers 404 for an unknown docId.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -1260,7 +1271,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_tasks',
       description:
-        'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation.',
+        'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation. On a big board the default rows still run large (reviews with their quotes and answers, infoRequests, options, evidence ride on every row — a real board hit 122KB); pass `fields` to pick exactly the keys you need.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1269,6 +1280,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           status: { type: 'string', enum: ['todo', 'in-progress', 'done'] },
           assignee: { type: 'string' },
           needs: { type: 'string', enum: ['action', 'decision'] },
+          fields: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              "Project each row to just these keys (`id` always included; keys a row lacks are omitted). Use for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB. 'transitionCount' is computable here without hauling transitions. Omit (or pass []) for the historical default trim.",
+          },
         },
         required: ['workspaceId'],
       },
@@ -1951,6 +1968,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'get_doc': {
         const { docId } = a as { docId: string };
         const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
+        return ok(res);
+      }
+      case 'doc_status': {
+        const { docId } = a as { docId: string };
+        const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/status`);
         return ok(res);
       }
       case 'create_review_doc': {
@@ -2693,12 +2715,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ workspaceId, tasks: res.tasks });
       }
       case 'list_tasks': {
-        const { workspaceId, goal, status, assignee, needs } = a as {
+        const { workspaceId, goal, status, assignee, needs, fields } = a as {
           workspaceId: string;
           goal?: string;
           status?: string;
           assignee?: string;
           needs?: string;
+          fields?: string[];
         };
         const qs = new URLSearchParams();
         if (goal !== undefined) qs.set('goal', goal);
@@ -2710,13 +2733,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           'GET',
           `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`,
         )) as { tasks: TaskPayload[] };
-        // Trimmed rows: no body snapshot, no transition history.
+        // Trimmed handler-side, NOT at the route — an old bundle keeps
+        // calling the REST route forever and must keep reading its shape.
+        // Default: no body snapshot, no transition history. With `fields`:
+        // exactly the picked keys per row.
         return ok({
           workspaceId,
-          tasks: res.tasks.map(({ body: _body, transitions, ...rest }) => ({
-            ...rest,
-            transitionCount: transitions?.length ?? 0,
-          })),
+          tasks: projectTaskRows(res.tasks, fields),
         });
       }
       case 'task_transition': {
