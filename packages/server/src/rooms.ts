@@ -2634,6 +2634,7 @@ export class Rooms {
     docId: string,
     anchorId: string,
     markdown: string,
+    opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
@@ -2642,6 +2643,7 @@ export class Rooms {
     return prose.insertBlocksAfterAnchor(room.ydoc, {
       anchorRel: anchor.endRel,
       markdown,
+      placement: opts?.placement,
     });
   }
 
@@ -2665,6 +2667,7 @@ export class Rooms {
     docId: string,
     threadId: string,
     markdown: string,
+    opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
@@ -2674,6 +2677,7 @@ export class Rooms {
     return prose.insertBlocksAfterAnchor(room.ydoc, {
       anchorRel: thread.anchor.endRel,
       markdown,
+      placement: opts?.placement,
     });
   }
 

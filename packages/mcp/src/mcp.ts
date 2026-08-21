@@ -803,13 +803,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_after_thread',
       description:
-        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'.",
+        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'. If the anchor sits inside a list item, the default placement nests the new blocks under that item — pass placement 'top-level' to insert after the entire list instead.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           threadId: { type: 'string' },
           markdown: { type: 'string' },
+          placement: {
+            type: 'string',
+            enum: ['after-block', 'top-level'],
+            description:
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+          },
         },
         required: ['docId', 'threadId', 'markdown'],
       },
@@ -855,13 +861,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_at_anchor',
       description:
-        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element.",
+        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element. CAUTION: an anchor inside a list item nests everything under that item by default — pass placement 'top-level' to insert after the whole list.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           anchorId: { type: 'string' },
           markdown: { type: 'string' },
+          placement: {
+            type: 'string',
+            enum: ['after-block', 'top-level'],
+            description:
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+          },
         },
         required: ['docId', 'anchorId', 'markdown'],
       },
@@ -2258,15 +2270,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'insert_blocks_after_thread': {
-        const { docId, threadId, markdown } = a as {
+        const { docId, threadId, markdown, placement } = a as {
           docId: string;
           threadId: string;
           markdown: string;
+          placement?: 'after-block' | 'top-level';
         };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`,
-          { markdown },
+          { markdown, ...(placement !== undefined ? { placement } : {}) },
         );
         return ok(res);
       }
@@ -2302,15 +2315,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'insert_blocks_at_anchor': {
-        const { docId, anchorId, markdown } = a as {
+        const { docId, anchorId, markdown, placement } = a as {
           docId: string;
           anchorId: string;
           markdown: string;
+          placement?: 'after-block' | 'top-level';
         };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`,
-          { markdown },
+          { markdown, ...(placement !== undefined ? { placement } : {}) },
         );
         return ok(res);
       }

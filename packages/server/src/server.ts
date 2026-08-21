@@ -4509,7 +4509,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (threadRest === '/insert_blocks_after' && req.method === 'POST') {
               const body = await safeJson(req);
               const markdown = String(body?.markdown ?? '');
-              const res = rooms.insertBlocksAfterThread(docId, threadId, markdown);
+              const placement = parsePlacement(body?.placement);
+              if (placement === PLACEMENT_INVALID) {
+                return j(400, { error: "placement must be 'after-block' or 'top-level'" });
+              }
+              const res = rooms.insertBlocksAfterThread(docId, threadId, markdown, { placement });
               return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
             }
           }
@@ -4710,7 +4714,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const body = await safeJson(req);
               const markdown = String(body?.markdown ?? '');
               if (markdown.length === 0) return j(400, { error: 'markdown is required' });
-              const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown);
+              const placement = parsePlacement(body?.placement);
+              if (placement === PLACEMENT_INVALID) {
+                return j(400, { error: "placement must be 'after-block' or 'top-level'" });
+              }
+              const res = rooms.insertBlocksAtAnchor(docId, anchorId, markdown, { placement });
               return res.ok ? j(200, withSyncError(rooms, docId, res)) : j(409, res);
             }
             if (anchorRest === '' && req.method === 'DELETE') {
@@ -5244,6 +5252,22 @@ function j(status: number, body: unknown): Response {
 function withSyncError(rooms: Rooms, docId: string, body: object): object {
   const syncError = rooms.getSyncError(docId);
   return syncError ? { ...body, syncError } : body;
+}
+
+/** Sentinel for a `placement` body value that is present but not one of the
+ *  two known values — the route answers 400 rather than silently splicing at
+ *  the default position (an insert in the wrong place is a structure edit
+ *  the caller then has to hunt down and undo). */
+const PLACEMENT_INVALID = Symbol('placement-invalid');
+
+/** Parse an insert_blocks body's optional `placement`. Absent → undefined
+ *  (core defaults to 'after-block', the historical behavior). */
+function parsePlacement(
+  value: unknown,
+): 'after-block' | 'top-level' | undefined | typeof PLACEMENT_INVALID {
+  if (value === undefined || value === null) return undefined;
+  if (value === 'after-block' || value === 'top-level') return value;
+  return PLACEMENT_INVALID;
 }
 
 /** Parse a `suggest: true` request body's `author` field into a
