@@ -7,9 +7,11 @@ import {
   type ReviewPayload,
   type User,
   type WebhookPayload,
+  agentIdCandidates,
   anchors,
   checkReviewPayload,
   contentKind,
+  readReviewPayload,
   reviewGapAdvice,
   reviewPayloadMessage,
   suggestOps,
@@ -233,7 +235,11 @@ function reviewFromBody(
   const check = checkReviewPayload(raw);
   if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
   const advice = reviewGapAdvice(check.gaps);
-  return { ok: true, review: raw as ReviewPayload, ...(advice ? { advice } : {}) };
+  // Stored via the reader so the agent-facing spellings (`review_type`,
+  // 'question') land in the stored vocabulary and junk keys never persist.
+  const review = readReviewPayload(raw);
+  if (!review) return { ok: false, error: reviewPayloadMessage(check) };
+  return { ok: true, review, ...(advice ? { advice } : {}) };
 }
 
 /** Attribution for a write that arrived with no author at all. Deliberately
@@ -877,12 +883,96 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // migration: `fileUnderHubWorkspace` already files every doc onto some
   // board, defaulting to Unfiled, so a doc that exists is a doc some board
   // holds.
+  /** Does this comment author name this agent? Candidate-matched both ways,
+   *  because the event's actor id and the attachment key demonstrably
+   *  disagree in the field (see noteObservedWork in tasks.ts). */
+  const commentAuthorIs = (agentId: string, author?: { id?: string; name?: string }): boolean => {
+    if (!author) return false;
+    const candidates = new Set<string>();
+    for (const raw of [author.id, author.name]) {
+      if (typeof raw !== 'string') continue;
+      candidates.add(raw.trim().toLowerCase());
+      for (const c of agentIdCandidates(raw)) candidates.add(c);
+    }
+    return candidates.has(agentId.trim().toLowerCase());
+  };
+
+  /**
+   * The durable half of a comment's delivery (§ comment queue, mirrored from
+   * voice): write one ADDRESSED row per owning agent before any frame goes
+   * out, so a stream being down costs latency rather than the comment.
+   *
+   * Who owns a comment — the addressing decision, made here in one place:
+   * the board's LEAD (declare-lead's contract is "everything on this board
+   * reaches you") plus every agent whose DURABLE watch set holds
+   * `ws:<workspaceId>` (the standing subscription that survives the stream
+   * carrying it). Deliberately NOT per-doc watchers or "whoever attaches
+   * first": attach and heartbeat — the only per-agent drains — are
+   * board-scoped, and queuedVoice's missing lead-guard is the measured cost
+   * of leaving a queue unaddressed. The author is excluded: an agent is not
+   * owed a receipt for its own words.
+   *
+   * Only events that ARE a comment queue (thread.created / thread.replied,
+   * which carry `comment`); resolve/reopen/suggestion verdicts are state
+   * changes, not asks waiting on somebody.
+   */
+  const queueCommentRows = (
+    workspaceId: string,
+    docId: string,
+    payload: WebhookPayload,
+  ): Map<string, string> => {
+    const rows = new Map<string, string>();
+    if (payload.event !== 'thread.created' && payload.event !== 'thread.replied') return rows;
+    // thread.replied carries the comment on the payload; thread.created fires
+    // with `comment: undefined` and the opening comment inside the thread
+    // (rooms.ts fireEvent call sites), so fall back to the newest one there.
+    const comment =
+      payload.comment ??
+      (payload.event === 'thread.created'
+        ? payload.thread?.comments?.[payload.thread.comments.length - 1]
+        : undefined);
+    if (!comment) return rows;
+    const addressees = new Set<string>(agentWatches.agentsWatching(`ws:${workspaceId}`));
+    const lead = taskStore.getWorkspace(workspaceId)?.leadAgentId;
+    if (lead) addressees.add(lead);
+    for (const agentId of addressees) {
+      if (commentAuthorIs(agentId, comment.author)) continue;
+      const id = taskStore.queueComment(workspaceId, {
+        agentId,
+        docId,
+        threadId: payload.threadId,
+        event: payload.event,
+        author: { id: comment.author.id, name: comment.author.name },
+        text: comment.text,
+        payload,
+      });
+      if (id !== false) rows.set(agentId, id);
+    }
+    return rows;
+  };
+
+  /** An addressee holding the board stream just received (or is receiving)
+   *  the live frame: start its ack grace, so the next heartbeat does not
+   *  immediately re-send what is already in flight. */
+  const markCommentRowsEmitted = (workspaceId: string, rows: Map<string, string>): void => {
+    if (rows.size === 0) return;
+    const on = sse.agentsOn(`ws~${workspaceId}`);
+    for (const [agentId, rowId] of rows) {
+      if (on.has(agentId)) taskStore.markCommentEmitted(workspaceId, rowId);
+    }
+  };
+
   onDocRoomEvent = (docId, payload) => {
     const taskId = taskIdOfBodyDoc(docId);
     if (taskId) {
       const workspaceId = taskStore.getTask(taskId)?.workspaceId;
       if (!workspaceId) return;
-      sse.broadcast(`ws~${workspaceId}`, payload);
+      const rows = queueCommentRows(workspaceId, docId, payload);
+      sse.broadcast(`ws~${workspaceId}`, payload, (who) => {
+        const rowId = who.agentId ? rows.get(who.agentId) : undefined;
+        return rowId ? { ...payload, workspaceId, commentQueueId: rowId } : undefined;
+      });
+      markCommentRowsEmitted(workspaceId, rows);
       // Task path only: a plain doc thread moves no row, so refreshing the
       // projection for it would be a board-wide rewrite that changes nothing.
       taskProjection.refresh(workspaceId);
@@ -893,10 +983,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // and what a share visitor may OPEN in it cannot drift apart.
     const grouping = rooms.get(docId)?.meta.workspaceId;
     for (const board of hubBoardsForDoc(docId)) {
+      const rows = queueCommentRows(board, docId, payload);
       // rooms.ts already broadcast on the grouping's own channel; a second
-      // send here would deliver the same comment twice to one listener.
-      if (board === grouping) continue;
-      sse.broadcast(`ws~${board}`, payload);
+      // send here would deliver the same comment twice to one listener. The
+      // grouping frames carried no row id, so those rows are acked off the
+      // grace-window redelivery instead — late receipt beats double frame.
+      if (board !== grouping) {
+        sse.broadcast(`ws~${board}`, payload, (who) => {
+          const rowId = who.agentId ? rows.get(who.agentId) : undefined;
+          return rowId ? { ...payload, workspaceId: board, commentQueueId: rowId } : undefined;
+        });
+      }
+      markCommentRowsEmitted(board, rows);
     }
   };
 
@@ -4098,6 +4196,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               typeof body?.pluginVersion === 'string' && body.pluginVersion.trim().length > 0
                 ? body.pluginVersion.trim()
                 : undefined,
+            // Per-process nonce (see AgentAttachment.processId): same nonce
+            // means a live process re-attaching, so the drains respect the
+            // ack grace; absent (an older bundle) keeps bypass-always.
+            processId:
+              typeof body?.processId === 'string' && body.processId.trim().length > 0
+                ? body.processId.trim()
+                : undefined,
           });
           if (!res.ok) return j(404, res);
           return j(200, res);
@@ -4116,7 +4221,55 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             toolCallAt: typeof body?.toolCallAt === 'number' ? Number(body.toolCallAt) : undefined,
           });
           if (!res.ok) return j(404, res);
+          // Parked comments ride the observation, as ADDRESSED frames — the
+          // response body would not do (the keepalive that carries most
+          // heartbeats discards it), and a broadcast would bill every peer
+          // for a message that names one of them. Each frame replays the
+          // original payload plus this row's id; the receiving MCP's ack is
+          // what clears it.
+          //
+          // `sendToAgent` returning 0 is a REAL answer — the agent holds no
+          // stream (its keepalive still lands as plain HTTP while its SSE
+          // reconnect fails) — and the hand-over above already stamped the
+          // row emitted. Left stamped, the row waits out a full grace window
+          // per heartbeat while never actually going anywhere: an
+          // SSE-or-nothing loop wearing delivery bookkeeping. Same lesson as
+          // setTriageDelivery above ("0 is a real answer"): roll the mark
+          // back, so the NEXT heartbeat is a fresh attempt rather than a
+          // grace-window wait. Rows the route cannot even frame (no replay
+          // payload) are rolled back for the same reason — nothing was sent.
+          for (const q of res.queuedComments ?? []) {
+            let sent = 0;
+            const original =
+              q.payload && typeof q.payload === 'object'
+                ? (q.payload as Record<string, unknown>)
+                : undefined;
+            if (original && typeof original.event === 'string') {
+              const frame: Record<string, unknown> & { event: string } = {
+                ...original,
+                event: original.event,
+                workspaceId,
+                commentQueueId: q.id,
+              };
+              sent = sse.sendToAgent(`ws~${workspaceId}`, agentId, frame);
+            }
+            if (sent === 0) taskStore.clearCommentEmitted(workspaceId, q.id);
+          }
           return j(200, res);
+        }
+        // The receipt that clears a queued comment — mirror of the voice ack
+        // below, with the same idempotency: a replayed receipt for a row
+        // already cleared answers 200 with cleared:false rather than an
+        // error.
+        const wsCommentAckMatch = pathname.match(
+          /^\/api\/workspaces\/([^/]+)\/comment-queue\/([^/]+)\/ack$/,
+        );
+        if (wsCommentAckMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const workspaceId = decodeURIComponent(wsCommentAckMatch[1] ?? '');
+          const entryId = decodeURIComponent(wsCommentAckMatch[2] ?? '');
+          const cleared = taskStore.ackComment(workspaceId, entryId);
+          return j(200, { ok: true, cleared });
         }
         // The receipt that makes a live voice delivery durable. The server
         // knows what it wrote to a socket and nothing more, so a row stays on
