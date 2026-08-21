@@ -833,6 +833,54 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
 });
 
 /**
+ * Design point 4 (approved design, review-flow-mock-v1): every composer is a
+ * markdown editor with a live preview. The walkthrough has two — the answer
+ * box and the "Tell me more" ask box — and both go through the same
+ * `attachMarkdownField`, so they cannot drift apart.
+ */
+describe('the walkthrough composers are markdown fields', () => {
+  it('the answer box carries the affordance and previews what you type', () => {
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    const preview = form.querySelector('.md-preview') as HTMLElement;
+    expect(preview.hidden).toBe(true);
+    ta.value = '**two hops**';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(preview.hidden).toBe(false);
+    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+  });
+
+  it('a successful send empties the preview along with the box', async () => {
+    const onAnswer = vi.fn(() => Promise.resolve(true));
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Blue, **final**.';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ta.value).toBe('');
+    expect((form.querySelector('.md-preview') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('the Tell me more box is the same editor', () => {
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
+    const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
+    expect(info.querySelector('.md-affordance')).not.toBeNull();
+    expect(info.querySelector('.md-preview')).not.toBeNull();
+  });
+
+  it('a declared item card gets the same composer', () => {
+    const q = reviewQueue([task({ id: 't-1' })], [threadItem()], NOW);
+    renderReviewWalkthrough(root, q, 0, walk());
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance')).not.toBeNull();
+  });
+});
+
+/**
  * The advance is the feature — "when I submit an answer to a request I should
  * go to the next request in priority order" — and the whole difficulty is that
  * the list edits itself underneath the reader. These are pure so the off-by-one

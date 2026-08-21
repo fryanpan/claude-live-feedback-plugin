@@ -13,6 +13,7 @@ import {
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
 import { askedMetaLine } from './hub/hub-model.ts';
+import { attachMarkdownField } from './md-field.ts';
 import {
   isFoldingTap,
   morphThread,
@@ -519,11 +520,16 @@ export class ThreadPanel {
       ? `Answer as ${this.opts.currentUser.name}…`
       : `Reply as ${this.opts.currentUser.name}…`;
     if (pendingReply) ta.value = pendingReply;
+    reply.appendChild(ta);
+    // Every composer speaks markdown (design point 4); refresh covers the
+    // programmatic clear below, which fires no `input` event.
+    const refreshPreview = attachMarkdownField(ta);
     const submitReply = () => {
       const text = ta.value.trim();
       if (!text) return;
       this.opts.onReply(t.id, text, answering);
       ta.value = '';
+      refreshPreview();
     };
     ta.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
@@ -531,7 +537,6 @@ export class ThreadPanel {
         submitReply();
       }
     });
-    reply.appendChild(ta);
     const actions = div('thread-actions');
     actions.appendChild(btn(answering ? 'Answer' : 'Reply', 'primary', submitReply));
     // Resolve/Reopen is NOT here — one control, in the foot, outside the

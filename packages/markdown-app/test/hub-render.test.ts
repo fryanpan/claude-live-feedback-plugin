@@ -2334,6 +2334,32 @@ describe('renderTaskDetail — discussion', () => {
     );
   });
 
+  /** Design point 4: every composer is a markdown field with a live preview. */
+  it('the discussion composer is a markdown field', () => {
+    renderTaskDetail(root, task(), detailHandlers(), { loading: false, threads: [] });
+    const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    const preview = form.querySelector('.md-preview') as HTMLElement;
+    expect(preview.hidden).toBe(true);
+    ta.value = '**two hops**';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(preview.hidden).toBe(false);
+    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+  });
+
+  it('the review card answer box is a markdown field too', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      detailHandlers({ asks: [askItem({ threadId: 'th-1' })], now: NOW }),
+      { loading: false, threads: [thread({ id: 'th-1' })] },
+    );
+    const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
+    expect(form.querySelector('.md-affordance')).not.toBeNull();
+    expect(form.querySelector('.md-preview')).not.toBeNull();
+  });
+
   /**
    * The acceptance line for the two-composers report: "a task with one thread
    * presents exactly one obvious way to reply". It used to present two — a
