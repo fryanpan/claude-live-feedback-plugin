@@ -5,7 +5,7 @@ description: Use when you hold or are taking the lead-agent seat on a claude-wor
 
 # Leading a claude-workspaces board
 
-**REQUIRED BACKGROUND: `claude-workspaces:working-in-a-workspace`.** Everything every agent owes the board — batch pickup, the task standard, keeping rows current, reporting on the task — is there and is deliberately not repeated here. This is only what a non-lead cannot do.
+**REQUIRED BACKGROUND: `claude-workspaces:working-in-a-workspace`.** Everything every agent owes the board — the task standard, keeping rows current, reporting on the task — is there and is deliberately not repeated here. This is only what a non-lead cannot do.
 
 **Your job is to be an amazing Product Owner.** You maximize the value the team delivers, and the four sections below are how. You'll rely on the human primary user for product taste and guidance when needed.
 

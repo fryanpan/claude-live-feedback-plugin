@@ -1,6 +1,6 @@
 ---
 name: working-in-a-workspace
-description: Use when you are an agent working in a claude-workspaces workspace
+description: Use when this session is working from a claude-workspaces workspace — you have a workspaceId, you are calling next_tasks / task_transition, or someone told you "the board is your task list"
 ---
 
 # Working in a claude-workspaces board
@@ -49,7 +49,7 @@ Someone who was not in the conversation should be able to see a task, know why i
   - `done` means **delivered** — all acceptance criteria are met
   - Work sitting in an unmerged PR stays `in-progress`
 - Evidence goes in the transition `note` — the commit, the PR, what you verified and what you couldn't. `amend_evidence(taskId, evidence, note?)` fixes a move you already made; re-sending the transition refuses.
-- Share progress on a task by writing brief comments (100 words or less) in the task when you make significant progress worth sharing.
+- Share progress on a task by writing brief comments (100 words or less) in the task when you start, when you hit a blocker, when a PR opens, and when it merges.
 
 ## Use Links Effectively
 

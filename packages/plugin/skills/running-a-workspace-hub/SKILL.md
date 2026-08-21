@@ -1,6 +1,6 @@
 ---
 name: running-a-workspace-hub
-description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, set_workspace_lead, attach_agent, task_transition, add_review_item, answer_review_item, answer_decision, link_refs. Covers the north-star goal, the ordered goal list, story-shaped task bodies, triage, the work loop, the review items a ticket carries, the lead-agent seat, and declaring yourself lead once so every surface on the board — including ones created later — reaches you without a per-doc subscribe.
+description: Use when you need to stand up or drive a claude-workspaces workspace hub with the MCP tools — create_workspace, set_goal_list, create_tasks, set_task_goal, set_workspace_lead, attach_agent, task_transition, add_review_item, answer_review_item, answer_decision, link_refs.
 ---
 
 # Running a claude-workspaces workspace hub
@@ -11,15 +11,15 @@ MCP tools: you can create the board, order its goals, file work as tasks a
 person can read, hang questions on a ticket and record verbatim answers, and
 hand the whole thing to the next agent with no chat handoff.
 
-**Do it all with the tools.** Two agents have reconstructed this API by reading
-the server source and got the shapes wrong; a `curl` at the REST layer looks
-identical to a proper board and proves nothing about whether the product works.
-If a tool you need does not exist, that is a blocker to report and a task to
-file.
+**Do it all with the tools, not `curl` at the REST layer.** A hand-built REST
+call looks identical to a working board and proves nothing about whether the
+product works. If a tool you need does not exist, that is a blocker to report
+and a task to file.
 
-This skill is the tool contract. The **discipline** of working an existing
-board lives in `claude-workspaces:working-in-a-workspace`, and the lead
-seat's own duties in `claude-workspaces:leading-a-workspace`. Read all three.
+This skill is the tool contract. **REQUIRED BACKGROUND:**
+`claude-workspaces:working-in-a-workspace` and
+`claude-workspaces:leading-a-workspace`. The first is the discipline every
+agent owes an existing board; the second is what the lead seat adds.
 
 ## First: two different things are called "workspace"
 
@@ -108,12 +108,10 @@ rename_goal(workspaceId, goal: "index",   title: "Index shape", dueAt: null)
 
 - **The id never changes, so nothing moves.** A task's band IS its goal id.
 - This is the reason the verb exists: `set_goal_list` is keyed by id, so
-  "renaming" a band there by giving it a new id used to be a removal plus an
-  addition — open tasks into Backlog, done tasks orphaned onto an id that no
-  longer exists, and the new title appearing exactly as if it had worked. That
-  gesture is now refused outright (`unknown-goal-id`), because ids are
-  generated and permanent. `rename_goal` is where a title change belongs, and
-  a title is the only part of a band anyone was ever really renaming.
+  giving a band a new id there is not a rename at all — it is a removal plus
+  an addition, and it is refused outright (`unknown-goal-id`) because ids are
+  generated and permanent. A title is the only part of a band anyone was ever
+  really renaming, and `rename_goal` is where that belongs.
 - `dueAt` is optional: a number sets it, `null` clears it, omitting it leaves
   it alone. `chores` is refused — its label is fixed.
 
@@ -379,11 +377,10 @@ list; an empty `after` clears the edges.
 
 ## Triage: shape it, then place it
 
-Triage is **two** verbs, and for a long time only the second one was written
-down. A paragraph typed into quick-capture became one row whose title was the
-first line clipped mid-word and whose body was the raw utterance; triage gave
-it a goal, and it kept that fragment title forever while every component
-reported success. Placement alone does not make a row pickup-able.
+Triage is **two** verbs, and shaping is the one that gets skipped. A row
+captured from a pasted paragraph or a dictation keeps its clipped title and its
+raw body however well you place it, and every component reports success either
+way. Placement alone does not make a row pickup-able.
 
 **Shape first.**
 
@@ -451,8 +448,8 @@ identity (`CW_AGENT_NAME`) and re-wired when your session comes back, so the
 next context does not spend its opening turns rebuilding a watch list. The
 restore now **re-attaches** you too, on boards you already led or were attached
 to whose heartbeat came back stale — re-wiring the key puts events back on the
-wire, and only the attachment makes you *addressable*, so the two repairs
-failing separately is how a respawned lead came back subscribed and invisible.
+wire, and only the attachment makes you *addressable*, so both repairs have to
+land for you to be reachable.
 Check with `list_watched_docs`, whose `restore.status` says whether the re-wire
 happened, failed, or was never possible (no stable identity).
 
@@ -605,13 +602,12 @@ task_transition(taskId, to: "done", note: "merged in #142",
   message, it names what to unblock.
 - **Moving back to `todo` is never blocked** — undoing work must not be
   gateable.
-- There is no risk gate here any more. A `riskTier` on the task used to refuse
-  an agent's forward move on `red` and require `confirmed: true` on `yellow`;
-  that was removed on 2026-08-18 because when to stop and ask a person is
-  already your fleet's own judgement, and a second copy of it on this server
-  was one mechanism too many. **Deciding when a move needs a human is still
-  yours to make** — the server simply no longer makes it for you. Old bundles
-  may still send `riskTier` and `confirmed`; both are accepted and ignored.
+- There is no risk gate here. The server never refuses a forward move for
+  being risky: when to stop and ask a person is already your fleet's own
+  judgement, and a second copy of it on this server would be one mechanism too
+  many. **Deciding when a move needs a human is still yours to make.** Old
+  bundles may still send `riskTier` and `confirmed`; both are accepted and
+  ignored.
 
 **Hand off what isn't yours** with `assign_task(taskId, assignee)` —
 `'human'`, `'agent'`, or a named identity — the moment you discover it, rather
