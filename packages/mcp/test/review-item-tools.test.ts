@@ -414,7 +414,7 @@ describe('the agent-facing skills describe the entity, not the old model', () =>
     'utf8',
   );
   const board = readFileSync(
-    join(HERE, '../../plugin/skills/working-a-workspace-board/SKILL.md'),
+    join(HERE, '../../plugin/skills/working-in-a-workspace/SKILL.md'),
     'utf8',
   );
 
@@ -424,11 +424,10 @@ describe('the agent-facing skills describe the entity, not the old model', () =>
     expect(hub.toLowerCase()).toContain('more than one');
   });
 
-  it('the board skill says a TICKET takes review items too, not only a thread', () => {
-    // Non-vacuity: the phrase "review items" already appears in the skill, in
-    // the quote about presenting work in context — so asserting the phrase
-    // alone passes without a word changing. Assert the verb.
-    expect(board).toContain('review items tied to tasks'); // the pre-existing quote
-    expect(board).toContain('add_review_item'); // what this commit owes
+  it('the general skill says a TICKET takes review items too, not only a thread', () => {
+    expect(board).toContain('add_review_item(taskId, review)');
+    // And it teaches the current payload vocabulary, not the old field names.
+    expect(board).toContain('review_type: "decision"');
+    expect(board).toContain('review_type: "question"');
   });
 });
