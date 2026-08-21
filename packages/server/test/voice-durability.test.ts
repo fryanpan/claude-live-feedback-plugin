@@ -120,6 +120,49 @@ describe('an utterance routed to an agent is written down either way', () => {
     expect(beat.queuedVoice?.map((q) => q.transcript)).toEqual([utterance.transcript]);
   });
 
+  it('a NON-LEAD attach leaves the queue intact for the lead', () => {
+    // The queue is addressed to the seat, not to whoever shows up first — the
+    // same contract as pendingRetriage / pendingBucketReview / taskReviews.
+    // Before this test, any attach drained it, so a bystander attaching to a
+    // board swallowed the notes into a payload it has no contract to act on.
+    const s = store();
+    const w = s.createWorkspace('guarded-hub', 'Ship it.', { leadAgentId: 'agent-lead' }).id;
+    s.queueVoiceRequest(w, utterance);
+
+    const bystander = s.attachAgent(w, {
+      agentId: 'agent-bystander',
+      runtime: 'claude-code-local',
+    });
+    if (!bystander.ok) throw new Error('attach refused');
+    expect(bystander.lead).toBe(false);
+    expect(bystander.queuedVoice).toBeUndefined();
+    // Still on the books — not delivered, just not handed to the wrong seat.
+    expect(s.listQueuedVoice(w)).toHaveLength(1);
+
+    // And the lead's next attach still receives it.
+    const lead = s.attachAgent(w, { agentId: 'agent-lead', runtime: 'claude-code-local' });
+    if (!lead.ok) throw new Error('attach refused');
+    expect(lead.lead).toBe(true);
+    expect(lead.queuedVoice?.map((q) => q.transcript)).toEqual([utterance.transcript]);
+    expect(s.listQueuedVoice(w)).toHaveLength(0);
+  });
+
+  it("POSITIVE CONTROL: the lead's attach drains the queue exactly as before", () => {
+    const s = store();
+    const w = s.createWorkspace('guarded-hub', 'Ship it.', { leadAgentId: 'agent-lead' }).id;
+    s.queueVoiceRequest(w, utterance);
+
+    const lead = s.attachAgent(w, { agentId: 'agent-lead', runtime: 'claude-code-local' });
+    if (!lead.ok) throw new Error('attach refused');
+    expect(lead.lead).toBe(true);
+    expect(lead.queuedVoice?.map((q) => q.transcript)).toEqual([utterance.transcript]);
+    // Drained means drained: a second attach by the lead is offered nothing.
+    const again = s.attachAgent(w, { agentId: 'agent-lead', runtime: 'claude-code-local' });
+    if (!again.ok) throw new Error('attach refused');
+    expect(again.queuedVoice ?? []).toEqual([]);
+    expect(s.listQueuedVoice(w)).toHaveLength(0);
+  });
+
   it('an ATTACHING agent gets an in-flight frame immediately — a new process holds nothing', () => {
     // The grace window exists to protect a session that might still ack. A
     // session that just attached is a different process; whatever was in
@@ -131,8 +174,8 @@ describe('an utterance routed to an agent is written down either way', () => {
     s.markVoiceEmitted(w, id);
 
     const attached = s.attachAgent(w, { agentId: 'worker', runtime: 'claude-code-local' });
-    if (!('queuedVoice' in attached)) throw new Error('attach refused');
-    expect(attached.queuedVoice.map((q: { transcript: string }) => q.transcript)).toEqual([
+    if (!attached.ok) throw new Error('attach refused');
+    expect(attached.queuedVoice?.map((q: { transcript: string }) => q.transcript)).toEqual([
       utterance.transcript,
     ]);
   });
