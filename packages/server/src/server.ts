@@ -797,7 +797,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // rendered no matter what the renderer does — and the lead who is HERE
     // would get less than the one who was away and picks the same edit up as
     // `pendingRetriage` on attach. Pinned by a test that reads this frame.
-    sse.broadcast(`ws~${req.workspaceId}`, { event: 'triage.requested', ...req });
+    const frame = { event: 'triage.requested', ...req } as const;
+    // Addressed kinds go to ONE agent; only shape-and-place is open to
+    // whoever is there. The addressing used to be done at the receiver, in
+    // prose — the frame went to every sink on the channel and the MCP
+    // rendered "Act only if that is you". An agent can obey a sentence.
+    // Bryan's browser cannot: it rendered his own rename back at him as
+    // something for him to review, which is what he saw (2026-08-21). And
+    // every non-lead agent on the board paid a whole turn to read a message
+    // and conclude it was not theirs.
+    if (
+      req.kind === 'goal-retriage' ||
+      req.kind === 'bucket-review' ||
+      req.kind === 'task-review'
+    ) {
+      // No addressee in the payload means the seat is empty, and an empty
+      // seat cannot be delivered to — the liveness gate above already said
+      // no in that case, so this is belt-and-braces rather than a path.
+      if (req.leadAgentId === undefined) return false;
+      // Report what the send actually reached. The gate above can pass with
+      // the lead holding no stream (its clock is fresh and SOMEBODY is on
+      // the wire), and a `true` there would mark the task triage-pending
+      // against a delivery that never happened. 0 is a real answer: the ask
+      // parks and the lead drains it on their next attach.
+      return sse.sendToAgent(`ws~${req.workspaceId}`, req.leadAgentId, frame) > 0;
+    }
+    sse.broadcast(`ws~${req.workspaceId}`, frame);
     return true;
   });
   // The second half of the liveness gate, and the half a time window cannot

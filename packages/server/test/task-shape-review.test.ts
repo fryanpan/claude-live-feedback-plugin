@@ -140,7 +140,7 @@ describe('task shape review requests (the routing loop)', () => {
   it('a PLACED create asks the live lead for a review — and the write itself still lands', async () => {
     const ws = await makeWorkspace('hot-board');
     await attach(ws, LEAD_ID);
-    const sse = listen(await local(`/events/workspace/${ws}`));
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
     const res = await post(`/api/workspaces/${ws}/tasks`, {
       author: PERSON,
       title: TITLE,
@@ -175,10 +175,43 @@ describe('task shape review requests (the routing loop)', () => {
     expect(readAudit(dataDir, ws).filter((l) => l.event === 'task.created')).toHaveLength(1);
   });
 
+  it('is ADDRESSED, not broadcast — a browser tab on the same channel never sees it', async () => {
+    // The defect this pins (Bryan, 2026-08-21, on renaming one of his own
+    // rows): "I have no idea why this is flagged for me? Wtf?" A shape review
+    // is addressed to the LEAD, but it went out on `ws~<id>` — the channel his
+    // browser tab is also subscribed to — with the addressing done at the
+    // receiver in prose. Prose works on an agent that reads the sentence and
+    // does nothing at all for a tab.
+    //
+    // A tab can never name itself (`agentId` is set only by an agent's MCP
+    // child, and refused for share visitors), so routing to the lead excludes
+    // every browser by construction rather than by a rule someone maintains.
+    const ws = await makeWorkspace('addressed-board');
+    await attach(ws, LEAD_ID);
+    const leadStream = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
+    const browserTab = listen(await local(`/events/workspace/${ws}`));
+    await post(`/api/workspaces/${ws}/tasks`, {
+      author: PERSON,
+      title: TITLE,
+      body: BODY,
+      goal: 'chores',
+    });
+    await settle();
+    leadStream.stop();
+    browserTab.stop();
+
+    expect(reviewFrames(leadStream.data)).toHaveLength(1);
+    expect(reviewFrames(browserTab.data)).toHaveLength(0);
+    // The control that makes the zero above mean something: the tab's stream
+    // is open and delivering. Without it, a torn-down stream and a correctly
+    // routed one are the same empty array.
+    expect(browserTab.data.some((d) => d.includes('"task.created"'))).toBe(true);
+  });
+
   it('a decision row routes too — the prompt owns the story-shape exemption, not the server', async () => {
     const ws = await makeWorkspace('decision-board');
     await attach(ws, LEAD_ID);
-    const sse = listen(await local(`/events/workspace/${ws}`));
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
     const res = await post(`/api/workspaces/${ws}/tasks`, {
       author: PERSON,
       needs: 'decision',
@@ -198,7 +231,7 @@ describe('task shape review requests (the routing loop)', () => {
   it('an UNPLACED create routes through shape-and-place triage, not a second review ask', async () => {
     const ws = await makeWorkspace('unplaced-board');
     await attach(ws, LEAD_ID);
-    const sse = listen(await local(`/events/workspace/${ws}`));
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
     await post(`/api/workspaces/${ws}/tasks`, {
       author: PERSON,
       title: TITLE,
@@ -224,7 +257,7 @@ describe('task shape review requests (the routing loop)', () => {
       goal: 'chores',
     });
     const task = ((await created.json()) as { task: { id: string } }).task;
-    const sse = listen(await local(`/events/workspace/${ws}`));
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
 
     await post(`/api/tasks/${task.id}/title`, {
       author: PERSON,
@@ -248,7 +281,7 @@ describe('task shape review requests (the routing loop)', () => {
       goal: 'chores',
     });
     const task = ((await created.json()) as { task: { id: string } }).task;
-    const sse = listen(await local(`/events/workspace/${ws}`));
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
     await post(`/api/tasks/${task.id}/body`, {
       author: PERSON,
       markdown:
@@ -272,7 +305,7 @@ describe('task shape review requests (the routing loop)', () => {
       goal: 'chores',
     });
     const task = ((await created.json()) as { task: { id: string } }).task;
-    const sse = listen(await local(`/events/workspace/${ws}`));
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
     await post(`/api/tasks/${task.id}/title`, {
       author: LEAD_AUTHOR,
       title: 'The lead renames its own row',
@@ -292,7 +325,7 @@ describe('task shape review requests (the routing loop)', () => {
 
   it('nobody live: the ask queues in a sidecar, and the LEAD (only) drains it on next attach', async () => {
     const ws = await makeWorkspace('cold-board');
-    const sse = listen(await local(`/events/workspace/${ws}`));
+    const sse = listen(await local(`/events/workspace/${ws}?agentId=${LEAD_ID}`));
     // Placed, written while no agent is attached.
     const created = await post(`/api/workspaces/${ws}/tasks`, {
       author: PERSON,
