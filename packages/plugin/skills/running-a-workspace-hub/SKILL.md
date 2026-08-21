@@ -18,8 +18,8 @@ If a tool you need does not exist, that is a blocker to report and a task to
 file.
 
 This skill is the tool contract. The **discipline** of working an existing
-board — priority order, fanning out, when to stop — lives in
-`claude-workspaces:working-a-workspace-board`. Read both.
+board lives in `claude-workspaces:working-in-a-workspace`, and the lead
+seat's own duties in `claude-workspaces:leading-a-workspace`. Read all three.
 
 ## First: two different things are called "workspace"
 
@@ -562,9 +562,8 @@ whenever a line of work finishes** — priorities move while you work.
 **The lead decides the shape of the fan-out.** That queue reaches everyone
 identically; what this seat adds is deciding how many lines run at once and in
 what order their merges land. The default is every ready row that doesn't
-collide, and the criteria — what counts as a collision, and what forces a
-sequence of the merge rather than of the work — are in
-`claude-workspaces:working-a-workspace-board`. Don't re-derive them here. Two
+collide — staffing the top of the queue in parallel is the lead's job, per
+`claude-workspaces:leading-a-workspace`. Two
 things only the lead can do about it:
 
 - **Make the board judgeable.** A batch is planned by reading descriptions

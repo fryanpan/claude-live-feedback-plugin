@@ -18,7 +18,7 @@ For the tool shapes — `set_workspace_goal`, `set_task_goal`, `reorder_goals`,
 `rename_goal`, the lead-agent seat — read
 `claude-workspaces:running-a-workspace-hub`. For the
 ordinary work loop this interrupts, read
-`claude-workspaces:working-a-workspace-board`.
+`claude-workspaces:working-in-a-workspace`.
 
 **Vocabulary, because the rest of this depends on it:** a workspace has one
 north-star **goal** (a sentence or two of prose) and an ordered list of

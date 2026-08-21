@@ -1,13 +1,13 @@
 # Working From a Claude Workspaces Board
 
-**The contract now ships with the plugin.** How to work a board — priority
-order, taking the whole ready batch in parallel by default and what actually
-forces a sequence, what a description owes the next agent, keeping the board
-current, asking for feedback on the task, and why finishing a task is not a
-reason to stop — lives in the
-`claude-workspaces:working-a-workspace-board` skill
-(`packages/plugin/skills/working-a-workspace-board/SKILL.md`). Read it at
-session start if this session has a workspace, and follow it.
+**The contract now ships with the plugin.** How to work a board — the task
+standard, keeping rows current, sharing progress and asking for review in
+the workspace — lives in the `claude-workspaces:working-in-a-workspace`
+skill (`packages/plugin/skills/working-in-a-workspace/SKILL.md`), and the
+lead seat's duties — goals, ranking, priority order, holding the seat — in
+`claude-workspaces:leading-a-workspace`
+(`packages/plugin/skills/leading-a-workspace/SKILL.md`). Read them at
+session start if this session has a workspace, and follow them.
 
 It moved there because it is not advice about this repo: it is what the
 product asks of **anyone** working a board, and the people who need it most
@@ -18,7 +18,7 @@ description is a compact user story — **`<persona> can <do x> so that
 <goal y>`**, one persona (Agent, Bryan, Collaborator) — and every task
 **belongs to somebody**, so the API refuses a create whose owner comes out as
 the bare word "agent" (your session needs `FEEDBACK_AGENT_NAME` set). The
-reasoning for both, and everything else about writing a task, is in the skill.
+reasoning for both, and everything else about writing a task, is in the skills.
 
 What stays here is the part that is about building this product rather than
 about using it.

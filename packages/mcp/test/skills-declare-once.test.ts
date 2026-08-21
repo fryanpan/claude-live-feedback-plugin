@@ -24,7 +24,8 @@ import { describe, expect, it } from 'vitest';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILLS = join(HERE, '../../plugin/skills');
 const HUB = readFileSync(join(SKILLS, 'running-a-workspace-hub/SKILL.md'), 'utf8');
-const BOARD = readFileSync(join(SKILLS, 'working-a-workspace-board/SKILL.md'), 'utf8');
+const LEAD = readFileSync(join(SKILLS, 'leading-a-workspace/SKILL.md'), 'utf8');
+const GENERAL = readFileSync(join(SKILLS, 'working-in-a-workspace/SKILL.md'), 'utf8');
 
 /**
  * One line, lower-cased. Every assertion below that searches for a PHRASE runs
@@ -56,7 +57,7 @@ const flatten = (s: string): string => s.replace(/\s+/g, ' ').toLowerCase();
 
 const both: Array<[string, string, string]> = [
   ['running-a-workspace-hub', HUB, flatten(HUB)],
-  ['working-a-workspace-board', BOARD, flatten(BOARD)],
+  ['leading-a-workspace', LEAD, flatten(LEAD)],
 ];
 
 describe('the skills teach one declaration per session', () => {
@@ -75,11 +76,11 @@ describe('the skills teach one declaration per session', () => {
 
       it('says it survives a respawn without being redone', () => {
         expect(flat).toMatch(/respawn|restart/);
-        expect(flat).toMatch(/re-?wire|restore|persist/);
+        expect(flat).toMatch(/survives|re-?wire|restore|persist/);
       });
 
-      it('demotes watch_doc to docs OUTSIDE your board', () => {
-        expect(flat).toMatch(/outside/);
+      it('demotes watch_doc — it is for docs outside your board, not a stand-in', () => {
+        expect(flat).toMatch(/outside|does not stand in/);
         expect(text).toMatch(/watch_doc/);
       });
 
@@ -87,10 +88,12 @@ describe('the skills teach one declaration per session', () => {
         expect(text).toMatch(/list_watched_docs/);
       });
 
-      it('tells the reader to read unattachedBoards when it feels quiet', () => {
+      it('gives the reader a probe for a board that feels quiet', () => {
         // The exact reading the incident needed and nobody had: a peer that
-        // believed it was listening had no way to ask.
-        expect(text).toMatch(/unattachedBoards/);
+        // believed it was listening had no way to ask. The hub names
+        // unattachedBoards; the lead skill routes the same doubt through
+        // list_watched_docs coverage. Either way, quiet gets a probe.
+        expect(text).toMatch(/unattachedBoards|coverage/);
         expect(flat).toMatch(/quiet/);
       });
     });
@@ -125,7 +128,7 @@ describe('the skills teach what declaring does NOT do', () => {
         // where both files carried the sentence word for word.
         expect(text).toMatch(/heartbeat\(workspaceId\)/);
         // Positive: the delivery gate is named as BOTH signals, not one.
-        expect(flat).toMatch(/a heartbeat or a tool call/);
+        expect(flat).toMatch(/a heartbeat or a tool call|a tool call or a heartbeat/);
         // Negative: and the old claim cannot come back unnoticed. Reverting
         // either skill to "Delivery is gated on a heartbeat inside the
         // ~5-minute window" fails on both halves at once.
@@ -144,11 +147,13 @@ describe('the skills teach what declaring does NOT do', () => {
         expect(flat).not.toMatch(/away and triage requests queue/);
       });
 
-      it('names the THREE different remedies, not one blanket fix', () => {
-        // A single "declare yourself" recommendation is wrong in two
-        // directions: it evicts a live peer, and it does not fix a lapsed
-        // heartbeat on a seat you already hold.
-        expect(text).toMatch(/attach_agent\(workspaceId\)/);
+      it('teaches the repair path without leaving the heartbeat behind', () => {
+        // The hub names three distinct remedies; the lead skill teaches that
+        // set_workspace_lead attaches first and so repairs every seat state
+        // by itself ("that one call is also the repair"). Both must still
+        // name the heartbeat, because the one thing the repair call does NOT
+        // fix is a session going quietly unobserved.
+        expect(text).toMatch(/attach_agent\(workspaceId\)|one call is also the repair/i);
         expect(text).toMatch(/set_workspace_lead\(workspaceId\)/);
         expect(text).toMatch(/heartbeat\(workspaceId\)/);
       });
@@ -191,9 +196,32 @@ describe('positive controls — guidance that must survive the edit', () => {
     expect(HUB).toMatch(/set_workspace_lead\(workspaceId, leadAgentId\)/);
   });
 
-  it('the board skill still leads with priority order and not-stopping', () => {
-    expect(BOARD).toMatch(/^## Always work in priority order$/m);
-    expect(BOARD).toMatch(/^## Finishing a task is not a reason to stop$/m);
+  it('the lead skill still leads with priority order and not-stopping', () => {
+    expect(LEAD).toMatch(/^## 3\. Work in priority order — including over the primary user$/m);
+    expect(flatten(LEAD)).toMatch(/not until the batch drains/);
+  });
+
+  it('the general skill still carries the task standard and the review vocabulary', () => {
+    expect(GENERAL).toMatch(/<persona> can <do x> so that <goal y>/);
+    expect(GENERAL).toContain('add_review_item(taskId, review)');
+    expect(GENERAL).toContain('review_type: "decision"');
+    expect(GENERAL).toContain('review_type: "question"');
+  });
+
+  it('no substantive sentence appears in both halves of the split skill', () => {
+    // The split's drift guard, stated mechanically: the lead skill says its
+    // shared ground is "deliberately not repeated here", so any long line
+    // present verbatim in both files is a copy that will rot in one place.
+    const lines = (t: string) =>
+      new Set(
+        t
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.length > 60 && !l.startsWith('#') && !l.startsWith('---')),
+      );
+    const g = lines(GENERAL);
+    const dup = [...lines(LEAD)].filter((l) => g.has(l));
+    expect(dup).toEqual([]);
   });
 
   it('the hub skill still keeps its work loop and lead-seat sections', () => {
@@ -201,8 +229,9 @@ describe('positive controls — guidance that must survive the edit', () => {
     expect(HUB).toMatch(/^## Goal edits and the lead-agent seat$/m);
   });
 
-  it('both skills still carry their frontmatter name', () => {
+  it('the skills still carry their frontmatter names', () => {
     expect(HUB).toMatch(/^name: running-a-workspace-hub$/m);
-    expect(BOARD).toMatch(/^name: working-a-workspace-board$/m);
+    expect(LEAD).toMatch(/^name: leading-a-workspace$/m);
+    expect(GENERAL).toMatch(/^name: working-in-a-workspace$/m);
   });
 });
