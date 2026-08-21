@@ -126,3 +126,61 @@ describe('the decision flag', () => {
     expect(flag?.getAttribute('title')).toBeTruthy();
   });
 });
+
+/**
+ * What an ANSWERED decision says on the folded card.
+ *
+ * Reported from a walkthrough of the build: an answered decision's collapsed
+ * card led with "No replies yet", which is true — an answer is a payload on
+ * the item, not a reply — and useless. The one fact worth scanning a column
+ * for is what was decided, and it was two folds away, inside the answered
+ * record on the detail face.
+ *
+ * It rides on the decision row rather than replacing the discussion line: the
+ * discussion line's job is where the conversation GOT TO, and a thread with an
+ * answer and three replies still has a last reply worth showing.
+ */
+const outcomeOf = (card: HTMLElement): HTMLElement | null =>
+  card.querySelector<HTMLElement>('.thread-decision-outcome');
+
+describe('the decided outcome', () => {
+  it('names the chosen option on the folded card', () => {
+    const answered = decisionPayload({
+      answeredAt: ts,
+      answeredWith: 'a',
+      answerText: 'Write through',
+    });
+    const card = render(thread([comment('Which one?', answered)]));
+    expect(outcomeOf(card)?.textContent).toBe('Write through');
+    // On the decision row, outside both slots — the whole point is that it is
+    // readable without opening anything.
+    expect(outcomeOf(card)?.closest('.thread-flag-row')).not.toBe(null);
+    expect(outcomeOf(card)?.closest('.thread-face')).toBe(null);
+  });
+
+  // An answer tapped before `answerText` existed recorded only the option id.
+  it('falls back to the tapped option label when no words were recorded', () => {
+    const answered = decisionPayload({ answeredAt: ts, answeredWith: 'b' });
+    const card = render(thread([comment('Which one?', answered)]));
+    expect(outcomeOf(card)?.textContent).toBe('Write behind');
+  });
+
+  it('says nothing while the decision is still open', () => {
+    expect(outcomeOf(render(thread([comment('Which one?', decisionPayload())])))).toBe(null);
+  });
+
+  it('says nothing on a thread that carries no decision', () => {
+    expect(outcomeOf(render(thread([comment('Looks good to me')])))).toBe(null);
+  });
+
+  // Plain text: an answer is a person's words, and this row is not the place
+  // that escapes them.
+  it('renders the words as text, never as markup', () => {
+    const answered = decisionPayload({
+      answeredAt: ts,
+      answerText: '<img src=x onerror=1> write through',
+    });
+    const card = render(thread([comment('Which one?', answered)]));
+    expect(outcomeOf(card)?.querySelector('img')).toBe(null);
+  });
+});

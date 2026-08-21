@@ -13,7 +13,7 @@ import {
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
 import { askedMetaLine } from './hub/hub-model.ts';
-import { threadDecision } from './long-thread.ts';
+import { decisionOutcome, threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
 import {
   isFoldingTap,
@@ -84,6 +84,19 @@ export interface ThreadPanelOpts {
 
 export class ThreadPanel {
   private activeId: string | null = null;
+  /**
+   * A thread whose conversation is being shown somewhere this panel does not
+   * own — today, inside the wide modal.
+   *
+   * Selection and EXPANSION were the same thing until the modal arrived, and
+   * the card's own comment has said for a while that the two key off different
+   * classes so they could separate later. This is later. The thread stays
+   * selected (the anchor highlight is downstream of that, and so is the drawer
+   * row's styling) while every copy in the column, the drawer and the sheet
+   * stays folded — otherwise the same conversation renders two and three times
+   * under the scrim, dimmed and unreadable but still there to be scrolled past.
+   */
+  private expandedElsewhere: string | null = null;
   private threads: Thread[] = [];
   private statusMap = new Map<string, 'open' | 'resolved' | 'orphan'>();
   private tab: ThreadTab = 'open';
@@ -170,9 +183,27 @@ export class ThreadPanel {
       for (const el of threadCards(previous)) el.classList.remove('active');
     }
     if (next) {
-      morphThread(next, true);
+      // Selected, but not unfolded here: something else is already showing
+      // this conversation full size, and a second copy under it is noise.
+      if (next !== this.expandedElsewhere) morphThread(next, true);
       for (const el of threadCards(next)) el.classList.add('active');
     }
+  }
+
+  /**
+   * Hand this thread's expansion to another surface, or take it back.
+   *
+   * Only ever FOLDS on the way in. Handing it back re-opens the copies only
+   * when the caller passes `null` — a straight hand-off from one thread to
+   * another (the modal switching threads) would otherwise flash the outgoing
+   * thread open for the instant before its deselection folds it again.
+   */
+  setExpandedElsewhere(id: string | null): void {
+    const previous = this.expandedElsewhere;
+    if (previous === id) return;
+    this.expandedElsewhere = id;
+    if (id && id === this.activeId) morphThread(id, false);
+    else if (id === null && previous && previous === this.activeId) morphThread(previous, true);
   }
 
   /**
@@ -389,7 +420,13 @@ export class ThreadPanel {
     // own selection styling. They coincide today (expanded == active), but
     // the slots key off `expanded` so the two can separate later without
     // touching the CSS that folds the card.
-    if (this.activeId === t.id) el.classList.add('active', 'expanded');
+    // Selected and expanded are the same thing everywhere except under an open
+    // modal, which is showing this conversation full size already.
+    const shownElsewhere = this.expandedElsewhere === t.id;
+    if (this.activeId === t.id) {
+      el.classList.add('active');
+      if (!shownElsewhere) el.classList.add('expanded');
+    }
     // The lookup key for every copy of this thread on screen. A thread can be
     // rendered twice (inline in the doc AND in the mobile sheet), so nothing
     // may address a card by a document-unique id — drive them all from this.
@@ -410,7 +447,7 @@ export class ThreadPanel {
     el.appendChild(this.slotA(t, summary.topic, itemComment?.id));
     el.appendChild(this.slotB(t, summary, status, { pending, itemComment, pendingReply }));
     el.appendChild(this.foot(t, status));
-    syncFaceVisibility(el, this.activeId === t.id);
+    syncFaceVisibility(el, this.activeId === t.id && !shownElsewhere);
 
     // The whole card is the tap target; the caret is a hint, not the hit
     // area. The only exclusions are things you tap FOR something else — a
@@ -459,6 +496,24 @@ export class ThreadPanel {
       ? 'This thread is waiting on a decision'
       : 'This thread carries a decision that has been answered';
     row.appendChild(flag);
+
+    // WHAT was decided, next to the fact that something was. Reported from a
+    // walkthrough: an answered decision's folded card led with "No replies
+    // yet" — true, since an answer is a payload on the item rather than a
+    // reply, and useless. The outcome was two folds away inside the answered
+    // record, on the detail face. It rides here rather than replacing the
+    // discussion line, whose job is where the conversation GOT TO: a decision
+    // with an answer and three replies still has a last reply worth showing.
+    const outcome = decisionOutcome(t);
+    if (outcome) {
+      const words = span('thread-decision-outcome clip');
+      // Plain text: an answer is a person's words and this row does not escape
+      // them. `clip` ellipsizes whatever the column's real width turns out to
+      // be; `decisionOutcome` has already capped the length.
+      words.textContent = outcome;
+      words.title = outcome;
+      row.appendChild(words);
+    }
     return row;
   }
 

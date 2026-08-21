@@ -261,3 +261,277 @@ describe('narrow viewports keep the surface they already have', () => {
     expect(modalOpen()).toBe(false);
   });
 });
+
+/**
+ * Escape means the same thing whichever surface the thread opened on.
+ *
+ * The dialog took Escape from the day it shipped; an inline-expanded card
+ * never had it, so the gesture that dismissed a thread depended on its word
+ * count — under the threshold you had to find the caret, over it you could
+ * press a key. Nothing about the card tells a reader which one they are
+ * looking at.
+ */
+function pressEscape(): void {
+  document.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+  );
+}
+
+describe('Escape dismisses the thread, whatever it opened in', () => {
+  it('collapses a card that expanded in place', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(chrome.threadsPanel.getActive()).toBe('t1');
+    pressEscape();
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+  });
+
+  it('still closes the dialog, and still leaves nothing selected', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: words(LONG_THREAD_WORDS + 20) });
+    tapCard();
+    expect(modalOpen()).toBe(true);
+    pressEscape();
+    expect(modalOpen()).toBe(false);
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+  });
+
+  it('collapses the card before it closes the drawer, innermost first', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    chrome.openDrawer();
+    tapCard();
+    pressEscape();
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+    // One press, one layer. The drawer is still the reader's list.
+    expect(document.getElementById('shell')?.classList.contains('threads-open')).toBe(true);
+    pressEscape();
+    expect(document.getElementById('shell')?.classList.contains('threads-open')).toBe(false);
+  });
+
+  // The control: with nothing expanded, Escape must still reach the drawer on
+  // the first press rather than being swallowed by an empty selection.
+  it('goes straight to the drawer when no card is expanded', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    chrome.openDrawer();
+    pressEscape();
+    expect(document.getElementById('shell')?.classList.contains('threads-open')).toBe(false);
+  });
+});
+
+/**
+ * The floating mic and an open comment card want the same corner.
+ *
+ * Measured at 430px: `.voice-mic` is `position: fixed` bottom-left over the
+ * document, and a thread at that width opens as a FULL-WIDTH inline card whose
+ * reply box reaches the bottom-left too — so the 44px launcher sat on top of
+ * the composer. It is bottom-left precisely to stay out of the deep-work path,
+ * which holds on a wide screen and stops holding when the card is the width of
+ * the viewport.
+ *
+ * The class carries the width test rather than the stylesheet repeating the
+ * 1100px constant: a second copy of that number is exactly the drift this
+ * project has already been bitten by.
+ */
+const micHidden = (): boolean => document.body.classList.contains('thread-card-open');
+
+describe('the doc mic yields to an open card where they would overlap', () => {
+  it('stands down while a card is open at phone width', () => {
+    setViewportWidth(430);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(true);
+  });
+
+  it('comes back when the card folds', () => {
+    setViewportWidth(430);
+    const { chrome } = harness({ text: 'Looks good to me' });
+    tapCard();
+    chrome.threadsPanel.setActive(null);
+    expect(micHidden()).toBe(false);
+  });
+
+  // The control: on a wide screen the card opens in a 300px column nowhere
+  // near the corner, so taking the mic away would be a loss for nothing.
+  it('keeps the mic on a desktop width, where nothing overlaps', () => {
+    setViewportWidth(1180);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(false);
+  });
+
+  it('follows the viewport when it crosses the band with a card open', () => {
+    setViewportWidth(1180);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(false);
+    setViewportWidth(430);
+    window.matchMedia('(max-width: 1100px)').dispatchEvent(new Event('change'));
+    expect(micHidden()).toBe(true);
+  });
+
+  it('leaves nothing stuck on the document after the chrome goes away', () => {
+    setViewportWidth(430);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(true);
+    for (const s of scopes.splice(0)) s.dispose();
+    expect(micHidden()).toBe(false);
+  });
+});
+
+/**
+ * One conversation, rendered once.
+ *
+ * The panel's selection used to mean two things at once — this thread is
+ * chosen, and this thread's card is unfolded — and the modal made that wrong:
+ * the same conversation rendered in the dialog, again in the margin balloon it
+ * came out of, and again in the drawer row, all dimmed under the scrim but all
+ * still there to be scrolled past.
+ */
+function harness2(): { chrome: ReviewChrome; ydoc: Y.Doc } {
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response('{}', { status: 200 })));
+  mountChromeDom();
+  const ydoc = new Y.Doc();
+  for (const [id, text] of [
+    ['t1', words(LONG_THREAD_WORDS + 20)],
+    ['t2', words(LONG_THREAD_WORDS + 20)],
+  ] as const) {
+    createThread(ydoc, {
+      threadId: id,
+      anchor: { kind: 'element', fingerprint: 'x' as never, snippet: { text: `anchor ${id}` } },
+      createdBy: bob,
+      firstComment: { id: `c-${id}`, text },
+    });
+  }
+  const scope = new MountScope();
+  scopes.push(scope);
+  const chrome = mountReviewChrome(opts({ ydoc, scope }));
+  chrome.redrawThreads();
+  return { chrome, ydoc };
+}
+
+/** Every copy of a thread's card OUTSIDE the dialog. */
+function cardsBehind(id: string): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(`.thread[data-thread-id="${id}"]`),
+  ).filter((el) => el.closest('.thread-modal') === null);
+}
+
+describe('the dialog does not repeat what is behind it', () => {
+  it('leaves the copies behind the scrim folded', () => {
+    setViewportWidth(1180);
+    harness({ text: words(LONG_THREAD_WORDS + 20) });
+    tapCard();
+    expect(modalOpen()).toBe(true);
+    const behind = cardsBehind('t1');
+    // The control first: there IS a copy behind, so the assertion below is
+    // about its state rather than about an empty list.
+    expect(behind.length).toBeGreaterThan(0);
+    for (const el of behind) expect(el.classList.contains('expanded')).toBe(false);
+  });
+
+  it('still marks them selected, which is what lights the anchor', () => {
+    setViewportWidth(1180);
+    harness({ text: words(LONG_THREAD_WORDS + 20) });
+    tapCard();
+    for (const el of cardsBehind('t1')) expect(el.classList.contains('active')).toBe(true);
+  });
+
+  // The control: a thread that expands IN PLACE must keep doing exactly that.
+  it('still expands a short thread in the column, as it always did', () => {
+    setViewportWidth(1180);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    const behind = cardsBehind('t1');
+    expect(behind.length).toBeGreaterThan(0);
+    expect(behind.some((el) => el.classList.contains('expanded'))).toBe(true);
+  });
+
+  it('hands the expansion back when the dialog closes', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: words(LONG_THREAD_WORDS + 20) });
+    tapCard();
+    pressEscape();
+    expect(modalOpen()).toBe(false);
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+    // Re-opening has to work a second time — the state the dialog took must
+    // have been given back, not merely dropped.
+    tapCard();
+    expect(modalOpen()).toBe(true);
+    expect(modalThreadId()).toBe('t1');
+  });
+});
+
+/**
+ * Clicking another thread while the dialog is up.
+ *
+ * The click is not a miss — it lands exactly where it was aimed, on a scrim
+ * covering the card. Reading the stack UNDER the point is what turns it into
+ * what the reader meant by it.
+ */
+function clickScrimOver(card: Element | null): void {
+  const stack = card ? [card] : [];
+  (
+    document as unknown as { elementsFromPoint: (x: number, y: number) => Element[] }
+  ).elementsFromPoint = () => stack;
+  document
+    .querySelector('.thread-modal-scrim')
+    ?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 40, clientY: 40 }),
+    );
+}
+
+describe('switching threads takes one click, not two', () => {
+  it('opens the thread whose card was under the click', () => {
+    setViewportWidth(1180);
+    harness2();
+    tapCard('t1');
+    expect(modalThreadId()).toBe('t1');
+    clickScrimOver(document.querySelector('#threads-list .thread[data-thread-id="t2"]'));
+    expect(modalOpen()).toBe(true);
+    expect(modalThreadId()).toBe('t2');
+  });
+
+  it('moves the selection with it, so the anchor follows', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness2();
+    tapCard('t1');
+    clickScrimOver(document.querySelector('#threads-list .thread[data-thread-id="t2"]'));
+    expect(chrome.threadsPanel.getActive()).toBe('t2');
+  });
+
+  it('leaves the thread it came from folded behind the scrim', () => {
+    setViewportWidth(1180);
+    harness2();
+    tapCard('t1');
+    clickScrimOver(document.querySelector('#threads-list .thread[data-thread-id="t2"]'));
+    // State the switch first. Without it this passes for the wrong reason:
+    // a dismissal also leaves every card folded, so the assertions below
+    // would hold on a build where the click never switched anything.
+    expect(modalThreadId()).toBe('t2');
+    for (const el of cardsBehind('t1')) expect(el.classList.contains('expanded')).toBe(false);
+    for (const el of cardsBehind('t2')) expect(el.classList.contains('expanded')).toBe(false);
+  });
+
+  // The control, and the behaviour that must survive: a click on empty scrim
+  // is still a dismiss. Without this the fix would have taken the gesture away.
+  it('still dismisses on a click with no card under it', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness2();
+    tapCard('t1');
+    clickScrimOver(null);
+    expect(modalOpen()).toBe(false);
+    expect(chrome.threadsPanel.getActive()).toBe(null);
+  });
+
+  it('dismisses on a click over the same thread, having nothing to switch to', () => {
+    setViewportWidth(1180);
+    harness2();
+    tapCard('t1');
+    clickScrimOver(document.querySelector('#threads-list .thread[data-thread-id="t1"]'));
+    expect(modalOpen()).toBe(false);
+  });
+});

@@ -4325,6 +4325,22 @@ a.hub-link-chip:hover {
 .voice-mic:hover {
   background: var(--bg-hover);
 }
+/* An open comment card wins the corner. Measured at 430px: a thread there
+   opens as a full-WIDTH inline card whose reply box reaches bottom-left too,
+   so the launcher sat on top of the composer. "Out of the deep-work path"
+   above is true of a 300px column on the right and stops being true when the
+   card is the width of the screen.
+
+   No media query here on purpose. `review-chrome.ts` only sets
+   `.thread-card-open` in the band where the two overlap, so the width test
+   lives in one place — a second copy of the 1100px constant is the drift this
+   project has been bitten by before. Nothing is lost while it is down: this
+   mic routes dictation to the workspace hub, it does not type into the
+   composer, and folding the card brings it straight back. */
+body.thread-card-open .voice-mic,
+body.thread-card-open .voice-indicator {
+  display: none;
+}
 .voice-mic.voice-active {
   background: #c53030;
   border-color: #c53030;
@@ -5095,6 +5111,18 @@ body.threads-resizing {
 .thread-decision-flag.is-answered {
   color: var(--fg-muted);
   background: var(--bg-hover);
+}
+/* WHAT was decided, beside the chip that says something was. Not uppercase and
+   not a chip: these are a person's words, and shouting them would make the row
+   compete with the author line under it. Shrinks and ellipsizes (`.clip`) —
+   the chip beside it is fixed and this is the part that can afford to lose
+   characters. */
+.thread-decision-outcome {
+  flex: 0 1 auto;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  align-self: center;
 }
 /* Lines truncate rather than wrap, so a card cannot exceed its rows at any
    width. Shared by every one-line row on the card. */

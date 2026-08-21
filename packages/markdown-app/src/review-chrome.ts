@@ -555,10 +555,57 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // Hand the selection back only when it is still the thread the modal was
     // showing: closing BECAUSE another thread was selected must not then
     // unselect that other thread — which is the loop `onActiveChange` feeds.
+    //
+    // Deselect BEFORE handing the expansion back. The other order re-opens
+    // every copy of the card for the instant before the deselection folds them
+    // again, which is a visible flinch on the way out of the dialog.
     onClose: (threadId) => {
       if (threadsPanel.getActive() === threadId) threadsPanel.setActive(null);
+      threadsPanel.setExpandedElsewhere(null);
     },
+    // Which card the reader was actually pointing at, through the scrim.
+    // `elementsFromPoint` walks the whole stack rather than stopping at the
+    // scrim, which is the only reason this can see past it. Guarded because
+    // it is a layout API, and a DOM without layout does not have to have one.
+    threadUnderPoint: (x, y) => {
+      if (typeof document.elementsFromPoint !== 'function') return null;
+      for (const el of document.elementsFromPoint(x, y)) {
+        const card = (el as Element).closest?.('.thread[data-thread-id]');
+        const id = card?.getAttribute('data-thread-id');
+        if (id) return id;
+      }
+      return null;
+    },
+    // Exactly the route a click on that card takes — same scroll, same pulse,
+    // same inline/modal/sheet decision. A switch that took its own path is how
+    // the two start disagreeing about what opening a thread means.
+    onSwitchThread: (id) => engageThread(id),
   });
+
+  /**
+   * Tell the document that a comment card is open over it, in the band where
+   * the card is the full width of the viewport.
+   *
+   * One consumer today: the floating hold-to-talk mic. `.voice-mic` is fixed
+   * bottom-LEFT specifically to stay out of the deep-work path, which is true
+   * while the composer is a 300px column on the right and stops being true at
+   * 430px, where the card and its reply box span the screen and the 44px
+   * launcher lands on top of them.
+   *
+   * The CLASS carries the width test and the stylesheet just reads it. A media
+   * query there would be a second copy of the 1100px constant, and a width
+   * constant that exists twice is one this project has already watched drift.
+   */
+  function syncCardOpenClass(activeId: string | null): void {
+    document.body.classList.toggle('thread-card-open', activeId !== null && inlineCardsVisible());
+  }
+  // The class is on <body>, which outlives this chrome — a router swap that
+  // left it set would take the mic away on a page with no card on it.
+  {
+    const drop = () => document.body.classList.remove('thread-card-open');
+    if (opts.scope) opts.scope.onCleanup(drop);
+    else modalCleanups.push(drop);
+  }
 
   /**
    * Open `id` in the wide modal, or say no.
@@ -569,17 +616,51 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
    * a full-width inline card with the over-doc sheet behind it, so a dialog
    * there is a second dismissable layer over one conversation.
    *
-   * `setActive` still happens, and first: the panel's selection is the one
-   * expand authority, it carries the anchor highlight, and it is what makes
-   * the card the modal builds render open rather than folded.
+   * `setActive` still happens — the panel's selection carries the anchor
+   * highlight and the drawer row's styling — but LAST, and it no longer
+   * expands anything. `setExpandedElsewhere` takes the expansion first, so the
+   * copies in the column, the drawer and the sheet stay folded instead of
+   * rendering the same conversation two and three times under the scrim. The
+   * modal force-opens its own copy and needs nothing from the selection.
+   *
+   * The order matters for a second reason: with the modal already showing the
+   * thread by the time `setActive` announces it, `onActiveChange` finds its own
+   * thread on screen and leaves it alone. Selecting first made it close the
+   * modal it was about to reopen, dropping the return-focus target on the way.
    */
   function maybeOpenModal(id: string): boolean {
     if (inlineCardsVisible()) return false;
     const t = collectThreads().find((x) => x.id === id);
     if (!t || !threadNeedsModal(t)) return false;
-    threadsPanel.setActive(id);
+    threadsPanel.setExpandedElsewhere(id);
     threadModal.open(t);
+    threadsPanel.setActive(id);
     return true;
+  }
+
+  /**
+   * Open a thread, wherever it belongs.
+   *
+   * ONE path, shared by a click on a card in the drawer or the column, a click
+   * on the highlighted text in the document, and a click through the modal's
+   * scrim onto another thread. Each of those used to decide for itself, and a
+   * route that reasons separately is how two of them end up disagreeing about
+   * what opening a thread means.
+   */
+  function engageThread(id: string): void {
+    const range = resolveThreadRange(id);
+    if (range) {
+      surface.scrollToPos(range.from);
+      surface.pulseRange(range.from, range.to);
+    }
+    // A thread that has outgrown the column opens in the modal instead of
+    // unfolding into it; `maybeOpenModal` has already made the selection.
+    if (maybeOpenModal(id)) return;
+    // Nothing extra on mobile: setActive unfolds EVERY copy of this card, so a
+    // tap in the sheet expands the sheet's copy in place (and the inline one
+    // underneath it) rather than launching a third, separate full-screen view
+    // of the same conversation.
+    threadsPanel.setActive(id);
   }
 
   const threadsPanel = new ThreadPanel({
@@ -592,26 +673,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // own tap handler — so the highlight used to stay lit with no card open.
     onActiveChange: (id) => {
       refreshThreadDecorations(id);
+      syncCardOpenClass(id);
       // The selection moved off whatever the modal is showing — a different
       // thread, or nothing. The modal is a view of ONE thread and the panel's
       // selection is the authority, so it follows rather than argues.
       if (id !== threadModal.openThreadId()) threadModal.close();
     },
-    onThreadClick: (id) => {
-      const range = resolveThreadRange(id);
-      if (range) {
-        surface.scrollToPos(range.from);
-        surface.pulseRange(range.from, range.to);
-      }
-      // A thread that has outgrown the column opens in the modal instead of
-      // unfolding into it; `maybeOpenModal` has already made the selection.
-      if (maybeOpenModal(id)) return;
-      threadsPanel.setActive(id);
-      // Nothing extra on mobile: setActive has already unfolded EVERY copy
-      // of this card, so a tap in the sheet expands the sheet's copy in
-      // place (and the inline one underneath it) rather than launching a
-      // third, separate full-screen view of the same conversation.
-    },
+    onThreadClick: (id) => engageThread(id),
     onReply: async (id, text, answersCommentId, optionId) => {
       // Two routes, one reply. `/answer` posts the SAME comment and
       // additionally stamps `answeredAt` on the declaring comment, which is
@@ -755,6 +823,9 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // same thread — and page zoom moves a reviewer across this line, so it is
     // not a hypothetical transition.
     if (inlineCardsVisible()) threadModal.close();
+    // Recomputed rather than left alone: the same zoom that moves the tier
+    // decides whether the floating mic and an open card are in each other's way.
+    syncCardOpenClass(threadsPanel.getActive());
   });
 
   // A card's folding slots hold a height we MEASURED, so anything that
@@ -1052,8 +1123,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       openComposer();
     }
     if (ke.key === 'Escape') {
+      // Innermost first, one layer per press. The expanded card sits between
+      // the full-screen thread view and the drawer: the view covers it, and it
+      // is inside the drawer's list. Its branch used to be missing entirely,
+      // so which gesture dismissed a thread depended on its WORD COUNT — over
+      // the threshold it opened as a dialog and Escape worked, under it you
+      // had to find the caret, and nothing about the card says which it is.
+      // The dialog never reaches here: its own handler stops the event
+      // immediately, on this same node.
       if (!composer.classList.contains('hidden')) hideComposer();
       else if (!threadView.classList.contains('hidden')) closeThreadView();
+      else if (threadsPanel.getActive()) threadsPanel.setActive(null);
       else if (shell.classList.contains('threads-open')) closeDrawer();
     }
   });
