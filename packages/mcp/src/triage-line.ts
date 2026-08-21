@@ -74,13 +74,19 @@ const SHAPE_THEN_PLACE =
   'read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal';
 
 /**
- * The judgment half of a task-review — what the standard is, when to rewrite
- * versus ask the filer, and why a human's deliberate words are never silently
- * replaced. Named in the request the same way RETRIAGE_SKILL is, and exported
- * for the same reason: the away lead gets the queued rows on `attach_agent`,
- * and both delivery paths must name the same contract.
+ * The judgment half of a task-review — when to rewrite versus ask the filer,
+ * and why a human's deliberate words are never silently replaced. Named in the
+ * request the same way RETRIAGE_SKILL is, and exported for the same reason:
+ * the away lead gets the queued rows on `attach_agent`, and both delivery
+ * paths must name the same contract.
+ *
+ * This used to name a skill of its own (`reviewing-task-shape`). It was
+ * retired: the ask is the lead seat's, §2 of the lead skill claims it outright,
+ * the STANDARD it judged against is stated once in the general skill, and
+ * `rewrite_task`'s own description carries the mechanics. What was left was
+ * judgment that belongs beside the rest of the seat's judgment.
  */
-export const TASK_REVIEW_SKILL = 'claude-workspaces:reviewing-task-shape';
+export const TASK_REVIEW_SKILL = 'claude-workspaces:leading-a-workspace';
 
 /**
  * The part of the request that is the WORK — the exact ids to re-place, and
