@@ -1168,3 +1168,51 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     );
   });
 });
+
+/**
+ * A long detail no longer bounces at the API (the 150-word refusal pushed the
+ * real context into the thread and a compressed copy onto the card — two
+ * versions of one ask), so the card must carry all of it while staying
+ * scannable: the FULL words are always in the DOM, and past the review target
+ * the body is clamped with an explicit expand affordance. The clamp itself is
+ * CSS scoped to the phone tier (walk-body-clamp-css.test.ts pins that); this
+ * suite pins the DOM contract — classes, the button, and the words.
+ */
+describe('renderReviewWalkthrough — a long detail clamps with an explicit expand', () => {
+  const queueOf = (...items: ReviewThreadItem[]) => reviewQueue([], items, NOW);
+  const longDetail = Array.from({ length: 300 }, (_, i) => `word${i}`).join(' ');
+  const longItem = () =>
+    threadItem({
+      review: {
+        shape: 'review',
+        headline: 'Read the migration write-up',
+        why: 'It gates the cutover.',
+        detail: longDetail,
+      },
+    });
+
+  it('puts the FULL detail in the body — the card and the thread say the same words', () => {
+    renderReviewWalkthrough(root, queueOf(longItem()), 0, walk());
+    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    expect(body.textContent).toContain('word0');
+    expect(body.textContent).toContain('word299');
+  });
+
+  it('clamps a long body and expands it on the affordance, which then leaves', () => {
+    renderReviewWalkthrough(root, queueOf(longItem()), 0, walk());
+    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    expect(body.classList.contains('hub-walk-body-clamp')).toBe(true);
+    const expand = root.querySelector('.hub-walk-body-expand') as HTMLButtonElement;
+    expect(expand).not.toBeNull();
+    expand.click();
+    expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
+    expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
+  });
+
+  it('a body within the target gets no clamp and no affordance', () => {
+    renderReviewWalkthrough(root, queueOf(threadItem()), 0, walk());
+    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
+    expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
+  });
+});
