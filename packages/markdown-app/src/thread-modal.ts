@@ -59,6 +59,20 @@ export interface ThreadModalOpts {
    * looping back in through `onActiveChange`.
    */
   onClose: (threadId: string) => void;
+  /**
+   * Which thread's card, if any, sits under this point on the page BEHIND the
+   * scrim. The chrome answers with `document.elementsFromPoint`; the modal has
+   * no business knowing how a card is found.
+   *
+   * Omit it and the scrim is a plain dismiss, which is what it was.
+   */
+  threadUnderPoint?: (x: number, y: number) => string | null;
+  /**
+   * The reader clicked another thread's card through the scrim. Route it the
+   * same way a click on that card would go — inline, modal or sheet, by the
+   * caller's own predicate.
+   */
+  onSwitchThread?: (threadId: string) => void;
 }
 
 export interface ThreadModalHandle {
@@ -178,7 +192,28 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
   }
 
   scope.listen(root.querySelector('.thread-modal-close') as HTMLElement, 'click', close);
-  scope.listen(scrim, 'click', close);
+  /**
+   * The scrim dismisses — unless the reader was aiming at another thread.
+   *
+   * Measured on the build: with the dialog up, clicking a second thread's card
+   * only closed the dialog, so switching threads took two clicks and the first
+   * one looked like a miss. It wasn't a miss — the click landed exactly where
+   * it was aimed, on a scrim covering the card. Asking what is UNDER the point
+   * turns that first click into what the reader meant by it.
+   *
+   * Falls through to `close()` for a click on the same thread's own card too:
+   * there is nothing to switch to, and dismissing is the only other thing the
+   * gesture could mean.
+   */
+  scope.listen(scrim, 'click', (ev) => {
+    const me = ev as MouseEvent;
+    const under = opts.threadUnderPoint?.(me.clientX, me.clientY) ?? null;
+    if (under !== null && under !== openId && opts.onSwitchThread) {
+      opts.onSwitchThread(under);
+      return;
+    }
+    close();
+  });
   /**
    * Everything inside the dialog a Tab could land on.
    *

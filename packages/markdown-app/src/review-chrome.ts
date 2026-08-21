@@ -555,24 +555,33 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // Hand the selection back only when it is still the thread the modal was
     // showing: closing BECAUSE another thread was selected must not then
     // unselect that other thread — which is the loop `onActiveChange` feeds.
+    //
+    // Deselect BEFORE handing the expansion back. The other order re-opens
+    // every copy of the card for the instant before the deselection folds them
+    // again, which is a visible flinch on the way out of the dialog.
     onClose: (threadId) => {
       if (threadsPanel.getActive() === threadId) threadsPanel.setActive(null);
+      threadsPanel.setExpandedElsewhere(null);
     },
+    // Which card the reader was actually pointing at, through the scrim.
+    // `elementsFromPoint` walks the whole stack rather than stopping at the
+    // scrim, which is the only reason this can see past it. Guarded because
+    // it is a layout API, and a DOM without layout does not have to have one.
+    threadUnderPoint: (x, y) => {
+      if (typeof document.elementsFromPoint !== 'function') return null;
+      for (const el of document.elementsFromPoint(x, y)) {
+        const card = (el as Element).closest?.('.thread[data-thread-id]');
+        const id = card?.getAttribute('data-thread-id');
+        if (id) return id;
+      }
+      return null;
+    },
+    // Exactly the route a click on that card takes — same scroll, same pulse,
+    // same inline/modal/sheet decision. A switch that took its own path is how
+    // the two start disagreeing about what opening a thread means.
+    onSwitchThread: (id) => engageThread(id),
   });
 
-  /**
-   * Open `id` in the wide modal, or say no.
-   *
-   * Two conditions and both are load-bearing. The thread has to have outgrown
-   * the column (`threadNeedsModal`), and the viewport has to be one where a
-   * modal is the right answer at all: below 1100px a comment ALREADY opens as
-   * a full-width inline card with the over-doc sheet behind it, so a dialog
-   * there is a second dismissable layer over one conversation.
-   *
-   * `setActive` still happens, and first: the panel's selection is the one
-   * expand authority, it carries the anchor highlight, and it is what makes
-   * the card the modal builds render open rather than folded.
-   */
   /**
    * Tell the document that a comment card is open over it, in the band where
    * the card is the full width of the viewport.
@@ -598,13 +607,60 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     else modalCleanups.push(drop);
   }
 
+  /**
+   * Open `id` in the wide modal, or say no.
+   *
+   * Two conditions and both are load-bearing. The thread has to have outgrown
+   * the column (`threadNeedsModal`), and the viewport has to be one where a
+   * modal is the right answer at all: below 1100px a comment ALREADY opens as
+   * a full-width inline card with the over-doc sheet behind it, so a dialog
+   * there is a second dismissable layer over one conversation.
+   *
+   * `setActive` still happens — the panel's selection carries the anchor
+   * highlight and the drawer row's styling — but LAST, and it no longer
+   * expands anything. `setExpandedElsewhere` takes the expansion first, so the
+   * copies in the column, the drawer and the sheet stay folded instead of
+   * rendering the same conversation two and three times under the scrim. The
+   * modal force-opens its own copy and needs nothing from the selection.
+   *
+   * The order matters for a second reason: with the modal already showing the
+   * thread by the time `setActive` announces it, `onActiveChange` finds its own
+   * thread on screen and leaves it alone. Selecting first made it close the
+   * modal it was about to reopen, dropping the return-focus target on the way.
+   */
   function maybeOpenModal(id: string): boolean {
     if (inlineCardsVisible()) return false;
     const t = collectThreads().find((x) => x.id === id);
     if (!t || !threadNeedsModal(t)) return false;
-    threadsPanel.setActive(id);
+    threadsPanel.setExpandedElsewhere(id);
     threadModal.open(t);
+    threadsPanel.setActive(id);
     return true;
+  }
+
+  /**
+   * Open a thread, wherever it belongs.
+   *
+   * ONE path, shared by a click on a card in the drawer or the column, a click
+   * on the highlighted text in the document, and a click through the modal's
+   * scrim onto another thread. Each of those used to decide for itself, and a
+   * route that reasons separately is how two of them end up disagreeing about
+   * what opening a thread means.
+   */
+  function engageThread(id: string): void {
+    const range = resolveThreadRange(id);
+    if (range) {
+      surface.scrollToPos(range.from);
+      surface.pulseRange(range.from, range.to);
+    }
+    // A thread that has outgrown the column opens in the modal instead of
+    // unfolding into it; `maybeOpenModal` has already made the selection.
+    if (maybeOpenModal(id)) return;
+    // Nothing extra on mobile: setActive unfolds EVERY copy of this card, so a
+    // tap in the sheet expands the sheet's copy in place (and the inline one
+    // underneath it) rather than launching a third, separate full-screen view
+    // of the same conversation.
+    threadsPanel.setActive(id);
   }
 
   const threadsPanel = new ThreadPanel({
@@ -623,21 +679,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // selection is the authority, so it follows rather than argues.
       if (id !== threadModal.openThreadId()) threadModal.close();
     },
-    onThreadClick: (id) => {
-      const range = resolveThreadRange(id);
-      if (range) {
-        surface.scrollToPos(range.from);
-        surface.pulseRange(range.from, range.to);
-      }
-      // A thread that has outgrown the column opens in the modal instead of
-      // unfolding into it; `maybeOpenModal` has already made the selection.
-      if (maybeOpenModal(id)) return;
-      threadsPanel.setActive(id);
-      // Nothing extra on mobile: setActive has already unfolded EVERY copy
-      // of this card, so a tap in the sheet expands the sheet's copy in
-      // place (and the inline one underneath it) rather than launching a
-      // third, separate full-screen view of the same conversation.
-    },
+    onThreadClick: (id) => engageThread(id),
     onReply: async (id, text, answersCommentId, optionId) => {
       // Two routes, one reply. `/answer` posts the SAME comment and
       // additionally stamps `answeredAt` on the declaring comment, which is
