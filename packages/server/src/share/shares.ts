@@ -50,32 +50,32 @@ export class Shares {
   }
 
   /**
-   * Share a whole workspace (folder bind / diff review). The visitor reaches
-   * every member doc plus the navigation endpoints, so the set browses with
-   * its sidebar intact — see middleware/host-guard.ts for the exact scope.
-   * The URL opens `entryDocId`.
+   * Share a BOARD behind Cloudflare Access. The URL opens the board, and the
+   * visitor reaches every doc filed on it plus the navigation endpoints — see
+   * middleware/host-guard.ts for the exact scope.
+   *
+   * There is no entry doc: a board share lands on `/workspaces/<id>`, so
+   * `docId` is always empty on a record minted today. Legacy records may
+   * carry one; it was only ever a landing address, never a grant.
    */
   async createShareWorkspace(req: CreateShareWorkspaceReq): Promise<Share> {
-    if (!req.hub && !req.entryDocId) {
-      throw new Error('entryDocId is required (or pass hub for a hub workspace share)');
-    }
     return this.create({
       ...req,
       surface: 'workspace',
-      // A hub share has no entry doc — its URL opens the hub page.
-      docId: req.entryDocId ?? '',
+      docId: '',
       workspaceId: req.workspaceId,
     });
   }
 
   /**
-   * Share a workspace by unguessable link. No Cloudflare Access app, no email
+   * Share a BOARD by unguessable link. No Cloudflare Access app, no email
    * policy — possession of the slug is the credential until `expiresAt`.
    *
-   * There is no single-doc form: a workspace is the unit of sharing. The old
-   * `docId` argument minted a share scoped to one doc, which is exactly the
-   * grant that went away, so an older caller still sending it is refused at
-   * the route rather than quietly re-scoped to something it did not ask for.
+   * There is no single-doc form and no single-grouping form: a board is the
+   * unit of sharing. Both of those grants minted a share scoped to something
+   * smaller, which is exactly what went away, so an older caller still
+   * asking for one is refused at the route rather than quietly re-scoped to
+   * something it did not ask for.
    */
   createShareLink(req: CreateShareLinkReq): Share {
     if (!this.config.publicHostname) {
@@ -84,12 +84,9 @@ export class Shares {
       );
     }
     if (!req.workspaceId) throw new Error('workspaceId is required');
-    const docId = req.entryDocId ?? '';
-    // A hub workspace share deliberately has NO entry doc — redemption
-    // lands on the hub page, and the guard scopes by workspaceId alone.
-    if (!docId && !req.hub) {
-      throw new Error('entryDocId is required (or pass hub for a hub workspace share)');
-    }
+    // Redemption lands on the board page, so there is no entry doc and the
+    // guard scopes by workspaceId alone.
+    const docId = '';
 
     const slug = randomBytes(SLUG_BYTES).toString('hex');
     const hostname = this.config.publicHostname;

@@ -73,7 +73,6 @@ import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './rev
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
 import { CfApi } from './share/cf-api.ts';
-import { resolveShareEntry } from './share/entry-resolve.ts';
 import {
   SHARE_COOKIE,
   loadCookieKey,
@@ -90,7 +89,7 @@ import {
 } from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
-import type { ShareConfig } from './share/types.ts';
+import type { Share, ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
@@ -196,6 +195,26 @@ function parseGoalList(raw: unknown): GoalListEntry[] | null {
  * url carries which hub it came from.
  */
 export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
+
+/**
+ * The refusal a share route gives when handed a GROUPING id.
+ *
+ * A BOARD is the unit of sharing (Bryan, 2026-08-17: "Workspace only — a
+ * review must be filed on a board before it can be shared"). A folder bind
+ * and a diff review are groupings: they hold member docs, but they are not
+ * boards, and until this they could each be shared on their own.
+ *
+ * 410 rather than 404 because the id is real and the caller is not wrong
+ * about it — the capability is what went away. Older peers keep calling the
+ * shared server with the payload THEIR bundle sends long after this one
+ * stopped sending it, and a grouping id arrives in the same `workspaceId`
+ * field a board id does, so a bare 404 would read as "your review vanished".
+ * The hint has to name the replacement or the reply is just a wall.
+ */
+const GROUPING_SHARING_REMOVED = {
+  error: 'grouping_sharing_removed',
+  hint: 'A board is the unit of sharing. A folder bind or diff review cannot be shared on its own — file it on a board and share the board instead. Use the hubWorkspaceId that create_diff_review / bind_folder returns, or make a fresh board with create_workspace.',
+} as const;
 
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
@@ -583,6 +602,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     return shares.findLive(shareId)?.shareId ?? null;
   };
 
+  /**
+   * What a share may reach — or null, when it may reach nothing.
+   *
+   * A BOARD is the unit of sharing (Bryan, 2026-08-17). Minting a share of a
+   * folder bind or diff review is refused at the route, but a record written
+   * BEFORE that keeps its slug and its already-signed session cookies, so the
+   * mint guard alone would retire the grant everywhere except where it is
+   * actually exercised. This is that place: every serving path resolves a
+   * share through here, and a share whose workspace is not a board resolves
+   * to nothing.
+   *
+   * Deliberately not a drop in `Shares.load`, which is how the per-doc
+   * removal did it. Two reasons: `Shares` has no way to ask what a board is
+   * (only `taskStore` knows), and a load-time drop would destroy a row an
+   * operator can still want to list and revoke. Removing a capability is not
+   * deleting user content.
+   */
+  const boardShareTarget = (share: Share | null | undefined): ShareTarget | null => {
+    if (!share?.workspaceId) return null;
+    if (!taskStore.getWorkspace(share.workspaceId)) return null;
+    return { workspaceId: share.workspaceId };
+  };
+
   /** Resolve a link-mode session cookie to what it may reach, or null. */
   const linkSessionTarget = (req: Request): ShareTarget | null => {
     if (!shares) return null;
@@ -592,111 +634,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // effect immediately rather than when a browser's cookie lapses.
     const share = shares.findLive(shareId);
     if (!share || share.mode !== 'link') return null;
-    return { docId: share.docId, workspaceId: share.workspaceId };
-  };
-
-  /**
-   * The doc a workspace share should open right now, or null when the
-   * workspace has no members left. Resolved per request rather than stored,
-   * because a member docId encodes the file's relPath — renaming the entry
-   * file changes its docId.
-   */
-  const currentWorkspaceEntry = (workspaceId: string, preferred?: string): string | null => {
-    const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
-    const resolved = resolveShareEntry(
-      preferred,
-      members.map((m) => ({
-        docId: m.docId,
-        ...(m.relPath ? { relPath: m.relPath } : {}),
-        ...(m.stale ? { stale: true } : {}),
-        ...(m.type === 'diff' ? { isChangedFile: true } : {}),
-      })),
-    );
-    // Everything bound is a tombstone. A BROWSE workspace usually has exactly
-    // one bound doc — its entry — so renaming that one file is the common
-    // case, and there is no survivor to fall back to. But the folder is full
-    // of files that are one lazy open away; the sidebar lists them already.
-    // Bind the best of them rather than land the visitor on a ghost.
-    //
-    // NOT for a diff review: there, every member stale means every reviewed
-    // change was reverted, i.e. the review is empty. Binding some arbitrary
-    // unchanged file would misrepresent that as a review of a file nobody
-    // touched. Land on the tombstone — it still holds the comments.
-    const isDiffReview = members.some((m) => m.type === 'diff');
-    const winner = resolved ? members.find((m) => m.docId === resolved) : undefined;
-    if (!isDiffReview && (!resolved || winner?.stale)) {
-      const live = liveFileEntry(workspaceId, members);
-      if (live) return live;
-    }
-    return resolved;
-  };
-
-  /**
-   * Lazily bind the best on-disk file of a workspace as a landing doc.
-   *
-   * Honours the workspace's stored `exclude`: listRepoFiles powers the
-   * all-files sidebar and deliberately scans everything, so picking from it
-   * unfiltered would land a reviewer on a vendored or generated file the
-   * caller explicitly kept out — and bind it into the workspace on the way.
-   */
-  const liveFileEntry = (workspaceId: string, members: DocMeta[]): string | null => {
-    const listed = rooms.listRepoFiles(workspaceId);
-    if (!listed.ok || !listed.files) return null;
-    const bound = new Set(members.map((m) => m.relPath));
-    const excluded = (members.find((m) => m.workspaceExclude)?.workspaceExclude ?? []).map((p) =>
-      p.replace(/^\/+/, '').replace(/\/+$/, ''),
-    );
-    const candidates = listed.files
-      .filter((f) => !bound.has(f.relPath))
-      .filter((f) => !excluded.some((p) => f.relPath === p || f.relPath.startsWith(`${p}/`)))
-      .map((f) => ({ docId: f.relPath, relPath: f.relPath }));
-    const pick = resolveShareEntry(undefined, candidates);
-    if (!pick) return null;
-    const opened = rooms.openContextFile(workspaceId, pick);
-    return opened.ok ? opened.docId : null;
-  };
-
-  /**
-   * Repair a share visitor's `/review/<docId>` when that doc is gone.
-   *
-   * Link shares resolve their landing doc at redemption, but the URL the
-   * visitor ends up with (and bookmarks, and is sent by email in the case of
-   * an Access share, whose URL is handed out directly and never redeemed)
-   * still names a specific docId. Renaming the file behind it leaves that URL
-   * pointing at nothing. Redirect to the workspace's current entry instead —
-   * which also repairs every URL already in someone's inbox.
-   *
-   * Fires for the share's own entry doc, in two states: gone entirely, or
-   * kept as a stale tombstone (the usual rename outcome — the doc survives so
-   * its threads do). Deliberately NOT for any other stale member: those are
-   * listed in the tree precisely so a stranded thread stays readable, and
-   * bouncing a visitor away from one would make it unreachable.
-   *
-   * Only for workspace shares: a single-doc share has nowhere else to go, and
-   * silently moving it would be wrong. Returns null when nothing to do.
-   */
-  const repairStaleReviewUrl = (
-    pathname: string,
-    method: string,
-    target: ShareTarget,
-  ): Response | null => {
-    if (method !== 'GET' || !target.workspaceId) return null;
-    if (!pathname.startsWith('/review/')) return null;
-    const docId = decodeURIComponent(pathname.slice('/review/'.length));
-    // ONLY the share's own entry. Repairing an arbitrary docId would answer
-    // a question the scope check deliberately refuses: a missing id would
-    // redirect while a real id belonging to someone else's workspace 403s,
-    // handing a visitor an existence oracle they never had before. Every
-    // docId other than this share's entry gets the same 403 it always did.
-    if (docId !== target.docId) return null;
-    const room = rooms.get(docId);
-    if (room && !room.meta.stale) return null;
-    const entry = currentWorkspaceEntry(target.workspaceId);
-    if (!entry || entry === docId) return null;
-    return new Response(null, {
-      status: 302,
-      headers: { location: `/review/${encodeURIComponent(entry)}` },
-    });
+    return boardShareTarget(share);
   };
 
   // When shares is wired, automatically derive the cf-access audience from
@@ -1859,7 +1797,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // different audiences, and seeding from the doc id would give a
               // returning browser the same guest identity on both — attributing
               // comments on a freshly minted link to the old one's visitor.
-              shareKey: visitorShareId ?? visitor.workspaceId ?? visitor.docId,
+              // The `?? ''` is unreachable: the guard refuses a target with
+              // no workspaceId, so a visitor always has one. Typed optional
+              // there so an old doc-only shape is refused at runtime rather
+              // than only at compile time.
+              shareKey: visitorShareId ?? visitor.workspaceId ?? '',
             });
           }
           return claimed as User | undefined;
@@ -1899,9 +1841,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // LIVE, not merely known: an expired share's hostname must stop
               // being a share hostname, or expiry never takes effect for
               // Access mode (see Shares.findLiveByHostname).
-              const s = shares?.findLiveByHostname(h);
-              if (!s) return null;
-              return { docId: s.docId, workspaceId: s.workspaceId };
+              return boardShareTarget(shares?.findLiveByHostname(h));
             },
             linkHost: shares?.publicHostname ?? null,
           });
@@ -1930,15 +1870,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!result.ok) return j(result.status, { error: result.error });
             // Authenticated for THIS share — but Access only proves the
             // visitor's email domain, not what they may touch. Scope them to
-            // the shared doc: no doc enumeration, no workspace/diff creation,
-            // no share administration.
-            // Ahead of the scope check on purpose: a /review/<docId> for a doc
-            // that does NOT exist can't pass scope (there's no workspace to
-            // match), so the repair would be unreachable behind it. It leaks
-            // nothing — a docId that exists elsewhere is left alone and still
-            // gets the 403 below.
-            const repaired = repairStaleReviewUrl(pathname, req.method, decision.target);
-            if (repaired) return repaired;
+            // the shared board: no doc enumeration, no workspace/diff
+            // creation, no share administration.
             if (!shareScopeAllows(pathname, req.method, decision.target, shareWorkspacesOf)) {
               return j(403, { error: 'out_of_share_scope' });
             }
@@ -1956,8 +1889,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!redeeming) {
               const target = linkSessionTarget(req);
               if (!target) return j(401, { error: 'no_share_session' });
-              const repaired = repairStaleReviewUrl(pathname, req.method, target);
-              if (repaired) return repaired;
               if (!shareScopeAllows(pathname, req.method, target, shareWorkspacesOf)) {
                 return j(403, { error: 'out_of_share_scope' });
               }
@@ -2039,28 +1970,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               headers: { 'content-type': 'text/html; charset=utf-8' },
             });
           }
-          // A HUB workspace share lands IN the hub — never a review URL,
-          // never a lobby (§2.5). Resolved at redemption like everything
-          // else, so a workspace deleted after minting falls through to the
-          // same not-found the legacy path gives.
-          if (share.workspaceId && taskStore.getWorkspace(share.workspaceId)) {
-            const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
-            return new Response(null, {
-              status: 302,
-              headers: {
-                location: `/workspaces/${encodeURIComponent(share.workspaceId)}`,
-                'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
-                'referrer-policy': 'no-referrer',
-              },
-            });
-          }
-          // Where to land is resolved NOW, not when the share was minted: a
-          // member docId encodes the file's relPath, so renaming or deleting
-          // the entry file used to 404 the link with no way to repoint it.
-          const target = currentWorkspaceEntry(share.workspaceId, share.docId);
-          // An emptied-out workspace has nothing to show; say no more than an
-          // unknown slug would.
-          if (!target) {
+          // A share lands IN the board — never a review URL, never a lobby
+          // (§2.5). Resolved at redemption like everything else, so a board
+          // deleted after minting falls through to the same not-found.
+          //
+          // A legacy GROUPING share lands here too, and gets that same 404
+          // rather than a named 410. The route's own rule is that an unknown,
+          // an expired and a malformed slug are indistinguishable — telling a
+          // stranger holding a leaked link that it was once real would give
+          // away more than the removal takes back. The named 410 is for the
+          // MINT routes, where the caller is a peer with a legitimate ask.
+          if (!boardShareTarget(share)) {
             return new Response(renderLinkNotFound(), {
               status: 404,
               headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -2070,7 +1990,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return new Response(null, {
             status: 302,
             headers: {
-              location: `/review/${encodeURIComponent(target)}`,
+              location: `/workspaces/${encodeURIComponent(share.workspaceId)}`,
               'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
               // Keep the slug out of any downstream Referer header.
               'referrer-policy': 'no-referrer',
@@ -2098,35 +2018,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (!workspaceId) return j(400, { error: 'workspaceId required' });
 
-          let entryDocId = body?.entryDocId as string | undefined;
-          let memberCount: number | undefined;
-          // A HUB workspace (§3.12 commit 8) is shareable with zero bound
-          // member docs — its entry is the hub page, not a review doc.
-          const isHubShare = !!taskStore.getWorkspace(workspaceId);
-          if (isHubShare) {
-            if (entryDocId) {
-              return j(400, {
-                error: 'a hub workspace share opens the hub page — entryDocId is not supported',
-              });
+          // Only a BOARD may be shared. A board is what `taskStore` answers
+          // for; a grouping is what only `rooms` knows about. They arrive in
+          // the SAME field — unlike the per-doc removal above, no shape of
+          // the payload separates them — so the lookup IS the discriminator.
+          if (!taskStore.getWorkspace(workspaceId)) {
+            if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
+              return j(410, GROUPING_SHARING_REMOVED);
             }
-          } else {
-            const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
-            if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
-            if (entryDocId && !members.some((m) => m.docId === entryDocId)) {
-              return j(400, { error: 'entryDocId is not a member of this workspace' });
-            }
-            entryDocId = entryDocId ?? members[0]?.docId;
-            memberCount = members.length;
+            // Neither. Kept distinct from the 410 so that reply keeps meaning
+            // "this exists and is no longer shareable" rather than becoming
+            // the answer to every unrecognised id.
+            return j(404, { error: 'workspace not found', workspaceId });
+          }
+          // A board share opens the board. There is no entry doc to choose,
+          // and an older bundle sharing a board sends this key undefined,
+          // which JSON.stringify drops.
+          if (body?.entryDocId) {
+            return j(400, {
+              error: 'a board share opens the board — entryDocId is not supported',
+            });
           }
           try {
             const share = shares.createShareLink({
               workspaceId,
-              entryDocId,
-              hub: isHubShare,
               ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
               label: typeof body?.label === 'string' ? body.label : undefined,
             });
-            return j(200, { share, ...(memberCount ? { memberCount } : {}) });
+            return j(200, { share });
           } catch (err) {
             const error = err instanceof Error ? err.message : 'create_share_failed';
             return j(400, { error });
@@ -2161,48 +2080,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!Array.isArray(allowDomains) || allowDomains.length === 0) {
             return j(400, { error: 'allowDomains must be a non-empty array' });
           }
-          // A HUB workspace share (§3.12 commit 8): same email-share
-          // machinery, but the URL opens the hub page and there is no entry
-          // doc — the guard scopes by workspaceId alone.
-          if (taskStore.getWorkspace(workspaceId)) {
-            if (body?.entryDocId) {
-              return j(400, {
-                error: 'a hub workspace share opens the hub page — entryDocId is not supported',
-              });
+          // Same board-only rule as the link route, and for the same reason:
+          // the two modes differ only in how a visitor is authorized, never
+          // in what may be shared.
+          if (!taskStore.getWorkspace(workspaceId)) {
+            if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
+              return j(410, GROUPING_SHARING_REMOVED);
             }
-            try {
-              const share = await shares.createShareWorkspace({
-                workspaceId,
-                hub: true,
-                allowDomains,
-                ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
-                name: typeof body?.name === 'string' ? body.name : undefined,
-              });
-              return j(200, { share });
-            } catch (err) {
-              const error = err instanceof Error ? err.message : 'create_share_failed';
-              return j(502, { error });
-            }
+            return j(404, { error: 'workspace not found', workspaceId });
           }
-          const members = rooms.list().filter((m) => m.workspaceId === workspaceId);
-          if (members.length === 0) return j(404, { error: 'workspace not found', workspaceId });
-          // Entry doc: caller's choice, else the first member. Must belong to
-          // the workspace — otherwise the URL would open an out-of-scope doc
-          // and the visitor would land on a 403.
-          const requested = body?.entryDocId as string | undefined;
-          if (requested && !members.some((m) => m.docId === requested)) {
-            return j(400, { error: 'entryDocId is not a member of this workspace' });
+          if (body?.entryDocId) {
+            return j(400, {
+              error: 'a board share opens the board — entryDocId is not supported',
+            });
           }
-          const entryDocId = requested ?? members[0]?.docId ?? '';
           try {
             const share = await shares.createShareWorkspace({
               workspaceId,
-              entryDocId,
               allowDomains,
               ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
               name: typeof body?.name === 'string' ? body.name : undefined,
             });
-            return j(200, { share, memberCount: members.length });
+            return j(200, { share });
           } catch (err) {
             const error = err instanceof Error ? err.message : 'create_share_failed';
             return j(502, { error });

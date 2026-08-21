@@ -19,9 +19,15 @@
  *     actually exercised — the registry is what the gate reads.
  *
  *  3. The replacement still works. Every assertion here is an absence, so
- *     each one is paired with a workspace share doing the same thing in the
- *     same test. Without that pair, a server that answered nothing at all
- *     would pass this entire file.
+ *     each one is paired with a live share doing the same thing in the same
+ *     test. Without that pair, a server that answered nothing at all would
+ *     pass this entire file.
+ *
+ * Those positive controls used to be minted over the folder bind. A BOARD is
+ * the unit of sharing now — the grouping removal that followed this one is
+ * covered in grouping-share-removed.test.ts — so the bind is FILED on a board
+ * and the control shares the board. The pairing is the point, and it only
+ * works if the control is something that still mints.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -39,6 +45,9 @@ describe('per-doc sharing is removed', () => {
   let dataDir: string;
   let folder: string;
   let base: string;
+  /** The board every positive control below is minted over. */
+  let boardId: string;
+  /** The folder bind filed on it — a GROUPING, not shareable on its own. */
   let workspaceId: string;
   let memberDocId: string;
   const SOLO = 'solo-doc';
@@ -71,7 +80,12 @@ describe('per-doc sharing is removed', () => {
     const mk = await local('/api/docs', { docId: SOLO, type: 'markdown', sourceUrl: soloPath });
     expect(mk.status).toBe(200);
 
-    const bind = await local('/api/workspaces', { folderPath: folder });
+    const board = await local('/api/workspaces', { name: 'Per-doc removal board' });
+    expect(board.status).toBe(200);
+    boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    expect(boardId).toBeTruthy();
+
+    const bind = await local('/api/workspaces', { folderPath: folder, hubWorkspaceId: boardId });
     expect(bind.status).toBe(200);
     const bound = (await bind.json()) as {
       workspaceId: string;
@@ -81,6 +95,7 @@ describe('per-doc sharing is removed', () => {
     memberDocId = bound.files[0]?.docId ?? '';
     expect(workspaceId).toBeTruthy();
     expect(memberDocId).toBeTruthy();
+    expect(workspaceId).not.toBe(boardId);
   });
 
   afterEach(async () => {
@@ -104,13 +119,13 @@ describe('per-doc sharing is removed', () => {
       // The reply has to point somewhere, or it reads as a broken server.
       expect(body.hint).toContain('workspace');
 
-      // Positive control, same server, same pass: the workspace route works.
-      const ws = await local('/api/share/link', { workspaceId });
+      // Positive control, same server, same pass: the board route works.
+      const ws = await local('/api/share/link', { workspaceId: boardId });
       expect(ws.status).toBe(200);
-      expect(((await ws.json()) as { share: Share }).share.workspaceId).toBe(workspaceId);
+      expect(((await ws.json()) as { share: Share }).share.workspaceId).toBe(boardId);
     });
 
-    it('refuses share_link’s DOC form while its WORKSPACE form still works', async () => {
+    it('refuses share_link’s DOC form while its BOARD form still works', async () => {
       // The 0.1.41 bundle destructures `{ docId, workspaceId, entryDocId,
       // ttlSeconds, label }` and forwards all five. For a per-doc call that
       // means docId is set and workspaceId is undefined.
@@ -124,21 +139,28 @@ describe('per-doc sharing is removed', () => {
       expect(doc.status).toBe(410);
       expect(((await doc.json()) as { error: string }).error).toBe('per_doc_sharing_removed');
 
-      // The SAME old bundle, sharing a workspace, sends the identical shape
-      // with docId undefined — which JSON.stringify drops, so the body never
+      // The SAME old bundle, sharing a board, sends the identical shape with
+      // docId undefined — which JSON.stringify drops, so the body never
       // carries the key and the call keeps working. That is the whole reason
       // the guard tests for the KEY rather than for a truthy value: an old
-      // peer's workspace shares must not break with its doc shares.
+      // peer's board shares must not break with its doc shares.
+      //
+      // `entryDocId` is dropped from this control rather than left at
+      // `memberDocId`: it is refused now too (a board share opens the board),
+      // and a control that 400s is no control. That refusal has its own test
+      // in grouping-share-removed.test.ts, where it is the subject rather than
+      // a side effect. An old bundle sharing a board sends it undefined, which
+      // JSON.stringify drops, exactly like docId above.
       const ws = await local('/api/share/link', {
         docId: undefined,
-        workspaceId,
-        entryDocId: memberDocId,
+        workspaceId: boardId,
+        entryDocId: undefined,
         ttlSeconds: undefined,
-        label: 'folder review',
+        label: 'board review',
       });
       expect(ws.status).toBe(200);
       const share = ((await ws.json()) as { share: Share }).share;
-      expect(share.workspaceId).toBe(workspaceId);
+      expect(share.workspaceId).toBe(boardId);
       expect(share.surface).toBe('workspace');
     });
 
@@ -148,7 +170,7 @@ describe('per-doc sharing is removed', () => {
       expect(((await none.json()) as { error: string }).error).toBe('workspaceId required');
 
       // Positive control: adding the one named field is all it takes.
-      const ok = await local('/api/share/link', { label: 'nothing', workspaceId });
+      const ok = await local('/api/share/link', { label: 'nothing', workspaceId: boardId });
       expect(ok.status).toBe(200);
     });
   });
@@ -252,9 +274,10 @@ describe('per-doc sharing is removed', () => {
   });
 
   describe('what replaces it', () => {
-    it('files a loose doc on a workspace and shares that instead', async () => {
+    it('files a loose doc on a workspace, on a board, and shares the board', async () => {
       // The whole migration story in one test: a doc nobody could share
-      // becomes shareable by being filed, and the share reaches it.
+      // becomes reachable by being filed, and a share of the board it ends up
+      // on reaches it.
       const dir = join(folder, 'nested');
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'note.md'), '# Note\n\nFiled, therefore shareable.\n');
@@ -269,7 +292,7 @@ describe('per-doc sharing is removed', () => {
       const { docId } = (await opened.json()) as { docId: string };
       expect(docId).toBeTruthy();
 
-      const mint = await local('/api/share/link', { workspaceId, entryDocId: memberDocId });
+      const mint = await local('/api/share/link', { workspaceId: boardId });
       expect(mint.status).toBe(200);
       const share = ((await mint.json()) as { share: Share }).share;
 
@@ -278,6 +301,9 @@ describe('per-doc sharing is removed', () => {
         redirect: 'manual',
       });
       expect(r.status).toBe(302);
+      // Redemption lands on the board, not on any doc — there is no entry doc
+      // to land on, which is why `entryDocId` is gone from the mint payload.
+      expect(r.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
       const cookie = (r.headers.get('set-cookie') ?? '').match(
         new RegExp(`${SHARE_COOKIE}=([^;]+)`),
       )?.[1];

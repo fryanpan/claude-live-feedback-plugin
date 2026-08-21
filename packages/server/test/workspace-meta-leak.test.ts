@@ -70,17 +70,27 @@ describe('workspace share does not leak host details', () => {
     });
     base = `http://localhost:${handle.port}`;
 
+    // A board is the unit of sharing; the bind is filed on one. What this
+    // test measures — which meta fields a share visitor may see — is reached
+    // through the grouping either way.
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Meta board' }),
+    }).then((r) => r.json());
+    const boardId = board.workspace.id as string;
+    expect(boardId).toBeTruthy();
+
     workspaceId = (
       await local('/api/workspaces', {
         method: 'POST',
-        body: JSON.stringify({ folderPath: folder }),
+        body: JSON.stringify({ folderPath: folder, hubWorkspaceId: boardId }),
       }).then((r) => r.json())
     ).workspaceId;
     expect(workspaceId).toBeTruthy();
 
     const share = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId }),
+      body: JSON.stringify({ workspaceId: boardId }),
     }).then((r) => r.json());
     const redeemed = await fetch(`${base}/s/${share.share.slug}`, {
       redirect: 'manual',

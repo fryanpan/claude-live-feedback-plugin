@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  type ShareTarget,
   classifyHost,
   isTrustedLocalHost,
   normalizeHost,
@@ -89,7 +90,7 @@ describe('isTrustedLocalHost', () => {
 
 describe('classifyHost', () => {
   const lookupShare = (h: string) =>
-    h === 'share-abc.tunnel.example.com' ? { docId: 'shared-doc' } : null;
+    h === 'share-abc.tunnel.example.com' ? { workspaceId: 'ws-shared' } : null;
 
   it('local → no gate', () => {
     expect(classifyHost('localhost:8787', { ...LOCAL, lookupShare })).toEqual({ kind: 'local' });
@@ -98,15 +99,26 @@ describe('classifyHost', () => {
   it('active share host → gate + what it is scoped to', () => {
     expect(classifyHost('share-abc.tunnel.example.com', { ...LOCAL, lookupShare })).toEqual({
       kind: 'share',
-      target: { docId: 'shared-doc' },
+      target: { workspaceId: 'ws-shared' },
     });
   });
 
-  it('carries the workspaceId through for a workspace share', () => {
-    const wsLookup = () => ({ docId: 'ws-1:index.md', workspaceId: 'ws-1' });
-    expect(
-      classifyHost('share-ws.tunnel.example.com', { ...LOCAL, lookupShare: wsLookup }),
-    ).toEqual({ kind: 'share', target: { docId: 'ws-1:index.md', workspaceId: 'ws-1' } });
+  it('the target it carries names a BOARD and nothing else', () => {
+    // This used to read "carries the workspaceId through", paired with a
+    // target that named an ENTRY DOC beside its workspace. A board share opens
+    // the board, so there is no entry doc left to carry and the field is gone.
+    // Asserted as an absence of the old key as well as a match on the new
+    // shape: a target that quietly regrew a `docId` is precisely the
+    // regression the removal exists to prevent, and `toEqual` on its own would
+    // be satisfied by a lookup that never had one to begin with.
+    const wsLookup = () => ({ workspaceId: 'ws-1' });
+    const decision = classifyHost('share-ws.tunnel.example.com', {
+      ...LOCAL,
+      lookupShare: wsLookup,
+    });
+    expect(decision).toEqual({ kind: 'share', target: { workspaceId: 'ws-1' } });
+    expect(decision.kind).toBe('share');
+    if (decision.kind === 'share') expect('docId' in decision.target).toBe(false);
   });
 
   it('unknown host → DENY (previously this fell through to the open API)', () => {
@@ -128,35 +140,42 @@ describe('classifyHost', () => {
     // …but a proxied request to a real share host is still a share.
     expect(
       classifyHost('share-abc.tunnel.example.com', { ...LOCAL, lookupShare, viaProxy: true }),
-    ).toEqual({ kind: 'share', target: { docId: 'shared-doc' } });
+    ).toEqual({ kind: 'share', target: { workspaceId: 'ws-shared' } });
   });
 });
 
 /**
- * A workspace is the unit of sharing (Bryan, 2026-08-17). A target that names
- * no workspace is the shape a PER-DOC share had, and it must now grant
- * nothing at all — not the doc it names, and not even the app shell.
+ * A BOARD is the unit of sharing (Bryan, 2026-08-17). A target that names no
+ * workspace is what a PER-DOC share was, and it must now grant nothing at all
+ * — not the doc it used to name, and not even the app shell.
+ *
+ * The empty object IS that shape now. A target once carried the entry doc
+ * beside its workspace, so "the old doc-share shape" could be written out as
+ * `{ docId }`; the field went with board-only sharing, which leaves `{}` as
+ * the only way a workspace-less target can be constructed at all. Nothing
+ * about what is under test moved — the paths below still name `auth-rfc`, and
+ * the question is still whether a target with no workspace reaches it.
  *
  * Every assertion here is an absence, so each one carries its positive
- * control IN THE SAME `it`: the identical path, against a workspace target
+ * control IN THE SAME `it`: the identical path, against a board target
  * covering the same doc, must be allowed. Without that pair, a bare
  * `return false` at the top of the function would pass this whole block while
  * breaking every share on the server.
  */
 describe('shareScopeAllows — a target with no workspace grants nothing', () => {
-  const DOC = { docId: 'auth-rfc' }; // the old doc-share shape
-  const WS = { docId: 'auth-rfc', workspaceId: 'ws-1' }; // same doc, filed
+  const NO_WS: ShareTarget = {}; // the old doc-share shape, as it survives
+  const WS: ShareTarget = { workspaceId: 'ws-1' }; // the board `auth-rfc` is filed on
   const workspaceOf = (d: string) => (d === 'auth-rfc' ? ['ws-1'] : []);
 
   it('refuses the app shell and assets a doc share used to get', () => {
     for (const p of ['/app/app.js', '/app/styles.css', '/favicon.ico', '/widget.js']) {
-      expect(shareScopeAllows(p, 'GET', DOC, workspaceOf), `${p} (no workspace)`).toBe(false);
-      // Positive control: the same asset IS served to a workspace share.
+      expect(shareScopeAllows(p, 'GET', NO_WS, workspaceOf), `${p} (no workspace)`).toBe(false);
+      // Positive control: the same asset IS served to a board share.
       expect(shareScopeAllows(p, 'GET', WS, workspaceOf), `${p} (workspace)`).toBe(true);
     }
   });
 
-  it('refuses the named doc’s own surfaces — naming a doc is not a grant', () => {
+  it('refuses a doc’s own surfaces — the target names no workspace to be in', () => {
     for (const [p, method] of [
       ['/review/auth-rfc', 'GET'],
       ['/y/auth-rfc', 'GET'],
@@ -165,9 +184,9 @@ describe('shareScopeAllows — a target with no workspace grants nothing', () =>
       ['/api/docs/auth-rfc/threads', 'POST'],
       ['/api/docs/auth-rfc/threads/t1/comments', 'POST'],
     ] as const) {
-      expect(shareScopeAllows(p, method, DOC, workspaceOf), `${p} (no workspace)`).toBe(false);
+      expect(shareScopeAllows(p, method, NO_WS, workspaceOf), `${p} (no workspace)`).toBe(false);
       // Positive control: the doc is reachable once it is filed on the shared
-      // workspace — which is the whole replacement story.
+      // board — which is the whole replacement story.
       expect(shareScopeAllows(p, method, WS, workspaceOf), `${p} (workspace)`).toBe(true);
     }
   });
@@ -175,19 +194,24 @@ describe('shareScopeAllows — a target with no workspace grants nothing', () =>
   it('refuses even with a resolver that would place the doc in a workspace', () => {
     // The resolver says `auth-rfc` is in ws-1; the TARGET names no workspace,
     // so there is nothing for that membership to match against.
-    expect(shareScopeAllows('/review/auth-rfc', 'GET', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'GET', DOC, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/review/auth-rfc', 'GET', NO_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'GET', NO_WS, workspaceOf)).toBe(false);
     expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'GET', WS, workspaceOf)).toBe(true);
   });
 });
 
 describe('shareScopeAllows — what stays closed to every share', () => {
-  const DOC = { docId: 'ws-1:index.md', workspaceId: 'ws-1' };
+  // The share covers the BOARD; `MEMBER` is the one doc filed on it. They used
+  // to be one object (the target carried the entry doc), and separating them
+  // is the point: everything below reaches the member through membership, so
+  // nothing here can pass because the target happened to name it.
+  const MEMBER = 'ws-1:index.md';
+  const SHARE: ShareTarget = { workspaceId: 'ws-1' };
   // EXACT membership, not a prefix test: scope is now decided entirely by
   // this resolver, so a fixture that answers on `startsWith` would grant
   // `ws-1:index.md-other` and hide the prefix case below.
-  const wsOf = (d: string) => (d === 'ws-1:index.md' ? ['ws-1'] : []);
-  const shareScopeAllowsDoc = (p: string, m: string) => shareScopeAllows(p, m, DOC, wsOf);
+  const wsOf = (d: string) => (d === MEMBER ? ['ws-1'] : []);
+  const shareScopeAllowsDoc = (p: string, m: string) => shareScopeAllows(p, m, SHARE, wsOf);
 
   it('matches a percent-encoded docId (workspace members encode `:` and `~`)', () => {
     expect(shareScopeAllowsDoc('/review/ws-1%3Aindex.md', 'GET')).toBe(true);
@@ -224,13 +248,16 @@ describe('shareScopeAllows — what stays closed to every share', () => {
   });
 
   it('is not fooled by a prefix that merely starts with a member id', () => {
-    expect(shareScopeAllowsDoc(`/review/${DOC.docId}-other`, 'GET')).toBe(false);
-    expect(shareScopeAllowsDoc(`/api/docs/${DOC.docId}-other/threads`, 'GET')).toBe(false);
+    expect(shareScopeAllowsDoc(`/review/${MEMBER}-other`, 'GET')).toBe(false);
+    expect(shareScopeAllowsDoc(`/api/docs/${MEMBER}-other/threads`, 'GET')).toBe(false);
+    // Positive control: the member itself, un-suffixed, is reachable — so the
+    // two refusals are about the extra characters and not about the fixture.
+    expect(shareScopeAllowsDoc(`/review/${MEMBER}`, 'GET')).toBe(true);
   });
 });
 
 describe('shareScopeAllows (workspace share)', () => {
-  const WS = { docId: 'ws-1:index.md', workspaceId: 'ws-1' };
+  const WS: ShareTarget = { workspaceId: 'ws-1' };
   // Members of ws-1, plus a doc that belongs to a DIFFERENT workspace and
   // one that belongs to none — the two things scoping has to keep out.
   const MEMBERS: Record<string, string> = {
@@ -312,12 +339,15 @@ describe('shareScopeAllows (workspace share)', () => {
   });
 
   it('the old doc-only target reaches nothing here, resolver or no resolver', () => {
-    const docShare = { docId: 'ws-1:index.md' }; // no workspaceId
+    // `{}` is what the old doc-only shape reduces to: the target no longer has
+    // a docId field to put `ws-1:index.md` in, and a workspace-less target is
+    // the whole of what that shape was.
+    const docShare: ShareTarget = {}; // no workspaceId
     expect(shareScopeAllows('/review/ws-1%3Adocs~design.md', 'GET', docShare, workspaceOf)).toBe(
       false,
     );
     expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'GET', docShare, workspaceOf)).toBe(false);
-    // Not even the doc it names, which is the half that used to be granted.
+    // Not even the doc it used to name, which is the half that was granted.
     expect(shareScopeAllows('/review/ws-1%3Aindex.md', 'GET', docShare, workspaceOf)).toBe(false);
     // Positive control: identical path, workspace target → allowed.
     expect(shareScopeAllows('/review/ws-1%3Aindex.md', 'GET', WS, workspaceOf)).toBe(true);
@@ -325,67 +355,69 @@ describe('shareScopeAllows (workspace share)', () => {
 });
 
 describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => {
-  // `auth-rfc` is a member of the shared workspace; every share is a
-  // workspace share, so the per-subroute contract is exercised through one.
-  const DOC = { docId: 'auth-rfc', workspaceId: 'ws-a' };
-  const WS = { docId: 'ws-1:index.md', workspaceId: 'ws-1' };
+  // `auth-rfc` is a member of `ws-a`; every share is a board share, so the
+  // per-subroute contract is exercised through one. The target no longer names
+  // the doc — it never needed to, and now it cannot — so every allowance below
+  // is reached through membership in the shared board.
+  const WS_A: ShareTarget = { workspaceId: 'ws-a' };
+  const WS_1: ShareTarget = { workspaceId: 'ws-1' };
   const workspaceOf = (d: string) =>
     d === 'auth-rfc' ? ['ws-a'] : d.startsWith('ws-1:') ? ['ws-1'] : [];
 
   it('allows what the review UI actually calls', () => {
-    expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', DOC, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/docs/auth-rfc/diff', 'GET', DOC, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/docs/auth-rfc/content', 'GET', DOC, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/docs/auth-rfc/activity', 'POST', DOC, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/docs/auth-rfc/threads', 'POST', DOC, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/docs/auth-rfc/threads/by_find', 'POST', DOC, workspaceOf)).toBe(
+    expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/diff', 'GET', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/content', 'GET', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/activity', 'POST', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads', 'POST', WS_A, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/threads/by_find', 'POST', WS_A, workspaceOf)).toBe(
       true,
     );
     expect(
-      shareScopeAllows('/api/docs/auth-rfc/threads/t1/comments', 'POST', DOC, workspaceOf),
+      shareScopeAllows('/api/docs/auth-rfc/threads/t1/comments', 'POST', WS_A, workspaceOf),
     ).toBe(true);
     expect(
-      shareScopeAllows('/api/docs/auth-rfc/threads/t1/resolve', 'POST', DOC, workspaceOf),
+      shareScopeAllows('/api/docs/auth-rfc/threads/t1/resolve', 'POST', WS_A, workspaceOf),
     ).toBe(true);
     expect(
-      shareScopeAllows('/api/docs/auth-rfc/threads/t1/reanchor', 'POST', DOC, workspaceOf),
+      shareScopeAllows('/api/docs/auth-rfc/threads/t1/reanchor', 'POST', WS_A, workspaceOf),
     ).toBe(true);
     expect(
-      shareScopeAllows('/api/docs/auth-rfc/suggestions/s1/accept', 'POST', DOC, workspaceOf),
+      shareScopeAllows('/api/docs/auth-rfc/suggestions/s1/accept', 'POST', WS_A, workspaceOf),
     ).toBe(true);
   });
 
   it('BLOCKS deleting the doc', () => {
-    expect(shareScopeAllows('/api/docs/auth-rfc', 'DELETE', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/docs/ws-1%3Aindex.md', 'DELETE', WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs/auth-rfc', 'DELETE', WS_A, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs/ws-1%3Aindex.md', 'DELETE', WS_1, workspaceOf)).toBe(false);
   });
 
   it('BLOCKS whole-doc replacement and disk reparse', () => {
-    expect(shareScopeAllows('/api/docs/auth-rfc/content', 'POST', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/docs/auth-rfc/reparse_from_disk', 'POST', DOC, workspaceOf)).toBe(
-      false,
-    );
+    expect(shareScopeAllows('/api/docs/auth-rfc/content', 'POST', WS_A, workspaceOf)).toBe(false);
+    expect(
+      shareScopeAllows('/api/docs/auth-rfc/reparse_from_disk', 'POST', WS_A, workspaceOf),
+    ).toBe(false);
   });
 
   it('BLOCKS the agent-side document-surgery verbs hung off a thread', () => {
     for (const verb of ['rewrite_region', 'insert_after', 'insert_blocks_after']) {
       expect(
-        shareScopeAllows(`/api/docs/auth-rfc/threads/t1/${verb}`, 'POST', DOC, workspaceOf),
+        shareScopeAllows(`/api/docs/auth-rfc/threads/t1/${verb}`, 'POST', WS_A, workspaceOf),
         verb,
       ).toBe(false);
     }
   });
 
   it('BLOCKS a doc subroute added later (closed by default)', () => {
-    expect(shareScopeAllows('/api/docs/auth-rfc/export', 'GET', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/docs/auth-rfc/rename', 'POST', DOC, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs/auth-rfc/export', 'GET', WS_A, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs/auth-rfc/rename', 'POST', WS_A, workspaceOf)).toBe(false);
   });
 
   it('BLOCKS writing the audit trail — moves and their evidence alike', () => {
     // The allowlist above is the positive control: these same predicates say
     // yes to the review verbs, so a `false` here is a decision and not a
     // probe that can never see anything.
-    for (const target of [DOC, WS] as const) {
+    for (const target of [WS_A, WS_1] as const) {
       expect(shareScopeAllows('/api/tasks/t-1/transition', 'POST', target, workspaceOf)).toBe(
         false,
       );
@@ -395,13 +427,14 @@ describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => 
 });
 
 describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => {
-  // A hub workspace share: the entry is the hub page, not a review doc, so
-  // docId is empty. Scope comes entirely from workspaceId.
-  const HUB = { docId: '', workspaceId: 'hub-1' };
-  // A share scoped to a DIFFERENT workspace — the neighbour that must not
-  // reach this board. It used to be a doc-scoped share; per-doc sharing is
-  // gone, so the boundary it tests is now workspace-to-workspace.
-  const DOC = { docId: 'auth-rfc', workspaceId: 'ws-a' };
+  // A board share. Every share is one now — it opens `/workspaces/<id>` and
+  // scope comes entirely from workspaceId, which is why the target is a single
+  // field rather than a landing doc plus a grant.
+  const HUB: ShareTarget = { workspaceId: 'hub-1' };
+  // A share scoped to a DIFFERENT board — the neighbour that must not reach
+  // this one. It used to be a doc-scoped share, then a doc-plus-workspace one;
+  // the boundary it tests has always been board-to-board.
+  const OTHER_WS: ShareTarget = { workspaceId: 'ws-a' };
   const workspaceOf = (d: string) =>
     d === 'auth-rfc' ? ['ws-a'] : d.startsWith('hub-1:') ? ['hub-1'] : [];
 
@@ -417,14 +450,14 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     // step on someone's laptop. The allowlist is closed-by-default so this
     // was already true the moment the route existed — this pins it, because
     // "closed by default" is a property of a file somebody can edit.
-    for (const target of [HUB, DOC]) {
+    for (const target of [HUB, OTHER_WS]) {
       expect(shareScopeAllows('/api/plugin/refresh', 'POST', target, workspaceOf)).toBe(false);
       expect(shareScopeAllows('/api/plugin/refresh', 'GET', target, workspaceOf)).toBe(false);
     }
     // Positive control: the same targets DO reach their own surfaces, so the
     // refusals above are about this path and not about the fixture.
     expect(shareScopeAllows('/workspaces/hub-1', 'GET', HUB, workspaceOf)).toBe(true);
-    expect(shareScopeAllows(`/api/docs/${DOC.docId}`, 'GET', DOC, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc', 'GET', OTHER_WS, workspaceOf)).toBe(true);
   });
 
   it('allows the ws:<id> board room socket (the resolver knows nothing of it)', () => {
@@ -438,11 +471,16 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     expect(shareScopeAllows('/events/workspace/hub-1', 'GET', HUB, () => [])).toBe(true);
   });
 
-  it('a DOC-scoped share gets NONE of the three (the §3.3 rule-2 boundary)', () => {
-    expect(shareScopeAllows('/workspaces/hub-1', 'GET', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/y/ws:hub-1', 'GET', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', DOC, workspaceOf)).toBe(false);
+  it('a share on ANOTHER board gets NONE of the three (the §3.3 rule-2 boundary)', () => {
+    expect(shareScopeAllows('/workspaces/hub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws%3Ahub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/y/ws:hub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/events/workspace/hub-1', 'GET', OTHER_WS, workspaceOf)).toBe(false);
+    // Positive control: the same three, for the board that share DOES cover.
+    // Without it a target that reached no board at all would pass this test.
+    expect(shareScopeAllows('/workspaces/ws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/y/ws%3Aws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/events/workspace/ws-a', 'GET', OTHER_WS, workspaceOf)).toBe(true);
   });
 
   it('BLOCKS another workspace’s hub surfaces', () => {
@@ -472,10 +510,10 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
   it('allows the review queue for a workspace share, and only its own workspace', () => {
     expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'GET', HUB)).toBe(true);
     expect(shareScopeAllows('/api/workspaces/hub-2/review-items', 'GET', HUB)).toBe(false);
-    // A DOC-scoped share never reaches a board, review queue included.
-    expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'GET', DOC, workspaceOf)).toBe(
-      false,
-    );
+    // A share on another board never reaches this one, review queue included.
+    expect(
+      shareScopeAllows('/api/workspaces/hub-1/review-items', 'GET', OTHER_WS, workspaceOf),
+    ).toBe(false);
     // Read-only, like every other allowance here.
     expect(shareScopeAllows('/api/workspaces/hub-1/review-items', 'POST', HUB)).toBe(false);
   });
@@ -510,14 +548,14 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
     // threads/* is broadly allowed for commenting; promote creates a TASK
     // and must stay owner-only like the other document-surgery verbs.
     expect(
-      shareScopeAllows('/api/docs/auth-rfc/threads/t1/promote', 'POST', DOC, workspaceOf),
+      shareScopeAllows('/api/docs/auth-rfc/threads/t1/promote', 'POST', OTHER_WS, workspaceOf),
     ).toBe(false);
   });
 
   it('allows the task-chip resolution endpoint (GET only) — §3.3 rule 2', () => {
-    expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'GET', DOC, workspaceOf)).toBe(true);
-    expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'POST', DOC, workspaceOf)).toBe(false);
-    expect(shareScopeAllows('/api/docs/other-doc/tasks', 'GET', DOC, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'GET', OTHER_WS, workspaceOf)).toBe(true);
+    expect(shareScopeAllows('/api/docs/auth-rfc/tasks', 'POST', OTHER_WS, workspaceOf)).toBe(false);
+    expect(shareScopeAllows('/api/docs/other-doc/tasks', 'GET', OTHER_WS, workspaceOf)).toBe(false);
   });
 });
 
@@ -535,8 +573,11 @@ describe('shareScopeAllows (workspace-hub surfaces — §3.12 commit 8)', () => 
  * rule to drift.
  */
 describe('shareScopeAllows — a grouping filed on a shared board', () => {
-  const HUB = { docId: '', workspaceId: 'hub-1' };
-  const OTHER_HUB = { docId: '', workspaceId: 'hub-2' };
+  // Both targets are board shares, which since the board-only removal is the
+  // only kind there is: a grouping cannot be shared on its own, so reaching
+  // one is always the board→grouping hop under test here.
+  const HUB: ShareTarget = { workspaceId: 'hub-1' };
+  const OTHER_HUB: ShareTarget = { workspaceId: 'hub-2' };
   /** grouping `rev-a` sits on hub-1; grouping `rev-b` sits on hub-2. */
   const OWNERS: Record<string, string[]> = {
     'rev-a': ['hub-1'],
@@ -624,8 +665,10 @@ describe('shareScopeAllows — a grouping filed on a shared board', () => {
     // This used to be "a DOC share is not widened by any of it", whose
     // positive control was that the share still opened its one doc. That
     // grant is what per-doc sharing WAS, so the control has to move: the
-    // reachable-half is now the same doc under a workspace target.
-    const docShare = { docId: 'rev-a:src~app.ts' }; // no workspaceId
+    // reachable-half is now the same doc under a board target. The shape
+    // itself is now just an absent workspaceId — the docId field the old
+    // target carried went with board-only sharing.
+    const docShare: ShareTarget = {}; // no workspaceId
     expect(shareScopeAllows('/api/docs/rev-a%3Asrc~app.ts', 'GET', docShare, workspacesOf)).toBe(
       false,
     );

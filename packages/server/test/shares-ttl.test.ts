@@ -120,16 +120,16 @@ describe('a share must name a workspace', () => {
     }
   });
 
-  it('refuses a workspace link with nowhere to land, unless it is a hub share', () => {
+  it('mints a board link with no entry doc — a share opens the board', () => {
+    // There is no longer an entry-doc form to refuse. A board is the unit of
+    // sharing, redemption lands on `/workspaces/<id>`, and `docId` is a
+    // landing address that no share written today fills in.
     const { shares, cleanup } = makeShares();
     try {
-      expect(() => shares.createShareLink({ workspaceId: 'ws1' })).toThrow(
-        /entryDocId is required/,
-      );
-      // A hub share deliberately has no entry doc — it opens the board.
-      const hub = shares.createShareLink({ workspaceId: 'ws1', hub: true });
-      expect(hub.docId).toBe('');
-      expect(hub.workspaceId).toBe('ws1');
+      const share = shares.createShareLink({ workspaceId: 'ws1' });
+      expect(share.docId).toBe('');
+      expect(share.workspaceId).toBe('ws1');
+      expect(share.surface).toBe('workspace');
     } finally {
       cleanup();
     }
