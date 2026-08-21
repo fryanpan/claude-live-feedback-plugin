@@ -1031,7 +1031,7 @@ describe('keyboard reordering', () => {
 });
 
 describe('renderHomeReview', () => {
-  const strip = () => ({ onOpen: vi.fn(), onWalkthrough: vi.fn() });
+  const strip = () => ({ onReview: vi.fn(), onOpen: vi.fn(), onWalkthrough: vi.fn() });
 
   /** A thread an agent DECLARED as a review item — one of the two shapes the
    *  server ships (the other is a surviving direct ask; membership is decided
@@ -1092,7 +1092,7 @@ describe('renderHomeReview', () => {
     );
     expect(rows[0]?.querySelector('.hub-review-row-sub')?.textContent).toBe('Asked moments ago');
     (rows[1] as HTMLElement).click();
-    expect(h.onOpen).toHaveBeenCalledTimes(1);
+    expect(h.onReview).toHaveBeenCalledTimes(1);
   });
 
   it('highlights the top live row — the one the walkthrough would open on', () => {

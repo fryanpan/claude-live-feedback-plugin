@@ -1354,9 +1354,21 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
 // ── Decisions strip ────────────────────────────────────────────────────────
 
 export interface ReviewStripHandlers {
+  /** Open this one in the queue itself — the card that carries the ask and the
+   *  box to answer it, aimed at this row. What a LIVE row does when tapped.
+   *
+   *  Tapping used to call `onOpen` and leave Home for the underlying task or
+   *  doc, which is the opposite of what the row is for: the reader came to the
+   *  queue to work the queue, and every tap ejected them from it. Going to the
+   *  resource is still offered — from inside the opened card, as a second,
+   *  deliberate tap. */
+  onReview: (item: ReviewItem, index: number) => void;
   /** Jump straight to where this one gets answered — the decision's panel,
    *  the task's discussion at that thread, the doc anchored on that comment.
-   *  "Exactly the place", not the containing surface. */
+   *  "Exactly the place", not the containing surface.
+   *
+   *  Now reached from the card's own pointer out, and from a SETTLED row —
+   *  which has left the queue, so there is no card left to open it in. */
   onOpen: (item: ReviewItem) => void;
   /** Go through all of them, one at a time. */
   onWalkthrough: () => void;
@@ -1465,7 +1477,10 @@ export function renderHomeReview(
     sub.textContent = askedMeta(item, now);
     row.append(title, sub);
     row.title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`;
-    row.addEventListener('click', () => handlers.onOpen(item));
+    // Into the queue's own card at this row, not out to the task or the doc.
+    // The index rides along so the card opens where the reader was pointing;
+    // the card re-resolves it by key on every repaint from there.
+    row.addEventListener('click', () => handlers.onReview(item, i));
     container.append(row);
   });
 
@@ -1845,22 +1860,35 @@ function walkReviewBody(review: NonNullable<ReviewItem['review']>): HTMLElement 
   return body;
 }
 
-/** The one pointer up and out of the card: the task or doc this came from.
- *  Rendered only when it says something the title does not — an item whose
- *  question IS its subject would otherwise print the same words twice. */
-function walkWhere(item: ReviewItem, handlers: WalkthroughHandlers): HTMLElement | null {
-  if (item.ask.trim() === '' || item.title.trim() === '') return null;
+/**
+ * The one pointer up and out of the card: the task or doc this came from.
+ *
+ * ALWAYS rendered, on every kind. It used to be dropped for an item whose
+ * question IS its subject, on the grounds that naming the subject would print
+ * the same words twice — true of the words, and it left those cards with no
+ * exit at all. That was survivable only while the queue row itself navigated;
+ * now that a row opens the card, this link is the reader's ONLY way to the
+ * resource, so a card without it is a dead end. Where the title would repeat
+ * the headline, the link says what it does instead of what it points at.
+ */
+function walkWhere(item: ReviewItem, handlers: WalkthroughHandlers): HTMLElement {
+  const doc = item.kind === 'doc-thread';
   const where = document.createElement('p');
   where.className = 'hub-walk-where';
   const label = document.createElement('b');
-  label.textContent = item.kind === 'doc-thread' ? 'Doc:' : 'Task:';
+  label.textContent = doc ? 'Doc:' : 'Task:';
   const open = document.createElement('button');
   open.type = 'button';
   // Its own class, kept distinct from every button class the cards use:
   // sharing a selector with a primary button once turned this link into bare
   // blue text — measured on staging at 430px.
   open.className = 'hub-walk-where-link';
-  open.textContent = `${item.title} ↗`;
+  const title = item.title.trim();
+  // Compared against the ROW title rather than the rendered headline: the
+  // headline clips, so a long subject would differ from itself and read as
+  // new information the card has already shown.
+  const names = title !== '' && title !== reviewRowTitle(item).trim();
+  open.textContent = names ? `${title} ↗` : `${doc ? 'Open the doc' : 'Open the task'} ↗`;
   open.addEventListener('click', () => handlers.onOpenItem(item));
   where.append(label, document.createTextNode(' '), open);
   return where;
@@ -2056,8 +2084,7 @@ export function renderReviewWalkthrough(
   // mean leaving the queue on every item — but a comment sometimes only makes
   // sense in place, so "open where this lives" is always offered.
   if (!row) {
-    const where = walkWhere(item, handlers);
-    if (where) card.append(where);
+    card.append(walkWhere(item, handlers));
     const review = item.review;
     if (review) {
       // A DECLARED review item. Everything below was written by the agent for
@@ -2122,6 +2149,11 @@ export function renderReviewWalkthrough(
   }
 
   const task = row.task;
+
+  // The same pointer out the thread kinds carry. A decision card had none —
+  // the only route from the queue to its task was the Home row, and the row
+  // now opens this card instead.
+  card.append(walkWhere(item, handlers));
 
   card.append(walkBody(task));
 

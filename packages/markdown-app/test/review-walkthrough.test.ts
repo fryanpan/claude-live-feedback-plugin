@@ -95,7 +95,7 @@ function note(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
 const q0 = (tasks: HubTask[]) => reviewQueue(tasks, [], NOW);
 
 function strip(over: Partial<ReviewStripHandlers> = {}): ReviewStripHandlers {
-  return { onOpen: vi.fn(), onWalkthrough: vi.fn(), ...over };
+  return { onReview: vi.fn(), onOpen: vi.fn(), onWalkthrough: vi.fn(), ...over };
 }
 
 function walk(over: Partial<WalkthroughHandlers> = {}): WalkthroughHandlers {
@@ -118,11 +118,11 @@ beforeEach(() => {
 });
 
 describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
-  it('Review All starts the walkthrough; a row still opens one item', () => {
+  it('Review All starts the walkthrough; a row opens that one item', () => {
     const onWalkthrough = vi.fn();
-    const onOpen = vi.fn();
+    const onReview = vi.fn();
     const d = decision({ title: 'Ship now or wait?' });
-    renderHomeReview(root, q0([d, task({ after: [d.id] })]), strip({ onWalkthrough, onOpen }));
+    renderHomeReview(root, q0([d, task({ after: [d.id] })]), strip({ onWalkthrough, onReview }));
     (root.querySelector('.hub-review-go') as HTMLElement).click();
     expect(onWalkthrough).toHaveBeenCalledTimes(1);
     const row = root.querySelector('.hub-review-row') as HTMLElement;
@@ -131,7 +131,51 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
     // edges into the hover title, since the mockup row carries no third line.
     expect(row.title).toContain('Blocking 1 task');
     row.click();
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onReview).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The bug this fixes, in one line: tapping a row on Home left Home. Bryan,
+   * 2026-08-21 — "tapping on review item in home goes to the resource rather
+   * than home review queue for that item." The row is the queue's own handle
+   * on an item; going to the underlying task or doc is a second, deliberate
+   * tap from inside the card that opens.
+   */
+  it('a row tap opens the item IN the queue and never navigates to its resource', () => {
+    const onReview = vi.fn();
+    const onOpen = vi.fn();
+    const queue = reviewQueue(
+      [decision({ title: 'Ship now or wait?' })],
+      [threadItem({ ask: 'Which repo does this land in?' })],
+      NOW,
+    );
+    renderHomeReview(root, queue, strip({ onReview, onOpen }));
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
+    expect(rows).toHaveLength(2);
+    rows[1]?.click();
+    // The item AND where it stands, so the card opens on the row that was
+    // tapped rather than at the top of the list.
+    expect(onReview).toHaveBeenCalledWith(queue.items[1], 1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  // A settled row has LEFT the queue, so there is no card to open it in —
+  // the resource is the only place left to go, and the row stays the way back.
+  it('a settled row still goes to the resource', () => {
+    const onReview = vi.fn();
+    const onOpen = vi.fn();
+    const answered: ReviewItem = {
+      key: 'decision:t-gone',
+      kind: 'decision',
+      title: 'Already answered',
+      ask: '',
+      why: '',
+      since: NOW - 3_600_000,
+    };
+    renderHomeReview(root, q0([]), strip({ onReview, onOpen }), [answered], NOW);
+    (root.querySelector('.hub-review-row-done') as HTMLElement).click();
+    expect(onOpen).toHaveBeenCalledWith(answered);
+    expect(onReview).not.toHaveBeenCalled();
   });
 
   it('an empty queue renders no rows and says so plainly (Home is a page, not a strip)', () => {
@@ -391,6 +435,23 @@ describe('renderReviewWalkthrough — decisions', () => {
     );
   });
 
+  // The card is where a row tap lands now, so it owes the reader a way on to
+  // the task. A decision card had none at all: the Home row was the only route
+  // from the queue to the task, and the row no longer navigates.
+  it('carries a pointer out to its task', () => {
+    const onOpenItem = vi.fn();
+    const { q } = queueOfThree();
+    renderReviewWalkthrough(root, q, 0, walk({ onOpenItem }));
+    const where = root.querySelector('.hub-walk-where') as HTMLElement;
+    expect(where.textContent).toContain('Task:');
+    const open = root.querySelector('.hub-walk-where-link') as HTMLElement;
+    // The subject IS the question on a decision, so naming it would print the
+    // same words the headline already carries — the link says what it does.
+    expect(open.textContent).toContain('Open the task');
+    open.click();
+    expect(onOpenItem).toHaveBeenCalledWith(q.items[0]);
+  });
+
   it('offers the options as taps AND keeps a free-text answer — options are a shortcut, not a closed set', () => {
     const onAnswer = vi.fn();
     const { q } = queueOfThree();
@@ -635,6 +696,19 @@ describe('renderReviewWalkthrough — comments', () => {
     // link keeps its own class so a shared selector cannot come back and turn
     // the button into bare text again (measured on staging at 430px).
     expect(root.querySelector('.hub-walk-open')).toBeNull();
+  });
+
+  // This card used to render no way out at all, on the grounds that naming the
+  // subject repeats the question. True of the words — and it made the card a
+  // dead end the moment the queue row stopped navigating.
+  it('still offers the way out when the subject IS the question', () => {
+    const onOpenItem = vi.fn();
+    const queue = queueOf(threadItem({ title: 'Green or blue?', ask: 'Green or blue?' }));
+    renderReviewWalkthrough(root, queue, 0, walk({ onOpenItem }));
+    const open = root.querySelector('.hub-walk-where-link') as HTMLElement;
+    expect(open.textContent).toContain('Open the task');
+    open.click();
+    expect(onOpenItem).toHaveBeenCalledWith(queue.items[0]);
   });
 
   // The nav is the feature: "there's a way for me to go through that list".
