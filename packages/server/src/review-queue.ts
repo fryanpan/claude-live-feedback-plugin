@@ -196,9 +196,10 @@ export interface ThreadSource {
  *
  * It over-includes by design: an agent's closing note with nothing to answer
  * still reads as waiting. That over-inclusion is why this predicate no longer
- * decides queue membership (see `ReviewBand`) — it still decides which
- * comment a row quotes and where its clock starts, and it still serves the
- * reply-reopen path, where one item too many costs a glance.
+ * decides queue membership (see `ReviewBand`) — and with that gone, nothing
+ * in production calls it: the queue reads `unansweredRun` directly, and the
+ * reply-reopen rule has its own person predicate in `task-owner.ts`. It stays
+ * exported as the one-line, test-pinned statement of the wait signal itself.
  */
 export function awaitingPerson(thread: Thread): Comment | null {
   const run = unansweredRun(thread);
@@ -218,8 +219,8 @@ export function awaitingPerson(thread: Thread): Comment | null {
  * (2026-08-21) the run stopped being a membership test at all: a non-empty
  * run no longer puts a thread on the queue unless it contains a direct ask.
  * The run still picks which comment an inferred row quotes and which
- * timestamp is the wait's start, and it still backs `awaitingPerson`'s other
- * callers.
+ * timestamp is the wait's start, and it still backs `awaitingPerson` — which
+ * has no production callers left of its own.
  */
 export function unansweredRun(thread: Thread): Comment[] {
   if (thread.status !== 'open') return [];
@@ -306,8 +307,15 @@ export function pendingDeclaration(thread: Thread): Comment | null {
  * every real decision on it is lost too.
  *
  * `people` is who has actually spoken as a person in this workspace. A
- * workspace where nobody has yet answers no to everything, and the strip
- * behaves exactly as it did before this existed.
+ * workspace where nobody has yet answers no to everything — and since this
+ * matcher became the inferred band's membership test, that means an empty
+ * roster empties the inferred band entirely: no inferred row exists until a
+ * person first speaks. Matching is exact and case-sensitive on the stored
+ * name, so a short form ("Bryan" for a roster's "Bryan Chan") or a lowercase
+ * address misses too, and the miss now costs the row rather than a label.
+ * Both are accepted the same way the 2-of-3 recall trade above was: the
+ * declared path does not depend on the roster or on prose, and it is the
+ * escape hatch an agent uses when the ask must surface.
  */
 export function asksPerson(text: string, people: Iterable<string>): boolean {
   return findAsk(text, people) !== null;
