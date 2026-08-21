@@ -2189,48 +2189,54 @@ export class Rooms {
     if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = setTimeout(() => {
       binding.writeTimer = null;
-      try {
-        // Guard (RC2): if disk moved since we last read or wrote it, we'd be
-        // overwriting bytes we have never seen — the poll just hasn't caught
-        // up yet. Reconcile first; apply/conflict decides, and the conflict
-        // path both backs up the external version and re-schedules our flush.
-        if (binding.lastMtimeMs !== undefined && existsSync(binding.path)) {
-          try {
-            const mtimeMs = statSync(binding.path).mtimeMs;
-            if (mtimeMs !== binding.lastMtimeMs) {
-              binding.lastMtimeMs = mtimeMs;
-              this.reconcileFromDisk(room, binding);
-              return;
-            }
-          } catch {}
-        }
-        const md =
-          contentKind(room.meta.type) === 'flat'
-            ? room.ydoc.getText('content').toString()
-            : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
-        if (md === binding.lastWritten) return;
-        // Atomic: write-temp-then-rename, so a crash mid-write can't leave
-        // the user's file truncated and a concurrent reader never sees half
-        // a document. (Same save pattern editors use.) Rename onto the
-        // REALPATH — renaming onto a symlink would replace the link with a
-        // regular file instead of writing through it (codex P2).
-        let target = binding.path;
-        try {
-          target = realpathSync(binding.path);
-        } catch {}
-        const tmp = `${target}.lf-write~`;
-        writeFileSync(tmp, md);
-        renameSync(tmp, target);
-        binding.lastWritten = md;
-        // Record our own write's mtime so the poll doesn't treat the
-        // write-back as an external edit and schedule a redundant reconcile.
-        try {
-          binding.lastMtimeMs = statSync(binding.path).mtimeMs;
-        } catch {}
-      } catch (err) {
-        console.error(`[rooms] file write failed for ${binding.path}:`, err);
-      }
+      this.writeBoundFileNow(room, binding);
     }, 800);
+  }
+
+  /** The write-back body: what the ~800ms debounce runs when it fires, and
+   *  what `flush()` runs synchronously on graceful shutdown. */
+  private writeBoundFileNow(room: DocRoom, binding: FileBinding): void {
+    try {
+      // Guard (RC2): if disk moved since we last read or wrote it, we'd be
+      // overwriting bytes we have never seen — the poll just hasn't caught
+      // up yet. Reconcile first; apply/conflict decides, and the conflict
+      // path both backs up the external version and re-schedules our flush.
+      if (binding.lastMtimeMs !== undefined && existsSync(binding.path)) {
+        try {
+          const mtimeMs = statSync(binding.path).mtimeMs;
+          if (mtimeMs !== binding.lastMtimeMs) {
+            binding.lastMtimeMs = mtimeMs;
+            this.reconcileFromDisk(room, binding);
+            return;
+          }
+        } catch {}
+      }
+      const md =
+        contentKind(room.meta.type) === 'flat'
+          ? room.ydoc.getText('content').toString()
+          : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+      if (md === binding.lastWritten) return;
+      // Atomic: write-temp-then-rename, so a crash mid-write can't leave
+      // the user's file truncated and a concurrent reader never sees half
+      // a document. (Same save pattern editors use.) Rename onto the
+      // REALPATH — renaming onto a symlink would replace the link with a
+      // regular file instead of writing through it (codex P2).
+      let target = binding.path;
+      try {
+        target = realpathSync(binding.path);
+      } catch {}
+      const tmp = `${target}.lf-write~`;
+      writeFileSync(tmp, md);
+      renameSync(tmp, target);
+      binding.lastWritten = md;
+      // Record our own write's mtime so the poll doesn't treat the
+      // write-back as an external edit and schedule a redundant reconcile.
+      try {
+        binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+      } catch {}
+    } catch (err) {
+      console.error(`[rooms] file write failed for ${binding.path}:`, err);
+    }
   }
 
   /**
@@ -3196,19 +3202,57 @@ export class Rooms {
     this.saveTimers.set(
       room.docId,
       setTimeout(() => {
-        try {
-          const update = Y.encodeStateAsUpdate(room.ydoc);
-          writeFileSync(this.pathFor(room.docId), update);
-          // The sidecar rides the SAME debounced write as the `.ydoc`. Two
-          // persistence paths would eventually disagree, and a doc whose
-          // sourceUrl went missing stops writing back to disk silently —
-          // the failure mode this whole change must not introduce.
-          writePrivateMeta(this.cfg.dataDir, room.docId, room.meta);
-        } catch (err) {
-          console.error(`[rooms] failed to persist ${room.docId}:`, err);
-        }
+        this.saveTimers.delete(room.docId);
+        this.persistRoomNow(room);
       }, 200),
     );
+  }
+
+  private persistRoomNow(room: DocRoom): void {
+    try {
+      const update = Y.encodeStateAsUpdate(room.ydoc);
+      writeFileSync(this.pathFor(room.docId), update);
+      // The sidecar rides the SAME debounced write as the `.ydoc`. Two
+      // persistence paths would eventually disagree, and a doc whose
+      // sourceUrl went missing stops writing back to disk silently —
+      // the failure mode this whole change must not introduce.
+      writePrivateMeta(this.cfg.dataDir, room.docId, room.meta);
+    } catch (err) {
+      console.error(`[rooms] failed to persist ${room.docId}:`, err);
+    }
+  }
+
+  /**
+   * Synchronously run every pending debounced write — the 200ms `.ydoc`
+   * persist and the ~800ms bound-file write-back — so a graceful shutdown
+   * keeps the keystrokes that were still inside a debounce window. bin.ts
+   * routes SIGTERM (what the deploy path sends) through `handle.stop()`,
+   * which calls this; without it SIGTERM measured identical content loss to
+   * SIGKILL. This is a last-resort save on the way down, NOT a deploy gate —
+   * the deploy's refusal logic stays on `pendingFileWrites`.
+   */
+  flush(): void {
+    // A write-back can re-arm a timer while flushing (the reconcile guard's
+    // conflict path re-schedules the flush it just consumed), so sweep until
+    // quiescent — bounded, so a wedged binding cannot loop forever.
+    for (let pass = 0; pass < 3; pass++) {
+      const saves = [...this.saveTimers.entries()];
+      const writes = [...this.fileBindings.entries()].filter(([, b]) => b.writeTimer);
+      if (saves.length === 0 && writes.length === 0) break;
+      for (const [docId, timer] of saves) {
+        clearTimeout(timer);
+        this.saveTimers.delete(docId);
+        const room = this.rooms.get(docId);
+        if (room) this.persistRoomNow(room);
+      }
+      for (const [docId, binding] of writes) {
+        if (!binding.writeTimer) continue;
+        clearTimeout(binding.writeTimer);
+        binding.writeTimer = null;
+        const room = this.rooms.get(docId);
+        if (room) this.writeBoundFileNow(room, binding);
+      }
+    }
   }
 }
 

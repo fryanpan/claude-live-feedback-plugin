@@ -5383,6 +5383,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // Flush pending sidecar writes so a clean shutdown never loses board
       // state that was still inside the debounce window.
       taskStore.stop();
+      // Same contract for the docs themselves: run the rooms' pending 200ms
+      // .ydoc saves and ~800ms bound-file write-backs. SIGTERM reaches here
+      // via bin.ts, and before this call it lost exactly as much just-typed
+      // content as SIGKILL (measured 0/100 kept on a burst killed 103ms
+      // after the last keystroke, on both signals).
+      rooms.flush();
       server.stop();
     },
   };
