@@ -510,7 +510,16 @@ export class ThreadPanel {
     const caret = document.createElement('button');
     caret.type = 'button';
     caret.className = 'thread-caret';
-    caret.setAttribute('aria-label', 'Toggle comment thread');
+    // Named for its own thread, not "Toggle comment thread" on every card. A
+    // sighted reader tells the column apart by the name and the flag; a
+    // keyboard user tabbing it got a run of identical buttons, with no way to
+    // know which thread they were on or which one was holding a decision. The
+    // decision half is also the only place that fact reaches a screen reader
+    // at all — the flag says it in colour and in a `title` nothing announces.
+    const decision = threadDecision(t);
+    const decisionSuffix =
+      decision === 'pending' ? ', decision needed' : decision === 'answered' ? ', decision' : '';
+    caret.setAttribute('aria-label', `Comment from ${author.name}${decisionSuffix}`);
     caret.setAttribute('aria-expanded', String(this.activeId === t.id));
     caret.textContent = '›';
     head.appendChild(caret);
