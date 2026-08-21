@@ -44,10 +44,10 @@ describe('the decision card has the spacing it was reported for missing', () => 
       '.hub-decide',
       '.hub-decide-head',
       '.hub-decide-kicker',
+      '.hub-decide-card-head',
+      '.hub-decide-k',
       '.hub-decide-headline',
-      '.hub-decide-why',
-      '.hub-decide-detail',
-      '.hub-decide-lookfor',
+      '.hub-decide-body',
       '.hub-decide-meta',
       '.hub-decide-walk',
       '.hub-decide-step',
@@ -67,7 +67,7 @@ describe('the decision card has the spacing it was reported for missing', () => 
     // *"The blurb may run a few lines — design for that."* The failure this
     // guards is a one-liner: any of these three turns a three-line question
     // into a clipped one, and a clipped decision question is unanswerable.
-    for (const sel of ['.hub-decide-headline', '.hub-decide-why']) {
+    for (const sel of ['.hub-decide-headline', '.hub-decide-body']) {
       const r = rule(sel);
       expect(r, `${sel} clamps its line count`).not.toMatch(/-webkit-line-clamp/);
       expect(r, `${sel} hides its overflow`).not.toMatch(/overflow:\s*hidden/);
@@ -75,6 +75,14 @@ describe('the decision card has the spacing it was reported for missing', () => 
     }
     // And it wraps a long unbroken token rather than widening the panel.
     expect(rule('.hub-decide-headline')).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('lets the asked-by meta wrap — it is a sentence now, and 430px is real', () => {
+    // The walkthrough head meta used to be a bare duration ("2 days") and
+    // wore `white-space: nowrap`. It reads "Asked by <who> N days ago" now,
+    // which nowrap would push out of a 430px head row.
+    expect(rule('.hub-walk-wait')).not.toMatch(/white-space:\s*nowrap/);
+    expect(rule('.hub-decide-meta')).not.toMatch(/white-space:\s*nowrap/);
   });
 
   it('puts the walkthrough beside the kicker without moving it', () => {

@@ -1,4 +1,4 @@
-import { type Thread, formatTime, suggestOps, summaryKey } from '@feedback/core';
+import { type Thread, formatTime, suggestOps, threadRenderKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
 import type { MountScope } from '../mount-scope.ts';
 import { type ReviewChrome, showToast } from '../review-chrome.ts';
@@ -617,17 +617,15 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     const delKeys = delGroups.map(
       (g) => `del|${g.blockKey}|${g.deletedMarkdown}|${isExpanded(`d:${g.blockKey}`)}`,
     );
-    // The topic line comes from the anchor snippet, which moves whenever the
-    // doc is edited — independently of every other term here. Without it, an
-    // edited anchor keeps a stale topic on the card until some unrelated
-    // change forces a repaint. Key on the line the card actually shows.
+    // A comment balloon IS the drawer's card, so it memoizes off the drawer's
+    // key — `threadRenderKey` carries everything the card displays, including
+    // the two things that move without touching a count or a clock: a
+    // generated summary landing, and an answer being stamped or taken back.
     //
     // Deliberately ABSENT: expanded/active. A comment card folds in place, so
     // a rebuild on expand would destroy the very node the morph is animating.
     // The key carries what the card DISPLAYS and not what it merely animates.
-    const commentKeys = openThreads.map(
-      (t) => `comment|${t.id}|${t.status}|${t.commentCount}|${t.lastActivity}|${summaryKey(t)}`,
-    );
+    const commentKeys = openThreads.map((t) => `comment|${threadRenderKey(t)}`);
     const suggestionKeys = suggestions.map(
       (s) => `suggest|${s.sid}|${s.kind}|${isExpanded(`s:${s.sid}`)}`,
     );

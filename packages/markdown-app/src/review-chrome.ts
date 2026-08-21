@@ -4,10 +4,12 @@ import {
   type User,
   formatTime,
   readDocMeta,
+  readReviewPayload,
   readStoredSummary,
   summaryPending,
 } from '@feedback/core';
 import type * as Y from 'yjs';
+import { attachMarkdownField } from './md-field.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
@@ -393,8 +395,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
           const author = c.get('author') as User | undefined;
           const text = c.get('text') as string | undefined;
           const ts = c.get('ts') as number | undefined;
-          if (cid && author && text != null && ts != null)
-            comments.push({ id: cid, author, text, ts });
+          if (cid && author && text != null && ts != null) {
+            // The review payload is what makes a thread CARRY an item — drop
+            // it here and the panel renders a plain conversation: no item
+            // card, no Answer routing, no answered record. This reader is the
+            // panel's only source (see the summary note below), so the doc
+            // half of answering worked in every panel unit test and not at
+            // all through the mounted chrome until the glue tests posted
+            // through it.
+            const review = readReviewPayload(c.get('review'));
+            comments.push({ id: cid, author, text, ts, ...(review ? { review } : {}) });
+          }
         }
       }
       // A text-range anchor that no longer resolves displays as orphaned so
@@ -525,15 +536,64 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // place (and the inline one underneath it) rather than launching a
       // third, separate full-screen view of the same conversation.
     },
-    onReply: async (id, text) => {
-      await fetch(
-        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/comments`,
+    onReply: async (id, text, answersCommentId, optionId) => {
+      // Two routes, one reply. `/answer` posts the SAME comment and
+      // additionally stamps `answeredAt` on the declaring comment, which is
+      // what takes the item off the Home queue. The panel decides which by
+      // handing back an id or not; sending one the server did not declare is
+      // refused rather than invented, so there is nothing to guess here.
+      //
+      // Until this branch existed, every doc reply went to `/comments`, so a
+      // review item could be read in the doc, answered in the person's own
+      // words, and stay queued — which is exactly what happened four times on
+      // `board-review-2026-08-19`.
+      const base = `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}`;
+      let res: Response;
+      try {
+        res = await fetch(answersCommentId ? `${base}/answer` : `${base}/comments`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            author: user,
+            text,
+            ...(answersCommentId ? { commentId: answersCommentId } : {}),
+            // Provenance for a tapped option — records WHICH offered candidate
+            // the verbatim words came from. Typed answers send none.
+            ...(answersCommentId && optionId ? { optionId } : {}),
+          }),
+        });
+      } catch {
+        if (answersCommentId) showToast('Answer failed to post — try again');
+        return false;
+      }
+      // A failed answer must not read as a posted one: the toast says try
+      // again, and the returned `false` is what makes trying again possible —
+      // the panel puts the typed words back in the box.
+      if (!res.ok && answersCommentId) {
+        showToast('Answer failed to post — try again');
+      }
+      return res.ok;
+    },
+    onUndoAnswer: async (id, commentId) => {
+      // Soft delete on the server: the stamps move into `answerHistory` and
+      // the reply comment stays. The doc's own websocket repaint is what
+      // re-renders the thread as pending again, so success needs no client
+      // state here.
+      const res = await fetch(
+        `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(id)}/answer/undo`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ author: user, text }),
+          body: JSON.stringify({ author: user, commentId }),
         },
       );
+      if (!res.ok) {
+        // "not-answered" means somebody else took it back first — the live
+        // repaint is already showing that, and a failure toast over an
+        // already-done undo would read as a broken button.
+        const err = (await res.json().catch(() => undefined)) as { error?: string } | undefined;
+        if (err?.error !== 'not-answered') showToast('Undo failed — try again');
+      }
     },
     onResolve: async (id) => {
       try {
@@ -659,6 +719,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   composerAvatar.style.background = user.color;
   composerAvatar.textContent = (user.name[0] ?? '?').toUpperCase();
 
+  // Every composer is a markdown editor (design point 4), and this is the one
+  // a reviewer reaches first — select text, tap the pill, type. Comments
+  // RENDER markdown, so the box has to say so and show what the words become.
+  // `attachMarkdownField` is idempotent because `#composer` is shell DOM that
+  // outlives the document while this function runs once per navigation.
+  const refreshComposerPreview = attachMarkdownField(composerText);
+
   /** Selection captured when the composer opened — survives the editor
    *  losing its DOM selection while the user types the comment. */
   let composerSelection: ChromeSelection | null = null;
@@ -678,6 +745,10 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     document.body.classList.add('composer-open');
     opts.hidePill?.();
     composerText.value = '';
+    // Emptying the box in code fires no `input`, so the preview has to be
+    // told — otherwise the previous comment's rendering sits under a blank
+    // composer.
+    refreshComposerPreview();
     // preventScroll stops iOS's auto-scroll-to-focus from yanking the page.
     setTimeout(() => composerText.focus({ preventScroll: true }), 30);
     opts.onComposerOpened?.();

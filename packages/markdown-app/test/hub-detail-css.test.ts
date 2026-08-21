@@ -582,10 +582,24 @@ describe('the threading UI left no rules behind', () => {
       '.hub-detail-ask-kicker',
       '.hub-detail-ask-form',
       // Named here because it arrived on main AFTER the queue replaced this
-      // region: the declared item's "why" line. Its behaviour survives on
-      // `.hub-decide-why`, so the rule it was written against is dead CSS of
-      // exactly the kind this sweep exists to catch.
+      // region: the declared item's "why" line. Its behaviour survives in the
+      // card's one markdown body (`.hub-decide-body`), so the rule it was
+      // written against is dead CSS of exactly the kind this sweep exists to
+      // catch.
       '.hub-detail-ask-why',
+      // The one-card anatomy (approved design, review-flow-mock-v1) collapsed
+      // the labelled sub-sections into a single markdown body, on the
+      // walkthrough card and the panel card alike — these are the classes the
+      // collapse retired.
+      '.hub-walk-why',
+      '.hub-walk-ctx',
+      '.hub-walk-asked-line',
+      '.hub-walk-lookfor-text',
+      '.hub-walk-review-detail',
+      '.hub-review-row-why',
+      '.hub-decide-why',
+      '.hub-decide-detail',
+      '.hub-decide-lookfor',
       // The status chip ROW went with the redesign too (replaced by the
       // status <select>), and it left these four rules behind: the chip base,
       // its two interaction states, and the -current variant only a row of

@@ -296,8 +296,8 @@ export function assignedToHuman(task: HubTask): boolean {
  *
  * The question every surface phrased as "what a human owes" actually wants,
  * and the one that could not be asked while ownership was the literal
- * `human`. One spelling, so the blocker band and anything built next to it
- * cannot drift apart.
+ * `human`. One spelling, so the blocked-note rows and anything built next to
+ * them cannot drift apart.
  */
 export function ownedByPerson(task: HubTask): boolean {
   return ownerKind(task) === 'person';
@@ -686,8 +686,9 @@ function dependentsRows(tasks: HubTask[], candidates: HubTask[]): DecisionRow[] 
   );
 }
 
-/** A task and the open work waiting on it. The decision band and the blocker
- *  band carry the same shape because it is the same computation. */
+/** A task and the open work waiting on it. Same shape as a decision's row
+ *  because it is the same computation — but it feeds the task PANEL's blocked
+ *  note now, not a queue band. */
 export type BlockerRow = DecisionRow;
 
 /**
@@ -695,17 +696,17 @@ export type BlockerRow = DecisionRow;
  *
  * The board's six real dependency edges pointed at none of its decisions —
  * they pointed at a person's own tasks (turn on the tunnel, merge the PR), and
- * no surface said so. Two rules make this band different from the decision one
- * and both are load-bearing:
+ * no surface said so. **Where this surfaces moved (approved design,
+ * review-flow-mock-v1): a blocker is task STATE, not a review item.** There is
+ * nothing to answer on it — the only move is to go and do the work — so it
+ * renders as the amber note on its own task's detail panel, and `reviewQueue`
+ * deliberately does not read these rows any more. Two rules are still
+ * load-bearing:
  *
- * - **Nothing waiting means not here.** The decision band deliberately shows a
- *   decision with no dependents ("Nothing is waiting on this yet") because an
- *   unanswered question is itself the ask. A task is not an ask, so a human
- *   task nobody is waiting on would put the whole personal backlog in the strip
- *   and make the count mean nothing.
- * - **A decision is not a blocker.** Every decision is also assigned to
- *   somebody, so without this the same task would appear in both bands and be
- *   counted twice in the number at the top of the board.
+ * - **Nothing waiting means not here.** A task nobody is waiting on is just a
+ *   task; a note on every human-owned ticket would mean nothing.
+ * - **A decision is not a blocker.** A decision already surfaces as itself,
+ *   with an answer path; stamping it blocked too would say one thing twice.
  *
  * Ownership is the server-resolved `ownerKind`, so a task handed to a person
  * by NAME is in this band and one held by a named agent is not. That closes a
@@ -810,7 +811,7 @@ export async function refreshReviewItems(
   state.reviewItems = applyRefresh(state.reviewItems, res, (r) => r.items ?? []);
 }
 
-export type ReviewKind = 'decision' | 'blocker' | 'task-thread' | 'doc-thread';
+export type ReviewKind = 'decision' | 'task-thread' | 'doc-thread';
 
 export interface ReviewItem {
   /** Stable across re-fetches. The walkthrough steps by position and the list
@@ -826,9 +827,6 @@ export interface ReviewItem {
   since: number;
   /** Set on a decision — the row the answer form and the blocks line need. */
   decision?: DecisionRow;
-  /** Set on a human-owned blocker — the same row shape, but there is no
-   *  question to answer here, only work to unblock. */
-  blocker?: BlockerRow;
   /** Set on either thread kind — where the reply gets written. */
   thread?: ReviewThreadItem;
   /** Set when an agent DECLARED this as a review item. Presence decides how
@@ -845,11 +843,11 @@ export function reviewCardHeadline(item: ReviewItem): string {
   return item.review ? item.review.headline : reviewHeadline(reviewRowTitle(item));
 }
 
-/** The task-and-dependents row an item carries, for the two bands that have
- *  one. One reader for both, so "open the thing this is about" cannot learn
- *  about a new band and forget the other. */
+/** The task-and-dependents row an item carries, when it carries one. Kept as
+ *  the one reader for "which task is this row about" so a future band with a
+ *  row lands here rather than in a second spelling of the same question. */
 export function reviewRow(item: ReviewItem): DecisionRow | undefined {
-  return item.decision ?? item.blocker;
+  return item.decision;
 }
 
 export interface ReviewQueue {
@@ -868,9 +866,10 @@ export interface ReviewQueue {
   items: ReviewItem[];
   total: number;
   /** How many are holding other work up right now: decisions with dependents,
-   *  plus every human-owned blocker (which has dependents by definition). Not
-   *  threads — a comment blocks nothing structurally, and counting it would
-   *  inflate the one number that is supposed to mean "act now". */
+   *  and nothing else. Not threads — a comment blocks nothing structurally.
+   *  Not human-owned blockers either — those are task state (the panel's
+   *  blocked note), not items in this queue, so counting them would promise
+   *  the reader something to clear from here that is not here. */
   blocking: number;
 }
 
@@ -892,7 +891,7 @@ interface AskRank {
   createdAt: number;
   taskId: string;
   /** Among asks about ONE task (or among the ones with no task at all): the
-   *  decision or blocker row, then that task's discussion, then a doc
+   *  decision row, then that task's discussion, then a doc
    *  comment. */
   band: number;
   /** 0 = a question addressed to a person by name. Only ever a tiebreak. */
@@ -945,7 +944,7 @@ function compareAsk(a: AskRank, b: AskRank): number {
  * Three consequences worth stating, because each replaces a rule this
  * function used to apply as a primary key:
  *
- *  - **Kind is no longer a band.** A decision, a blocker and a comment about
+ *  - **Kind is no longer a band.** A decision and a comment about
  *    the same task now sit together, in that order; asks about a
  *    higher-priority task all come first. Previously every decision on the
  *    board outranked every comment regardless of what either was about.
@@ -1055,24 +1054,10 @@ export function reviewQueue(
     });
   }
 
-  // A person's own open tasks that other work is waiting on. A task is never
-  // both a decision and a blocker (`humanBlockerRows` excludes decisions), so
-  // sharing a band with them cannot collide.
-  const blockers = humanBlockerRows(tasks);
-  for (const row of blockers) {
-    ranked.push({
-      item: {
-        key: `blocker:${row.task.id}`,
-        kind: 'blocker',
-        title: row.task.title,
-        ask: '',
-        why: blockingLine(row),
-        since: row.task.createdAt,
-        blocker: row,
-      },
-      rank: rankOf(row.task, BAND_TASK_ROW, false, row.task.createdAt, row.task.id),
-    });
-  }
+  // A person's own open task that other work waits on is deliberately NOT
+  // enqueued (design point 5). It was never a question — there is nothing to
+  // answer, only work to do — so it surfaces as state on its own task: the
+  // detail panel's blocked note, built from the same `humanBlockerRows`.
 
   for (const t of threadItems) {
     // A row of a kind this queue does not place is SKIPPED, not half-built.
@@ -1130,21 +1115,32 @@ export function reviewQueue(
   ranked.sort((a, b) => compareAsk(a.rank, b.rank));
   const items = ranked.map((r) => r.item);
 
-  // Every blocker is blocking — that is the condition for being in the band —
-  // so it belongs in the number that means "act now". A thread still does not:
-  // it blocks nothing structurally, and counting it would inflate the one
-  // number that is supposed to mean act now.
+  // Only decisions with dependents count as blocking. A thread blocks nothing
+  // structurally, and a human-owned blocker is no longer IN this queue — a
+  // count that included it would promise something to clear from here that
+  // the list below does not hold.
   return {
     items,
     total: items.length,
-    blocking: decisions.blocking + blockers.length,
+    blocking: decisions.blocking,
   };
 }
 
-/** "Blocking 2 tasks" / "Hard-blocking 1 task". One phrasing, both bands. */
+/** "Blocking 2 tasks" / "Hard-blocking 1 task". One phrasing everywhere a
+ *  dependent count is spoken. */
 function blockingLine(row: DecisionRow): string {
   const n = row.blocks.length;
   return `${row.hard ? 'Hard-blocking' : 'Blocking'} ${n === 1 ? '1 task' : `${n} tasks`}`;
+}
+
+/**
+ * The task panel's blocked note, in words: the count phrase the decision rows
+ * already use, then the NAMES of the open work standing behind this task.
+ * The note is read ON the task, where a bare "2 tasks" answers nothing — the
+ * reader's next question is always "which ones".
+ */
+export function blockedNoteLine(row: BlockerRow): string {
+  return `${blockingLine(row)}: ${row.blocks.map((t) => t.title).join(', ')}`;
 }
 
 // ── Where the walkthrough is standing ──────────────────────────────────────
@@ -2149,17 +2145,11 @@ export function reviewHeadline(text: string): string {
 
 /**
  * The card's kind badge (mockup: the amber `Decision` and the blue
- * `Needs your reply`).
- *
- * A blocker gets neither, and the third tone is the reason this is a function
- * rather than a two-entry record: a blocker was never a question, so "needs
- * your reply" would promise something to answer and there is nothing — the
- * only move is to go and do the work. The mockup has no such card, so it gets
- * the mockup's own neutral `.k` styling rather than an invented colour.
+ * `Needs your reply`). A blocker has no entry because a blocker has no card —
+ * it is task state, not a review item (design point 5).
  */
 export function reviewBadge(kind: ReviewKind): { label: string; tone: string } {
   if (kind === 'decision') return { label: 'Decision', tone: 'decision' };
-  if (kind === 'blocker') return { label: 'Your task, blocking', tone: 'plain' };
   return { label: 'Needs your reply', tone: 'reply' };
 }
 
@@ -2178,54 +2168,53 @@ export function reviewItemBadge(item: ReviewItem): { label: string; tone: string
   return reviewBadge(item.kind);
 }
 
-/** "blocks Ship the tunnel" — the tail of the card's provenance line. Lower
- *  case and mid-sentence, where `blocksLine` is a standalone sentence; empty
- *  when nothing is waiting, so the line ends after the clock rather than
- *  asserting an absence. */
-export function blocksPhrase(row: Pick<DecisionRow, 'blocks' | 'hard'>): string {
-  if (row.blocks.length === 0) return '';
-  const titles = row.blocks.map((t) => t.title);
-  const shown = titles.slice(0, 2).join(', ');
-  const rest = titles.length > 2 ? ` and ${titles.length - 2} more` : '';
-  return `${row.hard ? 'hard-blocks' : 'blocks'} ${shown}${rest}`;
+/**
+ * "Asked by Harbor agent 2 days ago" — the head row's top-right meta, the ONE
+ * provenance line the card carries (approved design, review-flow-mock-v1; it
+ * replaced the left-bordered context block and the bare wait chip).
+ *
+ * Split from `askedMeta` so a surface with its own row shape (the task
+ * panel's `PanelReviewItem`) spells the line identically without inventing a
+ * `ReviewItem` to say it — two spellings of "who asked, when" is how the row
+ * and the card come to disagree.
+ *
+ * Built only out of parts we actually hold: a decision whose transitions
+ * carry no actor says when it was asked without claiming who asked it. The
+ * clock uses `waitShort`, so the row subline and the card head can never
+ * disagree about the wait — and the singular/plural comes with it.
+ */
+export function askedMetaLine(
+  who: string | undefined,
+  asked: boolean,
+  at: number,
+  now: number,
+): string {
+  // "Asked by" is a claim that there is a question — a status note says
+  // "Posted by" instead. Saying "asked" over a deploy note is the card
+  // promising something answerable and delivering something that is not.
+  const verb = asked ? 'Asked' : 'Posted';
+  const when = `${waitShort(at, now)} ago`;
+  return who && who.trim() !== '' ? `${verb} by ${who} ${when}` : `${verb} ${when}`;
 }
 
 /**
- * "Asked by Harbor agent · 2h ago · blocks Re-run relevance eval" — the
- * mockup's left-bordered context block, first line.
- *
- * Built only out of parts we actually hold, and each one drops out
- * independently: a decision whose transitions carry no actor says when it was
- * asked without claiming who asked it, and one nothing is waiting on ends at
- * the clock. The alternative — a fixed three-part sentence with a placeholder
- * where a fact is missing — states something nobody measured, which is the
- * failure this file's `why` lines already had to be walked back from.
+ * The meta for a queue item. For a DECLARED item "Asked by" is always true —
+ * a declaration IS an ask, in so many words, whatever the `direct` heuristic
+ * measured. The inferred band keeps its measured Posted/Asked honesty, since
+ * over-including is how a queue stops being believed.
  */
-export function reviewAskedLine(item: ReviewItem, now: number): string {
-  const row = reviewRow(item);
+export function askedMeta(item: ReviewItem, now: number): string {
   const thread = item.thread;
-  const parts: string[] = [];
+  const row = reviewRow(item);
   // A thread carries its asker; a decision's is whoever first moved the task,
   // which is the only actor a projected task row records.
   const who = thread?.askedBy ?? row?.task.transitions[0]?.by.name;
-  // "Asked by" is a claim that there is a question. A thread reaches this card
-  // whether or not there is one — over-including is the safe direction — so a
-  // status note says "Posted by" instead. Saying "asked" over a deploy note is
-  // the card promising something answerable and delivering something that is
-  // not, and it is how a queue stops being believed.
-  const asked = thread ? thread.direct === true : true;
-  if (who && who.trim() !== '') parts.push(`${asked ? 'Asked' : 'Posted'} by ${who}`);
+  const asked = item.review !== undefined || (thread ? thread.direct === true : true);
   // The clock beside "asked" is the QUESTION's, not the run's: a run can start
   // days before the ask, and quoting its start tells the reader they have been
   // sitting on something they were handed minutes ago.
-  parts.push(timeAgo(asked ? (thread?.askedAt ?? item.since) : item.since, now));
-  const where = row
-    ? blocksPhrase(row)
-    : item.kind === 'task-thread'
-      ? 'on this task'
-      : 'on this doc';
-  if (where !== '') parts.push(where);
-  return parts.join(' · ');
+  const at = asked ? (thread?.askedAt ?? item.since) : item.since;
+  return askedMetaLine(who, asked, at, now);
 }
 
 /**

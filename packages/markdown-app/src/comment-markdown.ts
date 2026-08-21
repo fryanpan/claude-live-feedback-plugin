@@ -57,6 +57,17 @@ function inline(escaped: string): string {
   return out;
 }
 
+/**
+ * The INLINE half alone — marks, code, links — with no block structure, for
+ * text that lands inside somebody else's sentence (the answered record quotes
+ * the answer's words inside “…”). Same escape-first rule as the block
+ * renderer: the input is untrusted, and the output only ever ADDS the fixed
+ * set of known-safe tags.
+ */
+export function renderCommentMarkdownInline(text: string): string {
+  return inline(escapeHtml(text.replace(/\s+/g, ' ').trim()));
+}
+
 export function renderCommentMarkdown(text: string): string {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const html: string[] = [];
