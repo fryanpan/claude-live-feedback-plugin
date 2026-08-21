@@ -15,20 +15,18 @@ answers to it.
 ```
 create_workspace(
   name: "search-revamp",              // required, short handle
-  goal: "Cut p95 search latency below 200ms without losing recall.",
 )
-→ { workspaceId, name, goal, leadAgentId }
+→ { workspaceId, name, leadAgentId }
 ```
 
-- `goal` is the **north-star statement every triage decision is judged
-  against**. Markdown, a sentence or two. Keep it current with
-  `set_workspace_goal`.
+- **A board's goals are the ordered goal LIST**, written with `set_goal_list`
+  below. There is no separate workspace-level goal statement.
 - **You become the board's lead agent** unless you pass `leadAgentId`. The lead
-  is the addressee for goal-edit re-triage.
+  is the addressee for the board's triage asks.
 - The call auto-subscribes this session to the workspace event channel
-  (`task.*`, `decision.answered`, `triage.requested`, `workspace.goal_updated`,
-  …), which arrives on the same channel as thread events. Pass
-  `subscribe: false` to skip.
+  (`task.*`, `decision.answered`, `triage.requested`,
+  `workspace.goals_changed`, …), which arrives on the same channel as thread
+  events. Pass `subscribe: false` to skip.
 - **If you did not create the board, declare yourself on it** with
   `set_workspace_lead(workspaceId)` — see "The work loop" in the skill file.
   That is the whole of your session-start setup.
@@ -54,7 +52,7 @@ set_goal_list(workspaceId, goals: [
   handle is the **title**, and that is editable — see `rename_goal` below.
 - **Order IS priority.** The first goal is the highest band. To CHANGE that
   order, use `reorder_goals` (below) rather than this call — it fires the same
-  `workspace.goals_changed`, never a re-triage, and it cannot lose a goal.
+  `workspace.goals_changed` and it cannot lose a goal.
 - One subgoal level, maximum. `dueAt` is epoch ms and optional at every
   level — never invent one.
 - `"chores"` is **reserved**: it always renders last and must not appear in the
@@ -111,7 +109,7 @@ reorder_goals(workspaceId, order: ["shape", "index"], parent: "latency")
 
 ```
 get_workspace(workspaceId)
-→ { workspaceId, name, goal, goalUpdatedAt, leadAgentId, pendingRetriage?, goals }
+→ { workspaceId, name, leadAgentId, goals }
 ```
 
 `goals` is the **ordered** list with per-goal todo / in-progress / done counts,
@@ -202,7 +200,7 @@ than a phrase inside it, so `create_thread` takes no anchor text in that case:
 ```
 create_thread(
   docId: "task:t-abc123",
-  text: "This assumes the index ships first — is that still true after the retriage?",
+  text: "This assumes the index ships first — is that still true after the reorder?",
 )
 ```
 
@@ -389,7 +387,7 @@ set_task_goal(taskId, goal: "latency", position: 2.5, batchId?)
 
 - **Pick the spot, not just the bucket.** `position` is fractional — there is
   always room between two tasks; omitted means bottom of the goal.
-- It stamps `triagedAgainst` with the goal text you judged against and clears
+- It stamps `triagedAgainst` with the goal id you judged against and clears
   the triage-pending marker. Every move is recorded and fires `task.regrouped`,
   so regroup freely — the safety is the record, not asking first. When a move
   would cross a human's earlier placement, leave a comment on the task doc

@@ -5,7 +5,7 @@ description: Use when you need to stand up or drive a claude-workspaces workspac
 
 # Running a claude-workspaces workspace hub
 
-A hub workspace is a **north-star goal + an ordered task board + linked docs**,
+A hub workspace is an **ordered goal list + a task board + linked docs**,
 rendered at `/workspaces/<workspaceId>`. Everything on it is reachable from
 MCP tools: you can create the board, order its goals, file work as tasks a
 person can read, hang questions on a ticket and record verbatim answers, and
@@ -59,7 +59,7 @@ set_workspace_lead(workspaceId)          // no second argument
 → { workspaceId, changed, leadAgentId, previousLeadAgentId?, declined?,
     subscribed, subscriptionPersisted, subscriptionWarning?,
     lead, gating, untriaged, queuedVoice,
-    pendingRetriage?, pendingBucketReview?, taskReviews? }
+    pendingBucketReview?, taskReviews? }
 ```
 
 **What the seat then covers is the lead skill's contract; this is how the call
@@ -139,7 +139,7 @@ instead: it subscribes and briefs you, but it does not take the seat.
 ```
 attach_agent(workspaceId)
 → { workspaceId, agentId, gating, lead, untriaged, queuedVoice,
-    pendingRetriage?, pendingBucketReview? }
+    pendingBucketReview? }
 ```
 
 Defaults: `agentId` = this agent's MCP identity, `runtime` =
@@ -154,12 +154,9 @@ Defaults: `agentId` = this agent's MCP identity, `runtime` =
 - `lead` — whether you hold the lead seat. An **empty** seat is claimed by the
   first agent to attach; an occupied one is a standing decision and a second
   agent attaching is not a reassignment.
-- `pendingRetriage` — only if you lead. A **north-star** edit you missed.
-  See below.
 - `pendingBucketReview` — only if you lead. A goal **band** that appeared
   while you were away, and the unplaced tasks worth re-looking at against
-  it. A different question from the one above, and answering one does not
-  answer the other. See below.
+  it. See below.
 
 **All of these are drained by this call.** Nothing offers them again.
 
@@ -238,34 +235,7 @@ task_transition(taskId, to: "done", note: "merged in #142",
 than leaving it parked in your column. Status is untouched (re-assigning is not
 progress) and the direction of every hand-off is recorded.
 
-## Goal edits and the lead-agent seat
-
-Editing the north-star goal invalidates every placement that was judged against
-the old one, so it asks for a re-triage — **addressed to the lead agent**, not
-to whoever happens to be connected:
-
-```
-set_workspace_goal(workspaceId, goal: "<new north-star statement>")
-→ { workspaceId, changed, retriage: { requested, queued, taskIds, batchId } }
-```
-
-- `retriage.requested` — it reached the lead live.
-- `retriage.queued` — the lead was away (or the board has no lead), and the
-  request is **waiting**. It does not expire; the board shows it as pending
-  work.
-
-A queued request is delivered as `pendingRetriage` on the lead's next
-`attach_agent` — or immediately, if `set_workspace_lead` hands the seat to an
-agent who is already live. `get_workspace` also surfaces `pendingRetriage`, but
-**reading it there does not drain it** — only `attach_agent` does.
-
-**What the lead then owes is `claude-workspaces:handling-a-goal-change`** — the
-whole sweep, in order, including the parts that are easy to get wrong: saving
-the payload before it is gone, re-reading the goal from the board rather than
-the event, re-affirming placements that did not move, and flagging obsoleted
-work without closing somebody else's task.
-
-### A new band asks the bucket to be re-looked-at
+## A new band asks the bucket to be re-looked-at
 
 Tasks nobody could place sit in the unknown-goal bucket (`untriaged`) at the
 bottom of Backlog. That is a fine place for them — until a goal **band** appears
@@ -277,10 +247,12 @@ set_goal_list(workspaceId, goals: [...])
 → { ..., bucketReview: { requested, queued, taskIds, newBands, batchId } }
 ```
 
-Same live-or-queue rule as the re-triage: `requested` reached the lead live,
-`queued` is waiting for their next `attach_agent`, where it arrives as
-`pendingBucketReview` (and `get_workspace` shows it without draining it, same
-as above). A **reorder or a rename reveals no new destination and asks
+The ask is **addressed to the lead agent**, not to whoever happens to be
+connected. `requested` means it reached the lead live; `queued` means the lead
+was away (or the board has no lead) and it is waiting for their next
+`attach_agent`, where it arrives as `pendingBucketReview`. It does not expire.
+`get_workspace` shows it without draining it — only `attach_agent` drains.
+A **reorder or a rename reveals no new destination and asks
 nothing** — use `reorder_goals` and `rename_goal` for those and no one is
 interrupted.
 

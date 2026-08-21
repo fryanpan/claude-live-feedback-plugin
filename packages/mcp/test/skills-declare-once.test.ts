@@ -44,7 +44,6 @@ const HUB = readFileSync(join(SKILLS, 'running-a-workspace-hub/SKILL.md'), 'utf8
 const HUB_REF = readFileSync(join(SKILLS, 'running-a-workspace-hub/tool-reference.md'), 'utf8');
 const LEAD = readFileSync(join(SKILLS, 'leading-a-workspace/SKILL.md'), 'utf8');
 const GENERAL = readFileSync(join(SKILLS, 'working-in-a-workspace/SKILL.md'), 'utf8');
-const GOAL_CHANGE = readFileSync(join(SKILLS, 'handling-a-goal-change/SKILL.md'), 'utf8');
 
 /**
  * One line, lower-cased. Every assertion below that searches for a PHRASE runs
@@ -241,7 +240,6 @@ describe('positive controls — guidance that must survive the edit', () => {
       ['running-a-workspace-hub/tool-reference.md', prose(HUB_REF)],
       ['leading-a-workspace', prose(LEAD)],
       ['working-in-a-workspace', prose(GENERAL)],
-      ['handling-a-goal-change', prose(GOAL_CHANGE)],
     ];
     const dups: string[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -276,7 +274,6 @@ describe('positive controls — guidance that must survive the edit', () => {
       ['running-a-workspace-hub/tool-reference.md', HUB_REF],
       ['leading-a-workspace', LEAD],
       ['working-in-a-workspace', GENERAL],
-      ['handling-a-goal-change', GOAL_CHANGE],
     ] as const) {
       expect(`${name}: ${raw}`).not.toContain('reviewing-task-shape');
     }
@@ -285,9 +282,29 @@ describe('positive controls — guidance that must survive the edit', () => {
     expect(flatten(LEAD)).toMatch(/three honest outcomes/);
   });
 
-  it('the hub skill still keeps its work loop and lead-seat sections', () => {
+  it('the hub skill still keeps its work loop and bucket-review sections', () => {
     expect(HUB).toMatch(/^## The work loop$/m);
-    expect(HUB).toMatch(/^## Goal edits and the lead-agent seat$/m);
+    expect(HUB).toMatch(/^## A new band asks the bucket to be re-looked-at$/m);
+  });
+
+  it('the retired goal-change skill is gone and nothing still points at it', () => {
+    // `handling-a-goal-change` was entirely about the workspace-level TEXT
+    // goal and the re-triage it fired. Both are removed; a skill name left
+    // behind in a triage line or a tool description reads to an agent as a
+    // skill it failed to find rather than one that no longer exists.
+    expect(existsSync(join(SKILLS, 'handling-a-goal-change'))).toBe(false);
+    for (const [name, raw] of [
+      ['running-a-workspace-hub/SKILL.md', HUB],
+      ['running-a-workspace-hub/tool-reference.md', HUB_REF],
+      ['leading-a-workspace', LEAD],
+      ['working-in-a-workspace', GENERAL],
+    ] as const) {
+      expect(`${name}: ${raw}`).not.toContain('handling-a-goal-change');
+      expect(`${name}: ${raw}`).not.toContain('set_workspace_goal');
+    }
+    // Positive control: the surviving goal verbs are still taught, so the
+    // absences above are a removal rather than a file that stopped loading.
+    expect(HUB_REF).toContain('set_goal_list');
   });
 
   it('the skills still carry their frontmatter names', () => {
