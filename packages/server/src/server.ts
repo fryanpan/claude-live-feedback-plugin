@@ -951,10 +951,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * The number is a promise about the LIST rendered under it, so it counts
    * exactly what the browser's `reviewQueue` places and nothing else:
    *
-   *  - person-owned blockers with open dependents,
    *  - comment-borne review rows (`task-thread` / `doc-thread`),
    *  - open decisions, which Home draws from the board projection as its own
    *    `decision` rows.
+   *
+   * Person-owned blockers are deliberately NOT a term. A blocker is task
+   * state, not a review item — the browser's `reviewQueue` stopped placing
+   * blocker rows when the task panel's blocked note took them over, so a
+   * count that still included them pointed the brief ("queued below") at a
+   * queue that renders nothing.
    *
    * TICKET-borne rows (`kind: 'task-review'`) are shipped by the route and
    * deliberately NOT counted here. No browser surface places one yet — the
@@ -974,17 +979,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * paragraph go together — not one without the other.
    */
   const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
-    const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
     const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
-    const blockers = open.filter(
-      (t) =>
-        t.needs !== 'decision' &&
-        ownerKindOf(t) === 'person' &&
-        open.some((o) => o.id !== t.id && o.after.includes(t.id)),
-    );
     const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
     const rendered = items.filter((i) => i.kind !== 'task-review');
-    return blockers.length + rendered.length + decisions.length;
+    return rendered.length + decisions.length;
   };
 
   const homeBriefInput = (workspace: HubWorkspace, since: number): BriefInput => {
