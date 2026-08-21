@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
@@ -7,10 +8,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { readRenamedEnv } from '../../core/src/env-names.ts';
 import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
+import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
+import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 import { voiceRequestLine } from './voice-line.ts';
@@ -90,7 +93,18 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.74';
+const PLUGIN_VERSION = '0.1.75';
+
+/**
+ * One nonce per PROCESS, minted at module load and sent on every attach.
+ * The server compares it against the attachment's recorded nonce to answer
+ * the question the ack grace window turns on: is this attach a fresh process
+ * (bypass the grace — whatever was in flight went to a process that is gone)
+ * or the same live one re-attaching (respect it — a frame already on the
+ * wire to THIS process must not be handed over a second time through the
+ * attach response). See AgentAttachment.processId on the server side.
+ */
+const PROCESS_ID = randomUUID();
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -2527,6 +2541,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               self: AUTHOR,
               runtime: 'claude-code-local',
               pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
             },
           ),
         );
@@ -3098,12 +3113,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             // loaded at launch, not by what its machine's cache holds now.
             // Reporting it is what lets the board say a merge never arrived.
             pluginVersion: PLUGIN_VERSION,
+            // Same-process re-attaches must not re-hand rows still in
+            // flight to this very process — see PROCESS_ID.
+            processId: PROCESS_ID,
           },
         )) as {
           attachment?: { agentId?: string };
           gating?: unknown;
           untriaged?: string[];
           queuedVoice?: Array<{ transcript: string; ts: number; applied?: string }>;
+          queuedComments?: Array<{
+            id: string;
+            docId: string;
+            threadId?: string;
+            event: string;
+            author?: { id?: string; name?: string };
+            text: string;
+            ts: number;
+          }>;
           lead?: boolean;
           pendingRetriage?: {
             batchId: string;
@@ -3128,6 +3155,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // from here would assert liveness for an agent that may be gone.
         if (agentId === undefined || agentId === AUTHOR.id) markAttached(workspaceId);
         if (subscribe !== false) await watchWorkspace(workspaceId);
+        // These rows are now in this process's hands — this response is their
+        // delivery — so send each receipt. Unlike queuedVoice the server did
+        // NOT drain them: a row it holds until this ack is a row a crash
+        // between the attach and here re-offers after the grace window,
+        // instead of losing with the response body.
+        for (const q of res.queuedComments ?? []) {
+          if (typeof q?.id !== 'string') continue;
+          try {
+            await http(
+              'POST',
+              `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`,
+              {},
+            );
+          } catch {
+            // Left on the queue on purpose — redelivered after the grace.
+          }
+        }
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
@@ -3144,6 +3188,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // the speaker's behalf. Pick up only what the utterance asked for
           // beyond it; redoing it posts the same words twice.
           queuedVoice: res.queuedVoice ?? [],
+          // Comments addressed to YOU that arrived while your stream was
+          // down — a person (or peer) commented on a task or doc you watch or
+          // lead, and nobody was listening. Read each and act on it where it
+          // lives (post_reply on the thread / resolve when addressed). This
+          // response is their delivery; the receipts are already sent.
+          queuedComments: (res.queuedComments ?? []).map((q) => ({
+            docId: q.docId,
+            ...(q.threadId !== undefined ? { threadId: q.threadId } : {}),
+            event: q.event,
+            ...(q.author !== undefined ? { author: q.author } : {}),
+            text: q.text,
+            ts: q.ts,
+          })),
           // A goal edit made while you were away, waiting for you because
           // you lead this board. Walk its taskIds with set_task_goal against
           // the NEW goal, passing its batchId on each so the moves read as
@@ -3410,13 +3467,44 @@ async function ensureWatchesRestored(): Promise<void> {
       const reattached: string[] = [];
       for (const workspaceId of boardsToReattach(lastCoverage)) {
         try {
-          await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
-            agentId: AUTHOR.id,
-            runtime: 'claude-code-local',
-            pluginVersion: PLUGIN_VERSION,
-          });
+          const attachRes = (await http(
+            'POST',
+            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
+            {
+              agentId: AUTHOR.id,
+              runtime: 'claude-code-local',
+              pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
+            },
+          )) as {
+            queuedComments?: BacklogCommentRow[];
+            queuedVoice?: Array<{ transcript?: unknown }>;
+          };
           markAttached(workspaceId);
           reattached.push(workspaceId);
+          // This POST is the fourth attach site, and the only one whose
+          // response body no tool call reads — yet the server just drained
+          // the backlog into it (voice destructively; comment rows marked
+          // emitted). Dropping it here is the ticket's own failure mode one
+          // layer down: the respawned session the queue waited for arrives,
+          // and the arrival itself eats the delivery. So forward each row as
+          // the channel notification its SSE frame would have been, acking a
+          // comment row only after its emit succeeded — same order, same
+          // reason as handleFrame.
+          await deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (shouldForwardFrame.shouldForward(ev, payload)) {
+                await emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await http(
+                'POST',
+                `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
+                {},
+              );
+            },
+          });
         } catch {
           // Best effort, exactly like the watch restore: the notice below
           // reads the coverage AFTER this, so a failure shows up as a board
@@ -3600,10 +3688,19 @@ async function runSseLoop(
     const w = watchers.get(label);
     if (w) w.open = open;
   };
+  // The wire id of the last frame this loop DELIVERED, presented back on
+  // every reconnect. This loop is a hand-rolled fetch stream, not a native
+  // EventSource, so nothing sends `Last-Event-ID` for us — without this line
+  // the 1.5s retry below reconnects fast and resumes WITH A HOLE: everything
+  // broadcast inside the gap used to be lost permanently. Delivered, not
+  // seen: the cursor advances only after `handleFrame` resolves (see
+  // sse-cursor.ts for the loss that committing it early caused).
+  const cursor: SseCursor = { lastEventId: undefined };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
         signal,
+        ...(cursor.lastEventId ? { headers: { 'Last-Event-ID': cursor.lastEventId } } : {}),
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -3621,7 +3718,13 @@ async function runSseLoop(
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          await handleFrame(frame);
+          // Deliver, THEN advance the cursor — a frame whose delivery threw
+          // must be re-presented on reconnect, not skipped past. On a
+          // delivered gap the cursor drops (the held id points at nothing
+          // the server can replay) and the dedup window drops with it, since
+          // after a refetch-worthy gap every held key may collide with a
+          // genuinely new event.
+          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
           sep = buf.indexOf('\n\n');
         }
       }
@@ -3701,8 +3804,56 @@ async function handleFrame(raw: string): Promise<void> {
   } catch {
     return;
   }
-  if (!shouldForwardFrame.shouldForward(ev, payload)) return;
-  await emitChannelMessage(ev, payload);
+  if (ev === 'replay.gap') {
+    // An explicit hole: the server is saying it CANNOT replay what this
+    // session missed while disconnected. Surface it as its own channel line —
+    // the doc-shaped formatter below would render it as a garbled comment —
+    // so the agent refetches (get_doc / list_threads / next_tasks) instead of
+    // trusting the stream to have been complete. No receipt: a gap notice
+    // carries no queue row, and acking one would claim delivery of the very
+    // frames it is reporting as missing.
+    const p = (payload ?? {}) as { docId?: string };
+    await server.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        source: 'claude-workspaces',
+        sent_at: new Date().toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? 'a watched channel'} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: 'replay.gap', ...(p.docId ? { doc_id: p.docId } : {}) },
+      },
+    });
+    return;
+  }
+  if (shouldForwardFrame.shouldForward(ev, payload)) {
+    await emitChannelMessage(ev, payload);
+  }
+  // The receipt for a durable comment row, AFTER the forward attempt (same
+  // ordering rationale as the voice ack below: an ack sent first would clear
+  // the durable copy on the strength of an intent). Deliberately OUTSIDE the
+  // dedup gate: a redelivered frame reuses the original event's eid — it IS
+  // the same event — so dedup rightly hides the duplicate from the session,
+  // but the receipt must still go back or the server re-offers the row after
+  // every grace window, forever. "The frame is in this process's hands" is
+  // exactly what the receipt asserts, forwarded or collapsed.
+  await ackCommentRow(payload);
+}
+
+/** POST the receipt for a frame that carries a durable comment-queue row id.
+ *  Never throws: a failed ack leaves the row on the queue, so the cost is a
+ *  redelivery after the grace window — late and duplicated beats silently
+ *  dropped, and that asymmetry is why the receipt lives on this side. */
+async function ackCommentRow(payload: unknown): Promise<void> {
+  const p = payload as { commentQueueId?: unknown; workspaceId?: unknown };
+  if (typeof p?.commentQueueId !== 'string' || typeof p?.workspaceId !== 'string') return;
+  try {
+    await http(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
+      {},
+    );
+  } catch {
+    // Left on the queue on purpose — see above.
+  }
 }
 
 interface ChannelPayload {
