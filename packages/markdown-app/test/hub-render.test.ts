@@ -1437,7 +1437,10 @@ describe('renderTaskDetail', () => {
     renderTaskDetail(root, gate, { ...detailHandlers(), blocked: row });
     const note = root.querySelector<HTMLElement>('.hub-blocked-note');
     expect(note).not.toBeNull();
-    expect(note?.querySelector('.hub-decide-k')?.textContent).toBe('Blocked');
+    // The chip must agree with the sentence beside it: this task IS the
+    // blocker ("Blocking 2 tasks: …"), so a chip reading "Blocked" would
+    // assert the opposite dependency direction.
+    expect(note?.querySelector('.hub-decide-k')?.textContent).toBe('Blocking');
     expect(note?.textContent).toContain('Blocking 2 tasks: Ship the widget, Wire the badge');
     // Under the key fields, above everything else — where the reader looks
     // for what state the task is in.
