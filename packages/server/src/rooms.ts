@@ -995,6 +995,70 @@ export class Rooms {
   }
 
   /**
+   * Cheap doc health check — everything an agent needs to answer "is this
+   * doc bound, is it wedged, how big is it, is anything pending" WITHOUT
+   * the body. `getDoc` re-renders every block to markdown and has returned
+   * 320KB for one doc, which overflows tool-result caps; this returns the
+   * metadata the room and binding already hold, plus counts. Deliberately
+   * no plainText, no blocks, no thread bodies.
+   */
+  getDocStatus(docId: string): {
+    docId: string;
+    type: DocType;
+    title?: string;
+    /** True when the doc is file-backed (a binding exists). */
+    bound: boolean;
+    /** Absolute path of the bound file. Route-level: omitted for share
+     *  visitors, same rule as `sourceUrl` in PRIVATE_META_KEYS. */
+    path?: string;
+    syncError?: { message: string; at: number };
+    lastActivityAt?: number;
+    textLength: number;
+    blockCount: number;
+    threads: { open: number; resolved: number };
+    pendingSuggestions: number;
+  } | null {
+    const room = this.rooms.get(docId);
+    if (!room) return null;
+    const binding = this.fileBindings.get(docId);
+    const meta = this.withActivity(room.meta);
+
+    let textLength: number;
+    let blockCount: number;
+    let pendingSuggestions = 0;
+    if (contentKind(room.meta.type) === 'flat') {
+      textLength = room.ydoc.getText('content').length;
+      blockCount = 1;
+    } else {
+      const fragment = prose.getProseFragment(room.ydoc);
+      textLength = prose.walkProse(fragment).plainText.length;
+      blockCount = fragment.length;
+      pendingSuggestions = suggestOps.listSuggestions(room.ydoc).length;
+    }
+
+    let open = 0;
+    let resolved = 0;
+    for (const t of listThreads(room.ydoc)) {
+      if (t.status === 'resolved') resolved += 1;
+      else open += 1;
+    }
+
+    return {
+      docId,
+      type: room.meta.type,
+      ...(room.meta.title ? { title: room.meta.title } : {}),
+      bound: Boolean(binding),
+      ...(binding ? { path: binding.path } : {}),
+      ...(binding?.lastSyncError ? { syncError: binding.lastSyncError } : {}),
+      ...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
+      textLength,
+      blockCount,
+      threads: { open, resolved },
+      pendingSuggestions,
+    };
+  }
+
+  /**
    * Build the file-tree view for a workspace: every doc tagged with
    * `workspaceId`, arranged into a nested directory tree by its `relPath`,
    * with per-file unresolved-comment counts and folder roll-ups.
@@ -2338,6 +2402,8 @@ export class Rooms {
       contextBefore?: string;
       contextAfter?: string;
       occurrence?: number;
+      /** Replace EVERY occurrence in one transaction. See prose.findAndReplace. */
+      replaceAll?: boolean;
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
@@ -2568,6 +2634,7 @@ export class Rooms {
     docId: string,
     anchorId: string,
     markdown: string,
+    opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
@@ -2576,6 +2643,7 @@ export class Rooms {
     return prose.insertBlocksAfterAnchor(room.ydoc, {
       anchorRel: anchor.endRel,
       markdown,
+      placement: opts?.placement,
     });
   }
 
@@ -2599,6 +2667,7 @@ export class Rooms {
     docId: string,
     threadId: string,
     markdown: string,
+    opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
@@ -2608,6 +2677,7 @@ export class Rooms {
     return prose.insertBlocksAfterAnchor(room.ydoc, {
       anchorRel: thread.anchor.endRel,
       markdown,
+      placement: opts?.placement,
     });
   }
 

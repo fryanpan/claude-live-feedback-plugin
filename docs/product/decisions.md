@@ -298,3 +298,60 @@ reserves "workspace" for a hub board, which would read "reviews … individually
 as covering them too — but that change requires every review to be reachable
 through a board first, and that is a product prerequisite rather than a
 deletion. Tracked separately.
+
+## 2026-08-21 — Serialization churn: the normal form is the contract; churn is one-time, not prevented
+
+Ask 5 of the mechanical-edits task (t-voJUJHi-BmdY): write-back reflows line
+wraps (a one-entry insert produced a +26/-47 diff), and a table nested under a
+bullet flattens on round-trip. The asks were stable serialization, or
+warn-or-refuse on structures the round-trip cannot preserve.
+
+**Decision: defer stable serialization; document the normal form as the
+contract; known-lossy constructs are named below. A cheap warn flag is
+follow-up work, not part of this decision. Refuse-on-lossy is rejected.**
+
+**Why stable serialization is a rewrite, not a fix.**
+`serializeFragmentToMarkdown` (`packages/core/src/prose.ts:1492`) emits a
+normal form — one line per paragraph. Soft line wraps are not represented in
+the ProseMirror/Yjs schema at all, so "preserving" them is not a serializer
+option: it means changing the schema, the parser
+(`parseMarkdownBlocks`, prose.ts:1135), the serializer, AND the editor
+round-trip together. That is a project, and one whose payoff is cosmetic diff
+noise on the first edit only.
+
+**Why the churn is one-time.** The hydrate path
+(`packages/server/src/rooms.ts:1709-1730`) already recognizes "pure
+normalization drift" — a disk file that parses to exactly the live doc — and
+deliberately leaves the original disk bytes untouched until a real edit
+happens. So a never-edited bound doc pays nothing, and the +26/-47 reflow is
+the one-time normalization any hard-wrapped doc pays on its FIRST real
+write-back. After that, the doc is in normal form and subsequent diffs are
+minimal.
+
+**Known-lossy constructs (documented, not prevented):**
+- Soft line wraps: reflowed to one line per paragraph on first write-back.
+  Content is preserved; only wrapping changes.
+- Tables nested under list items: `serializeList`'s continuation branch
+  (prose.ts:1812) CAN emit an indented table, but `parseMarkdownBlocks`
+  cannot re-parse an indented table inside a list item — so the next
+  round-trip flattens it. This is a parse-side gap; a fix would live in the
+  parser, and is not scheduled.
+
+**Refuse-on-lossy is rejected** because it would block binding exactly the
+docs people most want reviewed — real-world markdown is hard-wrapped and
+list-heavy. A refusal converts cosmetic churn into a hard workflow stop.
+
+**Follow-up (cheap partial, not implemented here):** at bind time, compute
+`willReflow = prose.normalizeMarkdown(diskText) !== diskText` — the exact
+comparison hydrate already performs — stash it on the file binding, and
+surface it in the `create_review_doc` response and the `doc_status` payload
+with a one-line note ("first write-back will reflow line wrapping; content is
+preserved"). That turns the surprise into a heads-up for the cost of one
+string compare that already runs.
+
+**What would change the decision:** churn that is NOT one-time (a doc in
+normal form still producing spurious diffs — that would be a bug, not this
+decision); a reviewer workflow where the first-edit diff noise blocks review
+(e.g. diff-review over a bound doc where +26/-47 buries the real change); or
+the table-under-bullet flatten hitting real docs often enough that the
+parse-side fix pays for itself.

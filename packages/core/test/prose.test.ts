@@ -135,6 +135,111 @@ describe('findAndReplace', () => {
     expect(res.error).toBe('no-match');
   });
 
+  it('no-match with a case-only difference carries a case hint previewing the actual casing', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Deploy pinned to SHA a1B2c3D4 since Monday.' }]);
+    const res = findAndReplace(doc, { find: 'sha A1b2C3d4', replace: 'sha e5F6a7B8' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('case');
+    // The preview shows the DOC's casing, so the caller can re-issue the find verbatim.
+    expect(res.hint?.preview).toContain('SHA a1B2c3D4');
+  });
+
+  it('no-match against a double-spaced doc carries a whitespace hint', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'alpha  beta gamma' }]);
+    const res = findAndReplace(doc, { find: 'alpha beta', replace: 'alpha delta' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('alpha  beta');
+  });
+
+  it('no-match against NBSP in the doc carries a whitespace hint', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'price:\u00a0100 dollars' }]);
+    const res = findAndReplace(doc, { find: 'price: 100', replace: 'price: 200' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('price:\u00a0100');
+  });
+
+  it('genuinely absent text gets no hint field at all', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Hello world' }]);
+    const res = findAndReplace(doc, { find: 'entirely elsewhere', replace: 'x' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect('hint' in res).toBe(false);
+  });
+
+  it('the hint scans the full pattern, context included', () => {
+    // The find alone exists verbatim; the CONTEXT is what mis-cases. A scan
+    // of the bare find would say nothing useful, so the hint targets the
+    // pattern the caller actually failed to match.
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'Alpha beta gamma.' }]);
+    const res = findAndReplace(doc, {
+      find: 'beta',
+      replace: 'delta',
+      contextBefore: 'alpha ',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('case');
+    expect(res.hint?.preview).toContain('Alpha beta');
+  });
+
+  it('replaceAll no-match carries the same hint', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'SHA a1B2c3D4 here and SHA a1B2c3D4 there.' }]);
+    const res = findAndReplace(doc, { find: 'sha a1b2c3d4', replace: 'x', replaceAll: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('case');
+  });
+
+  it('a whitespace hint across a real newline quotes the newline, not a space', () => {
+    // A code block holds real \n characters inside ONE Y.XmlText. If the
+    // hint preview flattened them to spaces, it would hand back the exact
+    // string that just failed to match — re-issuing it loops forever, which
+    // steers the caller straight back to the raw disk write the hint exists
+    // to prevent.
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'codeBlock', text: 'const foo = 1\nconst bar = 2' }]);
+    const res = findAndReplace(doc, { find: 'foo = 1 const bar', replace: 'x' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('foo = 1\nconst bar');
+    // Re-issuing the quoted characters verbatim now succeeds.
+    const again = findAndReplace(doc, {
+      find: 'foo = 1\nconst bar',
+      replace: 'foo = 9\nconst bar',
+    });
+    expect(again.ok).toBe(true);
+  });
+
+  it('a whitespace hint spanning a block boundary quotes the paragraph break', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'ends with alpha' },
+      { tag: 'paragraph', text: 'beta starts' },
+    ]);
+    const res = findAndReplace(doc, { find: 'alpha beta', replace: 'x' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('alpha\n\nbeta');
+    // Re-issuing that find is TERMINAL: the separator is not editable text,
+    // so it reports cross-node rather than another no-match+hint loop.
+    const again = findAndReplace(doc, { find: 'alpha\n\nbeta', replace: 'x' });
+    expect(again.ok).toBe(false);
+    expect(again.error).toBe('cross-node');
+  });
+
   it('surfaces ambiguous matches with candidates', () => {
     const doc = new Y.Doc();
     seedDoc(doc, [
@@ -277,6 +382,137 @@ describe('findAndReplace — parseInlineMarks', () => {
     });
     expect(res.ok).toBe(true);
     expect(walkProse(getProseFragment(doc)).plainText).toBe('new word here');
+  });
+});
+
+describe('findAndReplace — replaceAll', () => {
+  it('replaces every occurrence across several blocks in one call', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'heading', text: 'About deadbeef1234', attrs: { level: '2' } },
+      { tag: 'paragraph', text: 'The sha deadbeef1234 is stale.' },
+      { tag: 'paragraph', text: 'deadbeef1234 appears here and deadbeef1234 there.' },
+      { tag: 'paragraph', text: 'Unrelated paragraph.' },
+      { tag: 'paragraph', text: 'Tail mention: deadbeef1234.' },
+    ]);
+    const res = findAndReplace(doc, {
+      find: 'deadbeef1234',
+      replace: 'cafef00dbeef',
+      replaceAll: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(5);
+    const text = walkProse(getProseFragment(doc)).plainText;
+    expect(text).not.toContain('deadbeef1234');
+    expect(text).toContain('About cafef00dbeef');
+    expect(text).toContain('cafef00dbeef appears here and cafef00dbeef there.');
+    expect(text).toContain('Tail mention: cafef00dbeef.');
+  });
+
+  it('carries marks per site — a bold occurrence stays bold, a plain one stays plain', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      const p1 = new Y.XmlElement('paragraph');
+      const t1 = new Y.XmlText();
+      t1.insert(0, 'oldsha is stale');
+      t1.format(0, 6, { bold: {} });
+      p1.insert(0, [t1]);
+      const p2 = new Y.XmlElement('paragraph');
+      const t2 = new Y.XmlText();
+      t2.insert(0, 'see oldsha here');
+      p2.insert(0, [t2]);
+      frag.push([p1, p2]);
+    });
+    const res = findAndReplace(doc, { find: 'oldsha', replace: 'newsha', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(2);
+    // Neither site was partially formatted, so no marks were dropped.
+    expect(res.marksDropped).toBeUndefined();
+    const delta1 = firstParaDelta(doc);
+    expect(delta1[0]?.insert).toBe('newsha');
+    expect(delta1[0]?.attributes).toHaveProperty('bold');
+    const p2 = getProseFragment(doc).toArray()[1] as Y.XmlElement;
+    const t2 = p2.toArray()[0] as Y.XmlText;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const delta2 = t2.toDelta() as Array<{ insert: string; attributes?: Record<string, unknown> }>;
+    expect(delta2.map((op) => op.insert).join('')).toBe('see newsha here');
+    for (const op of delta2) {
+      expect(Object.keys(op.attributes ?? {})).toEqual([]);
+    }
+  });
+
+  it('stays correct at every site when the replacement is longer (same node, reverse-order proof)', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'x1 then x1 then x1' }]);
+    const res = findAndReplace(doc, { find: 'x1', replace: 'longer-token', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(3);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe(
+      'longer-token then longer-token then longer-token',
+    );
+  });
+
+  it('stays correct at every site when the replacement is shorter', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'longtoken a longtoken b longtoken' }]);
+    const res = findAndReplace(doc, { find: 'longtoken', replace: 'x', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(3);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('x a x b x');
+  });
+
+  it('refuses the occurrence + replaceAll combination', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'a a a' }]);
+    const res = findAndReplace(doc, { find: 'a', replace: 'X', replaceAll: true, occurrence: 2 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('replace-all-with-occurrence');
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('a a a');
+  });
+
+  it('skips a cross-node match and reports it in skippedCrossNode', () => {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => {
+      // One paragraph whose text is split across TWO Y.XmlText leaves so the
+      // match "ab" straddles the node boundary.
+      const p1 = new Y.XmlElement('paragraph');
+      const t1a = new Y.XmlText();
+      t1a.insert(0, 'xa');
+      const t1b = new Y.XmlText();
+      t1b.insert(0, 'by');
+      p1.insert(0, [t1a, t1b]);
+      const p2 = new Y.XmlElement('paragraph');
+      const t2 = new Y.XmlText();
+      t2.insert(0, 'ab whole');
+      p2.insert(0, [t2]);
+      frag.push([p1, p2]);
+    });
+    const res = findAndReplace(doc, { find: 'ab', replace: 'Z', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(1);
+    expect(res.skippedCrossNode).toBe(1);
+    const text = walkProse(frag).plainText;
+    expect(text).toContain('Z whole');
+    expect(text).toContain('xab'); // the straddling match is untouched
+  });
+
+  it('applies overlapping candidates non-overlapping, left to right', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'aaaa' }]);
+    const res = findAndReplace(doc, { find: 'aa', replace: 'b', replaceAll: true });
+    expect(res.ok).toBe(true);
+    expect(res.replaced).toBe(2);
+    expect(walkProse(getProseFragment(doc)).plainText).toBe('bb');
+  });
+
+  it('still reports no-match when nothing matches', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'paragraph', text: 'hello' }]);
+    const res = findAndReplace(doc, { find: 'absent', replace: 'x', replaceAll: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
   });
 });
 
@@ -484,6 +720,78 @@ describe('insertBlocksAfterAnchor', () => {
     expect(text).toMatch(
       /Gorillas\n\nGentle giants.*\n\ndiet: plants\n\nhabitat: forest\n\nMonkeys/s,
     );
+  });
+
+  /** Doc whose first block is a bullet list; anchor pinned inside the FIRST
+   *  list item's paragraph — the shape that has twice broken structure when
+   *  a sweep inserted "after the anchor" and everything nested under the item. */
+  function listDocWithAnchor(): { doc: Y.Doc; anchorRel: Uint8Array } {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks('- alpha\n- beta\n\nAfter paragraph.')));
+    const list = frag.toArray()[0] as Y.XmlElement;
+    const item = list.toArray()[0] as Y.XmlElement;
+    const para = item.toArray()[0] as Y.XmlElement;
+    const text = para.toArray()[0] as Y.XmlText;
+    const anchorRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, 0));
+    return { doc, anchorRel };
+  }
+
+  it('characterization: default placement nests blocks INSIDE the list item hosting the anchor', () => {
+    // Locks the compat default: 'after-block' means after the anchor's
+    // innermost block, even when that block sits inside a listItem.
+    const { doc, anchorRel } = listDocWithAnchor();
+    const res = insertBlocksAfterAnchor(doc, { anchorRel, markdown: '## New section\n\nBody.' });
+    expect(res.ok).toBe(true);
+    const frag = getProseFragment(doc);
+    // Top level is unchanged: still [bulletList, paragraph].
+    expect(frag.toArray().map((b) => (b as Y.XmlElement).nodeName)).toEqual([
+      'bulletList',
+      'paragraph',
+    ]);
+    // The heading landed inside the first listItem.
+    const list = frag.toArray()[0] as Y.XmlElement;
+    const item = list.toArray()[0] as Y.XmlElement;
+    expect(item.toArray().map((c) => (c as Y.XmlElement).nodeName)).toContain('heading');
+  });
+
+  it("placement 'top-level' inserts after the ENTIRE list, at fragment level", () => {
+    const { doc, anchorRel } = listDocWithAnchor();
+    const res = insertBlocksAfterAnchor(doc, {
+      anchorRel,
+      markdown: '## New section\n\nBody.',
+      placement: 'top-level',
+    });
+    expect(res.ok).toBe(true);
+    const frag = getProseFragment(doc);
+    expect(frag.toArray().map((b) => (b as Y.XmlElement).nodeName)).toEqual([
+      'bulletList',
+      'heading',
+      'paragraph',
+      'paragraph',
+    ]);
+    // Serialized markdown shows the heading un-indented, after the whole list.
+    const md = serializeFragmentToMarkdown(frag);
+    expect(md).toContain('- beta\n\n## New section\n\nBody.');
+  });
+
+  it("placement 'top-level' on an already top-level anchor matches the default", () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'First.' },
+      { tag: 'paragraph', text: 'Last.' },
+    ]);
+    const frag = getProseFragment(doc);
+    const first = frag.toArray()[0] as Y.XmlElement;
+    const text = first.toArray()[0] as Y.XmlText;
+    const anchorRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, 0));
+    const res = insertBlocksAfterAnchor(doc, {
+      anchorRel,
+      markdown: 'Middle.',
+      placement: 'top-level',
+    });
+    expect(res.ok).toBe(true);
+    expect(walkProse(frag).plainText).toBe('First.\n\nMiddle.\n\nLast.');
   });
 });
 

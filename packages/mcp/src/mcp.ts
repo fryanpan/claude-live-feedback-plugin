@@ -14,6 +14,7 @@ import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
+import { projectTaskRows } from './task-projection.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
 import { RETRIAGE_SKILL, TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 import { voiceRequestLine } from './voice-line.ts';
@@ -93,7 +94,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.75';
+const PLUGIN_VERSION = '0.1.76';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -440,7 +441,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'get_doc',
       description:
-        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits.',
+        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits. On a big doc this result is BODY-SIZED (real docs have returned 320KB, past tool-result caps) — when you only need health/shape ("is it bound, is it wedged, how big, what is pending"), call doc_status instead and read the body only if you actually need the text.',
+      inputSchema: {
+        type: 'object',
+        properties: { docId: { type: 'string' } },
+        required: ['docId'],
+      },
+    },
+    {
+      name: 'doc_status',
+      description:
+        "Cheap doc health check — the doc's metadata and counts WITHOUT any of the body (no plainText, no blocks, no thread text), a few hundred bytes where get_doc can run to hundreds of KB. Returns {docId, type, title?, bound, path?, syncError?, lastActivityAt?, textLength, blockCount, threads: {open, resolved}, pendingSuggestions}. Use it before/instead of get_doc when the question is about the doc rather than its text: is it still bound to disk and where (`bound`/`path`), did the last sync wedge (`syncError` — read it, it names the conflict), how big is what get_doc would return (`textLength`), is anything waiting (`threads.open`, `pendingSuggestions`). Answers 404 for an unknown docId.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -698,7 +709,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'find_and_replace',
       description:
-        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. Use `occurrence` (1-indexed) to pick one explicitly. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
+        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. A no-match comes back with a near-miss `hint` when the doc contains the text up to letter case (`kind: 'case'`) or up to whitespace runs (`kind: 'whitespace'` — double spaces, NBSP, newlines); the hint's `preview` quotes the doc's ACTUAL characters — real newlines included, never flattened to spaces — so copy the find from it and re-issue rather than guessing (or, never, editing the bound file on disk); if the quoted span crosses a paragraph break (contains `\n\n`), the re-issue reports `cross-node` because the break is not editable text — split the edit per block instead. Use `occurrence` (1-indexed) to pick one explicitly, or pass `replaceAll: true` to replace every occurrence in one call — the right tool for a mechanical sweep (the same stale SHA or renamed identifier in dozens of places), which must NEVER be done by writing the bound file on disk. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -708,6 +719,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contextBefore: { type: 'string' },
           contextAfter: { type: 'string' },
           occurrence: { type: 'number' },
+          replaceAll: {
+            type: 'boolean',
+            description:
+              'Replace every occurrence in one call — one Yjs transaction, marks carried per site. Use for mechanical sweeps (the same stale SHA in 44 places) instead of looping occurrence-by-occurrence or, worse, editing the bound file on disk. Returns { replaced } (and skippedCrossNode when a match straddled formatting boundaries and was left alone). Mutually exclusive with occurrence and with suggest.',
+          },
           parseInlineMarks: { type: 'boolean' },
           suggest: {
             type: 'boolean',
@@ -807,13 +823,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_after_thread',
       description:
-        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'.",
+        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'. If the anchor sits inside a list item, the default placement nests the new blocks under that item — pass placement 'top-level' to insert after the entire list instead.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           threadId: { type: 'string' },
           markdown: { type: 'string' },
+          placement: {
+            type: 'string',
+            enum: ['after-block', 'top-level'],
+            description:
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+          },
         },
         required: ['docId', 'threadId', 'markdown'],
       },
@@ -859,13 +881,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_at_anchor',
       description:
-        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element.",
+        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element. CAUTION: an anchor inside a list item nests everything under that item by default — pass placement 'top-level' to insert after the whole list.",
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           anchorId: { type: 'string' },
           markdown: { type: 'string' },
+          placement: {
+            type: 'string',
+            enum: ['after-block', 'top-level'],
+            description:
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+          },
         },
         required: ['docId', 'anchorId', 'markdown'],
       },
@@ -1275,7 +1303,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_tasks',
       description:
-        'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation.',
+        'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation. On a big board the default rows still run large (reviews with their quotes and answers, infoRequests, options, evidence ride on every row — a real board hit 122KB); pass `fields` to pick exactly the keys you need.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1284,6 +1312,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           status: { type: 'string', enum: ['todo', 'in-progress', 'done'] },
           assignee: { type: 'string' },
           needs: { type: 'string', enum: ['action', 'decision'] },
+          fields: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              "Project each row to just these keys (`id` always included; keys a row lacks are omitted). Use for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB. 'transitionCount' is computable here without hauling transitions. Omit (or pass []) for the historical default trim.",
+          },
         },
         required: ['workspaceId'],
       },
@@ -1968,6 +2002,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
         return ok(res);
       }
+      case 'doc_status': {
+        const { docId } = a as { docId: string };
+        const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/status`);
+        return ok(res);
+      }
       case 'create_review_doc': {
         const { docId, path, title, setId, hubWorkspaceId, producedBy } = a as {
           docId: string;
@@ -2158,6 +2197,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           contextBefore,
           contextAfter,
           occurrence,
+          replaceAll,
           parseInlineMarks,
           suggest,
         } = a as {
@@ -2167,6 +2207,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           contextBefore?: string;
           contextAfter?: string;
           occurrence?: number;
+          replaceAll?: boolean;
           parseInlineMarks?: boolean;
           suggest?: boolean;
         };
@@ -2176,6 +2217,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(contextBefore !== undefined ? { contextBefore } : {}),
           ...(contextAfter !== undefined ? { contextAfter } : {}),
           ...(occurrence !== undefined ? { occurrence } : {}),
+          ...(replaceAll === true ? { replaceAll: true } : {}),
           ...(parseInlineMarks === true ? { parseInlineMarks: true } : {}),
           ...(suggest === true ? { suggest: true, author: suggestionAuthor() } : {}),
         });
@@ -2248,15 +2290,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'insert_blocks_after_thread': {
-        const { docId, threadId, markdown } = a as {
+        const { docId, threadId, markdown, placement } = a as {
           docId: string;
           threadId: string;
           markdown: string;
+          placement?: 'after-block' | 'top-level';
         };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/insert_blocks_after`,
-          { markdown },
+          { markdown, ...(placement !== undefined ? { placement } : {}) },
         );
         return ok(res);
       }
@@ -2292,15 +2335,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'insert_blocks_at_anchor': {
-        const { docId, anchorId, markdown } = a as {
+        const { docId, anchorId, markdown, placement } = a as {
           docId: string;
           anchorId: string;
           markdown: string;
+          placement?: 'after-block' | 'top-level';
         };
         const res = await http(
           'POST',
           `/api/docs/${encodeURIComponent(docId)}/agent_anchors/${encodeURIComponent(anchorId)}/insert_blocks`,
-          { markdown },
+          { markdown, ...(placement !== undefined ? { placement } : {}) },
         );
         return ok(res);
       }
@@ -2706,12 +2750,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ workspaceId, tasks: res.tasks });
       }
       case 'list_tasks': {
-        const { workspaceId, goal, status, assignee, needs } = a as {
+        const { workspaceId, goal, status, assignee, needs, fields } = a as {
           workspaceId: string;
           goal?: string;
           status?: string;
           assignee?: string;
           needs?: string;
+          fields?: string[];
         };
         const qs = new URLSearchParams();
         if (goal !== undefined) qs.set('goal', goal);
@@ -2723,13 +2768,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           'GET',
           `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`,
         )) as { tasks: TaskPayload[] };
-        // Trimmed rows: no body snapshot, no transition history.
+        // Trimmed handler-side, NOT at the route — an old bundle keeps
+        // calling the REST route forever and must keep reading its shape.
+        // Default: no body snapshot, no transition history. With `fields`:
+        // exactly the picked keys per row.
         return ok({
           workspaceId,
-          tasks: res.tasks.map(({ body: _body, transitions, ...rest }) => ({
-            ...rest,
-            transitionCount: transitions?.length ?? 0,
-          })),
+          tasks: projectTaskRows(res.tasks, fields),
         });
       }
       case 'task_transition': {
