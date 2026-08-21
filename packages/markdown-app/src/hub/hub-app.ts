@@ -611,6 +611,23 @@ async function main(): Promise<void> {
     renderWalkthrough();
   }
 
+  /**
+   * Tapping a row on Home: open the queue's card ON that row, in place.
+   *
+   * The same surface `Review All` opens, aimed at the item the reader pointed
+   * at rather than at the top — one card anatomy, one answer path, and the
+   * reader stays on Home. `walkKey` is what actually holds the aim; the index
+   * is the fallback for the repaint after the item leaves the queue.
+   */
+  function openInQueue(item: ReviewItem, index: number): void {
+    // A new sitting, exactly as `Review All` starts one: the tally counts what
+    // this pass cleared, and a leftover count would open on "4 cleared".
+    state.walkProgress = { cleared: 0, last: null };
+    state.walkIndex = index;
+    state.walkKey = item.key;
+    renderWalkthrough();
+  }
+
   function renderHomeRegion(): void {
     // Nav active state, all four destinations.
     for (const btn of document.querySelectorAll<HTMLButtonElement>('.hub-nav-item')) {
@@ -637,7 +654,7 @@ async function main(): Promise<void> {
     renderHomeReview(
       el('hub-home-review'),
       currentQueue(),
-      { onOpen: openReviewItem, onWalkthrough: startWalkthrough },
+      { onReview: openInQueue, onOpen: openReviewItem, onWalkthrough: startWalkthrough },
       [...state.homeSettled.values()],
     );
   }
