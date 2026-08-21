@@ -154,6 +154,75 @@ describe('a comment for an agent is written down, addressed, and cleared only on
     expect(attached.queuedComments.map((q) => q.text)).toEqual(['Tighten this paragraph.']);
   });
 
+  it('a re-attach from the SAME live process respects the in-flight grace; a new process bypasses it', () => {
+    // "Fresh process" is a fact the server cannot infer from the attach verb
+    // alone: declare-lead, a retry after `subscribed: false`, and a
+    // defensive re-call all attach from a process that is still holding the
+    // frame a heartbeat just put on the wire. Handing the row over AGAIN
+    // through the attach response makes the agent read the same comment
+    // twice. The per-process nonce is what tells the two apart.
+    const { s } = store(10_000);
+    const w = s.createWorkspace('durable-comments', 'Ship it.').id;
+    s.attachAgent(w, { agentId: 'worker-a', runtime: 'claude-code-local', processId: 'proc-1' });
+    const id = s.queueComment(w, row('worker-a')) as string;
+    s.markCommentEmitted(w, id); // a frame in flight to proc-1
+
+    const samProcess = s.attachAgent(w, {
+      agentId: 'worker-a',
+      runtime: 'claude-code-local',
+      processId: 'proc-1',
+    });
+    if (!samProcess.ok) throw new Error('unreachable');
+    expect(samProcess.queuedComments).toEqual([]);
+    // Still queued — respected, not lost.
+    expect(s.listQueuedComments(w)).toHaveLength(1);
+
+    const newProcess = s.attachAgent(w, {
+      agentId: 'worker-a',
+      runtime: 'claude-code-local',
+      processId: 'proc-2',
+    });
+    if (!newProcess.ok) throw new Error('unreachable');
+    expect(newProcess.queuedComments.map((q) => q.text)).toEqual(['Tighten this paragraph.']);
+  });
+
+  it('an old bundle attaching without a nonce keeps the bypass-always behavior it was built against', () => {
+    const { s } = store(10_000);
+    const w = s.createWorkspace('durable-comments', 'Ship it.').id;
+    s.attachAgent(w, { agentId: 'worker-a', runtime: 'claude-code-local', processId: 'proc-1' });
+    const id = s.queueComment(w, row('worker-a')) as string;
+    s.markCommentEmitted(w, id);
+
+    const noNonce = s.attachAgent(w, { agentId: 'worker-a', runtime: 'claude-code-local' });
+    if (!noNonce.ok) throw new Error('unreachable');
+    expect(noNonce.queuedComments).toHaveLength(1);
+  });
+
+  it('clearing an emitted mark re-offers the row immediately — and refuses to invent one', () => {
+    // The heartbeat route's rollback for a send that reached no socket:
+    // without it a row marked against nothing waits out a full grace window
+    // per attempt, forever, while the agent's heartbeats keep landing.
+    const { s } = store(10_000); // a grace nothing in this test can outlive
+    const w = ws(s, 'worker-a');
+    const id = s.queueComment(w, row('worker-a')) as string;
+    s.markCommentEmitted(w, id);
+
+    const starved = s.heartbeat(w, 'worker-a');
+    if (!starved.ok) throw new Error('unreachable');
+    expect(starved.queuedComments ?? []).toEqual([]); // in grace, not re-offered
+
+    expect(s.clearCommentEmitted(w, id)).toBe(true);
+    const retried = s.heartbeat(w, 'worker-a');
+    if (!retried.ok) throw new Error('unreachable');
+    expect(retried.queuedComments?.map((q) => q.text)).toEqual(['Tighten this paragraph.']);
+
+    // POSITIVE CONTROLS: no mark to clear and no such row are both real
+    // answers, not licence to rewrite the queue.
+    expect(s.clearCommentEmitted(w, 'no-such-row')).toBe(false);
+    const fresh = s.queueComment(w, { ...row('worker-a'), text: 'second' }) as string;
+    expect(s.clearCommentEmitted(w, fresh)).toBe(false);
+  });
+
   it('the queue is delivery state, not the record — it stays bounded', () => {
     // The comment itself lives in the thread; this file is an index of what
     // is still owed. An addressee that never acks (an old bundle) must not
@@ -168,6 +237,25 @@ describe('a comment for an agent is written down, addressed, and cleared only on
     // Oldest dropped, newest kept.
     expect(queue[queue.length - 1]?.text).toBe(`comment ${MAX_QUEUED_COMMENTS + 4}`);
     expect(queue[0]?.text).toBe('comment 5');
+  });
+
+  it('the cap is PER ADDRESSEE — one dead addressee cannot evict a live agent’s row', () => {
+    // A shared cap would let an addressee that never acks (a stale lead, an
+    // orphaned durable watch) silently push a different agent's still-pending
+    // comment off the file, with no signal anywhere that it happened.
+    const { s } = store();
+    const w = ws(s, 'worker-a');
+    const liveRow = s.queueComment(w, {
+      ...row('worker-b'),
+      text: 'For the live agent.',
+    }) as string;
+    for (let i = 0; i < MAX_QUEUED_COMMENTS + 5; i++) {
+      s.queueComment(w, { ...row('worker-a'), text: `flood ${i}` });
+    }
+    const queue = s.listQueuedComments(w);
+    expect(queue.filter((q) => q.agentId === 'worker-a')).toHaveLength(MAX_QUEUED_COMMENTS);
+    // The other addressee's single row survived the flood.
+    expect(queue.some((q) => q.id === liveRow)).toBe(true);
   });
 });
 
@@ -387,5 +475,54 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     expect(handle.tasks.listQueuedComments(workspaceId).map((q) => q.text)).toEqual([
       'Please tighten the intro.',
     ]);
+  });
+
+  it('a heartbeat whose addressed frame reached no socket does NOT burn the grace window', async () => {
+    // The starve loop this pins shut: an agent whose keepalive lands as
+    // plain HTTP while its SSE stream is down would otherwise see every
+    // heartbeat mark the row emitted against a send that matched zero sinks
+    // — a fresh 90s grace per attempt, delivery never. `sendToAgent`
+    // returning 0 is a real answer, and the route must treat it as one.
+    const workspaceId = await board('starve-board', 'agent-starve');
+    await makeDoc('starve-doc', workspaceId);
+
+    expect((await comment('starve-doc', 'Anyone listening?')).status).toBe(200);
+    await settle();
+    const rowId = handle.tasks.listQueuedComments(workspaceId)[0]?.id as string;
+
+    // Heartbeat with NO stream open: the hand-over happens, the send finds
+    // nobody, and the emitted mark is rolled back rather than left burning.
+    const first = await post(
+      `/api/workspaces/${workspaceId}/attachments/agent-starve/heartbeat`,
+      {},
+    );
+    expect(first.status).toBe(200);
+    expect(handle.tasks.listQueuedComments(workspaceId)[0]?.emittedAt).toBeUndefined();
+
+    // …so the very next heartbeat is a fresh attempt, not a grace-window
+    // wait (the server's real grace is 90s — far longer than this test).
+    const second = await post(
+      `/api/workspaces/${workspaceId}/attachments/agent-starve/heartbeat`,
+      {},
+    );
+    const secondBody = (await second.json()) as { queuedComments?: Array<{ id: string }> };
+    expect(secondBody.queuedComments?.map((q) => q.id)).toEqual([rowId]);
+
+    // POSITIVE CONTROL: once the stream is up, the same heartbeat path
+    // delivers the frame and the emitted mark STAYS.
+    const stream = await get(
+      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-starve`,
+    );
+    const heard = listenFrames(stream);
+    stops.push(heard.stop);
+    await settle(150);
+    const third = await post(
+      `/api/workspaces/${workspaceId}/attachments/agent-starve/heartbeat`,
+      {},
+    );
+    expect(third.status).toBe(200);
+    await settle();
+    expect(heard.frames.find((f) => f.data.commentQueueId === rowId)).toBeDefined();
+    expect(typeof handle.tasks.listQueuedComments(workspaceId)[0]?.emittedAt).toBe('number');
   });
 });
