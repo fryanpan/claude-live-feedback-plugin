@@ -25,6 +25,7 @@ import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import {
   type ActivityEvent,
   type ActivityFilter,
+  type BlockerRow,
   type BoardSection,
   type DriftNotice,
   type HomePayload,
@@ -50,6 +51,7 @@ import {
   askedMeta,
   askedMetaLine,
   assigneeLabel,
+  blockedNoteLine,
   describeEvent,
   dropIndexFor,
   dropTarget,
@@ -608,8 +610,8 @@ function taskBadges(task: HubTask): HTMLElement {
   // reach at all.
   //
   // The dependencies themselves are untouched: `after` / `afterEnforce` still
-  // gate transitions, still drive the blocker rows on Home, and still show in
-  // the detail panel. This removes a row-level TELL, not a feature. If the
+  // gate transitions, still drive the detail panel's blocked note, and still
+  // show in the panel. This removes a row-level TELL, not a feature. If the
   // board needs one again, it should distinguish enforced from soft and name
   // what is blocking without a hover.
   if (task.dueAt !== undefined) {
@@ -1290,7 +1292,6 @@ function clip(text: string, max = 60): string {
  *  longer wording a tooltip can afford. */
 const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   decision: 'Decision',
-  blocker: 'Your task, blocking',
   'task-thread': 'Task comment',
   'doc-thread': 'Doc comment',
 };
@@ -1593,8 +1594,7 @@ export interface WalkthroughHandlers {
   contextLabel?: (item: ReviewItem) => string | null;
 }
 
-/** The task's own description, or an honest line saying there isn't one.
- *  Shared by the decision and blocker cards — both are a task. */
+/** The task's own description, or an honest line saying there isn't one. */
 function walkBody(task: HubTask): HTMLElement {
   const body = document.createElement('div');
   // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
@@ -1777,8 +1777,8 @@ function walkWhere(item: ReviewItem, handlers: WalkthroughHandlers): HTMLElement
   label.textContent = item.kind === 'doc-thread' ? 'Doc:' : 'Task:';
   const open = document.createElement('button');
   open.type = 'button';
-  // Its own class, NOT `hub-walk-open`: that one is the blocker card's primary
-  // button, and styling both through one selector turned the button into bare
+  // Its own class, kept distinct from every button class the cards use:
+  // sharing a selector with a primary button once turned this link into bare
   // blue text — measured on staging at 430px.
   open.className = 'hub-walk-where-link';
   open.textContent = `${item.title} ↗`;
@@ -1897,9 +1897,9 @@ export function renderReviewWalkthrough(
   panel.append(topline);
 
   const item = queue.items[index];
-  // Only a decision gets the answer furniture. A blocker carries the same row
-  // shape but was never a question, so writing an `answer` onto it would be a
-  // lie about what happened.
+  // Only a decision gets the answer furniture — the thread kinds below get a
+  // reply path instead. (A blocker never reaches this queue at all: it is
+  // task state, surfaced as the detail panel's blocked note.)
   const row = item?.decision;
   if (!item) {
     const done = document.createElement('div');
@@ -1971,23 +1971,6 @@ export function renderReviewWalkthrough(
   // the left-bordered provenance block are gone; the why leads the body, and
   // the who/when lives in the head's meta.
   card.append(walkCardHead(item, handlers, now));
-
-  // ── A blocker: your own task, and the work standing behind it. There is
-  // nothing to answer and nothing to reply to — the only move is to go and do
-  // it — so the card says what is waiting and hands you the task.
-  const blocker = item.blocker;
-  if (blocker) {
-    card.append(walkBody(blocker.task));
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'hub-btn hub-btn-primary hub-walk-open';
-    open.textContent = 'Open the task';
-    open.addEventListener('click', () => handlers.onOpenItem(item));
-    card.append(open, walkActions(index, handlers));
-    panel.append(card);
-    container.append(panel);
-    return;
-  }
 
   // ── A thread: the question, a reply box, and the way out to the surface it
   // lives on. Answering here is the point — going through the queue must not
@@ -2453,6 +2436,14 @@ export interface DetailHandlers {
    * nothing is worse than its absence.
    */
   onCopyLink?: (task: HubTask) => void;
+  /**
+   * Set when the open task is a human-owned open task other work waits on —
+   * the row `humanBlockerRows` derives for it, handed down by the app. The
+   * panel renders it as the amber blocked note under the key fields: a
+   * blocker is task STATE (design point 5), so this is the one surface that
+   * says it, and the board row and the Home queue deliberately do not.
+   */
+  blocked?: BlockerRow;
   /** Clock for the "asked 3h ago" lines. Injected so a test can pin it. */
   now?: number;
   /**
@@ -4039,6 +4030,24 @@ export function renderTaskDetail(
   // identical across every task on the board. None of that is what the reader
   // came to answer.
   before.push(detailFields(task, handlers));
+
+  // The blocked note (design point 5): this task is a person's own open work
+  // that other tasks wait on, and this panel is the ONE surface that says so
+  // — a blocker is task state, never a review item, so it appears in no
+  // queue, no walkthrough, and no row badge. The chip keeps the card-head
+  // pill shape (`.hub-decide-k`) so "what kind of thing is this" reads in one
+  // vocabulary across the panel.
+  if (handlers.blocked) {
+    const note = document.createElement('div');
+    note.className = 'hub-blocked-note';
+    const k = document.createElement('span');
+    k.className = 'hub-decide-k hub-blocked-k';
+    k.textContent = 'Blocked';
+    const line = document.createElement('p');
+    line.textContent = blockedNoteLine(handlers.blocked);
+    note.append(k, line);
+    before.push(note);
+  }
 
   // Everything waiting on the reader, as ONE queue — the task's own decision
   // and every declared or unanswered item on its threads, ranked together.

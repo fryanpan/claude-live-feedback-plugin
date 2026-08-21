@@ -14,6 +14,7 @@ import {
   boardSections,
   clientDriftNotice,
   goalLabel,
+  humanBlockerRows,
   pluginDriftNotice,
   reviewQueue,
   unplacedNotice,
@@ -203,6 +204,22 @@ describe('renderBoard', () => {
       .join(' ');
     expect(badgeText).not.toContain('decision');
     expect(badgeText).not.toContain('action');
+  });
+
+  // Design point 5's board half. The mock added an amber `blocked` row badge
+  // and flagged it as its one invention; the directive keeps the board's
+  // badge discipline, so the blocked state lives in the task PANEL's note and
+  // the row gains nothing.
+  it('adds no blocked badge to a human-owned task other work waits on', () => {
+    const h = handlers();
+    const gate = task({ goal: 'g-pr', assignee: 'human', dueAt: NOW + 86_400_000 });
+    const waiting = task({ goal: 'g-pr', after: [gate.id] });
+    renderBoard(root, boardSections(GOALS, [gate, waiting], filters), h);
+    const row = root.querySelector(`.hub-task-row[data-task-id="${gate.id}"]`);
+    expect(row).not.toBeNull();
+    expect(row?.querySelector('.hub-badge-due')).not.toBeNull(); // control: badges render
+    expect(row?.querySelector('.hub-badge-blocked')).toBeNull();
+    expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toMatch(/blocked/i);
   });
 
   // Display-only flattening. The goal LIST still nests — `boardSections`
@@ -1402,6 +1419,43 @@ describe('renderTaskDetail', () => {
     onTitleCommit: vi.fn(),
     onAnswer: vi.fn(),
     onAssign: vi.fn(),
+  });
+
+  // Design point 5's panel half: the blocked state lives HERE, on the task,
+  // as the amber note under the key fields — not on Home, not in the
+  // walkthrough, not as a row badge.
+  it('shows the blocked note, with the count and the names, when the open task holds work up', () => {
+    const gate = task({ assignee: 'human', title: 'Turn on the tunnel' });
+    const tasks = [
+      gate,
+      task({ title: 'Ship the widget', after: [gate.id] }),
+      task({ title: 'Wire the badge', after: [gate.id] }),
+    ];
+    // The row the app hands down — the same derivation the old Home band used.
+    const row = humanBlockerRows(tasks).find((r) => r.task.id === gate.id);
+    expect(row).toBeDefined(); // the fixture is not vacuous
+    renderTaskDetail(root, gate, { ...detailHandlers(), blocked: row });
+    const note = root.querySelector<HTMLElement>('.hub-blocked-note');
+    expect(note).not.toBeNull();
+    expect(note?.querySelector('.hub-decide-k')?.textContent).toBe('Blocked');
+    expect(note?.textContent).toContain('Blocking 2 tasks: Ship the widget, Wire the badge');
+    // Under the key fields, above everything else — where the reader looks
+    // for what state the task is in.
+    expect(note?.previousElementSibling?.className).toContain('hub-detail-fields');
+  });
+
+  it('renders no blocked note on an agent task or a task nothing waits on', () => {
+    const agentGate = task({ assignee: 'Helper', title: 'Land the schema change' });
+    const idle = task({ assignee: 'human', title: 'Read the retro' });
+    const tasks = [agentGate, idle, task({ after: [agentGate.id] })];
+    for (const open of [agentGate, idle]) {
+      // Asserted through the same derivation the app uses, not a bare absent
+      // param: neither task earns a row, so the panel is handed nothing.
+      const row = humanBlockerRows(tasks).find((r) => r.task.id === open.id);
+      expect(row).toBeUndefined();
+      renderTaskDetail(root, open, { ...detailHandlers(), blocked: row });
+      expect(root.querySelector('.hub-blocked-note')).toBeNull();
+    }
   });
 
   /**

@@ -166,9 +166,7 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
     renderHomeReview(root, queue, strip());
     const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
     expect(
-      rows.map(
-        (c) => c.className.match(/hub-review-(?:decision|task-thread|doc-thread|blocker)/)?.[0],
-      ),
+      rows.map((c) => c.className.match(/hub-review-(?:decision|task-thread|doc-thread)/)?.[0]),
     ).toEqual(['hub-review-decision', 'hub-review-task-thread', 'hub-review-doc-thread']);
     expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
       'Which repo does this land in?',
@@ -190,7 +188,7 @@ describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
   });
 });
 
-describe('the blocker band — a person’s own task, holding agent work up', () => {
+describe('a blocker is task state — off Home, out of the walkthrough (design point 5)', () => {
   /** A human task with `n` open tasks waiting on it. */
   function blocked(over: Partial<HubTask> = {}, n = 1): HubTask[] {
     const gate = task({ assignee: 'human', title: 'Turn on the tunnel', ...over });
@@ -200,73 +198,44 @@ describe('the blocker band — a person’s own task, holding agent work up', ()
     return [gate, ...waits];
   }
 
-  it('marks the row as its own kind and says how much is waiting', () => {
-    const onOpen = vi.fn();
-    renderHomeReview(root, q0(blocked({}, 2)), strip({ onOpen }));
-    const row = root.querySelector('.hub-review-row') as HTMLElement;
-    expect(row.className).toContain('hub-review-blocker');
-    expect(row.textContent).toContain('Turn on the tunnel');
-    // The count is read off the edges, the same as a decision row's.
-    expect(row.title).toContain('Blocking 2 tasks');
-    row.click();
-    expect(onOpen).toHaveBeenCalledTimes(1);
+  // A blocker was never a question. Its place is on the TASK — the panel's
+  // amber note — not in a queue whose promise is "things you can clear from
+  // here".
+  it('renders no Home row for a human task other work waits on', () => {
+    // Positive control in the same render: a decision row still appears.
+    const d = decision({ title: 'Blue or green?' });
+    renderHomeReview(root, q0([...blocked({}, 2), d]), strip());
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.hub-review-row'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain('Blue or green?');
+    expect(root.textContent).not.toContain('Turn on the tunnel');
+    expect(root.querySelector('.hub-review-blocker')).toBeNull();
   });
 
-  // Criterion 3 at the surface: widening the band to every human task is the
-  // easy wrong fix, and it shows up here as a strip full of personal backlog.
-  it('a human task nothing waits on never reaches the queue', () => {
-    // Presence first: with an edge, the section carries a row.
-    renderHomeReview(root, q0(blocked()), strip());
-    expect(root.querySelectorAll('.hub-review-row').length).toBeGreaterThan(0);
-    renderHomeReview(root, q0([task({ assignee: 'human', title: 'Read the retro' })]), strip());
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(0);
-    expect(root.textContent).not.toContain('Read the retro');
+  it('does not count a blocker in the blocking number or the total', () => {
+    const alone = q0(blocked({}, 2));
+    expect(alone.total).toBe(0);
+    expect(alone.blocking).toBe(0);
+    // Positive control: a decision with a dependent still counts.
+    const d = decision({ title: 'Blue or green?' });
+    const q = reviewQueue([...blocked({}, 2), d, task({ after: [d.id] })], [], NOW);
+    expect(q.total).toBe(1);
+    expect(q.blocking).toBe(1);
   });
 
-  it('counts as blocking work now, not as something that can wait', () => {
-    const queue = q0(blocked());
-    expect(queue.blocking).toBe(1);
-    renderHomeReview(root, queue, strip());
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
-  });
-
-  // There is no question on a task, so the decision furniture must not appear:
-  // an answer box here would write an `answer` onto work that was never asked.
-  it('walks a blocker without offering to answer it', () => {
-    const onOpenItem = vi.fn();
-    const onStep = vi.fn();
-    const q = q0(blocked({}, 2));
-    renderReviewWalkthrough(root, q, 0, walk({ onOpenItem, onStep }));
-    // Presence first: it IS a card, with the kind on it. The one-card anatomy
-    // has no provenance/blocks sub-block — head, body, actions, nothing else.
-    const card = root.querySelector('.hub-walk-card') as HTMLElement;
-    expect(card.className).toContain('hub-walk-blocker');
-    expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
-      'Turn on the tunnel',
-    );
-    expect(root.querySelector('.hub-walk-ctx')).toBeNull();
-    expect((root.querySelector('.hub-walk-wait') as HTMLElement).textContent).toMatch(/^Asked/);
-    expect(root.querySelector('.hub-walk-answer')).toBeNull();
-    expect(root.querySelector('.hub-walk-info')).toBeNull();
-    expect(root.querySelector('.hub-walk-options')).toBeNull();
-
-    // The way out, and the nav — going through the list must not stop here.
-    const open = root.querySelector('.hub-walk-open') as HTMLElement;
-    expect(open.textContent).toContain('task');
-    open.click();
-    expect(onOpenItem).toHaveBeenCalledWith(q.items[0]);
-    (root.querySelector('.hub-walk-skip') as HTMLElement).click();
-    expect(onStep).toHaveBeenCalledWith(1);
-  });
-
-  it('shows the task’s own description, and says so when there is none', () => {
-    const q = q0(blocked({ body: 'Needs a **cert** first.' }));
+  it('never renders a blocker card in the walkthrough', () => {
+    const d = decision({ title: 'Blue or green?' });
+    const q = reviewQueue([...blocked({}, 2), d], [], NOW);
+    expect(q.items).toHaveLength(1);
     renderReviewWalkthrough(root, q, 0, walk());
-    expect((root.querySelector('.hub-walk-body') as HTMLElement).innerHTML).toContain(
-      '<strong>cert</strong>',
-    );
-    renderReviewWalkthrough(root, q0(blocked()), 0, walk());
-    expect(root.querySelector('.hub-walk-body-empty')).not.toBeNull();
+    // The one card is the decision — there is no blocker card to step onto.
+    expect(root.querySelector('.hub-walk-card')?.className).toContain('hub-walk-decision');
+    expect(root.querySelector('.hub-walk-blocker')).toBeNull();
+    expect(root.querySelector('.hub-walk-open')).toBeNull();
+    // A board holding ONLY a blocker walks straight to the done state.
+    renderReviewWalkthrough(root, q0(blocked({}, 2)), 0, walk());
+    expect(root.querySelector('.hub-walk-card')).toBeNull();
+    expect(root.querySelector('.hub-walk-done')).not.toBeNull();
   });
 });
 
@@ -310,14 +279,14 @@ describe('renderTaskDetail — the same options, from the other entrance', () =>
  * rewording is a regression even when it reads better.
  */
 describe('the walkthrough matches the approved mockup', () => {
-  const withBlocker = () => {
+  const blockingDecision = () => {
     const d = decision({ title: 'Blue or green?' });
     return q0([d, task({ after: [d.id], title: 'Build the badge' })]);
   };
 
   it('is a page with a way back, not a dialog over the board', () => {
     const onClose = vi.fn();
-    renderReviewWalkthrough(root, withBlocker(), 0, walk({ onClose }));
+    renderReviewWalkthrough(root, blockingDecision(), 0, walk({ onClose }));
     // A dialog is what got rejected. Nothing here may claim that role, and
     // the way out is a link rather than a dismiss.
     expect(root.querySelector('[role="dialog"]')).toBeNull();
@@ -336,7 +305,7 @@ describe('the walkthrough matches the approved mockup', () => {
   it('badges the kind, chips the context, and puts the asked-by meta in the head', () => {
     renderReviewWalkthrough(
       root,
-      withBlocker(),
+      blockingDecision(),
       0,
       walk({ contextLabel: () => 'Home pane' }),
       { cleared: 0, last: null },
@@ -363,7 +332,7 @@ describe('the walkthrough matches the approved mockup', () => {
   });
 
   it('says Send and Skip for now, on both card kinds', () => {
-    for (const queue of [withBlocker(), reviewQueue([], [threadItem()], NOW)]) {
+    for (const queue of [blockingDecision(), reviewQueue([], [threadItem()], NOW)]) {
       renderReviewWalkthrough(root, queue, 0, walk());
       const send = root.querySelector('.hub-walk-answer .hub-btn') as HTMLElement;
       expect(send.textContent).toBe('Send');
@@ -378,7 +347,7 @@ describe('the walkthrough matches the approved mockup', () => {
 
   it('Skip for now steps to the next item', () => {
     const onStep = vi.fn();
-    renderReviewWalkthrough(root, withBlocker(), 0, walk({ onStep }));
+    renderReviewWalkthrough(root, blockingDecision(), 0, walk({ onStep }));
     (root.querySelector('.hub-walk-skip-link') as HTMLElement).click();
     expect(onStep).toHaveBeenCalledWith(1);
   });
@@ -656,8 +625,9 @@ describe('renderReviewWalkthrough — comments', () => {
     expect((root.querySelector('.hub-walk-where-link') as HTMLElement).textContent).toContain(
       'Launch plan',
     );
-    // Not the blocker card's primary button — one class for both turned that
-    // button into bare text on staging.
+    // Not `.hub-walk-open` — that class left with the blocker card, and this
+    // link keeps its own class so a shared selector cannot come back and turn
+    // the button into bare text again (measured on staging at 430px).
     expect(root.querySelector('.hub-walk-open')).toBeNull();
   });
 
