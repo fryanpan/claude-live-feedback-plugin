@@ -44,6 +44,22 @@ describe('renderCommentMarkdown', () => {
     expect(out).toContain('line1<br>line2');
     expect(out.match(/<p>/g)?.length).toBe(2);
   });
+
+  /* tiptap-markdown serializes a hard line break as backslash-newline, so a
+     dictated multi-line comment arrives as "line\" plus a lone "\" line —
+     and the backslashes rendered literally. Backslash-newline IS a markdown
+     hard break; the renderer absorbs it as one. */
+  it('absorbs hard-break backslashes instead of rendering them', () => {
+    const out = renderCommentMarkdown('rate at $100\\\n\\\nArgue with me about why');
+    expect(out).not.toContain('\\');
+    expect(out.match(/<p>/g)?.length).toBe(2); // the doubled break reads as a paragraph
+  });
+
+  it('keeps the line break a single backslash-break asked for', () => {
+    const out = renderCommentMarkdown('one\\\ntwo');
+    expect(out).toContain('one<br>two');
+    expect(out).not.toContain('\\');
+  });
 });
 
 /**
@@ -217,5 +233,12 @@ describe('renderCommentMarkdown — headings', () => {
   it('closes an open list and paragraph before the next heading', () => {
     const out = renderCommentMarkdown('- one\n## Next');
     expect(out).toBe('<ul class="cm-list"><li>one</li></ul><h4 class="cm-h">Next</h4>');
+  });
+});
+
+describe('renderCommentMarkdownInline — hard-break backslashes', () => {
+  it('absorbs a backslash-newline as the space it collapses to', () => {
+    const out = renderCommentMarkdownInline('one\\\ntwo');
+    expect(out).toBe('one two');
   });
 });
