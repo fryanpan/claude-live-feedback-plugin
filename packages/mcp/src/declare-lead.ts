@@ -29,6 +29,11 @@ export interface DeclareLeadDeps {
   runtime: string;
   /** The bundle this session actually loaded, so the board can say who is behind. */
   pluginVersion: string;
+  /** This PROCESS's attach nonce (mcp.ts PROCESS_ID). Sent so the server can
+   *  tell a live process re-declaring from a fresh one — a same-process
+   *  re-attach must not bypass the comment queue's ack grace window and
+   *  re-hand rows whose frames are already in flight to this session. */
+  processId: string;
 }
 
 /** The half of the attach response that is a BACKLOG rather than a receipt. */
@@ -83,6 +88,7 @@ export async function declareWorkspaceLead(
       agentId: deps.self.id,
       runtime: deps.runtime,
       pluginVersion: deps.pluginVersion,
+      processId: deps.processId,
     })) as AttachResponse;
 
     // 2. SUBSCRIBE BEFORE THE SEAT CHANGE. setLeadAgent re-delivers a waiting
