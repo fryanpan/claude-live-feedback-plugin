@@ -6,7 +6,7 @@
  * property a board has — inside the one field that must never move. Renaming
  * a band then meant re-keying it, and re-keying through the full-replace
  * `setGoalList` reads as one goal removed and a different one added: open
- * tasks swept to Chores, done tasks orphaned onto an id that no longer
+ * tasks swept to Backlog, done tasks orphaned onto an id that no longer
  * exists, and a successful-looking result.
  *
  * `would-strand-tasks` (PR #161) refuses that AFTER the fact and still does.
@@ -245,7 +245,7 @@ describe('reserved goal ids are enumerated in one place and reachable by literal
     const ws = store.createWorkspace('board', 'Ship it.');
     seedGoals(store, ws.id, [{ key: 'loop', title: 'Loop' }], PERSON);
 
-    const created = store.setGoalList(ws.id, [{ id: CHORES_GOAL_ID, title: 'Chores' }], {
+    const created = store.setGoalList(ws.id, [{ id: CHORES_GOAL_ID, title: 'Backlog' }], {
       actor: PERSON,
     });
     expect(created.ok).toBe(false);

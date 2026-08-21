@@ -95,7 +95,7 @@ set_goal_list(workspaceId, goals: [
   holds, and nothing is written. Removing a band that holds work is therefore
   a second, deliberate call that lists its id in `drop`; removing an empty one
   needs no ceremony. On success the result reports `movedToChores` (open tasks
-  swept to the bottom of Chores — re-place each with `set_task_goal` rather
+  swept to the bottom of Backlog — re-place each with `set_task_goal` rather
   than leaving them piled) and `strandedDone` (done tasks still pointing at
   the removed id, which is what leaves a bare row in `get_workspace`).
 
@@ -109,7 +109,7 @@ rename_goal(workspaceId, goal: "index",   title: "Index shape", dueAt: null)
 - **The id never changes, so nothing moves.** A task's band IS its goal id.
 - This is the reason the verb exists: `set_goal_list` is keyed by id, so
   "renaming" a band there by giving it a new id used to be a removal plus an
-  addition — open tasks into Chores, done tasks orphaned onto an id that no
+  addition — open tasks into Backlog, done tasks orphaned onto an id that no
   longer exists, and the new title appearing exactly as if it had worked. That
   gesture is now refused outright (`unknown-goal-id`), because ids are
   generated and permanent. `rename_goal` is where a title change belongs, and
@@ -130,7 +130,7 @@ reorder_goals(workspaceId, order: ["shape", "index"], parent: "latency")
   offending ids. That refusal is the feature: a list that changed under you
   makes you re-read rather than silently dropping somebody's goal.
 - Nothing is created, renamed, removed or reparented, and **no task moves** —
-  the Chores hazard above cannot happen here.
+  the Backlog hazard above cannot happen here.
 - Get the ids from `get_workspace`, whose rows carry `depth` and, on
   subgoals, `parent`.
 
@@ -142,7 +142,7 @@ get_workspace(workspaceId)
 ```
 
 `goals` is the **ordered** list with per-goal todo / in-progress / done counts,
-parent goals followed by their subgoals, Chores last. `list_tasks` returns goal
+parent goals followed by their subgoals, Backlog last. `list_tasks` returns goal
 **ids** only — without `get_workspace` the ordering is invisible and you will
 work the wrong band. It is deliberately cheap (goals and counts, no tasks);
 pair it with `next_tasks`, which carries the tasks and their full descriptions.
@@ -186,7 +186,7 @@ Only `workspaceId` and a `title` per row are required. What matters:
   more. It renders on the task and comes back whole from `next_tasks` — do not
   create a separate doc to hold it.
 - **`goal` — omit it when you have not judged placement yet.** The task lands
-  UNPLACED at the bottom of Chores and a triage request goes to the live
+  UNPLACED at the bottom of Backlog and a triage request goes to the live
   workspace agent (possibly you). An explicit goal — *even `"chores"`* — is a
   placement and skips triage. The create says which happened: `placed` is
   whether YOU named a goal (not whether the goal is `chores`), `triagePending`
@@ -655,7 +655,7 @@ drain it** — only `attach_agent` does.
 ### A new band asks the bucket to be re-looked-at
 
 Tasks nobody could place sit in the unknown-goal bucket (`untriaged`) at the
-bottom of Chores. That is a fine place for them — until a goal **band** appears
+bottom of Backlog. That is a fine place for them — until a goal **band** appears
 that one of them might belong to. So ADDING a band to the goal list asks the
 lead to look:
 
@@ -709,4 +709,4 @@ tasks as explicit placements (no triage), walks imported statuses through the
 transition gate, and **stamps the source file** with a banner + hub link so the
 old tracker cannot quietly stay a second source of truth. A stamped file
 refuses re-import (409). Headings map to goals; rows before any heading land in
-Chores; a leading H1 is the document title, not a group.
+Backlog; a leading H1 is the document title, not a group.

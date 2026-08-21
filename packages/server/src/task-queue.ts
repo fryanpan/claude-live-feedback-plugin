@@ -302,7 +302,7 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
       placed.add(s.id);
     }
   }
-  // Chores, then anything sitting under a goal id the list no longer has —
+  // Backlog, then anything sitting under a goal id the list no longer has —
   // both would otherwise be invisible in a view whose whole job is "where is
   // the open work", and a task you can't see is a task nobody picks up.
   // Neither is IN the ordered list, so neither is reorderable: they are
@@ -311,6 +311,6 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
     if (placed.has(id) || id === CHORES_ID) continue;
     out.push(row(id, id, 0, false));
   }
-  if (counts.has(CHORES_ID)) out.push(row(CHORES_ID, 'Chores', 0, false));
+  if (counts.has(CHORES_ID)) out.push(row(CHORES_ID, 'Backlog', 0, false));
   return out;
 }

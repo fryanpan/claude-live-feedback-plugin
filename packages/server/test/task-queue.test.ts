@@ -158,12 +158,12 @@ describe('summarizeGoals', () => {
     expect(rows.find((r) => r.id === 'g-ship-loop')).toMatchObject({ todo: 0, done: 0 });
   });
 
-  it('appends Chores last, and only when it holds something', () => {
+  it('appends Backlog last, and only when it holds something', () => {
     expect(summarizeGoals([task({ goal: 'g-reach' })], GOALS).map((r) => r.id)).not.toContain(
       'chores',
     );
     const rows = summarizeGoals([task({ goal: 'chores' })], GOALS);
-    expect(rows[rows.length - 1]).toMatchObject({ id: 'chores', title: 'Chores', todo: 1 });
+    expect(rows[rows.length - 1]).toMatchObject({ id: 'chores', title: 'Backlog', todo: 1 });
   });
 
   it('surfaces a goal id the list no longer has instead of hiding its tasks', () => {

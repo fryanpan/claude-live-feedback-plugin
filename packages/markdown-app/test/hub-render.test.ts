@@ -98,7 +98,7 @@ beforeEach(() => {
 });
 
 describe('renderBoard', () => {
-  it('renders goal sections in order with Chores last, done rows styled done in place', () => {
+  it('renders goal sections in order with Backlog last, done rows styled done in place', () => {
     const done = task({
       goal: 'g-pr',
       order: 1,
@@ -236,7 +236,7 @@ describe('renderBoard', () => {
     const input = root.querySelector('.hub-goal-add-input') as HTMLInputElement;
     input.value = '  3. Cut support load  ';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    // Trimmed, and placed after the last REAL band — never after Chores,
+    // Trimmed, and placed after the last REAL band — never after Backlog,
     // which always renders last and is not a band anyone files against.
     const lastReal = [...sections].reverse().find((s) => !s.isChores);
     expect(lastReal?.isChores).toBe(false);
@@ -514,7 +514,7 @@ describe('renderBoard', () => {
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
   });
 
-  it('goal titles are editable in place too; Chores is not', () => {
+  it('goal titles are editable in place too; Backlog is not', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [], filters), h);
     const goalTitle = root.querySelector(
@@ -1465,16 +1465,16 @@ describe('renderTaskDetail', () => {
     expect(metaValue('Goal')).toBe('1. Get the PR out');
   });
 
-  // Chores is a real section with a real header, and it is also where an
-  // orphaned task lands — so both have to say Chores here, not `chores`.
-  it('says Chores for a chore and for a goal that no longer exists', () => {
+  // Backlog is a real section with a real header, and it is also where an
+  // orphaned task lands — so both have to say Backlog here, not `chores`.
+  it('says Backlog for a chore and for a goal that no longer exists', () => {
     for (const goal of [CHORES_ID, 'g-deleted']) {
       root.replaceChildren();
       renderTaskDetail(root, task({ goal }), {
         ...detailHandlers(),
         goalLabel: (id) => goalLabel(GOALS, id),
       });
-      expect(metaValue('Goal')).toBe('Chores');
+      expect(metaValue('Goal')).toBe('Backlog');
     }
   });
 
