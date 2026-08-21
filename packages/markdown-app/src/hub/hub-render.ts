@@ -5,6 +5,7 @@
  * the two-filter activity view) are testable under happy-dom.
  */
 import {
+  REVIEW_LIMITS,
   type ReviewPayload,
   escapeHtml,
   evidenceSuperseded,
@@ -2089,13 +2090,34 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
  * collapsed — every part is still here, in the author's order, unlabelled.
  * `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
  */
-function walkReviewBody(review: NonNullable<ReviewItem['review']>): HTMLElement | null {
+function walkReviewBody(review: NonNullable<ReviewItem['review']>): DocumentFragment | null {
   const markdown = reviewItemBodyMarkdown(review);
   if (markdown === '') return null;
+  const frag = document.createDocumentFragment();
   const body = document.createElement('div');
   body.className = 'hub-walk-body';
   body.innerHTML = renderCommentMarkdown(markdown);
-  return body;
+  frag.append(body);
+  // The API stopped refusing a long detail (the refusal split every real ask
+  // into a thread body and a weaker card copy), so the card now has to carry
+  // it: the FULL words are always in the DOM — card and thread say the same
+  // thing — and past the review target the body clamps ON THE PHONE TIER
+  // ONLY (the CSS scopes it; wider screens render everything, since 430px is
+  // where an unbounded body buries the options and the composer). The button
+  // is the explicit expand affordance; expanding is one-way, like reading.
+  if (markdown.split(/\s+/).length > REVIEW_LIMITS.detailTargetWords.review) {
+    body.classList.add('hub-walk-body-clamp');
+    const expand = document.createElement('button');
+    expand.type = 'button';
+    expand.className = 'hub-walk-body-expand';
+    expand.textContent = 'Show the whole ask';
+    expand.addEventListener('click', () => {
+      body.classList.remove('hub-walk-body-clamp');
+      expand.remove();
+    });
+    frag.append(expand);
+  }
+  return frag;
 }
 
 /**

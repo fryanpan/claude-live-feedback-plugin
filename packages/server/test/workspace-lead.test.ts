@@ -106,6 +106,9 @@ describe('TaskStore lead agent', () => {
 
   it('setLeadAgent reassigns and emits workspace.lead_changed with both sides', () => {
     const ws = store.createWorkspace('reassign-hub', 'Ship it.', { leadAgentId: 'agent-relay' });
+    // A handover target must be an id the workspace has a record of; the
+    // seat is occupied, so this attach does not claim it.
+    store.attachAgent(ws.id, { agentId: 'agent-helper', runtime: 'claude-code-local' });
     const res = store.setLeadAgent(ws.id, 'agent-helper', { actor: PERSON });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -251,6 +254,8 @@ describe('setLeadAgent does not displace a LIVE lead without takeover', () => {
 
   it('a PERSON reassigning is never refused — the guard is about agents claiming for themselves', () => {
     const ws = boardWithLiveLead();
+    // Known id: the unknown-id guard is a different gate with its own suite.
+    store.attachAgent(ws.id, { agentId: HELPER.id, runtime: 'claude-code-local' });
     const res = store.setLeadAgent(ws.id, HELPER.id, { actor: PERSON });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -261,8 +266,10 @@ describe('setLeadAgent does not displace a LIVE lead without takeover', () => {
 
   it('an agent HANDING the seat to a third party is not refused either', () => {
     const ws = boardWithLiveLead();
-    // The incumbent itself, or any agent, naming somebody else is a handover
-    // rather than a grab: nobody is claiming the seat for the caller.
+    store.attachAgent(ws.id, { agentId: 'agent-scribe', runtime: 'claude-code-local' });
+    // The incumbent itself, or any agent, naming somebody else (known to the
+    // board) is a handover rather than a grab: nobody is claiming the seat
+    // for the caller.
     const res = store.setLeadAgent(ws.id, 'agent-scribe', { actor: HELPER });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -279,6 +286,134 @@ describe('setLeadAgent does not displace a LIVE lead without takeover', () => {
     expect(res.changed).toBe(false);
     expect(res.declined).toBeUndefined();
     expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(RELAY.id);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The seat must route somewhere REAL.
+//
+// `setLeadAgent` used to accept ANY trimmed string: a typo'd or fabricated id
+// took the seat, and from then on every lead-addressed delivery — queued voice
+// notes, goal re-triage, task reviews — routed to an addressee that does not
+// exist. Nothing reported it; the queue just stopped draining.
+//
+// The predicate is deliberately about the workspace's own record:
+//  - SELF-declaration is always legal, attachment history or not. The caller
+//    is by definition a real, live agent, and the plugin's bootstrap order
+//    (declare-then-attach in older bundles; the store cannot assume attach
+//    came first) must keep working.
+//  - naming a THIRD PARTY is a handover, and a handover needs an addressee
+//    the workspace has an attachment record for. Away is fine — recovering a
+//    dead session's seat is a supported flow, and a dead session's record is
+//    still on the board. Never-attached is refused.
+//  - the empty id is refused outright: it used to trim to '' and take the
+//    seat, which is the same dead letter with a blank nameplate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('setLeadAgent refuses an id the workspace has no record of', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  let events: TaskStoreEvent[];
+
+  const RELAY = { id: 'agent-relay', name: 'Relay', kind: 'agent' };
+  const HELPER = { id: 'agent-helper', name: 'Helper', kind: 'agent' };
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-unknown-'));
+    // Short windows so "attached but AWAY" is reachable without faking the
+    // clock — same rationale as the lead-held suite above.
+    store = new TaskStore({
+      dataDir,
+      debounceMs: 5,
+      heartbeatFreshMs: 150,
+      observedWorkFreshMs: 150,
+    });
+    events = [];
+    store.onEvent((e) => events.push(e));
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const board = () => {
+    const ws = store.createWorkspace('routed-hub', 'Ship it.');
+    const attach = store.attachAgent(ws.id, { agentId: RELAY.id, runtime: 'claude-code-local' });
+    if (!attach.ok || attach.lead !== true) throw new Error('fixture');
+    return ws;
+  };
+
+  it('refuses a third-party id nobody has ever attached, names it, and moves nothing', () => {
+    const ws = board();
+    events.length = 0;
+
+    const res = store.setLeadAgent(ws.id, 'agent-phantom', { actor: RELAY });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBe('unknown-lead-agent');
+    if (res.error !== 'unknown-lead-agent') return;
+    // The refusal names the id, so the caller can see the typo.
+    expect(res.message).toContain('agent-phantom');
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(RELAY.id);
+    expect(events.filter((e) => e.type === 'workspace.lead_changed')).toHaveLength(0);
+  });
+
+  it('a PERSON naming an unknown id is refused the same way — the typo case', () => {
+    const ws = board();
+    const res = store.setLeadAgent(ws.id, 'agent-relya', { actor: PERSON });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBe('unknown-lead-agent');
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(RELAY.id);
+  });
+
+  it('refuses the empty id, and the whitespace id that used to trim to it and take the seat', () => {
+    const ws = board();
+    for (const bogus of ['', '   ']) {
+      const res = store.setLeadAgent(ws.id, bogus, { actor: PERSON });
+      expect(res.ok).toBe(false);
+      if (res.ok) continue;
+      expect(res.error).toBe('empty-lead-agent-id');
+    }
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(RELAY.id);
+  });
+
+  it('SELF-declaration needs no attachment history — the bootstrap order must not matter', () => {
+    // An empty-seat board and an agent the workspace has never seen: naming
+    // ITSELF is by definition a real live caller, so it seats.
+    const ws = store.createWorkspace('fresh-hub', 'Ship it.');
+    const res = store.setLeadAgent(ws.id, HELPER.id, { actor: HELPER });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(true);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(HELPER.id);
+  });
+
+  it('handover to a known id that went AWAY succeeds — recovering a dead session is supported', async () => {
+    const ws = board();
+    // HELPER attached once, then went quiet past both windows: away, with a
+    // record still on the board.
+    const attach = store.attachAgent(ws.id, { agentId: HELPER.id, runtime: 'claude-code-local' });
+    if (!attach.ok) throw new Error('fixture');
+    await new Promise((r) => setTimeout(r, 200));
+
+    const res = store.setLeadAgent(ws.id, HELPER.id, { actor: PERSON });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(true);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(HELPER.id);
+  });
+
+  it('handover to a known LIVE third party still succeeds', () => {
+    const ws = board();
+    const attach = store.attachAgent(ws.id, { agentId: HELPER.id, runtime: 'claude-code-local' });
+    if (!attach.ok) throw new Error('fixture');
+    const res = store.setLeadAgent(ws.id, HELPER.id, { actor: PERSON });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.changed).toBe(true);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe(HELPER.id);
   });
 });
 
@@ -353,8 +488,18 @@ describe('lead agent routes + projection', () => {
   });
 
   it('PUT /api/workspaces/:id/lead reassigns; 400 without leadAgentId; 404 for an unknown workspace', async () => {
-    const r = await post('/api/workspaces', { name: 'reassign-route', goal: 'Ship it.' });
+    const r = await post('/api/workspaces', {
+      name: 'reassign-route',
+      goal: 'Ship it.',
+      leadAgentId: 'agent-relay',
+    });
     const wsId = ((await r.json()) as { workspace: HubWorkspace }).workspace.id;
+    // The handover target must be a known id — attach it first (the seat is
+    // occupied, so this attach does not claim it).
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-helper',
+      runtime: 'claude-code-local',
+    });
 
     const ok = await put(`/api/workspaces/${wsId}/lead`, {
       leadAgentId: 'agent-helper',
@@ -367,6 +512,26 @@ describe('lead agent routes + projection', () => {
     expect(
       (await put('/api/workspaces/w-nope/lead', { leadAgentId: 'x', author: PERSON })).status,
     ).toBe(404);
+  });
+
+  it('PUT /lead answers 400 with the structured refusal for an id the workspace has never seen', async () => {
+    const r = await post('/api/workspaces', {
+      name: 'unknown-lead-route',
+      goal: 'Ship it.',
+      leadAgentId: 'agent-relay',
+    });
+    const wsId = ((await r.json()) as { workspace: HubWorkspace }).workspace.id;
+
+    const res = await put(`/api/workspaces/${wsId}/lead`, {
+      leadAgentId: 'agent-phantom',
+      author: PERSON,
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string; message?: string };
+    expect(body.error).toBe('unknown-lead-agent');
+    expect(body.message).toContain('agent-phantom');
+    // The seat did not move.
+    expect((await workspaceOf(wsId)).leadAgentId).toBe('agent-relay');
   });
 
   it('attaching an agent to a leaderless workspace claims the seat, through the route', async () => {

@@ -2821,9 +2821,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const takeover = body?.takeover === true;
           const res = taskStore.setLeadAgent(workspaceId, leadAgentId, {
             actor: author,
+            // An id the workspace has NO attachment record of is refused with
+            // `unknown-lead-agent` (400): a seat routed to nobody silently
+            // stops every lead-addressed delivery. Self-declaration is exempt
+            // in the store — the caller is by definition real.
             ...(takeover ? { takeover: true } : {}),
           });
-          if (!res.ok) return j(404, res);
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, res);
         }
         // Voice (§3.8): transcript + per-surface context in, route decision +

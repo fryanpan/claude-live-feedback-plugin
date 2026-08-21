@@ -1765,7 +1765,18 @@ export type SetLeadAgentResult =
        *  `takeover`. The request succeeded; the seat did not move. */
       declined?: 'lead-held';
     }
-  | { ok: false; error: 'workspace-not-found' };
+  | { ok: false; error: 'workspace-not-found' }
+  | {
+      ok: false;
+      /** `unknown-lead-agent` — a handover named an id this workspace has no
+       *  attachment record of, so every lead-addressed delivery would route
+       *  to nobody. `empty-lead-agent-id` — the id trimmed to nothing, which
+       *  used to take the seat as ''. */
+      error: 'unknown-lead-agent' | 'empty-lead-agent-id';
+      /** The verbatim refusal, naming the id — written to land in a retrying
+       *  caller's context, the same contract as `bad-review`. */
+      message: string;
+    };
 
 export type AnswerDecisionResult =
   | { ok: true; task: Task }
@@ -2689,7 +2700,39 @@ export class TaskStore {
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
     const next = leadAgentId.trim();
+    // The seat must route somewhere REAL — this method is the addressing
+    // authority for every lead-addressed delivery (queued voice notes, goal
+    // re-triage, bucket and task reviews), and it used to accept ANY trimmed
+    // string. A typo'd or fabricated id took the seat and the queue silently
+    // stopped draining: nothing anywhere reported that the addressee did not
+    // exist. Checked FIRST, before the same-id no-op, so '' can never equal
+    // anything — it used to trim to '' and be assigned.
+    if (next.length === 0) {
+      return {
+        ok: false,
+        error: 'empty-lead-agent-id',
+        message: 'leadAgentId is empty — the lead seat needs a real agent id.',
+      };
+    }
     if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
+    // Naming a THIRD PARTY is a deliberate handover, and a handover needs an
+    // addressee this workspace has a record of. The record is the attachments
+    // map: an agent that attached and went AWAY is still in it (recovering a
+    // dead session's seat is a supported flow — dead sessions do not detach),
+    // while an id nobody ever attached is not. SELF-declaration is exempt by
+    // definition — `next === actor.id` is a real, live caller, and the
+    // bootstrap order must not matter (older bundles declare before they
+    // attach; the store cannot assume attach came first).
+    if (next !== opts.actor.id && !state.attachments.has(next)) {
+      return {
+        ok: false,
+        error: 'unknown-lead-agent',
+        message:
+          `no agent "${next}" has ever attached to this workspace — a lead the board has ` +
+          'no record of would receive none of the deliveries addressed to the seat. ' +
+          'Name an agent that has attached here, or have that agent declare itself lead.',
+      };
+    }
     const previousLeadAgentId = workspace.leadAgentId;
     /**
      * DO NOT let an agent quietly take a seat somebody LIVE is sitting in.
@@ -2769,8 +2812,10 @@ export class TaskStore {
       if (delivered) this.clearPendingBucketReview(state);
     }
     // Waiting task reviews are addressed to the same seat. Re-deliver each
-    // to the new live occupant; whatever fails to go out stays queued.
-    const reviews = this.getPendingTaskReviews(workspaceId);
+    // to the new live occupant; whatever fails to go out stays queued. Rows
+    // the new occupant itself wrote are pruned at the read — author ==
+    // addressee is never delivered (see `getPendingTaskReviews`).
+    const reviews = this.getPendingTaskReviews(workspaceId, { excludeActorId: next });
     if (reviews && this.hasLiveLeadAttachment(workspaceId)) {
       const undelivered = reviews.filter((r) => {
         const reviewTask = state.tasks.get(r.taskId);
@@ -3901,13 +3946,30 @@ export class TaskStore {
    * rows that have since gone done (or vanished) drop out — same reasoning
    * as `getPendingRetriage`, "which rows still need a look" is a question
    * about the CURRENT board, not about a snapshot taken when they queued.
+   *
+   * `excludeActorId` is the addressee about to receive the queue, and rows
+   * IT wrote are pruned the same way — dropped, not deferred. The live path
+   * already refuses to address the lead's own write back to the lead ("its
+   * rewrites ARE the review"), but a write queues precisely when the seat is
+   * empty or its holder is away, so the queue meets its addressee only here
+   * — and without this check an agent that wrote while nobody was home and
+   * then took the seat was handed a review of its own edit. That is the
+   * self-review loop Bryan named on 2026-08-21 ("I have no idea why this is
+   * flagged for me?"), reaching an agent through the sidecar instead of a
+   * browser through the broadcast. Dropping is correct rather than lossy:
+   * the moment the author holds the seat, the row is a lead's own write,
+   * which the request path never routes either.
    */
-  getPendingTaskReviews(workspaceId: string): PendingTaskReview[] | undefined {
+  getPendingTaskReviews(
+    workspaceId: string,
+    opts?: { excludeActorId?: string },
+  ): PendingTaskReview[] | undefined {
     const state = this.workspaces.get(workspaceId);
     if (!state?.pendingTaskReviews) return undefined;
     const live = state.pendingTaskReviews.filter((r) => {
       const task = state.tasks.get(r.taskId);
-      return task !== undefined && task.status !== 'done';
+      if (task === undefined || task.status === 'done') return false;
+      return opts?.excludeActorId === undefined || r.actor?.id !== opts.excludeActorId;
     });
     if (live.length === 0) {
       this.clearPendingTaskReviews(state);
@@ -5369,8 +5431,12 @@ export class TaskStore {
     // The correction loop's durable half: writes whose live request never
     // reached anyone (or that arrived while the lead was away), drained the
     // same way the re-triage is — delivered in the one payload a fresh
-    // attachment is guaranteed to read, then cleared.
-    const taskReviews = lead ? this.getPendingTaskReviews(workspaceId) : undefined;
+    // attachment is guaranteed to read, then cleared. The attaching lead's
+    // own queued writes are pruned at the read: author == addressee is never
+    // delivered (see `getPendingTaskReviews`).
+    const taskReviews = lead
+      ? this.getPendingTaskReviews(workspaceId, { excludeActorId: opts.agentId })
+      : undefined;
     if (taskReviews) this.clearPendingTaskReviews(state);
     // The voice queue is the same ask with the same addressee: only the lead
     // drains it. A bystander attaching leaves the notes where they are for
