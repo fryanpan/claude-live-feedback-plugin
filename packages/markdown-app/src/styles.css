@@ -5054,6 +5054,29 @@ body.threads-resizing {
 .thread-tag {
   color: var(--fg-muted);
 }
+/* "Decision needed" on the head row — outside both folding slots, so a reader
+   scanning the column sees it without opening anything. The same amber tone
+   tokens as `.thread-item-k-decision` inside the opened item card, because it
+   is the same fact stated one fold earlier. Never wraps and never shrinks: it
+   is the thing the row exists to say, so the author name clips first. */
+.thread-decision-flag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  color: var(--warn-fg, #b25e09);
+  background: var(--warn-wash, #fff4e5);
+}
+/* Answered: the same fact, no longer a request. Muted so an open decision is
+   the only amber thing in the column. */
+.thread-decision-flag.is-answered {
+  color: var(--fg-muted);
+  background: var(--bg-hover);
+}
 /* Lines truncate rather than wrap, so a card cannot exceed its rows at any
    width. Shared by every one-line row on the card. */
 .thread .clip {

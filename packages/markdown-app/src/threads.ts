@@ -13,6 +13,7 @@ import {
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
 import { askedMetaLine } from './hub/hub-model.ts';
+import { threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
 import {
   isFoldingTap,
@@ -451,6 +452,25 @@ export class ThreadPanel {
       who.appendChild(tag);
     }
     head.appendChild(who);
+
+    // A decision is the one thing in a thread a reader must not scroll past,
+    // and the folded card said nothing about it: the kind chip lives inside
+    // the item card, which is on the detail face — `inert` and invisible until
+    // the thread is opened. In the head row, so it is there in BOTH states and
+    // expanding never rebuilds or moves it.
+    const decision = threadDecision(t);
+    if (decision !== 'none') {
+      const flag = span('thread-decision-flag');
+      const pending = decision === 'pending';
+      if (!pending) flag.classList.add('is-answered');
+      flag.textContent = pending ? 'Decision needed' : 'Decision';
+      // The colour alone is not the message — it says nothing to a screen
+      // reader and nothing to anyone who cannot separate the two swatches.
+      flag.title = pending
+        ? 'This thread is waiting on a decision'
+        : 'This thread carries a decision that has been answered';
+      head.appendChild(flag);
+    }
 
     const lineLabel = this.opts.threadLineLabel?.(t.id);
     if (lineLabel) {
