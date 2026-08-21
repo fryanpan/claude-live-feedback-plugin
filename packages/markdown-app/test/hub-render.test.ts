@@ -853,8 +853,9 @@ describe('keyboard reordering', () => {
 describe('renderHomeReview', () => {
   const strip = () => ({ onOpen: vi.fn(), onWalkthrough: vi.fn() });
 
-  /** A thread an agent DECLARED as a review item — which is what puts a thread
-   *  in the queue at all now. `note()` below is the undeclared twin. */
+  /** A thread an agent DECLARED as a review item — one of the two shapes the
+   *  server ships (the other is a surviving direct ask; membership is decided
+   *  there since 2026-08-21). `note()` below is the undeclared twin. */
   const threadItem = (over: Record<string, unknown> = {}) => ({
     kind: 'task-thread' as const,
     docId: 'task:t-x',
@@ -953,24 +954,32 @@ describe('renderHomeReview', () => {
 
   // The band that used to render here ("N unanswered comments") is gone
   // outright — Bryan, 2026-08-18: "Remove the unanswered comments from home.
-  // I don't need to know." The model still buckets undeclared threads into
-  // `queue.unreplied` so they stay OUT of the declared queue; the page just
-  // no longer shows them.
-  it('does not render undeclared comments at all', () => {
+  // I don't need to know." Since 2026-08-21 membership is decided
+  // server-side (only declared items and surviving direct asks are shipped),
+  // so every row that arrives is an ask and renders as an ordinary queue
+  // row — never under band furniture of its own.
+  it('renders an undeclared ask as an ordinary row, with no unreplied band', () => {
     const h = strip();
     const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
-    renderHomeReview(root, reviewQueue([d], [threadItem(), note()], NOW), h, [], NOW);
+    renderHomeReview(
+      root,
+      reviewQueue([d], [threadItem(), note({ direct: true })], NOW),
+      h,
+      [],
+      NOW,
+    );
     expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
     expect(root.querySelector('.hub-review-unreplied-title')).toBeNull();
     const rows = [...root.querySelectorAll('.hub-review-row')];
-    // Positive control: both DECLARED items rendered, so the absences above
-    // are not a page that rendered nothing.
-    expect(rows).toHaveLength(2);
+    // Positive control: the decision, the declared item AND the undeclared
+    // ask all rendered — the absences above are not a page that rendered
+    // nothing, and the ask is not a row that vanished.
+    expect(rows).toHaveLength(3);
     expect(rows.some((r) => r.className.includes('hub-review-row-unreplied'))).toBe(false);
   });
 
-  it('shows only the quiet line when the queue is empty, however many comments sit unreplied', () => {
-    renderHomeReview(root, reviewQueue([], [note(), note()], NOW), strip(), [], NOW);
+  it('shows only the quiet line when the server ships nothing', () => {
+    renderHomeReview(root, reviewQueue([], [], NOW), strip(), [], NOW);
     expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
       'Nothing is waiting for your review',
     );
@@ -992,10 +1001,17 @@ describe('renderHomeReview', () => {
   // queue row is where the reader decides what to open, which is the exact
   // judgement that line exists to serve.
   it('puts the declared why on the queue row, not only on the card it opens', () => {
-    renderHomeReview(root, reviewQueue([], [threadItem(), note()], NOW), strip(), [], NOW);
+    // The undeclared note renders too now; it waited less, so it ranks after
+    // the declared item and the declared why is the first row's second line.
+    renderHomeReview(
+      root,
+      reviewQueue([], [threadItem(), note({ since: NOW - 3_600_000 })], NOW),
+      strip(),
+      [],
+      NOW,
+    );
     const rows = [...root.querySelectorAll('.hub-review-row')];
-    // The undeclared note no longer renders a row, so only the declared one is here.
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]?.querySelector('.hub-review-row-why')?.textContent).toBe(
       threadItem().review?.why,
     );

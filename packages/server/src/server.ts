@@ -952,7 +952,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * exactly what the browser's `reviewQueue` places and nothing else:
    *
    *  - person-owned blockers with open dependents,
-   *  - comment-borne review rows (`task-thread` / `doc-thread`),
+   *  - comment-borne review rows (`task-thread` / `doc-thread`) — ALL of
+   *    them, which is true again since 2026-08-21: membership moved into
+   *    `reviewThreadItems` (a row is a declared item or a surviving direct
+   *    ask), and the browser retired its undeclared shelf and places every
+   *    row this route ships. Between those two changes this count briefly
+   *    included inferred rows Home never drew — "something needs you" over a
+   *    list that showed nothing,
    *  - open decisions, which Home draws from the board projection as its own
    *    `decision` rows.
    *
