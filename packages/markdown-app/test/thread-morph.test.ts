@@ -506,6 +506,21 @@ describe('isFoldingTap', () => {
     expect(isFoldingTap(link)).toBe(false);
   });
 
+  it('the reply box is a field even though it is a div', () => {
+    const { card } = mountCard();
+    const surface = card.querySelector('.md-composer-surface');
+    // POSITIVE CONTROL: the card really does render a markdown editor, so a
+    // passing assertion below is about the tap and not about a missing box.
+    expect(surface, 'the reply box mounted no editor').not.toBeNull();
+
+    // The tap lands on the editor, or on the surface's padding around it.
+    // Measured before this: the card folded shut under the tap that was
+    // reaching for the reply box, because a contenteditable <div> matched none
+    // of the tag names the textarea used to.
+    expect(isFoldingTap(surface?.querySelector('.ProseMirror') ?? null)).toBe(false);
+    expect(isFoldingTap(surface)).toBe(false);
+  });
+
   it('a text selection being dragged out does not fold the card', () => {
     const { card } = mountCard();
     const body = card.querySelector('.thread-message') as HTMLElement;

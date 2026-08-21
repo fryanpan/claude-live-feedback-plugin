@@ -13,7 +13,7 @@ import {
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
 import { askedMetaLine } from './hub/hub-model.ts';
-import { attachMarkdownField } from './md-field.ts';
+import { attachMarkdownComposer } from './md-composer.ts';
 import {
   isFoldingTap,
   morphThread,
@@ -553,15 +553,15 @@ export class ThreadPanel {
       : `Reply as ${this.opts.currentUser.name}…`;
     if (pendingReply) ta.value = pendingReply;
     reply.appendChild(ta);
-    // Every composer speaks markdown (design point 4); refresh covers the
-    // programmatic clear below, which fires no `input` event.
-    const refreshPreview = attachMarkdownField(ta);
+    // Every composer is a markdown editor (design point 4); refresh covers
+    // the programmatic clear below, which the editor cannot see.
+    const refreshComposer = attachMarkdownComposer(ta);
     const submitReply = () => {
       const text = ta.value.trim();
       if (!text) return;
       const posted = this.opts.onReply(t.id, text, answering);
       ta.value = '';
-      refreshPreview();
+      refreshComposer();
       // A refused post hands the words back — the chrome's 'try again' toast
       // must never point at an empty box. Only while the box is still empty,
       // though: restoring over words typed since would stomp them.
@@ -570,7 +570,7 @@ export class ThreadPanel {
         .then((ok) => {
           if (ok === false && ta.value === '') {
             ta.value = text;
-            refreshPreview();
+            refreshComposer();
           }
         });
     };

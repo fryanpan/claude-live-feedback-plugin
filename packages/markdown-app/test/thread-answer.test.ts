@@ -1,6 +1,8 @@
 import type { Comment, ReviewPayload, Thread, User } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { refreshMarkdownComposer } from '../src/md-composer.ts';
 import { ThreadPanel, type ThreadPanelOpts } from '../src/threads.ts';
+import { renderedHtml, surfaceOf } from './support/composer.ts';
 
 /**
  * Answering a review item from the DOC, not just from Home.
@@ -345,23 +347,19 @@ describe('the full item interface in the carrying thread', () => {
 
 /**
  * Design point 4 (approved design, review-flow-mock-v1): the doc thread's
- * reply/answer box is the same markdown editor as every other composer —
- * affordance row, preview that fills in as you type, empty again on send.
+ * reply/answer box is the same markdown editor as every other composer — the
+ * words are edited as what they mean, and the box empties again on send.
  */
-describe('the reply composer is a markdown field', () => {
-  it('carries the affordance and previews what you type', () => {
+describe('the reply composer is a markdown editor', () => {
+  it('edits the reply as markdown, live', () => {
     const { panel, container } = mountPanel();
     panel.setThreads([makeThread([comment(alice, 'This paragraph reads oddly.')])]);
     panel.setActive('t1');
-    const reply = container.querySelector('.thread-reply') as HTMLElement;
-    expect(reply.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
-    const ta = reply.querySelector('textarea') as HTMLTextAreaElement;
-    const preview = reply.querySelector('.md-preview') as HTMLElement;
-    expect(preview.hidden).toBe(true);
+    const ta = container.querySelector('.thread-reply textarea') as HTMLTextAreaElement;
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
     ta.value = '**two hops**';
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(preview.hidden).toBe(false);
-    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+    refreshMarkdownComposer(ta);
+    expect(renderedHtml(ta)).toContain('<strong>two hops</strong>');
   });
 
   it('a refused send puts the words back — a retry must not mean retyping', async () => {
@@ -379,8 +377,8 @@ describe('the reply composer is a markdown field', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(ta.value).toBe('Alphabetical, **final**.');
-    const preview = container.querySelector('.thread-reply .md-preview') as HTMLElement;
-    expect(preview.hidden).toBe(false);
+    // Back in the editor too, not just in the value nobody can see.
+    expect(renderedHtml(ta)).toContain('<strong>final</strong>');
   });
 
   it('leaves fresh words alone when the refusal lands after more typing', async () => {
@@ -403,16 +401,15 @@ describe('the reply composer is a markdown field', () => {
     expect(ta.value).toBe('Second attempt, mid-typing.');
   });
 
-  it('a send empties the preview with the box', () => {
+  it('a send empties the editor with the box', () => {
     const { panel, container } = mountPanel();
     panel.setThreads([makeThread([comment(bot, 'Which way?', ask())])]);
     panel.setActive('t1');
     const ta = container.querySelector('.thread-reply textarea') as HTMLTextAreaElement;
     ta.value = 'Alphabetical, **final**.';
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    refreshMarkdownComposer(ta);
     replyWith(container, 'Alphabetical, **final**.');
     expect(ta.value).toBe('');
-    const preview = container.querySelector('.thread-reply .md-preview') as HTMLElement;
-    expect(preview.hidden).toBe(true);
+    expect(renderedHtml(ta)).not.toContain('final');
   });
 });

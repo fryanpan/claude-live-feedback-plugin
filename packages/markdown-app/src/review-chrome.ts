@@ -9,7 +9,7 @@ import {
   summaryPending,
 } from '@feedback/core';
 import type * as Y from 'yjs';
-import { attachMarkdownField } from './md-field.ts';
+import { attachMarkdownComposer, focusMarkdownComposer } from './md-composer.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
@@ -721,10 +721,10 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
 
   // Every composer is a markdown editor (design point 4), and this is the one
   // a reviewer reaches first — select text, tap the pill, type. Comments
-  // RENDER markdown, so the box has to say so and show what the words become.
-  // `attachMarkdownField` is idempotent because `#composer` is shell DOM that
-  // outlives the document while this function runs once per navigation.
-  const refreshComposerPreview = attachMarkdownField(composerText);
+  // RENDER markdown, so the box they are typed into edits it live.
+  // `attachMarkdownComposer` is idempotent because `#composer` is shell DOM
+  // that outlives the document while this function runs once per navigation.
+  const refreshComposer = attachMarkdownComposer(composerText);
 
   /** Selection captured when the composer opened — survives the editor
    *  losing its DOM selection while the user types the comment. */
@@ -745,12 +745,14 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     document.body.classList.add('composer-open');
     opts.hidePill?.();
     composerText.value = '';
-    // Emptying the box in code fires no `input`, so the preview has to be
-    // told — otherwise the previous comment's rendering sits under a blank
-    // composer.
-    refreshComposerPreview();
-    // preventScroll stops iOS's auto-scroll-to-focus from yanking the page.
-    setTimeout(() => composerText.focus({ preventScroll: true }), 30);
+    // Emptying the box in code is invisible to the editor, so it has to be
+    // told — otherwise the previous comment is still sitting in the box the
+    // reviewer just opened for a new one.
+    refreshComposer();
+    // Focusing without scrolling stops iOS's auto-scroll-to-focus from
+    // yanking the page — what `preventScroll` bought while this was a
+    // textarea.
+    setTimeout(() => focusMarkdownComposer(composerText, null, { scroll: false }), 30);
     opts.onComposerOpened?.();
   }
   function hideComposer(): void {

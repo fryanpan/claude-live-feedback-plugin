@@ -16,6 +16,8 @@ import {
   renderReviewWalkthrough,
   renderTaskDetail,
 } from '../src/hub/hub-render.ts';
+import { refreshMarkdownComposer } from '../src/md-composer.ts';
+import { renderedHtml, surfaceOf } from './support/composer.ts';
 
 /** All fixtures are synthetic — invented names and ids throughout. */
 
@@ -882,49 +884,47 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
 
 /**
  * Design point 4 (approved design, review-flow-mock-v1): every composer is a
- * markdown editor with a live preview. The walkthrough has two — the answer
- * box and the "Tell me more" ask box — and both go through the same
- * `attachMarkdownField`, so they cannot drift apart.
+ * live markdown editor. The walkthrough has two — the answer box and the
+ * "Tell me more" ask box — and both go through the same
+ * `attachMarkdownComposer`, so they cannot drift apart.
  */
-describe('the walkthrough composers are markdown fields', () => {
-  it('the answer box carries the affordance and previews what you type', () => {
+describe('the walkthrough composers are markdown editors', () => {
+  it('the answer box edits what you type as markdown', () => {
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
     const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
-    expect(form.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
-    const preview = form.querySelector('.md-preview') as HTMLElement;
-    expect(preview.hidden).toBe(true);
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
     ta.value = '**two hops**';
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(preview.hidden).toBe(false);
-    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+    refreshMarkdownComposer(ta);
+    expect(renderedHtml(ta)).toContain('<strong>two hops</strong>');
   });
 
-  it('a successful send empties the preview along with the box', async () => {
+  it('a successful send empties the editor along with the box', async () => {
     const onAnswer = vi.fn(() => Promise.resolve(true));
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
     const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Blue, **final**.';
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    refreshMarkdownComposer(ta);
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await new Promise((r) => setTimeout(r, 0));
     expect(ta.value).toBe('');
-    expect((form.querySelector('.md-preview') as HTMLElement).hidden).toBe(true);
+    expect(renderedHtml(ta)).not.toContain('final');
   });
 
   it('the Tell me more box is the same editor', () => {
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
     const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
-    expect(info.querySelector('.md-affordance')).not.toBeNull();
-    expect(info.querySelector('.md-preview')).not.toBeNull();
+    const ta = info.querySelector('textarea') as HTMLTextAreaElement;
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
   });
 
   it('a declared item card gets the same composer', () => {
     const q = reviewQueue([task({ id: 't-1' })], [threadItem()], NOW);
     renderReviewWalkthrough(root, q, 0, walk());
     const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
-    expect(form.querySelector('.md-affordance')).not.toBeNull();
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
   });
 });
 
