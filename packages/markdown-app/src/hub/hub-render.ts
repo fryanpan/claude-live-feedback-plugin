@@ -163,10 +163,13 @@ function placeCaretIn(el: HTMLElement, offset?: number): void {
   if (node && node.nodeType === Node.TEXT_NODE) {
     const len = node.textContent?.length ?? 0;
     range.setStart(node, typeof offset === 'number' ? Math.max(0, Math.min(len, offset)) : len);
+    range.collapse(true);
   } else {
+    // No text node to aim at — an empty title. Put the caret inside the
+    // element so the first keystroke lands there rather than nowhere.
     range.selectNodeContents(el);
+    range.collapse(false);
   }
-  range.collapse(typeof offset === 'number' && node !== null);
   sel.removeAllRanges();
   sel.addRange(range);
 }
@@ -733,7 +736,7 @@ export function ownerInitials(owner: string): string {
 
 /**
  * A hovering, precise pointer is what makes tap-to-rename on the title safe:
- * it implies a visible hover state (so the drag handle and the open zone are
+ * it implies a visible hover state (so the drag handle and the open caret are
  * discoverable) and a click that lands where it was aimed. Asking the pointer
  * rather than the viewport width is the honest form of the question — an
  * iPad with a trackpad gets the desktop gesture, a touchscreen laptop's mouse

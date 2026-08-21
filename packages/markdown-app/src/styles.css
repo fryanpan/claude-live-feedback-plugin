@@ -650,8 +650,9 @@ body.hub-body {
    feel free to widen the task list so more can fit"). Measured in a browser,
    not derived — see `task-title-lines-css.test.ts` for the method and the
    numbers. Widening the container is what buys it; the row itself has nothing
-   left to give, its fixed chrome being 134px of handle, open zone, status,
-   owner, gaps and padding. */
+   left to give, its fixed chrome being 134px of handle, status, open caret,
+   owner, gaps and padding. (Still 134px after the caret moved to the right of
+   the row on 2026-08-21: it is 16px wide and it took over a 16px slot.) */
 #hub-root {
   max-width: var(--hub-page-w);
   margin: 0 auto;
@@ -4196,6 +4197,9 @@ a.hub-link-chip:hover {
    apart. Seven of thirty-three rows came out under half. Since 2026-08-18 the
    risk dot and its 6px gap are gone, so the chrome is 110px and the title
    starts 16px wider — the argument for the block is unchanged, only softened.
+   Then the open caret moved to the right of the row and became visible on a
+   touch pointer (2026-08-21), spending 14px of that: chrome 124px, title 274px.
+   Still the same argument, and 14px less room to make it in.
 
    The phone strip used to keep exactly one mark, the discussion count. That
    badge was removed board-wide on 2026-08-18 at Bryan's request (see the note
