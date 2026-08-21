@@ -819,7 +819,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // the lead holding no stream (its clock is fresh and SOMEBODY is on
       // the wire), and a `true` there would mark the task triage-pending
       // against a delivery that never happened. 0 is a real answer: the ask
-      // parks and the lead drains it on their next attach.
+      // parks and the lead drains it on their next attach. And `> 0` can
+      // still lie — a socket that died without the server noticing doesn't
+      // throw on enqueue — which is why sendToAgent also buffers the frame:
+      // the lead's reconnect replays it (or gets an honest replay.gap)
+      // instead of a clean-looking stream missing the one addressed message.
       return sse.sendToAgent(`ws~${req.workspaceId}`, req.leadAgentId, frame) > 0;
     }
     sse.broadcast(`ws~${req.workspaceId}`, frame);
@@ -2199,6 +2203,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             visitorShareId ?? undefined,
             visitor ? redactHubEventForVisitor : undefined,
             streamAgentId,
+            sseLastEventId(req, url),
           );
         }
         // --- SSE ---
@@ -2206,7 +2211,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const docId = decodeURIComponent(pathname.slice('/events/'.length));
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
           if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
-          return openSseStream(sse, docId, visitorShareId ?? undefined);
+          return openSseStream(
+            sse,
+            docId,
+            visitorShareId ?? undefined,
+            undefined,
+            undefined,
+            sseLastEventId(req, url),
+          );
         }
 
         // --- REST: docs ---
@@ -5229,6 +5241,15 @@ function isValidDocId(s: string): boolean {
 
 /** `scheme://host` with the default port normalized away, or the raw
  *  concatenation when it doesn't parse (which then simply matches nothing). */
+/** The id a reconnecting SSE client last saw: the `Last-Event-ID` header a
+ *  native EventSource sends back by itself once frames carry `id:` lines,
+ *  else the `lastEventId` query param for hand-rolled fetch-stream consumers
+ *  (the MCP watch loop). Absent/empty → a fresh subscription, no replay. */
+function sseLastEventId(req: Request, url: URL): string | undefined {
+  const v = req.headers.get('last-event-id') ?? url.searchParams.get('lastEventId');
+  return v ? v : undefined;
+}
+
 function canonicalOrigin(scheme: string, host: string): string {
   try {
     return new URL(`${scheme}://${host}`).origin;
