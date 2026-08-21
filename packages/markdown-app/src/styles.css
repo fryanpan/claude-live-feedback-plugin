@@ -3939,6 +3939,22 @@ a.hub-link-chip:hover {
     border-bottom: none;
     padding: 0 0 var(--safe-bottom);
   }
+  /* The feedback widget's launcher is a fixed 48px bubble in the viewport's
+     bottom-right corner (shadow DOM, maximum z-index), and this bar is fixed
+     to the same edge — at 430px the bubble sat exactly over the Activity
+     tab's centre, so the tap hit-tested to CLAUDE-FEEDBACK-WIDGET. The bar
+     cannot win a z-order contest it should not win (the bubble must stay
+     tappable), so the tabs END before the bubble's column instead: right
+     padding equal to the bubble's inset (max(18px, safe-right)) + its 48px
+     diameter + 6px slack. Gated on a widget actually being on the page — a
+     share visitor's hub ships no widget (see renderHubShell) and keeps the
+     full-width bar. The 901–1100px band needs nothing: the strip sits at the
+     TOP of the content there and shares no edge with the bubble.
+     hub-nav-widget-clearance-css.test.ts ties these numbers to the widget's
+     own fab rule, so a bigger bubble goes red rather than back over the tab. */
+  body:has(claude-feedback-widget) .hub-nav {
+    padding-right: calc(max(18px, env(safe-area-inset-right)) + 54px);
+  }
   .hub-nav-item {
     flex: 1;
     flex-direction: column;

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
@@ -7,6 +8,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { readRenamedEnv } from '../../core/src/env-names.ts';
 import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machine-paths.ts';
+import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
@@ -91,7 +93,18 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.73';
+const PLUGIN_VERSION = '0.1.75';
+
+/**
+ * One nonce per PROCESS, minted at module load and sent on every attach.
+ * The server compares it against the attachment's recorded nonce to answer
+ * the question the ack grace window turns on: is this attach a fresh process
+ * (bypass the grace — whatever was in flight went to a process that is gone)
+ * or the same live one re-attaching (respect it — a frame already on the
+ * wire to THIS process must not be handed over a second time through the
+ * attach response). See AgentAttachment.processId on the server side.
+ */
+const PROCESS_ID = randomUUID();
 
 /**
  * What a good `evidence.commit` looks like, said at the one layer that reaches
@@ -242,11 +255,17 @@ const REVIEW_ITEM_SCHEMA = {
   description:
     "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
   properties: {
+    review_type: {
+      type: 'string',
+      enum: ['decision', 'question'],
+      description:
+        "'decision' offers named options to pick between (2-6 required). 'question' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask.",
+    },
     shape: {
       type: 'string',
       enum: ['decision', 'review'],
       description:
-        "'decision' offers named options to pick between (2-6 required). 'review' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask.",
+        "Legacy spelling of `review_type` ('review' = 'question'). Accepted forever so old callers keep working; new calls should send `review_type`.",
     },
     headline: {
       type: 'string',
@@ -264,11 +283,11 @@ const REVIEW_ITEM_SCHEMA = {
     detail: {
       type: 'string',
       description:
-        'The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a review.',
+        'The body, markdown, inline links welcome. ≤50 words for a decision, ≤150 for a question.',
     },
     options: {
       type: 'array',
-      description: "For 'decision' only: 2-6 options. Refused on a 'review'.",
+      description: "For 'decision' only: 2-6 options. Refused on a 'question'.",
       items: {
         type: 'object',
         properties: {
@@ -283,7 +302,7 @@ const REVIEW_ITEM_SCHEMA = {
       },
     },
   },
-  required: ['shape', 'headline', 'why'],
+  required: ['headline', 'why'],
 } as const;
 
 /**
@@ -1112,7 +1131,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 title: {
                   type: 'string',
                   description:
-                    'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. Say WHO it is for, WHAT they get, and HOW — `<Person> can <achieve goal X> by <describe action>`, under 70 characters (100 is the hard ceiling). e.g. "Bryan can review across tasks faster with clearer task descriptions and UX", "Agents can revise goal priority with a tool to reorder goals". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.',
+                    'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. The standard: `<persona> can <do x> so that <goal y>` — ONE persona (Agent, Bryan, Collaborator), 20 words or less so it fits every screen. e.g. "Bryan can review across tasks faster so that review sessions stay short", "Agent can reorder goals so that the board\'s priority stays current". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (the `claude-workspaces:reviewing-task-shape` skill), so file what you have.',
                 },
                 body: {
                   type: 'string',
@@ -1203,7 +1222,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: {
             type: 'string',
             description:
-              'Override the drafted title. Worth sending: the drafted one is a clip of somebody\u2019s comment, so it names what was SAID rather than what will be done. The standard is `<Person> can <achieve goal X> by <describe action>`, under 70 characters.',
+              'Override the drafted title. Worth sending: the drafted one is a clip of somebody\u2019s comment, so it names what was SAID rather than what will be done. The standard is `<persona> can <do x> so that <goal y>`, one persona, 20 words or less.',
           },
           body: { type: 'string', description: 'Override the drafted body.' },
           assignee: {
@@ -1360,7 +1379,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: {
             type: 'string',
             description:
-              'The new one-line name. Omit to keep the current one. Aim for `<Person> can <achieve goal X> by <describe action>` — ideally under 70 characters, 100 max, never clipped mid-word; the full standard is in the `claude-workspaces:reviewing-task-shape` skill.',
+              'The new one-line name. Omit to keep the current one. Aim for `<persona> can <do x> so that <goal y>` — one persona, 20 words or less, never clipped mid-word; the full standard is in the `claude-workspaces:working-in-a-workspace` skill.',
           },
           body: {
             type: 'string',
@@ -1665,7 +1684,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then queuedVoice — voice change-requests that arrived while no agent was live; act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and, if you LEAD this workspace, pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then, if you LEAD this workspace, queuedVoice — voice change-requests that arrived while no lead was live (lead-only: a bystander's attach leaves the queue for the seat); act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and pendingRetriage: a goal edit made while you were away, whose taskIds you re-place with set_task_goal (echo its batchId on each), plus pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass the `claude-workspaces:reviewing-task-shape` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2522,6 +2541,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               self: AUTHOR,
               runtime: 'claude-code-local',
               pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
             },
           ),
         );
@@ -3093,12 +3113,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             // loaded at launch, not by what its machine's cache holds now.
             // Reporting it is what lets the board say a merge never arrived.
             pluginVersion: PLUGIN_VERSION,
+            // Same-process re-attaches must not re-hand rows still in
+            // flight to this very process — see PROCESS_ID.
+            processId: PROCESS_ID,
           },
         )) as {
           attachment?: { agentId?: string };
           gating?: unknown;
           untriaged?: string[];
           queuedVoice?: Array<{ transcript: string; ts: number; applied?: string }>;
+          queuedComments?: Array<{
+            id: string;
+            docId: string;
+            threadId?: string;
+            event: string;
+            author?: { id?: string; name?: string };
+            text: string;
+            ts: number;
+          }>;
           lead?: boolean;
           pendingRetriage?: {
             batchId: string;
@@ -3123,6 +3155,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // from here would assert liveness for an agent that may be gone.
         if (agentId === undefined || agentId === AUTHOR.id) markAttached(workspaceId);
         if (subscribe !== false) await watchWorkspace(workspaceId);
+        // These rows are now in this process's hands — this response is their
+        // delivery — so send each receipt. Unlike queuedVoice the server did
+        // NOT drain them: a row it holds until this ack is a row a crash
+        // between the attach and here re-offers after the grace window,
+        // instead of losing with the response body.
+        for (const q of res.queuedComments ?? []) {
+          if (typeof q?.id !== 'string') continue;
+          try {
+            await http(
+              'POST',
+              `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`,
+              {},
+            );
+          } catch {
+            // Left on the queue on purpose — redelivered after the grace.
+          }
+        }
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
@@ -3139,6 +3188,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // the speaker's behalf. Pick up only what the utterance asked for
           // beyond it; redoing it posts the same words twice.
           queuedVoice: res.queuedVoice ?? [],
+          // Comments addressed to YOU that arrived while your stream was
+          // down — a person (or peer) commented on a task or doc you watch or
+          // lead, and nobody was listening. Read each and act on it where it
+          // lives (post_reply on the thread / resolve when addressed). This
+          // response is their delivery; the receipts are already sent.
+          queuedComments: (res.queuedComments ?? []).map((q) => ({
+            docId: q.docId,
+            ...(q.threadId !== undefined ? { threadId: q.threadId } : {}),
+            event: q.event,
+            ...(q.author !== undefined ? { author: q.author } : {}),
+            text: q.text,
+            ts: q.ts,
+          })),
           // A goal edit made while you were away, waiting for you because
           // you lead this board. Walk its taskIds with set_task_goal against
           // the NEW goal, passing its batchId on each so the moves read as
@@ -3405,13 +3467,44 @@ async function ensureWatchesRestored(): Promise<void> {
       const reattached: string[] = [];
       for (const workspaceId of boardsToReattach(lastCoverage)) {
         try {
-          await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
-            agentId: AUTHOR.id,
-            runtime: 'claude-code-local',
-            pluginVersion: PLUGIN_VERSION,
-          });
+          const attachRes = (await http(
+            'POST',
+            `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
+            {
+              agentId: AUTHOR.id,
+              runtime: 'claude-code-local',
+              pluginVersion: PLUGIN_VERSION,
+              processId: PROCESS_ID,
+            },
+          )) as {
+            queuedComments?: BacklogCommentRow[];
+            queuedVoice?: Array<{ transcript?: unknown }>;
+          };
           markAttached(workspaceId);
           reattached.push(workspaceId);
+          // This POST is the fourth attach site, and the only one whose
+          // response body no tool call reads — yet the server just drained
+          // the backlog into it (voice destructively; comment rows marked
+          // emitted). Dropping it here is the ticket's own failure mode one
+          // layer down: the respawned session the queue waited for arrives,
+          // and the arrival itself eats the delivery. So forward each row as
+          // the channel notification its SSE frame would have been, acking a
+          // comment row only after its emit succeeded — same order, same
+          // reason as handleFrame.
+          await deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (shouldForwardFrame.shouldForward(ev, payload)) {
+                await emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await http(
+                'POST',
+                `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
+                {},
+              );
+            },
+          });
         } catch {
           // Best effort, exactly like the watch restore: the notice below
           // reads the coverage AFTER this, so a failure shows up as a board
@@ -3716,7 +3809,9 @@ async function handleFrame(raw: string): Promise<void> {
     // session missed while disconnected. Surface it as its own channel line —
     // the doc-shaped formatter below would render it as a garbled comment —
     // so the agent refetches (get_doc / list_threads / next_tasks) instead of
-    // trusting the stream to have been complete.
+    // trusting the stream to have been complete. No receipt: a gap notice
+    // carries no queue row, and acking one would claim delivery of the very
+    // frames it is reporting as missing.
     const p = (payload ?? {}) as { docId?: string };
     await server.notification({
       method: 'notifications/claude/channel',
@@ -3729,8 +3824,36 @@ async function handleFrame(raw: string): Promise<void> {
     });
     return;
   }
-  if (!shouldForwardFrame.shouldForward(ev, payload)) return;
-  await emitChannelMessage(ev, payload);
+  if (shouldForwardFrame.shouldForward(ev, payload)) {
+    await emitChannelMessage(ev, payload);
+  }
+  // The receipt for a durable comment row, AFTER the forward attempt (same
+  // ordering rationale as the voice ack below: an ack sent first would clear
+  // the durable copy on the strength of an intent). Deliberately OUTSIDE the
+  // dedup gate: a redelivered frame reuses the original event's eid — it IS
+  // the same event — so dedup rightly hides the duplicate from the session,
+  // but the receipt must still go back or the server re-offers the row after
+  // every grace window, forever. "The frame is in this process's hands" is
+  // exactly what the receipt asserts, forwarded or collapsed.
+  await ackCommentRow(payload);
+}
+
+/** POST the receipt for a frame that carries a durable comment-queue row id.
+ *  Never throws: a failed ack leaves the row on the queue, so the cost is a
+ *  redelivery after the grace window — late and duplicated beats silently
+ *  dropped, and that asymmetry is why the receipt lives on this side. */
+async function ackCommentRow(payload: unknown): Promise<void> {
+  const p = payload as { commentQueueId?: unknown; workspaceId?: unknown };
+  if (typeof p?.commentQueueId !== 'string' || typeof p?.workspaceId !== 'string') return;
+  try {
+    await http(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
+      {},
+    );
+  } catch {
+    // Left on the queue on purpose — see above.
+  }
 }
 
 interface ChannelPayload {

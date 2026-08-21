@@ -1540,7 +1540,7 @@ describe('reviewItemBadge', () => {
       'Decision',
     );
     expect(reviewItemBadge(item({ shape: 'review', headline: 'h', why: 'w' })).label).toBe(
-      'Review',
+      'Question',
     );
     // Positive control: an undeclared thread keeps the pre-existing badge.
     expect(reviewItemBadge(item()).label).toBe('Needs your reply');
