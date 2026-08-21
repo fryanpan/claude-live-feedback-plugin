@@ -305,7 +305,7 @@ describe('a task shape review (kind: task-review)', () => {
 
   it('names the contract skill and the rewrite verb — the line is the whole briefing', () => {
     const line = triageRequestLine(payload, 'agent-lead');
-    expect(line).toContain('claude-workspaces:reviewing-task-shape');
+    expect(line).toContain('claude-workspaces:leading-a-workspace');
     expect(line).toContain('rewrite_task');
     // Judging a row fine must be a stated outcome, or every review "finds"
     // something — the corrective-retry lesson, one loop earlier.
