@@ -3605,18 +3605,17 @@ function reviewQueueRegion(
     region.dataset.reviewItemId = queue[at]?.id ?? '';
     cards.forEach((c, ci) => c.classList.toggle('hidden', ci !== at));
     const item = queue[at];
-    // Three headings, and the third one is the honest half. Measured on the
-    // live board 2026-08-17: 23 review items, ZERO of them `direct` — every one
-    // an ellipsis-clipped status note ("Done in PR #154 — …") presented under a
-    // heading that read as a question. `direct` runs at about 1-in-3 recall, so
-    // this says what is TRUE of the flag (nobody is named) rather than the
-    // stronger claim that no question is present.
+    // Two headings. There was a third — "Flagged for you — not addressed to
+    // you by name" over an item whose `direct` flag came back false — and it
+    // is gone per the mock direction. It was written when an undeclared status
+    // note could reach this queue (measured 2026-08-17: 23 items, ZERO of them
+    // `direct`), and it hedged the heading because the row underneath might
+    // not be a question at all. Membership is decided server-side now — a row
+    // here is a declared item or a surviving direct ask — so the hedge
+    // apologises for a row that no longer arrives, in the reader's most
+    // prominent line.
     kicker.textContent =
-      item?.shape === 'decision'
-        ? 'Waiting on your decision'
-        : item?.direct === false
-          ? 'Flagged for you — not addressed to you by name'
-          : 'Waiting on your review';
+      item?.shape === 'decision' ? 'Waiting on your decision' : 'Waiting on your review';
     // A settled item is none of the above: the card below it is the RECORD,
     // and the kicker says so. An override rather than a fourth ternary arm so
     // the three waiting headings above stay exactly as written.
@@ -3766,24 +3765,35 @@ function reviewItemCard(
   badge.className = `hub-decide-k hub-decide-k-${item.shape === 'decision' ? 'decision' : 'review'}`;
   badge.textContent = item.shape === 'decision' ? 'Decision' : 'Question';
   head.append(badge);
-  // The headline is free-flowing prose rather than a clipped line: a decision
-  // blurb *"may run a few lines"*, so nothing here truncates it. Without it
-  // the card leans on the ticket title, and "the ticket title is not the
-  // decision".
-  const headline = document.createElement('p');
-  headline.className = 'hub-decide-headline';
-  headline.textContent = item.headline;
-  head.append(headline);
-  const meta = document.createElement('p');
-  meta.className = 'hub-decide-meta';
-  meta.textContent = askedMetaLine(item.askedBy, item.asked ?? true, item.since, now);
-  head.append(meta);
-  card.append(head);
   // The one body, markdown-rendered — the links to the thing under review are
   // the whole reason a declaration carries a detail, and appended as text
   // they rendered as bracket soup (reported with a screenshot 2026-08-19).
   // `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
   const bodyMarkdown = reviewItemBodyMarkdown(item);
+  // The headline is free-flowing prose rather than a clipped line: a decision
+  // blurb *"may run a few lines"*, so nothing here truncates it. Without it
+  // the card leans on the ticket title, and "the ticket title is not the
+  // decision".
+  //
+  // Which is why it is DROPPED when it came out as the ticket title anyway:
+  // `panelReviewQueue` falls back to `task.title` for a decision whose body
+  // yields no blurb, and this card renders directly under the panel's own
+  // `.hub-detail-title`, so the reader gets the same words twice in a row.
+  // Only when the body below still says something, though — the fallback
+  // exists so an unreadable body yields the title rather than a card that
+  // says nothing at all, and that remains the better of the two.
+  const echoesTitle = item.headline.trim() === task.title.trim();
+  if (!(echoesTitle && bodyMarkdown !== '')) {
+    const headline = document.createElement('p');
+    headline.className = 'hub-decide-headline';
+    headline.textContent = item.headline;
+    head.append(headline);
+  }
+  const meta = document.createElement('p');
+  meta.className = 'hub-decide-meta';
+  meta.textContent = askedMetaLine(item.askedBy, item.asked ?? true, item.since, now);
+  head.append(meta);
+  card.append(head);
   if (bodyMarkdown !== '') {
     const body = document.createElement('div');
     body.className = 'hub-decide-body';

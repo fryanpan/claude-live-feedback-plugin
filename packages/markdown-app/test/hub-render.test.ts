@@ -2239,13 +2239,74 @@ describe('renderTaskDetail — discussion', () => {
   });
 
   /**
-   * Measured on the live board 2026-08-17: 23 review items, **0** of them
-   * `direct` — every one an ellipsis-clipped PR announcement ("Done in PR
-   * #154 — …") presented under a heading that reads as a question. Giving a
-   * status note the words "what we need from you" is the reported defect, so
-   * the heading has to tell the two apart.
+   * The card sits directly under the panel's own `.hub-detail-title`, so a
+   * headline that came out as the ticket title prints the same words twice in
+   * a row — which is the whole of what the reader sees before the body. It is
+   * a real shape and not a contrived one: `panelReviewQueue` falls back to
+   * `task.title` for a decision whose body yields no blurb.
    */
-  it('does not call a status note a question', () => {
+  it('drops a headline that only repeats the ticket title the panel already shows', () => {
+    const t = task({ id: 't-1', title: 'Rename the catch-all band' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({
+        asks: [
+          askItem({
+            review: {
+              shape: 'review' as const,
+              headline: 'Rename the catch-all band',
+              why: 'Two bands answer to the same word and the picker shows both.',
+            },
+          }),
+        ],
+        now: NOW,
+      }),
+      { loading: false, threads: [thread()] },
+    );
+    expect(root.querySelector('.hub-detail-title')?.textContent).toBe('Rename the catch-all band');
+    expect(root.querySelector('.hub-decide-headline')).toBeNull();
+    // Nothing was swallowed with it: the card still carries the why, which is
+    // the condition the drop is gated on.
+    expect(root.querySelector('.hub-decide-body')?.textContent).toContain('Two bands answer');
+  });
+
+  /** The control: a headline that says something the title does not is the
+   *  ordinary case and still renders, so the absence above is a comparison
+   *  rather than a card that stopped drawing its heading. */
+  it('keeps a headline that says more than the ticket title', () => {
+    const t = task({ id: 't-1', title: 'Rename the catch-all band' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({
+        asks: [
+          askItem({
+            review: {
+              shape: 'review' as const,
+              headline: 'Call it Backlog, or something narrower?',
+              why: 'Two bands answer to the same word and the picker shows both.',
+            },
+          }),
+        ],
+        now: NOW,
+      }),
+      { loading: false, threads: [thread()] },
+    );
+    expect(root.querySelector('.hub-decide-headline')?.textContent).toBe(
+      'Call it Backlog, or something narrower?',
+    );
+  });
+
+  /**
+   * The "Flagged for you — not addressed to you by name" heading is gone (mock
+   * direction). It hedged because an item whose `direct` came back false might
+   * not be a question at all — measured on the live board 2026-08-17: 23
+   * review items, **0** of them `direct`. The server decides membership now, so
+   * the row it hedged about does not arrive, and the apology was sitting in the
+   * reader's most prominent line.
+   */
+  it('heads an item nobody was named on with the plain review heading', () => {
     renderTaskDetail(
       root,
       task({ id: 't-1' }),
@@ -2256,19 +2317,14 @@ describe('renderTaskDetail — discussion', () => {
       { loading: false, threads: [thread()] },
     );
     const kicker = root.querySelector('.hub-decide-kicker')?.textContent ?? '';
-    expect(kicker).not.toContain('Waiting on your review');
-    // Says what is TRUE of the flag — nobody is named — rather than the
-    // stronger claim that no question is present, which `direct` cannot
-    // support at 1-in-3 recall.
-    expect(kicker).toContain('not addressed to you by name');
-    expect(kicker).not.toContain('no question');
-    // The words are still shown — labelled honestly, not withheld.
+    expect(kicker).toBe('Waiting on your review');
+    expect(kicker).not.toContain('not addressed to you by name');
+    // The words are still shown — the heading changed, nothing was withheld.
     expect(root.querySelector('.hub-decide-headline')?.textContent).toContain('PR #154');
   });
 
-  /** The positive control for the case above: the same renderer DOES give a
-   *  real question the question heading, so the absence just asserted is a
-   *  decision rather than a renderer that can only produce one string. */
+  /** The pair to the case above: a direct question reads identically, which is
+   *  the point of dropping the third heading rather than an accident of it. */
   it('calls a direct question a question', () => {
     renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ asks: [askItem()], now: NOW }), {
       loading: false,
