@@ -412,3 +412,28 @@ describe('announcing the mount', () => {
     expect(seen).toHaveLength(0);
   });
 });
+
+/**
+ * tiptap-markdown's own spelling of a hard break is backslash-newline, which
+ * comment surfaces then showed literally: a dictated multi-line comment
+ * arrived as "line\" plus a lone "\" line. The composer speaks the
+ * two-trailing-spaces spelling instead — invisible in raw text, and it
+ * round-trips through a draft restore (a bare newline would soften back into
+ * a space on re-parse).
+ */
+describe('hard breaks leave the composer without backslashes', () => {
+  it('serializes a hard break as a two-space break, and it round-trips', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const ed = realChunk.createComposerEditor({ parent, placeholder: '', onUpdate: () => {} });
+    try {
+      ed.setMarkdown('one\\\ntwo'); // the serializer's own spelling parses in…
+      expect(ed.getMarkdown()).toBe('one  \ntwo'); // …and leaves in the invisible one
+      ed.setMarkdown('one  \ntwo');
+      expect(ed.getMarkdown()).toBe('one  \ntwo'); // POSITIVE CONTROL: stable round-trip
+    } finally {
+      ed.destroy();
+      parent.remove();
+    }
+  });
+});

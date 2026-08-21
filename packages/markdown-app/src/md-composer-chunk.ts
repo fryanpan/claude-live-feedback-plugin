@@ -54,9 +54,14 @@ export function createComposerEditor(opts: CreateComposerEditorOpts): ComposerEd
     getMarkdown() {
       type MarkdownStorage = { getMarkdown: () => string };
       const store = (editor.storage as unknown as { markdown?: MarkdownStorage }).markdown;
-      return (
-        store?.getMarkdown() ?? editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n')
-      );
+      const md =
+        store?.getMarkdown() ??
+        editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n');
+      // tiptap-markdown spells a hard break backslash-newline, and comment
+      // surfaces showed the backslash literally. Respell it as the two-space
+      // break: invisible in raw text, and it round-trips through a draft
+      // restore where a bare newline would soften back into a space.
+      return md.replace(/\\\n/g, '  \n');
     },
     setMarkdown(md: string) {
       // `emitUpdate: false` is load-bearing rather than an optimisation. A
