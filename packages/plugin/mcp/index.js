@@ -16769,12 +16769,13 @@ async function emitChannelMessage(event, rawPayload) {
   }
   const threadId = p.threadId ?? "";
   const snippet = p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? "";
-  const author = p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
-  const text = p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
+  const statusChange = event === "thread.resolved" || event === "thread.reopened";
+  const author = statusChange ? p.actor?.name ?? "" : p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
+  const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
   const header = snippet ? `on "${truncate2(snippet, 60)}"` : "";
-  const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}] thread ${threadId} ${header}`.trim();
+  const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}]${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
     params: {

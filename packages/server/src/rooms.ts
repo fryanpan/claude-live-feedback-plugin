@@ -658,7 +658,11 @@ export class Rooms {
     // hold 'resolved' for a thread that is open again. No separate activity
     // record: the reply below already logs this person's action, and a
     // synthetic 'reopen' would double-count it.
-    if (reopened && thread) this.fireEvent(room, 'thread.reopened', thread, undefined, opts);
+    if (reopened && thread) {
+      // The replier's continuation is what reopened the thread, so the
+      // reopen frame names them — same attribution the reply frame carries.
+      this.fireEvent(room, 'thread.reopened', thread, undefined, opts, author);
+    }
     this.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
     return thread;
   }
@@ -862,7 +866,10 @@ export class Rooms {
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
     if (t) {
-      this.fireEvent(room, 'thread.resolved', t, undefined, opts);
+      // The frame names WHO resolved. Without it, 17 resolves in the field
+      // were each attributed to the thread's creator by the channel
+      // renderer's comments[0] fallback. Same default recordActivity uses.
+      this.fireEvent(room, 'thread.resolved', t, undefined, opts, author ?? DEFAULT_REVIEWER);
       this.recordActivity(room, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
@@ -881,7 +888,8 @@ export class Rooms {
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'open');
     if (t) {
-      this.fireEvent(room, 'thread.reopened', t, undefined, opts);
+      // See resolve above — the reopen frame names who reopened.
+      this.fireEvent(room, 'thread.reopened', t, undefined, opts, author ?? DEFAULT_REVIEWER);
       this.recordActivity(room, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
@@ -2788,6 +2796,10 @@ export class Rooms {
     thread: Thread,
     comment?: { id: string; author: User; text: string; ts: number },
     opts?: { generate?: boolean },
+    // Who performed a resolve/reopen. The comment param can't carry it —
+    // there is no comment on a status change, and a frame without an actor
+    // sent channel renderers to comments[0].author, i.e. the CREATOR.
+    actor?: User,
   ): void {
     room.seq++;
     // Every thread change funnels through here, which is exactly why the
@@ -2803,6 +2815,7 @@ export class Rooms {
       thread,
       doc: decorate(room.meta),
       comment,
+      ...(actor ? { actor } : {}),
       seq: room.seq,
     });
   }
