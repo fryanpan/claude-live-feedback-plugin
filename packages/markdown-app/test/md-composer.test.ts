@@ -340,6 +340,17 @@ describe('the markdown composer is styled', () => {
     ).toContain('attr(data-placeholder)');
   });
 
+  it('keeps the document surface’s type off a composer nested inside it', () => {
+    // An inline thread card lives inside `#editor` and carries a reply
+    // composer, so `#editor .ProseMirror` as a DESCENDANT selector reached the
+    // composer's editor and won — an id outranks any number of classes. The
+    // measured result at 820px: an empty reply box 18px serif and 60vh tall,
+    // with the Reply button pushed off the bottom of the screen.
+    // POSITIVE CONTROL: those rules are still here to be got wrong.
+    expect(stripped).toContain('#editor > .ProseMirror');
+    expect(stripped).not.toMatch(/#editor\s+\.ProseMirror/);
+  });
+
   it('dresses the surface wherever a composer lives — one look per context', () => {
     // POSITIVE CONTROL: the extractor can see a rule that is definitely there.
     expect(stripped).toContain('.thread-reply textarea');

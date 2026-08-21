@@ -3364,7 +3364,7 @@ a.hub-link-chip:hover {
   border-color: var(--accent);
   background: var(--bg-subtle, var(--bg-panel));
 }
-/* None of the `#editor .ProseMirror` rules reach here — that surface is a
+/* None of the `#editor > .ProseMirror` rules reach here — that surface is a
    full page and this is a box inside a panel — so the description's editor
    states its own type. Prose font at the panel's own size, not the review
    page's 18px. */
@@ -4429,8 +4429,16 @@ a.hub-link-chip:hover {
    sets `body.is-reading-width` and persists the choice in localStorage.
    1200px ceiling so a 4K monitor doesn't stretch a paragraph across
    the whole screen; 36rem reading mode is the Bringhurst comfort range
-   (~70 chars / line at 18px). */
-#editor .ProseMirror {
+   (~70 chars / line at 18px).
+
+   The `>` in every `#editor > .ProseMirror` rule below is load-bearing, not
+   tidiness. The document surface is no longer the only ProseMirror inside
+   `#editor`: an inline thread card carries a reply composer, which mounts one
+   of its own. As a descendant selector these rules reached it and won — an id
+   beats any number of classes, so nothing `.md-composer-surface` says can
+   override them — and an EMPTY reply box came out 18px serif and `60vh` tall,
+   which on a 820px-high iPad pushed the Reply button off the screen. */
+#editor > .ProseMirror {
   outline: none;
   max-width: min(100%, 1200px);
   margin: 0 auto;
@@ -4445,46 +4453,46 @@ a.hub-link-chip:hover {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-body.is-reading-width #editor .ProseMirror {
+body.is-reading-width #editor > .ProseMirror {
   max-width: 36rem; /* ≈ 720px at 18px */
 }
-#editor .ProseMirror p {
+#editor > .ProseMirror p {
   margin: 0 0 1em;
 }
-#editor .ProseMirror h1,
-#editor .ProseMirror h2,
-#editor .ProseMirror h3 {
+#editor > .ProseMirror h1,
+#editor > .ProseMirror h2,
+#editor > .ProseMirror h3 {
   font-family: var(--sans);
   letter-spacing: -0.01em;
   line-height: 1.25;
 }
-#editor .ProseMirror h1 {
+#editor > .ProseMirror h1 {
   font-size: 2rem;
   font-weight: 700;
   margin: 1.6em 0 0.5em;
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
 }
-#editor .ProseMirror h1:first-child {
+#editor > .ProseMirror h1:first-child {
   margin-top: 0.2em;
 }
-#editor .ProseMirror h2 {
+#editor > .ProseMirror h2 {
   font-size: 1.45rem;
   font-weight: 650;
   margin: 1.6em 0 0.4em;
 }
-#editor .ProseMirror h3 {
+#editor > .ProseMirror h3 {
   font-size: 1.15rem;
   font-weight: 600;
   margin: 1.3em 0 0.3em;
   color: var(--fg);
 }
-#editor .ProseMirror a {
+#editor > .ProseMirror a {
   color: var(--accent);
   text-decoration: underline;
   text-decoration-color: rgba(46, 125, 215, 0.35);
 }
-#editor .ProseMirror a:hover {
+#editor > .ProseMirror a:hover {
   text-decoration-color: currentColor;
 }
 /* Mobile prose tuning. Trim horizontal padding (40px → 16px) so a
@@ -4497,7 +4505,7 @@ body.is-reading-width #editor .ProseMirror {
   #editor {
     padding: 16px 14px calc(160px + var(--safe-bottom));
   }
-  #editor .ProseMirror {
+  #editor > .ProseMirror {
     font-size: 16px;
     line-height: 1.55;
     overflow-wrap: anywhere;
@@ -4505,24 +4513,24 @@ body.is-reading-width #editor .ProseMirror {
   }
   /* Catch-all so no descendant element (table, codeBlock, image) can
      force the prose column wider than the viewport. */
-  #editor .ProseMirror * {
+  #editor > .ProseMirror * {
     max-width: 100%;
   }
-  #editor .ProseMirror h1 {
+  #editor > .ProseMirror h1 {
     font-size: 1.4rem;
     margin: 1em 0 0.4em;
     padding-bottom: 6px;
   }
-  #editor .ProseMirror h2 {
+  #editor > .ProseMirror h2 {
     font-size: 1.2rem;
   }
-  #editor .ProseMirror h3 {
+  #editor > .ProseMirror h3 {
     font-size: 1.05rem;
   }
   /* Tables can't word-wrap their cells the same way, so let them scroll
      horizontally inside their own container instead of pushing the page. */
-  #editor .ProseMirror .prose-table,
-  #editor .ProseMirror table {
+  #editor > .ProseMirror .prose-table,
+  #editor > .ProseMirror table {
     display: block;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
@@ -4565,14 +4573,14 @@ body.is-reading-width #editor .ProseMirror {
   }
 }
 
-#editor .ProseMirror code {
+#editor > .ProseMirror code {
   background: var(--bg-hover);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: var(--mono);
   font-size: 0.9em;
 }
-#editor .ProseMirror pre {
+#editor > .ProseMirror pre {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -4583,62 +4591,62 @@ body.is-reading-width #editor .ProseMirror {
   line-height: 1.45;
   margin: 0.6em 0;
 }
-#editor .ProseMirror pre code {
+#editor > .ProseMirror pre code {
   background: transparent;
   padding: 0;
   font-size: inherit;
 }
-#editor .ProseMirror blockquote {
+#editor > .ProseMirror blockquote {
   margin: 0.8em 0;
   padding: 0.1em 16px;
   color: var(--fg-muted);
   border-left: 3px solid var(--border);
 }
-#editor .ProseMirror ul,
-#editor .ProseMirror ol {
+#editor > .ProseMirror ul,
+#editor > .ProseMirror ol {
   padding-left: 28px;
   margin: 0.4em 0 0.8em;
 }
-#editor .ProseMirror li > p {
+#editor > .ProseMirror li > p {
   margin: 0.2em 0;
 }
-#editor .ProseMirror li {
+#editor > .ProseMirror li {
   margin: 0.15em 0;
 }
-#editor .ProseMirror hr {
+#editor > .ProseMirror hr {
   border: 0;
   border-top: 1px solid var(--border);
   margin: 1.2em 0;
 }
 
 /* ========== code blocks + mermaid diagrams ========== */
-#editor .ProseMirror .cm-codeblock {
+#editor > .ProseMirror .cm-codeblock {
   margin: 0.8em 0;
 }
-#editor .ProseMirror .cm-codeblock pre {
+#editor > .ProseMirror .cm-codeblock pre {
   margin: 0;
 }
 /* Mermaid blocks: only show the diagram in the default (read) view.
    Click the diagram to move the cursor into the code block — the
    NodeView adds .is-editing, which reveals the source. Click outside
    to collapse back to diagram-only. */
-#editor .ProseMirror .cm-codeblock.is-mermaid .cm-source {
+#editor > .ProseMirror .cm-codeblock.is-mermaid .cm-source {
   display: none;
 }
-#editor .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-source {
+#editor > .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-source {
   display: block;
   margin-top: 8px;
   border: 1px dashed var(--border);
   border-radius: var(--radius);
 }
-#editor .ProseMirror .cm-codeblock.is-mermaid .cm-diagram {
+#editor > .ProseMirror .cm-codeblock.is-mermaid .cm-diagram {
   cursor: pointer;
 }
-#editor .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-diagram {
+#editor > .ProseMirror .cm-codeblock.is-mermaid.is-editing .cm-diagram {
   cursor: default;
   opacity: 0.9;
 }
-#editor .ProseMirror .cm-diagram {
+#editor > .ProseMirror .cm-diagram {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -4649,7 +4657,7 @@ body.is-reading-width #editor .ProseMirror {
   overflow: auto;
   user-select: none;
 }
-#editor .ProseMirror .cm-diagram:empty {
+#editor > .ProseMirror .cm-diagram:empty {
   /* Don't reserve vertical space while mermaid's first render is in
      flight, but keep the element in the layout so the NodeView can
      swap in SVG or an error without a reflow jump. */
@@ -4658,11 +4666,11 @@ body.is-reading-width #editor .ProseMirror {
   background: transparent;
   min-height: 0;
 }
-#editor .ProseMirror .cm-diagram svg {
+#editor > .ProseMirror .cm-diagram svg {
   max-width: 100%;
   height: auto;
 }
-#editor .ProseMirror .cm-diagram-error {
+#editor > .ProseMirror .cm-diagram-error {
   color: var(--red);
   font-family: var(--mono);
   font-size: 13px;
@@ -4674,7 +4682,7 @@ body.is-reading-width #editor .ProseMirror {
 }
 
 /* ========== tables (GFM) ========== */
-#editor .ProseMirror table {
+#editor > .ProseMirror table {
   border-collapse: collapse;
   margin: 1em 0;
   width: 100%;
@@ -4682,51 +4690,51 @@ body.is-reading-width #editor .ProseMirror {
   font-family: var(--sans); /* tables read better sans even in serif-body mode */
   font-size: 14px;
 }
-#editor .ProseMirror th,
-#editor .ProseMirror td {
+#editor > .ProseMirror th,
+#editor > .ProseMirror td {
   border: 1px solid var(--border);
   padding: 6px 10px;
   vertical-align: top;
   text-align: left;
   min-width: 6em;
 }
-#editor .ProseMirror th {
+#editor > .ProseMirror th {
   background: var(--bg-panel);
   font-weight: 600;
 }
-#editor .ProseMirror tr:nth-child(even) td {
+#editor > .ProseMirror tr:nth-child(even) td {
   background: rgba(246, 248, 250, 0.5);
 }
-#editor .ProseMirror td > p,
-#editor .ProseMirror th > p {
+#editor > .ProseMirror td > p,
+#editor > .ProseMirror th > p {
   margin: 0;
 }
 /* Wrap tables so wide ones scroll horizontally instead of blowing out the layout */
-#editor .ProseMirror .prose-table {
+#editor > .ProseMirror .prose-table {
   display: block;
   overflow-x: auto;
   max-width: 100%;
 }
 
 /* ========== thread highlights ========== */
-#editor .ProseMirror .thread-range {
+#editor > .ProseMirror .thread-range {
   background: rgba(255, 213, 79, 0.35);
   border-bottom: 2px solid rgba(191, 135, 0, 0.55);
   cursor: pointer;
   transition: background 180ms ease;
 }
-#editor .ProseMirror .thread-range:hover {
+#editor > .ProseMirror .thread-range:hover {
   background: rgba(255, 213, 79, 0.55);
 }
-#editor .ProseMirror .thread-range.resolved {
+#editor > .ProseMirror .thread-range.resolved {
   background: rgba(45, 164, 78, 0.12);
   border-bottom-color: rgba(45, 164, 78, 0.45);
 }
-#editor .ProseMirror .thread-range.active {
+#editor > .ProseMirror .thread-range.active {
   background: rgba(46, 125, 215, 0.22);
   border-bottom-color: rgba(46, 125, 215, 0.8);
 }
-#editor .ProseMirror .thread-range.pulse {
+#editor > .ProseMirror .thread-range.pulse {
   animation: thread-wink 650ms ease-out;
 }
 @keyframes thread-wink {
@@ -5719,7 +5727,7 @@ body.threads-resizing {
 
 /* When the composer is open, the selection highlight in the editor
    becomes more prominent so it stands out above the dim scrim. */
-body.composer-open #editor .ProseMirror ::selection {
+body.composer-open #editor > .ProseMirror ::selection {
   background: rgba(255, 213, 79, 0.85);
   color: #1b1f23;
 }

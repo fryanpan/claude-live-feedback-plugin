@@ -107,7 +107,14 @@ export function threadCards(id: string, root: ParentNode = document): HTMLElemen
  */
 export function isFoldingTap(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
-  const control = el?.closest?.('input, textarea, select, button, a, label');
+  // `.md-composer-surface` is in this list because it IS the field: the reply
+  // box is a markdown editor, and the textarea it replaced is `display: none`
+  // behind it, so a tap that used to land on a <textarea> now lands on a
+  // contenteditable <div> and matched none of the tag names. Measured: the
+  // card folded shut under the tap that was reaching for the reply box. The
+  // class rather than `[contenteditable]` so the surface's own padding — which
+  // is outside the editor element — counts as the field too.
+  const control = el?.closest?.('input, textarea, select, button, a, label, .md-composer-surface');
   // The caret is the ONE control that means "fold this card" — it is a real
   // button so a keyboard can reach it (Enter/Space raise a click, which is
   // this same path), and it deliberately has no handler of its own: it does
