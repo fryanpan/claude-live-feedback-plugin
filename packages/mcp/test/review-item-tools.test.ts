@@ -409,8 +409,12 @@ describe('what the tool schemas tell an agent', () => {
 });
 
 describe('the agent-facing skills describe the entity, not the old model', () => {
+  // The review-item CALL SHAPES moved out of the hub's SKILL.md and into its
+  // sibling `tool-reference.md` when the hub was split (the skill file keeps
+  // the judgment, the reference keeps the argument lists). The pin follows the
+  // content: it reads the file that now has to carry these literals.
   const hub = readFileSync(
-    join(HERE, '../../plugin/skills/running-a-workspace-hub/SKILL.md'),
+    join(HERE, '../../plugin/skills/running-a-workspace-hub/tool-reference.md'),
     'utf8',
   );
   const board = readFileSync(
