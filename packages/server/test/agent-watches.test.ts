@@ -47,6 +47,22 @@ describe('AgentWatches store', () => {
     expect(removed.watches.map((w) => w.key)).toEqual(['doc-b', 'doc-c']);
   });
 
+  it('agentsWatching is the reverse lookup — that key only, shared identities excluded', () => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-watches-'));
+    const store = new AgentWatches({ dataDir: dir, now: () => 1_000 });
+    store.update('agent-alpha', { add: ['ws:w-1', 'doc-a'] });
+    store.update('agent-beta', { add: ['ws:w-1'] });
+    store.update('agent-gamma', { add: ['ws:w-2'] });
+    // A shared identity can end up in the file (the refusal lives at the
+    // route); the reverse lookup must never address it — nothing could ever
+    // re-send or receipt to "agent".
+    store.update('agent', { add: ['ws:w-1'] });
+    expect(store.agentsWatching('ws:w-1').sort()).toEqual(['agent-alpha', 'agent-beta']);
+    // Positive control: the neighbouring key still answers.
+    expect(store.agentsWatching('ws:w-2')).toEqual(['agent-gamma']);
+    expect(store.agentsWatching('ws:w-none')).toEqual([]);
+  });
+
   it('survives a new instance over the same data dir (the whole point)', () => {
     dir = mkdtempSync(join(tmpdir(), 'agent-watches-'));
     new AgentWatches({ dataDir: dir }).update('agent-alpha', { add: ['doc-a'], name: 'Alpha' });

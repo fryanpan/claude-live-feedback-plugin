@@ -2842,7 +2842,7 @@ function renderDiscussion(
     if (c.review) {
       const badge = document.createElement('span');
       badge.className = 'hub-comment-review-k';
-      badge.textContent = c.review.shape === 'decision' ? 'Decision' : 'Review';
+      badge.textContent = c.review.shape === 'decision' ? 'Decision' : 'Question';
       head.append(badge);
     }
     // "Needs your reply" was a THREAD badge — it named a thread, because the

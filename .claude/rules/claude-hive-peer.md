@@ -23,8 +23,8 @@ ninety-nine messages is a reasonable count, and two of them ran 3,079 and
 
 - **Post the report where the work is** — a comment on the task or the review
   doc — and hand over the `threadUrl` that comes back on the response. The
-  full contract is in the `claude-workspaces:working-a-workspace-board` skill
-  ("A report to a peer goes on the task too"). A message here is read once by
+  full contract is in the `claude-workspaces:working-in-a-workspace` skill
+  ("Share progress in the workspace on the most appropriate task or doc"). A message here is read once by
   one session and is gone; a task comment is there for whoever picks the work
   up next.
 - **Count AND length.** Still 3–5 messages per task — start, blockers, PR
