@@ -2043,17 +2043,18 @@ export class Rooms {
       // getDoc can report WHY it's stale. The fragment is left untouched
       // (we never started the transact), so the next edit retries cleanly.
       const message = err instanceof Error ? err.message : String(err);
-      binding.lastSyncError = { message: `parse failed: ${message}`, at: Date.now() };
+      this.recordSyncError(room, binding, `parse failed: ${message}`);
       console.error(`[rooms] ${room.docId}: disk→doc parse failed for ${binding.path}:`, err);
       return decision;
     }
     if (blocks.length === 0) {
       // Don't wipe to empty on a parse that produced nothing — but DON'T
       // do it silently either (the old behavior). Surface it.
-      binding.lastSyncError = {
-        message: 'disk content parsed to zero blocks; live doc left unchanged',
-        at: Date.now(),
-      };
+      this.recordSyncError(
+        room,
+        binding,
+        'disk content parsed to zero blocks; live doc left unchanged',
+      );
       console.warn(
         `[rooms] ${room.docId}: disk→doc reconcile yielded 0 blocks from ${binding.path}; keeping prior state`,
       );
@@ -2090,10 +2091,11 @@ export class Rooms {
       // SUCCEEDED, but pending proposals living in a rewritten block were
       // dropped — record which, so agents/UI can report the loss instead of
       // the suggestions just vanishing. Cleared by the next clean reconcile.
-      binding.lastSyncError = {
-        message: `external edit dropped pending suggestion(s): ${droppedSids.join(', ')}`,
-        at: Date.now(),
-      };
+      this.recordSyncError(
+        room,
+        binding,
+        `external edit dropped pending suggestion(s): ${droppedSids.join(', ')}`,
+      );
       console.warn(
         `[rooms] ${room.docId}: external edit to ${binding.path} dropped suggestion(s) ${droppedSids.join(', ')}`,
       );
@@ -2173,21 +2175,57 @@ export class Rooms {
   private recordConflictReassert(room: DocRoom, binding: FileBinding, external: string): void {
     const backupPath = this.backupExternalVersion(room.docId, external);
     const gitHint = gitConflictHint(binding.path, external);
-    binding.lastSyncError = {
-      message:
-        'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
+    this.recordSyncError(
+      room,
+      binding,
+      'external file change collided with un-flushed live edits; kept live edits and reasserted them to disk. ' +
         (backupPath
           ? `The external version was saved to ${backupPath} — restore it and reparse_from_disk to make it win.`
           : 'Backup of the external version FAILED — it survives only in your editor/git history.') +
         gitHint,
-      at: Date.now(),
-    };
+      backupPath,
+    );
     console.warn(
       `[rooms] ${room.docId}: disk↔doc conflict for ${binding.path}; kept live edits, reasserting to disk` +
         (backupPath ? ` (external version backed up to ${backupPath})` : '') +
         (gitHint ? ' — the overwritten bytes came from git, not an editor save' : ''),
     );
     this.scheduleFileWrite(room, binding);
+  }
+
+  /**
+   * Record a sync failure on a binding AND announce it on the doc's event
+   * channels as a `doc.sync_error` broadcast.
+   *
+   * Every `lastSyncError` write funnels through here for the same reason
+   * thread changes funnel through `fireEvent`: a fifth failure mode added
+   * later gets the broadcast for free rather than silently going without.
+   * Before this, the error was only readable via get_doc or a later edit
+   * response — surfaces the party who just LOST content (whoever ran the
+   * `git stash` whose bytes now exist only in clobber-backups/, or saved in
+   * an editor) never touches. Watching sessions do, so the loss is announced
+   * where the watchers already are (board ticket t-3bFI5h-F9qRW).
+   */
+  private recordSyncError(
+    room: DocRoom,
+    binding: FileBinding,
+    message: string,
+    backupPath?: string | null,
+  ): void {
+    const at = Date.now();
+    binding.lastSyncError = { message, at };
+    room.seq++;
+    const decorate = this.cfg.decorateDocMeta ?? ((m) => m);
+    this.broadcastToRoom(room, {
+      event: 'doc.sync_error',
+      docId: room.docId,
+      doc: decorate(room.meta),
+      path: room.meta.relPath ?? binding.path,
+      ...(backupPath ? { backupPath } : {}),
+      message,
+      at,
+      seq: room.seq,
+    });
   }
 
   /**
