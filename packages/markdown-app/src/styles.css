@@ -1592,8 +1592,17 @@ body.hub-body {
   white-space: pre-wrap;
 }
 /* The inline `Task: <title> ↗` link (mockup `.desc a`). A button, because it
-   acts rather than navigates — dressed as the link it reads as. */
+   acts rather than navigates — dressed as the link it reads as.
+
+   `inline-flex` for the tap target: since a queue row opens the card instead
+   of the resource, this is the ONLY way to the task or the doc, and it is
+   thumbed on an iPad. An inline box takes its height from the line and would
+   sit at ~18px; an inline-flex box is atomic, so `min-height` reaches the 36px
+   design-mobile.md asks for and the line grows with it. */
 .hub-walk-where-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
   font: inherit;
   padding: 0;
   border: none;
