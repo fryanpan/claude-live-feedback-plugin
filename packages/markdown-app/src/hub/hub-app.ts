@@ -1445,9 +1445,12 @@ async function main(): Promise<void> {
   /**
    * Answer a queued comment from the queue itself. The reply is an ordinary
    * thread comment — the same POST the doc and the task panel use — which is
-   * what takes the item OUT of the queue: `awaitingPerson` reports a thread
-   * only while an agent spoke last, so there is no separate dismissed flag to
-   * write and none to keep in sync.
+   * what takes the item OUT of the queue: the server ships a thread row only
+   * while a declared item or a direct ask is still waiting on a person, and a
+   * person's reply ends the unanswered run (`unansweredRun` in the server's
+   * review-queue.ts), so there is no separate dismissed flag to write and
+   * none to keep in sync. A declared item is retired the same way through
+   * `/answer`, which records the choice on the declaring comment.
    */
   async function replyToReviewItem(
     item: ReviewItem,
