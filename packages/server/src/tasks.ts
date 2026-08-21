@@ -1765,7 +1765,18 @@ export type SetLeadAgentResult =
        *  `takeover`. The request succeeded; the seat did not move. */
       declined?: 'lead-held';
     }
-  | { ok: false; error: 'workspace-not-found' };
+  | { ok: false; error: 'workspace-not-found' }
+  | {
+      ok: false;
+      /** `unknown-lead-agent` — a handover named an id this workspace has no
+       *  attachment record of, so every lead-addressed delivery would route
+       *  to nobody. `empty-lead-agent-id` — the id trimmed to nothing, which
+       *  used to take the seat as ''. */
+      error: 'unknown-lead-agent' | 'empty-lead-agent-id';
+      /** The verbatim refusal, naming the id — written to land in a retrying
+       *  caller's context, the same contract as `bad-review`. */
+      message: string;
+    };
 
 export type AnswerDecisionResult =
   | { ok: true; task: Task }
@@ -2689,7 +2700,39 @@ export class TaskStore {
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
     const next = leadAgentId.trim();
+    // The seat must route somewhere REAL — this method is the addressing
+    // authority for every lead-addressed delivery (queued voice notes, goal
+    // re-triage, bucket and task reviews), and it used to accept ANY trimmed
+    // string. A typo'd or fabricated id took the seat and the queue silently
+    // stopped draining: nothing anywhere reported that the addressee did not
+    // exist. Checked FIRST, before the same-id no-op, so '' can never equal
+    // anything — it used to trim to '' and be assigned.
+    if (next.length === 0) {
+      return {
+        ok: false,
+        error: 'empty-lead-agent-id',
+        message: 'leadAgentId is empty — the lead seat needs a real agent id.',
+      };
+    }
     if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
+    // Naming a THIRD PARTY is a deliberate handover, and a handover needs an
+    // addressee this workspace has a record of. The record is the attachments
+    // map: an agent that attached and went AWAY is still in it (recovering a
+    // dead session's seat is a supported flow — dead sessions do not detach),
+    // while an id nobody ever attached is not. SELF-declaration is exempt by
+    // definition — `next === actor.id` is a real, live caller, and the
+    // bootstrap order must not matter (older bundles declare before they
+    // attach; the store cannot assume attach came first).
+    if (next !== opts.actor.id && !state.attachments.has(next)) {
+      return {
+        ok: false,
+        error: 'unknown-lead-agent',
+        message:
+          `no agent "${next}" has ever attached to this workspace — a lead the board has ` +
+          'no record of would receive none of the deliveries addressed to the seat. ' +
+          'Name an agent that has attached here, or have that agent declare itself lead.',
+      };
+    }
     const previousLeadAgentId = workspace.leadAgentId;
     /**
      * DO NOT let an agent quietly take a seat somebody LIVE is sitting in.
