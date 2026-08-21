@@ -386,6 +386,80 @@ describe('server REST', () => {
     expect(content.blocks[0]?.text).toBe('First paragraph.');
   });
 
+  it('insert_blocks placement top-level escapes the list item; unknown placement is a 400', async () => {
+    const file = join(dataDir, 'blocks-placement.md');
+    writeFileSync(file, '- alpha\n- beta\n\nAfter paragraph.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-placement', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+
+    const anchor = await fetch(`${base}/api/docs/md-placement/agent_anchors`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ find: 'alpha' }),
+    }).then((r) => j<{ anchorId: string }>(r));
+    const route = `${base}/api/docs/md-placement/agent_anchors/${encodeURIComponent(anchor.anchorId)}/insert_blocks`;
+
+    // Unknown placement → 400 before any write.
+    const bad = await fetch(route, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ markdown: '## New section', placement: 'sideways' }),
+    });
+    expect(bad.status).toBe(400);
+    const badBody = (await bad.json()) as { error: string };
+    expect(badBody.error).toContain('placement');
+
+    // top-level → the heading lands AFTER the whole list, not nested in the item.
+    const res = await fetch(route, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ markdown: '## New section\n\nBody.', placement: 'top-level' }),
+    });
+    expect(res.status).toBe(200);
+    const content = await fetch(`${base}/api/docs/md-placement/content`).then((r) =>
+      j<{ blocks: { type: string | null; text: string }[] }>(r),
+    );
+    expect(content.blocks.map((b) => b.type)).toEqual([
+      'bulletList',
+      'heading',
+      'paragraph',
+      'paragraph',
+    ]);
+  });
+
+  it('threads insert_blocks_after forwards placement top-level too', async () => {
+    const file = join(dataDir, 'blocks-placement-thread.md');
+    writeFileSync(file, '- alpha\n- beta\n\nAfter paragraph.\n');
+    await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'md-placement-thread', type: 'markdown', sourceUrl: file }),
+    }).then((r) => j(r));
+
+    const created = await fetch(`${base}/api/docs/md-placement-thread/threads/by_find`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ author: agent, text: 'add a section after this list', find: 'beta' }),
+    }).then((r) => j<{ thread: { id: string } }>(r));
+
+    const res = await fetch(
+      `${base}/api/docs/md-placement-thread/threads/${encodeURIComponent(created.thread.id)}/insert_blocks_after`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ markdown: '## New section', placement: 'top-level' }),
+      },
+    );
+    expect(res.status).toBe(200);
+    const content = await fetch(`${base}/api/docs/md-placement-thread/content`).then((r) =>
+      j<{ blocks: { type: string | null }[] }>(r),
+    );
+    expect(content.blocks.map((b) => b.type)).toEqual(['bulletList', 'heading', 'paragraph']);
+  });
+
   it('docs created with the same setId share the set', async () => {
     const f1 = join(dataDir, 'set-a.md');
     const f2 = join(dataDir, 'set-b.md');

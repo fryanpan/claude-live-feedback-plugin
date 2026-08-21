@@ -616,6 +616,78 @@ describe('insertBlocksAfterAnchor', () => {
       /Gorillas\n\nGentle giants.*\n\ndiet: plants\n\nhabitat: forest\n\nMonkeys/s,
     );
   });
+
+  /** Doc whose first block is a bullet list; anchor pinned inside the FIRST
+   *  list item's paragraph — the shape that has twice broken structure when
+   *  a sweep inserted "after the anchor" and everything nested under the item. */
+  function listDocWithAnchor(): { doc: Y.Doc; anchorRel: Uint8Array } {
+    const doc = new Y.Doc();
+    const frag = getProseFragment(doc);
+    doc.transact(() => frag.push(parseMarkdownBlocks('- alpha\n- beta\n\nAfter paragraph.')));
+    const list = frag.toArray()[0] as Y.XmlElement;
+    const item = list.toArray()[0] as Y.XmlElement;
+    const para = item.toArray()[0] as Y.XmlElement;
+    const text = para.toArray()[0] as Y.XmlText;
+    const anchorRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, 0));
+    return { doc, anchorRel };
+  }
+
+  it('characterization: default placement nests blocks INSIDE the list item hosting the anchor', () => {
+    // Locks the compat default: 'after-block' means after the anchor's
+    // innermost block, even when that block sits inside a listItem.
+    const { doc, anchorRel } = listDocWithAnchor();
+    const res = insertBlocksAfterAnchor(doc, { anchorRel, markdown: '## New section\n\nBody.' });
+    expect(res.ok).toBe(true);
+    const frag = getProseFragment(doc);
+    // Top level is unchanged: still [bulletList, paragraph].
+    expect(frag.toArray().map((b) => (b as Y.XmlElement).nodeName)).toEqual([
+      'bulletList',
+      'paragraph',
+    ]);
+    // The heading landed inside the first listItem.
+    const list = frag.toArray()[0] as Y.XmlElement;
+    const item = list.toArray()[0] as Y.XmlElement;
+    expect(item.toArray().map((c) => (c as Y.XmlElement).nodeName)).toContain('heading');
+  });
+
+  it("placement 'top-level' inserts after the ENTIRE list, at fragment level", () => {
+    const { doc, anchorRel } = listDocWithAnchor();
+    const res = insertBlocksAfterAnchor(doc, {
+      anchorRel,
+      markdown: '## New section\n\nBody.',
+      placement: 'top-level',
+    });
+    expect(res.ok).toBe(true);
+    const frag = getProseFragment(doc);
+    expect(frag.toArray().map((b) => (b as Y.XmlElement).nodeName)).toEqual([
+      'bulletList',
+      'heading',
+      'paragraph',
+      'paragraph',
+    ]);
+    // Serialized markdown shows the heading un-indented, after the whole list.
+    const md = serializeFragmentToMarkdown(frag);
+    expect(md).toContain('- beta\n\n## New section\n\nBody.');
+  });
+
+  it("placement 'top-level' on an already top-level anchor matches the default", () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'First.' },
+      { tag: 'paragraph', text: 'Last.' },
+    ]);
+    const frag = getProseFragment(doc);
+    const first = frag.toArray()[0] as Y.XmlElement;
+    const text = first.toArray()[0] as Y.XmlText;
+    const anchorRel = Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, 0));
+    const res = insertBlocksAfterAnchor(doc, {
+      anchorRel,
+      markdown: 'Middle.',
+      placement: 'top-level',
+    });
+    expect(res.ok).toBe(true);
+    expect(walkProse(frag).plainText).toBe('First.\n\nMiddle.\n\nLast.');
+  });
 });
 
 describe('autoReanchorDoc', () => {

@@ -88,3 +88,35 @@ describe('find_and_replace forwards replaceAll', () => {
     expect(bundle).toContain('replaceAll');
   });
 });
+
+describe('insert_blocks tools forward placement', () => {
+  for (const tool of ['insert_blocks_at_anchor', 'insert_blocks_after_thread'] as const) {
+    it(`${tool} declares placement, and the description names the list-item nesting trap`, () => {
+      const decl = declarationFor(tool);
+      expect(decl).toContain('placement: {');
+      expect(decl).toContain("'after-block'");
+      expect(decl).toContain("'top-level'");
+      // The failure mode the param exists for must be discoverable from the
+      // schema alone — an agent picks placement at the moment its anchor
+      // sits inside a list item, not after re-reading the docs.
+      expect(decl.toLowerCase()).toContain('list item');
+    });
+
+    it(`${tool} handler puts placement into the POST body instead of dropping it`, () => {
+      // These handlers' http() calls are line-wrapped, so match the pieces
+      // separately: a POST happens, and the body carries the forward (not
+      // just the `as { … }` type annotation naming the field).
+      const handler = handlerFor(tool);
+      const bodyStart = handler.indexOf('await http(');
+      expect(bodyStart, 'handler does not call http').toBeGreaterThan(-1);
+      const call = handler.slice(bodyStart);
+      expect(call).toContain("'POST'");
+      expect(call).toMatch(/placement !== undefined \? \{ placement \}/);
+    });
+  }
+
+  it('the committed bundle carries the forward too (peers load the bundle, not the source)', () => {
+    const bundle = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
+    expect(bundle).toContain("'after-block'");
+  });
+});

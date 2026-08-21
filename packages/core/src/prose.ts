@@ -1799,17 +1799,31 @@ function serializeBlockquote(node: Y.XmlElement): string {
   return parts.length > 0 ? parts.join('\n>\n') : '>';
 }
 
+/** Where insertBlocksAfterAnchor splices relative to the anchor's block. */
+export type BlockPlacement = 'after-block' | 'top-level';
+
 /**
  * Insert one or more markdown-parsed blocks AFTER the block containing
  * the anchor. Use this for "add a paragraph after this heading" or
  * "add a section here" — the anchor tells the agent where in the doc
  * structure to splice, and the markdown describes the new content.
+ *
+ * `placement` (default 'after-block') picks the splice point:
+ * - 'after-block': immediately after the anchor's INNERMOST block, inside
+ *   that block's parent. For an anchor inside a list item's paragraph the
+ *   parent is the listItem, so the new blocks NEST under the item — which
+ *   has broken document structure twice when the caller meant "after the
+ *   list". Kept as the default because it is the historical behavior.
+ * - 'top-level': after the anchor's TOP-LEVEL block, at fragment level —
+ *   "after the whole list / table / blockquote". For an anchor already in
+ *   a top-level block the two placements are identical.
  */
 export function insertBlocksAfterAnchor(
   doc: Y.Doc,
   opts: {
     anchorRel: Uint8Array;
     markdown: string;
+    placement?: BlockPlacement;
     transactionOrigin?: unknown;
   },
 ): AnchoredEditResult {
@@ -1819,8 +1833,11 @@ export function insertBlocksAfterAnchor(
   const { segments } = walkProse(fragment);
   const seg = segments.find((s) => s.node === raw.node);
   if (!seg || !seg.block) return { ok: false, error: 'no-host-block' };
-  const block = seg.block;
-  const parent = block.parent as Y.XmlFragment | Y.XmlElement | null;
+  // walkProse guarantees topBlock is set for any segment with a block, but
+  // fall through to the after-block path rather than crash if it isn't.
+  const topLevel = opts.placement === 'top-level' && seg.topBlock != null;
+  const block = topLevel ? (seg.topBlock as Y.XmlElement) : seg.block;
+  const parent = (topLevel ? fragment : block.parent) as Y.XmlFragment | Y.XmlElement | null;
   if (!parent) return { ok: false, error: 'no-host-block' };
   const siblings = parent.toArray();
   const idx = siblings.indexOf(block);
