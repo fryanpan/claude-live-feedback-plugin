@@ -1,8 +1,8 @@
 import type { Comment, ReviewPayload, Thread, User } from '@feedback/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MountScope } from '../src/mount-scope.ts';
-import { ThreadPanel } from '../src/threads.ts';
 import { type ThreadModalHandle, mountThreadModal } from '../src/thread-modal.ts';
+import { ThreadPanel } from '../src/threads.ts';
 
 /**
  * The wide modal a long or decision-bearing thread opens in.

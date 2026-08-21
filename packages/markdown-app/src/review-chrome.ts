@@ -9,10 +9,12 @@ import {
   summaryPending,
 } from '@feedback/core';
 import type * as Y from 'yjs';
+import { threadNeedsModal } from './long-thread.ts';
 import { attachMarkdownComposer, focusMarkdownComposer } from './md-composer.ts';
 import { type MobileReview, mountMobileReview } from './mobile-review.ts';
 import type { MountScope } from './mount-scope.ts';
 import type { ReviewSurface } from './review-surface.ts';
+import { type ThreadModalHandle, mountThreadModal } from './thread-modal.ts';
 import { installSlotRemeasure, sizeThreadSlots } from './thread-morph.ts';
 import { ThreadPanel, type ThreadTab } from './threads.ts';
 
@@ -216,6 +218,17 @@ export interface ReviewChrome {
   refreshThreadDecorations: (activeId: string | null) => void;
   /** Scroll+pulse the thread's range and focus it in panel / thread view. */
   revealThread: (id: string) => void;
+  /**
+   * Open this thread in the wide modal IF it has outgrown the 300px column —
+   * more than ~100 words, or a decision at any length (`long-thread.ts`) — and
+   * the viewport is wide enough for a modal to be the right treatment.
+   *
+   * Returns false when the caller should go on expanding the card in place, so
+   * every route into a thread asks the same question in the same words. There
+   * are three of them (a card tap, `revealThread`, a tap on the anchor
+   * highlight), and the third does not pass through the other two.
+   */
+  openInModal: (id: string) => boolean;
   /** Mobile inline cards + over-doc sheet + the ‹ › comment nav. */
   mobile: MobileReview;
   openThreadView: (id: string) => void;
@@ -245,6 +258,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     if (opts.scope) opts.scope.listen(target, type, handler, options);
     else target.addEventListener(type, handler, options);
   };
+
+  /** Teardown for the modal when this mount has no scope of its own — it
+   *  appends to `document.body`, so `destroy()` has to be able to take it
+   *  away or the next document mounts under a stranded dialog. */
+  const modalCleanups: Array<() => void> = [];
 
   const threadsListEl = el<HTMLElement>('threads-list');
   const docTitleEl = el<HTMLElement>('doc-title');
@@ -488,6 +506,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // stale exactly when the drawer would, so they refresh from the same
     // signal rather than a listener of their own.
     mobile.refresh();
+    // …and so does the modal's copy. It holds a card the panel's own render
+    // never rebuilds, so without this a reply landing over the websocket shows
+    // up everywhere on the page except in the dialog being read.
+    const modalId = threadModal.openThreadId();
+    if (modalId) threadModal.refresh(all.find((t) => t.id === modalId) ?? null);
   }
   function refreshThreadDecorations(activeId: string | null): void {
     activeThreadId = activeId;
@@ -515,6 +538,49 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   }
 
   // --- thread panel ------------------------------------------------------
+  // The wide modal a thread too big for the column opens in. Built BEFORE the
+  // panel it renders from: the two reference each other, so one of them has to
+  // be named first, and every reference here is inside a closure that does not
+  // run until after both exist.
+  const threadModal: ThreadModalHandle = mountThreadModal({
+    scope: {
+      listen: on,
+      onCleanup: (fn) => {
+        if (opts.scope) opts.scope.onCleanup(fn);
+        else modalCleanups.push(fn);
+      },
+    },
+    renderCard: (t, pendingReply) => threadsPanel.renderThread(t, pendingReply),
+    // Hand the selection back only when it is still the thread the modal was
+    // showing: closing BECAUSE another thread was selected must not then
+    // unselect that other thread — which is the loop `onActiveChange` feeds.
+    onClose: (threadId) => {
+      if (threadsPanel.getActive() === threadId) threadsPanel.setActive(null);
+    },
+  });
+
+  /**
+   * Open `id` in the wide modal, or say no.
+   *
+   * Two conditions and both are load-bearing. The thread has to have outgrown
+   * the column (`threadNeedsModal`), and the viewport has to be one where a
+   * modal is the right answer at all: below 1100px a comment ALREADY opens as
+   * a full-width inline card with the over-doc sheet behind it, so a dialog
+   * there is a second dismissable layer over one conversation.
+   *
+   * `setActive` still happens, and first: the panel's selection is the one
+   * expand authority, it carries the anchor highlight, and it is what makes
+   * the card the modal builds render open rather than folded.
+   */
+  function maybeOpenModal(id: string): boolean {
+    if (inlineCardsVisible()) return false;
+    const t = collectThreads().find((x) => x.id === id);
+    if (!t || !threadNeedsModal(t)) return false;
+    threadsPanel.setActive(id);
+    threadModal.open(t);
+    return true;
+  }
+
   const threadsPanel = new ThreadPanel({
     container: threadsListEl,
     currentUser: user,
@@ -523,13 +589,22 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // instead of at each of the half-dozen places that change it. Folding an
     // open card had no such place — it selects nothing, from inside the card's
     // own tap handler — so the highlight used to stay lit with no card open.
-    onActiveChange: (id) => refreshThreadDecorations(id),
+    onActiveChange: (id) => {
+      refreshThreadDecorations(id);
+      // The selection moved off whatever the modal is showing — a different
+      // thread, or nothing. The modal is a view of ONE thread and the panel's
+      // selection is the authority, so it follows rather than argues.
+      if (id !== threadModal.openThreadId()) threadModal.close();
+    },
     onThreadClick: (id) => {
       const range = resolveThreadRange(id);
       if (range) {
         surface.scrollToPos(range.from);
         surface.pulseRange(range.from, range.to);
       }
+      // A thread that has outgrown the column opens in the modal instead of
+      // unfolding into it; `maybeOpenModal` has already made the selection.
+      if (maybeOpenModal(id)) return;
       threadsPanel.setActive(id);
       // Nothing extra on mobile: setActive has already unfolded EVERY copy
       // of this card, so a tap in the sheet expands the sheet's copy in
@@ -672,7 +747,14 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   // Crossing the phone breakpoint changes which surface owns the comments —
   // inline cards must appear (or be handed back) at the same width the
   // stylesheet swaps the drawer for a sheet.
-  on(window.matchMedia(INLINE_CARDS_QUERY), 'change', () => mobile.refresh());
+  on(window.matchMedia(INLINE_CARDS_QUERY), 'change', () => {
+    mobile.refresh();
+    // Crossing DOWN hands the conversation to the inline card and the sheet.
+    // Leaving the dialog up would stack a second dismissable layer over the
+    // same thread — and page zoom moves a reviewer across this line, so it is
+    // not a hypothetical transition.
+    if (inlineCardsVisible()) threadModal.close();
+  });
 
   // A card's folding slots hold a height we MEASURED, so anything that
   // changes text metrics after first paint — a reflow, a webfont landing —
@@ -706,7 +788,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       // resolved) has no inline card at all — showThread opens the sheet,
       // the only place it exists.
       mobile.showThread(id);
-    } else {
+    } else if (!maybeOpenModal(id)) {
       // Open the drawer first, then (after layout) scroll the panel to the
       // thread — otherwise the active comment lands off-screen and the
       // click appears to do nothing.
@@ -979,6 +1061,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     redrawThreads,
     refreshThreadDecorations,
     revealThread,
+    openInModal: maybeOpenModal,
     mobile,
     openThreadView,
     closeThreadView,
@@ -998,6 +1081,11 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       threadsListEl.innerHTML = '';
       hideComposer();
       closeThreadView();
+      // The modal lives on `document.body`, outside every element this
+      // function empties — a scope-less mount has to take it away by hand or
+      // the next document mounts underneath a stranded dialog.
+      threadModal.close();
+      for (const fn of modalCleanups.splice(0)) fn();
       // The doc-level suggestions badge (suggestions-summary.ts) is only
       // mounted by the markdown/redline surfaces, not the code surface — if
       // the next document's mount doesn't call mountSuggestionsSummary at
@@ -1054,6 +1142,12 @@ export function wireThreadRangeClicks(opts: ThreadFocusOpts): void {
     // on screen; jumping the doc would feel broken.
     const range = chrome.resolveThreadRange(threadId);
     if (range) surface.pulseRange(range.from, range.to);
+    // Asked BEFORE the balloon, because a balloon reveal expands the card in
+    // the column — which is the treatment this thread was promoted out of.
+    // This is the one route into a thread that does not pass through
+    // `onThreadClick`, so without this the modal would be reachable from the
+    // drawer and not from the highlight the reader actually taps.
+    if (chrome.openInModal(threadId)) return;
     if (revealBalloon?.(threadId)) return;
     if (chrome.isMobile()) {
       // The card is already inline, directly under the text just tapped —

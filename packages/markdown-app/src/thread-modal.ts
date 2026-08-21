@@ -1,6 +1,5 @@
 import { type Thread, threadRenderKey } from '@feedback/core';
 import { threadDecision } from './long-thread.ts';
-import type { MountScope } from './mount-scope.ts';
 import { isFoldingTap, sizeThreadSlots, syncFaceVisibility } from './thread-morph.ts';
 
 /**
@@ -29,20 +28,37 @@ import { isFoldingTap, sizeThreadSlots, syncFaceVisibility } from './thread-morp
  * lives with the caller (`inlineCardsVisible`), which is the thing that knows.
  */
 
+/**
+ * Just the two things this needs from a lifecycle owner. A `MountScope`
+ * satisfies it, and so does the ad-hoc pair the chrome assembles for a mount
+ * that has no scope of its own — which is what the lighter test fixtures and
+ * the pre-router boots are.
+ */
+export interface ThreadModalScope {
+  listen: (
+    target: EventTarget,
+    type: string,
+    handler: EventListenerOrEventListenerObject,
+    options?: AddEventListenerOptions,
+  ) => void;
+  onCleanup: (fn: () => void) => void;
+}
+
 export interface ThreadModalOpts {
-  scope: MountScope;
+  scope: ThreadModalScope;
   /** The card. Pass `(t, draft) => threadsPanel.renderThread(t, draft)`. */
   renderCard: (t: Thread, pendingReply?: string) => HTMLElement;
   /**
-   * The modal closed — by any route, including `close()` itself. The chrome
-   * hands the selection back (`setActive(null)`) from here, so the anchor
-   * highlight and every other copy of the card fold with it.
+   * The modal closed — by any route, including `close()` itself. Carries the
+   * thread it WAS showing, which is what lets the chrome hand the selection
+   * back only when the selection is still that thread: a close caused by
+   * another thread being selected must not then unselect that other thread.
    *
    * Fires exactly once per open. A close that closes nothing announces
    * nothing, which is what keeps the caller's own `setActive(null)` from
    * looping back in through `onActiveChange`.
    */
-  onClose: () => void;
+  onClose: (threadId: string) => void;
 }
 
 export interface ThreadModalHandle {
@@ -128,6 +144,7 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     // hands the panel's selection back, which comes round again as an
     // active-change — and that is where an unguarded second close would loop.
     if (openId === null) return;
+    const was = openId;
     openId = null;
     renderedKey = '';
     bodyEl.textContent = '';
@@ -136,7 +153,7 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     scrim.setAttribute('aria-hidden', 'true');
     returnFocus?.focus?.();
     returnFocus = null;
-    opts.onClose();
+    opts.onClose(was);
   }
 
   function refresh(t: Thread | null): void {
