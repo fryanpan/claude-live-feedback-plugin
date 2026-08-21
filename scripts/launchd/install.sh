@@ -54,12 +54,20 @@ BUN_DIR="$(dirname "${BUN_BIN}")"
 # working; the new name wins when both are set.
 PUBLIC_BASE_URL="${CW_PUBLIC_BASE_URL:-${LF_PUBLIC_BASE_URL:-}}"
 
+# Link-mode sharing hostname, same contract as the base URL: baked into the
+# plist because launchd inherits no shell environment, and empty (the default)
+# keeps link mode off. Re-running the installer without it reverts sharing —
+# which is exactly what happened at the claude-workspaces rename, so pass it
+# every time on a deployment that shares.
+SHARE_PUBLIC_HOSTNAME="${CF_SHARE_PUBLIC_HOSTNAME:-}"
+
 echo "[install] label:    ${LABEL}"
 echo "[install] repo:     ${REPO_DIR}"
 echo "[install] bun:      ${BUN_BIN}"
 echo "[install] plist:    ${PLIST_DEST}"
 echo "[install] logs:     ${LOG_DIR}/${LABEL}.{out,err}.log"
 echo "[install] links:    ${PUBLIC_BASE_URL:-<discovered host>:<port> over http}"
+echo "[install] sharing:  ${SHARE_PUBLIC_HOSTNAME:-<link mode off>}"
 
 DOMAIN="gui/$(id -u)"
 
@@ -110,6 +118,7 @@ sed \
     -e "s|{{HOME_DIR}}|${HOME}|g" \
     -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
     -e "s|{{PUBLIC_BASE_URL}}|${PUBLIC_BASE_URL}|g" \
+    -e "s|{{SHARE_PUBLIC_HOSTNAME}}|${SHARE_PUBLIC_HOSTNAME}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
 
 launchctl bootstrap "${DOMAIN}" "${PLIST_DEST}"
