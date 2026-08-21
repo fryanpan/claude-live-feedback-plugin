@@ -40,6 +40,13 @@ import {
   renderTaskDetail,
   renderUnplacedStrip,
 } from '../src/hub/hub-render.ts';
+import {
+  composerSelection,
+  focusMarkdownComposer,
+  isComposerFocused,
+  refreshMarkdownComposer,
+} from '../src/md-composer.ts';
+import { caretAt, frame, renderedHtml, surfaceOf, typeInComposer } from './support/composer.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
 
@@ -1656,7 +1663,7 @@ describe('renderTaskDetail', () => {
   /** A repaint must not re-take it: the panel repaints on every board change,
    *  and one that grabbed focus would pull the caret out of the composer
    *  every time a peer's comment landed. */
-  it('does not re-take focus on a repaint of the same task', () => {
+  it('does not re-take focus on a repaint of the same task', async () => {
     const t = task({ id: 't-repaint' });
     const withComposer = () => ({ ...detailHandlers(), onComment: vi.fn() });
     const discussion = { loading: false, threads: [] };
@@ -1666,14 +1673,14 @@ describe('renderTaskDetail', () => {
     // "focus went back to the composer" below is a decision rather than an
     // empty panel with nowhere else for it to go.
     expect(ta).toBeTruthy();
-    ta?.focus();
-    ta!.value = 'half a sentence';
+    await typeInComposer(ta as HTMLTextAreaElement, 'half a sentence');
 
     renderTaskDetail(root, t, withComposer(), discussion);
+    await frame();
     const panel = root.querySelector('.hub-detail-panel');
     const rebuilt = root.querySelector<HTMLTextAreaElement>('.hub-detail-panel textarea');
     expect(document.activeElement).not.toBe(panel);
-    expect(document.activeElement).toBe(rebuilt);
+    expect(isComposerFocused(rebuilt as HTMLTextAreaElement)).toBe(true);
     expect(rebuilt?.value).toBe('half a sentence');
   });
 
@@ -2619,21 +2626,18 @@ describe('renderTaskDetail — discussion', () => {
     );
   });
 
-  /** Design point 4: every composer is a markdown field with a live preview. */
-  it('the discussion composer is a markdown field', () => {
+  /** Design point 4: every composer is a live markdown editor. */
+  it('the discussion composer is a markdown editor', () => {
     renderTaskDetail(root, task(), detailHandlers(), { loading: false, threads: [] });
     const form = root.querySelector('.hub-comment-form') as HTMLFormElement;
-    expect(form.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
-    const preview = form.querySelector('.md-preview') as HTMLElement;
-    expect(preview.hidden).toBe(true);
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
     ta.value = '**two hops**';
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(preview.hidden).toBe(false);
-    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+    refreshMarkdownComposer(ta);
+    expect(renderedHtml(ta)).toContain('<strong>two hops</strong>');
   });
 
-  it('the review card answer box is a markdown field too', () => {
+  it('the review card answer box is a markdown editor too', () => {
     renderTaskDetail(
       root,
       task({ id: 't-1' }),
@@ -2641,8 +2645,8 @@ describe('renderTaskDetail — discussion', () => {
       { loading: false, threads: [thread({ id: 'th-1' })] },
     );
     const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
-    expect(form.querySelector('.md-affordance')).not.toBeNull();
-    expect(form.querySelector('.md-preview')).not.toBeNull();
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
   });
 
   /**
@@ -2964,22 +2968,26 @@ describe('a repaint of the detail panel keeps what was typed', () => {
 
   const composer = () => root.querySelector('.hub-discussion textarea') as HTMLTextAreaElement;
 
-  /** Type into a control the way a person does: value, focus, caret. */
-  const typeInto = (el: HTMLTextAreaElement | HTMLInputElement, text: string, caret: number) => {
+  /** Type into a plain control the way a person does: value, focus, caret.
+   *  The composers go through `typeInComposer` — their words live in an
+   *  editor, and their caret is a ProseMirror position rather than an
+   *  offset. */
+  const typeInto = (el: HTMLInputElement, text: string, caret: number) => {
     el.value = text;
     el.focus();
     el.setSelectionRange(caret, caret);
   };
 
-  it('the discussion composer survives a task transition — text, focus AND caret', () => {
+  it('the discussion composer survives a task transition — text, focus AND caret', async () => {
     const t = task({ status: 'todo' });
     paint(t);
     const before = composer();
-    typeInto(before, 'I think this is below the API work because', 12);
-    expect(document.activeElement).toBe(before);
+    await typeInComposer(before, 'I think this is below the API work because', 12);
+    expect(isComposerFocused(before)).toBe(true);
 
     // The SSE-driven repaint: same task, new status.
     paint({ ...t, status: 'in-progress' });
+    await frame();
 
     // Positive control, two ways: the panel really was rebuilt (the status
     // control moved, and the composer is a NEW node), so a pass below is a
@@ -2991,69 +2999,71 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     expect(after).not.toBe(before);
 
     expect(after.value).toBe('I think this is below the API work because');
-    expect(document.activeElement).toBe(after);
-    expect(after.selectionStart).toBe(12);
-    expect(after.selectionEnd).toBe(12);
+    expect(isComposerFocused(after)).toBe(true);
+    expect(composerSelection(after)).toEqual(caretAt(12));
   });
 
   // The caret is restored where it was, not at the end — someone editing the
   // middle of a sentence keeps their place.
-  it('keeps a mid-text selection, direction included', () => {
+  it('keeps a mid-text selection', async () => {
     const t = task();
     paint(t);
     const ta = composer();
     ta.value = 'drop the second half';
-    ta.focus();
-    ta.setSelectionRange(9, 20, 'backward');
+    refreshMarkdownComposer(ta);
+    focusMarkdownComposer(ta, { from: 10, to: 21 });
+    await frame();
     paint({ ...t, updatedAt: NOW + 1 });
-    const after = composer();
-    expect(after.selectionStart).toBe(9);
-    expect(after.selectionEnd).toBe(20);
-    expect(after.selectionDirection).toBe('backward');
+    await frame();
+    expect(composerSelection(composer())).toEqual({ from: 10, to: 21 });
   });
 
   // Text without focus is still a draft — the reader tapped away to read a
   // thread and is coming back to it. Restored, but the caret is left alone:
   // focusing a field the person left would steal it from wherever they went.
-  it('keeps unfocused draft text without stealing focus', () => {
+  it('keeps unfocused draft text without stealing focus', async () => {
     const t = task();
     paint(t);
     composer().value = 'half a thought';
+    refreshMarkdownComposer(composer());
     (document.activeElement as HTMLElement | null)?.blur?.();
     document.body.focus();
     paint({ ...t, updatedAt: NOW + 1 });
+    await frame();
     expect(composer().value).toBe('half a thought');
-    expect(document.activeElement).not.toBe(composer());
+    expect(isComposerFocused(composer())).toBe(false);
   });
 
   // The other text controls on the panel go through the same repaint and lose
   // the same way, so they ride the same fix.
-  it('the review card’s answer box survives too', () => {
+  it('the review card’s answer box survives too', async () => {
     const t = task();
     paint(t, { asks: [ask(t.id, 'th-1')] });
     const box = root.querySelector('.hub-decide-form textarea') as HTMLTextAreaElement;
     expect(box).toBeTruthy();
-    typeInto(box, 'Keep threading.', 4);
+    await typeInComposer(box, 'Keep threading.', 4);
     paint({ ...t, status: 'in-progress' }, { asks: [ask(t.id, 'th-1')] });
+    await frame();
     const after = root.querySelector('.hub-decide-form textarea') as HTMLTextAreaElement;
     expect(after).not.toBe(box);
     expect(after.value).toBe('Keep threading.');
-    expect(document.activeElement).toBe(after);
-    expect(after.selectionStart).toBe(4);
+    expect(isComposerFocused(after)).toBe(true);
+    expect(composerSelection(after)).toEqual(caretAt(4));
   });
 
-  it('a decision answer being recorded survives too', () => {
+  it('a decision answer being recorded survives too', async () => {
     const t = task({ needs: 'decision' });
     paint(t);
     const box = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
     expect(box).toBeTruthy();
-    typeInto(box, 'Option B, because', 8);
+    await typeInComposer(box, 'Option B, because', 8);
     paint({ ...t, updatedAt: NOW + 1 });
+    await frame();
     const after = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
     expect(after).not.toBe(box);
     expect(after.value).toBe('Option B, because');
-    expect(document.activeElement).toBe(after);
-    expect(after.selectionStart).toBe(8);
+    expect(isComposerFocused(after)).toBe(true);
+    expect(composerSelection(after)).toEqual(caretAt(8));
   });
 
   // The title editor is a control that only exists mid-edit, so a repaint
@@ -3078,24 +3088,26 @@ describe('a repaint of the detail panel keeps what was typed', () => {
   // on. Opening a DIFFERENT task in the same panel starts clean — carrying a
   // half-typed comment from one task onto another would post it in the wrong
   // place, which is worse than losing it.
-  it('does not carry a draft from one task onto another', () => {
+  it('does not carry a draft from one task onto another', async () => {
     const a = task();
     const b = task();
     paint(a);
-    typeInto(composer(), 'about task A', 5);
+    await typeInComposer(composer(), 'about task A', 5);
     paint(b);
+    await frame();
     expect(composer().value).toBe('');
-    expect(document.activeElement).not.toBe(composer());
+    expect(isComposerFocused(composer())).toBe(false);
   });
 
   // A control that starts empty stays empty: the snapshot is not inventing
   // values, and a repaint of an untouched panel is a no-op for the fields.
-  it('an untouched panel repaints untouched', () => {
+  it('an untouched panel repaints untouched', async () => {
     const t = task();
     paint(t);
     paint({ ...t, updatedAt: NOW + 1 });
+    await frame();
     expect(composer().value).toBe('');
-    expect(document.activeElement).not.toBe(composer());
+    expect(isComposerFocused(composer())).toBe(false);
   });
 
   // The two guarantees in one pass. They are implemented by opposite
@@ -3103,15 +3115,16 @@ describe('a repaint of the detail panel keeps what was typed', () => {
   // description slot is the node the rebuild goes AROUND — so a change that
   // reintroduced a blanket `replaceChildren` would satisfy neither, and one
   // that stopped rebuilding at all would silently freeze the panel.
-  it('keeps a live description AND a half-typed comment across the same repaint', () => {
+  it('keeps a live description AND a half-typed comment across the same repaint', async () => {
     const t = task({ status: 'todo', body: 'The description as the store has it.' });
     paint(t);
     const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
     slot.classList.add(BODY_LIVE_CLASS);
     slot.replaceChildren(document.createTextNode('what the editor is showing'));
-    typeInto(composer(), 'and a comment mid-sentence', 9);
+    await typeInComposer(composer(), 'and a comment mid-sentence', 9);
 
     paint({ ...t, status: 'in-progress' });
+    await frame();
 
     // Positive control: the panel really was repainted around the slot.
     expect((root.querySelector('.hub-detail-status') as HTMLSelectElement).value).toBe(
@@ -3120,8 +3133,8 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     expect(root.querySelector('.hub-detail-body-slot')).toBe(slot);
     expect(slot.textContent).toBe('what the editor is showing');
     expect(composer().value).toBe('and a comment mid-sentence');
-    expect(document.activeElement).toBe(composer());
-    expect(composer().selectionStart).toBe(9);
+    expect(isComposerFocused(composer())).toBe(true);
+    expect(composerSelection(composer())).toEqual(caretAt(9));
   });
 });
 
