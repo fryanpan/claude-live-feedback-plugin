@@ -267,9 +267,13 @@ export interface ReplaceResult {
   /** On `no-match` only: a NEAR miss a fallback scan found. `kind: 'case'`
    *  means the pattern is in the doc up to letter case; `kind: 'whitespace'`
    *  means it matches once whitespace runs are collapsed (double spaces,
-   *  NBSP, newlines). `preview` shows the DOC's actual characters, so the
-   *  caller can re-issue the find verbatim instead of falling back to a raw
-   *  disk write. Absent when the text is genuinely not there. */
+   *  NBSP, newlines). `preview` shows the DOC's actual characters — newlines
+   *  included, NOT flattened to spaces — so the caller can re-issue the find
+   *  verbatim instead of falling back to a raw disk write. A preview that
+   *  spans a block boundary quotes the flattened text's `\n\n` separator;
+   *  re-issuing that find reports `cross-node` (the separator is not
+   *  editable text), which is a terminal answer rather than a loop. Absent
+   *  when the text is genuinely not there. */
   hint?: NoMatchHint;
 }
 
@@ -542,13 +546,21 @@ export function findAndReplace(
   return { ok: true, ...marksReport(marks.dropped) };
 }
 
-function preview(text: string, at: number, length: number): string {
+/**
+ * `verbatim` keeps newlines as-is instead of flattening them to spaces.
+ * The flattened form is for DISPLAY (ambiguous-match candidate lists); a
+ * near-miss hint must quote the doc's characters byte-for-byte, because the
+ * caller is told to re-issue the find from it — flattening a newline there
+ * hands back the exact string that just failed, an infinite loop.
+ */
+function preview(text: string, at: number, length: number, verbatim = false): string {
   const pad = 24;
   const start = Math.max(0, at - pad);
   const end = Math.min(text.length, at + length + pad);
   const prefix = start > 0 ? '…' : '';
   const suffix = end < text.length ? '…' : '';
-  return prefix + text.slice(start, end).replace(/\n/g, ' ') + suffix;
+  const body = text.slice(start, end);
+  return prefix + (verbatim ? body : body.replace(/\n/g, ' ')) + suffix;
 }
 
 /**
@@ -574,7 +586,7 @@ function noMatchHint(
   if (pattern.length === 0 || plainText.includes(pattern)) return undefined;
 
   const ci = plainText.toLowerCase().indexOf(pattern.toLowerCase());
-  if (ci >= 0) return { kind: 'case', preview: preview(plainText, ci, pattern.length) };
+  if (ci >= 0) return { kind: 'case', preview: preview(plainText, ci, pattern.length, true) };
 
   const hay = collapseWhitespace(plainText);
   const needle = collapseWhitespace(pattern).text;
@@ -586,7 +598,10 @@ function noMatchHint(
       wi + needle.length < hay.map.length
         ? (hay.map[wi + needle.length] ?? plainText.length)
         : plainText.length;
-    return { kind: 'whitespace', preview: preview(plainText, startOrig, endOrig - startOrig) };
+    return {
+      kind: 'whitespace',
+      preview: preview(plainText, startOrig, endOrig - startOrig, true),
+    };
   }
   return undefined;
 }

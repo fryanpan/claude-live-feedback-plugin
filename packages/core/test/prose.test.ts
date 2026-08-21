@@ -201,6 +201,45 @@ describe('findAndReplace', () => {
     expect(res.hint?.kind).toBe('case');
   });
 
+  it('a whitespace hint across a real newline quotes the newline, not a space', () => {
+    // A code block holds real \n characters inside ONE Y.XmlText. If the
+    // hint preview flattened them to spaces, it would hand back the exact
+    // string that just failed to match — re-issuing it loops forever, which
+    // steers the caller straight back to the raw disk write the hint exists
+    // to prevent.
+    const doc = new Y.Doc();
+    seedDoc(doc, [{ tag: 'codeBlock', text: 'const foo = 1\nconst bar = 2' }]);
+    const res = findAndReplace(doc, { find: 'foo = 1 const bar', replace: 'x' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('foo = 1\nconst bar');
+    // Re-issuing the quoted characters verbatim now succeeds.
+    const again = findAndReplace(doc, {
+      find: 'foo = 1\nconst bar',
+      replace: 'foo = 9\nconst bar',
+    });
+    expect(again.ok).toBe(true);
+  });
+
+  it('a whitespace hint spanning a block boundary quotes the paragraph break', () => {
+    const doc = new Y.Doc();
+    seedDoc(doc, [
+      { tag: 'paragraph', text: 'ends with alpha' },
+      { tag: 'paragraph', text: 'beta starts' },
+    ]);
+    const res = findAndReplace(doc, { find: 'alpha beta', replace: 'x' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('no-match');
+    expect(res.hint?.kind).toBe('whitespace');
+    expect(res.hint?.preview).toContain('alpha\n\nbeta');
+    // Re-issuing that find is TERMINAL: the separator is not editable text,
+    // so it reports cross-node rather than another no-match+hint loop.
+    const again = findAndReplace(doc, { find: 'alpha\n\nbeta', replace: 'x' });
+    expect(again.ok).toBe(false);
+    expect(again.error).toBe('cross-node');
+  });
+
   it('surfaces ambiguous matches with candidates', () => {
     const doc = new Y.Doc();
     seedDoc(doc, [
