@@ -21,6 +21,8 @@ Every task you create — and every task you *see* — is yours to check against
 
 Then **place it**: the right goal, in the right position relative to the rows already there. `after` on a `create_tasks` row for a new one, `set_task_goal` for an existing one.
 
+**Avoid duplicates or subtasks.** If you see an existing ticket that covers the same goal and solution, merge the tickets.
+
 **Be ruthless.** A task that is not necessary for a goal goes to the Backlog. The board is a ranking, and a row that is on it without earning a place costs every future reader a read.
 
 ## 3. Work in priority order — including over the primary user
@@ -29,39 +31,14 @@ Then **place it**: the right goal, in the right position relative to the rows al
 
 Staff the top of the queue, in parallel where the rows don't collide, and keep going until the **goal** is met — not until the batch drains.
 
-## 4. Hold the seat
+## 4. Registering as Lead
 
 ```
 set_workspace_lead(workspaceId)          // no second argument
 ```
 
-Everything on the board then reaches you — task and decision events, thread events on every doc filed here, voice notes, re-triage asks — **including surfaces created later**, because coverage resolves when the event fires. It survives a respawn. And it hands back whatever queued while the seat was empty: `queuedVoice`, `pendingRetriage`, `pendingBucketReview`, `taskReviews`. Read it there — nothing offers it again.
+Everything on the board then reaches you:
 
-`queuedVoice` is notes the primary user spoke at the board with nobody attached — `{transcript, ts}` — asks that had nowhere to land. `pendingRetriage` is a goal that moved, `oldGoal` → `newGoal`, with the `taskIds` under it to re-rank against the new north star. `pendingBucketReview` is new bands appearing, `newBands` plus the unplaced `taskIds`, asking whether any of them have a home now. `taskReviews` is rows somebody wrote to, each with its `trigger`, wanting a shape check.
-
-The attach DRAINS all four, and the last three drain only for the lead: a bystander attaching leaves them put, or the ask is "delivered" to whoever showed up first.
-
-**That one call is also the repair, whatever is wrong.** It attaches before it touches the seat, and attaching resets the observed-liveness clock — so the same call claims an empty seat, revives your own seat after a quiet stretch, and gets you attached and subscribed to a board a live peer leads (that last returns `declined: "lead-held"` and leaves the seat put; `takeover: true` is for when you mean it). You do not have to work out which situation you are in.
-
-Two things it does not do:
-
-- **It does not keep you live.** Deliveries are gated on the server having observed you recently — a tool call or a heartbeat, whichever is later — so a working session stays live on its own and a long think or a long-running command is the case to watch. `heartbeat(workspaceId)` covers that stretch.
-- **`watch_doc` does not stand in for it.** Every delivery gate asks whether the lead is *attached*, and a doc watch is not an attachment. Six watches while every voice note queues looks exactly like a queue nobody filled: no error, no warning.
-
-When the board feels quiet, `list_watched_docs` → `coverage` answers what you are missing rather than what you are watching. **`coverage` absent means unknown, not all-clear.**
-
-### The three asks that route to you and nobody else
-
-| Arrives as            | Means                                                 | Read                                       |
-| --------------------- | ----------------------------------------------------- | ------------------------------------------ |
-| `kind: goal-retriage` | the north star changed                                | `claude-workspaces:handling-a-goal-change` |
-| `kind: task-review`   | somebody wrote to a row                               | `claude-workspaces:reviewing-task-shape`   |
-| `kind: bucket-review` | a band appeared, so unplaced work may have a home now | look at it; **never auto-place**           |
-
-Auto-placing stamps a ranking decision no human made, invisibly. The ask is always to look.
-
-### Promotion, and the pile you already have
-
-A finding on a task thread becomes a row when **you** say so. You hold the ranking and can place it against the goals it competes with; an agent promoting its own finding is how a queue reorders itself around whoever is talking.
-
-A deep Backlog needs a consolidation pass, and it is worth an hour: merge each row into the one that covers it, carry the absorbed body into the survivor, and close the absorbed rows `done` with a note saying **absorbed, not built** so the board reads as reversible rather than as work that shipped. 59 rows came down to 47 in one pass here, with six promoted into a real goal on the way.
+- Events for tasks, review items, comments, docs, voice requests, re-triage asks, bucket reviews, task reviews
+- Includes events from resources created later — you listen to everything
+- If you disconnect, events that happen in the meantime will remain queued for when you reconnect

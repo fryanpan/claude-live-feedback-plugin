@@ -4,7 +4,7 @@
 standard, keeping rows current, sharing progress and asking for review in
 the workspace — lives in the `claude-workspaces:working-in-a-workspace`
 skill (`packages/plugin/skills/working-in-a-workspace/SKILL.md`), and the
-lead seat's duties — goals, ranking, priority order, holding the seat — in
+lead seat’s duties — goals, ranking, priority order, registering as lead — in
 `claude-workspaces:leading-a-workspace`
 (`packages/plugin/skills/leading-a-workspace/SKILL.md`). Read them at
 session start if this session has a workspace, and follow them.
