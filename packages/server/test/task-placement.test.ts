@@ -60,7 +60,7 @@ describe('the store reports placement, grounded in what actually happened', () =
 
   function seed(): { wsId: string; G: GoalIds } {
     store = new TaskStore({ dataDir });
-    const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
+    const ws = store.createWorkspace('search-revamp');
     const G = seedGoals(store, ws.id, [{ key: 'ship', title: '1. Ship' }], {
       id: AGENT.id,
       name: AGENT.name,

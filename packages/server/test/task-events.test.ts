@@ -77,7 +77,7 @@ describe('task store events + audit log', () => {
 
   describe('task.created', () => {
     it('createTask emits task.created carrying the task, goal, and assignee', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const res = store.createTask(ws.id, { title: 'Wire the index' });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -92,7 +92,7 @@ describe('task store events + audit log', () => {
     });
 
     it('a refused create (unknown goal) emits nothing', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const bad = store.createTask(ws.id, { title: 'Nope', goal: 'g-missing' });
       expect(bad.ok).toBe(false);
       expect(events).toHaveLength(0);
@@ -105,7 +105,7 @@ describe('task store events + audit log', () => {
 
   describe('task.transitioned', () => {
     it('a transition emits the from/to, classified actor, evidence, and usage', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const created = store.createTask(ws.id, { title: 'Wire the index' });
       if (!created.ok) throw new Error('create failed');
       events.length = 0;
@@ -129,7 +129,7 @@ describe('task store events + audit log', () => {
     });
 
     it('a refused transition emits nothing (with a positive control)', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const gate = store.createTask(ws.id, {
         title: 'Your go?',
         assignee: 'human',
@@ -157,7 +157,7 @@ describe('task store events + audit log', () => {
 
   describe('decision.answered', () => {
     it('records the verbatim answer and emits it with actor and links', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const created = store.createTask(ws.id, {
         title: 'Expand the budget?',
         assignee: 'human',
@@ -183,7 +183,7 @@ describe('task store events + audit log', () => {
     });
 
     it('refuses a non-decision task and an unknown task, emitting nothing', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const created = store.createTask(ws.id, { title: 'Plain task' });
       if (!created.ok) throw new Error('create failed');
       events.length = 0;
@@ -207,7 +207,7 @@ describe('task store events + audit log', () => {
     });
 
     it('replaces the ordered list and emits old list, new list, actor, kind', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const res = store.setGoalList(ws.id, GOAL_ENTRIES, { actor: PERSON });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -242,7 +242,7 @@ describe('task store events + audit log', () => {
     });
 
     it('a pure reorder is kind=reorder; an identical list is changed=false with no event', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const { goals } = seedBoard(ws.id);
       events.length = 0;
       const reordered = [goals[1], goals[0]] as WorkspaceGoal[];
@@ -263,7 +263,7 @@ describe('task store events + audit log', () => {
     });
 
     it('moves OPEN tasks whose goal disappears to Backlog, batched under the goals_changed event; done stays put', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const { G, goals } = seedBoard(ws.id);
       const open = store.createTask(ws.id, { title: 'Trim the bundle', goal: G.perf });
       const closed = store.createTask(ws.id, { title: 'Old perf audit', goal: G.perf });
@@ -295,7 +295,7 @@ describe('task store events + audit log', () => {
     });
 
     it("refuses the reserved 'chores' id and duplicate ids", () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const reserved = store.setGoalList(ws.id, [{ id: CHORES_GOAL_ID, title: 'Backlog' }], {
         actor: PERSON,
       });
@@ -317,29 +317,25 @@ describe('task store events + audit log', () => {
 
   describe('events.jsonl audit log', () => {
     it('appends one line per emitted event, in order, matching what subscribers saw', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const created = store.createTask(ws.id, { title: 'Wire the index' });
       if (!created.ok) throw new Error('create failed');
       store.transition(created.task.id, 'in-progress', { actor: AGENT });
-      store.setWorkspaceGoal(ws.id, 'Ship the search, fast.', { actor: PERSON });
+      store.renameTask(created.task.id, 'Agent can wire the index', { actor: PERSON });
       const lines = readAudit(dataDir, ws.id);
-      // A goal edit with an open task to re-place writes TWO rows: the edit
-      // itself, then the batched re-triage it asks for (the request rides
-      // SSE only, so the row is the log's only record that it happened).
       expect(lines.map((l) => l.event)).toEqual([
         'task.created',
         'task.transitioned',
-        'workspace.goal_updated',
-        'workspace.retriaged',
+        'task.retitled',
       ]);
       // The audit line carries the same payload the subscriber saw.
       expect(lines[1]?.taskId).toBe(created.task.id);
       expect(lines[1]?.to).toBe('in-progress');
-      expect(events).toHaveLength(4);
+      expect(events).toHaveLength(3);
     });
 
     it('a refused mutation appends nothing (the creation lines are the positive control)', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       const created = store.createTask(ws.id, { title: 'Wire the index' });
       if (!created.ok) throw new Error('create failed');
       const before = readAudit(dataDir, ws.id);
@@ -350,7 +346,7 @@ describe('task store events + audit log', () => {
     });
 
     it('the log is per-workspace and survives a store restart (append, not rewrite)', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship the search.');
+      const ws = store.createWorkspace('search-revamp');
       store.createTask(ws.id, { title: 'First' });
       store.flush();
       const second = new TaskStore({ dataDir, debounceMs: 5 });

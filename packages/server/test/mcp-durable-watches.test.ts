@@ -224,7 +224,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     };
     expect(w.persisted).toBe(true);
     expect(w.persistence).toBe('server');
-    const ws = (await first.tool('create_workspace', { name: 'dw-ws', goal: 'Watch me.' })) as {
+    const ws = (await first.tool('create_workspace', { name: 'dw-ws' })) as {
       workspaceId: string;
     };
     expect(ws.workspaceId).toBeTruthy();
@@ -355,12 +355,9 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     name: string,
     docId: string,
   ): Promise<{ workspaceId: string }> => {
-    const ws = (await (
-      await rest('/api/workspaces', 'POST', {
-        name,
-        goal: 'Ship the index.',
-      })
-    ).json()) as { workspace: { id: string } };
+    const ws = (await (await rest('/api/workspaces', 'POST', { name })).json()) as {
+      workspace: { id: string };
+    };
     const workspaceId = ws.workspace.id;
     const path = join(dataDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nA paragraph to anchor a thread on.\n`);
@@ -527,16 +524,13 @@ describe('a declared lead comes back live after a respawn', () => {
     return res.attachments.find((a) => a.agentId === AGENT_ID)?.state;
   };
 
-  it('is re-ATTACHED, not merely re-subscribed, and its goal edits arrive', async () => {
-    const w = await rest('/api/workspaces', 'POST', {
-      name: 'declared-board',
-      goal: 'Ship the index.',
-    });
+  it('is re-ATTACHED, not merely re-subscribed, and its lead-addressed asks arrive', async () => {
+    const w = await rest('/api/workspaces', 'POST', { name: 'declared-board' });
     const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
-    // A goal edit re-triages the board's OPEN ROWS, so an empty board has
-    // nothing to ask about and reports `requested: false` for a reason that
-    // has nothing to do with attachment. One row makes the later assertion
-    // about liveness rather than about emptiness.
+    // A new goal band asks about the board's UNPLACED ROWS, so an empty board
+    // has nothing to ask about and reports `requested: false` for a reason
+    // that has nothing to do with attachment. One row makes the later
+    // assertion about liveness rather than about emptiness.
     expect(
       (
         await rest(`/api/workspaces/${workspaceId}/tasks`, 'POST', {
@@ -566,16 +560,17 @@ describe('a declared lead comes back live after a respawn', () => {
     expect(await stateOf(workspaceId)).not.toBe('away');
 
     // The end-to-end consequence, and the only assertion that would have
-    // caught this: a goal edit is DELIVERED rather than stored for a lead the
-    // server cannot see. `queued: true` here is the incident.
-    const goal = await rest(`/api/workspaces/${workspaceId}/goal`, 'PUT', {
-      goal: 'Cut token usage per session in half.',
+    // caught this: a lead-addressed ask is DELIVERED rather than stored for a
+    // lead the server cannot see. `queued: true` here is the incident.
+    const goal = await rest(`/api/workspaces/${workspaceId}/goals`, 'PUT', {
+      goals: [{ title: 'Cut token usage per session in half' }],
       author: PERSON,
     });
-    const retriage = ((await goal.json()) as { retriage: { requested: boolean; queued: boolean } })
-      .retriage;
-    expect(retriage.requested).toBe(true);
-    expect(retriage.queued).toBe(false);
+    const bucketReview = (
+      (await goal.json()) as { bucketReview: { requested: boolean; queued: boolean } }
+    ).bucketReview;
+    expect(bucketReview.requested).toBe(true);
+    expect(bucketReview.queued).toBe(false);
     second.kill();
   }, 40_000);
 
@@ -588,10 +583,7 @@ describe('a declared lead comes back live after a respawn', () => {
   it('POSITIVE CONTROL: does not attach a respawn to a board it only watches', async () => {
     const OTHER = 'Bystander Tester';
     const OTHER_ID = 'agent-bystander-tester';
-    const w = await rest('/api/workspaces', 'POST', {
-      name: 'someone-elses-board',
-      goal: 'Ship the index.',
-    });
+    const w = await rest('/api/workspaces', 'POST', { name: 'someone-elses-board' });
     const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
     const path = join(dataDir, 'bystander-doc.md');
     writeFileSync(path, '# bystander-doc\n\nBody.\n');

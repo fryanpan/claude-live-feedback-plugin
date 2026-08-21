@@ -57,7 +57,7 @@ describe('an utterance routed to an agent is written down either way', () => {
   }
 
   function ws(s: TaskStore): string {
-    const w = s.createWorkspace('durable-hub', 'Ship it.');
+    const w = s.createWorkspace('durable-hub');
     s.attachAgent(w.id, { agentId: 'worker', runtime: 'claude-code-local' });
     return w.id;
   }
@@ -126,7 +126,7 @@ describe('an utterance routed to an agent is written down either way', () => {
     // Before this test, any attach drained it, so a bystander attaching to a
     // board swallowed the notes into a payload it has no contract to act on.
     const s = store();
-    const w = s.createWorkspace('guarded-hub', 'Ship it.', { leadAgentId: 'agent-lead' }).id;
+    const w = s.createWorkspace('guarded-hub', { leadAgentId: 'agent-lead' }).id;
     s.queueVoiceRequest(w, utterance);
 
     const bystander = s.attachAgent(w, {
@@ -149,7 +149,7 @@ describe('an utterance routed to an agent is written down either way', () => {
 
   it("POSITIVE CONTROL: the lead's attach drains the queue exactly as before", () => {
     const s = store();
-    const w = s.createWorkspace('guarded-hub', 'Ship it.', { leadAgentId: 'agent-lead' }).id;
+    const w = s.createWorkspace('guarded-hub', { leadAgentId: 'agent-lead' }).id;
     s.queueVoiceRequest(w, utterance);
 
     const lead = s.attachAgent(w, { agentId: 'agent-lead', runtime: 'claude-code-local' });
