@@ -30,6 +30,15 @@
  * was written: the 30 newest rows were 0-for-30 on questions and the oldest
  * row on the board was not one either. Age would retire live threads and keep
  * dead ones.
+ *
+ * 2026-08-21: the queue route itself stopped emitting inference-only rows —
+ * membership is now "a pending declaration or a direct ask", so receipts no
+ * longer reach `fetchQueueRows` and there is nothing left for this script to
+ * resolve. The queue is derived per request; the leftover rows retired
+ * themselves the moment membership changed, with no thread touched. The
+ * script is kept for its report (`question` rows still surface here) and the
+ * pure classifier still serves tooling, but its resolve pass is expected to
+ * be a no-op against any server running the new rule.
  */
 import type { Comment, Thread } from '@feedback/core';
 import { asksPerson, knownPeople, unansweredRun } from './review-queue.ts';
