@@ -614,9 +614,15 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
       'below',
     );
     expect(reAnswered.ok).toBe(true);
+    // The comparison point must be AFTER the re-answer settles: the re-answer
+    // itself schedules a summary and moves the marker off `afterAnswer`, so
+    // asserting against that older value would pass even if the undo never
+    // reached the event funnel at all — a control that passes on a zero.
+    const afterReAnswer = markerOf(docId, thread.id);
+    expect(typeof afterReAnswer).toBe('number');
     await new Promise((r) => setTimeout(r, 2));
     const ungated = gatedHandle.rooms.undoReviewItemAnswer(docId, thread.id, commentId, PERSON);
     expect(ungated.ok).toBe(true);
-    expect(markerOf(docId, thread.id)).not.toBe(afterAnswer);
+    expect(markerOf(docId, thread.id)).not.toBe(afterReAnswer);
   });
 });
