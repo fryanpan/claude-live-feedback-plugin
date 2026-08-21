@@ -79,7 +79,7 @@ describe('the landing page is a list of active workspaces', () => {
   let alphaId: string;
   let betaId: string;
 
-  it('lists workspaces newest-activity first, linking to each board', async () => {
+  it('lists workspaces newest-activity first, linking to each Home pane', async () => {
     alphaId = await makeWorkspace('Alpha board');
     await tick();
     betaId = await makeWorkspace('Beta board');
@@ -88,8 +88,11 @@ describe('the landing page is a list of active workspaces', () => {
     expect(html).toContain('name="viewport"');
     expect(html).toContain('Alpha board');
     expect(html).toContain('Beta board');
-    expect(html).toContain(`/workspaces/${encodeURIComponent(alphaId)}`);
-    expect(html).toContain(`/workspaces/${encodeURIComponent(betaId)}`);
+    // The `/home` suffix is the assertion, not decoration: without it the
+    // href is the board, and the row lands on a task list rather than on the
+    // page that says what needs you.
+    expect(html).toContain(`href="/workspaces/${encodeURIComponent(alphaId)}/home"`);
+    expect(html).toContain(`href="/workspaces/${encodeURIComponent(betaId)}/home"`);
     // Beta was created after Alpha, so with no other activity it sorts first.
     expect(html.indexOf('Beta board')).toBeLessThan(html.indexOf('Alpha board'));
 
