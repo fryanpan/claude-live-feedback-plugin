@@ -130,29 +130,25 @@ export function isTrustedLocalHost(
   return candidates.includes(h);
 }
 
-/** What a share hostname grants access to. */
+/**
+ * What a share hostname grants access to.
+ *
+ * One field, and that is the whole point. A target used to carry a `docId`
+ * as well — the doc the share URL opened — and while it was documented as a
+ * landing address rather than a grant, "always in scope" is precisely what a
+ * per-doc share WAS. That base case went with the per-doc removal, and the
+ * field went with the board-only removal after it: a board share opens the
+ * board, so there is no entry doc left for anything to read.
+ */
 export interface ShareTarget {
   /**
-   * The doc the share URL OPENS — a landing address, not a grant.
-   *
-   * It used to be "always in scope", which is precisely what a per-doc share
-   * was: one docId named on the target and waved through by `inScope`. That
-   * base case is gone. The entry doc is reachable because it is a member of
-   * `workspaceId`, and if it somehow is not a member it is not reachable —
-   * which is the correct answer, not a regression.
-   *
-   * Still read by `repairStaleReviewUrl`, which repoints a bookmarked
-   * `/review/<entry>` after the file behind it is renamed.
-   */
-  docId: string;
-  /**
-   * The workspace this share covers. Every member doc is in scope, along
+   * The BOARD this share covers. Every doc filed on it is in scope, along
    * with the navigation endpoints that make the set browsable.
    *
-   * REQUIRED, and it is the ONLY source of scope: a workspace is the unit of
-   * sharing. Typed optional so a caller that still constructs the old
-   * doc-only shape is refused by the guard below rather than rejected by the
-   * compiler and then shipped anyway — an absent workspaceId grants nothing.
+   * REQUIRED, and it is the ONLY source of scope. Typed optional so a caller
+   * that still constructs the old doc-only shape is refused by the guard
+   * below rather than rejected by the compiler and then shipped anyway — an
+   * absent workspaceId grants nothing.
    */
   workspaceId?: string;
 }

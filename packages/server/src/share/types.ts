@@ -20,13 +20,23 @@
  * Both modes share one scope engine — the mode only decides how we answer
  * "which share is this request for?".
  *
- * **A WORKSPACE is the unit of sharing** (Bryan, 2026-08-17). There is no
- * per-doc share: `surface: 'doc'` and the `createShareDoc` / `docId`-only
- * `createShareLink` paths that minted one are gone, and `Shares.load` drops
- * any legacy record that carries no `workspaceId` rather than keep honouring
- * a grant the product no longer offers. Share the workspace a doc is filed
- * on; everything in a workspace is available to everyone in it (see
- * `.claude/rules/workspace-board.md`).
+ * **A BOARD is the unit of sharing** (Bryan, 2026-08-17: "Workspace only — a
+ * review must be filed on a board before it can be shared"). Two grants were
+ * removed to get there, and they needed different mechanisms:
+ *
+ * - **Per-doc.** `surface: 'doc'` and the `createShareDoc` / `docId`-only
+ *   `createShareLink` paths are gone, and `Shares.load` drops any legacy
+ *   record carrying no `workspaceId`. A load-time drop works there because
+ *   the record itself says which kind it is.
+ * - **Per-grouping.** A folder bind and a diff review are not boards, and
+ *   could each be shared alone. `Shares` cannot drop those at load: nothing
+ *   on the record distinguishes a board id from a grouping id, and only
+ *   `taskStore` knows the difference. So it is enforced where the share is
+ *   RESOLVED for serving (see `boardShareTarget` in server.ts) and the row
+ *   stays on disk — a capability removed, not user content deleted.
+ *
+ * File the review on a board and share the board; everything in a workspace
+ * is available to everyone in it (see `.claude/rules/workspace-board.md`).
  *
  * Dev server and mockup surfaces are scoped for a follow-up: they need
  * additional cloudflared ingress wiring + a small static-file server.
@@ -87,17 +97,9 @@ export interface Share {
 }
 
 export interface CreateShareLinkReq {
-  /** The workspace in scope. A workspace is the unit of sharing, so there is
-   *  no `docId` alternative: file the doc on a workspace and share that. */
+  /** The BOARD in scope. There is no `docId` and no `entryDocId`
+   *  alternative: file the review on a board and share the board. */
   workspaceId: string;
-  /** Doc the link opens. Required unless `hub`. */
-  entryDocId?: string;
-  /**
-   * A HUB workspace share (§3.12 commit 8): the visitor lands on the hub
-   * page (`/workspaces/<id>`), not on a review doc, so there is no entry
-   * doc and `docId` stays empty. Scope comes entirely from `workspaceId`.
-   */
-  hub?: boolean;
   /** Defaults to DEFAULT_TTL_SECONDS (one week). */
   ttlSeconds?: number;
   /** Optional human label shown in list_shares. */
@@ -105,12 +107,8 @@ export interface CreateShareLinkReq {
 }
 
 export interface CreateShareWorkspaceReq {
+  /** The BOARD in scope. See CreateShareLinkReq. */
   workspaceId: string;
-  /** Doc the share URL opens. Callers usually pass the workspace entry.
-   *  Omitted for a `hub` share, whose URL opens the hub page instead. */
-  entryDocId?: string;
-  /** See CreateShareLinkReq.hub — the visitor lands on `/workspaces/<id>`. */
-  hub?: boolean;
   allowDomains: string[];
   ttlSeconds?: number;
   /** Optional slug override. Default is `<YYYY-MM-DD>-<3hex>`. */

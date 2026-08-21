@@ -89,16 +89,26 @@ describe('symlink escape from a shared workspace', () => {
     });
     base = `http://localhost:${handle.port}`;
 
+    // The bind is a GROUPING and is not shareable on its own; file it on a
+    // board and share that. The escape this file guards is unchanged — a
+    // board visitor reaches the grouping's files through the same routes.
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Escape board' }),
+    }).then((r) => r.json());
+    const boardId = board.workspace.id as string;
+    expect(boardId).toBeTruthy();
+
     const bound = await local('/api/workspaces', {
       method: 'POST',
-      body: JSON.stringify({ folderPath: repo }),
+      body: JSON.stringify({ folderPath: repo, hubWorkspaceId: boardId }),
     }).then((r) => r.json());
     workspaceId = bound.workspaceId;
     expect(workspaceId).toBeTruthy();
 
     const share = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId }),
+      body: JSON.stringify({ workspaceId: boardId }),
     }).then((r) => r.json());
     const redeemed = await fetch(`${base}/s/${share.share.slug}`, {
       redirect: 'manual',

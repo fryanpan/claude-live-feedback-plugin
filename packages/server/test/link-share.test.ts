@@ -8,13 +8,18 @@
  * Access visitor, and (d) revocation and expiry taking effect immediately
  * rather than when a browser cookie happens to lapse.
  *
- * **A workspace is the unit of sharing** (2026-08-17), so every fixture here
- * is a workspace share. The file used to mint most of them with `{docId}` —
- * a grant that no longer exists — so the "one doc" fixture is now a folder
- * bind holding exactly one file, and the tests that were ABOUT per-doc
- * scoping assert the removal instead: `POST /api/share/doc` is gone, and a
- * `docId` in a `/api/share/link` body is refused by name rather than
- * quietly re-scoped to something the caller never asked for.
+ * **A BOARD is the unit of sharing** (2026-08-17), so every fixture here is a
+ * board share. The file used to mint most of them with `{docId}` — a grant
+ * that no longer exists — so the "one doc" fixture is a folder bind holding
+ * exactly one file, and the tests that were ABOUT per-doc scoping assert the
+ * removal instead: `POST /api/share/doc` is gone, and a `docId` in a
+ * `/api/share/link` body is refused by name rather than quietly re-scoped to
+ * something the caller never asked for.
+ *
+ * The bind itself is no longer the shareable id either — a folder bind is a
+ * GROUPING — so each one is FILED on a board and the link is minted over the
+ * board. Nothing about reach changed: a board share opens every member of a
+ * grouping filed on it, which is what the scope suites below measure.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -34,10 +39,15 @@ describe('link shares over HTTP', () => {
 
   let soloShare: { shareId: string; slug: string; url: string; expiresAt: number };
   let wsShare: { shareId: string; slug: string };
+  /** The board the multi-file folder bind is filed on — what `wsShare` covers. */
+  let boardId: string;
   let workspaceId: string;
   let entryDocId: string;
-  /** The one-file workspace and its only member — this file's "narrowest
-   *  possible share" fixture, now that a doc cannot be shared on its own. */
+  /** The board the one-file bind is filed on — what `soloShare` covers, and
+   *  this file's "narrowest possible share" fixture now that neither a doc nor
+   *  a grouping can be shared on its own. */
+  let soloBoardId: string;
+  /** The one-file workspace and its only member. */
   let soloWorkspaceId: string;
   let SOLO: string;
   /** SOLO path-encoded. Member docIds are `<group>:<relPath>`, so they carry
@@ -111,21 +121,36 @@ describe('link shares over HTTP', () => {
       ).status,
     ).toBe(200);
 
-    const bindFolder = async (path: string) => {
+    /** A fresh board, and a folder bound onto it in one call. */
+    const makeBoard = async (name: string) => {
       const r = await local('/api/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ folderPath: path }),
+        body: JSON.stringify({ name }),
+      });
+      expect(r.status).toBe(200);
+      const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      expect(id).toBeTruthy();
+      return id;
+    };
+    const bindFolder = async (path: string, hubWorkspaceId: string) => {
+      const r = await local('/api/workspaces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ folderPath: path, hubWorkspaceId }),
       });
       expect(r.status).toBe(200);
       return (await r.json()) as { workspaceId: string; files: Array<{ docId: string }> };
     };
 
-    const bound = await bindFolder(folder);
+    boardId = await makeBoard('Folder review');
+    const bound = await bindFolder(folder, boardId);
     workspaceId = bound.workspaceId;
     entryDocId = bound.files[0]?.docId ?? '';
+    expect(workspaceId).not.toBe(boardId);
 
-    const soloBound = await bindFolder(soloFolder);
+    soloBoardId = await makeBoard('Solo review');
+    const soloBound = await bindFolder(soloFolder, soloBoardId);
     soloWorkspaceId = soloBound.workspaceId;
     SOLO = soloBound.files[0]?.docId ?? '';
     soloPath = encodeURIComponent(SOLO);
@@ -134,7 +159,7 @@ describe('link shares over HTTP', () => {
     const dr = await local('/api/share/link', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: soloWorkspaceId, label: 'solo review' }),
+      body: JSON.stringify({ workspaceId: soloBoardId, label: 'solo review' }),
     });
     expect(dr.status).toBe(200);
     soloShare = ((await dr.json()) as { share: typeof soloShare }).share;
@@ -142,7 +167,7 @@ describe('link shares over HTTP', () => {
     const wr = await local('/api/share/link', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId }),
+      body: JSON.stringify({ workspaceId: boardId }),
     });
     expect(wr.status).toBe(200);
     wsShare = ((await wr.json()) as { share: typeof wsShare }).share;
@@ -155,13 +180,13 @@ describe('link shares over HTTP', () => {
     rmSync(soloFolder, { recursive: true, force: true });
   });
 
-  /** Mint a link over the one-file workspace — the replacement for every
-   *  `{docId: SOLO}` body this file used to send. */
+  /** Mint a link over the board holding the one-file workspace — the
+   *  replacement for every `{docId: SOLO}` body this file used to send. */
   const mintSolo = (extra: Record<string, unknown> = {}) =>
     local('/api/share/link', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId: soloWorkspaceId, ...extra }),
+      body: JSON.stringify({ workspaceId: soloBoardId, ...extra }),
     });
 
   describe('minting', () => {
@@ -229,7 +254,32 @@ describe('link shares over HTTP', () => {
         body: JSON.stringify({ workspaceId: 'ghost-ws' }),
       });
       expect(ghost.status).toBe(404);
-      // Positive control: a real workspace id on the same route mints.
+      // Positive control: a real BOARD id on the same route mints.
+      expect((await mintSolo()).status).toBe(200);
+    });
+
+    it('refuses the GROUPING filed on the board, and not as "not found"', async () => {
+      // The folder bind is a real id whose SHARING went away, so it answers
+      // 410 by name rather than joining the 404 above. Collapsing the two
+      // would tell a peer whose review stopped sharing that the review is gone.
+      const r = await local('/api/share/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: soloWorkspaceId }),
+      });
+      expect(r.status).toBe(410);
+      const body = (await r.json()) as { error: string; hint: string };
+      expect(body.error).toBe('grouping_sharing_removed');
+      expect(body.hint).toContain('board');
+      // Positive control: the board that grouping is filed on mints fine.
+      expect((await mintSolo()).status).toBe(200);
+    });
+
+    it('refuses an entryDocId — a board share opens the board', async () => {
+      const r = await mintSolo({ entryDocId: SOLO });
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toContain('entryDocId');
+      // Positive control: drop the field and the same call mints.
       expect((await mintSolo()).status).toBe(200);
     });
   });
@@ -262,8 +312,10 @@ describe('link shares over HTTP', () => {
       for (const body of [
         { docId: SOLO },
         // The dangerous reading of this payload is "ignore the field you
-        // don't recognise and mint something anyway".
-        { docId: SOLO, workspaceId: soloWorkspaceId },
+        // don't recognise and mint something anyway". Paired with a
+        // workspaceId that WOULD mint on its own, so what is under test is
+        // the docId and not the other field.
+        { docId: SOLO, workspaceId: soloBoardId },
       ]) {
         const r = await local('/api/share/link', {
           method: 'POST',
@@ -302,10 +354,14 @@ describe('link shares over HTTP', () => {
   });
 
   describe('redemption', () => {
-    it('exchanges the slug for a session and redirects to the entry doc', async () => {
+    it('exchanges the slug for a session and lands ON THE BOARD', async () => {
+      // It used to land on `/review/<entry doc>`. A board share has no entry
+      // doc to resolve — that whole resolution step went with board-only
+      // sharing — so redemption lands on the board and the visitor navigates
+      // from there. The member doc is still reachable; the next suite opens it.
       const r = await pub(`/s/${soloShare.slug}`);
       expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/review/${soloPath}`);
+      expect(r.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(soloBoardId)}`);
       const cookie = r.headers.get('set-cookie') ?? '';
       expect(cookie).toContain('HttpOnly');
       expect(cookie).toContain('SameSite=Lax');
@@ -344,16 +400,18 @@ describe('link shares over HTTP', () => {
   });
 
   describe('a redeemed session is scoped exactly like an Access visitor', () => {
-    // The narrowest share available: a workspace holding one file. It reaches
-    // that file because it is a MEMBER, not because the share names it — the
-    // "the entry doc is always in scope" base case went away with per-doc
-    // sharing, so a doc outside the workspace is refused even here.
+    // The narrowest share available: a board holding one bind holding one
+    // file. It reaches that file because it is a MEMBER of a grouping filed on
+    // the board — never because the share names it. The "the entry doc is
+    // always in scope" base case went away with per-doc sharing and the field
+    // that expressed it went with board-only sharing, so a doc outside the
+    // board is refused even here.
     let cookie: string;
     beforeAll(async () => {
       cookie = await redeem(soloShare.slug);
     });
 
-    it('reaches its own doc', async () => {
+    it('reaches the doc filed on its board', async () => {
       expect((await pub(`/api/docs/${soloPath}`, cookie)).status).toBe(200);
       expect((await pub(`/review/${soloPath}`, cookie)).status).not.toBe(403);
       expect((await pub(`/api/docs/${soloPath}/threads`, cookie)).status).toBe(200);
@@ -370,7 +428,7 @@ describe('link shares over HTTP', () => {
       const r = await pub('/api/share/link', cookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId }),
+        body: JSON.stringify({ workspaceId: boardId }),
       });
       expect(r.status).toBe(403);
       expect((await pub('/api/share', cookie)).status).toBe(403);
@@ -379,7 +437,7 @@ describe('link shares over HTTP', () => {
       const ok = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId }),
+        body: JSON.stringify({ workspaceId: boardId }),
       });
       expect(ok.status).toBe(200);
       const minted = ((await ok.json()) as { share: { shareId: string } }).share;
@@ -449,7 +507,7 @@ describe('link shares over HTTP', () => {
       const r = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId }),
+        body: JSON.stringify({ workspaceId: boardId }),
       });
       expect(r.status).toBe(200);
       const { share } = (await r.json()) as { share: { slug: string } };
@@ -464,11 +522,13 @@ describe('link shares over HTTP', () => {
       });
       expect(r.status).toBe(410);
       expect(((await r.json()) as { error: string }).error).toBe('per_doc_sharing_removed');
-      // Positive control: the workspace this member belongs to shares fine.
+      // Positive control: the BOARD this member's workspace is filed on shares
+      // fine. Not the workspace itself — that is a grouping, and its own
+      // refusal is asserted in the minting suite above.
       const ok = await local('/api/share/link', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId }),
+        body: JSON.stringify({ workspaceId: boardId }),
       });
       expect(ok.status).toBe(200);
       await local(

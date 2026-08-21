@@ -30,11 +30,20 @@ agent owes an existing board; the second is what the lead seat adds.
 | Is | a goal + task board + doc links | a set of review docs over files |
 | URL | `/workspaces/<id>` | the review's `entryUrl` |
 
-`delete_workspace`, `refresh_workspace`, `set_workspace_groups` and
-`share_workspace` take the **grouping** id — never a hub id. Link a grouping
-workspace onto a board with `attach_doc(workspaceId, docId)`; `docId` there
-accepts a doc id *or* a review/bind id, and the whole review attaches as one
-unit.
+`delete_workspace`, `refresh_workspace` and `set_workspace_groups` take the
+**grouping** id — never a hub id. Link a grouping workspace onto a board with
+`attach_doc(workspaceId, docId)`; `docId` there accepts a doc id *or* a
+review/bind id, and the whole review attaches as one unit.
+
+**`share_workspace` and `share_link` are the exception: they take the HUB id,
+and only the hub id.** A board is the unit of sharing (Bryan, 2026-08-17: "a
+review must be filed on a board before it can be shared"), so a grouping id
+comes back `410 grouping_sharing_removed`. `bind_folder` and
+`create_diff_review` already report the board they filed onto as
+`hubWorkspaceId` — that is the id to share. Everything filed on that board
+travels with the share, so when a review should not carry the rest of the
+board, give it its own: `create_workspace` makes an empty one in about a
+second.
 
 ## Stand up the board
 

@@ -109,6 +109,18 @@ describe('the sync channel leaks no host metadata', () => {
     });
     base = `http://localhost:${handle.port}`;
 
+    // A BOARD is the unit of sharing, so `leaky` is filed on one and the
+    // share below covers that board. `ws-leaky` is the doc's GROUPING tag —
+    // a PUBLIC meta field (it is how the sidebar groups), and no longer
+    // shareable on its own. `workspaceRoot`, the absolute host path, is the
+    // private one, and this test is about that distinction.
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Leak board' }),
+    }).then((r) => r.json());
+    const boardId = board.workspace.id as string;
+    expect(boardId).toBeTruthy();
+
     await local('/api/docs', {
       method: 'POST',
       body: JSON.stringify({
@@ -116,19 +128,16 @@ describe('the sync channel leaks no host metadata', () => {
         type: 'markdown',
         sourceUrl: docPath,
         owner: OWNER,
-        // A workspace is the unit of sharing, so `leaky` is filed on one and
-        // the share below covers that. `workspaceId` is a PUBLIC meta field
-        // (it is how the sidebar groups) — `workspaceRoot`, the absolute host
-        // path, is the private one, and this test is about that distinction.
         workspaceId: 'ws-leaky',
         workspaceRoot: OWNER,
+        hubWorkspaceId: boardId,
         producedBy: { agentId: 'secret-agent', sessionId: 'sess-1' },
       }),
     });
 
     const mint = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId: 'ws-leaky' }),
+      body: JSON.stringify({ workspaceId: boardId }),
     });
     const { share } = (await mint.json()) as { share: { slug: string } };
     const redeemed = await fetch(`${base}/s/${share.slug}`, {

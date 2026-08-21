@@ -285,9 +285,10 @@ describe('the public share host is same-origin only', () => {
         ...i,
         headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
       });
-    // A workspace is the unit of sharing: file the doc on one, share that.
-    // `shared` is its only member, so the visitor's reach — and therefore what
-    // a forged origin could steal through it — is exactly what it was.
+    // A BOARD is the unit of sharing: file the doc on a grouping, file the
+    // grouping on a board, share the board. `shared` is the grouping's only
+    // member, so the visitor's reach — and therefore what a forged origin
+    // could steal through it — is exactly what it was.
     await local('/api/docs', {
       method: 'POST',
       body: JSON.stringify({
@@ -297,10 +298,22 @@ describe('the public share host is same-origin only', () => {
         workspaceId: 'ws-shared',
       }),
     });
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Cross-origin board' }),
+    });
+    expect(board.status).toBe(200);
+    const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+      method: 'POST',
+      body: JSON.stringify({ docId: 'ws-shared' }),
+    });
+    expect(filed.status).toBe(200);
     const mint = await local('/api/share/link', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId: 'ws-shared' }),
+      body: JSON.stringify({ workspaceId: boardId }),
     });
+    expect(mint.status).toBe(200);
     const { share } = (await mint.json()) as { share: { slug: string } };
     const redeemed = await fetch(`${base}/s/${share.slug}`, {
       redirect: 'manual',

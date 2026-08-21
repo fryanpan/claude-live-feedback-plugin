@@ -385,20 +385,24 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
 
   /**
    * This suite used to mint a DOC-scoped share (`share_link {docId}`) and
-   * prove it was not widened by the board its doc sat on. A workspace is the
-   * unit of sharing now, so there is no doc-scoped share to widen — and the
-   * two halves of that test have to be split, because they are two different
-   * facts:
+   * prove it was not widened by the board its doc sat on. Two removals have
+   * passed over it since, and the facts it holds have to be kept apart:
    *
-   *   1. the narrow share cannot be MINTED at all (below), and
-   *   2. a share on the narrowest unit that survives — the GROUPING, not the
-   *      board it is filed on — still stops at its own edge.
+   *   1. the doc-scoped share cannot be MINTED at all,
+   *   2. the GROUPING-scoped share that briefly became "the narrowest
+   *      surviving unit" cannot be minted either — a folder bind and a diff
+   *      review are not boards, and each is refused BY NAME so a peer whose
+   *      review stopped sharing does not read it as "your review vanished",
+   *   3. and the narrowest unit that survives — the BOARD — still stops at its
+   *      own edge.
    *
-   * Dropping (2) with the doc share would have retired the property the test
-   * existed for. It is the one that costs: this file's whole subject is a
-   * change that WIDENS reach, and (2) is where the widening is bounded.
+   * (3) is the property this suite exists for and the one that costs: the
+   * file's whole subject is a change that WIDENS reach, and (3) is where the
+   * widening is bounded. It used to be measured on a grouping share; with that
+   * gone it is measured on a board that holds exactly one review, which is the
+   * tight scope an agent is now told to create for a single review.
    */
-  describe('the narrow share is gone, and the narrowest surviving one still bounds', () => {
+  describe('the narrow shares are gone, and the narrowest surviving one still bounds', () => {
     it('refuses to mint a doc-scoped share on either route', async () => {
       const link = await post('/api/share/link', { docId: memberA });
       expect(link.status).toBe(410);
@@ -413,36 +417,64 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       expect((await doc.json()) as { error: string }).toMatchObject({
         error: 'per_doc_sharing_removed',
       });
-      // POSITIVE CONTROL: minting is not broken in general — a workspace
-      // share on the very same grouping succeeds on the same route.
-      const ok = await post('/api/share/link', { workspaceId: groupingA });
+      // POSITIVE CONTROL: minting is not broken in general — a share on the
+      // BOARD that grouping is filed on succeeds on the same route.
+      const ok = await post('/api/share/link', { workspaceId: boardA });
       expect(ok.status).toBe(200);
       const { share } = (await ok.json()) as { share: { shareId: string; workspaceId: string } };
-      expect(share.workspaceId).toBe(groupingA);
+      expect(share.workspaceId).toBe(boardA);
       expect((await local(`/api/share/${share.shareId}`, { method: 'DELETE' })).status).toBe(200);
     });
 
-    it('a share on ONE grouping reaches its members and nothing else on the board', async () => {
-      // The grouping is filed on board A, and board A also holds a folder
-      // bind and a second review. A visitor invited to the grouping gets the
-      // grouping — being ON a board is not being INVITED to it.
-      const gs = await post('/api/share/link', { workspaceId: groupingA });
+    it('refuses to mint a grouping-scoped share, on both kinds of grouping', async () => {
+      // The inversion of what used to be "a share on ONE grouping reaches its
+      // members": both a diff review and a folder bind are groupings, both are
+      // real ids, and neither can be shared on its own any more.
+      for (const grouping of [groupingA, folderGroupingA]) {
+        const r = await post('/api/share/link', { workspaceId: grouping });
+        expect(r.status, grouping).toBe(410);
+        const body = (await r.json()) as { error: string; hint: string };
+        expect(body.error).toBe('grouping_sharing_removed');
+        // A refusal that names nothing reads as a broken server.
+        expect(body.hint).toContain('board');
+      }
+      // POSITIVE CONTROL on the same route in the same pass: the board those
+      // two groupings are filed on mints.
+      const ok = await post('/api/share/link', { workspaceId: boardA });
+      expect(ok.status).toBe(200);
+      const { share } = (await ok.json()) as { share: { shareId: string } };
+      expect((await local(`/api/share/${share.shareId}`, { method: 'DELETE' })).status).toBe(200);
+    });
+
+    it('a board holding ONE review reaches that review and nothing around it', async () => {
+      // The surviving form of "being ON a board is not being INVITED to it".
+      // A visitor invited to a board that holds one review gets that review —
+      // not the reviews on board A, and not board A itself.
+      const narrowBoard = await newBoard('board-narrow');
+      const narrow = await newDiffOn(narrowBoard, 'rev-narrow');
+      const narrowMember = narrow.files[0]?.docId ?? '';
+      expect(narrowMember).not.toBe('');
+
+      const gs = await post('/api/share/link', { workspaceId: narrowBoard });
       expect(gs.status).toBe(200);
-      const groupCookie = await redeem(
+      const narrowCookie = await redeem(
         ((await gs.json()) as { share: { slug: string } }).share.slug,
       );
-      // Positive control: its own member and its own tree open.
-      expect((await pub(`/api/docs/${memberA}`, groupCookie)).status).toBe(200);
-      expect((await pub(`/api/workspaces/${groupingA}/tree`, groupCookie)).status).toBe(200);
-      // …and the BOARD it is filed on does not — neither page nor record.
-      expect((await pub(`/workspaces/${boardA}`, groupCookie)).status).toBe(403);
-      expect((await pub(`/api/workspaces/${boardA}`, groupCookie)).status).toBe(403);
-      // …nor a SIBLING review on that same board, which is the widening a
-      // narrow invite must never pick up from the board it sits on.
-      expect((await pub(`/api/workspaces/${folderGroupingA}/tree`, groupCookie)).status).toBe(403);
-      expect((await pub(`/api/docs/${folderEntryA}`, groupCookie)).status).toBe(403);
+      // Positive control: its own board, its own review's tree, its own member.
+      expect((await pub(`/api/workspaces/${narrowBoard}`, narrowCookie)).status).toBe(200);
+      expect((await pub(`/api/workspaces/${narrow.reviewId}/tree`, narrowCookie)).status).toBe(200);
+      expect((await pub(`/api/docs/${narrowMember}`, narrowCookie)).status).toBe(200);
+      // …and board A does not open — neither page nor record.
+      expect((await pub(`/workspaces/${boardA}`, narrowCookie)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${boardA}`, narrowCookie)).status).toBe(403);
+      // …nor either review filed on it, which is the widening a narrow invite
+      // must never pick up from a board it is not on.
+      expect((await pub(`/api/workspaces/${groupingA}/tree`, narrowCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${memberA}`, narrowCookie)).status).toBe(403);
+      expect((await pub(`/api/workspaces/${folderGroupingA}/tree`, narrowCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${folderEntryA}`, narrowCookie)).status).toBe(403);
       // …nor anything on the other board at all.
-      expect((await pub(`/api/docs/${memberB}`, groupCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${memberB}`, narrowCookie)).status).toBe(403);
     });
   });
 
