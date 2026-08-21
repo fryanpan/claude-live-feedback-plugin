@@ -3591,7 +3591,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                           .join('; ')}. ` +
                         'If you meant to RENAME a band, use rename_goal — it changes the title ' +
                         'in place and cannot move a task. If you meant to remove it, say so by ' +
-                        'listing its id in `drop`; open tasks then land at the bottom of Chores ' +
+                        'listing its id in `drop`; open tasks then land at the bottom of Backlog ' +
                         'and done tasks keep pointing at the removed id, both reported back.',
                     }
                   : {};

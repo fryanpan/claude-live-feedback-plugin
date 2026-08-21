@@ -257,10 +257,10 @@ describe('TaskStore attachment registry', () => {
     expect(after.gating.summary).toBe('no open gating decisions');
   });
 
-  it('attach returns the untriaged Chores tasks so the agent can sweep them (§3.4)', () => {
+  it('attach returns the untriaged Backlog tasks so the agent can sweep them (§3.4)', () => {
     const ws = store.createWorkspace('sweep-hub', 'Ship it.');
     // No attachment yet → this create emits no triage request and no marker;
-    // it just sits in Chores, untriaged.
+    // it just sits in Backlog, untriaged.
     const t = store.createTask(ws.id, { title: 'Landed while nobody was attached' });
     if (!t.ok) throw new Error('fixture');
     expect(t.task.triagePendingTs).toBeUndefined();
@@ -572,7 +572,7 @@ describe('attachment routes + triage bridge', () => {
   });
 
   it('the triage bridge grounds pending markers: live attachment → request delivered + marker; none → neither', async () => {
-    // NO attachment: the task lands plainly in Chores, no marker, and the
+    // NO attachment: the task lands plainly in Backlog, no marker, and the
     // SSE stream sees no triage.requested (absence proven against the
     // presence below on the same stream shape).
     const coldWs = await makeWorkspace('cold-hub');

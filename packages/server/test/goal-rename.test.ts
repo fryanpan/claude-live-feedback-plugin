@@ -5,7 +5,7 @@
  * verb — so the natural way to rename a band was to submit the list with a
  * new id and the new title. To the store that is one goal removed and a
  * different one added: the removal swept the old band's OPEN tasks to the
- * bottom of Chores, and left its DONE tasks pointing at an id no longer in
+ * bottom of Backlog, and left its DONE tasks pointing at an id no longer in
  * the list (the bare row `get_workspace` has to append, which is why #153
  * needed `reorderable`). Nothing errored, the new title appeared, and the
  * caller believed it worked. Reproduced end-to-end against a live server
@@ -385,7 +385,7 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    // Open work lands in Chores, as before…
+    // Open work lands in Backlog, as before…
     expect(res.movedToChores.sort()).toEqual([open, sub].sort());
     // …and the done task, which stays put, is now REPORTED rather than
     // silently left pointing at a vanished id.

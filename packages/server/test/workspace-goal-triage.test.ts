@@ -4,7 +4,7 @@
  * Triage EXECUTES in the attached agent, never in the server — the server
  * only EMITS triage requests. Two consequences under test here:
  *
- *  - A task created without an explicit goal lands at the bottom of Chores,
+ *  - A task created without an explicit goal lands at the bottom of Backlog,
  *    and its triage-pending marker is stamped ONLY at the moment a request
  *    is actually emitted to a live attachment (the grounded-pending rule:
  *    never promise work that isn't queued). No attachment → no marker.
@@ -169,7 +169,7 @@ describe('workspace goal + triage hook', () => {
   });
 
   describe('createTask triage hook', () => {
-    it('an omitted goal lands the task at the bottom of Chores and emits a triage request; the marker is stamped because the request reached a live attachment', () => {
+    it('an omitted goal lands the task at the bottom of Backlog and emits a triage request; the marker is stamped because the request reached a live attachment', () => {
       const ws = store.createWorkspace('blog', 'Ship the launch post.');
       const placed = create(ws.id, 'already placed', { goal: CHORES_GOAL_ID });
 
@@ -182,7 +182,7 @@ describe('workspace goal + triage hook', () => {
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.task.goal).toBe(CHORES_GOAL_ID);
-      // Bottom of Chores: below the task that was already there.
+      // Bottom of Backlog: below the task that was already there.
       expect(res.task.order).toBeGreaterThan(placed.order);
       expect(res.task.triagePendingTs).toBeGreaterThan(0);
 
@@ -195,7 +195,7 @@ describe('workspace goal + triage hook', () => {
       expect(req.goal).toBe('Ship the launch post.');
     });
 
-    it('no attachment → no marker; the task simply sits in Chores', () => {
+    it('no attachment → no marker; the task simply sits in Backlog', () => {
       // The positive control (marker IS stamped when delivery succeeds) is
       // the test above.
       const ws = store.createWorkspace('blog', 'Ship the launch post.');
@@ -269,7 +269,7 @@ describe('workspace goal + triage hook', () => {
   });
 
   describe('listUntriaged', () => {
-    it('returns open Chores tasks that no triage has placed, and nothing else', () => {
+    it('returns open Backlog tasks that no triage has placed, and nothing else', () => {
       const ws = store.createWorkspace('blog');
       const untriaged = create(ws.id, 'sweep me');
       const doneTask = create(ws.id, 'already finished');

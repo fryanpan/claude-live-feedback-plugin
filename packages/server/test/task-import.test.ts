@@ -113,7 +113,7 @@ describe('parseTrackerMarkdown (golden file)', () => {
     expect(mapping.ignoredColumns).toEqual(['Due']);
   });
 
-  it('a leading H1 is the document title, not a group — its table lands in Chores', () => {
+  it('a leading H1 is the document title, not a group — its table lands in Backlog', () => {
     // Covered by the golden mapping (line 7 → chores); this is the rule's
     // positive control from the other side: an H1 that is NOT leading IS a
     // group.
@@ -145,9 +145,9 @@ describe('parseTrackerMarkdown (golden file)', () => {
     expect(m.goals[1]?.existing).toBe(false);
   });
 
-  it("never mints the reserved 'chores' id for a heading named Chores", () => {
+  it("never mints the reserved 'chores' id for a heading named Backlog", () => {
     const m = parseTrackerMarkdown(
-      'Intro.\n\n# Chores\n\n| Task | Status |\n| --- | --- |\n| Sweep the stalls | todo |\n',
+      'Intro.\n\n# Backlog\n\n| Task | Status |\n| --- | --- |\n| Sweep the stalls | todo |\n',
       emptyWorkspace,
     );
     expect(m.goals[0]?.id).not.toBe('chores');
