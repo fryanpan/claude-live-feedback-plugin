@@ -94,7 +94,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.77';
+const PLUGIN_VERSION = '0.1.78';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -3925,6 +3925,9 @@ interface ChannelPayload {
     comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
   };
   comment?: { author?: { name?: string }; text?: string; ts?: number };
+  /** Who performed a resolve/reopen — the frame's own attribution, present
+   *  on servers that stamp it. Comment events carry `comment.author`. */
+  actor?: { name?: string };
   // Suggested edits (redline-suggestions phase 2): suggestion.created /
   // suggestion.accepted / suggestion.rejected carry `sid` + `suggestion`
   // instead of `threadId` + `thread`.
@@ -4148,8 +4151,17 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   const threadId = p.threadId ?? '';
   const snippet =
     p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? '';
-  const author = p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? '';
-  const text = p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? '';
+  // Resolve/reopen are STATUS changes, not speech: the person who clicked is
+  // `actor` on the frame, never any comment author. The old comments[0]
+  // fallback named the thread's CREATOR as the resolver, and the
+  // comments.at(-1) fallback put someone else's words in their mouth — 17
+  // resolves in the field, every one misattributed. An older server sends no
+  // actor; a blank author is honest there, a guessed one is the bug.
+  const statusChange = event === 'thread.resolved' || event === 'thread.reopened';
+  const author = statusChange
+    ? (p.actor?.name ?? '')
+    : (p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? '');
+  const text = statusChange ? '' : (p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? '');
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
 
   // Human-readable body — what the agent reads in their context.
@@ -4157,7 +4169,7 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   const header = snippet ? `on "${truncate(snippet, 60)}"` : '';
   const body = text
     ? `[${action}] ${author ? `${author}: ` : ''}${text}`
-    : `[${action}] thread ${threadId} ${header}`.trim();
+    : `[${action}]${author ? ` by ${author} —` : ''} thread ${threadId} ${header}`.trim();
 
   await server.notification({
     method: 'notifications/claude/channel',
