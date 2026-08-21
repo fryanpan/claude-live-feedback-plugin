@@ -3098,6 +3098,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           gating?: unknown;
           untriaged?: string[];
           queuedVoice?: Array<{ transcript: string; ts: number; applied?: string }>;
+          queuedComments?: Array<{
+            id: string;
+            docId: string;
+            threadId?: string;
+            event: string;
+            author?: { id?: string; name?: string };
+            text: string;
+            ts: number;
+          }>;
           lead?: boolean;
           pendingRetriage?: {
             batchId: string;
@@ -3122,6 +3131,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // from here would assert liveness for an agent that may be gone.
         if (agentId === undefined || agentId === AUTHOR.id) markAttached(workspaceId);
         if (subscribe !== false) await watchWorkspace(workspaceId);
+        // These rows are now in this process's hands — this response is their
+        // delivery — so send each receipt. Unlike queuedVoice the server did
+        // NOT drain them: a row it holds until this ack is a row a crash
+        // between the attach and here re-offers after the grace window,
+        // instead of losing with the response body.
+        for (const q of res.queuedComments ?? []) {
+          if (typeof q?.id !== 'string') continue;
+          try {
+            await http(
+              'POST',
+              `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`,
+              {},
+            );
+          } catch {
+            // Left on the queue on purpose — redelivered after the grace.
+          }
+        }
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
@@ -3138,6 +3164,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // the speaker's behalf. Pick up only what the utterance asked for
           // beyond it; redoing it posts the same words twice.
           queuedVoice: res.queuedVoice ?? [],
+          // Comments addressed to YOU that arrived while your stream was
+          // down — a person (or peer) commented on a task or doc you watch or
+          // lead, and nobody was listening. Read each and act on it where it
+          // lives (post_reply on the thread / resolve when addressed). This
+          // response is their delivery; the receipts are already sent.
+          queuedComments: (res.queuedComments ?? []).map((q) => ({
+            docId: q.docId,
+            ...(q.threadId !== undefined ? { threadId: q.threadId } : {}),
+            event: q.event,
+            ...(q.author !== undefined ? { author: q.author } : {}),
+            text: q.text,
+            ts: q.ts,
+          })),
           // A goal edit made while you were away, waiting for you because
           // you lead this board. Walk its taskIds with set_task_goal against
           // the NEW goal, passing its batchId on each so the moves read as
@@ -3695,8 +3734,36 @@ async function handleFrame(raw: string): Promise<void> {
   } catch {
     return;
   }
-  if (!shouldForwardFrame.shouldForward(ev, payload)) return;
-  await emitChannelMessage(ev, payload);
+  if (shouldForwardFrame.shouldForward(ev, payload)) {
+    await emitChannelMessage(ev, payload);
+  }
+  // The receipt for a durable comment row, AFTER the forward attempt (same
+  // ordering rationale as the voice ack below: an ack sent first would clear
+  // the durable copy on the strength of an intent). Deliberately OUTSIDE the
+  // dedup gate: a redelivered frame reuses the original event's eid — it IS
+  // the same event — so dedup rightly hides the duplicate from the session,
+  // but the receipt must still go back or the server re-offers the row after
+  // every grace window, forever. "The frame is in this process's hands" is
+  // exactly what the receipt asserts, forwarded or collapsed.
+  await ackCommentRow(payload);
+}
+
+/** POST the receipt for a frame that carries a durable comment-queue row id.
+ *  Never throws: a failed ack leaves the row on the queue, so the cost is a
+ *  redelivery after the grace window — late and duplicated beats silently
+ *  dropped, and that asymmetry is why the receipt lives on this side. */
+async function ackCommentRow(payload: unknown): Promise<void> {
+  const p = payload as { commentQueueId?: unknown; workspaceId?: unknown };
+  if (typeof p?.commentQueueId !== 'string' || typeof p?.workspaceId !== 'string') return;
+  try {
+    await http(
+      'POST',
+      `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`,
+      {},
+    );
+  } catch {
+    // Left on the queue on purpose — see above.
+  }
 }
 
 interface ChannelPayload {

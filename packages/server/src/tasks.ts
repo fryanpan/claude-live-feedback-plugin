@@ -5668,7 +5668,9 @@ export class TaskStore {
     if (queue.length === 0) return [];
     const now = Date.now();
     const inFlight = (q: QueuedComment): boolean =>
-      !opts?.freshProcess && q.emittedAt !== undefined && now - q.emittedAt < this.commentAckGraceMs;
+      !opts?.freshProcess &&
+      q.emittedAt !== undefined &&
+      now - q.emittedAt < this.commentAckGraceMs;
     const handOver = queue.filter((q) => q.agentId === agentId && !inFlight(q));
     if (handOver.length === 0) return [];
     for (const q of handOver) q.emittedAt = now;

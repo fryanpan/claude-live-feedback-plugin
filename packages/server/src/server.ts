@@ -4206,11 +4206,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // back after the grace window.
           for (const q of res.queuedComments ?? []) {
             if (!q.payload || typeof q.payload !== 'object') continue;
-            sse.sendToAgent(`ws~${workspaceId}`, agentId, {
-              ...(q.payload as WebhookPayload),
+            const original = q.payload as Record<string, unknown>;
+            if (typeof original.event !== 'string') continue;
+            const frame: Record<string, unknown> & { event: string } = {
+              ...original,
+              event: original.event,
               workspaceId,
               commentQueueId: q.id,
-            } as WebhookPayload & { event: string });
+            };
+            sse.sendToAgent(`ws~${workspaceId}`, agentId, frame);
           }
           return j(200, res);
         }

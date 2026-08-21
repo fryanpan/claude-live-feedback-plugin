@@ -37,6 +37,18 @@ interface AttachResponse {
   gating?: unknown;
   untriaged?: string[];
   queuedVoice?: Array<{ transcript: string; ts: number }>;
+  /** Comments addressed to this agent that its stream never carried. Handed
+   *  over but NOT drained — the server holds each row until the receipt this
+   *  module sends, so a crash between attach and response re-offers them. */
+  queuedComments?: Array<{
+    id: string;
+    docId: string;
+    threadId?: string;
+    event: string;
+    author?: { id?: string; name?: string };
+    text: string;
+    ts: number;
+  }>;
   lead?: boolean;
   pendingRetriage?: { batchId: string; oldGoal: string; newGoal: string; taskIds: string[] };
   pendingBucketReview?: {
@@ -123,6 +135,17 @@ export async function declareWorkspaceLead(
   if (!declaring) return seat;
 
   const a = attached ?? {};
+  // The parked comments are in this process's hands once this response goes
+  // back — send the receipt per row, same contract as attach_agent's own
+  // handler. A failed ack costs one redelivery after the grace window.
+  for (const q of a.queuedComments ?? []) {
+    if (typeof q?.id !== 'string') continue;
+    try {
+      await deps.http('POST', `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+    } catch {
+      // Left on the queue on purpose.
+    }
+  }
   // Two independent failures, reported separately because their remedies
   // differ: an unopened stream is retryable now, an unpersisted watch is a
   // missing `CW_AGENT_NAME` (or a server that refused) and will bite at the
@@ -171,6 +194,17 @@ export async function declareWorkspaceLead(
     // contracts attach_agent uses — an agent that arrives through this door
     // must not be told less than one arriving through the other.
     queuedVoice: a.queuedVoice ?? [],
+    // Comments addressed to you that arrived while no stream was up. This
+    // response is their delivery (receipts already sent) — read each and act
+    // on it where it lives.
+    queuedComments: (a.queuedComments ?? []).map((q) => ({
+      docId: q.docId,
+      ...(q.threadId !== undefined ? { threadId: q.threadId } : {}),
+      event: q.event,
+      ...(q.author !== undefined ? { author: q.author } : {}),
+      text: q.text,
+      ts: q.ts,
+    })),
     ...(a.pendingRetriage
       ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } }
       : {}),
