@@ -629,6 +629,25 @@ describe('installSlotRemeasure', () => {
     fire([{ target: container, contentRect: { width: 280 } }]);
     expect(slotA.style.height).toBe('48px');
   });
+
+  /* A reply composer's editor chunk mounts in a microtask — AFTER the card
+     holding it was measured, so the detail face grows under a slot height
+     written against the bare textarea and `overflow: hidden` eats the reply
+     box — the clipped-reply defect, as reported in the field. The mount
+     announces itself with a bubbling event; the remeasure listens for it. */
+  it('re-measures when a composer editor mounts inside a card', () => {
+    const { card } = mountCard();
+    const slotA = card.querySelector<HTMLElement>('.slot-a') as HTMLElement;
+    installSlotRemeasure(scopeSpy());
+
+    const face = card.querySelector<HTMLElement>('.slot-a > .face-summary') as HTMLElement;
+    Object.defineProperty(face, 'offsetHeight', { get: () => 55, configurable: true });
+    // POSITIVE CONTROL: nothing has re-measured yet, so the height is stale.
+    expect(slotA.style.height).toBe('22px');
+
+    card.dispatchEvent(new CustomEvent('lf-composer-mounted', { bubbles: true }));
+    expect(slotA.style.height).toBe('55px');
+  });
 });
 
 describe('sizeThreadSlots refuses a zero measurement', () => {

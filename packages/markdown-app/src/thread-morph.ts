@@ -22,6 +22,8 @@
  * into the two lines it came from.
  */
 
+import { COMPOSER_MOUNTED_EVENT } from './md-composer.ts';
+
 /** Total morph, both phases. */
 export const MORPH_MS = 150;
 /** Each phase's own length: 62% of the total. */
@@ -218,6 +220,10 @@ export function installSlotRemeasure(
   containers: Array<Element | null | undefined> = [],
 ): void {
   scope.listen(window, 'resize', () => sizeThreadSlots(document));
+  // A composer's editor chunk mounts in a microtask — after the card holding
+  // it was measured. The mount announces itself (md-composer.ts); this is
+  // the measurement following.
+  scope.listen(document, COMPOSER_MOUNTED_EVENT, () => sizeThreadSlots(document));
   document.fonts?.ready.then(() => {
     if (scope.disposed) return;
     sizeThreadSlots(document);
