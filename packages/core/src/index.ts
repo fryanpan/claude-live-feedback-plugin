@@ -5,6 +5,7 @@ export * from './identity.ts';
 export * from './lcs.ts';
 export * from './markdown-blocks.ts';
 export * from './redline.ts';
+export * from './review.ts';
 export * from './review-item.ts';
 export * from './suggest.ts';
 export * from './thread-summary.ts';

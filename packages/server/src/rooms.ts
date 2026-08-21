@@ -24,8 +24,10 @@ import {
   initDocMeta,
   listThreads,
   prose,
+  isReviewMember,
   readDocMeta,
   reviewAnswered,
+  reviewIdOf,
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
@@ -1203,7 +1205,7 @@ export class Rooms {
   ): Array<Thread & { docId: string; relPath?: string }> {
     const out: Array<Thread & { docId: string; relPath?: string }> = [];
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId) continue;
+      if (reviewIdOf(meta) !== workspaceId) continue;
       for (const t of this.listThreads(meta.docId, opts)) {
         out.push({ ...t, docId: meta.docId, relPath: meta.relPath });
       }
@@ -1241,7 +1243,7 @@ export class Rooms {
     // short-circuits when one exists), so summing by relPath is safe.
     const companionThreads = new Map<string, { open: number; total: number }>();
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId || meta.type === 'diff' || !meta.relPath) continue;
+      if (reviewIdOf(meta) !== workspaceId || meta.type === 'diff' || !meta.relPath) continue;
       const open = this.listThreads(meta.docId, { status: 'open' }).length;
       const total = this.listThreads(meta.docId).length;
       if (open === 0 && total === 0) continue;
@@ -1250,7 +1252,7 @@ export class Rooms {
     }
     let totalOpen = 0;
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId || meta.type !== 'diff') continue;
+      if (reviewIdOf(meta) !== workspaceId || meta.type !== 'diff') continue;
       const relPath = meta.relPath ?? meta.docId;
       const extra = companionThreads.get(relPath) ?? { open: 0, total: 0 };
       const openCount = this.listThreads(meta.docId, { status: 'open' }).length + extra.open;
@@ -1319,7 +1321,7 @@ export class Rooms {
     }>;
     error?: 'not-found';
   } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === workspaceId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root || !existsSync(root)) return { ok: false, error: 'not-found' };
     const decorate = this.cfg.decorateDocMeta;
@@ -1367,7 +1369,7 @@ export class Rooms {
   ):
     | { ok: true; docId: string; meta: DocMeta }
     | { ok: false; error: 'not-found' | 'bad-path' | 'attach-failed' } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === workspaceId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
     const clean = relPath.replace(/^\/+/, '');
@@ -1430,7 +1432,7 @@ export class Rooms {
         ok: false;
         error: 'not-found' | 'bad-path' | 'pinned' | 'not-markdown' | 'attach-failed';
       } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === workspaceId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
     const clean = relPath.replace(/^\/+/, '');
@@ -1481,7 +1483,7 @@ export class Rooms {
     // whichever doc the reviewer commented in, so badges merge across both.
     const byRel = new Map<string, { meta: DocMeta; openCount: number; threadCount: number }>();
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId) continue;
+      if (reviewIdOf(meta) !== workspaceId) continue;
       if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
       const key = meta.relPath ?? meta.docId;
       const open = this.listThreads(meta.docId, { status: 'open' }).length;
@@ -1666,8 +1668,12 @@ export class Rooms {
       }
     >();
     for (const meta of this.list()) {
-      const id = meta.workspaceId;
-      if (!id) continue;
+      // `isReviewMember`, not just "has a review id": `setId` predates binds
+      // as a batch-registration tag, so 129 docs in the live data dir share a
+      // set without belonging to any folder or diff. Listing those would
+      // invent reviews nobody made, each with no root and nothing to refresh.
+      if (!isReviewMember(meta)) continue;
+      const id = reviewIdOf(meta) as string;
       let entry = byId.get(id);
       if (!entry) {
         entry = {
@@ -1723,7 +1729,7 @@ export class Rooms {
         error: 'has-open-threads';
         files: Array<{ docId: string; openThreads: number }>;
       } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === workspaceId);
     if (members.length === 0) return { ok: false, error: 'not-found' };
     if (!opts?.force) {
       // Pre-flight the guardrail across ALL members before deleting any, so a
@@ -3194,21 +3200,20 @@ export class Rooms {
     // See event-id.ts.
     payload.eid = newEventId();
     this.cfg.sse.broadcast(room.docId, payload);
-    // Double-broadcast on the GROUPING's channel — `meta.workspaceId` is the
-    // tag a diff review or folder bind sets — so an agent can watch ONE
-    // stream per review/folder instead of one per file.
+    // Double-broadcast on the REVIEW's channel — the `setId` a diff review or
+    // folder bind stamps on each member — so an agent can watch ONE stream per
+    // review instead of one per file.
     //
-    // GROUPING, and only the grouping. This comment used to say "workspace"
-    // flat, which reads as covering the other thing that wears that word: a
-    // hub BOARD, which holds docs through `workspace.docIds` and never
-    // through this tag. A doc filed on a board but carrying no grouping tag
-    // reached the board's channel from here NEVER, and an agent watching
-    // `ws:<board>` had no way to notice — silence from a subscription you
-    // never made is indistinguishable from nobody having commented. The
-    // board fan-out lives in server.ts's `onDocRoomEvent`, which resolves
-    // `workspace.docIds` at broadcast time; rooms.ts has no view of boards.
-    if (room.meta.workspaceId) {
-      this.cfg.sse.broadcast(`ws~${room.meta.workspaceId}`, payload);
+    // The REVIEW, and only the review. A doc filed on a workspace but
+    // belonging to no review reaches the workspace's channel from here NEVER,
+    // and an agent watching `ws:<workspaceId>` has no way to notice — silence
+    // from a subscription you never made is indistinguishable from nobody
+    // having commented. The workspace fan-out lives in server.ts's
+    // `onDocRoomEvent`, which resolves `workspace.docIds` at broadcast time;
+    // rooms.ts has no view of workspaces.
+    const reviewId = reviewIdOf(room.meta);
+    if (reviewId) {
+      this.cfg.sse.broadcast(`ws~${reviewId}`, payload);
     }
     if (room.webhookUrl) {
       void this.cfg.webhooks.send(room.webhookUrl, payload);
