@@ -108,6 +108,43 @@ export class SseHub {
     return out;
   }
 
+  /**
+   * Write to the streams ONE named agent is holding on this channel.
+   *
+   * The counterpart to `broadcast`, and the difference is who pays for an
+   * addressed message. A lead-addressed request went out on the workspace
+   * channel with the addressing done at the RECEIVER, in prose — "Act only if
+   * that is you". That is a guard an agent can obey by reading a sentence and
+   * a browser tab cannot obey at all, so Bryan renamed one of his own rows and
+   * the board turned around and asked him to review his own edit (2026-08-21).
+   * It also billed every other attached agent a full turn to read the message
+   * and conclude it was not theirs — a cost that scales with how many peers
+   * joined the board rather than with how much work there is.
+   *
+   * A tab contributes no `agentId` and a share visitor is refused one, so
+   * addressing here excludes every browser by construction rather than by a
+   * rule somebody has to keep applying.
+   *
+   * Returns how many sinks it reached — 0 means the agent is not holding a
+   * stream, which is a real answer the caller must handle (the request queues
+   * for their next attach) and NOT the same as "delivered".
+   */
+  sendToAgent(docId: string, agentId: string, payload: SsePayload): number {
+    const set = this.byDoc.get(docId);
+    if (!set) return 0;
+    let sent = 0;
+    for (const [sink, who] of set) {
+      if (who.agentId !== agentId) continue;
+      try {
+        sink.write(payload.event, payload);
+        sent += 1;
+      } catch (err) {
+        console.error('[sse] addressed write failed:', err);
+      }
+    }
+    return sent;
+  }
+
   /** Close every stream a given share opened. Returns how many. */
   closeForShare(shareId: string): number {
     let closed = 0;

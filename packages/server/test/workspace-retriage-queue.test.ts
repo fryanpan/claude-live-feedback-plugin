@@ -432,14 +432,15 @@ describe('re-triage routing, over HTTP', () => {
     const taskId = await addTask(wsId, 'draft the outline');
 
     // POSITIVE CONTROL FIRST: the lead attaches, joins the workspace channel
-    // the way the MCP does, and the edit is delivered. Both halves matter —
-    // the request IS a broadcast on that channel, so an agent that attached
-    // without connecting is not a place a delivery can land.
+    // the way the MCP does — naming itself, which the MCP does too — and the
+    // edit is delivered. Both halves matter: the request is ADDRESSED to that
+    // named stream, so an agent that attached without connecting is not a
+    // place a delivery can land.
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: LEAD,
       runtime: 'claude-code-local',
     });
-    const stream = await openWorkspaceStream(baseUrl, wsId);
+    const stream = await openWorkspaceStream(baseUrl, wsId, {}, LEAD);
     const live = await editGoal(wsId, 'Delivered goal.');
     expect(live.retriage.requested).toBe(true);
     expect(live.retriage.queued).toBe(false);
@@ -532,7 +533,7 @@ describe('re-triage routing, over HTTP', () => {
 
     const seen: Array<Record<string, unknown>> = [];
     const ctl = new AbortController();
-    const stream = await local(`/events/workspace/${wsId}`, { signal: ctl.signal });
+    const stream = await local(`/events/workspace/${wsId}?agentId=${LEAD}`, { signal: ctl.signal });
     const reader = (stream.body as ReadableStream<Uint8Array>).getReader();
     const dec = new TextDecoder();
     const pump = (async () => {
