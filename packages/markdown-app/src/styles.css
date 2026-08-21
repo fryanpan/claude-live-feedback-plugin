@@ -1660,7 +1660,9 @@ body.hub-body {
   margin: 0;
 }
 .hub-walk-answer textarea,
-.hub-walk-info textarea {
+.hub-walk-info textarea,
+.hub-walk-answer .md-composer-surface,
+.hub-walk-info .md-composer-surface {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -1669,6 +1671,10 @@ body.hub-body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   resize: vertical;
+}
+.hub-walk-answer .md-composer-surface:focus-within,
+.hub-walk-info .md-composer-surface:focus-within {
+  border-color: var(--accent);
 }
 .hub-walk-info {
   padding-top: 10px;
@@ -3257,12 +3263,16 @@ a.hub-link-chip:hover {
 .hub-decide-form button {
   align-self: flex-start;
 }
-.hub-answer-form textarea {
+.hub-answer-form textarea,
+.hub-answer-form .md-composer-surface {
   width: 100%;
   font: inherit;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+.hub-answer-form .md-composer-surface:focus-within {
+  border-color: var(--accent);
 }
 /* The description, read in place. Prose measure and font, because this is
    the one part of the panel that is writing rather than metadata. */
@@ -3645,10 +3655,11 @@ a.hub-link-chip:hover {
 /* (`.hub-composer-target` and its switch are gone. The bar existed to say
    WHICH thread the one box would post to, and with threading out of the UI
    there is only one place a comment can go: the end of the sequence.) */
-.hub-comment-form textarea {
+.hub-comment-form textarea,
+.hub-comment-form .md-composer-surface {
   width: 100%;
   /* The panel is a grid/flex child; without this a long unbroken paste sets
-     the textarea's intrinsic width and pushes the panel past the viewport. */
+     the box's intrinsic width and pushes the panel past the viewport. */
   min-width: 0;
   box-sizing: border-box;
   font: inherit;
@@ -3656,6 +3667,9 @@ a.hub-link-chip:hover {
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+.hub-comment-form .md-composer-surface:focus-within {
+  border-color: var(--accent);
 }
 
 /* --- help + toast --- */
@@ -5433,7 +5447,8 @@ body.threads-resizing {
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
-.thread-reply textarea {
+.thread-reply textarea,
+.thread-reply .md-composer-surface {
   resize: vertical;
   font: inherit;
   border: 1px solid var(--border);
@@ -5441,6 +5456,9 @@ body.threads-resizing {
   padding: 8px;
   font-size: 14px;
   min-height: 44px;
+}
+.thread-reply .md-composer-surface:focus-within {
+  border-color: var(--accent);
 }
 .thread-actions {
   display: flex;
@@ -5641,7 +5659,8 @@ body.threads-resizing {
   color: #fff;
   margin-bottom: 4px;
 }
-#composer-text {
+#composer-text,
+.composer-inner .md-composer-surface {
   flex: 1 1 auto;
   min-width: 0;
   border: 0;
@@ -5654,6 +5673,12 @@ body.threads-resizing {
   color: var(--fg);
   max-height: 32vh;
   outline: none;
+}
+/* The composer row is a flex row and the wrapper is now the flex child; the
+   Send arrow sits beside it, not beside the box inside it. */
+.composer-inner .md-composer {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .submit-arrow {
   flex: 0 0 auto;
@@ -5690,95 +5715,121 @@ body.composer-open #editor .ProseMirror ::selection {
   color: #1b1f23;
 }
 
-/* ================= MARKDOWN FIELD =================
+/* ================= MARKDOWN COMPOSER =================
    Every composer is a markdown editor (approved design, review-flow-mock-v1,
-   design point 4). `attachMarkdownField` (md-field.ts) wraps a composer's
-   textarea in `.md-field` — box, then the quiet affordance row, then a
-   preview that fills in below as you type. The preview is hidden while the
-   box is empty so an untouched composer stays one control tall: the iPad's
-   scarce axis is HEIGHT, and most composers on a screen are never typed
-   into. The wrapper is the flex child now, which is what keeps the row
-   composers (field and Send side by side, e.g. .hub-walk-answer) intact
-   while the preview stretches under the box rather than beside it. */
+   design point 4), and "editor" means what the task description already is:
+   you type `**bold**` and the words go bold. `attachMarkdownComposer`
+   (md-composer.ts) wraps the textarea in `.md-composer` and puts the editor
+   beside it in `.md-composer-surface`; the textarea stays as the value every
+   caller reads, hidden once the editor mounts. Until it mounts — and if the
+   chunk never arrives — the plain box is what is on screen, which is why the
+   swap is a class on the wrapper rather than a removal.
 
-.md-field {
+   The wrapper is the flex child, which is what keeps the row composers (field
+   and Send side by side, e.g. .hub-walk-answer) intact.
+
+   Box chrome is NOT here: each composer's own rule dresses the surface the
+   same way it dresses its textarea (search `.md-composer-surface` — it is
+   named beside every `textarea` selector that had a box). One look per
+   context, stated once per context. */
+
+.md-composer {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
 }
-.md-field > textarea {
+.md-composer > textarea {
   width: 100%;
   box-sizing: border-box;
 }
-.md-affordance {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
+/* The editor is not on screen until it exists; then it takes the box's
+   place. Two rules rather than a `hidden` attribute so the fallback (chunk
+   failed, textarea stays) needs no cleanup. */
+.md-composer > .md-composer-surface {
+  display: none;
 }
-.md-badge {
-  flex: 0 0 auto;
-  font-family: var(--sans);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
+.md-composer-live > .md-composer-surface {
+  display: block;
 }
-.md-hint {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  min-width: 0;
-  overflow-wrap: anywhere;
+.md-composer-live > textarea {
+  display: none;
 }
-.md-preview {
-  border-left: 3px solid var(--accent);
-  background: var(--bg-panel);
-  border-radius: 0 var(--radius) var(--radius) 0;
-  padding: 7px 11px;
-  font-size: 13.5px;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  /* A growing preview must never push the textarea being typed in off the
-     top of the screen — measured doing exactly that at 820px viewport height
-     around 20 wrapped paragraphs. Same clamp shape as the balloon. */
-  max-height: min(35vh, 320px);
+.md-composer-surface {
+  box-sizing: border-box;
+  cursor: text;
+  /* A growing composer must never push the words being typed off the top of
+     the screen — the preview this replaced was measured doing exactly that at
+     820px viewport height. Same clamp shape, one control higher. */
+  max-height: min(45vh, 360px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* Belt and braces: happy-dom honours the property, and a stylesheet that
-   loses this rule would leave an empty accent-barred box under every
-   untouched composer. */
-.md-preview[hidden] {
-  display: none;
+.md-composer-disabled .md-composer-surface {
+  opacity: 0.55;
 }
-.md-preview p {
-  margin: 0 0 6px;
+.md-composer-surface .ProseMirror {
+  outline: none;
+  overflow-wrap: anywhere;
+  /* The height the box was asked for, kept: `rows` is carried onto the
+     wrapper as --md-rows by the attach. */
+  min-height: calc(var(--md-rows, 2) * 1.45em);
 }
-.md-preview ul {
-  margin: 0 0 6px;
+.md-composer-surface .ProseMirror > * {
+  margin: 0 0 0.5em;
+}
+.md-composer-surface .ProseMirror > :last-child {
+  margin-bottom: 0;
+}
+.md-composer-surface .ProseMirror h1,
+.md-composer-surface .ProseMirror h2,
+.md-composer-surface .ProseMirror h3 {
+  font-family: var(--sans);
+  font-size: 1.05em;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0.7em 0 0.3em;
+}
+.md-composer-surface .ProseMirror ul,
+.md-composer-surface .ProseMirror ol {
   padding-left: 20px;
 }
-.md-preview code {
+.md-composer-surface .ProseMirror blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  color: var(--fg-muted);
+}
+.md-composer-surface .ProseMirror code {
+  font-family: var(--mono);
+  font-size: 0.92em;
   background: var(--bg-hover);
   border-radius: 4px;
   padding: 0 4px;
+}
+.md-composer-surface .ProseMirror pre {
   font-family: var(--mono);
-  font-size: 0.9em;
+  font-size: 0.92em;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-subtle, var(--bg-panel));
+  border: 1px solid var(--border);
 }
-.md-preview > :last-child {
-  margin-bottom: 0;
+.md-composer-surface .ProseMirror pre code {
+  background: none;
+  padding: 0;
 }
-/* On a phone the cheat sheet is a second line under every composer; the
-   badge alone carries the affordance there. */
-@media (max-width: 720px) {
-  .md-hint {
-    display: none;
-  }
+/* Tiptap's Placeholder marks the empty first block and hands the text over in
+   an attribute; nothing renders it without this rule. It is what carries the
+   textarea's `placeholder` across — "Reply as …", "Record your answer,
+   verbatim…" — so losing it makes every composer an unlabelled box. */
+.md-composer-surface .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--fg-muted);
 }
 
 /* ================= TOAST ================= */

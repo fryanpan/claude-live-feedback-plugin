@@ -20,7 +20,15 @@ import {
   goalDisplay,
 } from '@feedback/core/goal-summary';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
-import { attachMarkdownField } from '../md-field.ts';
+import {
+  type ComposerSelection,
+  attachMarkdownComposer,
+  composerSelection,
+  composerState,
+  focusMarkdownComposer,
+  isComposerFocused,
+  refreshMarkdownComposer,
+} from '../md-composer.ts';
 import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import {
   type ActivityEvent,
@@ -1710,9 +1718,9 @@ function promptForm(
   submit.className = submitClass;
   submit.textContent = submitLabel;
   form.append(ta, submit);
-  // Every composer speaks markdown (design point 4); the returned refresh
-  // covers the programmatic clears below, which fire no `input` event.
-  const refreshPreview = attachMarkdownField(ta);
+  // Every composer is a markdown editor (design point 4); the returned
+  // refresh covers the programmatic clears below, which the editor cannot see.
+  const refreshComposer = attachMarkdownComposer(ta);
   // A flag, not just the disabled attributes: disabling the CONTROLS stops a
   // second tap, and a form can still be submitted around them (Enter in the
   // field, a programmatic submit). The guard has to be on the handler.
@@ -1731,7 +1739,7 @@ function promptForm(
         // usual outcome there is that the card is replaced anyway.
         if (ok === true) {
           ta.value = '';
-          refreshPreview();
+          refreshComposer();
         }
       })
       .catch(() => {})
@@ -2601,6 +2609,11 @@ export interface KeptField {
   selectionStart: number | null;
   selectionEnd: number | null;
   selectionDirection: 'forward' | 'backward' | 'none';
+  /** Where the caret was when the control is a live markdown composer. A
+   *  ProseMirror position is not a string offset, so it needs its own slot —
+   *  and it maps back exactly, because the restore puts the same markdown
+   *  back before placing it. */
+  composer: ComposerSelection | null;
 }
 
 /**
@@ -2624,12 +2637,20 @@ export function keepFields(root: ParentNode): Map<string, KeptField> {
   for (const el of root.querySelectorAll<TextControl>('textarea[data-keep], input[data-keep]')) {
     const key = el.dataset.keep;
     if (!key) continue;
+    // A composer's textarea is hidden behind its editor, so neither focus nor
+    // the caret is on the element any more — both have to be asked of the
+    // surface the reader is actually typing in. `composerSelection` answers
+    // null for a plain control, which is what selects the other branch.
+    const live = el instanceof HTMLTextAreaElement && composerState(el) === 'live';
     kept.set(key, {
       value: el.value,
-      focused: el === el.ownerDocument.activeElement,
+      focused: live
+        ? isComposerFocused(el as HTMLTextAreaElement)
+        : el === el.ownerDocument.activeElement,
       selectionStart: el.selectionStart,
       selectionEnd: el.selectionEnd,
       selectionDirection: el.selectionDirection ?? 'none',
+      composer: live ? composerSelection(el as HTMLTextAreaElement) : null,
     });
   }
   return kept;
@@ -2646,7 +2667,17 @@ export function restoreFields(root: ParentNode, kept: Map<string, KeptField>): v
     const snap = el.dataset.keep ? kept.get(el.dataset.keep) : undefined;
     if (!snap) continue;
     el.value = snap.value;
+    // The value is the composer's source of truth but not its content — put
+    // the words back into the editor too. No-op on a plain control, and safe
+    // before the editor's chunk has landed: it seeds from the value on mount.
+    if (el instanceof HTMLTextAreaElement) refreshMarkdownComposer(el);
     if (!snap.focused) continue;
+    // A box whose editor has not mounted yet still restores through here: the
+    // focus is remembered and applied the moment it does.
+    if (el instanceof HTMLTextAreaElement && composerState(el) !== 'none') {
+      focusMarkdownComposer(el, snap.composer);
+      continue;
+    }
     el.focus();
     if (snap.selectionStart !== null && snap.selectionEnd !== null) {
       el.setSelectionRange(snap.selectionStart, snap.selectionEnd, snap.selectionDirection);
@@ -2672,9 +2703,9 @@ function commentForm(
   submit.className = 'hub-btn';
   submit.textContent = submitLabel;
   form.append(ta, submit);
-  // Every composer speaks markdown (design point 4); refresh covers the
-  // programmatic clear and restore below, which fire no `input` event.
-  const refreshPreview = attachMarkdownField(ta);
+  // Every composer is a markdown editor (design point 4); refresh covers the
+  // programmatic clear and restore below, which the editor cannot see.
+  const refreshComposer = attachMarkdownComposer(ta);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
@@ -2693,19 +2724,19 @@ function commentForm(
     // comment that had just been posted, and the obvious second click posted
     // it twice. Put back verbatim if the post is refused.
     ta.value = '';
-    refreshPreview();
+    refreshComposer();
     // `Promise.resolve` rather than `await onSubmit(...)` so a handler that
     // returns nothing at all still settles here instead of throwing.
     void Promise.resolve(onSubmit(text))
       .then((ok) => {
         if (!ok) {
           ta.value = text;
-          refreshPreview();
+          refreshComposer();
         }
       })
       .catch(() => {
         ta.value = text;
-        refreshPreview();
+        refreshComposer();
       })
       .finally(() => {
         ta.disabled = false;
@@ -3885,9 +3916,9 @@ function reviewItemCard(
   submit.textContent = 'Record answer';
   form.append(hint, ta, submit);
   controls.push(ta, submit);
-  // Every composer speaks markdown (design point 4); refresh covers the
-  // programmatic clear and restore below, which fire no `input` event.
-  const refreshPreview = attachMarkdownField(ta);
+  // Every composer is a markdown editor (design point 4); refresh covers the
+  // programmatic clear and restore below, which the editor cannot see.
+  const refreshComposer = attachMarkdownComposer(ta);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
@@ -3904,10 +3935,10 @@ function reviewItemCard(
     // detached node while the rebuilt one is refilled with the words that
     // were just sent. Restored verbatim if the write is refused.
     ta.value = '';
-    refreshPreview();
+    refreshComposer();
     answer(text, undefined, () => {
       ta.value = text;
-      refreshPreview();
+      refreshComposer();
     });
   });
   card.append(form);
@@ -3932,7 +3963,9 @@ function requireText(field: HTMLTextAreaElement, near: HTMLElement, message: str
   note.textContent = message;
   note.setAttribute('role', 'alert');
   if (!existing) near.insertAdjacentElement('beforebegin', note);
-  field.focus();
+  // Through the composer: the textarea is hidden behind its editor, and
+  // focusing a hidden control puts the caret nowhere the reader can see.
+  focusMarkdownComposer(field);
   // Clears itself the moment the reason goes away, so it never contradicts
   // what the reader can see in the box.
   field.addEventListener('input', () => note.remove(), { once: true });
