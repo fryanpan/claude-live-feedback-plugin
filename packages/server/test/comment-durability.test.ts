@@ -525,4 +525,86 @@ describe('a comment posted while the subscriber is disconnected is delivered aft
     expect(heard.frames.find((f) => f.data.commentQueueId === rowId)).toBeDefined();
     expect(typeof handle.tasks.listQueuedComments(workspaceId)[0]?.emittedAt).toBe('number');
   });
+
+  it('a stream that EXISTED and dropped counts as down — a dead sink is not a delivery', async () => {
+    const workspaceId = await board('sever-board', 'agent-sever');
+    await makeDoc('sever-doc', workspaceId);
+
+    // Open the stream for real, then sever the CONNECTION — an aborted
+    // fetch is what a dying process or dropped socket looks like, and it
+    // fires the server stream's cancel() → hub removal within ~1ms
+    // (measured; a bare reader.cancel() does NOT sever in Bun, it leaves
+    // the connection open and the sink live). The headline test above never
+    // opens a stream before commenting, so a regression where removal stops
+    // firing on abrupt disconnects (leaving a stale sink that agentsOn
+    // still counts) would sail through it.
+    const ac = new AbortController();
+    const stream = await fetch(
+      `${base}/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-sever`,
+      { headers: { host: `localhost:${handle.port}` }, signal: ac.signal },
+    );
+    expect(stream.status).toBe(200);
+    const heard = listenFrames(stream);
+    stops.push(heard.stop);
+    await settle(150);
+    ac.abort();
+    await settle(150);
+
+    expect((await comment('sever-doc', 'Posted into the gap.')).status).toBe(200);
+    await settle();
+
+    // Queued for the addressee — and NOT marked emitted, which is the proof
+    // the server saw the disconnect instead of counting the dead sink.
+    const queued = handle.tasks.listQueuedComments(workspaceId);
+    expect(queued.map((q) => q.agentId)).toEqual(['agent-sever']);
+    expect(queued[0]?.emittedAt).toBeUndefined();
+    const rowId = queued[0]?.id as string;
+
+    // Reconnect + heartbeat: the full recovery, from a REAL severed stream.
+    const back = await get(
+      `/events/workspace/${encodeURIComponent(workspaceId)}?agentId=agent-sever`,
+    );
+    const rejoined = listenFrames(back);
+    stops.push(rejoined.stop);
+    await settle(150);
+    expect(
+      (await post(`/api/workspaces/${workspaceId}/attachments/agent-sever/heartbeat`, {})).status,
+    ).toBe(200);
+    await settle();
+    expect(rejoined.frames.find((f) => f.data.commentQueueId === rowId)).toBeDefined();
+    const acked = await post(`/api/workspaces/${workspaceId}/comment-queue/${rowId}/ack`, {});
+    expect((await acked.json()) as { cleared: boolean }).toMatchObject({ cleared: true });
+    expect(handle.tasks.listQueuedComments(workspaceId)).toHaveLength(0);
+  });
+
+  it('addressing is lead ∪ durable board watchers — an attached bystander gets NO row', async () => {
+    const workspaceId = await board('addressing-board', 'agent-lead');
+    // A second agent ATTACHES but neither leads nor durably watches the
+    // board. Mere attachment earning a row is queuedVoice's "whoever
+    // attaches first" defect, deliberately not copied here — this is the
+    // addressing-level negative control (the drain-level one is up in the
+    // store suite).
+    const att = await post(`/api/workspaces/${workspaceId}/attachments`, {
+      agentId: 'agent-bystander',
+      runtime: 'claude-code-local',
+    });
+    expect(att.status).toBe(200);
+    expect(((await att.json()) as { lead?: boolean }).lead).not.toBe(true);
+    // A third agent holds the DURABLE watch — never attached at all: the
+    // positive control that agentsWatching feeds the decision.
+    const watch = await post('/api/agents/agent-watcher/watches', {
+      add: [`ws:${workspaceId}`],
+    });
+    expect(watch.status).toBe(200);
+    await makeDoc('addressing-doc', workspaceId);
+
+    expect((await comment('addressing-doc', 'Who owns this?')).status).toBe(200);
+    await settle();
+
+    const byAgent = handle.tasks
+      .listQueuedComments(workspaceId)
+      .map((q) => q.agentId)
+      .sort();
+    expect(byAgent).toEqual(['agent-lead', 'agent-watcher']);
+  });
 });
