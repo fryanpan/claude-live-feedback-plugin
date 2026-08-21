@@ -342,6 +342,12 @@ export interface ThreadWebhookPayload {
   doc: DocMeta;
   /** the comment that triggered the event (undefined for resolve/reopen). */
   comment?: Comment;
+  /** who performed a resolve/reopen. On comment events `comment.author`
+   *  already carries the actor, so this stays unset there. Optional because
+   *  a server older than the stamp does not send one — a consumer with no
+   *  `actor` must NOT fall back to a comment author: that fallback is how
+   *  17 resolves in the field were attributed to the thread's creator. */
+  actor?: User;
   /** monotonically-increasing sequence within a doc. NOT unique across a
    *  server restart — the counter lives on the in-memory room and starts at 0
    *  again on every start. Use `eid` to identify an event. */
