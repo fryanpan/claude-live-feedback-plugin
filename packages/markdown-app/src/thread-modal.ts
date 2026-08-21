@@ -171,9 +171,16 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
 
   scope.listen(root.querySelector('.thread-modal-close') as HTMLElement, 'click', close);
   scope.listen(scrim, 'click', close);
+  // Escape closes the TOP layer and only the top layer.
+  //
+  // `stopImmediatePropagation`, not `stopPropagation`: the chrome's own
+  // Escape handler is bound to `document` too, and stopping propagation does
+  // nothing to another listener on the SAME node — it only stops the event
+  // travelling further up. So the weaker call left one Escape closing the
+  // dialog and the comments drawer underneath it in a single press.
   scope.listen(document, 'keydown', (ev) => {
     if ((ev as KeyboardEvent).key !== 'Escape' || openId === null) return;
-    ev.stopPropagation();
+    ev.stopImmediatePropagation();
     close();
   });
 

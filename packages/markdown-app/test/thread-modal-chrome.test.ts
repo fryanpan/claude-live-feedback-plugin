@@ -208,6 +208,20 @@ describe('opening a thread on a desktop/tablet width', () => {
     expect(modalOpen()).toBe(false);
   });
 
+  it('Escape closes the dialog and stops there, not the drawer under it', () => {
+    setViewportWidth(1180);
+    const { chrome } = harness({ text: words(LONG_THREAD_WORDS + 20) });
+    chrome.openDrawer();
+    const shell = document.getElementById('shell') as HTMLElement;
+    expect(shell.classList.contains('threads-open')).toBe(true);
+    tapCard();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modalOpen()).toBe(false);
+    // The chrome's own Escape handler is on `document` as well, so only
+    // stopImmediatePropagation keeps one press from closing two layers.
+    expect(shell.classList.contains('threads-open')).toBe(true);
+  });
+
   it('follows the conversation while it is open', () => {
     setViewportWidth(1180);
     const { chrome, ydoc } = harness({ text: words(LONG_THREAD_WORDS + 20) });
