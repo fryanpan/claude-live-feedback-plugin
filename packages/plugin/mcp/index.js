@@ -6517,6 +6517,7 @@ var require_dist = __commonJS((exports, module) => {
 });
 
 // packages/mcp/src/mcp.ts
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
@@ -13717,6 +13718,59 @@ function resolveDiscoveryFile(home, exists) {
   return discoveryCandidates(home).find(exists);
 }
 
+// packages/mcp/src/attach-backlog.ts
+async function deliverAttachBacklog(workspaceId, backlog, deps) {
+  let comments = 0;
+  for (const row of backlog.queuedComments ?? []) {
+    if (typeof row?.id !== "string")
+      continue;
+    const original = row.payload && typeof row.payload === "object" ? row.payload : undefined;
+    const event = typeof original?.event === "string" ? original.event : typeof row.event === "string" ? row.event : undefined;
+    if (event === undefined)
+      continue;
+    const payload = original ? { ...original } : {
+      event,
+      ...typeof row.docId === "string" ? { docId: row.docId } : {},
+      ...typeof row.threadId === "string" ? { threadId: row.threadId } : {},
+      comment: {
+        ...row.author !== undefined ? { author: row.author } : {},
+        ...typeof row.text === "string" ? { text: row.text } : {},
+        ...typeof row.ts === "number" ? { ts: row.ts } : {}
+      }
+    };
+    payload.workspaceId = workspaceId;
+    payload.commentQueueId = row.id;
+    try {
+      await deps.emit(event, payload);
+    } catch {
+      continue;
+    }
+    comments += 1;
+    try {
+      await deps.ackComment(row.id);
+    } catch {}
+  }
+  let voice = 0;
+  for (const row of backlog.queuedVoice ?? []) {
+    if (typeof row?.transcript !== "string")
+      continue;
+    const applied = typeof row.applied === "string" ? row.applied : undefined;
+    const payload = {
+      route: "agent",
+      transcript: row.transcript,
+      ack: applied ? `Delivered from the queue. Already applied: ${applied}` : "Delivered from the queue.",
+      ...row.context !== undefined ? { context: row.context } : {},
+      ...row.actor !== undefined ? { actor: row.actor } : {},
+      workspaceId
+    };
+    try {
+      await deps.emit("voice.request", payload);
+      voice += 1;
+    } catch {}
+  }
+  return { comments, voice };
+}
+
 // packages/mcp/src/attachment-keepalive.ts
 var DEFAULT_INTERVAL_MS = 120000;
 function createAttachmentKeepalive(opts) {
@@ -13883,7 +13937,8 @@ async function declareWorkspaceLead(args, deps) {
     attached = await deps.http("POST", `${path}/attachments`, {
       agentId: deps.self.id,
       runtime: deps.runtime,
-      pluginVersion: deps.pluginVersion
+      pluginVersion: deps.pluginVersion,
+      processId: deps.processId
     });
     subscription = await deps.watchWorkspace(workspaceId);
   }
@@ -13903,6 +13958,13 @@ async function declareWorkspaceLead(args, deps) {
   if (!declaring)
     return seat;
   const a = attached ?? {};
+  for (const q of a.queuedComments ?? []) {
+    if (typeof q?.id !== "string")
+      continue;
+    try {
+      await deps.http("POST", `${path}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+    } catch {}
+  }
   const warnings = [];
   if (!subscription.open) {
     warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
@@ -13922,6 +13984,14 @@ async function declareWorkspaceLead(args, deps) {
     gating: a.gating,
     untriaged: a.untriaged ?? [],
     queuedVoice: a.queuedVoice ?? [],
+    queuedComments: (a.queuedComments ?? []).map((q) => ({
+      docId: q.docId,
+      ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+      event: q.event,
+      ...q.author !== undefined ? { author: q.author } : {},
+      text: q.text,
+      ts: q.ts
+    })),
     ...a.pendingRetriage ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
     ...a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {},
     ...a.taskReviews !== undefined && a.taskReviews.length > 0 ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
@@ -13967,6 +14037,29 @@ function frameKey(event, payload) {
   if (typeof p.docId !== "string" || p.docId === "")
     return;
   return `${event}#${p.docId}#${p.seq}`;
+}
+
+// packages/mcp/src/sse-cursor.ts
+function frameMeta(raw) {
+  const meta2 = {};
+  for (const line of raw.split(`
+`)) {
+    if (line.startsWith("id:"))
+      meta2.id = line.slice(3).trim();
+    else if (line.startsWith("event:"))
+      meta2.event = line.slice(6).trim();
+  }
+  return meta2;
+}
+async function deliverThenCommit(frame, deliver, cursor, onGap) {
+  await deliver(frame);
+  const meta2 = frameMeta(frame);
+  if (meta2.event === "replay.gap") {
+    cursor.lastEventId = undefined;
+    onGap();
+  } else if (meta2.id !== undefined) {
+    cursor.lastEventId = meta2.id;
+  }
 }
 
 // packages/mcp/src/thread-create.ts
@@ -14113,7 +14206,8 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.74";
+var PLUGIN_VERSION = "0.1.75";
+var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
   name: "claude-workspaces",
@@ -16019,7 +16113,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           watchWorkspace,
           self: AUTHOR,
           runtime: "claude-code-local",
-          pluginVersion: PLUGIN_VERSION
+          pluginVersion: PLUGIN_VERSION,
+          processId: PROCESS_ID
         }));
       }
       case "attach_doc": {
@@ -16355,12 +16450,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           agentId: agentId ?? AUTHOR.id,
           runtime: runtime ?? "claude-code-local",
           ...capabilities !== undefined ? { capabilities } : {},
-          pluginVersion: PLUGIN_VERSION
+          pluginVersion: PLUGIN_VERSION,
+          processId: PROCESS_ID
         });
         if (agentId === undefined || agentId === AUTHOR.id)
           markAttached(workspaceId);
         if (subscribe !== false)
           await watchWorkspace(workspaceId);
+        for (const q of res.queuedComments ?? []) {
+          if (typeof q?.id !== "string")
+            continue;
+          try {
+            await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(q.id)}/ack`, {});
+          } catch {}
+        }
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
@@ -16368,6 +16471,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           queuedVoice: res.queuedVoice ?? [],
+          queuedComments: (res.queuedComments ?? []).map((q) => ({
+            docId: q.docId,
+            ...q.threadId !== undefined ? { threadId: q.threadId } : {},
+            event: q.event,
+            ...q.author !== undefined ? { author: q.author } : {},
+            text: q.text,
+            ts: q.ts
+          })),
           ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
           ...res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {},
           ...res.taskReviews !== undefined && res.taskReviews.length > 0 ? { taskReviews: res.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
@@ -16465,13 +16576,24 @@ async function ensureWatchesRestored() {
       const reattached = [];
       for (const workspaceId of boardsToReattach(lastCoverage)) {
         try {
-          await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
+          const attachRes = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
             agentId: AUTHOR.id,
             runtime: "claude-code-local",
-            pluginVersion: PLUGIN_VERSION
+            pluginVersion: PLUGIN_VERSION,
+            processId: PROCESS_ID
           });
           markAttached(workspaceId);
           reattached.push(workspaceId);
+          await deliverAttachBacklog(workspaceId, attachRes, {
+            emit: async (ev, payload) => {
+              if (shouldForwardFrame.shouldForward(ev, payload)) {
+                await emitChannelMessage(ev, payload);
+              }
+            },
+            ackComment: async (rowId) => {
+              await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
+            }
+          });
         } catch {}
       }
       if (reattached.length > 0)
@@ -16566,10 +16688,12 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
     if (w)
       w.open = open;
   };
+  const cursor = { lastEventId: undefined };
   while (!signal.aborted) {
     try {
       const res = await fetch(`${resolveBaseUrl()}${path}`, {
-        signal
+        signal,
+        ...cursor.lastEventId ? { headers: { "Last-Event-ID": cursor.lastEventId } } : {}
       });
       const live = res.ok && res.body !== null;
       setOpen(live);
@@ -16590,7 +16714,7 @@ async function runSseLoop(label, path, signal, onFirstAttempt) {
         while (sep >= 0) {
           const frame = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          await handleFrame(frame);
+          await deliverThenCommit(frame, handleFrame, cursor, () => shouldForwardFrame.reset());
           sep = buf.indexOf(`
 
 `);
@@ -16647,9 +16771,31 @@ async function handleFrame(raw) {
   } catch {
     return;
   }
-  if (!shouldForwardFrame.shouldForward(ev, payload))
+  if (ev === "replay.gap") {
+    const p = payload ?? {};
+    await server.notification({
+      method: "notifications/claude/channel",
+      params: {
+        source: "claude-workspaces",
+        sent_at: new Date().toISOString(),
+        content: `[replay.gap] events on ${p.docId ?? "a watched channel"} may have been missed while this session was disconnected — refetch state (get_doc / list_threads / next_tasks) rather than assuming the stream was complete`,
+        meta: { event: "replay.gap", ...p.docId ? { doc_id: p.docId } : {} }
+      }
+    });
     return;
-  await emitChannelMessage(ev, payload);
+  }
+  if (shouldForwardFrame.shouldForward(ev, payload)) {
+    await emitChannelMessage(ev, payload);
+  }
+  await ackCommentRow(payload);
+}
+async function ackCommentRow(payload) {
+  const p = payload;
+  if (typeof p?.commentQueueId !== "string" || typeof p?.workspaceId !== "string")
+    return;
+  try {
+    await http("POST", `/api/workspaces/${encodeURIComponent(p.workspaceId)}/comment-queue/${encodeURIComponent(p.commentQueueId)}/ack`, {});
+  } catch {}
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
 async function emitHubChannelMessage(event, rawPayload) {
