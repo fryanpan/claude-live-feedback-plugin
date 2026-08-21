@@ -65,6 +65,9 @@ SYSTEM_PROMPT = """You are a sensitive-content scanner. You will be shown a git 
 **What does NOT count as a leak (don't flag):**
 - The repo's own name in self-references (a repo's README / CLAUDE.md / package metadata legitimately names itself)
 - The author/maintainer name in standard metadata fields
+- The literal placeholder `<commit identity already public on the remote>` —
+  it marks a git Author/Co-authored-by line whose identity this tool already
+  verified is on the remote and redacted before you saw the diff
 - Public technical references (Anthropic, Claude, GitHub URLs to known public repos, well-known libraries)
 - Generic placeholders: <user>, <your-tailnet>, your-username/example, my-project, the user
 - Function/variable/class names, programming jargon, code comments about the code itself
