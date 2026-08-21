@@ -262,7 +262,7 @@ describe('task store events + audit log', () => {
       expect(events).toHaveLength(0);
     });
 
-    it('moves OPEN tasks whose goal disappears to Chores, batched under the goals_changed event; done stays put', () => {
+    it('moves OPEN tasks whose goal disappears to Backlog, batched under the goals_changed event; done stays put', () => {
       const ws = store.createWorkspace('search-revamp', 'Ship the search.');
       const { G, goals } = seedBoard(ws.id);
       const open = store.createTask(ws.id, { title: 'Trim the bundle', goal: G.perf });
@@ -277,7 +277,7 @@ describe('task store events + audit log', () => {
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.movedToChores).toEqual([open.task.id]);
-      // The open task moved to the bottom of Chores; the done one kept its goal.
+      // The open task moved to the bottom of Backlog; the done one kept its goal.
       expect(store.getTask(open.task.id)?.goal).toBe(CHORES_GOAL_ID);
       expect(store.getTask(closed.task.id)?.goal).toBe(G.perf);
       // One goals_changed event, then one member task.regrouped referencing it.
@@ -296,7 +296,7 @@ describe('task store events + audit log', () => {
 
     it("refuses the reserved 'chores' id and duplicate ids", () => {
       const ws = store.createWorkspace('search-revamp', 'Ship the search.');
-      const reserved = store.setGoalList(ws.id, [{ id: CHORES_GOAL_ID, title: 'Chores' }], {
+      const reserved = store.setGoalList(ws.id, [{ id: CHORES_GOAL_ID, title: 'Backlog' }], {
         actor: PERSON,
       });
       expect(reserved.ok).toBe(false);

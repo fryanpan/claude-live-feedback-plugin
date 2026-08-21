@@ -181,7 +181,7 @@ const NOTES_HEADER = /^(notes?|details?|comments?)$/i;
  *  - A level-1 heading at the very top of the file is the document TITLE,
  *    not a group (the near-universal tracker convention); every other
  *    heading (levels 1–4) starts a group.
- *  - Rows before any group heading land in Chores.
+ *  - Rows before any group heading land in Backlog.
  *  - A heading whose section contains no table rows is reported in
  *    `skipped`, never turned into an empty goal.
  *  - Headings match existing board goals by title (enumeration- and

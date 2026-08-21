@@ -113,7 +113,7 @@ describe('parseTrackerMarkdown (golden file)', () => {
     expect(mapping.ignoredColumns).toEqual(['Due']);
   });
 
-  it('a leading H1 is the document title, not a group — its table lands in Chores', () => {
+  it('a leading H1 is the document title, not a group — its table lands in Backlog', () => {
     // Covered by the golden mapping (line 7 → chores); this is the rule's
     // positive control from the other side: an H1 that is NOT leading IS a
     // group.
@@ -145,6 +145,10 @@ describe('parseTrackerMarkdown (golden file)', () => {
     expect(m.goals[1]?.existing).toBe(false);
   });
 
+  // The collision is with the reserved ID, which is still `chores` — the band
+  // is only LABELLED Backlog. So the heading that collides is still the word
+  // "Chores", however the board spells the band today, and this test says so
+  // in both directions.
   it("never mints the reserved 'chores' id for a heading named Chores", () => {
     const m = parseTrackerMarkdown(
       'Intro.\n\n# Chores\n\n| Task | Status |\n| --- | --- |\n| Sweep the stalls | todo |\n',
@@ -153,6 +157,21 @@ describe('parseTrackerMarkdown (golden file)', () => {
     expect(m.goals[0]?.id).not.toBe('chores');
     expect(m.goals[0]?.id).toBe('chores-2');
     expect(m.tasks[0]?.goalId).toBe('chores-2');
+  });
+
+  // …and the case the rename creates: now that the band READS "Backlog", a
+  // hand-maintained tracker is likely to have a heading spelled that way. It
+  // must become an ordinary band of its own, NOT be adopted into the reserved
+  // bucket — a heading matching the current label is not a declaration that
+  // the author meant the catch-all.
+  it('a heading named Backlog becomes its own band, not the reserved bucket', () => {
+    const m = parseTrackerMarkdown(
+      'Intro.\n\n# Backlog\n\n| Task | Status |\n| --- | --- |\n| Sweep the stalls | todo |\n',
+      emptyWorkspace,
+    );
+    expect(m.goals[0]?.id).toBe('backlog');
+    expect(m.goals[0]?.id).not.toBe('chores');
+    expect(m.tasks[0]?.goalId).toBe('backlog');
   });
 
   it('a table with no status column imports every row as todo', () => {

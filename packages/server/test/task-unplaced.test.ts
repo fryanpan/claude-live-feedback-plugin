@@ -4,14 +4,14 @@
  *
  * Why this field exists rather than the two proxies that were standing in for
  * it. `listUntriaged` — the sweep handed to every agent on `attach_agent` —
- * used to select "in Chores and `triagedAgainst` unset", which is wrong in
+ * used to select "in Backlog and `triagedAgainst` unset", which is wrong in
  * BOTH directions, and each direction was reproduced before this file existed:
  *
  *  - **False positive.** A caller who says `goal: "chores"` has PLACED the
  *    task (that is exactly the distinction `placement.placed` draws, and it
  *    is deliberately not `goal !== chores`). It has no `triagedAgainst`, so
  *    the old predicate re-asked for it on every attach, forever.
- *  - **False negative.** A task swept to Chores because its band was removed
+ *  - **False negative.** A task swept to Backlog because its band was removed
  *    KEEPS the `triagedAgainst` from its old placement — pointing at a goal
  *    id that no longer exists — so the old predicate never surfaced it, even
  *    though its placement is precisely what stopped being named.
@@ -107,7 +107,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       expect(store.getTask(res.task.id)?.unplacedSince).toBeUndefined();
     });
 
-    it('placing it INTO Chores also clears it — an agent that judged it a chore has named the band', () => {
+    it('placing it INTO Backlog also clears it — an agent that judged it a chore has named the band', () => {
       // Confirm-in-place is a placement (`setTaskGoal` stamps triagedAgainst
       // for a no-move call too), so the review is answered and must not be
       // asked again.
@@ -120,7 +120,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
   });
 
   describe('re-stamped when a band removal un-names a placement somebody DID make', () => {
-    it('a task swept to Chores by a goal-list removal gets unplacedSince', () => {
+    it('a task swept to Backlog by a goal-list removal gets unplacedSince', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
       const G = seedGoals(
         store,
@@ -272,7 +272,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // obvious one (create with no goal, restart, still marked) passes even
       // WITH a clear, because such a task matches the legacy migration's rule
       // and gets re-stamped a line later — two writers agreeing by accident.
-      // A task swept to Chores by a band removal carries a `triagedAgainst`,
+      // A task swept to Backlog by a band removal carries a `triagedAgainst`,
       // so the migration refuses it; if hydrate cleared the field, the marker
       // would be gone for good and the task would fall out of the bucket.
       const ws = store.createWorkspace('board', 'Ship the review surface.');
@@ -327,11 +327,11 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
   });
 
   describe('legacy rows — a writer fix alone would empty the sweep on deploy', () => {
-    it('hydrate stamps unplacedSince on a legacy Chores task that has no marker', () => {
+    it('hydrate stamps unplacedSince on a legacy Backlog task that has no marker', () => {
       // Every task already on disk predates the field. Without a migration the
       // sweep goes EMPTY for the whole existing bucket at the deploy, which is
       // the same class of silent regression as the heading-level string.
-      // Reproducing today's membership rule (Chores + open + never placed) is
+      // Reproducing today's membership rule (Backlog + open + never placed) is
       // the best available answer, and `createdAt` is the honest timestamp.
       const ws = store.createWorkspace('board', 'Ship the review surface.');
       const res = store.createTask(ws.id, { title: 'filed before the field existed' });
@@ -357,10 +357,10 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       }
     });
 
-    it('hydrate leaves a legacy task that WAS placed alone, even when it sits in Chores', () => {
+    it('hydrate leaves a legacy task that WAS placed alone, even when it sits in Backlog', () => {
       // A legacy explicit-chores create is indistinguishable from a legacy
       // unplaced one — the distinction was never recorded, so the migration
-      // over-includes and says so. But a task an agent PLACED into Chores has
+      // over-includes and says so. But a task an agent PLACED into Backlog has
       // a triagedAgainst, and that must keep it out.
       const ws = store.createWorkspace('board', 'Ship the review surface.');
       const res = store.createTask(ws.id, { title: 'judged a chore long ago' });
@@ -400,7 +400,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       }
     });
 
-    it('hydrate does not stamp a legacy DONE task in Chores', () => {
+    it('hydrate does not stamp a legacy DONE task in Backlog', () => {
       const ws = store.createWorkspace('board', 'Ship the review surface.');
       const res = store.createTask(ws.id, { title: 'done in the bucket' });
       if (!res.ok) throw new Error('create failed');
