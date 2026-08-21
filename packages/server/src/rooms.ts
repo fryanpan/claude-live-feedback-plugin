@@ -495,6 +495,21 @@ export class Rooms {
         existing.ydoc.transact(() => m.set('setId', init.setId));
         existing.meta.setId = init.setId;
       }
+      // Re-binding: bind_mock(docId, newPath) is documented as repointing an
+      // existing doc, but this branch used to drop init.sourceUrl — the doc
+      // kept serving the old file while the call reported success. sourceUrl
+      // is private-sidecar meta (never CRDT), so the whole repoint is the
+      // in-memory field plus the same debounced persist creation uses. Hub
+      // rooms stay excluded for the same reason hydrateFromDisk refuses a
+      // sourceUrl on them: a server-owned room is never file-bound.
+      if (
+        init?.sourceUrl !== undefined &&
+        init.sourceUrl !== existing.meta.sourceUrl &&
+        !isHubOwnedRoom(docId)
+      ) {
+        existing.meta.sourceUrl = init.sourceUrl;
+        this.saveToDisk(existing);
+      }
       return existing;
     }
     const ydoc = new Y.Doc();
@@ -658,7 +673,11 @@ export class Rooms {
     // hold 'resolved' for a thread that is open again. No separate activity
     // record: the reply below already logs this person's action, and a
     // synthetic 'reopen' would double-count it.
-    if (reopened && thread) this.fireEvent(room, 'thread.reopened', thread, undefined, opts);
+    if (reopened && thread) {
+      // The replier's continuation is what reopened the thread, so the
+      // reopen frame names them — same attribution the reply frame carries.
+      this.fireEvent(room, 'thread.reopened', thread, undefined, opts, author);
+    }
     this.recordActivity(room, 'reply', author, threadId, { text, tsMs: comment.ts });
     return thread;
   }
@@ -862,7 +881,10 @@ export class Rooms {
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
     if (t) {
-      this.fireEvent(room, 'thread.resolved', t, undefined, opts);
+      // The frame names WHO resolved. Without it, 17 resolves in the field
+      // were each attributed to the thread's creator by the channel
+      // renderer's comments[0] fallback. Same default recordActivity uses.
+      this.fireEvent(room, 'thread.resolved', t, undefined, opts, author ?? DEFAULT_REVIEWER);
       this.recordActivity(room, 'resolve', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
@@ -881,7 +903,8 @@ export class Rooms {
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'open');
     if (t) {
-      this.fireEvent(room, 'thread.reopened', t, undefined, opts);
+      // See resolve above — the reopen frame names who reopened.
+      this.fireEvent(room, 'thread.reopened', t, undefined, opts, author ?? DEFAULT_REVIEWER);
       this.recordActivity(room, 'reopen', author ?? DEFAULT_REVIEWER, threadId, {
         tsMs: Date.now(),
       });
@@ -991,6 +1014,70 @@ export class Rooms {
       blocks,
       threads: listThreads(room.ydoc),
       ...(syncError ? { syncError } : {}),
+    };
+  }
+
+  /**
+   * Cheap doc health check — everything an agent needs to answer "is this
+   * doc bound, is it wedged, how big is it, is anything pending" WITHOUT
+   * the body. `getDoc` re-renders every block to markdown and has returned
+   * 320KB for one doc, which overflows tool-result caps; this returns the
+   * metadata the room and binding already hold, plus counts. Deliberately
+   * no plainText, no blocks, no thread bodies.
+   */
+  getDocStatus(docId: string): {
+    docId: string;
+    type: DocType;
+    title?: string;
+    /** True when the doc is file-backed (a binding exists). */
+    bound: boolean;
+    /** Absolute path of the bound file. Route-level: omitted for share
+     *  visitors, same rule as `sourceUrl` in PRIVATE_META_KEYS. */
+    path?: string;
+    syncError?: { message: string; at: number };
+    lastActivityAt?: number;
+    textLength: number;
+    blockCount: number;
+    threads: { open: number; resolved: number };
+    pendingSuggestions: number;
+  } | null {
+    const room = this.rooms.get(docId);
+    if (!room) return null;
+    const binding = this.fileBindings.get(docId);
+    const meta = this.withActivity(room.meta);
+
+    let textLength: number;
+    let blockCount: number;
+    let pendingSuggestions = 0;
+    if (contentKind(room.meta.type) === 'flat') {
+      textLength = room.ydoc.getText('content').length;
+      blockCount = 1;
+    } else {
+      const fragment = prose.getProseFragment(room.ydoc);
+      textLength = prose.walkProse(fragment).plainText.length;
+      blockCount = fragment.length;
+      pendingSuggestions = suggestOps.listSuggestions(room.ydoc).length;
+    }
+
+    let open = 0;
+    let resolved = 0;
+    for (const t of listThreads(room.ydoc)) {
+      if (t.status === 'resolved') resolved += 1;
+      else open += 1;
+    }
+
+    return {
+      docId,
+      type: room.meta.type,
+      ...(room.meta.title ? { title: room.meta.title } : {}),
+      bound: Boolean(binding),
+      ...(binding ? { path: binding.path } : {}),
+      ...(binding?.lastSyncError ? { syncError: binding.lastSyncError } : {}),
+      ...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
+      textLength,
+      blockCount,
+      threads: { open, resolved },
+      pendingSuggestions,
     };
   }
 
@@ -2112,48 +2199,54 @@ export class Rooms {
     if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = setTimeout(() => {
       binding.writeTimer = null;
-      try {
-        // Guard (RC2): if disk moved since we last read or wrote it, we'd be
-        // overwriting bytes we have never seen — the poll just hasn't caught
-        // up yet. Reconcile first; apply/conflict decides, and the conflict
-        // path both backs up the external version and re-schedules our flush.
-        if (binding.lastMtimeMs !== undefined && existsSync(binding.path)) {
-          try {
-            const mtimeMs = statSync(binding.path).mtimeMs;
-            if (mtimeMs !== binding.lastMtimeMs) {
-              binding.lastMtimeMs = mtimeMs;
-              this.reconcileFromDisk(room, binding);
-              return;
-            }
-          } catch {}
-        }
-        const md =
-          contentKind(room.meta.type) === 'flat'
-            ? room.ydoc.getText('content').toString()
-            : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
-        if (md === binding.lastWritten) return;
-        // Atomic: write-temp-then-rename, so a crash mid-write can't leave
-        // the user's file truncated and a concurrent reader never sees half
-        // a document. (Same save pattern editors use.) Rename onto the
-        // REALPATH — renaming onto a symlink would replace the link with a
-        // regular file instead of writing through it (codex P2).
-        let target = binding.path;
-        try {
-          target = realpathSync(binding.path);
-        } catch {}
-        const tmp = `${target}.lf-write~`;
-        writeFileSync(tmp, md);
-        renameSync(tmp, target);
-        binding.lastWritten = md;
-        // Record our own write's mtime so the poll doesn't treat the
-        // write-back as an external edit and schedule a redundant reconcile.
-        try {
-          binding.lastMtimeMs = statSync(binding.path).mtimeMs;
-        } catch {}
-      } catch (err) {
-        console.error(`[rooms] file write failed for ${binding.path}:`, err);
-      }
+      this.writeBoundFileNow(room, binding);
     }, 800);
+  }
+
+  /** The write-back body: what the ~800ms debounce runs when it fires, and
+   *  what `flush()` runs synchronously on graceful shutdown. */
+  private writeBoundFileNow(room: DocRoom, binding: FileBinding): void {
+    try {
+      // Guard (RC2): if disk moved since we last read or wrote it, we'd be
+      // overwriting bytes we have never seen — the poll just hasn't caught
+      // up yet. Reconcile first; apply/conflict decides, and the conflict
+      // path both backs up the external version and re-schedules our flush.
+      if (binding.lastMtimeMs !== undefined && existsSync(binding.path)) {
+        try {
+          const mtimeMs = statSync(binding.path).mtimeMs;
+          if (mtimeMs !== binding.lastMtimeMs) {
+            binding.lastMtimeMs = mtimeMs;
+            this.reconcileFromDisk(room, binding);
+            return;
+          }
+        } catch {}
+      }
+      const md =
+        contentKind(room.meta.type) === 'flat'
+          ? room.ydoc.getText('content').toString()
+          : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+      if (md === binding.lastWritten) return;
+      // Atomic: write-temp-then-rename, so a crash mid-write can't leave
+      // the user's file truncated and a concurrent reader never sees half
+      // a document. (Same save pattern editors use.) Rename onto the
+      // REALPATH — renaming onto a symlink would replace the link with a
+      // regular file instead of writing through it (codex P2).
+      let target = binding.path;
+      try {
+        target = realpathSync(binding.path);
+      } catch {}
+      const tmp = `${target}.lf-write~`;
+      writeFileSync(tmp, md);
+      renameSync(tmp, target);
+      binding.lastWritten = md;
+      // Record our own write's mtime so the poll doesn't treat the
+      // write-back as an external edit and schedule a redundant reconcile.
+      try {
+        binding.lastMtimeMs = statSync(binding.path).mtimeMs;
+      } catch {}
+    } catch (err) {
+      console.error(`[rooms] file write failed for ${binding.path}:`, err);
+    }
   }
 
   /**
@@ -2376,6 +2469,8 @@ export class Rooms {
       contextBefore?: string;
       contextAfter?: string;
       occurrence?: number;
+      /** Replace EVERY occurrence in one transaction. See prose.findAndReplace. */
+      replaceAll?: boolean;
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
@@ -2606,6 +2701,7 @@ export class Rooms {
     docId: string,
     anchorId: string,
     markdown: string,
+    opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
@@ -2614,6 +2710,7 @@ export class Rooms {
     return prose.insertBlocksAfterAnchor(room.ydoc, {
       anchorRel: anchor.endRel,
       markdown,
+      placement: opts?.placement,
     });
   }
 
@@ -2637,6 +2734,7 @@ export class Rooms {
     docId: string,
     threadId: string,
     markdown: string,
+    opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
@@ -2646,6 +2744,7 @@ export class Rooms {
     return prose.insertBlocksAfterAnchor(room.ydoc, {
       anchorRel: thread.anchor.endRel,
       markdown,
+      placement: opts?.placement,
     });
   }
 
@@ -2826,6 +2925,10 @@ export class Rooms {
     thread: Thread,
     comment?: { id: string; author: User; text: string; ts: number },
     opts?: { generate?: boolean },
+    // Who performed a resolve/reopen. The comment param can't carry it —
+    // there is no comment on a status change, and a frame without an actor
+    // sent channel renderers to comments[0].author, i.e. the CREATOR.
+    actor?: User,
   ): void {
     room.seq++;
     // Every thread change funnels through here, which is exactly why the
@@ -2841,6 +2944,7 @@ export class Rooms {
       thread,
       doc: decorate(room.meta),
       comment,
+      ...(actor ? { actor } : {}),
       seq: room.seq,
     });
   }
@@ -3149,19 +3253,57 @@ export class Rooms {
     this.saveTimers.set(
       room.docId,
       setTimeout(() => {
-        try {
-          const update = Y.encodeStateAsUpdate(room.ydoc);
-          writeFileSync(this.pathFor(room.docId), update);
-          // The sidecar rides the SAME debounced write as the `.ydoc`. Two
-          // persistence paths would eventually disagree, and a doc whose
-          // sourceUrl went missing stops writing back to disk silently —
-          // the failure mode this whole change must not introduce.
-          writePrivateMeta(this.cfg.dataDir, room.docId, room.meta);
-        } catch (err) {
-          console.error(`[rooms] failed to persist ${room.docId}:`, err);
-        }
+        this.saveTimers.delete(room.docId);
+        this.persistRoomNow(room);
       }, 200),
     );
+  }
+
+  private persistRoomNow(room: DocRoom): void {
+    try {
+      const update = Y.encodeStateAsUpdate(room.ydoc);
+      writeFileSync(this.pathFor(room.docId), update);
+      // The sidecar rides the SAME debounced write as the `.ydoc`. Two
+      // persistence paths would eventually disagree, and a doc whose
+      // sourceUrl went missing stops writing back to disk silently —
+      // the failure mode this whole change must not introduce.
+      writePrivateMeta(this.cfg.dataDir, room.docId, room.meta);
+    } catch (err) {
+      console.error(`[rooms] failed to persist ${room.docId}:`, err);
+    }
+  }
+
+  /**
+   * Synchronously run every pending debounced write — the 200ms `.ydoc`
+   * persist and the ~800ms bound-file write-back — so a graceful shutdown
+   * keeps the keystrokes that were still inside a debounce window. bin.ts
+   * routes SIGTERM (what the deploy path sends) through `handle.stop()`,
+   * which calls this; without it SIGTERM measured identical content loss to
+   * SIGKILL. This is a last-resort save on the way down, NOT a deploy gate —
+   * the deploy's refusal logic stays on `pendingFileWrites`.
+   */
+  flush(): void {
+    // A write-back can re-arm a timer while flushing (the reconcile guard's
+    // conflict path re-schedules the flush it just consumed), so sweep until
+    // quiescent — bounded, so a wedged binding cannot loop forever.
+    for (let pass = 0; pass < 3; pass++) {
+      const saves = [...this.saveTimers.entries()];
+      const writes = [...this.fileBindings.entries()].filter(([, b]) => b.writeTimer);
+      if (saves.length === 0 && writes.length === 0) break;
+      for (const [docId, timer] of saves) {
+        clearTimeout(timer);
+        this.saveTimers.delete(docId);
+        const room = this.rooms.get(docId);
+        if (room) this.persistRoomNow(room);
+      }
+      for (const [docId, binding] of writes) {
+        if (!binding.writeTimer) continue;
+        clearTimeout(binding.writeTimer);
+        binding.writeTimer = null;
+        const room = this.rooms.get(docId);
+        if (room) this.writeBoundFileNow(room, binding);
+      }
+    }
   }
 }
 

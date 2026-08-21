@@ -479,13 +479,22 @@ describe('voice routing (§3.8)', () => {
     });
 
     it('a doc carries its title and the open review items scoped to it', async () => {
-      // An open thread whose newest comment is an agent's IS a review item.
+      // An unanswered agent comment that directly asks a person IS a review
+      // item (since 2026-08-21 a status note is not). The person opens the
+      // thread, which also puts their name on the roster the address rule
+      // matches against.
       const t = await post(`/api/docs/${docId}/threads`, {
-        author: AGENT,
-        text: 'Jordan, should the rollout wait for the crawler benchmark?',
+        author: PERSON,
+        text: 'Benchmark question below.',
         anchor: ANCHOR,
       });
       expect(t.status).toBe(200);
+      const openedId = ((await t.json()) as { thread: { id: string } }).thread.id;
+      const asked = await post(`/api/docs/${docId}/threads/${openedId}/comments`, {
+        author: AGENT,
+        text: 'Jordan, should the rollout wait for the crawler benchmark?',
+      });
+      expect(asked.status).toBe(200);
 
       completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
       lastPrompt.value = null;

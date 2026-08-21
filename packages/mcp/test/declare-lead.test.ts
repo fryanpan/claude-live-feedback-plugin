@@ -51,6 +51,7 @@ function harness(responses: { attach?: unknown; lead?: unknown } = {}) {
     self: SELF,
     runtime: 'claude-code-local',
     pluginVersion: '0.1.65',
+    processId: 'proc-test-1',
   };
   return { calls, deps };
 }
@@ -88,6 +89,10 @@ describe('declareWorkspaceLead — declaring yourself', () => {
       agentId: SELF.id,
       runtime: 'claude-code-local',
       pluginVersion: '0.1.65',
+      // The per-process nonce: what lets the server tell a live process
+      // re-declaring from a fresh one, so this attach cannot re-hand rows
+      // whose frames are already in flight to this same session.
+      processId: 'proc-test-1',
     });
     const lead = calls.find((c) => c.path?.endsWith('/lead'));
     expect(lead?.body).toMatchObject({ leadAgentId: SELF.id, author: SELF });

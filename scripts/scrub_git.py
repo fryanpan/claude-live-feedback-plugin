@@ -35,6 +35,7 @@ Two details that are load-bearing rather than stylistic:
 
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import Iterable, List, Optional
 
@@ -129,15 +130,69 @@ def _git(args: List[str]) -> str:
         return ""
 
 
+# Git's own commit-metadata lines in `git log --patch` output: the `Author:`
+# header at column 0, and identity trailers indented four spaces inside the
+# commit message. Diff content can NEVER match — added lines start with `+`,
+# removed with `-` — so file content that merely looks like a trailer is out
+# of reach by construction, not by judgment.
+_METADATA_IDENTITY_LINE = re.compile(
+    r"^(?P<prefix>(?:Author|Commit|Committer): +"
+    r"| {4}(?:Co-authored-by|Signed-off-by|Committer): *)"
+    r"(?P<identity>\S.*?) *$",
+    re.IGNORECASE,
+)
+
+IDENTITY_PLACEHOLDER = "<commit identity already public on the remote>"
+
+
+def public_commit_identities(remote_glob: Optional[str] = None) -> set:
+    """Author/committer identities on commits the remote already has."""
+    out = _git([
+        "git", "log", "--format=%an <%ae>%n%cn <%ce>",
+        "--remotes" if remote_glob is None else f"--remotes={remote_glob}",
+    ])
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def redact_public_identities(patch: str, identities: Iterable[str]) -> str:
+    """Blank commit-metadata identity lines the remote has already published.
+
+    Measured on PR #198: the Haiku layer flagged the commit author trailer —
+    the identity on every commit already public on origin/main — as a leak
+    across 11 file/line pairs and blocked the push, and the only exit was
+    SCRUB_SKIP_HAIKU=1. A gate that fires on the normal path trains people
+    to bypass it, which is worse than the finding it produces.
+
+    Narrow on purpose, in both dimensions: only git's OWN metadata lines
+    (the regex cannot reach diff content), and only identities already
+    reachable from a remote-tracking ref — an email introduced in file
+    content, or a co-author the remote has never seen, still goes to Haiku
+    exactly as before.
+    """
+    known = set(identities)
+    if not known:
+        return patch
+    lines = []
+    for line in patch.split("\n"):
+        m = _METADATA_IDENTITY_LINE.match(line)
+        if m and m.group("identity").strip() in known:
+            line = m.group("prefix") + IDENTITY_PLACEHOLDER
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def push_patch(rev_args: List[str]) -> str:
     """The patch text of the becoming-public commits, messages included.
 
     Commit messages ride along because they become public too, and the tree
-    diff this replaces never showed them.
+    diff this replaces never showed them. Commit-metadata identities the
+    remote already carries are redacted — they publish nothing new, and the
+    Haiku layer has blocked a push over its own author trailer (PR #198).
     """
-    return _git([
+    patch = _git([
         "git", "log", "--patch", "--cc", "--reverse", "--no-color", *rev_args,
     ])
+    return redact_public_identities(patch, public_commit_identities())
 
 
 def push_files(rev_args: List[str]) -> List[str]:
