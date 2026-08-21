@@ -4,6 +4,7 @@ import {
   type User,
   formatTime,
   readDocMeta,
+  readReviewPayload,
   readStoredSummary,
   summaryPending,
 } from '@feedback/core';
@@ -393,8 +394,17 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
           const author = c.get('author') as User | undefined;
           const text = c.get('text') as string | undefined;
           const ts = c.get('ts') as number | undefined;
-          if (cid && author && text != null && ts != null)
-            comments.push({ id: cid, author, text, ts });
+          if (cid && author && text != null && ts != null) {
+            // The review payload is what makes a thread CARRY an item — drop
+            // it here and the panel renders a plain conversation: no item
+            // card, no Answer routing, no answered record. This reader is the
+            // panel's only source (see the summary note below), so the doc
+            // half of answering worked in every panel unit test and not at
+            // all through the mounted chrome until the glue tests posted
+            // through it.
+            const review = readReviewPayload(c.get('review'));
+            comments.push({ id: cid, author, text, ts, ...(review ? { review } : {}) });
+          }
         }
       }
       // A text-range anchor that no longer resolves displays as orphaned so
