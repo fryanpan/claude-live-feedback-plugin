@@ -1075,8 +1075,10 @@ export type AttachAgentResult =
       /** Voice change-requests that arrived while no agent was live (§2.4
        *  "agent away — queued"). Delivered HERE — in the attach result, the
        *  one payload a fresh attachment is guaranteed to read — and drained:
-       *  a second attach gets an empty list. */
-      queuedVoice: QueuedVoiceRequest[];
+       *  a second attach gets an empty list. Only ever handed to the LEAD,
+       *  like `pendingRetriage`; a bystander attaching leaves the queue
+       *  intact (and this field absent) for the lead's next attach. */
+      queuedVoice?: QueuedVoiceRequest[];
       /** A goal edit that happened while the lead was away. Delivered HERE —
        *  the one payload a fresh attachment is guaranteed to read — and
        *  drained, so a re-attach never asks for the same walk twice. Only
@@ -5271,6 +5273,13 @@ export class TaskStore {
     // attachment is guaranteed to read, then cleared.
     const taskReviews = lead ? this.getPendingTaskReviews(workspaceId) : undefined;
     if (taskReviews) this.clearPendingTaskReviews(state);
+    // The voice queue is the same ask with the same addressee: only the lead
+    // drains it. A bystander attaching leaves the notes where they are for
+    // the lead's next attach — otherwise they are "delivered" into a payload
+    // that has no contract to act on them.
+    const queuedVoice = lead
+      ? this.drainVoiceQueue(workspaceId, { freshProcess: true })
+      : undefined;
     // Emitted LAST, after every state change above: the projection refreshes
     // off this event, so an earlier emit would repaint the board with a
     // pending re-triage this very call just drained.
@@ -5286,7 +5295,7 @@ export class TaskStore {
       attachment,
       gating: this.gatingSummary(workspaceId),
       untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
-      queuedVoice: this.drainVoiceQueue(workspaceId, { freshProcess: true }),
+      ...(queuedVoice !== undefined ? { queuedVoice } : {}),
       ...(pendingRetriage ? { pendingRetriage } : {}),
       ...(pendingBucketReview ? { pendingBucketReview } : {}),
       ...(taskReviews !== undefined && taskReviews.length > 0 ? { taskReviews } : {}),
