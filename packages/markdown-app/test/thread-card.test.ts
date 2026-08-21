@@ -493,25 +493,31 @@ describe('thread card — a declared Review Item', () => {
     ...over,
   });
 
-  // The pane is collapsed most of the time, so the opening comment's
-  // declaration has to be legible from the card face rather than only after
-  // someone expands it.
-  it('shows the opening comment’s header on the collapsed card', () => {
+  // This used to assert a two-line banner above the opening message, on the
+  // stated grounds that "the pane is collapsed most of the time, so the
+  // declaration has to be legible from the card face". That reason was never
+  // true of the code: the banner was built into slot A's DETAIL face, which a
+  // folded card does not show (`.face-summary` below is the collapsed face,
+  // and it holds the topic line and nothing else). What the banner did do was
+  // state the kind, the headline and the why immediately above an item card
+  // saying all three again.
+  it('states the opening declaration once — in the item card, not as a banner too', () => {
     const opening = { ...comment(alice, 'Draft is up.'), review: declared() };
     const t = makeThread({ comments: [opening] });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
-    const slotA = cardFor(t).querySelector('.thread-slot.slot-a') as HTMLElement;
-    const header = slotA.querySelector('.comment-review') as HTMLElement;
-    expect(text(header.querySelector('.comment-review-k'))).toBe('Question');
-    expect(text(header.querySelector('.comment-review-headline'))).toBe(
-      'Read the new onboarding copy',
-    );
-    expect(text(header.querySelector('.comment-review-why'))).toBe(
+    const card = cardFor(t);
+    const slotA = card.querySelector('.thread-slot.slot-a') as HTMLElement;
+    expect(slotA.querySelector('.comment-review')).toBeNull();
+    // Slot A still carries the words the author wrote.
+    expect(text(slotA.querySelector('.face-detail .thread-message'))).toBe('Draft is up.');
+    // The ask itself is the item card's, in full.
+    const item = card.querySelector('.thread-item-card') as HTMLElement;
+    expect(text(item.querySelector('.thread-item-k'))).toBe('Question');
+    expect(text(item.querySelector('.thread-item-headline'))).toBe('Read the new onboarding copy');
+    expect(text(item.querySelector('.thread-item-body'))).toContain(
       'Ships Tuesday and nobody outside the team has read it.',
     );
-    // Above the words, not instead of them.
-    expect(text(slotA.querySelector('.face-detail .thread-message'))).toBe('Draft is up.');
   });
 
   it('marks a declared REPLY and leaves the ordinary ones alone', () => {
@@ -526,11 +532,15 @@ describe('thread card — a declared Review Item', () => {
     });
     const { panel, cardFor } = mountPanel();
     panel.setThreads([t]);
-    const rows = [...cardFor(t).querySelectorAll('.face-detail .comments .comment')];
+    const card = cardFor(t);
+    const rows = [...card.querySelectorAll('.face-detail .comments .comment')];
     // A thread can start as a status note and become a review item later, so
     // the mark is per comment.
     expect(rows.map((r) => r.className.includes('comment-declared'))).toEqual([false, true]);
-    expect(text(rows[1]?.querySelector('.comment-review-k') ?? null)).toBe('Decision');
+    // The KIND is stated by the item card that carries this declaration, and
+    // not a second time by the history row sitting under it.
+    expect(rows[1]?.querySelector('.comment-review-k')).toBeNull();
+    expect(text(card.querySelector('.thread-item-card .thread-item-k'))).toBe('Decision');
   });
 
   it('renders no header at all on a thread nobody declared anything on', () => {
@@ -707,13 +717,14 @@ describe('thread card — a thread that carries a review item IS the review item
     panel.setThreads([t]);
     const card = cardFor(t); // collapsed
 
-    // Slot A's summary face is still just the topic line, and the two-line
-    // declared header still reads from the collapsed card as before.
+    // Slot A's summary face is still just the topic line — which is also why
+    // dropping the duplicated declared header from slot A costs a collapsed
+    // card nothing: that header was never on the face a folded card shows.
     const slotASummary = card.querySelector('.slot-a .face-summary') as HTMLElement;
     expect(Array.from(slotASummary.children).map((el) => el.className.split(' ')[0])).toEqual([
       'thread-topic',
     ]);
-    expect(card.querySelector('.slot-a .comment-review')).not.toBeNull();
+    expect(card.querySelector('.slot-a .comment-review')).toBeNull();
     // Slot B's summary face carries no card either — the sidebar and mobile
     // inline reads are unchanged.
     expect(card.querySelector('.face-summary .thread-item-card')).toBeNull();
