@@ -495,6 +495,21 @@ export class Rooms {
         existing.ydoc.transact(() => m.set('setId', init.setId));
         existing.meta.setId = init.setId;
       }
+      // Re-binding: bind_mock(docId, newPath) is documented as repointing an
+      // existing doc, but this branch used to drop init.sourceUrl — the doc
+      // kept serving the old file while the call reported success. sourceUrl
+      // is private-sidecar meta (never CRDT), so the whole repoint is the
+      // in-memory field plus the same debounced persist creation uses. Hub
+      // rooms stay excluded for the same reason hydrateFromDisk refuses a
+      // sourceUrl on them: a server-owned room is never file-bound.
+      if (
+        init?.sourceUrl !== undefined &&
+        init.sourceUrl !== existing.meta.sourceUrl &&
+        !isHubOwnedRoom(docId)
+      ) {
+        existing.meta.sourceUrl = init.sourceUrl;
+        this.saveToDisk(existing);
+      }
       return existing;
     }
     const ydoc = new Y.Doc();
