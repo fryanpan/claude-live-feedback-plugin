@@ -2182,54 +2182,53 @@ export function reviewItemBadge(item: ReviewItem): { label: string; tone: string
   return reviewBadge(item.kind);
 }
 
-/** "blocks Ship the tunnel" — the tail of the card's provenance line. Lower
- *  case and mid-sentence, where `blocksLine` is a standalone sentence; empty
- *  when nothing is waiting, so the line ends after the clock rather than
- *  asserting an absence. */
-export function blocksPhrase(row: Pick<DecisionRow, 'blocks' | 'hard'>): string {
-  if (row.blocks.length === 0) return '';
-  const titles = row.blocks.map((t) => t.title);
-  const shown = titles.slice(0, 2).join(', ');
-  const rest = titles.length > 2 ? ` and ${titles.length - 2} more` : '';
-  return `${row.hard ? 'hard-blocks' : 'blocks'} ${shown}${rest}`;
+/**
+ * "Asked by Harbor agent 2 days ago" — the head row's top-right meta, the ONE
+ * provenance line the card carries (approved design, review-flow-mock-v1; it
+ * replaced the left-bordered context block and the bare wait chip).
+ *
+ * Split from `askedMeta` so a surface with its own row shape (the task
+ * panel's `PanelReviewItem`) spells the line identically without inventing a
+ * `ReviewItem` to say it — two spellings of "who asked, when" is how the row
+ * and the card come to disagree.
+ *
+ * Built only out of parts we actually hold: a decision whose transitions
+ * carry no actor says when it was asked without claiming who asked it. The
+ * clock uses `waitShort`, so the row subline and the card head can never
+ * disagree about the wait — and the singular/plural comes with it.
+ */
+export function askedMetaLine(
+  who: string | undefined,
+  asked: boolean,
+  at: number,
+  now: number,
+): string {
+  // "Asked by" is a claim that there is a question — a status note says
+  // "Posted by" instead. Saying "asked" over a deploy note is the card
+  // promising something answerable and delivering something that is not.
+  const verb = asked ? 'Asked' : 'Posted';
+  const when = `${waitShort(at, now)} ago`;
+  return who && who.trim() !== '' ? `${verb} by ${who} ${when}` : `${verb} ${when}`;
 }
 
 /**
- * "Asked by Harbor agent · 2h ago · blocks Re-run relevance eval" — the
- * mockup's left-bordered context block, first line.
- *
- * Built only out of parts we actually hold, and each one drops out
- * independently: a decision whose transitions carry no actor says when it was
- * asked without claiming who asked it, and one nothing is waiting on ends at
- * the clock. The alternative — a fixed three-part sentence with a placeholder
- * where a fact is missing — states something nobody measured, which is the
- * failure this file's `why` lines already had to be walked back from.
+ * The meta for a queue item. For a DECLARED item "Asked by" is always true —
+ * a declaration IS an ask, in so many words, whatever the `direct` heuristic
+ * measured. The inferred band keeps its measured Posted/Asked honesty, since
+ * over-including is how a queue stops being believed.
  */
-export function reviewAskedLine(item: ReviewItem, now: number): string {
-  const row = reviewRow(item);
+export function askedMeta(item: ReviewItem, now: number): string {
   const thread = item.thread;
-  const parts: string[] = [];
+  const row = reviewRow(item);
   // A thread carries its asker; a decision's is whoever first moved the task,
   // which is the only actor a projected task row records.
   const who = thread?.askedBy ?? row?.task.transitions[0]?.by.name;
-  // "Asked by" is a claim that there is a question. A thread reaches this card
-  // whether or not there is one — over-including is the safe direction — so a
-  // status note says "Posted by" instead. Saying "asked" over a deploy note is
-  // the card promising something answerable and delivering something that is
-  // not, and it is how a queue stops being believed.
-  const asked = thread ? thread.direct === true : true;
-  if (who && who.trim() !== '') parts.push(`${asked ? 'Asked' : 'Posted'} by ${who}`);
+  const asked = item.review !== undefined || (thread ? thread.direct === true : true);
   // The clock beside "asked" is the QUESTION's, not the run's: a run can start
   // days before the ask, and quoting its start tells the reader they have been
   // sitting on something they were handed minutes ago.
-  parts.push(timeAgo(asked ? (thread?.askedAt ?? item.since) : item.since, now));
-  const where = row
-    ? blocksPhrase(row)
-    : item.kind === 'task-thread'
-      ? 'on this task'
-      : 'on this doc';
-  if (where !== '') parts.push(where);
-  return parts.join(' · ');
+  const at = asked ? (thread?.askedAt ?? item.since) : item.since;
+  return askedMetaLine(who, asked, at, now);
 }
 
 /**

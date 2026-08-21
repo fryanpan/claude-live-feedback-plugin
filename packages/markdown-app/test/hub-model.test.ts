@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { reviewItemBodyMarkdown } from '@feedback/core';
 import { describe, expect, it } from 'vitest';
 import {
   ACTIVITY_REFRESH_EVENTS,
@@ -16,6 +17,8 @@ import {
   type UptimeReport,
   activityRows,
   appendDictation,
+  askedMeta,
+  askedMetaLine,
   boardSections,
   clientDriftNotice,
   decisionRows,
@@ -1507,6 +1510,109 @@ describe('reviewItemBadge', () => {
     );
     // Positive control: an undeclared thread keeps the pre-existing badge.
     expect(reviewItemBadge(item()).label).toBe('Needs your reply');
+  });
+});
+
+describe('askedMeta — the one provenance line the card head carries', () => {
+  const T0 = 1_700_000_000_000;
+  const DAY = 86_400_000;
+  const item = (over: Partial<ReviewItem> = {}): ReviewItem => ({
+    key: 'k',
+    kind: 'task-thread',
+    title: 'Ship the widget',
+    ask: 'Green or blue?',
+    why: 'w',
+    since: T0 - 2 * DAY,
+    thread: {
+      kind: 'task-thread',
+      docId: 'task:t-1',
+      threadId: 'th-1',
+      taskId: 't-1',
+      title: 'Ship the widget',
+      ask: 'Green or blue?',
+      askedBy: 'Harbor agent',
+      since: T0 - 2 * DAY,
+    },
+    ...over,
+  });
+  const declared = (over: Partial<ReviewItem> = {}): ReviewItem =>
+    item({ review: { shape: 'review', headline: 'Green or blue?', why: 'w' }, ...over });
+
+  it('says Asked by <who> N days ago, singular and plural off one clock', () => {
+    expect(askedMeta(declared(), T0)).toBe('Asked by Harbor agent 2 days ago');
+    const one = declared({ since: T0 - DAY });
+    if (one.thread) one.thread.since = T0 - DAY;
+    expect(askedMeta(one, T0)).toBe('Asked by Harbor agent 1 day ago');
+  });
+
+  it('a declaration is always an ask, whatever direct measured', () => {
+    // The declared fixture carries no `direct` at all — the flag is the
+    // inferred band's evidence, and a declaration outranks it.
+    expect(askedMeta(declared(), T0)).toMatch(/^Asked by/);
+  });
+
+  it('the inferred band keeps its measured Posted/Asked wording', () => {
+    expect(askedMeta(item(), T0)).toBe('Posted by Harbor agent 2 days ago');
+    const direct = item();
+    if (direct.thread) direct.thread.direct = true;
+    expect(askedMeta(direct, T0)).toMatch(/^Asked by Harbor agent/);
+  });
+
+  it("the clock beside Asked is the question's, not the run's", () => {
+    const q = declared();
+    if (q.thread) q.thread.askedAt = T0 - DAY;
+    expect(askedMeta(q, T0)).toBe('Asked by Harbor agent 1 day ago');
+  });
+
+  it('a decision names the first recorded actor, or states the clock alone', () => {
+    const d: ReviewItem = {
+      key: 'decision:d-1',
+      kind: 'decision',
+      title: 'Blue or green?',
+      ask: '',
+      why: '',
+      since: T0 - DAY,
+      decision: {
+        task: task({
+          createdAt: T0 - DAY,
+          transitions: [
+            { ts: T0 - DAY, from: 'todo', to: 'todo', by: { name: 'Harbor agent', kind: 'agent' } },
+          ],
+        }),
+        blocks: [],
+        hard: false,
+      },
+    };
+    expect(askedMeta(d, T0)).toBe('Asked by Harbor agent 1 day ago');
+    const bare: ReviewItem = { ...d, decision: { task: task({}), blocks: [], hard: false } };
+    expect(askedMeta(bare, T0)).toBe('Asked 1 day ago');
+  });
+
+  it('askedMetaLine is the shared spelling for surfaces with their own rows', () => {
+    expect(askedMetaLine('Harbor agent', true, T0 - 3_600_000, T0)).toBe(
+      'Asked by Harbor agent 1 hour ago',
+    );
+    expect(askedMetaLine(undefined, false, T0 - 3_600_000, T0)).toBe('Posted 1 hour ago');
+  });
+});
+
+describe('reviewItemBodyMarkdown — one body, composed from the authored parts', () => {
+  it('joins why, lookFor and detail with blank lines, in that order', () => {
+    expect(
+      reviewItemBodyMarkdown({
+        why: 'It blocks the nightly job.',
+        lookFor: 'Whether the join drops rows.',
+        detail: 'The change is in [the PR](https://example.test/pr/12).',
+      }),
+    ).toBe(
+      'It blocks the nightly job.\n\nWhether the join drops rows.\n\nThe change is in [the PR](https://example.test/pr/12).',
+    );
+  });
+
+  it('omits the parts the author left out — no labels, no placeholders', () => {
+    expect(reviewItemBodyMarkdown({ why: 'It ships Tuesday.' })).toBe('It ships Tuesday.');
+    expect(reviewItemBodyMarkdown({ why: 'Why.', detail: 'Detail.' })).toBe('Why.\n\nDetail.');
+    expect(reviewItemBodyMarkdown({ why: '  ', lookFor: '\n' })).toBe('');
   });
 });
 

@@ -905,7 +905,11 @@ describe('renderHomeReview', () => {
     expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
       'Which repo does this land in?',
     );
-    expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe('waiting 2 days');
+    // The subline is the asked-by meta now — one spelling with the card head.
+    expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
+      'Asked by Helper 2 days ago',
+    );
+    expect(rows[0]?.querySelector('.hub-review-row-sub')?.textContent).toBe('Asked moments ago');
     (rows[1] as HTMLElement).click();
     expect(h.onOpen).toHaveBeenCalledTimes(1);
   });
@@ -987,17 +991,16 @@ describe('renderHomeReview', () => {
     expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
   });
 
-  // The header is two lines and both of them belong on the surface being
-  // SCANNED. A "why it matters" that is one tap away is not a header — the
-  // queue row is where the reader decides what to open, which is the exact
-  // judgement that line exists to serve.
-  it('puts the declared why on the queue row, not only on the card it opens', () => {
+  // ONE anatomy (approved design): the row is title + asked-by meta, and the
+  // why lives in the card's markdown body rather than as a third row line.
+  it('sublines the row with the asked-by meta and renders no separate why line', () => {
     renderHomeReview(root, reviewQueue([], [threadItem(), note()], NOW), strip(), [], NOW);
     const rows = [...root.querySelectorAll('.hub-review-row')];
     // The undeclared note no longer renders a row, so only the declared one is here.
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector('.hub-review-row-why')?.textContent).toBe(
-      threadItem().review?.why,
+    expect(rows[0]?.querySelector('.hub-review-row-why')).toBeNull();
+    expect(rows[0]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
+      'Asked by Helper 2 days ago',
     );
   });
 });
@@ -1969,9 +1972,11 @@ describe('renderTaskDetail — discussion', () => {
     const desc = root.querySelector('.hub-detail-body');
     expect(desc).toBeTruthy();
     expect(ask!.compareDocumentPosition(desc!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // …and it says who is waiting, and how long they have been.
-    expect(root.querySelector('.hub-decide-meta')?.textContent).toContain('Live Feedback');
-    expect(root.querySelector('.hub-decide-meta')?.textContent).toContain('1h ago');
+    // …and it says who is waiting, and how long they have been — the same
+    // asked-by spelling every card head carries.
+    expect(root.querySelector('.hub-decide-meta')?.textContent).toBe(
+      'Asked by Live Feedback 1 hour ago',
+    );
   });
 
   /** "Answer without leaving the screen you landed on." A button that scrolls
@@ -2067,7 +2072,7 @@ describe('renderTaskDetail — discussion', () => {
     ...over,
   });
 
-  it('renders the declared review payload in the review queue, links and all', () => {
+  it('renders the declared review payload as one markdown body, links and all', () => {
     renderTaskDetail(
       root,
       task({ id: 't-1' }),
@@ -2080,20 +2085,27 @@ describe('renderTaskDetail — discussion', () => {
     const card = root.querySelector('.hub-decide-card');
     expect(card).toBeTruthy();
     expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain('rollup query');
-    // Why it matters — the second half of the two-line header, which the panel
-    // dropped entirely.
-    expect(card?.querySelector('.hub-decide-why')?.textContent).toContain('blocks the nightly job');
-    // What to review for.
-    expect(card?.querySelector('.hub-decide-lookfor')?.textContent).toContain(
-      'drops rows when a session has no events',
-    );
+    // ONE body (approved design): why, lookFor and detail composed as
+    // markdown, no labelled sub-sections and none of the old paragraphs.
+    expect(card?.querySelector('.hub-decide-why')).toBeNull();
+    expect(card?.querySelector('.hub-decide-lookfor')).toBeNull();
+    expect(card?.querySelector('.hub-decide-detail')).toBeNull();
+    const body = card?.querySelector('.hub-decide-body') as HTMLElement;
+    const text = body.textContent ?? '';
+    const why = text.indexOf('blocks the nightly job');
+    const look = text.indexOf('drops rows when a session has no events');
+    expect(why).toBeGreaterThanOrEqual(0);
+    expect(look).toBeGreaterThan(why);
     // The detail is markdown, so the link to the thing under review is a real
-    // link rather than bracket soup — the reason the detail exists at all, and
-    // the half that a plain-text `why + detail` join silently swallowed.
-    const link = card?.querySelector('.hub-decide-detail a') as HTMLAnchorElement | null;
+    // link rather than bracket soup — the reason the detail exists at all.
+    const link = body.querySelector('a') as HTMLAnchorElement | null;
     expect(link).toBeTruthy();
     expect(link?.getAttribute('href')).toBe('https://example.test/pr/12');
     expect(link?.textContent).toBe('the rollup PR');
+    // The head badge is the item's kind, in the new UI vocabulary: a declared
+    // `review` shape reads Question (the class token stays `review`).
+    expect(card?.querySelector('.hub-decide-k')?.textContent).toBe('Question');
+    expect(card?.querySelector('.hub-decide-k')?.className).toContain('hub-decide-k-review');
   });
 
   it('offers a declared item’s options as one-tap answers on its own thread', () => {
@@ -2156,9 +2168,8 @@ describe('renderTaskDetail — discussion', () => {
     expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain(
       'should we drop threading',
     );
-    expect(card?.querySelector('.hub-decide-why')).toBeNull();
-    expect(card?.querySelector('.hub-decide-detail')).toBeNull();
-    expect(card?.querySelector('.hub-decide-lookfor')).toBeNull();
+    // Nothing declared means nothing composed: no body at all, not an empty one.
+    expect(card?.querySelector('.hub-decide-body')).toBeNull();
     expect(card?.querySelectorAll('.hub-decide-option')).toHaveLength(0);
     const form = root.querySelector('.hub-decide-form') as HTMLFormElement;
     expect(form.querySelector('.hub-decide-form-hint')?.textContent).toBe(
@@ -2246,9 +2257,10 @@ describe('renderTaskDetail — discussion', () => {
     expect(declared.querySelector('.hub-comment-review-headline')?.textContent).toBe(
       'Where should the trial banner live?',
     );
-    expect(declared.querySelector('.hub-comment-review-why')?.textContent).toBe(
-      'Blocks the rework; both screens are built either way.',
-    );
+    // The why paragraph is gone from the comment stream — it lives in the
+    // review card at the top of the panel now, and a second copy here was the
+    // duplication the one-card anatomy removes.
+    expect(declared.querySelector('.hub-comment-review-why')).toBeNull();
     // Above the words, not instead of them — the text is what the agent said.
     expect(declared.querySelector('.hub-comment-body')?.textContent).toContain(
       'Both screens are built',
@@ -3278,6 +3290,177 @@ describe('the panel’s review queue', () => {
         ),
       ).toHaveLength(0);
       expect(panelReviewQueue(task(), undefined)).toHaveLength(0);
+    });
+
+    /**
+     * The answered record stays IN the panel (approved design): a declared
+     * item somebody answered renders below the open ones as the record —
+     * "Answered by …" with a persistent Undo — read off the declaring
+     * comment's own stamps, which is the only place they survive a reload.
+     */
+    it('admits an answered declared item from the discussion, ranked after the open ones', () => {
+      const t = task({ id: 't-1' });
+      const q = panelReviewQueue(t, [ask({ threadId: 'th-open' })], {
+        loading: false,
+        threads: [
+          {
+            id: 'th-done',
+            comments: [
+              {
+                id: 'c-9',
+                author: 'Harbor agent',
+                text: 'Both screens are built.',
+                ts: NOW - 7_200_000,
+                review: {
+                  shape: 'decision',
+                  headline: 'Where should the banner live?',
+                  why: 'Blocks the rework.',
+                  answeredAt: NOW - 3_600_000,
+                  answeredBy: 'Jordan',
+                  answerText: 'Keep it above the fold',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(q.map((i) => i.id)).toEqual(['thread:th-open', 'answered:th-done:c-9']);
+      const done = q[1];
+      expect(done?.answered).toEqual({
+        by: 'Jordan',
+        text: 'Keep it above the fold',
+        at: NOW - 3_600_000,
+      });
+      expect(done?.commentId).toBe('c-9');
+      expect(done?.threadId).toBe('th-done');
+    });
+
+    it('does not admit an unanswered declared comment twice, nor a plain comment at all', () => {
+      const t = task({ id: 't-1' });
+      const q = panelReviewQueue(t, [ask({ threadId: 'th-open' })], {
+        loading: false,
+        threads: [
+          {
+            id: 'th-open',
+            comments: [
+              {
+                id: 'c-1',
+                author: 'Harbor agent',
+                text: 'Asked here.',
+                ts: NOW - 7_200_000,
+                // Unanswered declaration: the asks row already carries it.
+                review: { shape: 'review', headline: 'Read this', why: 'Ships Friday.' },
+              },
+              { id: 'c-2', author: 'Jordan', text: 'Reading now.', ts: NOW - 3_600_000 },
+            ],
+          },
+        ],
+      });
+      expect(q.map((i) => i.id)).toEqual(['thread:th-open']);
+    });
+  });
+
+  describe('the answered record in place, with its persistent Undo', () => {
+    const answeredThread = (over: Record<string, unknown> = {}) => ({
+      id: 'th-done',
+      comments: [
+        {
+          id: 'c-9',
+          author: 'Harbor agent',
+          text: 'Both screens are built.',
+          ts: NOW - 7_200_000,
+          review: {
+            shape: 'decision' as const,
+            headline: 'Where should the banner live?',
+            why: 'Blocks the rework.',
+            answeredAt: NOW - 3_600_000,
+            answeredBy: 'Jordan',
+            answerText: 'Keep it **above** the fold',
+            ...over,
+          },
+        },
+      ],
+    });
+
+    it('renders the record under the item card it answers, marked Answered', () => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        handlers({ selfName: 'Jordan', onUndoThreadAnswer: vi.fn() }),
+        { loading: false, threads: [answeredThread()] },
+      );
+      const card = shown();
+      expect(card?.dataset.reviewItemId).toBe('answered:th-done:c-9');
+      // The item interface first: head row and body, same anatomy as an open one.
+      expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain(
+        'Where should the banner live?',
+      );
+      expect(card?.querySelector('.hub-decide-body')?.textContent).toContain('Blocks the rework.');
+      // The record, in place: "Answered by you" for the reader's own answer,
+      // rendered markdown-inline.
+      const rec = card?.querySelector('.hub-detail-answered') as HTMLElement;
+      expect(rec.textContent).toContain('Answered by you');
+      expect(rec.textContent).toContain('Keep it above the fold');
+      expect(rec.querySelector('strong')?.textContent).toBe('above');
+      // No composer and no options on a settled item — the record replaces them.
+      expect(card?.querySelector('.hub-decide-form')).toBeNull();
+      expect(card?.querySelectorAll('.hub-decide-option')).toHaveLength(0);
+      // The kicker says what this card is.
+      expect(root.querySelector('.hub-decide-kicker')?.textContent).toBe('Answered');
+    });
+
+    it("names the answerer when it wasn't you", () => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        handlers({ selfName: 'Sam', onUndoThreadAnswer: vi.fn() }),
+        { loading: false, threads: [answeredThread()] },
+      );
+      expect(shown()?.querySelector('.hub-detail-answered')?.textContent).toContain(
+        'Answered by Jordan',
+      );
+    });
+
+    it('wires the persistent Undo to the thread-answer undo handler', () => {
+      const onUndoThreadAnswer = vi.fn().mockResolvedValue(true);
+      const t = task({ id: 't-1' });
+      renderTaskDetail(root, t, handlers({ selfName: 'Jordan', onUndoThreadAnswer }), {
+        loading: false,
+        threads: [answeredThread()],
+      });
+      const undo = shown()?.querySelector('.hub-detail-undo-answer') as HTMLButtonElement;
+      expect(undo).toBeTruthy();
+      undo.click();
+      expect(onUndoThreadAnswer).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't-1' }),
+        expect.objectContaining({ commentId: 'c-9', threadId: 'th-done' }),
+      );
+    });
+
+    it('falls back to the tapped option label when a legacy answer has no text', () => {
+      renderTaskDetail(
+        root,
+        task({ id: 't-1' }),
+        handlers({ selfName: 'Jordan', onUndoThreadAnswer: vi.fn() }),
+        {
+          loading: false,
+          threads: [
+            answeredThread({
+              answeredBy: undefined,
+              answerText: undefined,
+              answeredAt: undefined,
+              answeredWith: 'above',
+              options: [
+                { id: 'above', label: 'Keep above' },
+                { id: 'below', label: 'Move below' },
+              ],
+            }),
+          ],
+        },
+      );
+      const rec = shown()?.querySelector('.hub-detail-answered') as HTMLElement;
+      expect(rec.textContent).toContain('Answered');
+      expect(rec.textContent).toContain('Keep above');
     });
   });
 
