@@ -1053,6 +1053,87 @@ describe('taskReviewItems — a ticket contributes one row per OPEN review item'
   });
 });
 
+/**
+ * Defect 5: three live rows rendered "LF Workspace &amp; Tasks" on Home,
+ * because a caller baked HTML entities into the stored title at bind/create
+ * time and the client renders titles via `textContent` — so the escape
+ * survives to the screen as literal text. The fix is at the queue's single
+ * title-assembly point, not in every writer: whatever a caller stored, a row's
+ * `title` is plain text by the time it leaves this module.
+ *
+ * TITLE-ONLY on purpose: `ask` is markdown-ish comment prose with its own
+ * pipeline (code spans, clipping), and a literal `&amp;` inside a code span is
+ * the author's content, not an encoding accident.
+ */
+describe('row titles decode HTML entities', () => {
+  const source = (map: Record<string, Thread[]>) => ({
+    threadsOf: (docId: string) => map[docId] ?? [],
+  });
+
+  /** A thread that produces one direct-ask row: person seeds the roster, agent asks. */
+  const asking = (askText = 'Jordan — ship it?') =>
+    thread({
+      comments: [
+        comment({ kind: 'person', text: 'seed', ts: T0 }),
+        comment({ text: askText, ts: T0 + 10 }),
+      ],
+    });
+
+  it("renders '&' where a caller baked in '&amp;'", () => {
+    const items = reviewThreadItems({
+      tasks: [],
+      docs: [{ docId: 'd-1', title: 'LF Workspace &amp; Tasks — v1 Build Plan' }],
+      source: source({ 'd-1': [asking()] }),
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe('LF Workspace & Tasks — v1 Build Plan');
+    expect(items[0].title).not.toContain('amp;');
+  });
+
+  it('decodes a numeric entity in a ticket title on a task-review row', () => {
+    const rows = taskReviewItems([
+      {
+        id: 'tk-1',
+        title: 'Jordan&#39;s launch checklist',
+        bodyDocId: 'task:tk-1',
+        reviews: [
+          {
+            id: 'ri-1',
+            review: { shape: 'review', headline: 'Ready to look?', why: 'Blocks the launch.' },
+            createdAt: T0 + 5,
+            createdBy: 'Helper',
+          },
+        ],
+      },
+    ]);
+    expect(rows[0].title).toBe("Jordan's launch checklist");
+  });
+
+  it('leaves a bare & alone, and decodes exactly once — no double decode', () => {
+    const items = reviewThreadItems({
+      tasks: [
+        { id: 'tk-1', title: 'Fish & Chips', bodyDocId: 'task:tk-1' },
+        { id: 'tk-2', title: 'Twice: &amp;amp;', bodyDocId: 'task:tk-2' },
+      ],
+      docs: [],
+      source: source({ 'task:tk-1': [asking()], 'task:tk-2': [asking()] }),
+    });
+    const byTask = new Map(items.map((i) => [i.kind === 'task-thread' ? i.taskId : '', i.title]));
+    expect(byTask.get('tk-1')).toBe('Fish & Chips');
+    // One pass: the '&amp;' produced BY decoding must not itself decode.
+    expect(byTask.get('tk-2')).toBe('Twice: &amp;');
+  });
+
+  it("does not touch the ask — a literal '&amp;' in a code span is the author's text", () => {
+    const items = reviewThreadItems({
+      tasks: [],
+      docs: [{ docId: 'd-1', title: 'Plan' }],
+      source: source({ 'd-1': [asking('Jordan — should `a &amp; b` stay as written?')] }),
+    });
+    expect(items[0].ask).toContain('&amp;');
+  });
+});
+
 describe('reviewItemRows — one queue, one order', () => {
   const source = (map: Record<string, Thread[]>) => ({
     threadsOf: (docId: string) => map[docId] ?? [],

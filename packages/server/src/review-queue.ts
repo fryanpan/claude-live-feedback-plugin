@@ -446,6 +446,45 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Row TITLES are plain text by the time they leave this module.
+ *
+ * Titles are caller-supplied at bind/create time, and some callers hand over
+ * strings they already HTML-escaped ("LF Workspace &amp; Tasks"). The client
+ * renders titles via `textContent`, which is correct — so the baked entity
+ * survives to the screen as literal text. Decoding here, at the queue's single
+ * title-assembly point, fixes every such row at once instead of chasing every
+ * writer, and fixes rows whose bad title is already stored.
+ *
+ * ONE pass by construction: `replace` scans left to right and never re-reads
+ * its own output, so `&amp;amp;` becomes the literal `&amp;` and stops — a
+ * caller's double-escape is shown, not silently collapsed. A bare `&`, or an
+ * unknown entity name, passes through untouched. TITLE-ONLY on purpose: `ask`
+ * is comment prose where a literal `&amp;` (say, inside a code span) is the
+ * author's content.
+ */
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+function decodeEntities(s: string): string {
+  if (!s.includes('&')) return s;
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
+    if (body.startsWith('#')) {
+      const hex = body[1] === 'x' || body[1] === 'X';
+      const code = Number.parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
+  });
+}
+
 function clip(text: string, max = ASK_MAX): string {
   const flat = stripEmphasis(text.replace(/\s+/g, ' ').trim());
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -506,9 +545,11 @@ export function reviewThreadItems(args: {
   const collect = (
     kind: ReviewThreadItem['kind'],
     docId: string,
-    title: string,
+    rawTitle: string,
     taskId?: string,
   ) => {
+    // Both bands share one title, so it is normalized once at the door.
+    const title = decodeEntities(rawTitle);
     for (const thread of args.source.threadsOf(docId)) {
       const run = unansweredRun(thread);
       // A DECLARATION beats every heuristic below it, and the newest one wins
@@ -614,7 +655,8 @@ export function taskReviewItems(tasks: ReviewTaskRef[]): ReviewTaskItem[] {
         taskId: task.id,
         reviewItemId: item.id,
         review: item.review,
-        title: task.title,
+        // Same normalization as thread rows — see `decodeEntities`.
+        title: decodeEntities(task.title),
         // The headline IS the row title, exactly as on a declared thread row —
         // an authored line rather than a clip of prose. No `clip` call: the
         // length was enforced at the door, so anything arriving over it is
