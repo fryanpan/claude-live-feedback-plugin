@@ -39,22 +39,23 @@ const ASK_MAX = 200;
 const DIRECT_ASK_MAX = 420;
 
 /**
- * Which of the two lists this row belongs to, and it is the whole point of
- * the change.
+ * Which of the two lists this row belongs to.
  *
  * - `declared` — an agent attached a Review Item and said "this needs you".
- *   This is the queue. Everything on it is something only a person can answer,
- *   because somebody had to write a headline to put it here.
- * - `unreplied` — the OLD membership rule, unchanged: an open thread whose
- *   newest comment is an agent's. That is what a finished exchange looks like,
- *   which is why it stopped being the queue.
+ *   Everything here is something only a person can answer, because somebody
+ *   had to write a headline to put it here.
+ * - `unreplied` — an INFERRED ask: an open thread where an agent's unanswered
+ *   comment directly asks a person something (`findAsk` found the question).
  *
- * `unreplied` is kept, and kept visible, on purpose. A declared queue is only
- * as good as the agents filling it, and if they stop filing, an inferred queue
- * that had silently been deleted would leave questions sitting unasked behind
- * a surface that looks healthy. So nothing that surfaces today stops
- * surfacing — the set of threads is identical, the rows only sort into two
- * lists — and the reader can see whether the new path is being used at all.
+ * This band used to be the old membership rule kept whole — every open thread
+ * whose newest comment was an agent's — under a safety argument that "nothing
+ * that surfaces today stops surfacing". Bryan reversed that argument
+ * (2026-08-21): replying created a row and only resolving drained it, so the
+ * safety net WAS the queue — 60 of its 61 rows were status notes nobody was
+ * being asked to act on, and the real asks drowned. A row is an ask, not a
+ * reply. Status notes emit nothing; the drain is automatic, because a
+ * person's reply ends the unanswered run and an answer (or resolve) retires a
+ * declaration — no agent has to remember to clean up after itself.
  */
 export type ReviewBand = 'declared' | 'unreplied';
 
@@ -90,11 +91,14 @@ export interface ReviewThreadItem {
    */
   since: number;
   /**
-   * This run contains a question addressed to a person by name — somebody is
-   * waiting on an ANSWER, not reading a status note.
+   * This row carries a question addressed to a person — an answer is being
+   * waited on, not a status note read.
    *
-   * Deliberately a rank-and-label signal rather than a filter. See
-   * `asksPerson` for the rule and for what it is measured to miss.
+   * True by construction since 2026-08-21: a declared row is direct because
+   * somebody authored it, and an inferred row exists only because `findAsk`
+   * found a direct question. The field stays on the wire because older
+   * clients read it to rank and label. See `asksPerson` for the matcher and
+   * for what it is measured to miss.
    */
   direct: boolean;
   /**
@@ -191,8 +195,10 @@ export interface ThreadSource {
  * piece of state saying "handled" would immediately disagree with the first.
  *
  * It over-includes by design: an agent's closing note with nothing to answer
- * still reads as waiting. That is the safe direction — a queue showing one
- * item too many costs a glance, one hiding a question costs the question.
+ * still reads as waiting. That over-inclusion is why this predicate no longer
+ * decides queue membership (see `ReviewBand`) — it still decides which
+ * comment a row quotes and where its clock starts, and it still serves the
+ * reply-reopen path, where one item too many costs a glance.
  */
 export function awaitingPerson(thread: Thread): Comment | null {
   const run = unansweredRun(thread);
@@ -203,17 +209,17 @@ export function awaitingPerson(thread: Thread): Comment | null {
  * Every comment since a person last spoke, oldest first — the whole stretch of
  * the conversation that is waiting, rather than only its last line.
  *
- * Membership is EXACTLY `awaitingPerson`'s: the run is non-empty if and only if
- * the newest comment is an agent's, which is what that predicate returned. That
- * equivalence is the safety property of this whole change — the set of threads
- * on the strip cannot move, so nothing that surfaces today can stop surfacing.
- * Only which comment is quoted, and which timestamp is called the wait, change.
+ * Non-empty if and only if the newest comment is an agent's — exactly
+ * `awaitingPerson`'s test, and the function is unchanged.
  *
- * The equivalence is still exact and this function is unchanged. What changed
- * later is that `reviewThreadItems` no longer uses it as its ONLY membership
- * test: a declared item is admitted by `pendingDeclaration` as well, so the
- * queue can hold something a person has already spoken under. That widens the
- * queue and cannot narrow it — every thread this run admits is still admitted.
+ * What the run DECIDES has narrowed twice since it was written. First a
+ * declared item became admissible past the run's end (`pendingDeclaration`),
+ * so the queue could hold a question a person had already spoken under. Then
+ * (2026-08-21) the run stopped being a membership test at all: a non-empty
+ * run no longer puts a thread on the queue unless it contains a direct ask.
+ * The run still picks which comment an inferred row quotes and which
+ * timestamp is the wait's start, and it still backs `awaitingPerson`'s other
+ * callers.
  */
 export function unansweredRun(thread: Thread): Comment[] {
   if (thread.status !== 'open') return [];
@@ -287,13 +293,17 @@ export function pendingDeclaration(thread: Thread): Comment | null {
  *
  * **False negatives, measured: 2 of 3 real questions.** "when a person creates
  * a task from the board, who should own it by default?" and "Want a follow-up
- * PR that's purely typography?" are genuine asks that never name Bryan, and
- * this rule misses both. That is the direction chosen on purpose, because it is
- * the recoverable one: a missed question still appears on the strip exactly as
- * it does today — membership is untouched — it merely forfeits the promotion.
- * The cost of the opposite failure is the thing the board cannot afford: a
- * strip padded with non-decisions is a strip nobody reads, and once nobody
- * reads it every real decision on it is lost too.
+ * PR that's purely typography?" are genuine asks that never name a person, and
+ * this rule misses both. Since 2026-08-21 that miss costs the ROW — this
+ * matcher is the inferred band's membership test, so a question it cannot see
+ * does not surface at all. That trade was chosen with eyes open (an agent's
+ * reply is not an ask): under the old rule those questions surfaced only as
+ * two rows in a 60-row pile of status notes, which is not surfacing in any
+ * sense that matters, and an agent that needs certainty has the declared path
+ * — attach a Review Item and membership stops depending on prose at all. The
+ * cost of the opposite failure is the thing the board cannot afford: a strip
+ * padded with non-decisions is a strip nobody reads, and once nobody reads it
+ * every real decision on it is lost too.
  *
  * `people` is who has actually spoken as a person in this workspace. A
  * workspace where nobody has yet answers no to everything, and the strip
@@ -473,9 +483,13 @@ function extractAsk(text: string, people: Iterable<string>): string {
 }
 
 /**
- * Every open thread across a workspace's tasks and docs whose newest comment
- * is an agent's, oldest first — the thing that has been waiting longest is the
- * one most at risk of never being answered at all.
+ * Every open thread across a workspace's tasks and docs that is ASKING a
+ * person something — a pending declaration, or an unanswered agent comment
+ * with a direct question in it — oldest first: the thing that has been
+ * waiting longest is the one most at risk of never being answered at all.
+ *
+ * A thread whose unanswered run asks nothing is a status note and emits no
+ * row (Bryan, 2026-08-21 — see `ReviewBand`).
  */
 export function reviewThreadItems(args: {
   tasks: ReviewTaskRef[];
@@ -536,25 +550,26 @@ export function reviewThreadItems(args: {
       }
 
       // Newest ask wins when an agent asked twice — the later one is the one
-      // still standing. Falling back to the run's newest comment keeps the
-      // pre-existing behaviour for every thread that asks nothing.
+      // still standing. No ask, no row: a run of status prose used to fall
+      // back to quoting its newest comment, which is exactly "replying
+      // creates a row", and it filled 60 of the queue's 61 rows.
       const asked = [...run].reverse().find((c) => asksPerson(c.text, people));
-      const shown = asked ?? run[run.length - 1];
+      if (asked === undefined) continue;
       items.push({
         kind,
         band: 'unreplied',
         docId,
         threadId: thread.id,
-        commentId: shown.id,
+        commentId: asked.id,
         ...(taskId ? { taskId } : {}),
         title,
-        ask: asked ? extractAsk(asked.text, people) : clip(shown.text),
-        askedBy: shown.author.name,
+        ask: extractAsk(asked.text, people),
+        askedBy: asked.author.name,
         // The run's START. See the field's own note: this is the correction
         // that stops an agent's follow-ups from burying its own question.
         since: run[0].ts,
-        direct: asked !== undefined,
-        ...(asked ? { askedAt: asked.ts } : {}),
+        direct: true,
+        askedAt: asked.ts,
       });
     }
   };

@@ -111,10 +111,19 @@ describe('reviewThreadItems', () => {
       docs: [{ docId: 'd-1', title: 'Launch plan' }],
       source: source({
         'task:tk-1': [
-          thread({ id: 'th-a', comments: [comment({ text: 'Green or blue?', ts: T0 + 20 })] }),
+          thread({
+            id: 'th-a',
+            comments: [comment({ text: 'Jordan — green or blue?', ts: T0 + 20 })],
+          }),
         ],
         'd-1': [
-          thread({ id: 'th-b', comments: [comment({ text: 'Is this claim true?', ts: T0 + 10 })] }),
+          thread({
+            id: 'th-b',
+            comments: [
+              comment({ kind: 'person', text: 'take a look', ts: T0 }),
+              comment({ text: 'Jordan — is this claim true?', ts: T0 + 10 }),
+            ],
+          }),
         ],
       }),
     });
@@ -125,10 +134,14 @@ describe('reviewThreadItems', () => {
       kind: 'doc-thread',
       docId: 'd-1',
       title: 'Launch plan',
-      ask: 'Is this claim true?',
+      ask: 'Jordan — is this claim true?',
       since: T0 + 10,
     });
-    expect(items[1]).toMatchObject({ kind: 'task-thread', taskId: 'tk-1', ask: 'Green or blue?' });
+    expect(items[1]).toMatchObject({
+      kind: 'task-thread',
+      taskId: 'tk-1',
+      ask: 'Jordan — green or blue?',
+    });
   });
 
   // A finished task's discussion is not a queue item: answering it changes
@@ -159,11 +172,19 @@ describe('reviewThreadItems', () => {
   it('clips a long question rather than shipping the whole comment', () => {
     const items = reviewThreadItems({
       tasks: [{ id: 'tk-1', title: 'Ship', bodyDocId: 'task:tk-1' }],
-      docs: [],
-      source: source({ 'task:tk-1': [thread({ comments: [comment({ text: 'x'.repeat(500) })] })] }),
+      docs: [{ docId: 'd-1', title: 'Plan' }],
+      source: source({
+        'task:tk-1': [
+          thread({ comments: [comment({ text: `Jordan — ${'x'.repeat(500)} or not?` })] }),
+        ],
+        'd-1': [
+          thread({ id: 'th-seed', comments: [comment({ kind: 'person', text: 'here', ts: T0 })] }),
+        ],
+      }),
     });
-    expect(items[0].ask.length).toBeLessThanOrEqual(200);
-    expect(items[0].ask.endsWith('…')).toBe(true);
+    const asks = items.filter((i) => i.kind === 'task-thread');
+    expect(asks[0].ask.length).toBeLessThanOrEqual(420);
+    expect(asks[0].ask.endsWith('…')).toBe(true);
   });
 });
 
@@ -188,10 +209,10 @@ describe('unansweredRun', () => {
     return newest.author.id.startsWith('agent-') || newest.author.kind === undefined;
   };
 
-  // The safety property of the whole change. The run is non-empty exactly when
-  // the old predicate said a person was being waited on, so no thread that
-  // reaches the strip today can stop reaching it — only the quoted line and the
-  // clock move.
+  // The function itself is unchanged: the run is non-empty exactly when the
+  // pre-change predicate said a person was being waited on. What moved (2026-08-21)
+  // is what the run DECIDES — it picks the quoted comment and the clock, but a
+  // non-empty run no longer puts a thread on the queue by itself.
   it('is non-empty exactly where the pre-change predicate was', () => {
     const cases = [
       thread({ comments: [comment({ ts: T0 })] }),
@@ -440,18 +461,20 @@ describe('reviewThreadItems — which comment is the ask, and since when', () =>
     expect(item.ask.startsWith('Jordan')).toBe(true);
   });
 
-  it('leaves a run with no question undecorated and clipped as before', () => {
+  // Reversed 2026-08-21 (Bryan): a run that asks nothing is a status note,
+  // and a status note is not a queue row. The old rule surfaced every one of
+  // them — replying created a row — and it produced a 60-row queue of noise.
+  it('emits nothing for a run with no question', () => {
     const notes = thread({
       id: 'th-note',
       comments: [comment({ text: 'Merged and deployed.', ts: T0 + 50 })],
     });
-    const [item] = reviewThreadItems({
+    const items = reviewThreadItems({
       tasks: [{ id: 'tk-2', title: 'Ship', bodyDocId: 'task:tk-2' }],
       docs: [{ docId: 'd-1', title: 'Plan' }],
       source: source({ 'task:tk-2': [notes], 'd-1': [seenPerson] }),
     });
-    expect(item.direct).toBe(false);
-    expect(item.ask).toBe('Merged and deployed.');
+    expect(items.filter((i) => i.taskId === 'tk-2')).toEqual([]);
   });
 
   // `since` is the run's start, which is right for RANKING. But the row says
@@ -465,17 +488,10 @@ describe('reviewThreadItems — which comment is the ask, and since when', () =>
     expect(item.askedAt).not.toBe(item.since);
   });
 
-  it('leaves askedAt off a run that asks nothing', () => {
-    const notes = thread({
-      id: 'th-note2',
-      comments: [comment({ text: 'Merged and deployed.', ts: T0 + 50 })],
-    });
-    const [item] = reviewThreadItems({
-      tasks: [{ id: 'tk-4', title: 'Ship', bodyDocId: 'task:tk-4' }],
-      docs: [{ docId: 'd-1', title: 'Plan' }],
-      source: source({ 'task:tk-4': [notes], 'd-1': [seenPerson] }),
-    });
-    expect(item.askedAt).toBeUndefined();
+  it('stamps every inferred row as a direct ask, askedAt included', () => {
+    const [item] = items();
+    expect(item.direct).toBe(true);
+    expect(item.askedAt).toBeDefined();
   });
 });
 
@@ -523,8 +539,10 @@ describe('reviewThreadItems — who counts as a person', () => {
   });
 
   it('keeps seeing it once that unrelated thread is resolved', () => {
-    // The bug, pinned: with only the open-filtered source the roster empties.
-    expect(run('resolved', false)?.direct).toBe(false);
+    // The bug, pinned — and it now costs MORE than a label: with only the
+    // open-filtered source the roster empties, the address stops matching,
+    // and the row does not merely demote, it disappears from the queue.
+    expect(run('resolved', false)).toBeUndefined();
     expect(run('resolved', true)?.direct).toBe(true);
   });
 
@@ -581,27 +599,25 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
     expect(item.commentId).toBe(t.comments[0].id);
   });
 
-  // The positive control for every assertion above: an ordinary agent status
-  // note must still produce a row, in the OTHER band. Without this, a
-  // collector that dropped undeclared threads entirely would satisfy the
-  // declared-band tests and silently delete the thing the migration exists to
-  // account for.
-  it('still emits an ordinary agent status note, in the unreplied band', () => {
-    const [item] = run([
-      thread({ id: 'th-s', comments: [comment({ text: 'Done — merged in a1b2c3d.', ts: T0 })] }),
-    ]);
-    expect(item.band).toBe('unreplied');
-    expect(item.review).toBeUndefined();
-    expect(item.ask).toContain('Done');
+  // Reversed 2026-08-21 (Bryan): the old rule surfaced every status note "in
+  // the other band" as a safety net, and the net WAS the queue — 60 of 61
+  // rows. A status note declares nothing and asks nothing; it is not a row.
+  it('emits nothing for an ordinary agent status note', () => {
+    expect(
+      run([
+        thread({ id: 'th-s', comments: [comment({ text: 'Done — merged in a1b2c3d.', ts: T0 })] }),
+      ]),
+    ).toEqual([]);
   });
 
   /**
-   * The safety property of the whole change, asserted as a relationship rather
-   * than as values: banding may re-sort and re-label rows, it may not change
-   * WHICH threads appear. A queue that quietly dropped rows would look like a
-   * fixed queue and be a queue that lost questions.
+   * The membership rule, asserted as a relationship: a declaration ADMITS a
+   * thread that plain status prose does not, and it is the only thing that
+   * does short of a direct ask. This reverses the old safety property ("the
+   * set of threads cannot move") on purpose — Bryan, 2026-08-21: an agent's
+   * reply is not an ask, and the old net WAS the 60-row queue.
    */
-  it('emits exactly the same set of threads whether or not they declare', () => {
+  it('admits a thread by declaring, where the same prose alone is silent', () => {
     const bare = [
       thread({ id: 'a', comments: [comment({ text: 'Done.', ts: T0 })] }),
       thread({ id: 'b', comments: [comment({ text: 'Fixed it.', ts: T0 + 1 })] }),
@@ -615,14 +631,10 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
           })
         : t,
     );
-    const ids = (ts: Thread[]) =>
-      run(ts)
-        .map((i) => i.threadId)
-        .sort();
-    expect(ids(declared)).toEqual(ids(bare));
-    // …and non-vacuously: the banding really did change between the two runs.
-    expect(run(bare).every((i) => i.band === 'unreplied')).toBe(true);
-    expect(run(declared).filter((i) => i.band === 'declared')).toHaveLength(1);
+    expect(run(bare)).toEqual([]);
+    const rows = run(declared);
+    expect(rows.map((i) => i.threadId)).toEqual(['b']);
+    expect(rows[0].band).toBe('declared');
   });
 
   it('takes the newest declaration when an agent declared twice', () => {
@@ -656,12 +668,27 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
       ],
     });
     expect(run([t])[0].since).toBe(T0 + 9_000);
-    // The control: strip the declaration and the same thread dates from T0.
-    const bare = thread({
+    // The control: the same shape as an inferred DIRECT ask dates from the
+    // run's start — an agent's follow-ups must not reset its own clock.
+    const asked = thread({
       id: t.id,
-      comments: t.comments.map((c) => ({ ...c, review: undefined })),
+      comments: [
+        comment({ text: 'working on it', ts: T0 }),
+        comment({ text: 'still working', ts: T0 + 1_000 }),
+        comment({ text: 'Jordan — now I need you: ship it?', ts: T0 + 9_000 }),
+      ],
     });
-    expect(run([bare])[0].since).toBe(T0);
+    const withRoster = reviewThreadItems({
+      tasks: [{ id: 'tk-1', title: 'Ship the inline comments', bodyDocId: 'task:tk-1' }],
+      docs: [{ docId: 'd-seed', title: 'Plan' }],
+      source: source({
+        'task:tk-1': [asked],
+        'd-seed': [
+          thread({ id: 'th-seed', comments: [comment({ kind: 'person', text: 'hi', ts: T0 })] }),
+        ],
+      }),
+    });
+    expect(withRoster.find((i) => i.threadId === 'th-late')?.since).toBe(T0);
   });
 
   /**
@@ -780,6 +807,144 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
           id: 'th-res',
           status: 'resolved',
           comments: [comment({ text: 'need you', review: declaration(), ts: T0 })],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+});
+
+// ── Membership: a queue row is an ask, not a reply ──────────────────────────
+
+/**
+ * The rule this commit reverses, named so nobody restores it by accident: the
+ * old inferred band emitted a row for EVERY open thread whose newest comment
+ * was an agent's, which means replying created a row and only resolving
+ * drained it. Measured on the live board that was 60 of 61 rows. Now the
+ * inferred branch emits only when `findAsk` found a direct question, so the
+ * drain is automatic: a person's reply ends the run, and a declared item is
+ * retired by its answer or its thread resolving.
+ */
+describe('reviewThreadItems — a row is an ask, not a reply', () => {
+  const declaration = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
+    shape: 'decision',
+    headline: 'Ship now or wait?',
+    why: 'Blocks the release.',
+    options: [
+      { id: 'now', label: 'Now' },
+      { id: 'wait', label: 'Wait' },
+    ],
+    ...over,
+  });
+
+  /** A person has spoken somewhere, so the roster of addressable names is
+   *  non-empty and `asksPerson` CAN fire — the positive control every
+   *  zero-row assertion below leans on. */
+  const seeded = (threads: Thread[]) =>
+    reviewThreadItems({
+      tasks: [{ id: 'tk-m', title: 'Ship the widget', bodyDocId: 'task:tk-m' }],
+      docs: [{ docId: 'd-seed', title: 'Plan' }],
+      source: {
+        threadsOf: (docId: string) =>
+          docId === 'task:tk-m'
+            ? threads
+            : docId === 'd-seed'
+              ? [
+                  thread({
+                    id: 'th-seed',
+                    comments: [comment({ kind: 'person', text: 'here', ts: T0 })],
+                  }),
+                ]
+              : [],
+      },
+    }).filter((i) => i.threadId !== 'th-seed');
+
+  it('emits zero rows for an agent status note that asks nothing', () => {
+    expect(
+      seeded([
+        thread({ id: 'th-1', comments: [comment({ text: 'Both done — reload', ts: T0 + 5 })] }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('emits exactly one direct row when the reply asks a named person', () => {
+    const rows = seeded([
+      thread({ id: 'th-2', comments: [comment({ text: 'Jordan — ship now?', ts: T0 + 5 })] }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].direct).toBe(true);
+    expect(rows[0].ask).toBe('Jordan — ship now?');
+    expect(rows[0].band).toBe('unreplied');
+  });
+
+  it('still emits a declared row, ask or no ask in the prose', () => {
+    const rows = seeded([
+      thread({
+        id: 'th-3',
+        comments: [comment({ text: 'see the card', review: declaration(), ts: T0 + 5 })],
+      }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].band).toBe('declared');
+    expect(rows[0].ask).toBe('Ship now or wait?');
+  });
+
+  // The drain is automatic — nobody has to remember to resolve.
+  it('drains a direct ask the moment a person replies', () => {
+    expect(
+      seeded([
+        thread({
+          id: 'th-4',
+          comments: [
+            comment({ text: 'Jordan — ship now?', ts: T0 + 5 }),
+            comment({ kind: 'person', text: 'Yes, ship it.', ts: T0 + 10 }),
+          ],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  // The relapse the old rule guaranteed: the agent says "thanks!", the newest
+  // comment is an agent's again, and the row is back for a finished exchange.
+  it('does not recreate the row when the agent follows up after the answer', () => {
+    expect(
+      seeded([
+        thread({
+          id: 'th-5',
+          comments: [
+            comment({ text: 'Jordan — ship now?', ts: T0 + 5 }),
+            comment({ kind: 'person', text: 'Yes, ship it.', ts: T0 + 10 }),
+            comment({ text: 'thanks!', ts: T0 + 15 }),
+          ],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('emits zero rows for a resolved thread regardless of content', () => {
+    expect(
+      seeded([
+        thread({
+          id: 'th-6',
+          status: 'resolved',
+          comments: [
+            comment({ text: 'Jordan — ship now?', ts: T0 + 5 }),
+            comment({ text: 'see the card', review: declaration(), ts: T0 + 6 }),
+          ],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('adds no second row when an agent replies under an answered declared item', () => {
+    expect(
+      seeded([
+        thread({
+          id: 'th-7',
+          comments: [
+            comment({ text: 'need you', review: declaration({ answeredWith: 'now' }), ts: T0 }),
+            comment({ kind: 'person', text: 'Now.', ts: T0 + 5 }),
+            comment({ text: 'Shipping. Will report back here.', ts: T0 + 10 }),
+          ],
         }),
       ]),
     ).toEqual([]);
@@ -913,9 +1078,20 @@ describe('reviewItemRows — one queue, one order', () => {
   ];
   const threads = {
     'task:tk-1': [
-      thread({ id: 'th-a', comments: [comment({ text: 'Green or blue?', ts: T0 + 300 })] }),
+      thread({
+        id: 'th-a',
+        comments: [comment({ text: 'Jordan — green or blue?', ts: T0 + 300 })],
+      }),
     ],
-    'd-1': [thread({ id: 'th-b', comments: [comment({ text: 'Is this true?', ts: T0 + 100 })] })],
+    'd-1': [
+      thread({
+        id: 'th-b',
+        comments: [
+          comment({ kind: 'person', text: 'over to you', ts: T0 }),
+          comment({ text: 'Jordan — is this true?', ts: T0 + 100 }),
+        ],
+      }),
+    ],
   };
   const docs = [{ docId: 'd-1', title: 'Launch plan' }];
 
@@ -943,9 +1119,8 @@ describe('reviewItemRows — one queue, one order', () => {
 
   /**
    * THE POSITIVE CONTROL. A workspace with no ticket-borne items must emit
-   * exactly the rows it emitted before this existed — same objects, same
-   * order — or "nothing that surfaces today stops surfacing" is a claim rather
-   * than a property.
+   * exactly the rows `reviewThreadItems` emits — same objects, same order —
+   * or the merge would be quietly rewriting the thread half of the queue.
    */
   it('leaves a thread-only workspace byte-identical to reviewThreadItems', () => {
     const args = { tasks: tasks(), docs, source: source(threads) };
