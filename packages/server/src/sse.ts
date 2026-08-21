@@ -353,7 +353,8 @@ export function openSseStream(
             docId,
             lastEventId,
             action: 'refetch',
-            reason: 'last-event-id is older than the replay buffer (or from a previous server epoch); events may have been missed — refetch state instead of trusting the stream',
+            reason:
+              'last-event-id is older than the replay buffer (or from a previous server epoch); events may have been missed — refetch state instead of trusting the stream',
           });
         }
       }

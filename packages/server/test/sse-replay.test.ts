@@ -21,8 +21,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { REPLAY_MAX_EVENTS, SseHub } from '../src/sse.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { REPLAY_MAX_EVENTS, SseHub } from '../src/sse.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
@@ -160,9 +160,7 @@ describe('SSE Last-Event-ID replay', () => {
     await settle();
     // An id minted by a previous server epoch: same shape, never issued by
     // this process. The server cannot know what it missed, so it must say so.
-    const s = listenFrames(
-      await get('/events/doc-replay', { 'Last-Event-ID': 'deadbeef:42' }),
-    );
+    const s = listenFrames(await get('/events/doc-replay', { 'Last-Event-ID': 'deadbeef:42' }));
     await settle();
     expect(s.frames.some((f) => f.event === 'replay.gap')).toBe(true);
     // And NO partial replay — a half-answer would read as a whole one.
@@ -189,9 +187,9 @@ describe('SSE Last-Event-ID replay', () => {
       await get(`/events/doc-replay?lastEventId=${encodeURIComponent(lastId)}`),
     );
     await settle();
-    expect(
-      second.frames.filter((f) => f.event === 'thread.created').map(commentText),
-    ).toEqual(['Missed via query.']);
+    expect(second.frames.filter((f) => f.event === 'thread.created').map(commentText)).toEqual([
+      'Missed via query.',
+    ]);
     await second.stop();
   });
 });
