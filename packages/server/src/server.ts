@@ -2485,13 +2485,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
         }
         // The human's queue, to the board's agent-side `next` below: every
-        // open thread across this workspace's tasks and docs that is waiting
-        // on a person — its newest comment is an agent's, OR it carries a
-        // declared item nobody has answered, which stays whatever else is
-        // said in the thread. Decisions are NOT here — the board already
-        // holds every task, so shipping them again would put the priority
-        // rule in two places; the client merges the two halves and orders
-        // them (see `reviewQueue` in hub-model).
+        // open thread across this workspace's tasks and docs that is ASKING
+        // a person something — an unanswered agent comment with a direct
+        // question in it, OR a declared item nobody has answered, which
+        // stays whatever else is said in the thread. A status note is not a
+        // row (Bryan, 2026-08-21 — see `ReviewBand` in review-queue.ts).
+        // Decisions are NOT here — the board already holds every task, so
+        // shipping them again would put the priority rule in two places;
+        // the client merges the two halves and orders them (see
+        // `reviewQueue` in hub-model).
         //
         // One request rather than one per doc: a board with forty tasks is a
         // board with forty rooms, and the strip has to be right at first
