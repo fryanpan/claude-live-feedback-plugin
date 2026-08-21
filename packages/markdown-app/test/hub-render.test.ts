@@ -310,7 +310,7 @@ describe('renderBoard', () => {
     // the row anatomy itself: handle, open zone, status, title, assignee.
     expect([...row.children].map((c) => (c as HTMLElement).className.split(' ')[0])).toEqual([
       'hub-drag-handle',
-      'hub-open-zone',
+      'hub-title-edit',
       'hub-status-ctl',
       'hub-task-title',
       'hub-task-badges',
@@ -533,32 +533,96 @@ describe('renderBoard', () => {
   });
 });
 
-// ── The Asana row anatomy: handle · open zone · status · title · assignee ──
+// ── The Asana row anatomy: handle · rename zone · status · title · assignee ──
 
-describe('the open zone', () => {
-  // The deliberate space whose only job is opening the task. It is what makes
-  // restoring inline title editing safe: with the title editable, the row
-  // needs a target that can only ever mean "open".
-  it('opens the task and says so to assistive tech', () => {
+describe('the rename zone', () => {
+  // The slot that used to be a 16px "open" sliver. Inverted deliberately
+  // (t-uUQLoTLVNdB9): the title spans most of a desktop row, so IT should be
+  // the open target, and the dedicated zone carries the deliberate gesture —
+  // renaming — that single-click on the words used to swallow.
+  it('starts a rename without opening, and says so to assistive tech', () => {
     const h = handlers();
-    const t = task({ goal: 'g-pr', title: 'Open me' });
+    const t = task({ goal: 'g-pr', title: 'Rename me' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
-    const zone = root.querySelector('.hub-open-zone') as HTMLButtonElement;
-    expect(zone.getAttribute('aria-label') ?? '').toContain('Open me');
+    const zone = root.querySelector('.hub-title-edit') as HTMLButtonElement;
+    expect(zone.getAttribute('aria-label') ?? '').toContain('Rename me');
     zone.click();
-    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    expect(title.querySelector('input')).not.toBeNull();
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+  });
+
+  // Renaming moved off the title's Enter, so the button being a real,
+  // focusable <button> is what keeps a rename reachable without a pointer.
+  it('is a focusable button on a fine pointer', () => {
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), handlers());
+    const zone = root.querySelector('.hub-title-edit') as HTMLButtonElement;
+    expect(zone.tagName).toBe('BUTTON');
+    expect(zone.disabled).toBe(false);
+    expect(zone.tabIndex).toBe(0);
+  });
+
+  // On a coarse pointer renaming lives in the detail panel, so the control is
+  // inert — but the ELEMENT stays: auto-placement fills consecutive tracks,
+  // and a dropped child slides every later cell one track left.
+  it('renders inert on a coarse pointer', () => {
+    const h = handlers({ inlineTitleEdit: () => false });
+    renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
+    const zone = root.querySelector('.hub-title-edit') as HTMLButtonElement;
+    expect(zone).not.toBeNull();
+    expect(zone.disabled).toBe(true);
+    expect(zone.getAttribute('aria-hidden')).toBe('true');
   });
 });
 
 describe('inline title editing', () => {
-  // Restored deliberately — and it re-opens the bug that removed it, so the
-  // gate is the pointer, not the title.
-  it('a fine pointer renames in place; Enter commits', () => {
+  // t-uUQLoTLVNdB9: the title is the row's biggest target on a 1282px desktop
+  // row, and a single click on it used to mean "rename" — so the biggest
+  // target was the one click that could NOT open the task. A single click on
+  // the words now opens, like the rest of the row; renaming asks for the
+  // explicit pencil.
+  it('a fine pointer single-click on the title OPENS the task', () => {
     const h = handlers();
     const t = task({ goal: 'g-pr', title: 'Old title' });
     renderBoard(root, boardSections(GOALS, [t], filters), h);
     const title = root.querySelector('.hub-task-title') as HTMLElement;
     title.click();
+    expect(title.querySelector('input')).toBeNull();
+    expect(h.onTitleCommit).not.toHaveBeenCalled();
+    expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
+  });
+
+  // A click that ends a drag-select fires too — opening the panel then would
+  // destroy the selection the reader just made to copy a title.
+  it('does not open when the click ends with text selected in the row', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(GOALS, [task({ goal: 'g-pr', title: 'Select me' })], filters),
+      h,
+    );
+    const row = root.querySelector('.hub-task-row') as HTMLElement;
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    const sel = (collapsed: boolean) =>
+      ({ isCollapsed: collapsed, anchorNode: title.firstChild }) as unknown as Selection;
+    const spy = vi.spyOn(document, 'getSelection').mockReturnValue(sel(false));
+    row.click();
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+    // Control: the same click with the selection collapsed opens.
+    spy.mockReturnValue(sel(true));
+    row.click();
+    expect(h.onOpenTask).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  // Restored deliberately — and it re-opens the bug that removed it, so the
+  // gate is the pointer, not the title.
+  it('the rename zone renames in place; Enter commits', () => {
+    const h = handlers();
+    const t = task({ goal: 'g-pr', title: 'Old title' });
+    renderBoard(root, boardSections(GOALS, [t], filters), h);
+    const title = root.querySelector('.hub-task-title') as HTMLElement;
+    (root.querySelector('.hub-title-edit') as HTMLButtonElement).click();
     const input = title.querySelector('input') as HTMLInputElement;
     expect(input).not.toBeNull();
     // The click that entered edit mode must not also have opened the task.
@@ -584,7 +648,7 @@ describe('inline title editing', () => {
       h,
     );
     const title = root.querySelector('.hub-task-title') as HTMLElement;
-    title.click();
+    (root.querySelector('.hub-title-edit') as HTMLButtonElement).click();
     const input = title.querySelector('input') as HTMLInputElement;
     input.value = 'New title';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
@@ -599,7 +663,7 @@ describe('inline title editing', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', title: 'Keep me' })], filters), h);
     const title = root.querySelector('.hub-task-title') as HTMLElement;
-    title.click();
+    (root.querySelector('.hub-title-edit') as HTMLButtonElement).click();
     const input = title.querySelector('input') as HTMLInputElement;
     input.value = 'Discard me';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -608,13 +672,16 @@ describe('inline title editing', () => {
   });
 
   // Keyboard parity: a rename reachable only by clicking is a rename a
-  // keyboard user cannot perform.
-  it('is reachable from the keyboard — the title is focusable and Enter starts it', () => {
+  // keyboard user cannot perform. The pencil <button> is that path now — and
+  // the title must NOT be its own tab stop any more, or Enter on it would
+  // race the row's Enter-opens.
+  it('keeps rename on the keyboard via the pencil, and the title out of the tab order', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr' })], filters), h);
     const title = root.querySelector('.hub-task-title') as HTMLElement;
-    expect(title.tabIndex).toBe(0);
-    title.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(title.hasAttribute('tabindex')).toBe(false);
+    const zone = root.querySelector('.hub-title-edit') as HTMLButtonElement;
+    zone.click(); // what Enter/Space on a focused <button> dispatches
     expect(title.querySelector('input')).not.toBeNull();
     // …and starting an edit must not also open the task behind it.
     expect(h.onOpenTask).not.toHaveBeenCalled();
@@ -634,9 +701,9 @@ describe('inline title editing', () => {
     expect(title.querySelector('input')).toBeNull();
     expect(h.onTitleCommit).not.toHaveBeenCalled();
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
-    // The open zone is still there and still works — the anatomy does not
-    // change shape between pointers, only what the title's tap means.
-    expect(root.querySelector('.hub-open-zone')).not.toBeNull();
+    // The rename zone element is still there (inert) — the anatomy does not
+    // change shape between pointers, only what the controls do.
+    expect(root.querySelector('.hub-title-edit')).not.toBeNull();
   });
 });
 
