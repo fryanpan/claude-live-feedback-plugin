@@ -18,6 +18,7 @@ import {
   createVoiceCapture,
   insecureOriginMessage,
   localhostUrlFor,
+  spaceScrollTarget,
   topmostVisibleHeading,
 } from '../src/voice-capture.ts';
 
@@ -75,6 +76,9 @@ describe('createVoiceCapture', () => {
   let sent: Array<{ transcript: string; context: VoiceContext }>;
   let ackToReturn: VoiceAck | null;
   let navigated: string[];
+  /** Every scroll the capture replayed on behalf of a Space that turned out
+   *  to be a tap. Injected, because no test environment resolves layout. */
+  let scrolled: Array<{ target: EventTarget | null; direction: 1 | -1 }>;
 
   /** A secure origin — the state-machine tests are about the hold, not the
    *  origin gate, so they run where the mic is actually allowed. */
@@ -104,6 +108,9 @@ describe('createVoiceCapture', () => {
       },
       createRecognition: opts?.createRecognition ?? (() => rec),
       readOrigin: opts?.readOrigin ?? secureOrigin,
+      scrollPage: (target, direction) => {
+        scrolled.push({ target, direction });
+      },
     });
 
   beforeEach(() => {
@@ -116,6 +123,7 @@ describe('createVoiceCapture', () => {
     rec = new FakeRecognition();
     sent = [];
     navigated = [];
+    scrolled = [];
     ackToReturn = { route: 'agent', ack: 'Heard: "x". Sent to the workspace agent.' };
   });
 
@@ -133,23 +141,109 @@ describe('createVoiceCapture', () => {
     cap.destroy();
   });
 
-  it('a Space TAP does nothing at all — no recording, no indicator, no eaten keystroke', () => {
+  it('a Space TAP records nothing, and gets the scroll it was asking for', () => {
     // The accidental-trigger report (t-Mym15-yQ3QxJ): a typed space is a tap,
     // and before this a tap RECORDED — plus a 6s "Didn't catch anything."
     // toast — whenever the guard could not see typing (focus stolen by a
-    // re-render, a focused row, plain body). A tap now never reaches the
-    // engine, and its keydown is not default-prevented, so whatever space
-    // natively does where it landed still happens.
+    // re-render, a focused row, plain body). A tap still never reaches the
+    // engine.
+    //
+    // What it no longer does is scroll NATIVELY. A press that might become a
+    // hold has its default suppressed at keydown, because that is the only
+    // moment the page can be kept still — and by the time the hold arms, a
+    // native space has already jumped the page a screen. The scroll is not
+    // lost, it is deferred: the release says the press was a tap, and the tap
+    // gets its page-down then.
     const cap = mount();
     const ev = new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
     document.body.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
     vi.advanceTimersByTime(SPACE_HOLD_ARM_MS - 100);
     keyup(document.body);
     vi.advanceTimersByTime(10_000);
-    expect(ev.defaultPrevented).toBe(false);
     expect(rec.started).toBe(0);
     expect(sent).toHaveLength(0);
     expect(indicator.classList.contains('hidden')).toBe(true);
+    expect(scrolled).toEqual([{ target: document.body, direction: 1 }]);
+    cap.destroy();
+  });
+
+  it('a Shift+Space tap scrolls back UP, the way Shift+Space always has', () => {
+    const cap = mount();
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        code: 'Space',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    vi.advanceTimersByTime(SPACE_HOLD_ARM_MS - 100);
+    keyup(document.body);
+    expect(scrolled.map((s) => s.direction)).toEqual([-1]);
+    cap.destroy();
+  });
+
+  it('the press that becomes a hold scrolls nothing — not on the way in, not on release', () => {
+    // The reported bug: every dictation began with the page jumping a screen,
+    // because the press that starts the hold was left to its native default.
+    const cap = mount();
+    const ev = new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    vi.advanceTimersByTime(SPACE_HOLD_ARM_MS);
+    expect(rec.started).toBe(1);
+    expect(ev.defaultPrevented).toBe(true);
+    keyup(document.body);
+    // The release ended a recording; it was never a page-down.
+    expect(scrolled).toEqual([]);
+    cap.destroy();
+  });
+
+  it('a Space pressed while dictation is already live neither scrolls nor cuts the recording', () => {
+    // Dictation started from the MIC BUTTON, which is how it starts on a
+    // tablet. A stray Space then arrived at the document handler with nothing
+    // to arm, fell through un-prevented, and scrolled the page out from under
+    // the person talking — and its keyup ended the utterance early.
+    const cap = mount();
+    button.dispatchEvent(new Event('pointerdown'));
+    expect(rec.started).toBe(1);
+
+    const ev = new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    keyup(document.body);
+    expect(scrolled).toEqual([]);
+    expect(rec.stopped).toBe(0);
+    expect(cap.holding()).toBe(true);
+
+    // …and the button's own release still ends it.
+    button.dispatchEvent(new Event('pointerup'));
+    expect(rec.stopped).toBe(1);
+    cap.destroy();
+  });
+
+  it('leaves Space alone where it belongs to something else', () => {
+    // The guard is one-directional on purpose: it may only ever suppress a
+    // press the page itself owns. A space typed into a field must type, and a
+    // space on a focused button must press it — so neither is prevented, and
+    // neither is replayed as a scroll either.
+    const cap = mount();
+    const input = document.createElement('input');
+    const control = document.createElement('button');
+    document.body.append(input, control);
+    for (const el of [input, control]) {
+      const ev = new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+      el.dispatchEvent(ev);
+      vi.advanceTimersByTime(SPACE_HOLD_ARM_MS);
+      keyup(el);
+      expect(ev.defaultPrevented, `Space on <${el.tagName.toLowerCase()}> was eaten`).toBe(false);
+    }
+    expect(scrolled).toEqual([]);
+    expect(rec.started).toBe(0);
+    // Positive control: the same probe DOES see the page's own press.
+    const onPage = new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(onPage);
+    expect(onPage.defaultPrevented).toBe(true);
     cap.destroy();
   });
 
@@ -399,6 +493,43 @@ describe('createVoiceCapture', () => {
     cap.destroy();
     vi.advanceTimersByTime(10_000);
     expect(rec.started).toBe(0);
+  });
+});
+
+describe('spaceScrollTarget', () => {
+  it('sends the page itself to the viewport, whatever the body says about overflow', () => {
+    // `body { overflow: auto }` PROPAGATES to the viewport — the body element
+    // is then not the scroller, so `body.scrollBy()` moves nothing at all. The
+    // hub is exactly that layout, and it is the surface where this scroll is
+    // the one people use, so "null means the viewport" is load-bearing rather
+    // than a fallback.
+    document.body.style.overflowY = 'auto';
+    expect(spaceScrollTarget(document.body)).toBeNull();
+    expect(spaceScrollTarget(document.documentElement)).toBeNull();
+    expect(spaceScrollTarget(null)).toBeNull();
+    document.body.style.overflowY = '';
+  });
+
+  it('picks the scrollable box a page-like container sits in', () => {
+    // The task detail panel takes focus and declares itself page-like, and it
+    // has its own `overflow: auto`. A space tap there scrolls the PANEL; the
+    // viewport behind it would be the wrong thing to move.
+    const panel = document.createElement('div');
+    panel.style.overflowY = 'auto';
+    const inner = document.createElement('div');
+    panel.append(inner);
+    document.body.append(panel);
+    // No test environment resolves layout, so the one fact the walk reads off
+    // the box — that it has more content than room — is stated here.
+    Object.defineProperty(panel, 'scrollHeight', { value: 900, configurable: true });
+    Object.defineProperty(panel, 'clientHeight', { value: 400, configurable: true });
+
+    expect(spaceScrollTarget(inner)).toBe(panel);
+    // A box with nothing to scroll is not the answer — the walk continues past
+    // it to the viewport.
+    Object.defineProperty(panel, 'scrollHeight', { value: 400, configurable: true });
+    expect(spaceScrollTarget(inner)).toBeNull();
+    panel.remove();
   });
 });
 
