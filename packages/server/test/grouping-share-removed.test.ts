@@ -385,6 +385,69 @@ describe('a grouping cannot be shared on its own', () => {
       });
       expect(asBoard.status).toBe(200);
     });
+
+    it('stops resolving a legacy Access-mode grouping HOSTNAME', async () => {
+      /**
+       * The third serving seam, and the one nothing covered until a mutation
+       * run found it silent: Access mode does not use the slug or the session
+       * cookie at all — it resolves the share from the per-share HOSTNAME.
+       * Closing the link seams alone would have left an emailed Access URL for
+       * a grouping still granting.
+       *
+       * Asserted without a Cloudflare JWT, which the test server has no
+       * verifier for. It does not need one: an unresolvable host never reaches
+       * authentication. `classifyHost` asks `lookupShare` first, and a null
+       * answer falls through to `deny`, so the two cases separate one layer
+       * ABOVE the JWT — 403 unknown_host for a host that resolves to nothing,
+       * versus 503 access_not_configured for one that resolves and then finds
+       * no verifier. Different codes from different layers, which is exactly
+       * what makes this a control rather than two flavours of failure.
+       */
+      const mint = await local('/api/share/workspace', {
+        workspaceId: boardId,
+        allowDomains: ['@partner.example'],
+      });
+      expect(mint.status).toBe(200);
+      const boardHost = ((await mint.json()) as { share: Share }).share.hostname;
+      expect(boardHost).toContain(BASE_HOST);
+
+      const legacyHost = `share-legacy-grouping.${BASE_HOST}`;
+      await restartWith([
+        {
+          shareId: 'legacy03',
+          surface: 'workspace',
+          // No `mode` — that is what a pre-link-mode Access record looks like.
+          docId: diffMemberDocId,
+          workspaceId: diffGroupingId,
+          hostname: legacyHost,
+          url: `https://${legacyHost}/review/${encodeURIComponent(diffMemberDocId)}`,
+          audience: 'aud-legacy',
+          appId: 'app-legacy',
+          policyId: 'policy-legacy',
+          allowDomains: ['@partner.example'],
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 86_400_000,
+        },
+      ]);
+
+      const onHost = (host: string) =>
+        fetch(`${base}/api/docs/${encodeURIComponent(diffMemberDocId)}`, { headers: { host } });
+
+      // Positive control FIRST: the BOARD's share hostname still resolves, so
+      // the registry survived the restart and hostname lookup works at all.
+      const board = await onHost(boardHost);
+      expect(board.status).toBe(503);
+      expect(((await board.json()) as { error: string }).error).toBe('access_not_configured');
+
+      // The grouping's hostname now resolves to nothing — indistinguishable
+      // from a hostname this server has never heard of.
+      const legacy = await onHost(legacyHost);
+      expect(legacy.status).toBe(403);
+      expect(((await legacy.json()) as { error: string }).error).toBe('unknown_host');
+      const never = await onHost(`share-never-existed.${BASE_HOST}`);
+      expect(never.status).toBe(403);
+      expect(((await never.json()) as { error: string }).error).toBe('unknown_host');
+    });
   });
 
   describe('what replaces it', () => {
