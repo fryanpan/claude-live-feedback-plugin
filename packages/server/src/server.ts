@@ -4179,6 +4179,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               typeof body?.pluginVersion === 'string' && body.pluginVersion.trim().length > 0
                 ? body.pluginVersion.trim()
                 : undefined,
+            // Per-process nonce (see AgentAttachment.processId): same nonce
+            // means a live process re-attaching, so the drains respect the
+            // ack grace; absent (an older bundle) keeps bypass-always.
+            processId:
+              typeof body?.processId === 'string' && body.processId.trim().length > 0
+                ? body.processId.trim()
+                : undefined,
           });
           if (!res.ok) return j(404, res);
           return j(200, res);
@@ -4202,19 +4209,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // heartbeats discards it), and a broadcast would bill every peer
           // for a message that names one of them. Each frame replays the
           // original payload plus this row's id; the receiving MCP's ack is
-          // what clears it, so a frame that reaches nobody here simply comes
-          // back after the grace window.
+          // what clears it.
+          //
+          // `sendToAgent` returning 0 is a REAL answer — the agent holds no
+          // stream (its keepalive still lands as plain HTTP while its SSE
+          // reconnect fails) — and the hand-over above already stamped the
+          // row emitted. Left stamped, the row waits out a full grace window
+          // per heartbeat while never actually going anywhere: an
+          // SSE-or-nothing loop wearing delivery bookkeeping. Same lesson as
+          // setTriageDelivery above ("0 is a real answer"): roll the mark
+          // back, so the NEXT heartbeat is a fresh attempt rather than a
+          // grace-window wait. Rows the route cannot even frame (no replay
+          // payload) are rolled back for the same reason — nothing was sent.
           for (const q of res.queuedComments ?? []) {
-            if (!q.payload || typeof q.payload !== 'object') continue;
-            const original = q.payload as Record<string, unknown>;
-            if (typeof original.event !== 'string') continue;
-            const frame: Record<string, unknown> & { event: string } = {
-              ...original,
-              event: original.event,
-              workspaceId,
-              commentQueueId: q.id,
-            };
-            sse.sendToAgent(`ws~${workspaceId}`, agentId, frame);
+            let sent = 0;
+            const original =
+              q.payload && typeof q.payload === 'object'
+                ? (q.payload as Record<string, unknown>)
+                : undefined;
+            if (original && typeof original.event === 'string') {
+              const frame: Record<string, unknown> & { event: string } = {
+                ...original,
+                event: original.event,
+                workspaceId,
+                commentQueueId: q.id,
+              };
+              sent = sse.sendToAgent(`ws~${workspaceId}`, agentId, frame);
+            }
+            if (sent === 0) taskStore.clearCommentEmitted(workspaceId, q.id);
           }
           return j(200, res);
         }

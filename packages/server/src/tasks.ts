@@ -884,6 +884,13 @@ export interface AgentAttachment {
    *  this agent. Absent on any peer older than the release that added it,
    *  which is exactly what makes silence readable as "behind". */
   pluginVersion?: string;
+  /** A nonce the MCP child mints once per PROCESS and sends on every attach.
+   *  It answers the one question the ack grace window depends on: is this
+   *  re-attach the SAME live process (whose in-flight deliveries may still
+   *  be acked — respect the grace) or a fresh one (whatever was in flight
+   *  went to a process that is gone — bypass it)? Absent on older bundles,
+   *  which keep the bypass-always behavior they were built against. */
+  processId?: string;
 }
 
 /** How recent a heartbeat must be for the process to count as up. */
@@ -5299,17 +5306,29 @@ export class TaskStore {
       capabilities?: string[];
       endpoint?: string;
       pluginVersion?: string;
+      processId?: string;
     },
   ): AttachAgentResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const now = Date.now();
+    // Is this attach a NEW process, or the same live one re-attaching (a
+    // lead declaration, a retry after `subscribed: false`, a defensive
+    // re-call)? The distinction decides whether the drains below may bypass
+    // the ack grace window. A caller that sends no nonce — an older bundle —
+    // is treated as fresh, which is exactly the behavior it was built
+    // against; a same-nonce re-attach must NOT re-hand rows whose frames are
+    // still in flight to this very process, or the agent reads the same
+    // comment twice (once off the wire, once off this response).
+    const priorProcessId = state.attachments.get(opts.agentId)?.processId;
+    const freshProcess = opts.processId === undefined || opts.processId !== priorProcessId;
     const attachment: AgentAttachment = {
       workspaceId,
       agentId: opts.agentId,
       runtime: opts.runtime,
       ...(opts.endpoint !== undefined ? { endpoint: opts.endpoint } : {}),
       ...(opts.pluginVersion !== undefined ? { pluginVersion: opts.pluginVersion } : {}),
+      ...(opts.processId !== undefined ? { processId: opts.processId } : {}),
       lastHeartbeat: now,
       lastToolCallAt: now,
       capabilities: opts.capabilities ?? [],
@@ -5364,11 +5383,11 @@ export class TaskStore {
       attachment,
       gating: this.gatingSummary(workspaceId),
       untriaged: this.listUntriaged(workspaceId).map((t) => t.id),
-      queuedVoice: this.drainVoiceQueue(workspaceId, { freshProcess: true }),
+      queuedVoice: this.drainVoiceQueue(workspaceId, { freshProcess }),
       // Addressed, unlike queuedVoice: only rows FOR this agent, and they
       // stay queued until its receipt — see takeDeliverableComments.
       queuedComments: this.takeDeliverableComments(workspaceId, opts.agentId, {
-        freshProcess: true,
+        freshProcess,
       }),
       ...(pendingRetriage ? { pendingRetriage } : {}),
       ...(pendingBucketReview ? { pendingBucketReview } : {}),
@@ -5584,10 +5603,21 @@ export class TaskStore {
     try {
       const dir = join(this.dataDir, 'workspaces');
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      // Oldest dropped past the cap: this file is delivery bookkeeping, and
-      // the comment itself lives in its thread. An addressee that never acks
-      // (an old bundle) must not grow it forever.
-      const next = [...this.listQueuedComments(workspaceId), queued].slice(-MAX_QUEUED_COMMENTS);
+      // Oldest dropped past the cap — PER ADDRESSEE, not across the file.
+      // This file is delivery bookkeeping and the comment itself lives in
+      // its thread, so an addressee that never acks (an old bundle, an
+      // orphaned durable watch) must not grow it forever. But the cap it
+      // hits must be its own: a shared cap would let one dead addressee's
+      // backlog silently evict a LIVE agent's still-pending row, with no
+      // signal anywhere that it happened.
+      const existing = this.listQueuedComments(workspaceId);
+      const mine = existing.filter((q) => q.agentId === item.agentId);
+      const overflow = mine.length + 1 - MAX_QUEUED_COMMENTS;
+      let next = [...existing, queued];
+      if (overflow > 0) {
+        const drop = new Set(mine.slice(0, overflow).map((q) => q.id));
+        next = next.filter((q) => !drop.has(q.id));
+      }
       writeFileSync(
         commentQueuePath(this.dataDir, workspaceId),
         `${JSON.stringify({ queue: next }, null, 2)}\n`,
@@ -5636,6 +5666,29 @@ export class TaskStore {
     const entry = queue.find((q) => q.id === id);
     if (!entry) return false;
     entry.emittedAt = Date.now();
+    this.writeCommentQueue(workspaceId, queue);
+    return true;
+  }
+
+  /**
+   * Roll back an emitted mark for a row whose send reached NO socket. The
+   * heartbeat route marks a row emitted when it hands it over, then attempts
+   * the addressed frame — but `sse.sendToAgent` returning 0 is a real answer
+   * ("the agent holds no stream"), and a row left marked against a send that
+   * never happened waits out a full grace window before anything re-offers
+   * it. Worse, if the agent's stream stays down while its heartbeats keep
+   * landing, the cycle repeats forever: mark → silent 0-sink send → grace →
+   * mark again. Clearing the mark makes the very next heartbeat a fresh
+   * delivery attempt instead. No-op (false) for unknown or un-emitted rows.
+   */
+  clearCommentEmitted(workspaceId: string, id: string): boolean {
+    const queue = this.listQueuedComments(workspaceId);
+    const entry = queue.find((q) => q.id === id);
+    if (!entry || entry.emittedAt === undefined) return false;
+    // JSON.stringify drops an undefined property, so the persisted row
+    // comes back with no emittedAt at all — indistinguishable from never
+    // having been sent, which is the point.
+    entry.emittedAt = undefined;
     this.writeCommentQueue(workspaceId, queue);
     return true;
   }
