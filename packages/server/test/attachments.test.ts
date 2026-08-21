@@ -141,7 +141,7 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('attachAgent records the §3.2 fields and emits agent.attached (SSE + audit, endpoint in neither)', () => {
-    const ws = store.createWorkspace('relay-hub', 'Ship the relay.');
+    const ws = store.createWorkspace('relay-hub');
     const res = store.attachAgent(ws.id, {
       agentId: 'relay-agent',
       runtime: 'claude-code-local',
@@ -188,8 +188,8 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('is keyed (workspaceId, agentId): one agent attaches to N workspaces; re-attach upserts', () => {
-    const a = store.createWorkspace('hub-a', 'A');
-    const b = store.createWorkspace('hub-b', 'B');
+    const a = store.createWorkspace('hub-a');
+    const b = store.createWorkspace('hub-b');
     expect(store.attachAgent(a.id, { agentId: 'lead', runtime: 'claude-code-local' }).ok).toBe(
       true,
     );
@@ -220,7 +220,7 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('attach returns the open-gating-decisions summary (§3.3: a fresh context learns the gates exist)', () => {
-    const ws = store.createWorkspace('gates-hub', 'Ship it.');
+    const ws = store.createWorkspace('gates-hub');
     const dec = store.createTask(ws.id, {
       title: 'your go',
       assignee: 'human',
@@ -258,7 +258,7 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('attach returns the untriaged Backlog tasks so the agent can sweep them (§3.4)', () => {
-    const ws = store.createWorkspace('sweep-hub', 'Ship it.');
+    const ws = store.createWorkspace('sweep-hub');
     // No attachment yet → this create emits no triage request and no marker;
     // it just sits in Backlog, untriaged.
     const t = store.createTask(ws.id, { title: 'Landed while nobody was attached' });
@@ -271,7 +271,7 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('heartbeat bumps lastHeartbeat, moves lastToolCallAt only forward, and emits agent.heartbeat', async () => {
-    const ws = store.createWorkspace('hb-hub', 'Ship it.');
+    const ws = store.createWorkspace('hb-hub');
     const res = store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     if (!res.ok) throw new Error('fixture');
     const t0 = res.attachment.lastToolCallAt;
@@ -302,7 +302,7 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('noteAgentToolCall bumps lastToolCallAt without an event (tool calls are not §3.6 rows)', () => {
-    const ws = store.createWorkspace('tc-hub', 'Ship it.');
+    const ws = store.createWorkspace('tc-hub');
     const res = store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     if (!res.ok) throw new Error('fixture');
     const before = events.length;
@@ -312,7 +312,7 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('detachAgent removes the record and emits agent.detached exactly once', () => {
-    const ws = store.createWorkspace('bye-hub', 'Ship it.');
+    const ws = store.createWorkspace('bye-hub');
     store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     expect(store.detachAgent(ws.id, 'lead')).toBe(true);
     expect(store.listAttachments(ws.id)).toHaveLength(0);
@@ -335,7 +335,7 @@ describe('TaskStore attachment registry', () => {
       heartbeatFreshMs: 30,
       observedWorkFreshMs: 30,
     });
-    const ws = tight.createWorkspace('live-hub', 'Ship it.');
+    const ws = tight.createWorkspace('live-hub');
     expect(tight.hasLiveAttachment(ws.id)).toBe(false);
     tight.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     // Positive control: fresh → live.
@@ -349,7 +349,7 @@ describe('TaskStore attachment registry', () => {
   });
 
   it('persists to its own sidecar and survives a restart (stale, honestly — away, not active)', () => {
-    const ws = store.createWorkspace('persist-hub', 'Ship it.');
+    const ws = store.createWorkspace('persist-hub');
     store.attachAgent(ws.id, {
       agentId: 'relay-agent',
       runtime: 'webhook',
@@ -726,31 +726,31 @@ describe('attachment routes + triage bridge', () => {
     expect(body.ack).not.toContain('queued');
   });
 
-  it('after declaring, a goal edit asks for re-triage instead of parking it', async () => {
+  it('after declaring, a new goal band asks for a bucket review instead of parking it', async () => {
     const wsId = await makeWorkspace('goal-declare-hub', 'agent-away');
     await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'An open row' });
     await declareSelf(wsId, 'agent-self');
 
     const sse = listen(await local(`/events/workspace/${wsId}?agentId=agent-self`));
-    const r = await put(`/api/workspaces/${wsId}/goal`, {
-      goal: 'Cut token usage per session in half.',
+    const r = await put(`/api/workspaces/${wsId}/goals`, {
+      goals: [{ title: 'Cut token usage per session in half' }],
       author: PERSON,
     });
     expect(r.status).toBe(200);
     const body = (await r.json()) as {
-      retriage: { requested: boolean; queued: boolean; taskIds: string[] };
+      bucketReview: { requested: boolean; queued: boolean; taskIds: string[] };
     };
     await settle();
     sse.stop();
-    expect(body.retriage.requested).toBe(true);
-    expect(body.retriage.queued).toBe(false);
-    expect(body.retriage.taskIds).toHaveLength(1);
+    expect(body.bucketReview.requested).toBe(true);
+    expect(body.bucketReview.queued).toBe(false);
+    expect(body.bucketReview.taskIds).toHaveLength(1);
     // The ask actually rode the channel a declared lead is now subscribed to
     // — "requested" is only true because somebody could hear it.
     expect(sse.events).toContain('triage.requested');
   });
 
-  it('POSITIVE CONTROL — naming an UNREACHABLE agent as lead still queues voice and re-triage', async () => {
+  it('POSITIVE CONTROL — naming an UNREACHABLE agent as lead still queues voice and the bucket review', async () => {
     // The asymmetry that keeps delivery honest. Handing the seat to an agent
     // who is not on the wire must NOT forge its liveness: otherwise the
     // board would report a live lead, voice would route to 'agent', and the
@@ -791,13 +791,13 @@ describe('attachment routes + triage bridge', () => {
     expect(voice.ack).toContain('queued');
 
     const goal = (await (
-      await put(`/api/workspaces/${wsId}/goal`, {
-        goal: 'Cut token usage per session in half.',
+      await put(`/api/workspaces/${wsId}/goals`, {
+        goals: [{ title: 'Cut token usage per session in half' }],
         author: PERSON,
       })
-    ).json()) as { retriage: { requested: boolean; queued: boolean } };
-    expect(goal.retriage.requested).toBe(false);
-    expect(goal.retriage.queued).toBe(true);
+    ).json()) as { bucketReview: { requested: boolean; queued: boolean } };
+    expect(goal.bucketReview.requested).toBe(false);
+    expect(goal.bucketReview.queued).toBe(true);
 
     // And the queued note is still there for whoever does show up — the
     // whole point of refusing to fake the delivery.
@@ -808,11 +808,11 @@ describe('attachment routes + triage bridge', () => {
       })
     ).json()) as {
       queuedVoice: Array<{ transcript: string }>;
-      pendingRetriage?: { taskIds: string[] };
+      pendingBucketReview?: { taskIds: string[] };
     };
     expect(drain.queuedVoice.map((v) => v.transcript)).toEqual([
       'make cutting token usage the top goal',
     ]);
-    expect(drain.pendingRetriage?.taskIds).toHaveLength(1);
+    expect(drain.pendingBucketReview?.taskIds).toHaveLength(1);
   });
 });

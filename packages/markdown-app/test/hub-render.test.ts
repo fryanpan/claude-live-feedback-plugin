@@ -30,7 +30,6 @@ import {
   panelReviewQueue,
   renderActivity,
   renderBoard,
-  renderGoalStrip,
   renderHomeBrief,
   renderHomeReview,
   renderLeadStrip,
@@ -1686,26 +1685,6 @@ describe('renderHomeBrief', () => {
   });
 });
 
-describe('renderGoalStrip', () => {
-  it('renders the goal as markdown and commits an edit through the handler', () => {
-    const onGoalCommit = vi.fn();
-    renderGoalStrip(root, 'Ship **search v2**.', { onGoalCommit });
-    expect(root.querySelector('.hub-goal-body strong')?.textContent).toBe('search v2');
-    (root.querySelector('.hub-goal-edit') as HTMLElement).click();
-    const ta = root.querySelector('textarea') as HTMLTextAreaElement;
-    ta.value = 'Ship search v3.';
-    (root.querySelector('.hub-btn-primary') as HTMLElement).click();
-    // The second argument is the ≤20-word display line; empty leaves the
-    // strip on its deterministic clip. See hub-goal-collapse.test.ts.
-    expect(onGoalCommit).toHaveBeenCalledWith('Ship search v3.', '');
-  });
-
-  it('leads with start-planning on an empty workspace instead of an empty strip', () => {
-    renderGoalStrip(root, '', { onGoalCommit: vi.fn() });
-    expect(root.textContent).toContain('start planning');
-  });
-});
-
 describe('renderLeadStrip', () => {
   it('names the lead and lists every known agent as a reassignment target', () => {
     const onLeadCommit = vi.fn();
@@ -1749,48 +1728,9 @@ describe('renderLeadStrip', () => {
     expect(root.querySelector('select')).toBeNull();
   });
 
-  const pending = (taskIds: string[]) => ({
-    batchId: 'b-1',
-    taskIds,
-    ts: 1_700_000_000_000,
-    byName: 'Jordan',
-  });
-
-  it('a goal edit waiting on the lead is counted, not merely announced', () => {
-    renderLeadStrip(
-      root,
-      'agent-relay',
-      ['agent-relay'],
-      { onLeadCommit: vi.fn() },
-      pending(['t-1', 't-2', 't-3']),
-    );
-    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
-    expect(waiting.textContent).toContain('3 tasks');
-    expect(waiting.textContent).toContain('waiting for the lead');
-    expect(waiting.title).toContain('Jordan');
-  });
-
-  it('with no lead at all the waiting edit says nobody is going to do it', () => {
-    renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() }, pending(['t-1']));
-    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
-    // Singular, because "1 tasks" is how a count stops being trusted.
-    expect(waiting.textContent).toContain('1 task to re-place');
-    expect(waiting.textContent).toContain('nobody to do it');
-  });
-
-  it('says nothing when nothing is waiting', () => {
-    // The absence assertions above are only worth anything because the two
-    // tests before this one show the strip CAN render the pending line.
-    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() });
-    expect(root.querySelector('.hub-lead-pending')).toBeNull();
-    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() }, pending([]));
-    expect(root.querySelector('.hub-lead-pending')).toBeNull();
-  });
-
-  // A NEW goal band nobody has re-looked at the bucket against. Its own chip,
-  // because the two asks are settled by different moves — and because a board
-  // that rendered only the north-star one would say "nothing waiting" while
-  // this sat in a sidecar, which is the store-has-it/surface-can't-show-it
+  // A NEW goal band nobody has re-looked at the bucket against. Rendered
+  // because a board that left it in a sidecar would say "nothing waiting"
+  // while an ask sat unanswered — the store-has-it/surface-can't-show-it
   // failure the projection next to it exists to prevent.
   const bucket = (taskIds: string[], bandTitles = ['Reviewer trust']) => ({
     batchId: 'b-2',
@@ -1800,13 +1740,19 @@ describe('renderLeadStrip', () => {
     byName: 'Jordan',
   });
 
+  it('says nothing when nothing is waiting', () => {
+    // The absence assertion is only worth anything because the tests below
+    // show the strip CAN render a pending line.
+    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() });
+    expect(root.querySelector('.hub-lead-pending')).toBeNull();
+  });
+
   it('a new goal band waiting on the lead is counted and named', () => {
     renderLeadStrip(
       root,
       'agent-relay',
       ['agent-relay'],
       { onLeadCommit: vi.fn() },
-      undefined,
       bucket(['t-1', 't-2']),
     );
     const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
@@ -1819,41 +1765,17 @@ describe('renderLeadStrip', () => {
   });
 
   it('with no lead at all the waiting band says nobody is going to do it', () => {
-    renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() }, undefined, bucket(['t-1']));
+    renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() }, bucket(['t-1']));
     const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
     expect(waiting.textContent).toContain('1 unplaced task');
     expect(waiting.textContent).toContain('nobody to do it');
   });
 
-  it('both asks can be waiting at once, and each gets its own chip', () => {
-    renderLeadStrip(
-      root,
-      'agent-relay',
-      ['agent-relay'],
-      { onLeadCommit: vi.fn() },
-      pending(['t-1']),
-      bucket(['t-2'], ['Reviewer trust', 'Mobile review']),
-    );
-    const chips = Array.from(root.querySelectorAll('.hub-lead-pending')) as HTMLElement[];
-    expect(chips).toHaveLength(2);
-    expect(chips[0]?.textContent).toContain('to re-place');
-    expect(chips[1]?.textContent).toContain('to re-look at');
-    // Two bands are counted rather than one being picked to stand for both.
-    expect(chips[1]?.title).toContain('2 new bands');
-  });
-
   it('says nothing about a band when none is waiting', () => {
-    // Non-vacuous because the three tests above render this same chip.
+    // Non-vacuous because the two tests above render this same chip.
     renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() });
     expect(root.textContent).not.toContain('re-look at');
-    renderLeadStrip(
-      root,
-      'agent-relay',
-      ['agent-relay'],
-      { onLeadCommit: vi.fn() },
-      undefined,
-      bucket([]),
-    );
+    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() }, bucket([]));
     expect(root.textContent).not.toContain('re-look at');
   });
 });

@@ -246,7 +246,6 @@ describe('ACTIVITY_REFRESH_EVENTS', () => {
       'decision.answered',
       'decision.answer_withdrawn',
       'decision.info_requested',
-      'workspace.goal_updated',
       'workspace.goals_changed',
     ]) {
       expect(ACTIVITY_REFRESH_EVENTS, `${ev} would never refresh the trail`).toContain(ev);
@@ -1964,7 +1963,7 @@ describe('unplacedNotice — the quiet bucket says how many and how long', () =>
     // saw it. The marker does.
     const swept = task({
       goal: CHORES_ID,
-      triagedAgainst: { goalId: 'g-gone', goal: 'A band that was deleted', ts: NOW - 5 * DAY },
+      triagedAgainst: { goalId: 'g-gone', ts: NOW - 5 * DAY },
       unplacedSince: NOW - 5 * DAY,
     });
     const n = unplacedNotice([deliberateChore, swept], NOW);
