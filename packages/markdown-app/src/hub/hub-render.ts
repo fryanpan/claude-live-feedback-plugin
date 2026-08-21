@@ -20,6 +20,7 @@ import {
   goalDisplay,
 } from '@feedback/core/goal-summary';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
+import { attachMarkdownField } from '../md-field.ts';
 import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import {
   type ActivityEvent,
@@ -1638,6 +1639,9 @@ function promptForm(
   submit.className = submitClass;
   submit.textContent = submitLabel;
   form.append(ta, submit);
+  // Every composer speaks markdown (design point 4); the returned refresh
+  // covers the programmatic clears below, which fire no `input` event.
+  const refreshPreview = attachMarkdownField(ta);
   // A flag, not just the disabled attributes: disabling the CONTROLS stops a
   // second tap, and a form can still be submitted around them (Enter in the
   // field, a programmatic submit). The guard has to be on the handler.
@@ -1654,7 +1658,10 @@ function promptForm(
         // Cleared only on an acknowledged write. A handler that answers
         // nothing at all keeps the text, which is the safe direction: the
         // usual outcome there is that the card is replaced anyway.
-        if (ok === true) ta.value = '';
+        if (ok === true) {
+          ta.value = '';
+          refreshPreview();
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -2603,6 +2610,9 @@ function commentForm(
   submit.className = 'hub-btn';
   submit.textContent = submitLabel;
   form.append(ta, submit);
+  // Every composer speaks markdown (design point 4); refresh covers the
+  // programmatic clear and restore below, which fire no `input` event.
+  const refreshPreview = attachMarkdownField(ta);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
@@ -2621,14 +2631,19 @@ function commentForm(
     // comment that had just been posted, and the obvious second click posted
     // it twice. Put back verbatim if the post is refused.
     ta.value = '';
+    refreshPreview();
     // `Promise.resolve` rather than `await onSubmit(...)` so a handler that
     // returns nothing at all still settles here instead of throwing.
     void Promise.resolve(onSubmit(text))
       .then((ok) => {
-        if (!ok) ta.value = text;
+        if (!ok) {
+          ta.value = text;
+          refreshPreview();
+        }
       })
       .catch(() => {
         ta.value = text;
+        refreshPreview();
       })
       .finally(() => {
         ta.disabled = false;
@@ -3798,6 +3813,9 @@ function reviewItemCard(
   submit.textContent = 'Record answer';
   form.append(hint, ta, submit);
   controls.push(ta, submit);
+  // Every composer speaks markdown (design point 4); refresh covers the
+  // programmatic clear and restore below, which fire no `input` event.
+  const refreshPreview = attachMarkdownField(ta);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     const text = ta.value.trim();
@@ -3814,8 +3832,10 @@ function reviewItemCard(
     // detached node while the rebuilt one is refilled with the words that
     // were just sent. Restored verbatim if the write is refused.
     ta.value = '';
+    refreshPreview();
     answer(text, undefined, () => {
       ta.value = text;
+      refreshPreview();
     });
   });
   card.append(form);

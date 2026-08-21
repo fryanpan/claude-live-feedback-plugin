@@ -5663,6 +5663,91 @@ body.composer-open #editor .ProseMirror ::selection {
   color: #1b1f23;
 }
 
+/* ================= MARKDOWN FIELD =================
+   Every composer is a markdown editor (approved design, review-flow-mock-v1,
+   design point 4). `attachMarkdownField` (md-field.ts) wraps a composer's
+   textarea in `.md-field` — box, then the quiet affordance row, then a
+   preview that fills in below as you type. The preview is hidden while the
+   box is empty so an untouched composer stays one control tall: the iPad's
+   scarce axis is HEIGHT, and most composers on a screen are never typed
+   into. The wrapper is the flex child now, which is what keeps the row
+   composers (field and Send side by side, e.g. .hub-walk-answer) intact
+   while the preview stretches under the box rather than beside it. */
+
+.md-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+.md-field > textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.md-affordance {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.md-badge {
+  flex: 0 0 auto;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.md-hint {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.md-preview {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-panel);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 7px 11px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+/* Belt and braces: happy-dom honours the property, and a stylesheet that
+   loses this rule would leave an empty accent-barred box under every
+   untouched composer. */
+.md-preview[hidden] {
+  display: none;
+}
+.md-preview p {
+  margin: 0 0 6px;
+}
+.md-preview ul {
+  margin: 0 0 6px;
+  padding-left: 20px;
+}
+.md-preview code {
+  background: var(--bg-hover);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+.md-preview > :last-child {
+  margin-bottom: 0;
+}
+/* On a phone the cheat sheet is a second line under every composer; the
+   badge alone carries the affordance there. */
+@media (max-width: 720px) {
+  .md-hint {
+    display: none;
+  }
+}
+
 /* ================= TOAST ================= */
 
 #toast {

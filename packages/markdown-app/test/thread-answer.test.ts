@@ -196,3 +196,38 @@ describe('the full item interface in the carrying thread', () => {
     expect(container.querySelector('.thread-answer-undo')).toBeNull();
   });
 });
+
+/**
+ * Design point 4 (approved design, review-flow-mock-v1): the doc thread's
+ * reply/answer box is the same markdown editor as every other composer —
+ * affordance row, preview that fills in as you type, empty again on send.
+ */
+describe('the reply composer is a markdown field', () => {
+  it('carries the affordance and previews what you type', () => {
+    const { panel, container } = mountPanel();
+    panel.setThreads([makeThread([comment(alice, 'This paragraph reads oddly.')])]);
+    panel.setActive('t1');
+    const reply = container.querySelector('.thread-reply') as HTMLElement;
+    expect(reply.querySelector('.md-affordance .md-badge')?.textContent).toBe('Markdown');
+    const ta = reply.querySelector('textarea') as HTMLTextAreaElement;
+    const preview = reply.querySelector('.md-preview') as HTMLElement;
+    expect(preview.hidden).toBe(true);
+    ta.value = '**two hops**';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(preview.hidden).toBe(false);
+    expect(preview.innerHTML).toContain('<strong>two hops</strong>');
+  });
+
+  it('a send empties the preview with the box', () => {
+    const { panel, container } = mountPanel();
+    panel.setThreads([makeThread([comment(bot, 'Which way?', ask())])]);
+    panel.setActive('t1');
+    const ta = container.querySelector('.thread-reply textarea') as HTMLTextAreaElement;
+    ta.value = 'Alphabetical, **final**.';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    replyWith(container, 'Alphabetical, **final**.');
+    expect(ta.value).toBe('');
+    const preview = container.querySelector('.thread-reply .md-preview') as HTMLElement;
+    expect(preview.hidden).toBe(true);
+  });
+});
