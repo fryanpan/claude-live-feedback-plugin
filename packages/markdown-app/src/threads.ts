@@ -361,9 +361,11 @@ export class ThreadPanel {
    * reply/resolve/reopen/re-anchor behave identically everywhere instead of
    * a second implementation drifting out of sync. Public on purpose.
    *
-   * Four rows, and the middle two are *slots* holding two faces each:
+   * Four rows (five when a decision is waiting), and the middle two are
+   * *slots* holding two faces each:
    *
    * ```
+   * .thread-flag-row  DECISION NEEDED          (only on a decision thread)
    * .thread-head    ● Alice · orphan                              ›
    * .thread-slot.slot-a   topic line          ⇄  the opening message
    * .thread-slot.slot-b   who + discussion    ⇄  the replies + reply box
@@ -402,6 +404,8 @@ export class ThreadPanel {
     const pending = pendingDeclaration(t);
     const itemComment = pending ?? latestDeclaredComment(t.comments);
 
+    const flagRow = this.decisionRow(t);
+    if (flagRow) el.appendChild(flagRow);
     el.appendChild(this.head(t, status));
     el.appendChild(this.slotA(t, summary.topic, itemComment?.id));
     el.appendChild(this.slotB(t, summary, status, { pending, itemComment, pendingReply }));
@@ -423,6 +427,39 @@ export class ThreadPanel {
     });
 
     return el;
+  }
+
+  /**
+   * Row 0, and only when there is a decision on the thread: why this card is
+   * in the reader's queue at all.
+   *
+   * A decision is the one thing in a thread a reader must not scroll past, and
+   * the folded card said nothing about it — the kind chip lives inside the item
+   * card, on the detail face, `inert` and invisible until the thread is opened.
+   *
+   * Its OWN row rather than a chip in the head, because the head is a flex row
+   * inside a 300px column: measured in the field at 1180px, a ~115px chip
+   * beside the name clipped the name to about seven characters, and two
+   * different askers came out as the same truncated string. A flag that costs
+   * you the identity of whoever is waiting has taken away more than it gave.
+   * Above both slots either way, so it is there folded and expanded alike and
+   * expanding never rebuilds or moves it.
+   */
+  private decisionRow(t: Thread): HTMLElement | null {
+    const decision = threadDecision(t);
+    if (decision === 'none') return null;
+    const row = div('thread-flag-row');
+    const flag = span('thread-decision-flag');
+    const pending = decision === 'pending';
+    if (!pending) flag.classList.add('is-answered');
+    flag.textContent = pending ? 'Decision needed' : 'Decision';
+    // The colour alone is not the message — it says nothing to a screen
+    // reader and nothing to anyone who cannot separate the two swatches.
+    flag.title = pending
+      ? 'This thread is waiting on a decision'
+      : 'This thread carries a decision that has been answered';
+    row.appendChild(flag);
+    return row;
   }
 
   /** Row 1: identity. The attribution for the OPENING MESSAGE and nothing
@@ -452,25 +489,6 @@ export class ThreadPanel {
       who.appendChild(tag);
     }
     head.appendChild(who);
-
-    // A decision is the one thing in a thread a reader must not scroll past,
-    // and the folded card said nothing about it: the kind chip lives inside
-    // the item card, which is on the detail face — `inert` and invisible until
-    // the thread is opened. In the head row, so it is there in BOTH states and
-    // expanding never rebuilds or moves it.
-    const decision = threadDecision(t);
-    if (decision !== 'none') {
-      const flag = span('thread-decision-flag');
-      const pending = decision === 'pending';
-      if (!pending) flag.classList.add('is-answered');
-      flag.textContent = pending ? 'Decision needed' : 'Decision';
-      // The colour alone is not the message — it says nothing to a screen
-      // reader and nothing to anyone who cannot separate the two swatches.
-      flag.title = pending
-        ? 'This thread is waiting on a decision'
-        : 'This thread carries a decision that has been answered';
-      head.appendChild(flag);
-    }
 
     const lineLabel = this.opts.threadLineLabel?.(t.id);
     if (lineLabel) {

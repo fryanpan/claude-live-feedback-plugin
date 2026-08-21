@@ -5064,11 +5064,20 @@ body.threads-resizing {
 .thread-tag {
   color: var(--fg-muted);
 }
-/* "Decision needed" on the head row — outside both folding slots, so a reader
-   scanning the column sees it without opening anything. The same amber tone
-   tokens as `.thread-item-k-decision` inside the opened item card, because it
-   is the same fact stated one fold earlier. Never wraps and never shrinks: it
-   is the thing the row exists to say, so the author name clips first. */
+/* "Decision needed", on its own row above the head — outside both folding
+   slots, so a reader scanning the column sees it without opening anything.
+
+   Its own row and not a chip beside the name: the head is a flex row in a
+   300px column, and sharing it clipped the author to about seven characters at
+   1180px, which is where two different askers stopped being distinguishable.
+   ~18px, and only on the cards that carry a decision. */
+.thread-flag-row {
+  display: flex;
+  margin-bottom: 4px;
+}
+/* The same amber tone tokens as `.thread-item-k-decision` inside the opened
+   item card, because it is the same fact stated one fold earlier. Sized to its
+   text rather than to the row, so it reads as a chip and not as a banner. */
 .thread-decision-flag {
   flex: 0 0 auto;
   font-size: 10px;

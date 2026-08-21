@@ -11,8 +11,9 @@ import { ThreadPanel } from '../src/threads.ts';
  * invisible until the thread is opened. So a decision waiting on somebody
  * looked exactly like any other comment in the column.
  *
- * The flag sits in `.thread-head`, which is outside both folding slots — so it
- * is there in both states and expanding never rebuilds or moves it.
+ * The flag sits on its own row above `.thread-head`, outside both folding
+ * slots — so it is there in both states, expanding never rebuilds or moves it,
+ * and it shares no horizontal space with the author's name.
  */
 
 const alice: User = { id: 'u1', name: 'Alice', kind: 'known', color: '#2e7dd7' };
@@ -95,11 +96,29 @@ describe('the decision flag', () => {
     expect(flag?.classList.contains('is-answered')).toBe(true);
   });
 
-  it('sits in the head row, so it survives the fold', () => {
+  it('sits outside both slots, so it survives the fold', () => {
+    const card = render(thread([comment('Which one?', decisionPayload())]));
+    expect(flagOf(card)?.closest('.thread-face')).toBe(null);
+  });
+
+  // Measured in the field at 1180px: the flag shared the head row with the
+  // author, and a ~115px chip inside a 300px column clipped the name to about
+  // seven characters. Two people asking for two different decisions rendered
+  // as the same truncated string, so the column could no longer say WHO was
+  // waiting — which is most of what a decision flag is for.
+  it('gets its own row, so it cannot squeeze the author name', () => {
     const card = render(thread([comment('Which one?', decisionPayload())]));
     const flag = flagOf(card);
-    expect(flag?.closest('.thread-head')).not.toBe(null);
-    expect(flag?.closest('.thread-face')).toBe(null);
+    expect(flag?.closest('.thread-head')).toBe(null);
+    expect(flag?.parentElement?.classList.contains('thread-flag-row')).toBe(true);
+    // Above the identity line rather than below it: the reader meets the
+    // reason the card is in their queue before the name attached to it.
+    expect(flag?.parentElement?.nextElementSibling?.classList.contains('thread-head')).toBe(true);
+  });
+
+  it('adds no row to a thread that carries no decision', () => {
+    const card = render(thread([comment('Looks good to me')]));
+    expect(card.querySelector('.thread-flag-row')).toBe(null);
   });
 
   it('is announced, not left as a bare colour', () => {
