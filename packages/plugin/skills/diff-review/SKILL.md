@@ -66,9 +66,12 @@ reviewer navigates everything from the all-files sidebar, files open lazily
 (markdown editable, source read-only). Works on plain folders and fresh
 repos with no commits; `bind_folder` is an alias for this.
 
-Then hand the human the returned `entryUrl`, as a bare URL on its own line
-(no markdown around it). The file tree inside the page navigates to every
-other changed file.
+Then hand the human the returned `entryUrl`. Format it for wherever you are
+putting it: an inline relative link when it goes on a task or a thread, bare
+on its own line when terminal chat is the only surface you have. The rule is
+written out once, under "Use Links Effectively" in
+`claude-workspaces:working-in-a-workspace`. The file tree inside the page
+navigates to every other changed file.
 
 ## Big or noisy diffs
 

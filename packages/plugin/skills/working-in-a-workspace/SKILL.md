@@ -56,3 +56,4 @@ Someone who was not in the conversation should be able to see a task, know why i
 - Each resource (task, workspace, document, mockup, folder diff) has a unique identifier and URL.
 - When you share links in a workspace, use relative URLs and make them inline using appropriate link text instead of the Raw URL
   - e.g. `[this link](/review/board-skill-one-row-per-pass?thread=nsk4yl4m6sqn)`
+- In terminal chat, send the absolute URL bare on its own line, with no markdown around it — autolinkers mangle a wrapped URL.
