@@ -532,6 +532,12 @@ export class TaskProjection {
       // it already rides agent.attached on the visitor-facing SSE feed.
       ...(ws.leadAgentId !== undefined ? { leadAgentId: ws.leadAgentId } : {}),
       ...(ws.leadAgentSince !== undefined ? { leadAgentSince: ws.leadAgentSince } : {}),
+      // The board has been stood down. Conditional like the lead above and
+      // for the same reason — the refresh deletes projected keys absent from
+      // this object, so un-retiring removes the key and the badge goes away
+      // without anything having to clear it.
+      ...(ws.retiredAt !== undefined ? { retiredAt: ws.retiredAt } : {}),
+      ...(ws.retiredReason !== undefined ? { retiredReason: ws.retiredReason } : {}),
       // A new goal band nobody has re-looked at the bucket against. Its own
       // key for the same reason it has its own sidecar: the two asks have
       // different baselines and different answers, so folding it into the

@@ -154,6 +154,11 @@ export interface HubWorkspaceInfo {
   /** A goal band the lead agent has not re-looked at the bucket against yet.
    *  Absent = none waiting; the board never infers one. */
   pendingBucketReview?: PendingBucketReviewView;
+  /** When this board was retired — present iff it was. Absent = live; the
+   *  board never infers a retirement, the same way it never guesses a lead. */
+  retiredAt?: number;
+  /** What the person who retired it said, shown on the badge's tooltip. */
+  retiredReason?: string;
   createdAt: number;
 }
 

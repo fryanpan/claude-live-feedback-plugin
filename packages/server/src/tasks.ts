@@ -197,7 +197,86 @@ export interface HubWorkspace {
   leadAgentId?: string;
   /** When the current lead took the seat. */
   leadAgentSince?: number;
+  /**
+   * When this board was RETIRED — present iff it is. A retired board stops
+   * ranking on the workspace list, refuses new tasks, and says so to any
+   * agent that reads or attaches to it. Everything it holds survives
+   * untouched: no file is moved, renamed or removed, and un-retiring is a
+   * second write of this one field rather than a restore.
+   *
+   * That is deliberate and it is the constraint the feature was asked for
+   * under. `deleteWorkspace` is the hard path — it `rmSync`s the tasks
+   * sidecar and the events log — and CLAUDE.md's project-wide rule is that a
+   * removal must be reversible. Retiring is the reversible middle that did
+   * not exist: before it, the only way to stand a stale board down was to
+   * rewrite its north star to a banner, which stops nothing.
+   *
+   * A TIMESTAMP rather than a boolean because "when" is the question anyone
+   * asks next, and because an absent field and `false` would otherwise be two
+   * spellings of live. `isRetired` is the one reader.
+   */
+  retiredAt?: number;
+  /** Who retired it — the audit answer to "who stood this down". */
+  retiredBy?: TaskActor;
+  /** Free text the operator left, replayed verbatim in every refusal and
+   *  notice: an agent told only "this board is retired" has nowhere to go,
+   *  and the reason is usually the name of the board that replaced it. */
+  retiredReason?: string;
   createdAt: number;
+}
+
+/**
+ * Is this board stood down? The single reader of `retiredAt`, so the
+ * absent/false/0 question is answered in one place rather than at each of the
+ * dozen enumeration sites that now ask it.
+ */
+export function isRetired(workspace: HubWorkspace): boolean {
+  return workspace.retiredAt !== undefined;
+}
+
+/** The reason clause, or empty — factored out so the refusal and the notice
+ *  can never disagree about whether there was one. */
+function retiredBecause(workspace: HubWorkspace): string {
+  return workspace.retiredReason ? ` Reason given: ${workspace.retiredReason}.` : '';
+}
+
+/**
+ * Why a write to a retired board was refused, written to land verbatim in an
+ * agent's context. It names the board, replays the operator's reason, and
+ * states the two ways forward — because a refusal an agent cannot act on
+ * produces a retry loop or a giving-up, and both look like the tool is broken.
+ */
+export function retiredRefusal(workspace: HubWorkspace): string {
+  return (
+    `"${workspace.name}" (${workspace.id}) is RETIRED and is not taking new work.` +
+    `${retiredBecause(workspace)} Nothing on it was deleted — every task, doc and thread ` +
+    'is still there to read. File this on the board that replaced it, or un-retire this ' +
+    'one first if it is the live board after all.'
+  );
+}
+
+/** What an agent reading or attaching to a retired board is told. */
+export function retiredNotice(workspace: HubWorkspace): RetiredNotice {
+  return {
+    since: workspace.retiredAt ?? 0,
+    ...(workspace.retiredReason ? { reason: workspace.retiredReason } : {}),
+    notice:
+      `This board is RETIRED — it is not ranked and takes no new work.${retiredBecause(workspace)} ` +
+      'Everything on it survives and is readable; if this is the board you meant to work, ' +
+      'un-retire it before filing anything.',
+  };
+}
+
+/**
+ * The key two board names are THE SAME under.
+ *
+ * Case and surrounding whitespace are not how a person tells two boards
+ * apart, so a warning that only fired on an exact byte match would miss
+ * `Harbor-Relay` beside `harbor-relay` — which is the same lost night with a
+ * shift key involved.
+ */
+export function normalizeWorkspaceName(name: string): string {
+  return name.trim().toLowerCase();
 }
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
@@ -662,6 +741,12 @@ export type CreateTaskResult =
       ok: false;
       error:
         | 'workspace-not-found'
+        // The board has been stood down. Refused at the ONE choke point every
+        // filing path runs through — the batch route, the markdown import,
+        // promote-to-task and the voice fast path all land here — because
+        // "stops accepting new work" enforced per-route is a rule that holds
+        // until somebody adds the next route.
+        | 'workspace-retired'
         | 'unknown-goal'
         | 'unknown-after'
         | 'unknown-after-enforce'
@@ -1070,8 +1155,40 @@ export type AttachAgentResult =
        *  lead is the addressee for goal-edit re-triage, so a fresh context
        *  needs to know which it is without a second call. */
       lead: boolean;
+      /** This board has been stood down. Present iff retired, and carried in
+       *  the attach result for the same reason the queues are: it is the one
+       *  payload a fresh session is guaranteed to read. `notice` is written
+       *  to land verbatim in an agent's context. */
+      retired?: RetiredNotice;
+      /**
+       * This agent leads ANOTHER live board with the same name.
+       *
+       * The whole of the 2026-08-19 incident in one field: two boards, one
+       * name, one lead agent, different goal lists, and nothing anywhere that
+       * said so. Lead-only — a bystander attaching is not the one who will
+       * pick the wrong board — and computed over live boards only, so
+       * retiring one of the pair clears it.
+       */
+      leadNameConflicts?: LeadNameConflicts;
     }
   | { ok: false; error: 'workspace-not-found' };
+
+/** What an agent is told when it reads a board that has been stood down. */
+export interface RetiredNotice {
+  /** When it was retired. */
+  since: number;
+  reason?: string;
+  /** Prose, because the reader is a language model with no schema for this
+   *  and one sentence it can act on beats a flag it has to interpret. */
+  notice: string;
+}
+
+export interface LeadNameConflicts {
+  /** The other live boards this agent leads under the same name. */
+  boards: SameNamedWorkspace[];
+  /** Prose naming the boards, for the same reason as `RetiredNotice`. */
+  notice: string;
+}
 
 export type HeartbeatResult =
   | {
@@ -1376,6 +1493,38 @@ export interface WorkspaceLeadChangedEvent {
   ts: number;
 }
 
+/**
+ * A board was stood down, or brought back. Its own event type rather than a
+ * flavour of `goals_changed`: the activity view's reader wants "this board
+ * stopped being worked" as a row, and the projection repaints the badge off
+ * it. `retired: false` is the un-retire — one event, both directions, so a
+ * subscriber cannot handle the standing-down and miss the return.
+ */
+export interface WorkspaceRetiredChangedEvent {
+  type: 'workspace.retired_changed';
+  workspaceId: string;
+  retired: boolean;
+  /** Only ever present on the retiring half. */
+  reason?: string;
+  actor: TaskActor;
+  ts: number;
+}
+
+/**
+ * The board's name changed. `oldName` rides along because the name is how
+ * people and agents refer to a board in every surface OUTSIDE it — a chat
+ * message, a skill, another board's task body — so an audit row that only
+ * carries the new one cannot answer "which board is this".
+ */
+export interface WorkspaceRenamedEvent {
+  type: 'workspace.renamed';
+  workspaceId: string;
+  oldName: string;
+  name: string;
+  actor: TaskActor;
+  ts: number;
+}
+
 export interface WorkspaceGoalsChangedEvent {
   type: 'workspace.goals_changed';
   workspaceId: string;
@@ -1475,6 +1624,8 @@ export type TaskStoreEvent =
   | DecisionAnswerWithdrawnEvent
   | DecisionInfoRequestedEvent
   | WorkspaceLeadChangedEvent
+  | WorkspaceRetiredChangedEvent
+  | WorkspaceRenamedEvent
   | WorkspaceGoalsChangedEvent
   | AgentAttachedEvent
   | AgentDetachedEvent
@@ -1857,6 +2008,40 @@ export type SetGoalListResult =
        *  never saw, which is the exact case this refuses. */
       stranding: Array<{ id: string; title: string; openTasks: number; doneTasks: number }>;
     };
+
+/** One live board that shares a name with another — the pair a duplicate
+ *  warning is about, trimmed to what identifies it. */
+export interface SameNamedWorkspace {
+  workspaceId: string;
+  name: string;
+}
+
+export type SetWorkspaceRetiredResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when the board was already in the requested state — no event,
+       *  and the original `retiredAt` is left alone rather than restamped. */
+      changed: boolean;
+    }
+  | { ok: false; error: 'workspace-not-found' };
+
+export type RenameWorkspaceResult =
+  | {
+      ok: true;
+      workspace: HubWorkspace;
+      /** False when the trimmed name already matched — no event. */
+      changed: boolean;
+      /**
+       * OTHER live boards that now carry this name. Renaming into a collision
+       * is allowed — the operator may be halfway through a cleanup — but it
+       * is never silent, because two boards with one name is the whole
+       * incident this feature exists for. Absent when there are none;
+       * retired boards do not count, since standing one down is the fix.
+       */
+      sameName?: SameNamedWorkspace[];
+    }
+  | { ok: false; error: 'workspace-not-found' | 'empty-name' };
 
 export type RenameGoalResult =
   | {
@@ -2286,6 +2471,132 @@ export class TaskStore {
   }
 
   /**
+   * Stand a board down, or bring it back. The REVERSIBLE middle between a
+   * live board and `deleteWorkspace`.
+   *
+   * Nothing is written but this one field, and that is the design rather than
+   * an economy: the tasks sidecar is serialized wholesale, so the retirement
+   * rides along with everything it holds and un-retiring is a second write of
+   * the same field. There is no staging directory, no rename, no file to
+   * restore from — which means there is nothing that can half-fail and leave
+   * a board neither retired nor live.
+   *
+   * What retirement CHANGES is small and enumerable: the board stops ranking
+   * on the workspace list (it folds into a labelled, counted `Retired`
+   * section rather than vanishing — a cut list states what it cut), it
+   * refuses new tasks, and it says so on read and on attach. Everything
+   * already on it stays readable and its in-flight tasks stay transitionable,
+   * because freezing those would strand whatever was running when somebody
+   * retired the board and the only exit would be un-retiring it — which is
+   * the ambiguity the feature exists to remove.
+   */
+  setWorkspaceRetired(
+    workspaceId: string,
+    retired: boolean,
+    opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
+  ): SetWorkspaceRetiredResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+    // Already in the requested state: report it and stamp nothing. Restamping
+    // `retiredAt` would move the "since" every surface reports, so a second
+    // retire — which an agent re-running a cleanup makes by accident — would
+    // rewrite the board's history to say it was stood down just now.
+    if (isRetired(workspace) === retired) return { ok: true, workspace, changed: false };
+
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    const ts = Date.now();
+    // Cleared to `undefined` rather than deleted, which is the same thing to
+    // every reader here: `isRetired` and the projection both test `!==
+    // undefined`, and `JSON.stringify` drops an undefined-valued key entirely,
+    // so the sidecar holds no `retiredAt` at all and hydrate reads it as live.
+    // What must NOT happen is writing `null` — that is a present value and
+    // would read as retired forever.
+    const reason = retired ? opts.reason?.trim() : undefined;
+    workspace.retiredAt = retired ? ts : undefined;
+    workspace.retiredBy = retired ? actor : undefined;
+    workspace.retiredReason = reason ? reason : undefined;
+    this.scheduleSave(workspaceId);
+    this.emit({
+      type: 'workspace.retired_changed',
+      workspaceId,
+      retired,
+      ...(retired && workspace.retiredReason ? { reason: workspace.retiredReason } : {}),
+      actor,
+      ts,
+    });
+    return { ok: true, workspace, changed: true };
+  }
+
+  /**
+   * Rename a board.
+   *
+   * `createWorkspace` set the name once and nothing changed it, so two boards
+   * could carry one name forever — and a name is how an agent picks. This is
+   * the other half of the fix: retiring stands the stale one down, renaming
+   * tells the two apart while both are live.
+   *
+   * The rename is not gated on uniqueness. Refusing a duplicate would block
+   * the legitimate middle of a cleanup (rename A, then rename B) and would
+   * not undo the duplicates already on disk. Instead the result NAMES the
+   * boards that now share the name, so a caller that collided finds out from
+   * the call rather than from a lost night.
+   */
+  renameWorkspace(
+    workspaceId: string,
+    name: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): RenameWorkspaceResult {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const workspace = state.workspace;
+    const next = name.trim();
+    if (next.length === 0) return { ok: false, error: 'empty-name' };
+
+    const sameName = this.liveWorkspacesNamed(next, { exclude: workspaceId });
+    if (next === workspace.name) {
+      return { ok: true, workspace, changed: false, ...(sameName.length > 0 ? { sameName } : {}) };
+    }
+    const oldName = workspace.name;
+    workspace.name = next;
+    this.scheduleSave(workspaceId);
+    this.emit({
+      type: 'workspace.renamed',
+      workspaceId,
+      oldName,
+      name: next,
+      actor: {
+        id: opts.actor.id,
+        name: opts.actor.name,
+        kind: classifyActor(opts.actor),
+      },
+      ts: Date.now(),
+    });
+    return { ok: true, workspace, changed: true, ...(sameName.length > 0 ? { sameName } : {}) };
+  }
+
+  /**
+   * Every LIVE board carrying this name, minus one. Retired boards are
+   * deliberately not counted: standing a duplicate down is exactly the fix,
+   * so counting it would leave the operator doing the right thing and being
+   * told nothing changed.
+   */
+  private liveWorkspacesNamed(name: string, opts: { exclude: string }): SameNamedWorkspace[] {
+    const key = normalizeWorkspaceName(name);
+    const out: SameNamedWorkspace[] = [];
+    for (const state of this.workspaces.values()) {
+      const ws = state.workspace;
+      if (ws.id === opts.exclude || isRetired(ws)) continue;
+      if (normalizeWorkspaceName(ws.name) === key) out.push({ workspaceId: ws.id, name: ws.name });
+    }
+    return out;
+  }
+
+  /**
    * Hand the board's lead-agent seat to `leadAgentId`. Reassignment is a
    * first-class operation rather than a side effect of attaching, because
    * "who is responsible" outlives any one session: the agent that holds it
@@ -2519,6 +2830,12 @@ export class TaskStore {
   createTask(workspaceId: string, opts: CreateTaskOpts): CreateTaskResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
+    // A retired board takes no new work. Checked before anything else is
+    // validated so the caller gets the reason it can act on rather than a
+    // goal-id complaint about a board it should not be filing to at all.
+    if (isRetired(state.workspace)) {
+      return { ok: false, error: 'workspace-retired', message: retiredRefusal(state.workspace) };
+    }
 
     const goal = opts.goal ?? CHORES_GOAL_ID;
     if (!this.goalIdExists(state.workspace, goal)) {
@@ -5018,6 +5335,11 @@ export class TaskStore {
     // the lead's next attach — otherwise they are "delivered" into a payload
     // that has no contract to act on them.
     const queuedVoice = lead ? this.drainVoiceQueue(workspaceId, { freshProcess }) : undefined;
+    // Computed after the seat claim above: an agent that just took an empty
+    // seat holds it now, and the conflict is exactly as real for it.
+    const leadNameConflicts = lead
+      ? this.leadNameConflictsFor(workspaceId, opts.agentId)
+      : undefined;
     // Emitted LAST, after every state change above: the projection refreshes
     // off this event, so an earlier emit would repaint the board with a
     // pending re-triage this very call just drained.
@@ -5042,6 +5364,49 @@ export class TaskStore {
       ...(pendingBucketReview ? { pendingBucketReview } : {}),
       ...(taskReviews !== undefined && taskReviews.length > 0 ? { taskReviews } : {}),
       lead,
+      ...(isRetired(state.workspace) ? { retired: retiredNotice(state.workspace) } : {}),
+      ...(leadNameConflicts ? { leadNameConflicts } : {}),
+    };
+  }
+
+  /**
+   * Other LIVE boards this agent leads under the same name as this one.
+   *
+   * The 2026-08-19 incident is detectable here and was reported nowhere: two
+   * boards named the same, led by the same agent, with different goal lists.
+   * The session read whichever it asked for and lost a night.
+   *
+   * Lead-gated on purpose. A bystander attaching to one of a pair is not the
+   * one who will pick wrong — the lead is, because the lead is the addressee
+   * for everything that says what to work on next. And computed over live
+   * boards only, so retiring one of the pair clears the warning: the fix has
+   * to visibly fix it, or the operator does the right thing and is told
+   * nothing changed.
+   */
+  private leadNameConflictsFor(
+    workspaceId: string,
+    agentId: string,
+  ): LeadNameConflicts | undefined {
+    const ws = this.workspaces.get(workspaceId)?.workspace;
+    if (!ws || ws.leadAgentId !== agentId || isRetired(ws)) return undefined;
+    const key = normalizeWorkspaceName(ws.name);
+    const boards: SameNamedWorkspace[] = [];
+    for (const state of this.workspaces.values()) {
+      const other = state.workspace;
+      if (other.id === workspaceId || isRetired(other)) continue;
+      if (other.leadAgentId !== agentId) continue;
+      if (normalizeWorkspaceName(other.name) !== key) continue;
+      boards.push({ workspaceId: other.id, name: other.name });
+    }
+    if (boards.length === 0) return undefined;
+    const ids = boards.map((b) => b.workspaceId).join(', ');
+    return {
+      boards,
+      notice:
+        `You lead ${boards.length + 1} live boards named "${ws.name}". You are attached to ` +
+        `${workspaceId}; the other${boards.length === 1 ? '' : 's'}: ${ids}. Two boards with ` +
+        'one name is how a session works the stale one for a night — read the goal lists, ' +
+        'then rename or retire whichever is not the live board.',
     };
   }
 

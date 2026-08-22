@@ -130,7 +130,10 @@ import {
   TaskStore,
   eventsLogPath,
   isAttachmentRuntime,
+  isRetired,
   isValidRef,
+  retiredNotice,
+  retiredRefusal,
   taskChip,
 } from './tasks.ts';
 import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
@@ -2808,6 +2811,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               name: w.name,
               docCount: w.docIds.length,
               createdAt: w.createdAt,
+              // Present only when true, so a client that has never heard of
+              // retirement reads exactly what it read before, and one that
+              // has can filter on the key's presence.
+              ...(isRetired(w) ? { retired: true, retiredAt: w.retiredAt } : {}),
             })),
           });
         }
@@ -2833,6 +2840,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // "nobody has picked this up" is visible work on the board rather
             // than a silent gap.
             pendingBucketReview: taskStore.getPendingBucketReview(workspaceId),
+            // The board has been stood down. Present only when it has, and
+            // carrying prose rather than a flag, because the reader is
+            // usually an agent deciding whether to work here and a boolean
+            // gives it nothing to act on.
+            ...(isRetired(workspace) ? { retired: retiredNotice(workspace) } : {}),
           });
         }
         // The human's queue, to the board's agent-side `next` below: every
@@ -2940,7 +2952,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? { staleAfterMs: opts.premiseStaleAfterMs }
               : {}),
           });
-          return j(200, { workspaceId, tasks: rows });
+          // The queue still ranks — a retired board's in-flight work is
+          // finishable — but the caller is told what it is looking at BEFORE
+          // it picks a row. This is the surface an agent hits when it asks
+          // "what should I do next", so silence here is the lost night.
+          return j(200, {
+            workspaceId,
+            tasks: rows,
+            ...(isRetired(workspace) ? { retired: retiredNotice(workspace) } : {}),
+          });
         }
         // Activity view (§3.9): the per-workspace events.jsonl audit log,
         // read back as rows. This is the surface where the after-the-fact
@@ -3007,6 +3027,54 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               'reorder_goals to rank them, and set_task_goal to place work under one. Nothing ' +
               'was written by this call.',
           });
+        }
+        // retire_workspace / unretire_workspace: stand a board down, or bring
+        // it back. Deliberately NOT a flag on DELETE — that route rmSyncs the
+        // tasks sidecar and the events log, and this one writes a single
+        // field on a record that is already serialized wholesale, so nothing
+        // it does needs undoing beyond writing the field again.
+        const wsRetiredMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/retired$/);
+        if (wsRetiredMatch && req.method === 'PUT') {
+          const workspaceId = decodeURIComponent(wsRetiredMatch[1] ?? '');
+          const body = await safeJson(req);
+          const retired = body?.retired;
+          // Explicit both ways. A missing field defaulting to `true` would
+          // make an empty body retire a board, which is the one direction
+          // that must never happen by accident.
+          if (typeof retired !== 'boolean') {
+            return j(400, { error: 'retired must be true or false' });
+          }
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const reason = typeof body?.reason === 'string' ? body.reason : undefined;
+          const res = taskStore.setWorkspaceRetired(workspaceId, retired, {
+            actor: author,
+            ...(reason !== undefined ? { reason } : {}),
+          });
+          if (!res.ok) return j(404, res);
+          // The store emits, but the projection reads the workspace record
+          // rather than the event payload, so the board room needs telling
+          // that the record moved — otherwise the badge appears only when
+          // some unrelated mutation next touches this workspace, which on a
+          // board somebody just retired is never.
+          taskProjection.ensureWorkspace(workspaceId);
+          return j(200, res);
+        }
+        // rename_workspace. The name was set once at creation and nothing
+        // changed it, which is how two live boards ended up sharing one — and
+        // a name is how an agent picks which to work.
+        const wsBoardRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/rename$/);
+        if (wsBoardRenameMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsBoardRenameMatch[1] ?? '');
+          const body = await safeJson(req);
+          const name = body?.name;
+          if (typeof name !== 'string') return j(400, { error: 'name required' });
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.renameWorkspace(workspaceId, name, { actor: author });
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(workspaceId);
+          return j(200, res);
         }
         // set_workspace_lead: hand the board's lead-agent seat to someone
         // else. A standing assignment, not a session fact — the lead may be
@@ -3214,8 +3282,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // An unknown workspace is a 404 before anything about the task is
           // judged — otherwise a typo'd id comes back as a complaint about
           // the body, and the caller fixes the wrong thing.
-          if (!taskStore.getWorkspace(workspaceId)) {
+          const targetBoard = taskStore.getWorkspace(workspaceId);
+          if (!targetBoard) {
             return j(404, { error: 'workspace-not-found' });
+          }
+          // A retired board takes no new work, and it says so about the BOARD
+          // rather than about the body — a caller told its title is fine and
+          // its goal is unknown fixes the wrong thing. `createTask` refuses
+          // this too (it is the choke point every filing path runs through);
+          // answering here is what turns N identical row failures into one
+          // sentence a caller can act on.
+          if (isRetired(targetBoard)) {
+            return j(409, { error: 'workspace-retired', message: retiredRefusal(targetBoard) });
           }
           // One reading of a create body, shared with the batch route below.
           const parsed = parseTaskCreate(body, authorFor(body?.author));
@@ -3283,8 +3361,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsTasksBatchMatch && req.method === 'POST') {
           const workspaceId = decodeURIComponent(wsTasksBatchMatch[1] ?? '');
           const body = await safeJson(req);
-          if (!taskStore.getWorkspace(workspaceId)) {
+          const batchBoard = taskStore.getWorkspace(workspaceId);
+          if (!batchBoard) {
             return j(404, { error: 'workspace-not-found' });
+          }
+          // Whole-batch, before any row is read: on a retired board every row
+          // fails for the same reason, and a hundred copies of one sentence
+          // is not a better answer than the sentence.
+          if (isRetired(batchBoard)) {
+            return j(409, { error: 'workspace-retired', message: retiredRefusal(batchBoard) });
           }
           const rows = body?.tasks;
           if (!Array.isArray(rows) || rows.length === 0) {
@@ -6102,7 +6187,12 @@ function collectLandingWorkspaces(rooms: Rooms, taskStore: TaskStore): LandingWo
         if (thread.lastActivity > last) last = thread.lastActivity;
       }
     }
-    return { id: ws.id, name: ws.name, lastActivity: last };
+    return {
+      id: ws.id,
+      name: ws.name,
+      lastActivity: last,
+      ...(isRetired(ws) ? { retired: true } : {}),
+    };
   });
 }
 
@@ -6379,6 +6469,10 @@ function renderLandingProjectLink(p: LandingProjectLink): string {
 
 function renderLanding(model: LandingModel): string {
   const days = Math.round(model.windowMs / 86_400_000);
+  // Retired boards are NOT in this denominator. "Nothing active, 3 inactive
+  // below" has to mean three rows a reader can go and look at; counting
+  // deliberately stood-down boards in it would make the empty state overstate
+  // what is still live.
   const total = model.active.length + model.inactive.length;
   // A cut list states what it cut: the empty state names the denominator,
   // and the inactive fold carries its count — "An empty list is a clearance
@@ -6394,6 +6488,14 @@ function renderLanding(model: LandingModel): string {
       ? ''
       : `<details class="fold"><summary>Inactive workspaces <span class="count">${model.inactive.length}</span></summary>
 <ul>${model.inactive.map(renderLandingWorkspaceRow).join('')}</ul></details>`;
+  // Folded, not hidden — a retired board is still readable, which is the
+  // whole difference between retiring one and deleting it. The count is the
+  // denominator the empty state above deliberately leaves out.
+  const retired =
+    model.retired.length === 0
+      ? ''
+      : `<details class="fold"><summary>Retired workspaces <span class="count">${model.retired.length}</span></summary>
+<ul>${model.retired.map(renderLandingWorkspaceRow).join('')}</ul></details>`;
   // The review-doc index stays reachable — one fold of per-project links,
   // not a browser. The "hundreds of bound review items" live behind
   // /projects/<owner>, fetched only when somebody opens one.
@@ -6408,6 +6510,7 @@ function renderLanding(model: LandingModel): string {
 <div class="summary">Active in the last ${days} days, most recent first</div>
 ${active}
 ${inactive}
+${retired}
 ${projects}`,
   );
 }
