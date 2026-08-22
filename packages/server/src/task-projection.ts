@@ -249,6 +249,13 @@ export function projectTask(
     // gotten to.
     ...(task.parkedUntil !== undefined ? { parkedUntil: task.parkedUntil } : {}),
     ...(task.parkedReason !== undefined ? { parkedReason: task.parkedReason } : {}),
+    // Soft-deleted, by whom, and why. Conditional like everything else here,
+    // and the refresh deletes projected keys absent from this object — so a
+    // RESTORE removes the keys and the row rejoins its lane with nothing
+    // having to clear a flag. This is the field the browser filters lanes on.
+    ...(task.archivedAt !== undefined ? { archivedAt: task.archivedAt } : {}),
+    ...(task.archivedBy !== undefined ? { archivedBy: task.archivedBy } : {}),
+    ...(task.archiveReason !== undefined ? { archiveReason: task.archiveReason } : {}),
     links: task.links,
     ...(task.origin !== undefined ? { origin: task.origin } : {}),
     ...(task.quote !== undefined ? { quote: task.quote } : {}),
@@ -343,7 +350,10 @@ export class TaskProjection {
    */
   private recoverInterruptedDeletes(): void {
     for (const ws of this.tasks.listWorkspaces()) {
-      const taskIds = this.tasks.listTasks(ws.id).map((t) => t.id);
+      // Archived rows included: an archived task still OWNS a room file, and
+      // a recovery that skipped it would leave that file staged forever with
+      // nothing left to notice.
+      const taskIds = this.tasks.listTasks(ws.id, { includeArchived: true }).map((t) => t.id);
       this.unstageWorkspaceFiles(ws.id, taskIds);
     }
   }
@@ -488,7 +498,11 @@ export class TaskProjection {
       // Re-arm body rooms after a restart: state hydration ≠ binding
       // hydration, and without this the snapshot observer would be silently
       // missing on every rehydrated task room.
-      for (const t of this.tasks.listTasks(workspaceId)) this.ensureTaskBody(t);
+      // Archived rows included — an archived task's discussion is still
+      // readable, and its body room has to be armed to stay that way.
+      for (const t of this.tasks.listTasks(workspaceId, { includeArchived: true })) {
+        this.ensureTaskBody(t);
+      }
     }
     this.refresh(workspaceId);
   }
@@ -590,9 +604,15 @@ export class TaskProjection {
     // kind re-projects the moment the roster moves, rather than going stale
     // until something unrelated touches a task.
     const ownerKindOf = this.ownerKindReader(workspaceId);
+    // ARCHIVED ROWS ARE PROJECTED, deliberately, and the browser is what
+    // leaves them out of the lanes (`taskVisible`). The alternative — dropping
+    // them here — would mean the restore list, the ten-second Undo and the
+    // "N archived" count all needed a REST round trip to draw something the
+    // board already holds, and an archive would visibly evict the row from
+    // under the toast offering to put it back.
     const want = new Map(
       this.tasks
-        .listTasks(workspaceId)
+        .listTasks(workspaceId, { includeArchived: true })
         .map((t) => [t.id, projectTask(t, this.commentCount(t.id), ownerKindOf(t))]),
     );
     const pendingBucket = this.tasks.getPendingBucketReview(workspaceId);
