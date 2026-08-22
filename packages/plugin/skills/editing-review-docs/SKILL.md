@@ -179,34 +179,40 @@ create_review_doc({ docId: "schema-rfc",   path: "/abs/schema-rfc.md",   setId: 
 before using one. Calling `create_review_doc` again on an existing
 docId with a different `setId` re-tags it (handy for rebatching).
 
-## Cleaning up a doc you're done with
+## Retiring a doc you're done with
 
 Most review docs are short-lived: you bind a file, get a round of
-feedback over ~30 minutes, and then the doc is obsolete. **Delete it
+feedback over ~30 minutes, and then the doc is obsolete. **Retire it
 when you're done** instead of leaving it to linger in `list_docs`
 forever — orphaned docs pile up fast and make the review list useless.
 
 ```
-delete_doc({ docId: "auth-rfc" })
+archive_doc({ docId: "auth-rfc", reason: "feedback applied, PR merged" })
 ```
 
-What it does: drops the live doc, stops its sync, and removes the
-persisted state so it won't reload on the next server restart. The
-bound **source `.md` file is left untouched on disk** — only the
-review session goes away. Safe to call even if the source file was
-already deleted.
+What it does: takes the doc off the home page and off any board row,
+stops its sync and its file poll — and **keeps the document**. The
+`.ydoc` moves into the server's archive rather than being deleted, so
+every comment in it still feeds the activity analyses, and
+`unarchive_doc({ docId })` brings the whole thing back, threads and
+board links included. The bound **source `.md` file is left untouched
+on disk** either way. Open threads do not block it: archiving strands
+nothing, which is the difference that makes this the routine verb.
 
-**Guardrail — open threads block deletion.** If the doc still has open
-comment threads, `delete_doc` refuses with
-`{ ok: false, error: "has-open-threads", openThreads: N }`, because an
-open thread means someone is still waiting on that feedback. Either:
+Because it is reversible, you don't have to be sure. A doc that has
+been quiet for a day and *might* still be wanted is exactly the case
+to archive — one call brings it back if you were wrong. Use
+`list_archived_reviews` to see what is parked (archived docs come back
+under `docs`, reviews under `archived`).
 
-- resolve the threads first (`resolve_thread`) once you've addressed
-  them, then delete; or
-- pass `force: true` to delete anyway (`delete_doc({ docId, force: true })`)
-  when you know the threads are stale.
+Two neighbours worth knowing:
 
-If you're unsure whether a doc is still needed — e.g. it's been quiet
-for a day but might be waiting on the human — leave it. Don't
-force-delete something a human may still come back to; deleting the
-short-lived, clearly-finished ones is enough to keep the list clean.
+- **`archive_review({ setId, reason })`** for a whole diff review or
+  bound folder. `archive_doc` refuses a doc that belongs to one, with
+  `error: "review-member"` and the `setId` to call instead.
+- **`delete_doc({ docId })`** is the destructive one — it purges the
+  `.ydoc` the activity analyses are rebuilt from, and there is no
+  undo. It still carries the open-threads guardrail (`{ ok: false,
+  error: "has-open-threads", openThreads: N }`, overridable with
+  `force: true`). Reach for it only when you mean to destroy the
+  record, not as routine cleanup.
