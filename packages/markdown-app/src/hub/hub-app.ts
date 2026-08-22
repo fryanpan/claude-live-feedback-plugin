@@ -13,6 +13,7 @@ import {
   watchConnection,
   watchLiveSync,
 } from '../connection-state.ts';
+import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
@@ -237,11 +238,10 @@ function showToast(msg: string): void {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 3500);
 }
 
-const SVG = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"';
-const SVG_ENDS = 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
-
 /** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
- *  share and settings are new, for the top-right cluster. */
+ *  share and settings are new, for the top-right cluster. The shared
+ *  attributes and the mic come from `../icons.ts`, because the mic is mounted
+ *  by three surfaces and only one of them is a hub module. */
 const NAV_ICONS = {
   home: `<svg ${SVG} ${SVG_ENDS}><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>`,
   tasks: `<svg ${SVG} ${SVG_ENDS}><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>`,
@@ -307,7 +307,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <span class="hub-nav-icon" aria-hidden="true">${NAV_ICONS.collapse}</span><span class="hub-nav-label">Collapse</span>
         </button>
         <div class="hub-nav-dock" role="group" aria-label="Voice">
-          <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">🎙</button>
+          <button type="button" id="hub-mic" class="voice-mic" title="Hold to talk (or hold Space)" aria-label="Hold to talk">${MIC_ICON}</button>
           <div id="hub-voice" class="voice-indicator hidden" aria-live="polite"></div>
         </div>
       </nav>

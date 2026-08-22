@@ -62,6 +62,23 @@ describe('the dictation readout is wide enough to follow', () => {
     expect((vw / 100) * 430 + 16).toBeLessThanOrEqual(430);
   });
 
+  it('sizes itself from the sentence, so the cap above is not decorative', () => {
+    // The pair above is a CEILING, and a ceiling only bites something that
+    // wants to be taller. An absolutely positioned box with a `left` and no
+    // `width` is shrink-to-fit, whose upper bound is the room left in its
+    // containing block — the viewport while the mic floats, and the dock's own
+    // column once it is docked. `max-width` cannot raise that bound, so on the
+    // hub the two numbers above applied to nothing: measured 2026-08-21
+    // against a full sentence, the readout came out 45px wide and 978px tall
+    // in the collapsed rail — 49 lines of roughly one syllable, the top 248px
+    // of it above the viewport. `max-content` is what makes the sentence, not
+    // the column, decide.
+    expect(indicator).toMatch(/width:\s*max-content/);
+    // …stated on the SHARED rule, not on the docked copy. Every surface that
+    // mounts this element positions it against something narrow eventually.
+    expect(rule('.hub-nav-dock .voice-indicator')).not.toMatch(/width:\s*max-content/);
+  });
+
   it('lets the docked copy inherit the width rather than restating it', () => {
     // The hub docks the same element in its nav (`.hub-nav-dock`), where it is
     // wider than the rail on purpose. Two hand-kept copies of a width is how
