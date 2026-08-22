@@ -54,7 +54,25 @@
  * a task row (a comment, an answer). Taking only the first would nudge over
  * a live conversation; taking only the second would nudge the instant the
  * server came up.
+ *
+ * ── Why the stamps are on disk ──────────────────────────────────────────
+ *
+ * Everything above describes a map that used to live only in this process,
+ * which meant a DEPLOY undid all of it: prod restarts at every merge, and
+ * each restart handed every idle board a clean slate and re-fired one wake
+ * per board over facts their leads had already been told. That is the
+ * "signal carries no information" training above, delivered by the release
+ * process rather than by a timer.
+ *
+ * The stamp itself was already durable by construction — both halves are
+ * read off the store, which is why a fresh nudger over the same board
+ * computes a byte-identical string. So the fix is only somewhere to keep it:
+ * one small json in the data dir, loaded at construction, rewritten when the
+ * map changes. Best-effort in BOTH directions and deliberately so — a stamp
+ * file that cannot be read or written costs at most one duplicate wake,
+ * which is the cheaper failure by a wide margin.
  */
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 /** Fifteen minutes. Long enough that a lead mid-task is not interrupted,
  *  short enough that ready work does not sit overnight. */
@@ -121,7 +139,25 @@ export interface ReadyWorkNudgerOptions {
   send: (workspaceId: string, agentId: string, frame: NudgeFrame) => number;
   idleMs?: number;
   now?: () => number;
+  /**
+   * Where the armed stamps are kept between runs. Omitted → memory only,
+   * which is what every unit test that is not about persistence wants.
+   */
+  stampFile?: string;
 }
+
+/** The stamp file's shape. Versioned so a later format change can recognise
+ *  an older file rather than treating it as corrupt. */
+interface StampFile {
+  version: number;
+  stamps: Record<string, string>;
+}
+
+const STAMP_FORMAT_VERSION = 1;
+
+/** The data-dir filename the server uses. Exported so a test can assert the
+ *  file the server actually writes rather than a copy of its name. */
+export const READY_NUDGE_STAMP_FILENAME = 'ready-nudge-stamps.json';
 
 export class ReadyWorkNudger {
   private readonly opts: ReadyWorkNudgerOptions;
@@ -133,11 +169,18 @@ export class ReadyWorkNudger {
   /** The stamp each workspace was last nudged for. */
   private readonly armed = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  private readonly stampFile: string | null;
+  /** What the file already holds, so an unchanged map costs no write. `tick`
+   *  runs once a minute forever; rewriting a byte-identical file each time
+   *  would be the one part of this feature with an ongoing cost. */
+  private lastPersisted = '';
 
   constructor(opts: ReadyWorkNudgerOptions) {
     this.opts = opts;
     this.now = opts.now ?? Date.now;
     this.idleMs = opts.idleMs ?? READY_IDLE_DEFAULT_MS;
+    this.stampFile = opts.stampFile ?? null;
+    this.loadStamps();
   }
 
   /** Something happened on this board. Resets its idle clock, which is also
@@ -181,6 +224,7 @@ export class ReadyWorkNudger {
     // second frame follow this one fifteen minutes from now over the same
     // fact. It re-arms on the next real activity.
     this.armed.set(input.workspaceId, this.stampFor(board, ts));
+    this.saveStamps();
     if (!this.reachable(board.workspaceId, lead)) return;
     this.emit(board.workspaceId, lead, {
       event: REVIEW_ANSWERED_EVENT,
@@ -208,8 +252,11 @@ export class ReadyWorkNudger {
       this.considerBoard(board, now);
     }
     // Forget boards that are gone, so neither map outlives what it describes.
+    // The pruning has to reach the FILE too, or the durable copy grows for the
+    // life of the install while the in-memory one stays bounded.
     for (const key of this.armed.keys()) if (!live.has(key)) this.armed.delete(key);
     for (const key of this.observed.keys()) if (!live.has(key)) this.observed.delete(key);
+    this.saveStamps();
   }
 
   /** Arm the timer. Unref'd, so it can never hold a dying process open. */
@@ -288,6 +335,56 @@ export class ReadyWorkNudger {
       return this.opts.canReach(workspaceId, agentId);
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Read the stamps a previous run left. A file that cannot be read starts
+   * this run empty — never throws, and deliberately does NOT move the file
+   * aside the way `PushStore` does with a corrupt subscription list. The two
+   * are not comparable losses: a lost subscription is a device that stops
+   * being notified until somebody re-registers it, while a lost stamp is one
+   * extra wake that the next tick re-arms on its own.
+   */
+  private loadStamps(): void {
+    if (!this.stampFile || !existsSync(this.stampFile)) return;
+    try {
+      const parsed = JSON.parse(readFileSync(this.stampFile, 'utf8')) as Partial<StampFile>;
+      if (!parsed || typeof parsed.stamps !== 'object' || parsed.stamps === null) return;
+      for (const [workspaceId, stamp] of Object.entries(parsed.stamps)) {
+        // Row-level tolerance, matching the store next door: one hand-edited
+        // entry must not cost every other board its arming.
+        if (typeof stamp === 'string') this.armed.set(workspaceId, stamp);
+      }
+      this.lastPersisted = this.serializeStamps();
+    } catch {
+      this.armed.clear();
+    }
+  }
+
+  private serializeStamps(): string {
+    // Key order is the map's insertion order, which differs between a fresh
+    // load and a run that has re-armed boards — sorted, so the content compare
+    // above answers "did anything change" rather than "did anything move".
+    const stamps: Record<string, string> = {};
+    for (const key of Array.from(this.armed.keys()).sort()) {
+      stamps[key] = this.armed.get(key) as string;
+    }
+    const file: StampFile = { version: STAMP_FORMAT_VERSION, stamps };
+    return `${JSON.stringify(file, null, 2)}\n`;
+  }
+
+  /** Write the map back, when it has actually moved. Never throws: this runs
+   *  inside a timer tick, and a full disk must not stop the wakes. */
+  private saveStamps(): void {
+    if (!this.stampFile) return;
+    const next = this.serializeStamps();
+    if (next === this.lastPersisted) return;
+    try {
+      writeFileSync(this.stampFile, next);
+      this.lastPersisted = next;
+    } catch (err) {
+      console.error('[nudge] could not persist stamps:', err);
     }
   }
 

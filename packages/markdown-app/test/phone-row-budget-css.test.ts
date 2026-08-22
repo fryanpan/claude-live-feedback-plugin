@@ -173,6 +173,29 @@ describe('the phone task row', () => {
     expect(all.filter((i) => i > phone)).toHaveLength(1); // only this block's own
   });
 
+  /**
+   * The new chip and the budget it inherits. `parked` is a WORD badge like
+   * `due`, so it is hidden on a phone with the rest of the strip — a
+   * deliberate cost, not an oversight: on Bryan's iPad (1180x820, far above
+   * this block) and on any laptop the chip shows, and on a phone a parked row
+   * is title-only and its deferral lives one tap away in the panel's park
+   * note, exactly where the overdue mark went.
+   *
+   * What this pins is that it takes no exception and adds no LAYOUT, so the
+   * measured budget above is still the budget. A chip that grew a padding or
+   * a min-width here would move numbers that were taken in a browser and
+   * cannot be re-derived from the file.
+   */
+  it('gives the parked chip colour only, and no phone exception', () => {
+    const rule = /\n\.hub-badge-parked\s*\{([^}]*)\}/.exec(declarationsOnly(CSS))?.[1] ?? '';
+    expect(rule).not.toBe(''); // control: the chip has a rule at all
+    expect(rule).toMatch(/border-color|background/);
+    for (const layout of ['padding', 'margin', 'min-width', 'width', 'font-size', 'display']) {
+      expect(rule, `${layout} would move the measured phone budget`).not.toContain(layout);
+    }
+    expect(phoneRowBlock()).not.toContain('hub-badge-parked');
+  });
+
   it('leaves the wider row alone — this is a phone budget, not a redesign', () => {
     const outside = outsidePhoneBlock();
     // The base strip keeps the zero minimum that lets a wide badge strip
