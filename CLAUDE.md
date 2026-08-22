@@ -65,11 +65,23 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
     in `_archive/<setId>.review.json`. Sidecars travel WITH their `.ydoc`, and
     the backfill resolves a sidecar next to the file it just read (falling back
     to the data dir, because the ~174 hand-moved ydocs left theirs behind).
+    **0.1.93 adds the single-doc half** — `Rooms.archiveDoc` / `unarchiveDoc`,
+    reached from `archive_doc` / `unarchive_doc`, for the few hundred
+    free-standing docs (a `create_review_doc` markdown doc, a `bind_mock`
+    mockup) that belong to no review and so had no soft path at all. Manifest
+    at `_archive/<docId>.doc.json` — a different suffix from a review's, so
+    each listing enumerates its own kind. It REFUSES a doc that carries a
+    review id (`archive_review` owns those) and a `task:` / `ws:` id.
+    `list_archived_reviews` returns both kinds, under `archived` and `docs`.
   - `purgePersisted` (`rooms.ts`) is the hard path — `rmSync` on the `.ydoc`
     plus the private-meta sidecar. **`delete_review` and `delete_workspace(reviewId)`
     no longer reach it by default**: they archive, and only `purge:true` purges.
-    `delete_doc` and a BOARD delete still purge. Calling it is a decision,
-    never a default.
+    `delete_doc` and a BOARD delete still purge — deliberately unchanged in
+    0.1.93, because `delete_doc` also covers task bodies, where archiving is
+    the wrong act; narrowing it needs its own compatibility pass. What changed
+    is that a free-standing doc now HAS a soft path (`archive_doc`), so
+    reaching for `delete_doc` is a choice to destroy rather than the only verb
+    available. Calling it is a decision, never a default.
   - **The rule is about user content and history, not about transient files.**
     Pruning old client releases and cleaning up `.tmp`/staging paths are correct
     as hard deletes. Stated in this direction deliberately: a rule read too
