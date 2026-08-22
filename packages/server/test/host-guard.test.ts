@@ -304,6 +304,42 @@ describe('shareScopeAllows (workspace share)', () => {
     );
   });
 
+  describe('the same rule judges /api/reviews/<setId>/…', () => {
+    // The endpoints are called this now. The alias exists for callers that
+    // cannot restart, so a visitor must be able to reach EITHER spelling —
+    // and must be refused on either one for the same reasons.
+    it('allows the navigation and lazy-open endpoints', () => {
+      expect(shareScopeAllows('/api/reviews/ws-1/tree', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/grouped', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/threads', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/files', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/context-file', 'POST', WS, workspaceOf)).toBe(
+        true,
+      );
+      expect(shareScopeAllows('/api/reviews/ws-1/editable-file', 'POST', WS, workspaceOf)).toBe(
+        true,
+      );
+    });
+
+    it('BLOCKS a review the share does not cover', () => {
+      expect(shareScopeAllows('/api/reviews/ws-2/tree', 'GET', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-2/context-file', 'POST', WS, workspaceOf)).toBe(
+        false,
+      );
+    });
+
+    it('BLOCKS the mutating verbs and anything unlisted', () => {
+      // refresh and groups rewrite the review; delete destroys it. A visitor
+      // is a reviewer, and none of the three is a review action.
+      expect(shareScopeAllows('/api/reviews/ws-1/refresh', 'POST', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-1/groups', 'POST', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-1', 'DELETE', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-1/anything-new', 'GET', WS, workspaceOf)).toBe(
+        false,
+      );
+    });
+  });
+
   it('BLOCKS a method the endpoint does not offer', () => {
     expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'POST', WS, workspaceOf)).toBe(false);
     expect(shareScopeAllows('/api/workspaces/ws-1/context-file', 'GET', WS, workspaceOf)).toBe(

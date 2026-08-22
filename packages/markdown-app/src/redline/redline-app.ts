@@ -376,14 +376,11 @@ interface CompanionDoc {
 async function openCompanionDoc(ctx: MountContext): Promise<CompanionDoc | null> {
   let opened: { docId: string; meta?: { sourceUrl?: string } };
   try {
-    const res = await fetch(
-      `/api/workspaces/${encodeURIComponent(ctx.workspaceId)}/editable-file`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ relPath: ctx.relPath }),
-      },
-    );
+    const res = await fetch(`/api/reviews/${encodeURIComponent(ctx.workspaceId)}/editable-file`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ relPath: ctx.relPath }),
+    });
     if (!res.ok) return null;
     opened = (await res.json()) as { docId: string; meta?: { sourceUrl?: string } };
   } catch {

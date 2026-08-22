@@ -171,7 +171,7 @@ export async function renderDiffNav(
   // whether the fetched list actually needs a DOM rebuild. The active marker
   // itself already moved synchronously in the router's swap(), so this fetch
   // never delays the perceived navigation.
-  const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/grouped`).catch(
+  const res = await fetch(`/api/reviews/${encodeURIComponent(workspaceId)}/grouped`).catch(
     () => null,
   );
   const grouped =
@@ -293,7 +293,7 @@ export async function renderDiffNav(
         if (!relPath) return;
         a.classList.add('loading');
         try {
-          const r = await fetch(`/api/workspaces/${encodeURIComponent(wsId)}/context-file`, {
+          const r = await fetch(`/api/reviews/${encodeURIComponent(wsId)}/context-file`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ relPath }),
@@ -467,7 +467,7 @@ interface DirNode {
 /** Fetch the workspace's full file list (changed + unchanged). Returns null on
  *  any failure so the caller can distinguish "no data" from an empty repo. */
 async function fetchFiles(workspaceId: string): Promise<FilesResponse | null> {
-  const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`).catch(
+  const res = await fetch(`/api/reviews/${encodeURIComponent(workspaceId)}/files`).catch(
     () => null,
   );
   if (!res || !res.ok) return null;

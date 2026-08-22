@@ -149,7 +149,7 @@ export async function renderWorkspaceTree(
     // Re-fetch on every navigation; the shared signature below decides whether
     // the fetched tree actually needs a DOM rebuild (which resets scroll +
     // collapses folder state), or just an active-marker move.
-    const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
+    const res = await fetch(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
     if (!res.ok) return;
     const data = (await res.json()) as { tree: TreeDir };
     // Superseded while fetching (mount torn down, or a newer sidebar render

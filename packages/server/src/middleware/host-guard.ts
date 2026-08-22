@@ -407,11 +407,20 @@ export function shareScopeAllows(
   // `context-file` can open any of them for context — the same "Show All
   // Files" surface you see locally. Share a folder bind when you want the
   // visitor confined to a directory.
-  if (pathname.startsWith('/api/workspaces/')) {
+  //
+  // TWO PREFIXES, ONE RULE. `/api/reviews/<setId>/…` is what these endpoints
+  // are called now — a review is not a workspace, and the old name is the
+  // vocabulary this change exists to remove. `/api/workspaces/<id>/…` still
+  // answers because the callers are plugin bundles in sessions nobody can
+  // restart. Both spellings are judged here, by the same lines: a second rule
+  // for the alias would agree today and drift later, and the one that drifts
+  // open is a breach.
+  const navPrefix = ['/api/reviews/', '/api/workspaces/'].find((p) => pathname.startsWith(p));
+  if (navPrefix) {
     if (!target.workspaceId) return false;
-    const rest = pathname.slice('/api/workspaces/'.length);
+    const rest = pathname.slice(navPrefix.length);
     const slash = rest.indexOf('/');
-    if (slash < 0) return false; // bare /api/workspaces/<id> is DELETE-only
+    if (slash < 0) return false; // bare /api/<prefix>/<id> is DELETE-only
     if (!inWorkspaceScope(rest.slice(0, slash))) return false;
     const sub = rest.slice(slash + 1);
     if (method === 'GET')
