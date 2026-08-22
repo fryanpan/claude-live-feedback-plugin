@@ -94,7 +94,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.87';
+const PLUGIN_VERSION = '0.1.88';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -246,15 +246,19 @@ const server = new Server(
  * not ask for something, do not pass `review`, and your comment stays out of
  * the queue.
  *
- * `headline` and `why` are the two lines of the row, and the server REFUSES
- * an over-long or multi-line one rather than clipping it — a clipped headline
- * is exactly the unreadable row this replaces. Write them like a ticket
- * title, not like the first sentence of the explanation.
+ * `headline` and `why` are the two lines of the row. Their character budgets
+ * are aims, not gates: over-running one wraps the row and comes back as
+ * advice on the 200, because refusing bounced honest asks two words over
+ * budget at the exact moment an agent was routing one to the queue instead of
+ * to chat. What still refuses is a MISSING or multi-line headline/why — the
+ * row cannot be built without them, and clipping one is exactly the
+ * unreadable row this replaces. Write them like a ticket title, not like the
+ * first sentence of the explanation.
  */
 const REVIEW_ITEM_SCHEMA = {
   type: 'object',
   description:
-    "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
+    "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) only if headline/why are missing or multi-line. A field over its character budget FILES and comes back with advice — send the ask you have rather than a retry that shaves two words off it.",
   properties: {
     review_type: {
       type: 'string',
@@ -270,16 +274,18 @@ const REVIEW_ITEM_SCHEMA = {
     },
     headline: {
       type: 'string',
-      description: 'Line 1: WHAT needs review, as a ticket title. One line, ≤70 chars.',
+      description:
+        'Line 1: WHAT needs review, as a ticket title. One line; aim for ≤70 chars so it holds its line on a phone. Longer files and is reported back as a gap.',
     },
     why: {
       type: 'string',
-      description: 'Line 2: why it matters / what is blocked on it. One line, ≤90 chars.',
+      description:
+        'Line 2: why it matters / what is blocked on it. One line; aim for ≤90 chars. Longer files and is reported back as a gap — never trim a real reason to fit.',
     },
     lookFor: {
       type: 'string',
       description:
-        'What to look for — shown on the opened card, not on the row. ≤90 chars. Omitting it is accepted but reported back as a gap.',
+        'What to look for — shown on the opened card, not on the row. Aim for ≤90 chars. Omitting it, or running long, files and is reported back as a gap.',
     },
     detail: {
       type: 'string',
@@ -296,8 +302,15 @@ const REVIEW_ITEM_SCHEMA = {
             type: 'string',
             description: 'Stable id; the answer records which one was picked.',
           },
-          label: { type: 'string', description: '1-3 words, ≤28 chars. This is the button.' },
-          detail: { type: 'string', description: 'What choosing it costs or buys. ≤50 words.' },
+          label: {
+            type: 'string',
+            description:
+              'This is the button. Aim for 1-3 words and ≤28 chars; a fourth word files and is reported back as a gap.',
+          },
+          detail: {
+            type: 'string',
+            description: 'What choosing it costs or buys. Aim for ≤50 words; longer still files.',
+          },
         },
         required: ['id', 'label'],
       },
