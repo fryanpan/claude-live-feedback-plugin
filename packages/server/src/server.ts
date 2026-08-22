@@ -70,7 +70,7 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
-import { PushNotifier, reviewItemNotification } from './push-notify.ts';
+import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -350,6 +350,15 @@ export interface ServerOptions {
   markdownAppDistDir?: string | null;
   /** Absolute path to the demos dir (static HTML). */
   demosDir?: string | null;
+  /**
+   * Stands in for the call to the push service. Tests only.
+   *
+   * The seam exists because the link it covers is the one that cannot be
+   * checked any other way: every unit around it can pass while nothing ever
+   * calls the notifier, and the symptom of that is a notification nobody is
+   * waiting for and so nobody misses.
+   */
+  pushFetch?: PushFetch;
   /**
    * Extra hostnames treated as LOCAL (bypass the host gate) beyond loopback,
    * the tailnet name, and this machine's LAN names. Requests arriving on any
@@ -762,6 +771,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           keys: await loadOrCreateVapidKeys(dataDir),
           subject,
           log: (message) => console.error(`[push] ${message}`),
+          ...(opts.pushFetch ? { fetch: opts.pushFetch } : {}),
         });
       } catch (err) {
         // A corrupt or unreadable key file. Say so once; the feature stays
