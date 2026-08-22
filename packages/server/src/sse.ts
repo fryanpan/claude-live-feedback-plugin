@@ -107,6 +107,49 @@ export class SseHub {
   private replay = new Map<string, BufferedEvent[]>();
   private lastSweepAt = 0;
 
+  /**
+   * channel → the wire id of the NEWEST event ever broadcast on it, as far as
+   * this server knows: everything this process has sent, seeded at boot with
+   * what the previous clean shutdown recorded (`sse-marks.ts`).
+   *
+   * Deliberately NOT pruned alongside the buffer, because it answers the
+   * question the buffer cannot once its contents age out — "is this cursor at
+   * the end of the channel, or behind it?". One string per channel, held for
+   * the life of the process; the buffer is where the bytes are.
+   *
+   * This is the fix for a whole class of VACUOUS gap notices. `replayAfter`
+   * used to have one way to say no, and used it for the case where the answer
+   * is provably yes: a subscriber holding the last id a quiet channel ever
+   * carried missed nothing, whether the buffer aged out under it or the server
+   * restarted without that channel being touched. Field-measured 2026-08-21 as
+   * waves of `replay.gap` across a session's whole watch set after every
+   * deploy, each followed by a refetch that found nothing.
+   */
+  private lastEver = new Map<string, string>();
+
+  /** `now` is injectable so the age-bound behaviour can be tested without
+   *  sleeping ten minutes. Production passes nothing. */
+  constructor(private now: () => number = Date.now) {}
+
+  /**
+   * Seed the channel marks from a previous process's clean shutdown.
+   *
+   * Only fills channels this process has not itself broadcast on — a live mark
+   * is always newer than a recovered one, and letting a recovered id win would
+   * move the channel's notion of "newest" backwards, which is the direction
+   * that turns a real gap into silence.
+   */
+  restoreMarks(marks: Record<string, string>): void {
+    for (const [channel, id] of Object.entries(marks)) {
+      if (!this.lastEver.has(channel)) this.lastEver.set(channel, id);
+    }
+  }
+
+  /** The channel marks, for the shutdown that hands them to the next boot. */
+  marks(): Record<string, string> {
+    return Object.fromEntries(this.lastEver);
+  }
+
   add(docId: string, sink: Sink, shareId?: string, agentId?: string): () => void {
     let set = this.byDoc.get(docId);
     if (!set) {
@@ -174,12 +217,15 @@ export class SseHub {
       buf = [];
       this.replay.set(docId, buf);
     }
-    buf.push({ id, at: Date.now(), payload, ...(toAgent !== undefined ? { toAgent } : {}) });
+    buf.push({ id, at: this.now(), payload, ...(toAgent !== undefined ? { toAgent } : {}) });
+    // Outside the buffer and outside its pruning: this is what lets a cursor
+    // at the end of a quiet channel still be recognised as up to date.
+    this.lastEver.set(docId, id);
     this.prune(docId);
     // Idle channels never get touched by their own appends, so a cheap
     // global sweep rides along at most once a minute — it is what keeps a
     // channel that went quiet from holding its last 200 events forever.
-    const now = Date.now();
+    const now = this.now();
     if (now - this.lastSweepAt > 60_000) {
       this.lastSweepAt = now;
       for (const key of this.replay.keys()) this.prune(key);
@@ -189,7 +235,7 @@ export class SseHub {
   private prune(docId: string): void {
     const buf = this.replay.get(docId);
     if (!buf) return;
-    const cutoff = Date.now() - REPLAY_MAX_AGE_MS;
+    const cutoff = this.now() - REPLAY_MAX_AGE_MS;
     let drop = Math.max(0, buf.length - REPLAY_MAX_EVENTS);
     while (drop < buf.length && (buf[drop] as BufferedEvent).at < cutoff) drop += 1;
     if (drop > 0) buf.splice(0, drop);
@@ -200,10 +246,22 @@ export class SseHub {
    * The events after `lastId` on this channel — or an explicit refusal.
    *
    * `ok: false` covers every case where completeness cannot be PROVEN: the id
-   * was evicted (count or age), the id is from a previous server epoch, the
-   * channel has no buffer at all. The caller turns that into a `replay.gap`
-   * event, because a partial replay that looks complete is the exact failure
-   * this branch exists to end — the client must be told to refetch instead.
+   * was evicted by the count bound, the id is from a previous server epoch
+   * whose tail this server has no record of, the channel is one it has never
+   * heard of. The caller turns that into a `replay.gap` event, because a
+   * partial replay that looks complete is the exact failure this branch exists
+   * to end — the client must be told to refetch instead.
+   *
+   * The one case that is NOT a gap despite missing the buffer: a cursor naming
+   * the newest event a channel ever carried. Nothing came after it, so nothing
+   * was missed — the buffer holding it merely aged out under a quiet channel,
+   * or this process restarted and recovered the channel's mark without yet
+   * broadcasting on it. That reading used to fall into `ok: false`, and it is
+   * where the field's vacuous-gap waves came from: most of a watch set is
+   * quiet most of the time, so most reconnects hit exactly this branch. Note
+   * the narrowing is symmetric — an id that is not the newest is still a gap,
+   * including the id one event behind it (`lastEver` moves the moment anything
+   * is broadcast).
    *
    * `agentId` is the reconnecting stream's own identity (absent for browser
    * tabs and share visitors). It filters the tail to what THIS subscriber's
@@ -222,13 +280,22 @@ export class SseHub {
   ): { ok: true; events: BufferedEvent[] } | { ok: false } {
     this.prune(docId);
     const buf = this.replay.get(docId);
-    if (!buf) return { ok: false };
-    const idx = buf.findIndex((e) => e.id === lastId);
-    if (idx < 0) return { ok: false };
-    return {
-      ok: true,
-      events: buf.slice(idx + 1).filter((e) => e.toAgent === undefined || e.toAgent === agentId),
-    };
+    if (buf) {
+      const idx = buf.findIndex((e) => e.id === lastId);
+      if (idx >= 0) {
+        return {
+          ok: true,
+          events: buf
+            .slice(idx + 1)
+            .filter((e) => e.toAgent === undefined || e.toAgent === agentId),
+        };
+      }
+    }
+    // Not in the buffer. Nothing to replay is not the same as nothing
+    // provable — see the doc comment: a cursor at the end of the channel is a
+    // clean, empty catch-up rather than a gap.
+    if (this.lastEver.get(docId) === lastId) return { ok: true, events: [] };
+    return { ok: false };
   }
 
   /** Wire id of the newest buffered event on a channel, if any. */

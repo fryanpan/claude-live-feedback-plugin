@@ -97,6 +97,7 @@ import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
 import type { Share, ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
+import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
@@ -712,6 +713,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const cfAccessVerifier = cfAccessConfig ? createCfAccessVerifier(cfAccessConfig) : null;
 
   const sse = new SseHub();
+  // Pick up where the last clean shutdown left off, so a deploy is silent on
+  // every channel nothing happened on. Discarded automatically if that process
+  // died instead of stopping — see sse-marks.ts for why that direction is the
+  // safe one.
+  sse.restoreMarks(claimReplayMarks(dataDir));
   const webhookLog: WebhookLogEntry[] = [];
   const webhooks = createWebhookDispatcher({
     onLog: (e) => {
@@ -5861,6 +5867,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // content as SIGKILL (measured 0/100 kept on a burst killed 103ms
       // after the last keystroke, on both signals).
       rooms.flush();
+      // Hand the next process each channel's final event id. Without it every
+      // subscriber's cursor is unrecognisable after the restart and every
+      // stream opens with a `replay.gap` that has nothing behind it.
+      saveReplayMarks(dataDir, sse.marks());
       server.stop();
     },
   };
