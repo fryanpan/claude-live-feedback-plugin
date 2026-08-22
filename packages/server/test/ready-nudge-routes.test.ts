@@ -280,4 +280,93 @@ describe('the board wakes its lead over the wire', () => {
     await lead.stop();
     await tab.stop();
   });
+
+  /**
+   * A liveness ping is not board activity, and reading it as activity made the
+   * wake self-cancelling: the only lead a nudge can be DELIVERED to is one
+   * holding a live stream, and a session holding a live stream is exactly the
+   * one attaching and heartbeating — so the clock those pings reset was the
+   * clock that decides whether that same lead is owed a wake.
+   *
+   * It also defeated the persisted stamp below, which is how it was found: a
+   * lead reattaching after a deploy moved its board's clock past the stamp,
+   * and the wake the stamp existed to suppress fired anyway.
+   */
+  it('does not treat an agent attach or heartbeat as the board moving', async () => {
+    const { workspaceId, lead, tab } = await boardWithReadyWork();
+    handle.nudgeReadyWork();
+    await settle();
+    expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(1);
+
+    // The lead pings. Nothing on the board changed, so nothing re-arms —
+    // the stamp is still the one that was already spent.
+    await jj(
+      await post(`/api/workspaces/${workspaceId}/attachments/${LEAD.id}/heartbeat`, {
+        toolCallAt: Date.now(),
+      }),
+    );
+    await settle();
+    handle.nudgeReadyWork();
+    await settle();
+
+    expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(1);
+
+    await lead.stop();
+    await tab.stop();
+  });
+
+  /**
+   * The deploy case, which no unit test can reach: prod restarts at every
+   * merge, and the armed map used to be process memory — so each release
+   * handed every idle board a clean slate and billed its lead one wake turn
+   * over a board that had not moved.
+   */
+  it('does not re-fire an identical wake after the server restarts', async () => {
+    const { workspaceId, lead, tab } = await boardWithReadyWork();
+    handle.nudgeReadyWork();
+    await settle();
+    expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(1);
+    await lead.stop();
+    await tab.stop();
+
+    // A deploy: same data dir, new process.
+    await handle.stop();
+    handle = createServer({ port: 0, dataDir, readyNudgeIdleMs: 0 });
+    base = `http://localhost:${handle.port}`;
+    await jj(
+      await post(`/api/workspaces/${workspaceId}/attachments`, {
+        agentId: LEAD.id,
+        runtime: 'claude-code-local',
+      }),
+    );
+    const revived = listenFrames(
+      await fetch(
+        `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(LEAD.id)}`,
+        { headers: { accept: 'text/event-stream' } },
+      ),
+    );
+    await settle();
+    handle.nudgeReadyWork();
+    await settle();
+
+    expect(nudges(revived.frames, READY_IDLE_EVENT)).toHaveLength(0);
+
+    // The silence is the STAMP, not a wake that could no longer be delivered.
+    // Move the board and the same pass fires down the same stream.
+    await jj(
+      await post(`/api/workspaces/${workspaceId}/tasks`, {
+        title: 'Cache the facet counts',
+        body: 'Agent can serve facet counts from cache so that the sidebar stops blocking.',
+        assignee: LEAD.name,
+        assigneeKind: 'agent',
+        author: LEAD,
+      }),
+    );
+    await settle();
+    handle.nudgeReadyWork();
+    await settle();
+    expect(nudges(revived.frames, READY_IDLE_EVENT)).toHaveLength(1);
+
+    await revived.stop();
+  });
 });
