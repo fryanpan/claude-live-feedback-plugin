@@ -14209,7 +14209,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.87";
+var PLUGIN_VERSION = "0.1.88";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -14313,7 +14313,7 @@ var server = new Server({
 });
 var REVIEW_ITEM_SCHEMA = {
   type: "object",
-  description: "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) if headline/why are missing, multi-line, or over budget: write them like a ticket title, because they are the two lines a phone shows.",
+  description: "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) only if headline/why are missing or multi-line. A field over its character budget FILES and comes back with advice — send the ask you have rather than a retry that shaves two words off it.",
   properties: {
     review_type: {
       type: "string",
@@ -14327,15 +14327,15 @@ var REVIEW_ITEM_SCHEMA = {
     },
     headline: {
       type: "string",
-      description: "Line 1: WHAT needs review, as a ticket title. One line, ≤70 chars."
+      description: "Line 1: WHAT needs review, as a ticket title. One line; aim for ≤70 chars so it holds its line on a phone. Longer files and is reported back as a gap."
     },
     why: {
       type: "string",
-      description: "Line 2: why it matters / what is blocked on it. One line, ≤90 chars."
+      description: "Line 2: why it matters / what is blocked on it. One line; aim for ≤90 chars. Longer files and is reported back as a gap — never trim a real reason to fit."
     },
     lookFor: {
       type: "string",
-      description: "What to look for — shown on the opened card, not on the row. ≤90 chars. Omitting it is accepted but reported back as a gap."
+      description: "What to look for — shown on the opened card, not on the row. Aim for ≤90 chars. Omitting it, or running long, files and is reported back as a gap."
     },
     detail: {
       type: "string",
@@ -14351,8 +14351,14 @@ var REVIEW_ITEM_SCHEMA = {
             type: "string",
             description: "Stable id; the answer records which one was picked."
           },
-          label: { type: "string", description: "1-3 words, ≤28 chars. This is the button." },
-          detail: { type: "string", description: "What choosing it costs or buys. ≤50 words." }
+          label: {
+            type: "string",
+            description: "This is the button. Aim for 1-3 words and ≤28 chars; a fourth word files and is reported back as a gap."
+          },
+          detail: {
+            type: "string",
+            description: "What choosing it costs or buys. Aim for ≤50 words; longer still files."
+          }
         },
         required: ["id", "label"]
       }
