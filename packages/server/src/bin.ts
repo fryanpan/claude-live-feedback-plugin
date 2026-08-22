@@ -243,6 +243,11 @@ const deployer = args.includes('--deploy')
       // its pull; one bound from another checkout is not this deploy's
       // business.
       busyDocs: () => handle?.rooms.pendingFileWrites(repoRoot) ?? [],
+      // What the browser is actually running, which is what a deploy
+      // delivers. Without it "up-to-date" only means the CHECKOUT is
+      // current, and a hand-pulled source with an unrestarted server reports
+      // nothing to do while the fleet loads the older bundle.
+      clientReleaseRoot: clientReleaseRootDir,
     })
   : null;
 

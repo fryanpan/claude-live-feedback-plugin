@@ -324,6 +324,13 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   deliberately no "just restart" verb** — a restart over an unpulled checkout
   rebuilds the same bundles and prints a successful deploy, which is exactly the
   failure the bullet above describes, so the route makes it unexpressible.
+  - **"Up-to-date" is the SERVED client, not the checkout.** The deploy compares
+    `release.json`'s `sourceRef` against what the checkout is on now, so a source
+    somebody pulled by hand and never restarted is reported as needing a deploy
+    (status `restarted`: no merge, nothing rewritten, just the restart that
+    rebuilds and republishes) rather than as current. Asking `behind === 0`
+    alone read the wrong artifact — it is the checkout that is current there,
+    while the fleet still loads the older bundle.
   - It answers only to a **loopback peer address**, not to the `Host` header —
     a LAN and a tailnet client were both measured reaching this server sending
     `Host: localhost`, so a Host-based gate would be spoofable by the callers
@@ -334,7 +341,12 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
     editor save as far as a bound doc is concerned, so against un-flushed edits
     the live doc wins and reasserts ~800ms later — git exits 0, `git status` is
     clean at that instant, and the tree is dirty again a second afterwards.
-    Refusing names the files; proceeding loses them silently.
+    Refusing names the files; proceeding loses them silently. It waits ~1.5s and
+    re-reads before refusing, because "busy" is that ~800ms debounce and not a
+    person: a doc that settles during the wait proceeds, one still being typed
+    in still refuses. A `restarted` deploy skips the check entirely — it
+    rewrites no file, and `Rooms.flush` saves every pending write-back on the
+    way down.
   - The manual three steps above still work and are still the fallback when the
     server is down — which is the one case the route cannot cover, since it
     needs the server it is about to restart.

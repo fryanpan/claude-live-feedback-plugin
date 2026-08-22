@@ -8,11 +8,12 @@
  * Fixtures are synthetic.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DeploySource } from '../src/deploy-source.ts';
 import {
+  BUSY_SETTLE_MS,
   type BusyDoc,
   type DeployDeps,
   type DeployResult,
@@ -20,6 +21,7 @@ import {
   deployLogPath,
   readDeployLog,
   runDeploy,
+  servedRefReader,
   writeDeployLog,
 } from '../src/deploy.ts';
 
@@ -54,8 +56,23 @@ function deps(over: Partial<DeployDeps> & { git: DeployDeps['git'] }): DeployDep
     readSource: () => ({ sourceRef: 'aaaaaaa' }),
     busyDocs: () => [],
     restart: () => {},
+    // No test in this file may sleep for real. `wait` is a REQUIRED dep for
+    // exactly that reason: forgetting it is a compile error rather than a
+    // suite that takes 1.5s longer per busy fixture.
+    wait: async () => {},
     now: () => 1_700_000_000_000,
     ...over,
+  };
+}
+
+/** A `wait` that records what it was asked to wait for and returns at once. */
+function fakeWait() {
+  const asked: number[] = [];
+  return {
+    asked,
+    wait: async (ms: number) => {
+      asked.push(ms);
+    },
   };
 }
 
@@ -246,6 +263,82 @@ describe('runDeploy — bound documents holding un-flushed edits', () => {
     expect(res.status).toBe('refuse-diverged');
   });
 
+  it('a document that settles during the wait proceeds', async () => {
+    // The refusal is about a ~800ms write-back debounce. Asking once catches
+    // every edit that finished a moment ago and refuses a deploy nothing
+    // would have lost — so the busy answer is re-read after a settle window.
+    const git = fakeGit(behindScript());
+    const w = fakeWait();
+    let asked = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        wait: w.wait,
+        busyDocs: () => (asked++ === 0 ? busy : []),
+        readSource: movingSource('aaaaaaa', 'bbbbbbb', git),
+      }),
+    );
+    expect(res.status).toBe('deployed');
+    expect(res.busyDocs).toBeUndefined();
+    // It really did wait, and it really did ask again.
+    expect(w.asked).toEqual([BUSY_SETTLE_MS]);
+    expect(asked).toBe(2);
+  });
+
+  it('and one still being typed in after the wait still refuses', async () => {
+    // The other direction on the same mechanism. Bryan, 2026-08-18, asked
+    // and answered: refuse by default. A settle window that let a busy doc
+    // through would be that ruling reversed by accident.
+    const git = fakeGit(behindScript());
+    const w = fakeWait();
+    let restarts = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        wait: w.wait,
+        busyDocs: () => busy,
+        restart: () => {
+          restarts++;
+        },
+      }),
+    );
+    expect(res.status).toBe('refuse-busy');
+    expect(res.busyDocs).toEqual(busy);
+    expect(res.message).toContain('live-plan.md');
+    expect(w.asked).toEqual([BUSY_SETTLE_MS]);
+    expect(restarts).toBe(0);
+    expect(git.calls.map((c) => c.join(' '))).not.toContain(MERGE);
+  });
+
+  it('does not wait when nothing is busy', async () => {
+    // The negative control for the two above: a settle window on every
+    // deploy would put 1.5s on the clean path for nothing.
+    const git = fakeGit(behindScript());
+    const w = fakeWait();
+    const res = await runDeploy(
+      deps({ git: git.run, wait: w.wait, readSource: movingSource('a', 'b', git) }),
+    );
+    expect(res.status).toBe('deployed');
+    expect(w.asked).toEqual([]);
+  });
+
+  it('force skips the wait entirely — there is nothing to wait for', async () => {
+    const git = fakeGit(behindScript());
+    const w = fakeWait();
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        wait: w.wait,
+        busyDocs: () => busy,
+        readSource: movingSource('a', 'b', git),
+      }),
+      { force: true },
+    );
+    expect(res.status).toBe('deployed');
+    expect(res.forced).toBe(true);
+    expect(w.asked).toEqual([]);
+  });
+
   it('does not consult bound documents at all when there is nothing to pull', async () => {
     const git = fakeGit({
       'fetch --quiet origin': { ok: true, stdout: '' },
@@ -264,6 +357,105 @@ describe('runDeploy — bound documents holding un-flushed edits', () => {
     );
     expect(res.status).toBe('up-to-date');
     expect(asked).toBe(0);
+  });
+});
+
+describe('runDeploy — a checkout at the tip serving an older client', () => {
+  /** Nothing to fetch: the checkout is exactly where origin is. */
+  function currentScript(): Record<string, { ok: boolean; stdout: string }> {
+    return {
+      'fetch --quiet origin': { ok: true, stdout: '' },
+      [AHEAD_BEHIND]: { ok: true, stdout: '0\t0\n' },
+      [STATUS]: { ok: true, stdout: '' },
+    };
+  }
+
+  it('restarts to republish the client, without merging anything', async () => {
+    // Somebody ran `git pull` in the deploy source by hand and did not
+    // restart. git says current; the browser is still on the old bundle.
+    const git = fakeGit(currentScript());
+    let restarts = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        readServed: () => 'older99',
+        restart: () => {
+          restarts++;
+        },
+      }),
+    );
+    expect(res.status).toBe('restarted');
+    expect(res.ok).toBe(true);
+    expect(res.restartRequested).toBe(true);
+    expect(restarts).toBe(1);
+    // Nothing was pulled, so the checkout did not move — and saying it did
+    // would be the same lie in the other direction.
+    expect(res.changed).toBe(false);
+    expect(res.before).toBe('aaaaaaa');
+    expect(res.after).toBe('aaaaaaa');
+    expect(git.calls.map((c) => c.join(' '))).not.toContain(MERGE);
+    expect(res.message).toContain('older99');
+  });
+
+  it('and stays put when the served client was built from HEAD', async () => {
+    // Same fixture, one field different. A rule that always restarts passes
+    // the test above and fails this one.
+    const git = fakeGit(currentScript());
+    let restarts = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        readServed: () => 'aaaaaaa',
+        restart: () => {
+          restarts++;
+        },
+      }),
+    );
+    expect(res.status).toBe('up-to-date');
+    expect(res.restartRequested).toBe(false);
+    expect(restarts).toBe(0);
+  });
+
+  it('does not refuse over a bound document — no file is rewritten', async () => {
+    // The busy refusal exists because a PULL overwrites files under an
+    // editor. A restart writes nothing, and `handle.stop()` flushes every
+    // pending write-back on the way down (rooms.ts `flush`), so refusing
+    // here would block a deploy over a hazard that is not present.
+    const git = fakeGit(currentScript());
+    const w = fakeWait();
+    let restarts = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        wait: w.wait,
+        readServed: () => 'older99',
+        busyDocs: () => [{ docId: 'd1', path: '/repo/docs/live-plan.md' }],
+        restart: () => {
+          restarts++;
+        },
+      }),
+    );
+    expect(res.status).toBe('restarted');
+    expect(restarts).toBe(1);
+    expect(w.asked).toEqual([]);
+  });
+
+  it('a deployment with no release root reports up-to-date, not a restart', async () => {
+    // dev, staging, a bare bin.ts. `readServed` is absent because there is
+    // no published client to compare against, and a restart there bounces
+    // every live editor to rebuild a bundle nobody is serving.
+    const git = fakeGit(currentScript());
+    let restarts = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        restart: () => {
+          restarts++;
+        },
+      }),
+    );
+    expect(res.status).toBe('up-to-date');
+    expect(restarts).toBe(0);
   });
 });
 
@@ -314,6 +506,59 @@ describe('runDeploy — git going wrong', () => {
     expect(res.status).toBe('error');
     expect(res.restartRequested).toBe(false);
     expect(restarts).toBe(0);
+  });
+});
+
+describe('servedRefReader', () => {
+  /** A published release, built by hand: `current` → `releases/<id>` with a
+   *  provenance file. Synthetic; nothing here is a real bundle. */
+  function publish(root: string, id: string, provenance: Record<string, unknown> | null): void {
+    const dir = join(root, 'releases', id);
+    mkdirSync(join(dir, 'markdown-app'), { recursive: true });
+    if (provenance) {
+      writeFileSync(join(dir, 'release.json'), `${JSON.stringify(provenance)}\n`);
+    }
+    rmSync(join(root, 'current'), { force: true });
+    symlinkSync(dir, join(root, 'current'));
+  }
+
+  it('reads the ref the served release recorded', () => {
+    const root = mkdtempSync(join(tmpdir(), 'served-ref-'));
+    try {
+      publish(root, '20260101T000000000Z-000001', {
+        id: '20260101T000000000Z-000001',
+        publishedAt: 1_700_000_000_000,
+        sourceRef: 'abc1234',
+      });
+      const read = servedRefReader(root);
+      expect(read).not.toBeNull();
+      expect(read?.()).toBe('abc1234');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('answers null for a release that recorded none — not a match', () => {
+    // Positive control above: the same reader CAN see a ref, so this null is
+    // the release's silence rather than a reader that never reads anything.
+    const root = mkdtempSync(join(tmpdir(), 'served-ref-'));
+    try {
+      publish(root, '20260101T000000000Z-000001', {
+        id: '20260101T000000000Z-000001',
+        publishedAt: 1_700_000_000_000,
+      });
+      expect(servedRefReader(root)?.()).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('is absent entirely when this deployment publishes no release', () => {
+    // Not "a reader that answers null" — no reader at all, so `runDeploy`
+    // never asks and never restarts dev or staging over prod's releases.
+    expect(servedRefReader(null)).toBeNull();
+    expect(servedRefReader(undefined)).toBeNull();
+    expect(servedRefReader('   ')).toBeNull();
   });
 });
 

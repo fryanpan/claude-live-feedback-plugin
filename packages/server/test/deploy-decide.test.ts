@@ -105,3 +105,65 @@ describe('decideDeploy', () => {
     expect(d.kind).toBe('refuse-diverged');
   });
 });
+
+describe('decideDeploy — what the browser is actually running', () => {
+  // The question `behind === 0` answers is "is the CHECKOUT current", and
+  // that was never the question a deploy is asked. Somebody pulls by hand,
+  // does not restart, and the checkout is at origin's tip while the served
+  // client is still the bundle built from the older commit.
+
+  it('a checkout at the tip whose served client is older still needs a deploy', () => {
+    const d = decideDeploy({ ...base, servedRef: 'older99' });
+    expect(d.kind).toBe('restart-only');
+    // Both refs, because "needs a deploy" without saying which two things
+    // disagree is a sentence that sends someone to read git log.
+    expect(d.reason).toContain('older99');
+    expect(d.reason).toContain('aaaaaaa');
+  });
+
+  it('and a served client built from HEAD is up-to-date', () => {
+    // The other direction on the same fixture: a rule that always restarts
+    // is as wrong as one that never does, and only this pair catches it.
+    const d = decideDeploy({ ...base, servedRef: 'aaaaaaa' });
+    expect(d.kind).toBe('up-to-date');
+  });
+
+  it('an unreadable served ref is not a match', () => {
+    // Nothing published, or a release with no provenance. Claiming the
+    // browser is current is claiming something we did not check.
+    const d = decideDeploy({ ...base, servedRef: null });
+    expect(d.kind).toBe('restart-only');
+  });
+
+  it('a deployment that publishes no client keeps the git answer', () => {
+    // `servedRef` absent means this server has no release root — dev,
+    // staging, a bare bin.ts. There is no served client to be stale, so
+    // restarting would bounce every live editor for nothing.
+    const d = decideDeploy({ ...base });
+    expect(d.kind).toBe('up-to-date');
+  });
+
+  it('an unknown current ref is not compared against', () => {
+    // git could not say what the checkout is on. Restarting to rebuild from
+    // a ref we cannot name is not an improvement on saying nothing.
+    const d = decideDeploy({ ...base, currentRef: null, servedRef: 'older99' });
+    expect(d.kind).toBe('up-to-date');
+  });
+
+  it('a stale served client does not outrank a pull', () => {
+    // The fast-forward path restarts anyway, so the two never compete —
+    // and reporting `restart-only` here would skip the commits.
+    const d = decideDeploy({
+      ...base,
+      behind: 3,
+      incomingPaths: ['packages/server/src/x.ts'],
+      servedRef: 'older99',
+    });
+    expect(d.kind).toBe('fast-forward');
+  });
+
+  it('nor a divergence', () => {
+    const d = decideDeploy({ ...base, ahead: 1, servedRef: 'older99' });
+    expect(d.kind).toBe('refuse-diverged');
+  });
+});
