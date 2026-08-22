@@ -289,13 +289,20 @@ describe('sync-clobber regressions', () => {
       // The reassert branch is the ONE writer that replaces disk content the
       // server never backed up — make it symmetric with the apply branch,
       // which snapshots the live side before pulling disk in.
+      //
+      // It fires on FIRST ACCESS after the restart rather than during the
+      // restart itself: file bindings are deferred (see `deferredBinds` in
+      // rooms.ts), so the read below is what binds this doc. The behaviour
+      // pinned here is unchanged — recover the un-flushed edit to disk, and
+      // snapshot the disk version being overwritten — only its trigger moved.
       expect(
         rooms.findAndReplace('d1', { find: 'Intro paragraph.', replace: 'Unflushed edit.' }).ok,
       ).toBe(true);
       await sleep(350); // .ydoc saved; .md write-back (800ms) has NOT run
       const diskBefore = readFileSync(path, 'utf8');
 
-      makeRooms(dataDir); // restart inside the write-back window
+      const restarted = makeRooms(dataDir); // restart inside the write-back window
+      expect(restarted.getDoc('d1')).not.toBeNull(); // first access — binds now
       await sleep(1100);
 
       expect(readFileSync(path, 'utf8')).toContain('Unflushed edit.');
@@ -304,6 +311,14 @@ describe('sync-clobber regressions', () => {
       const snapshot = backups.find((f) => readFileSync(join(backupDir, f), 'utf8') === diskBefore);
       expect(snapshot).toBeDefined();
     });
+
+    // NB: there is deliberately no companion test asserting the file is
+    // UNCHANGED before that first access. The original `rooms` instance is
+    // still alive in this file and its own ~800ms write-back lands on the
+    // same file, so such a test cannot tell a deferred restart from an eager
+    // one — it would pass for the wrong reason. That boot performs no read at
+    // all is measured in boot-perf.test.ts, where a syscall counter can see
+    // the difference.
 
     it('re-attach during the flush window after a suppressed drift is not a false conflict', async () => {
       // Suppression leaves lastWritten in serializer-space while disk keeps
