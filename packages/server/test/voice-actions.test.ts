@@ -153,15 +153,18 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
 
-  /** A doc room on disk, attached to `hubId` — the shape `docResource` reads. */
+  /**
+   * A doc room on disk, attached to `hubId` — the shape `docResource` reads.
+   * Returns the id the server MINTED; `docId` is only the readable name.
+   */
   const newDoc = async (docId: string): Promise<string> => {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, '# Ranking\n\nthe ranking clause\n');
-    expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: file })).status).toBe(
-      200,
-    );
-    expect((await post(`/api/workspaces/${hubId}/docs`, { docId })).status).toBe(200);
-    return docId;
+    const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
+    expect(made.status).toBe(200);
+    const mintedId = ((await made.json()) as { docId: string }).docId;
+    expect((await post(`/api/workspaces/${hubId}/docs`, { docId: mintedId })).status).toBe(200);
+    return mintedId;
   };
 
   /** An open review item: an AGENT declares, so the run is unanswered and the

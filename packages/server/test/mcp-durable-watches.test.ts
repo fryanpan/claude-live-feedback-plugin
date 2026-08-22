@@ -172,6 +172,15 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
   const live: McpChild[] = [];
   const NAME = 'Durable Watch Tester';
   const AGENT_ID = 'agent-durable-watch-tester';
+  /**
+   * The ids the server MINTED for the docs asked for as `dw-one` / `dw-two`.
+   *
+   * A watch is a durable key and an event carries the doc's ADDRESS, so both
+   * are the minted id — the readable name is what the fixture asked for, not
+   * what the watch store and the channel payloads speak in.
+   */
+  let dwOne: string;
+  let dwTwo: string;
 
   const spawnChild = async (env: Record<string, string | undefined>): Promise<McpChild> => {
     const c = new McpChild(base, env);
@@ -194,12 +203,20 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-durable-watches-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    for (const docId of ['dw-one', 'dw-two']) {
-      const path = join(dataDir, `${docId}.md`);
-      writeFileSync(path, `# ${docId}\n\nA paragraph to anchor a thread on.\n`);
-      const res = await rest('/api/docs', 'POST', { docId, sourceUrl: path });
+    // Created under readable names; every assertion below speaks the ids the
+    // server minted back.
+    const mintedFor: Record<string, string> = {};
+    for (const name of ['dw-one', 'dw-two']) {
+      const path = join(dataDir, `${name}.md`);
+      writeFileSync(path, `# ${name}\n\nA paragraph to anchor a thread on.\n`);
+      const res = await rest('/api/docs', 'POST', { docId: name, sourceUrl: path });
       expect(res.status).toBe(200);
+      mintedFor[name] = ((await res.json()) as { docId: string }).docId;
     }
+    dwOne = mintedFor['dw-one'] as string;
+    dwTwo = mintedFor['dw-two'] as string;
+    expect(dwOne).toBeTruthy();
+    expect(dwTwo).toBeTruthy();
   });
 
   afterAll(async () => {
@@ -225,7 +242,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     expect(list.restore.restored).toEqual([]);
 
     // Watch one doc explicitly and one workspace via auto-subscribe.
-    const w = (await first.tool('watch_doc', { docId: 'dw-one' })) as {
+    const w = (await first.tool('watch_doc', { docId: dwOne })) as {
       persisted: boolean;
       persistence: string;
       watching: string[];
@@ -237,11 +254,11 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     };
     expect(ws.workspaceId).toBeTruthy();
     // And a doc touched through an ordinary tool (the auto-watch path).
-    await first.tool('list_threads', { docId: 'dw-two' });
+    await first.tool('list_threads', { docId: dwTwo });
 
     // Server-side effect, not the tool's own account of itself.
     const stored = handle.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key);
-    expect(stored).toEqual(['dw-one', `ws:${ws.workspaceId}`, 'dw-two']);
+    expect(stored).toEqual([dwOne, `ws:${ws.workspaceId}`, dwTwo]);
 
     // The respawn: kill the child, start another with the SAME identity.
     first.kill();
@@ -253,11 +270,9 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     };
     expect(restored.restore.status).toBe('restored');
     expect(restored.restore.from).toBe('server');
-    expect(restored.restore.restored.sort()).toEqual(
-      ['dw-one', 'dw-two', `ws:${ws.workspaceId}`].sort(),
-    );
+    expect(restored.restore.restored.sort()).toEqual([dwOne, dwTwo, `ws:${ws.workspaceId}`].sort());
     expect(restored.restore.pruned).toEqual([]);
-    expect(restored.watching.sort()).toEqual(['dw-one', 'dw-two', `ws:${ws.workspaceId}`].sort());
+    expect(restored.watching.sort()).toEqual([dwOne, dwTwo, `ws:${ws.workspaceId}`].sort());
 
     // The session was TOLD, not left to ask: one channel line on restore.
     const notice = await second.waitForChannel((n) =>
@@ -269,7 +284,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     // A restored watch that delivers nothing is the empty-list failure with
     // extra steps — so post a real thread on the restored doc and require it
     // to arrive in the NEW child as a channel message.
-    const thread = await rest('/api/docs/dw-one/threads/by_find', 'POST', {
+    const thread = await rest(`/api/docs/${dwOne}/threads/by_find`, 'POST', {
       find: 'paragraph to anchor',
       text: 'Does the restored watch hear this?',
       author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
@@ -277,14 +292,14 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     expect(thread.status).toBe(200);
     const delivered = await second.waitForChannel(
       (n) =>
-        n.params?.meta?.doc_id === 'dw-one' &&
+        n.params?.meta?.doc_id === dwOne &&
         (n.params?.content ?? '').includes('Does the restored watch hear this?'),
     );
     expect(delivered.params?.meta?.event).toBe('thread.created');
 
     // unwatch forgets it on the server too, so the NEXT respawn does not
     // resurrect it — and dw-two, untouched, comes back.
-    const un = (await second.tool('unwatch_doc', { docId: 'dw-one' })) as { persisted: boolean };
+    const un = (await second.tool('unwatch_doc', { docId: dwOne })) as { persisted: boolean };
     expect(un.persisted).toBe(true);
     second.kill();
     const third = await spawnChild({ FEEDBACK_AGENT_NAME: NAME });
@@ -292,9 +307,9 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
       watching: string[];
       restore: { restored: string[] };
     };
-    expect(after.watching).not.toContain('dw-one');
-    expect(after.watching).toContain('dw-two');
-    expect(after.restore.restored).toContain('dw-two');
+    expect(after.watching).not.toContain(dwOne);
+    expect(after.watching).toContain(dwTwo);
+    expect(after.restore.restored).toContain(dwTwo);
     third.kill();
   }, 30_000);
 
@@ -315,13 +330,13 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     // CURRENT spelling: the cases above pass the legacy names and pass, which
     // is what makes them the regression test for the rename's fallback.
     const anon = await spawnChild({ CW_AGENT_NAME: undefined, CW_AUTHOR: 'agent' });
-    const w = (await anon.tool('watch_doc', { docId: 'dw-two' })) as {
+    const w = (await anon.tool('watch_doc', { docId: dwTwo })) as {
       persisted: boolean;
       persistence: string;
       watching: string[];
     };
     // Locally wired — events still flow for THIS session…
-    expect(w.watching).toEqual(['dw-two']);
+    expect(w.watching).toEqual([dwTwo]);
     // …but the response is honest that a restart drops it.
     expect(w.persisted).toBe(false);
     expect(w.persistence).toBe('session-only');
@@ -361,18 +376,24 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
    *  on it — the fixture the incident was made of. */
   const boardWithBacklog = async (
     name: string,
-    docId: string,
-  ): Promise<{ workspaceId: string }> => {
+    docName: string,
+  ): Promise<{ workspaceId: string; docId: string }> => {
     const ws = (await (await rest('/api/workspaces', 'POST', { name })).json()) as {
       workspace: { id: string };
     };
     const workspaceId = ws.workspace.id;
-    const path = join(dataDir, `${docId}.md`);
-    writeFileSync(path, `# ${docId}\n\nA paragraph to anchor a thread on.\n`);
-    expect(
-      (await rest('/api/docs', 'POST', { docId, sourceUrl: path, hubWorkspaceId: workspaceId }))
-        .status,
-    ).toBe(200);
+    const path = join(dataDir, `${docName}.md`);
+    writeFileSync(path, `# ${docName}\n\nA paragraph to anchor a thread on.\n`);
+    // The board records the MINTED id, which is the key coverage matches a
+    // watch against — so the fixture hands that back, not the name.
+    const created = await rest('/api/docs', 'POST', {
+      docId: docName,
+      sourceUrl: path,
+      hubWorkspaceId: workspaceId,
+    });
+    expect(created.status).toBe(200);
+    const docId = ((await created.json()) as { docId: string }).docId;
+    expect(docId).toBeTruthy();
     // `goal` on create is what routes a new row to the lead for a shape
     // review; with no live lead it queues instead.
     expect(
@@ -384,16 +405,16 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
         })
       ).status,
     ).toBe(200);
-    return { workspaceId };
+    return { workspaceId, docId };
   };
 
   it('a session watching docs on a board it never attached to is TOLD, on both surfaces', async () => {
     const NAME2 = 'Coverage Watch Tester';
     const AGENT2 = 'agent-coverage-watch-tester';
-    const { workspaceId } = await boardWithBacklog('cov-board', 'cov-doc');
+    const { workspaceId, docId: covDoc } = await boardWithBacklog('cov-board', 'cov-doc');
 
     const first = await spawnChild({ CW_AGENT_NAME: NAME2 });
-    await first.tool('watch_doc', { docId: 'cov-doc' });
+    await first.tool('watch_doc', { docId: covDoc });
     // The probe an agent already knows to run, in the state the incident was
     // in: watching, never attached.
     const live = (await first.tool('list_watched_docs')) as {
@@ -409,12 +430,12 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
         }>;
       };
     };
-    expect(live.watching).toContain('cov-doc');
+    expect(live.watching).toContain(covDoc);
     expect(live.coverage?.agentId).toBe(AGENT2);
     const row = live.coverage?.unattachedBoards.find((b) => b.workspaceId === workspaceId);
     expect(row).toBeDefined();
     expect(row?.name).toBe('cov-board');
-    expect(row?.watchedDocs).toEqual(['cov-doc']);
+    expect(row?.watchedDocs).toEqual([covDoc]);
     expect(row?.queued.taskReviews).toBe(1);
     expect(row?.queuedTotal).toBeGreaterThan(0);
 
@@ -435,10 +456,10 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
 
   it('POSITIVE CONTROL: a session that IS attached to the board hears the restore line and no alarm', async () => {
     const NAME3 = 'Seated Watch Tester';
-    const { workspaceId } = await boardWithBacklog('seated-board', 'seated-doc');
+    const { workspaceId, docId: seatedDoc } = await boardWithBacklog('seated-board', 'seated-doc');
 
     const first = await spawnChild({ CW_AGENT_NAME: NAME3 });
-    await first.tool('watch_doc', { docId: 'seated-doc' });
+    await first.tool('watch_doc', { docId: seatedDoc });
     // The one difference from the case above — and it goes through the TOOL
     // rather than a REST POST on purpose. Being seated is two things: a
     // record, and a channel open to receive what the record makes you the
@@ -463,7 +484,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     // Same message the alarmed session got, minus the alarm. Asserted on the
     // notice that DID arrive rather than on a timeout, so the absence is an
     // answer about this session and not about a notice that never fired.
-    expect(notice.params?.content).toContain('seated-doc');
+    expect(notice.params?.content).toContain(seatedDoc);
     expect(notice.params?.content).not.toContain('[not covered]');
     second.kill();
   }, 40_000);
@@ -736,16 +757,20 @@ describe('a restore that could not reach the server fails loudly, then recovers'
   it('reports the unreachable server, holds off, then re-wires the set on a later call', async () => {
     const path = join(dataDir, `${DOC_ID}.md`);
     writeFileSync(path, `# ${DOC_ID}\n\nA paragraph to anchor a thread on.\n`);
-    expect((await rest(base, '/api/docs', 'POST', { docId: DOC_ID, sourceUrl: path })).status).toBe(
-      200,
-    );
+    const createRes = await rest(base, '/api/docs', 'POST', { docId: DOC_ID, sourceUrl: path });
+    expect(createRes.status).toBe(200);
+    // `DOC_ID` is the READABLE name from here on; the doc's own id is what a
+    // watch is stored and restored under, so the two are kept apart
+    // deliberately — this test then proves they collapse to one doc.
+    const mintedId = ((await createRes.json()) as { docId: string }).docId;
+    expect(mintedId).not.toBe(DOC_ID);
 
     // A set worth restoring, persisted while the server is up.
     const first = await spawnChild({ CW_AGENT_NAME: NAME });
     const w = (await first.tool('watch_doc', { docId: DOC_ID })) as { persisted: boolean };
     expect(w.persisted).toBe(true);
     expect(handle?.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key)).toEqual([
-      DOC_ID,
+      mintedId,
     ]);
     first.kill();
 
@@ -803,7 +828,7 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     handle = createServer({ port, dataDir });
     expect(handle.port).toBe(port);
     expect(handle.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key)).toEqual([
-      DOC_ID,
+      mintedId,
     ]);
 
     // Past the backoff window, then any ordinary tool call.
@@ -819,8 +844,8 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     // Exactly one more attempt than the failure — the gate let the retry
     // through once, rather than the tool calls in between each spending one.
     expect(recovered.restore.attempts).toBe(2);
-    expect(recovered.restore.restored).toEqual([DOC_ID]);
-    expect(recovered.watching).toEqual([DOC_ID]);
+    expect(recovered.restore.restored).toEqual([mintedId]);
+    expect(recovered.watching).toEqual([mintedId]);
     expect(recovered.restore.at).toBeTruthy();
 
     // A listed watch that delivers nothing is the failure this whole area
@@ -833,7 +858,7 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     expect(thread.status).toBe(200);
     const delivered = await second.waitForChannel(
       (n) =>
-        n.params?.meta?.doc_id === DOC_ID &&
+        n.params?.meta?.doc_id === mintedId &&
         (n.params?.content ?? '').includes('Does the retried watch hear this?'),
     );
     expect(delivered.params?.meta?.event).toBe('thread.created');

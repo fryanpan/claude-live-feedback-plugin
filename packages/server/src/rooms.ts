@@ -66,6 +66,13 @@ import {
   refreshWorkspace as refreshWorkspaceImpl,
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
+import {
+  type DocIdAuthority,
+  HUB_ROOM_PREFIXES,
+  ReservedDocIdError,
+  isReservedDocId,
+  newDocId,
+} from './doc-ids.ts';
 import { newEventId } from './event-id.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
@@ -266,16 +273,33 @@ const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
  * board room and every `task:<taskId>` body room (§3.3). They are never
  * bound to a file, so a `sourceUrl` on one is by construction not ours —
  * and unlike a bound doc they have no private-meta sidecar to outvote a
- * forged value. Kept as a local prefix test rather than an import from
- * task-projection.ts, which imports this module.
+ * forged value.
+ *
+ * This answers "is this room's content server-owned". `isReservedDocId`
+ * (doc-ids.ts) answers the different question "may a caller occupy this
+ * address", and is a superset — both read the same prefix list so the two can
+ * never disagree about `ws:` and `task:`.
  */
 export function isHubOwnedRoom(docId: string): boolean {
-  return docId.startsWith('ws:') || docId.startsWith('task:');
+  return HUB_ROOM_PREFIXES.some((p) => docId.startsWith(p));
 }
 
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
   private fileBindings = new Map<string, FileBinding>();
+  /**
+   * Readable alias → the doc id it was minted alongside.
+   *
+   * Rebuilt from `meta.alias` on every `getOrCreate`, so it comes back from
+   * disk with the docs at boot and travels with a `.ydoc` through archive and
+   * restore. There is deliberately no separate alias file to fall out of step
+   * with the rooms it describes.
+   *
+   * Write-once: `claimAlias` refuses a name already held. That is what makes
+   * a captured URL a promise rather than a hint — a link that resolved
+   * yesterday cannot be pointed at somebody else's document today.
+   */
+  private aliases = new Map<string, string>();
 
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
@@ -347,6 +371,7 @@ export class Rooms {
    */
   private teardownRoom(room: DocRoom, closeReason: string): void {
     const docId = room.docId;
+    this.releaseAliases(docId);
     const saveTimer = this.saveTimers.get(docId);
     if (saveTimer) clearTimeout(saveTimer);
     this.saveTimers.delete(docId);
@@ -485,7 +510,11 @@ export class Rooms {
    * the thing most worth not having.
    */
   private hydrateDoc(docId: string): boolean {
-    const room = this.getOrCreate(docId);
+    // Server authority: hydration re-admits ids that ALREADY EXIST on disk,
+    // including the `task:` and `ws:` rooms the projection wrote. Refusing
+    // them here would not close a hole — the room is already persisted — it
+    // would only make the board fail to come back after a restart.
+    const room = this.getOrCreate(docId, undefined, { authority: 'server' });
     const src = room.meta.sourceUrl;
     // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
     // can only have arrived from a peer's ydoc write. Refusing to bind
@@ -536,8 +565,25 @@ export class Rooms {
       diffAdditions?: number;
       diffDeletions?: number;
       diffWhitespaceOnly?: boolean;
+      /** The readable name this doc was created under. Written at creation
+       *  and never again — see `claimAlias`. */
+      alias?: string;
     },
+    /**
+     * Who is asking. Defaults to `caller`, which is what closes the two
+     * namespace holes: a door that forgets to declare itself gets the
+     * restricted answer rather than the permissive one.
+     */
+    opts?: { authority?: DocIdAuthority },
   ): DocRoom {
+    // THE SEAM. Every path that can bring a docId into existence funnels
+    // here — the three creation routes, both bind paths, the lazy sidebar
+    // open, the task projection, and hydration — so the entitlement question
+    // is asked once. Deliberately not an enumeration of entry points: the
+    // enumeration is what missed `POST /api/docs`.
+    if ((opts?.authority ?? 'caller') === 'caller' && isReservedDocId(docId)) {
+      throw new ReservedDocIdError(docId);
+    }
     const existing = this.rooms.get(docId);
     if (existing) {
       if (init?.webhookUrl !== undefined) existing.webhookUrl = init.webhookUrl;
@@ -604,11 +650,16 @@ export class Rooms {
         diffOldPath: init?.diffOldPath,
         diffAdditions: init?.diffAdditions,
         diffDeletions: init?.diffDeletions,
+        alias: init?.alias,
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);
       return now;
     })();
+    // Index the readable name — for a doc just minted, and for one coming
+    // back off disk at boot. Same call either way, so the alias table cannot
+    // be complete at creation and empty after a restart.
+    if (meta.alias) this.claimAlias(meta.alias, docId);
     const room: DocRoom = {
       docId,
       ydoc,
@@ -635,8 +686,96 @@ export class Rooms {
     return room;
   }
 
+  /**
+   * A room by its id, or by a readable alias that resolves to it.
+   *
+   * Primary first, alias second — and the order is the migration. Every doc
+   * created before minting has a caller-chosen string as its PRIMARY id, so a
+   * URL captured back then hits the first branch and never consults the alias
+   * table at all. Nothing on disk had to be renamed for that to be true.
+   *
+   * `claimAlias` refuses a name that any doc already answers to, in either
+   * space, so the two branches can never both match.
+   */
   get(docId: string): DocRoom | undefined {
-    return this.rooms.get(docId);
+    const direct = this.rooms.get(docId);
+    if (direct) return direct;
+    const aliased = this.aliases.get(docId);
+    return aliased ? this.rooms.get(aliased) : undefined;
+  }
+
+  /**
+   * The doc-creation verb for CALLERS: they name the doc, the server decides
+   * its id.
+   *
+   * Splitting naming from identity is the whole change. A caller-chosen id
+   * put the two in one field, so the only way to fix a name was to move the
+   * address — and re-keying a doc orphans every thread anchored to it and
+   * every link anyone saved. Here the name is an alias, the id is minted, and
+   * a doc that wants a better name gets one without moving.
+   *
+   * Idempotent by resolution rather than by upsert: an already-resolving name
+   * returns the doc it already names. That is what keeps `bind_mock(docId,
+   * newPath)` repointing one doc instead of minting a second, and what makes
+   * a re-run of `create_review_doc` a no-op.
+   */
+  createForCaller(
+    requested: string,
+    init?: Parameters<Rooms['getOrCreate']>[1],
+  ): { ok: true; room: DocRoom; minted: boolean } | { ok: false; error: 'reserved-namespace' } {
+    if (isReservedDocId(requested)) return { ok: false, error: 'reserved-namespace' };
+    const existing = this.get(requested);
+    if (existing) {
+      // Re-tag / repoint the doc this name already resolves to, exactly as
+      // before — but under its OWN id, never the name it was asked by.
+      return { ok: true, room: this.getOrCreate(existing.docId, init), minted: false };
+    }
+    const docId = newDocId();
+    const room = this.getOrCreate(docId, { ...init, alias: requested });
+    return { ok: true, room, minted: true };
+  }
+
+  /**
+   * Bind a readable name to a doc, ONCE.
+   *
+   * The refusal is the point. An alias that could be repointed would make
+   * every captured review URL provisional: the link in yesterday's task
+   * comment would still resolve, silently, to a document nobody meant to
+   * send. So a name already held stays with its first doc, and the loser is
+   * logged rather than swallowed — two docs claiming one name is a fact
+   * somebody needs to see, not a race to win.
+   *
+   * There is no `repointAlias`, no `setAlias`, and no route that reaches
+   * this. A doc that wants a different readable name gets an ADDITIONAL one;
+   * the id it lives at does not move either way.
+   */
+  private claimAlias(alias: string, docId: string): void {
+    const held = this.aliases.get(alias);
+    if (held !== undefined && held !== docId) {
+      console.error(
+        `[rooms] alias "${alias}" already resolves to ${held}; leaving it there (${docId} keeps its own id)`,
+      );
+      return;
+    }
+    // A doc whose PRIMARY id is this string wins too — that is a
+    // pre-migration doc, and its address is the one already written down in
+    // links people saved.
+    //
+    // Belt, not braces: `get` tries the primary id first, so the primary
+    // would win the lookup even with a stale entry in this map. Keeping the
+    // map honest is still worth a line — a resolver whose table disagrees
+    // with its own answers is how the next bug reads as impossible. Measured:
+    // removing this line alone turns nothing red.
+    if (this.rooms.has(alias) && alias !== docId) return;
+    this.aliases.set(alias, docId);
+  }
+
+  /** Forget a doc's alias when its room goes away, so the name does not
+   *  outlive the doc as a dangling resolution. */
+  private releaseAliases(docId: string): void {
+    for (const [alias, target] of this.aliases) {
+      if (target === docId) this.aliases.delete(alias);
+    }
   }
 
   /** Schedule a persistence pass for a doc whose in-memory meta changed with

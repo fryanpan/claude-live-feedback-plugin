@@ -78,6 +78,9 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
+  /** The id the server MINTED for the doc the caller named `adv-doc`; the
+   *  name stays a working address, the activity rows carry the minted id. */
+  let advDocId: string;
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'adv-act-data-'));
@@ -97,13 +100,15 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
   it('PERSON comment appends a fully-formed comment event', async () => {
     const file = join(dataDir, 'adv-doc.md');
     writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
-    await j(
-      await fetch(`${base}/api/docs`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: 'adv-doc', type: 'markdown', sourceUrl: file }),
-      }),
-    );
+    advDocId = (
+      await j<{ docId: string }>(
+        await fetch(`${base}/api/docs`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ docId: 'adv-doc', type: 'markdown', sourceUrl: file }),
+        }),
+      )
+    ).docId;
 
     await j(
       await fetch(`${base}/api/docs/adv-doc/threads`, {
@@ -118,7 +123,7 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
     );
 
     const events = readEvents(dataDir);
-    const c = events.find((e) => e.type === 'comment' && e.doc.docId === 'adv-doc');
+    const c = events.find((e) => e.type === 'comment' && e.doc.docId === advDocId);
     expect(c, 'a comment event was appended').toBeDefined();
     expect(c!.type).toBe('comment');
     expect(c!.actor).toBe('person');
@@ -155,7 +160,7 @@ describe('ADVERSARIAL: activity stream e2e (throwaway server)', () => {
     expect(r.status).toBe(200);
 
     const read = readEvents(dataDir).find(
-      (e) => e.type === 'read_session' && e.doc.docId === 'adv-doc',
+      (e) => e.type === 'read_session' && e.doc.docId === advDocId,
     );
     expect(read, 'a read_session event was appended').toBeDefined();
     expect(read!.actor).toBe('person');

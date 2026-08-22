@@ -73,8 +73,16 @@ describe('the collaboration hostname over HTTP', () => {
   /** A board the collaborator is meant to reach, and one they are not. */
   let board: string;
   let otherBoard: string;
+  /** The readable names the caller asks for… */
   const DOC = 'design-doc';
   const OTHER_DOC = 'private-doc';
+  /**
+   * …and the ids the server MINTS for them, which is what a board's
+   * membership holds and therefore what every scope answer is about. The
+   * names stay aliases that resolve; the addresses are these.
+   */
+  let docId: string;
+  let otherDocId: string;
 
   const req = (path: string, host: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -116,8 +124,12 @@ describe('the collaboration hostname over HTTP', () => {
     base = `http://localhost:${handle.port}`;
     jwt = await signJwt(COLLAB_AUD);
 
-    /** A board with one file-backed doc filed on it. */
-    const boardWith = async (name: string, docId: string): Promise<string> => {
+    /** A board with one file-backed doc filed on it; returns the board id and
+     *  the id the server minted for the doc. */
+    const boardWith = async (
+      name: string,
+      requestedDocId: string,
+    ): Promise<{ boardId: string; mintedDocId: string }> => {
       const created = await asOwner('/api/workspaces', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -125,24 +137,29 @@ describe('the collaboration hostname over HTTP', () => {
       });
       expect(created.status).toBe(200);
       const id = ((await created.json()) as { workspace: { id: string } }).workspace.id;
-      const path = join(dataDir, `${docId}.md`);
-      writeFileSync(path, `# ${docId}\n\nBody.\n`);
+      const path = join(dataDir, `${requestedDocId}.md`);
+      writeFileSync(path, `# ${requestedDocId}\n\nBody.\n`);
       const doc = await asOwner('/api/docs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId, type: 'markdown', sourceUrl: path }),
+        body: JSON.stringify({ docId: requestedDocId, type: 'markdown', sourceUrl: path }),
       });
       expect(doc.status).toBe(200);
+      const mintedDocId = ((await doc.json()) as { docId: string }).docId;
+      // Filed by the readable name; the membership the board records is the
+      // minted id, which is what the scope checks below are measured against.
       const filed = await asOwner(`/api/workspaces/${encodeURIComponent(id)}/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId }),
+        body: JSON.stringify({ docId: requestedDocId }),
       });
       expect(filed.status).toBe(200);
-      return id;
+      return { boardId: id, mintedDocId };
     };
-    board = await boardWith('Shared work', DOC);
-    otherBoard = await boardWith('Not shared', OTHER_DOC);
+    ({ boardId: board, mintedDocId: docId } = await boardWith('Shared work', DOC));
+    ({ boardId: otherBoard, mintedDocId: otherDocId } = await boardWith('Not shared', OTHER_DOC));
+    expect(docId).toBeTruthy();
+    expect(otherDocId).toBeTruthy();
   });
 
   afterAll(async () => {
@@ -163,7 +180,7 @@ describe('the collaboration hostname over HTTP', () => {
 
     it('rejects a token minted for a different Access application', async () => {
       const wrong = await signJwt('aud-for-some-other-app');
-      const r = await req(`/api/docs/${DOC}`, TUNNEL_HOST, {
+      const r = await req(`/api/docs/${docId}`, TUNNEL_HOST, {
         headers: { ...CF_RAY, 'cf-access-jwt-assertion': wrong },
       });
       expect(r.status).toBe(401);
@@ -173,7 +190,7 @@ describe('the collaboration hostname over HTTP', () => {
       // A LAN client can send any Host it likes. Without the proxy hop there
       // is no Access application in front of the request, so the opt-in list
       // must not recognise it — even holding a valid token.
-      const r = await req(`/api/docs/${DOC}`, TUNNEL_HOST, {
+      const r = await req(`/api/docs/${docId}`, TUNNEL_HOST, {
         headers: { 'cf-access-jwt-assertion': jwt },
       });
       expect(r.status).toBe(403);
@@ -201,11 +218,11 @@ describe('the collaboration hostname over HTTP', () => {
       expect((await asCollaborator(`/api/workspaces/${encodeURIComponent(board)}`)).status).toBe(
         200,
       );
-      const doc = await asCollaborator(`/api/docs/${DOC}`);
+      const doc = await asCollaborator(`/api/docs/${docId}`);
       expect(doc.status).toBe(200);
-      expect(((await doc.json()) as { meta: { docId: string } }).meta.docId).toBe(DOC);
-      expect((await asCollaborator(`/api/docs/${DOC}/threads`)).status).toBe(200);
-      expect((await asCollaborator(`/review/${DOC}`)).status).not.toBe(403);
+      expect(((await doc.json()) as { meta: { docId: string } }).meta.docId).toBe(docId);
+      expect((await asCollaborator(`/api/docs/${docId}/threads`)).status).toBe(200);
+      expect((await asCollaborator(`/review/${docId}`)).status).not.toBe(403);
     });
 
     it('loads the app shell, which belongs to no workspace', async () => {
@@ -213,7 +230,7 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('can comment — reviewing is the point of the surface', async () => {
-      const r = await asCollaborator(`/api/docs/${DOC}/threads/by_find`, {
+      const r = await asCollaborator(`/api/docs/${docId}/threads/by_find`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -225,7 +242,7 @@ describe('the collaboration hostname over HTTP', () => {
       expect(r.status).toBe(200);
       // …as a guest, not as whoever they claimed to be. Same rewrite a share
       // visitor gets: the collaboration host is an outsider surface.
-      const listed = await asOwner(`/api/docs/${DOC}/threads`);
+      const listed = await asOwner(`/api/docs/${docId}/threads`);
       const { threads } = (await listed.json()) as {
         threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
       };
@@ -238,12 +255,12 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('is not shown the absolute paths or the tailnet host', async () => {
-      const raw = await (await asCollaborator(`/api/docs/${DOC}`)).text();
+      const raw = await (await asCollaborator(`/api/docs/${docId}`)).text();
       expect(raw).not.toContain(dataDir);
       expect(raw).not.toContain('.ts.net');
       const { meta } = JSON.parse(raw) as { meta: Record<string, unknown> };
       expect(meta.sourceUrl).toBeUndefined();
-      expect(meta.docId).toBe(DOC);
+      expect(meta.docId).toBe(docId);
     });
   });
 
@@ -300,18 +317,18 @@ describe('the collaboration hostname over HTTP', () => {
     });
 
     it('CANNOT delete a doc it can read, or rewrite it wholesale', async () => {
-      expect((await asCollaborator(`/api/docs/${DOC}`, { method: 'DELETE' })).status).toBe(403);
-      const rewrite = await asCollaborator(`/api/docs/${DOC}/content`, {
+      expect((await asCollaborator(`/api/docs/${docId}`, { method: 'DELETE' })).status).toBe(403);
+      const rewrite = await asCollaborator(`/api/docs/${docId}/content`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ markdown: '# Wiped\n' }),
       });
       expect(rewrite.status).toBe(403);
       expect(
-        (await asCollaborator(`/api/docs/${DOC}/reparse_from_disk`, { method: 'POST' })).status,
+        (await asCollaborator(`/api/docs/${docId}/reparse_from_disk`, { method: 'POST' })).status,
       ).toBe(403);
       // …and the doc really is intact.
-      expect((await asOwner(`/api/docs/${DOC}`)).status).toBe(200);
+      expect((await asOwner(`/api/docs/${docId}`)).status).toBe(200);
     });
 
     it('CANNOT delete a board or reshape one', async () => {
@@ -331,10 +348,10 @@ describe('the collaboration hostname over HTTP', () => {
     it('CANNOT reach a doc through a board it does not belong to', async () => {
       // Two conditions, not one: naming a board you can reach in front of
       // someone else's doc must not carry the doc in with it.
-      const crossed = `/workspaces/${encodeURIComponent(board)}/docs/${OTHER_DOC}`;
+      const crossed = `/workspaces/${encodeURIComponent(board)}/docs/${otherDocId}`;
       expect((await asCollaborator(crossed)).status).toBe(403);
       // POSITIVE CONTROL: the same shape with the doc that IS on that board.
-      const own = `/workspaces/${encodeURIComponent(board)}/docs/${DOC}`;
+      const own = `/workspaces/${encodeURIComponent(board)}/docs/${docId}`;
       expect((await asCollaborator(own)).status).not.toBe(403);
     });
 

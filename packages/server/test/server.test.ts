@@ -34,6 +34,10 @@ describe('server REST', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
+  // The server MINTS the doc's id; `unit-1` is only the readable alias the
+  // caller asked for. Captured once here so the later tests can address the
+  // doc by the id it actually lives at.
+  let unitId: string;
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-test-'));
@@ -57,16 +61,28 @@ describe('server REST', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'unit-1', type: 'mockup', title: 'Mock Test' }),
     });
-    const { meta } = await j<{ meta: { docId: string; type: string; title?: string } }>(r);
-    expect(meta.docId).toBe('unit-1');
+    const { docId, meta } = await j<{
+      docId: string;
+      meta: { docId: string; type: string; title?: string; alias?: string };
+    }>(r);
+    unitId = docId;
+    // The id is the server's, not the caller's; the caller's name rides along
+    // as the alias.
+    expect(meta.docId).toBe(unitId);
+    expect(unitId).not.toBe('unit-1');
+    expect(meta.alias).toBe('unit-1');
     expect(meta.type).toBe('mockup');
     expect(meta.title).toBe('Mock Test');
+
+    // …and the readable name still addresses the same doc.
+    const byName = await j<{ meta: { docId: string } }>(await fetch(`${base}/api/docs/unit-1`));
+    expect(byName.meta.docId).toBe(unitId);
   });
 
   it('lists docs', async () => {
     const r = await fetch(`${base}/api/docs`);
     const { docs } = await j<{ docs: { docId: string }[] }>(r);
-    expect(docs.map((d) => d.docId)).toContain('unit-1');
+    expect(docs.map((d) => d.docId)).toContain(unitId);
   });
 
   it('serves a bound mockup HTML at /mockup/<docId> with reviewUrl in meta', async () => {
@@ -83,11 +99,17 @@ describe('server REST', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'mock-served-1', type: 'mockup', sourceUrl: file }),
     }).then((r) =>
-      j<{ meta: { docId: string; type: string; sourceUrl?: string; reviewUrl?: string } }>(r),
+      j<{
+        docId: string;
+        meta: { docId: string; type: string; sourceUrl?: string; reviewUrl?: string };
+      }>(r),
     );
-    // The decorated meta should now carry a reviewUrl pointing at /mockup/.
+    const mockId = created.docId;
+    expect(created.meta.docId).toBe(mockId);
+    // The decorated meta should now carry a reviewUrl pointing at /mockup/ —
+    // addressed by the MINTED id, which is the doc's own address.
     expect(created.meta.reviewUrl).toBeDefined();
-    expect(created.meta.reviewUrl).toContain(`/mockups/${encodeURIComponent('mock-served-1')}`);
+    expect(created.meta.reviewUrl).toContain(`/mockups/${encodeURIComponent(mockId)}`);
 
     // GET the served URL — should be the HTML body the agent wrote.
     const served = await fetch(`${base}/mockup/mock-served-1`);
@@ -502,28 +524,28 @@ describe('server REST', () => {
     writeFileSync(f1, '# A\n');
     writeFileSync(f2, '# B\n');
     writeFileSync(f3, '# Other\n');
-    await fetch(`${base}/api/docs`, {
+    const { docId: setAId } = await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'set-a', type: 'markdown', sourceUrl: f1, setId: 's1' }),
-    }).then((r) => j(r));
-    await fetch(`${base}/api/docs`, {
+    }).then((r) => j<{ docId: string }>(r));
+    const { docId: setBId } = await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'set-b', type: 'markdown', sourceUrl: f2, setId: 's1' }),
-    }).then((r) => j(r));
-    await fetch(`${base}/api/docs`, {
+    }).then((r) => j<{ docId: string }>(r));
+    const { docId: otherId } = await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'other', type: 'markdown', sourceUrl: f3 }),
-    }).then((r) => j(r));
+    }).then((r) => j<{ docId: string }>(r));
 
     const list = await fetch(`${base}/api/docs`).then((r) =>
       j<{ docs: Array<{ docId: string; setId?: string }> }>(r),
     );
     const inSet = list.docs.filter((d) => d.setId === 's1').map((d) => d.docId);
-    expect(inSet.sort()).toEqual(['set-a', 'set-b']);
-    const lone = list.docs.find((d) => d.docId === 'other');
+    expect(inSet.sort()).toEqual([setAId, setBId].sort());
+    const lone = list.docs.find((d) => d.docId === otherId);
     expect(lone?.setId).toBeUndefined();
   });
 
@@ -548,16 +570,20 @@ describe('server REST', () => {
       const webhookUrl = `http://localhost:${sink.port}/hook`;
       const file = join(dataDir, 'hooked.md');
       writeFileSync(file, '# hooked\n');
-      await fetch(`${base}/api/docs`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          docId: 'hooked-1',
-          type: 'markdown',
-          sourceUrl: file,
-          webhookUrl,
+      const { docId: hookedId } = await j<{ docId: string }>(
+        await fetch(`${base}/api/docs`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            docId: 'hooked-1',
+            type: 'markdown',
+            sourceUrl: file,
+            webhookUrl,
+          }),
         }),
-      });
+      );
+      // Addressed by the readable alias — the payload must still name the
+      // doc's own id, or a webhook consumer sees two identities for one doc.
       await fetch(`${base}/api/docs/hooked-1/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -571,7 +597,7 @@ describe('server REST', () => {
       expect(hits.length).toBeGreaterThan(0);
       const payload = hits[0] as { event: string; docId: string };
       expect(payload.event).toBe('thread.created');
-      expect(payload.docId).toBe('hooked-1');
+      expect(payload.docId).toBe(hookedId);
     } finally {
       sink.stop();
     }
@@ -622,10 +648,12 @@ describe('server REST', () => {
         body: JSON.stringify({ docId: 'hydrate-test', type: 'mockup' }),
       }),
     );
-    expect(created.docId).toBe('hydrate-test');
+    // The `.ydoc` is named for the doc's own id, not the name it was created
+    // under.
+    const hydrateId = created.docId;
     // Yjs snapshot debounce + writeFileSync cycle. Poll until the file
     // appears rather than racing a fixed sleep.
-    const ydocPath = join(dataDir, 'hydrate-test.ydoc');
+    const ydocPath = join(dataDir, `${hydrateId}.ydoc`);
     for (let i = 0; i < 30 && !existsSync(ydocPath); i++) {
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -640,7 +668,13 @@ describe('server REST', () => {
         await fetch(`http://localhost:${second.port}/api/docs`),
       );
       const ids = list.docs.map((d) => d.docId);
-      expect(ids).toContain('hydrate-test');
+      expect(ids).toContain(hydrateId);
+      // The alias came back off disk with it, so the readable name still
+      // resolves on a server that never saw the create call.
+      const byName = await j<{ meta: { docId: string } }>(
+        await fetch(`http://localhost:${second.port}/api/docs/hydrate-test`),
+      );
+      expect(byName.meta.docId).toBe(hydrateId);
     } finally {
       await second.stop();
     }
@@ -665,9 +699,9 @@ describe('server REST', () => {
         }),
       }),
     );
-    expect(created.docId).toBe('rebind-test');
+    const rebindId = created.docId;
     // Wait for initial Yjs persistence to disk.
-    const ydocPath = join(dataDir, 'rebind-test.ydoc');
+    const ydocPath = join(dataDir, `${rebindId}.ydoc`);
     for (let i = 0; i < 30 && !existsSync(ydocPath); i++) {
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -762,12 +796,15 @@ describe('delete_doc', () => {
     await handle.stop();
     rmSync(dataDir, { recursive: true, force: true });
   });
-  const mk = (docId: string) =>
-    fetch(`${base}/api/docs`, {
+  // Returns the id the server MINTED — the name passed in is only the alias.
+  const mk = async (docId: string) => {
+    const r = await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId, type: 'mockup', title: docId }),
     });
+    return ((await r.json()) as { docId: string }).docId;
+  };
   const addThread = (docId: string) =>
     fetch(`${base}/api/docs/${docId}/threads`, {
       method: 'POST',
@@ -776,7 +813,7 @@ describe('delete_doc', () => {
     });
 
   it('refuses to delete a doc with open threads (guardrail)', async () => {
-    await mk('del-guard');
+    const guardId = await mk('del-guard');
     await addThread('del-guard');
     const r = await fetch(`${base}/api/docs/del-guard`, { method: 'DELETE' });
     expect(r.status).toBe(409);
@@ -787,13 +824,13 @@ describe('delete_doc', () => {
     const list = await fetch(`${base}/api/docs`).then(
       (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
     );
-    expect(list.docs.map((d) => d.docId)).toContain('del-guard');
+    expect(list.docs.map((d) => d.docId)).toContain(guardId);
   });
 
   it('deletes a doc with no open threads and removes its .ydoc', async () => {
-    await mk('del-ok');
+    const okId = await mk('del-ok');
     // wait for the debounced persist (200ms) so we can prove the file is removed
-    const ydocPath = join(dataDir, 'del-ok.ydoc');
+    const ydocPath = join(dataDir, `${okId}.ydoc`);
     for (let i = 0; i < 20 && !existsSync(ydocPath); i++)
       await new Promise((r) => setTimeout(r, 25));
     expect(existsSync(ydocPath)).toBe(true);
@@ -806,20 +843,21 @@ describe('delete_doc', () => {
     const list = await fetch(`${base}/api/docs`).then(
       (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
     );
-    expect(list.docs.map((d) => d.docId)).not.toContain('del-ok');
-    const g = await fetch(`${base}/api/docs/del-ok`);
-    expect(g.status).toBe(404);
+    expect(list.docs.map((d) => d.docId)).not.toContain(okId);
+    // Gone by both spellings: the alias must not outlive the doc it named.
+    expect(await fetch(`${base}/api/docs/del-ok`).then((x) => x.status)).toBe(404);
+    expect(await fetch(`${base}/api/docs/${okId}`).then((x) => x.status)).toBe(404);
   });
 
   it('force-deletes a doc despite open threads', async () => {
-    await mk('del-force');
+    const forceId = await mk('del-force');
     await addThread('del-force');
     const r = await fetch(`${base}/api/docs/del-force?force=true`, { method: 'DELETE' });
     expect(r.status).toBe(200);
     const list = await fetch(`${base}/api/docs`).then(
       (r) => r.json() as Promise<{ docs: { docId: string }[] }>,
     );
-    expect(list.docs.map((d) => d.docId)).not.toContain('del-force');
+    expect(list.docs.map((d) => d.docId)).not.toContain(forceId);
   });
 
   it('returns 404 when deleting a nonexistent doc', async () => {
@@ -849,12 +887,12 @@ describe('doc owner + lastActivityAt', () => {
   };
 
   it('records the owner passed at creation and surfaces it in list_docs', async () => {
-    await fetch(`${base}/api/docs`, {
+    const { docId: ownId } = (await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'own-1', type: 'mockup', owner: '/Volumes/x/dev/agent-foo' }),
-    });
-    const meta = await getMeta('own-1');
+    }).then((r) => r.json())) as { docId: string };
+    const meta = await getMeta(ownId);
     expect(meta?.owner).toBe('/Volumes/x/dev/agent-foo');
     expect(typeof meta?.lastActivityAt).toBe('number');
     expect(meta?.lastActivityAt).toBeGreaterThanOrEqual(meta!.createdAt - 1000);
@@ -863,14 +901,14 @@ describe('doc owner + lastActivityAt', () => {
   it('advances lastActivityAt when the doc is edited', async () => {
     const file = join(dataDir, 'activity.md');
     writeFileSync(file, 'before\n');
-    await fetch(`${base}/api/docs`, {
+    const { docId: actId } = (await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'act-1', type: 'markdown', sourceUrl: file }),
-    });
+    }).then((r) => r.json())) as { docId: string };
     // let the create-time persist settle
     await new Promise((r) => setTimeout(r, 250));
-    const before = (await getMeta('act-1'))!.lastActivityAt!;
+    const before = (await getMeta(actId))!.lastActivityAt!;
     await new Promise((r) => setTimeout(r, 1100));
     await fetch(`${base}/api/docs/act-1/find_and_replace`, {
       method: 'POST',
@@ -878,7 +916,7 @@ describe('doc owner + lastActivityAt', () => {
       body: JSON.stringify({ find: 'before', replace: 'after' }),
     });
     await new Promise((r) => setTimeout(r, 350)); // wait for the 200ms persist
-    const after = (await getMeta('act-1'))!.lastActivityAt!;
+    const after = (await getMeta(actId))!.lastActivityAt!;
     expect(after).toBeGreaterThan(before);
   });
 });
@@ -910,9 +948,12 @@ describe('read-only code docs', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'code-1', type: 'code', sourceUrl: file }),
     });
-    const body = (await r.json()) as { meta: { type: string; reviewUrl?: string } };
+    const body = (await r.json()) as {
+      docId: string;
+      meta: { type: string; reviewUrl?: string };
+    };
     expect(body.meta.type).toBe('code');
-    expect(body.meta.reviewUrl).toContain('/docs/code-1');
+    expect(body.meta.reviewUrl).toContain(`/docs/${body.docId}`);
     const c = await content('code-1');
     expect(c.plainText).toBe('const x: number = 1;\n');
     expect(c.blocks[0]?.type).toBe('code');

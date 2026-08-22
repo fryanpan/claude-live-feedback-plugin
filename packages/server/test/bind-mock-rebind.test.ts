@@ -46,12 +46,18 @@ describe('bind_mock rebind (POST /api/docs on an existing mockup doc)', () => {
 
     const created = await postDoc({ docId, type: 'mockup', sourceUrl: first });
     expect(created.meta.sourceUrl).toBe(first);
+    // `mock-rebind-1` is the NAME; the server minted the id it lives at, and
+    // the mockup URL below still addresses it by that name.
+    const mintedId = created.meta.docId;
     const servedFirst = await fetch(`${base}/mockup/${docId}`).then((r) => r.text());
     expect(servedFirst).toContain('First mock body');
 
     // Same docId, new path — the documented repoint.
     const rebound = await postDoc({ docId, type: 'mockup', sourceUrl: second });
     expect(rebound.meta.sourceUrl).toBe(second);
+    // …and it is the SAME doc: a repeated name resolves to the doc it already
+    // names rather than minting a second one beside it.
+    expect(rebound.meta.docId).toBe(mintedId);
     const servedSecond = await fetch(`${base}/mockup/${docId}`);
     expect(servedSecond.status).toBe(200);
     expect(await servedSecond.text()).toContain('Second mock body');
@@ -60,7 +66,7 @@ describe('bind_mock rebind (POST /api/docs on an existing mockup doc)', () => {
     // only touched memory would silently revert at the next supervisor
     // restart. saveToDisk debounces ~200ms; give it room.
     await new Promise((r) => setTimeout(r, 600));
-    const sidecar = JSON.parse(readFileSync(join(dataDir, `${docId}.private.json`), 'utf8')) as {
+    const sidecar = JSON.parse(readFileSync(join(dataDir, `${mintedId}.private.json`), 'utf8')) as {
       sourceUrl?: string;
     };
     expect(sidecar.sourceUrl).toBe(second);
@@ -71,10 +77,11 @@ describe('bind_mock rebind (POST /api/docs on an existing mockup doc)', () => {
     const file = join(dataDir, 'rebind-keep.html');
     writeFileSync(file, '<!doctype html><html><body><h1>Kept mock body</h1></body></html>');
 
-    await postDoc({ docId, type: 'mockup', sourceUrl: file });
+    const created = await postDoc({ docId, type: 'mockup', sourceUrl: file });
     // e.g. a later call that only re-tags the set must not unbind the doc.
     const retagged = await postDoc({ docId, type: 'mockup', setId: 'batch-2' });
     expect(retagged.meta.sourceUrl).toBe(file);
+    expect(retagged.meta.docId).toBe(created.meta.docId);
     const served = await fetch(`${base}/mockup/${docId}`);
     expect(served.status).toBe(200);
     expect(await served.text()).toContain('Kept mock body');
