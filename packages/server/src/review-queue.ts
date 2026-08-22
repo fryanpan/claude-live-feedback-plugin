@@ -21,7 +21,7 @@
  * already been bitten by.
  */
 import type { Comment, ReviewPayload, TaskReviewItem, Thread } from '@feedback/core';
-import { isReviewItemOpen, pendingDeclaration } from '@feedback/core';
+import { decodeEntities, isReviewItemOpen, pendingDeclaration } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** How much of the question rides along to the strip. Enough to recognise the
@@ -439,43 +439,16 @@ function escapeRe(s: string): string {
 }
 
 /**
- * Row TITLES are plain text by the time they leave this module.
+ * Row TITLES are plain text by the time they leave this module — `ask` is
+ * deliberately untouched, being comment prose where a literal `&amp;` (say,
+ * inside a code span) is the author's content.
  *
- * Titles are caller-supplied at bind/create time, and some callers hand over
- * strings they already HTML-escaped ("LF Workspace &amp; Tasks"). The client
- * renders titles via `textContent`, which is correct — so the baked entity
- * survives to the screen as literal text. Decoding here, at the queue's single
- * title-assembly point, fixes every such row at once instead of chasing every
- * writer, and fixes rows whose bad title is already stored.
- *
- * ONE pass by construction: `replace` scans left to right and never re-reads
- * its own output, so `&amp;amp;` becomes the literal `&amp;` and stops — a
- * caller's double-escape is shown, not silently collapsed. A bare `&`, or an
- * unknown entity name, passes through untouched. TITLE-ONLY on purpose: `ask`
- * is comment prose where a literal `&amp;` (say, inside a code span) is the
- * author's content.
+ * The decoder itself lives in `@feedback/core` because this is not the only
+ * door a title leaves by: the BOARD's titles reach the browser through
+ * `projectTask`, and the browser assembles its own review rows for decision
+ * tasks straight off those. One implementation, applied at each door exactly
+ * once — decoding twice would collapse a caller's deliberate `&amp;amp;`.
  */
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-};
-
-function decodeEntities(s: string): string {
-  if (!s.includes('&')) return s;
-  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
-    if (body.startsWith('#')) {
-      const hex = body[1] === 'x' || body[1] === 'X';
-      const code = Number.parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10);
-      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
-        ? String.fromCodePoint(code)
-        : whole;
-    }
-    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
-  });
-}
 
 function clip(text: string, max = ASK_MAX): string {
   const flat = stripEmphasis(text.replace(/\s+/g, ' ').trim());

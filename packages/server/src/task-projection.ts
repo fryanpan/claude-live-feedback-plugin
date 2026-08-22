@@ -1,4 +1,4 @@
-import { listThreads, prose, readTaskReviewItem } from '@feedback/core';
+import { decodeEntities, listThreads, prose, readTaskReviewItem } from '@feedback/core';
 import type { TaskReviewItem } from '@feedback/core';
 import * as Y from 'yjs';
 import type { Rooms } from './rooms.ts';
@@ -181,7 +181,16 @@ export function projectTask(
     id: task.id,
     ...(commentCount > 0 ? { commentCount } : {}),
     workspaceId: task.workspaceId,
-    title: task.title,
+    // Decoded here because this is the board's ONLY source of task titles, and
+    // the browser renders every one of them through `textContent` — so a
+    // caller that stored "Decisions &amp; open questions" reaches the screen
+    // with the entity intact. It matters beyond the row: the Home queue builds
+    // its DECISION items in the browser, off these projected titles rather
+    // than off `GET /review-items`, so a title left raw here is a review row
+    // with a raw entity in it however carefully the REST queue normalizes its
+    // own. See `decodeEntities` — one pass, so a deliberate `&amp;amp;` still
+    // shows as `&amp;`.
+    title: decodeEntities(task.title),
     status: task.status,
     assignee: task.assignee,
     ...(ownerKind !== undefined ? { ownerKind } : {}),
