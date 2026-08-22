@@ -241,6 +241,7 @@ describe('ACTIVITY_REFRESH_EVENTS', () => {
       'task.assigned',
       'task.retitled',
       'task.due_set',
+      'task.parked',
       'task.evidence_amended',
       'task.regrouped',
       'decision.answered',
@@ -327,6 +328,45 @@ describe('describeEvent', () => {
     expect(cleared).toContain('Fix ranking');
     // A cleared date must not print the one it used to have as though it were
     // still set — "cleared … 9/9/2026" reads as a date somebody just chose.
+    expect(cleared).not.toContain(shown(day(2026, 9, 9)));
+  });
+
+  it('reads a park three ways, and always says what it is waiting for', () => {
+    const park = (over: Record<string, unknown>) =>
+      describeEvent(
+        {
+          event: 'task.parked',
+          ts: NOW,
+          taskId: 't-1',
+          actor: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+          ...over,
+        },
+        titleOf,
+      );
+    const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getTime();
+    const shown = (t: number) => new Date(t).toLocaleDateString();
+
+    const set = park({
+      from: null,
+      to: day(2026, 9, 2),
+      reason: 'waiting on the index rebuild',
+    });
+    expect(set).toContain('Jordan');
+    expect(set).toContain('Fix ranking');
+    expect(set).toContain(shown(day(2026, 9, 2)));
+    // The reason is the half somebody reads back weeks later when they ask
+    // why the work never happened — a line with only a date cannot answer it.
+    expect(set).toContain('waiting on the index rebuild');
+    expect(set).not.toContain('task.parked');
+
+    const moved = park({ from: day(2026, 9, 2), to: day(2026, 9, 9) });
+    expect(moved).toContain(shown(day(2026, 9, 9)));
+
+    const cleared = park({ from: day(2026, 9, 9), to: null });
+    expect(cleared).toContain('un-parked');
+    expect(cleared).toContain('Fix ranking');
+    // A row that is no longer parked must not print the date it used to
+    // carry, which would read as a park somebody just set.
     expect(cleared).not.toContain(shown(day(2026, 9, 9)));
   });
 

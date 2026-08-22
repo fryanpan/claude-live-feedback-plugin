@@ -48,6 +48,7 @@ Someone who was not in the conversation should be able to see a task, know why i
   - `in-progress` when you **start**, not when you report.
   - `done` means **delivered** — all acceptance criteria are met
   - Work sitting in an unmerged PR stays `in-progress`
+  - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — it stays `todo` and the board stops treating it as work nobody got to. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
 - Evidence goes in the transition `note` — the commit, the PR, what you verified and what you couldn't. `amend_evidence(taskId, evidence, note?)` fixes a move you already made; re-sending the transition refuses.
 - Share progress on a task by writing brief comments (100 words or less) in the task when you start, when you hit a blocker, when a PR opens, and when it merges.
 

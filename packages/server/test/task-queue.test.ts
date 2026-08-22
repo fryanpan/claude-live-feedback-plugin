@@ -139,6 +139,55 @@ describe('buildQueue — blockers', () => {
   });
 });
 
+/**
+ * A parked row is deferred, not blocked and not claimed — so the queue keeps
+ * LISTING it and says so on the row. Hiding it would trade one invisibility
+ * for another: the point of the field is that a deliberate deferral becomes
+ * something a reader can see and argue with, and a row that silently vanishes
+ * from the queue is exactly what "moved it to in-progress so the nudger would
+ * stop" already produced.
+ */
+describe('buildQueue — parked rows', () => {
+  const NOW = 1_000_000_000;
+  const DAY = 86_400_000;
+
+  it('lists a parked row and marks it, without touching `ready`', () => {
+    const parked = task({
+      parkedUntil: NOW + DAY,
+      parkedReason: 'waiting on the index rebuild',
+    });
+    const rows = buildQueue([parked], GOALS, { now: NOW });
+    expect(rows.map((r) => r.id)).toEqual([parked.id]);
+    expect(rows[0]?.parked).toEqual({ until: NOW + DAY, reason: 'waiting on the index rebuild' });
+    // `ready` is about DEPENDENCIES and stays that way. A parked row has no
+    // open blocker, and overloading the field would silently change what
+    // `includeBlocked` means for every existing caller.
+    expect(rows[0]?.ready).toBe(true);
+  });
+
+  it('says nothing about a park whose date has passed', () => {
+    const expired = task({ parkedUntil: NOW - 1, parkedReason: 'waiting on the rebuild' });
+    const rows = buildQueue([expired], GOALS, { now: NOW });
+    expect(rows[0]?.id).toBe(expired.id); // control: the row is in there
+    // No sweeper cleared the field; the row simply counts as ready again,
+    // which is what makes "when the date passes it comes back" true with no
+    // second writer to fall behind.
+    expect(rows[0]?.parked).toBeUndefined();
+  });
+
+  it('carries the date with no reason when nobody gave one', () => {
+    const parked = task({ parkedUntil: NOW + DAY });
+    expect(buildQueue([parked], GOALS, { now: NOW })[0]?.parked).toEqual({ until: NOW + DAY });
+  });
+
+  it('leaves an un-parked row with no `parked` key at all', () => {
+    const plain = task();
+    const rows = buildQueue([plain], GOALS, { now: NOW });
+    expect(rows[0]?.id).toBe(plain.id); // control
+    expect('parked' in (rows[0] as object)).toBe(false);
+  });
+});
+
 describe('summarizeGoals', () => {
   it('flattens parent-then-subgoals in priority order, with counts', () => {
     const rows = summarizeGoals(

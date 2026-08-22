@@ -62,6 +62,7 @@ import {
   dropTarget,
   homeSinceLabel,
   initialsOf,
+  isTaskParked,
   ownerKind,
   presenceHue,
   quoteAfterCapture,
@@ -732,6 +733,24 @@ function taskBadges(task: HubTask): HTMLElement {
     add(
       overdue ? 'hub-badge-due hub-badge-overdue' : 'hub-badge-due',
       `due ${due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
+    );
+  }
+  // Deferred to a date. This one earns its place on the row where `needs` and
+  // the dependency count did not, and the difference is that it is TRUE OF
+  // ALMOST NO ROWS: it marks the handful somebody deliberately put off, on a
+  // list whose job is to answer what to work on next. Without it a parked row
+  // is indistinguishable from work nobody has gotten to — which is precisely
+  // the confusion the field was added to end, so a park the board did not
+  // draw would be the store-has-it/surface-can't-show-it failure again.
+  //
+  // The reason rides `title` rather than the chip text. It is free prose of
+  // any length and the row is one line; the panel below shows it in full.
+  if (isTaskParked(task)) {
+    const until = new Date(task.parkedUntil as number);
+    add(
+      'hub-badge-parked',
+      `parked · ${until.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
+      task.parkedReason,
     );
   }
   if (task.triagePendingTs !== undefined) add('hub-badge-triage', 'triaging…');
@@ -2682,6 +2701,9 @@ export interface DetailHandlers {
   onGoalSet?: (task: HubTask, goalId: string) => void;
   /** Set the due date, or clear it with `null`. */
   onDueSet?: (task: HubTask, dueAt: number | null) => void;
+  /** Defer the task to a date, or un-park it with `null`. Never moves the
+   *  row — parking is not a status. */
+  onParkSet?: (task: HubTask, parkedUntil: number | null) => void;
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
   onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
@@ -4361,6 +4383,52 @@ export function renderTaskDetail(
     const line = document.createElement('p');
     line.textContent = blockedNoteLine(handlers.blocked);
     note.append(k, line);
+    before.push(note);
+  }
+
+  // Deferred on purpose, in the same shape as the blocking note above — and
+  // in a block of its OWN rather than as a fifth cell in the fields row.
+  // That row is a pinned four: *"the four facts a reader checks before doing
+  // anything else"*, on a panel whose scarcest axis is height. A park is also
+  // true of almost no rows, so a permanent fifth control would cost every
+  // task a cell to say nothing.
+  //
+  // It carries a control anyway, because a field an agent writes and a person
+  // cannot correct reads as broken (Bryan, 2026-08-18: *"All fields must be
+  // human editable"*) — and this one more than most, since deferring somebody
+  // else's work is exactly the call a reader wants to overturn in one tap.
+  // The REASON is read-only here: it is prose that belongs with the
+  // discussion, and clearing the date clears it server-side anyway.
+  if (isTaskParked(task, handlers.now ?? Date.now())) {
+    const note = document.createElement('div');
+    note.className = 'hub-parked-note';
+    const k = document.createElement('span');
+    k.className = 'hub-decide-k hub-parked-k';
+    k.textContent = 'Parked';
+    const line = document.createElement('p');
+    line.textContent = task.parkedReason
+      ? `until ${new Date(task.parkedUntil as number).toLocaleDateString()} — ${task.parkedReason}`
+      : `until ${new Date(task.parkedUntil as number).toLocaleDateString()}`;
+    // Local noon both ways, exactly as the Due control does it: `toISOString`
+    // shows yesterday to anyone west of UTC, and `new Date('2026-09-02')`
+    // parses back as UTC midnight, which is the previous day in the same
+    // places. An emptied input is an explicit un-park, not a bad value.
+    const until = document.createElement('input');
+    until.type = 'date';
+    until.className = 'hub-detail-input hub-parked-until';
+    until.value = localDateInputValue(task.parkedUntil as number);
+    until.setAttribute('aria-label', 'Parked until — clear the date to un-park');
+    until.addEventListener('change', () => {
+      const v = until.value;
+      if (!v) {
+        handlers.onParkSet?.(task, null);
+        return;
+      }
+      const [y, m, d] = v.split('-').map(Number);
+      if (!y || !m || !d) return;
+      handlers.onParkSet?.(task, new Date(y, m - 1, d, 12, 0, 0, 0).getTime());
+    });
+    note.append(k, line, until);
     before.push(note);
   }
 
