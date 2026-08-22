@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { readyIdleLine, reviewAnsweredLine } from '../src/nudge-line.ts';
 
@@ -104,5 +107,82 @@ describe('reviewAnsweredLine', () => {
 
   it('falls back to the id when the server sent no title', () => {
     expect(reviewAnsweredLine({ taskId: 't-a1' })).toContain('t-a1');
+  });
+});
+
+/**
+ * The propagation clause, and the wiring that carries it to an agent.
+ *
+ * The behaviour is proven against REAL emitted frames in
+ * `packages/server/test/review-answered-nudge-links.test.ts` — that is the
+ * test that can tell `links` from a key nobody sends. What this block adds is
+ * the two seams that suite cannot see: the switch in mcp.ts must call this
+ * renderer rather than rebuild the sentence inline, and the BUNDLE must carry
+ * the guard, because peers load `packages/plugin/mcp/index.js` and never the
+ * source.
+ */
+describe('the propagation clause on reviewAnsweredLine', () => {
+  const CLAUSE = 'walk its links as the propagation checklist';
+  const ANSWERED = { taskId: 't-a1', title: 'Ship the search revamp' };
+
+  it('offers the checklist when there are links to walk', () => {
+    expect(reviewAnsweredLine({ ...ANSWERED, links: [{ kind: 'doc', docId: 'd1' }] })).toContain(
+      CLAUSE,
+    );
+  });
+
+  it('says nothing about links when the row has none', () => {
+    const line = reviewAnsweredLine({ ...ANSWERED, links: [] });
+    expect(line).not.toContain(CLAUSE);
+    // Positive control, so "no clause" cannot be "no line".
+    expect(line).toContain('[workspace.review_answered]');
+    expect(line).toContain('read it and act on it now');
+  });
+
+  it('says nothing about links when the frame carries no links key at all', () => {
+    // A server older than the field, or the comment-review route, which
+    // records an answer against no row. Absent is not "walk an empty list"
+    // and it is not "walk an unknown list" either — there is nothing to hand
+    // the reader.
+    expect(reviewAnsweredLine(ANSWERED)).not.toContain(CLAUSE);
+    expect(reviewAnsweredLine({})).not.toContain(CLAUSE);
+  });
+
+  it('leaves nothing dangling where the clause used to sit', () => {
+    const line = reviewAnsweredLine({ ...ANSWERED, links: [] });
+    expect(line.trimEnd()).toBe(line);
+    expect(line).not.toMatch(/[;—]\s*\.?$/);
+    expect(line.endsWith('now.')).toBe(true);
+  });
+});
+
+describe('the channel switch and the shipped bundle both use it', () => {
+  const CLAUSE = 'walk its links as the propagation checklist';
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+  const BUNDLE = readFileSync(join(HERE, '../../plugin/mcp/index.js'), 'utf8');
+
+  /** The `case 'workspace.review_answered':` arm, up to the next case. */
+  const arm = (): string => {
+    const start = SRC.indexOf("case 'workspace.review_answered':");
+    expect(start, 'no workspace.review_answered case in mcp.ts').toBeGreaterThan(-1);
+    const rest = SRC.slice(start + 1);
+    return rest.slice(0, rest.indexOf('case '));
+  };
+
+  it('delegates to the renderer instead of rebuilding the sentence inline', () => {
+    expect(arm()).toContain('reviewAnsweredLine(p)');
+    expect(arm()).not.toContain(CLAUSE);
+  });
+
+  it('ships the guard in the artifact peers actually load', () => {
+    // Positive control first: the bundle is a real build that contains the
+    // clause at all, so "no unconditional clause" cannot be "wrong file".
+    expect(BUNDLE).toContain(CLAUSE);
+    // Both renderers guard the same way, so this literal must appear at least
+    // twice — decision-line.ts's copy and this one.
+    expect(BUNDLE.split('Array.isArray(p.links) && p.links.length > 0').length - 1).toBeGreaterThan(
+      1,
+    );
   });
 });
