@@ -63,28 +63,42 @@ const bareUrl = (flags = ''): RegExp =>
  *  to the word `chat`, across a line wrap. */
 const NEAR = 200;
 
+/**
+ * Just the "Use Links Effectively" section, flattened. Scoped rather than
+ * matched against the whole file because the phrases here are ordinary — "in a
+ * workspace" appears three sections earlier, and a whole-file match would go
+ * green off that sentence with the link rule deleted.
+ */
+const linkSection = (): string => {
+  const body = GENERAL.split(/^## Use Links Effectively$/m)[1] ?? '';
+  return flatten(body.split(/^## /m)[0] ?? '');
+};
+
 describe('the general skill owns the rule, and states both halves', () => {
   it('has the section the other skills point at', () => {
     expect(GENERAL).toMatch(/^## Use Links Effectively$/m);
+    // POSITIVE CONTROL for the slicer: an empty section would satisfy every
+    // `not`-shaped read below and most `toMatch` ones would simply fail
+    // loudly — but the section boundary is the part worth proving.
+    expect(linkSection().length).toBeGreaterThan(100);
   });
 
   it('gives the workspace destination the inline relative spelling', () => {
-    const g = flatten(GENERAL);
-    expect(g).toMatch(/in a workspace/);
-    expect(g).toMatch(/relative url, inline/);
-    expect(g).toMatch(/never the raw url/);
+    // This is the operator's own sentence and it is quoted here so a reword
+    // has to be deliberate — today's whole round of fixes came from agents
+    // growing this file's prose.
+    expect(linkSection()).toContain(
+      'when you share links in a workspace, use relative urls and make them inline using appropriate link text instead of the raw url',
+    );
   });
 
   it('gives the chat destination the bare-on-its-own-line spelling', () => {
-    const g = flatten(GENERAL);
-    expect(g).toMatch(/in terminal chat/);
-    expect(g).toMatch(bareUrl());
-  });
-
-  it('says the destination decides, so neither half reads as universal', () => {
-    // The actual fix. Both spellings survived in the file before this ticket;
-    // what was missing was the sentence that makes them conditional.
-    expect(flatten(GENERAL)).toMatch(/the destination decides the format/);
+    // The addition. Without it the sentence above is the only instruction in
+    // the file that names a destination, and every other skill's "bare URL on
+    // its own line" has nothing to be the exception to.
+    const s = linkSection();
+    expect(s).toMatch(/in terminal chat/);
+    expect(s).toMatch(bareUrl());
   });
 });
 
