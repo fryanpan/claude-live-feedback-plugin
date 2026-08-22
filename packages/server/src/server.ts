@@ -3196,25 +3196,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const workspace = taskStore.getWorkspace(workspaceId);
           if (!workspace) return j(404, { error: 'workspace not found' });
           const limitRaw = url.searchParams.get('limit');
-          const rows = buildQueue(taskStore.listTasks(workspaceId), workspace.goals, {
-            ...(url.searchParams.get('assignee')
-              ? { assignee: url.searchParams.get('assignee') ?? '' }
-              : {}),
-            ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
-              ? { limit: Number(limitRaw) }
-              : {}),
-            includeBlocked: url.searchParams.get('includeBlocked') === 'true',
-            // The discussion the queue has always dropped. Every one of the
-            // five known stale-premise pickups had a comment on the task
-            // saying the premise had moved, and none of them reached the
-            // next reader, because this route returned `body` and nothing
-            // else. Passed as a reader rather than a map so `buildQueue`
-            // stays pure and only the armed rows pay for their notes.
-            discussion: (taskId) => taskProjection.discussionNotes(taskId),
-            ...(opts.premiseStaleAfterMs !== undefined
-              ? { staleAfterMs: opts.premiseStaleAfterMs }
-              : {}),
-          });
+          // Same additive flag as `/tasks`, and the same default: an archived
+          // row is not work to pick up, so it leaves the queue unless a caller
+          // asks for it by name.
+          const includeArchived = url.searchParams.get('includeArchived') === 'true';
+          const rows = buildQueue(
+            taskStore.listTasks(workspaceId, { includeArchived }),
+            workspace.goals,
+            {
+              ...(url.searchParams.get('assignee')
+                ? { assignee: url.searchParams.get('assignee') ?? '' }
+                : {}),
+              ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
+                ? { limit: Number(limitRaw) }
+                : {}),
+              includeBlocked: url.searchParams.get('includeBlocked') === 'true',
+              // The discussion the queue has always dropped. Every one of the
+              // five known stale-premise pickups had a comment on the task
+              // saying the premise had moved, and none of them reached the
+              // next reader, because this route returned `body` and nothing
+              // else. Passed as a reader rather than a map so `buildQueue`
+              // stays pure and only the armed rows pay for their notes.
+              discussion: (taskId) => taskProjection.discussionNotes(taskId),
+              ...(opts.premiseStaleAfterMs !== undefined
+                ? { staleAfterMs: opts.premiseStaleAfterMs }
+                : {}),
+            },
+          );
           // WHO IS ALREADY ON EACH ROW, on the surface where the pickup
           // decision is actually made. `list_tasks` has carried
           // `ownerSession` for a while and this route did not, so the read
@@ -3237,7 +3245,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // right.
           const ownerSessionOf = taskProjection.ownerSessionReader(workspaceId);
           const claimSessionOf = taskProjection.claimSessionReader(workspaceId);
-          const byId = new Map(taskStore.listTasks(workspaceId).map((t) => [t.id, t]));
+          const byId = new Map(
+            taskStore.listTasks(workspaceId, { includeArchived }).map((t) => [t.id, t]),
+          );
           const withPresence = rows.map((row) => {
             const task = byId.get(row.id);
             if (!task) return row;
@@ -3552,6 +3562,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(url.searchParams.get('needs')
               ? { needs: url.searchParams.get('needs') as 'action' | 'decision' }
               : {}),
+            // ADDITIVE, and the default is the narrowing: a caller built
+            // before archiving existed keeps getting the rows it always got,
+            // minus the ones somebody has since removed. That is the safe
+            // direction — the failure it cannot produce is an old bundle
+            // resurrecting a task its user archived.
+            includeArchived: url.searchParams.get('includeArchived') === 'true',
           });
           // The kind the BOARD resolves, not just the one somebody declared.
           // An agent has no other way to ask "which of my rows read as an
@@ -4316,6 +4332,40 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             actor: author,
             ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
           });
+          if (!res.ok) return j(404, res);
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        // Soft-delete a row, and put it back (§3.6 task.archived /
+        // task.restored). The board's ONLY removal: three fields on the task,
+        // nothing moved on disk, the id and every thread hanging off it still
+        // resolving. See `archivedAt` on the Task type.
+        //
+        // `reason` is optional here where a park's is merely encouraged — an
+        // archive is often a one-tap "not this" from a keyboard, and refusing
+        // it for want of a sentence would push people back to leaving dead
+        // rows on the board, which is the thing being fixed.
+        const taskArchiveMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/archive$/);
+        if (taskArchiveMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskArchiveMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.archiveTask(taskId, {
+            actor: author,
+            ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
+          });
+          if (!res.ok) return j(404, res);
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        const taskRestoreMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/restore$/);
+        if (taskRestoreMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskRestoreMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.unarchiveTask(taskId, { actor: author });
           if (!res.ok) return j(404, res);
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
@@ -5207,7 +5257,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // even to a restart that lands right after it.
             // Attached docs are untouched throughout: attachDoc is a LINK,
             // so a doc a deleted board merely cited keeps working.
-            const taskIds = taskStore.listTasks(workspaceId).map((t) => t.id);
+            // Archived rows included: each still owns a `.ydoc`, and a stage
+            // that skipped them would orphan those files under a board that
+            // no longer exists — the exact outcome the staging step exists to
+            // prevent.
+            const taskIds = taskStore
+              .listTasks(workspaceId, { includeArchived: true })
+              .map((t) => t.id);
             if (!taskProjection.stageWorkspaceFiles(workspaceId, taskIds).ok) {
               taskProjection.unstageWorkspaceFiles(workspaceId, taskIds);
               return j(500, { ok: false, error: 'rooms-cleanup-failed' });
@@ -6706,7 +6762,10 @@ function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): Land
 function collectLandingWorkspaces(rooms: Rooms, taskStore: TaskStore): LandingWorkspaceInput[] {
   return taskStore.listWorkspaces().map((ws) => {
     let last = ws.createdAt;
-    for (const task of taskStore.listTasks(ws.id)) {
+    // Archived rows included: archiving IS activity on this board, and a
+    // reading that dropped the row afterwards would step the timestamp
+    // backwards the moment somebody tidied up.
+    for (const task of taskStore.listTasks(ws.id, { includeArchived: true })) {
       if (task.updatedAt > last) last = task.updatedAt;
       for (const thread of rooms.listThreads(`task:${task.id}`)) {
         if (thread.lastActivity > last) last = thread.lastActivity;

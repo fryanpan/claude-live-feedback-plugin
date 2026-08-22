@@ -41,6 +41,7 @@ function fixture(detailTaskId: string | null) {
     ]),
   };
   const opened: string[] = [];
+  const archived: string[] = [];
   let closed = 0;
   const handler = hubShortcutKeydown({
     state,
@@ -53,6 +54,7 @@ function fixture(detailTaskId: string | null) {
       closed += 1;
       state.detailTaskId = null;
     },
+    archiveTask: (id) => archived.push(id),
   });
   return {
     handler,
@@ -61,6 +63,7 @@ function fixture(detailTaskId: string | null) {
     panel,
     state,
     opened,
+    archived,
     closedCount: () => closed,
   };
 }
@@ -123,6 +126,48 @@ describe('hub row shortcuts with the detail panel focused (the #250 focus steal)
     press('j', f.handler);
     // ...and j starts from the top, the pre-detail behavior.
     expect(document.activeElement).toBe(f.rows[0]);
+  });
+
+  // `e` — Gmail's archive key, on a board that already borrowed j/k/o/s from
+  // it. It resolves its target through the SAME anchor as o/s/a, which is the
+  // whole of the focus model: the focused row, or the open panel's row. Hover
+  // is deliberately not a target — it is not focus, it does not exist on an
+  // iPad, and it is the one way this key could remove a row nobody was
+  // looking at.
+  it('e archives the focused row', () => {
+    const f = fixture(null);
+    f.rows[1]?.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual(['t2']);
+  });
+
+  it('e archives the OPEN task when the panel holds focus', () => {
+    const f = fixture('t3');
+    f.panel.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual(['t3']);
+  });
+
+  it('e does nothing when nothing is anchored', () => {
+    const f = fixture(null);
+    const settings = document.createElement('button');
+    document.body.append(settings);
+    settings.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual([]);
+    // Positive control: the same key with a row focused DOES archive.
+    f.rows[0]?.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual(['t1']);
+  });
+
+  it('e never fires while typing', () => {
+    const f = fixture('t2');
+    const input = document.createElement('input');
+    document.body.append(input);
+    input.focus();
+    press('e', f.handler);
+    expect(f.archived).toEqual([]);
   });
 
   it('with no detail open, j from nowhere starts at the top row', () => {

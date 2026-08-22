@@ -14343,7 +14343,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.98";
+var PLUGIN_VERSION = "0.1.99";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -15510,6 +15510,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           includeBlocked: {
             type: "boolean",
             description: "Include tasks held by an enforced open dependency."
+          },
+          includeArchived: {
+            type: "boolean",
+            description: "Include soft-deleted rows. Default false, and leave it false here: an archived task is one somebody decided is not going to happen, so it is not work to pick up. Use `list_tasks` with this flag to FIND archived rows."
           }
         },
         required: ["workspaceId"]
@@ -15517,7 +15521,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "list_tasks",
-      description: 'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation. On a big board the default rows still run large (reviews with their quotes and answers, infoRequests, options, evidence ride on every row — a real board hit 122KB); pass `fields` to pick exactly the keys you need.',
+      description: 'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation. On a big board the default rows still run large (reviews with their quotes and answers, infoRequests, options, evidence ride on every row — a real board hit 122KB); pass `fields` to pick exactly the keys you need.\n\nArchived (soft-deleted) rows are NOT listed unless you pass `includeArchived: true` — that is how you find what somebody archived and what they said about it.',
       inputSchema: {
         type: "object",
         properties: {
@@ -15530,6 +15534,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "array",
             items: { type: "string" },
             description: "Project each row to just these keys (`id` always included; keys a row lacks are omitted). Use for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB. 'transitionCount' is computable here without hauling transitions. Omit (or pass []) for the historical default trim."
+          },
+          includeArchived: {
+            type: "boolean",
+            description: 'Include soft-deleted rows, which are hidden by default. Each comes back carrying `archivedAt`, `archivedBy` and `archiveReason`, so this is the read behind "what did we archive, and why". `unarchive_task` puts one back.'
           }
         },
         required: ["workspaceId"]
@@ -15626,6 +15634,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["taskId", "until"]
+      }
+    },
+    {
+      name: "archive_task",
+      description: 'Take a task OFF the board without destroying it — the soft delete, and the only removal a task has. THIS IS THE VERB FOR "that row should not be there": a duplicate, something the goal moved past, a capture that turned out to be two lines of thinking rather than work. Reach for it freely; it is cheap and it is reversible.\n\nSOFT, and the word is literal. Three fields land on the row (`archivedAt` / `archivedBy` / `archiveReason`) and nothing else happens. The task id keeps resolving, its body doc and every comment thread on it stay readable, links pointing at it keep working, and `after` edges naming it still name it. Nothing moves on disk, so `unarchive_task` is a field clear rather than a restore — there is no window in which the record is half-gone, and nothing to fail half-way.\n\nWhat DOES change is what lists it: the row leaves the board lanes, `next_tasks`, and the ready-work wake, and `list_tasks` stops returning it unless you pass `includeArchived: true`. That is the point — an archived row costs nobody a read.\n\nARCHIVING IS NOT COMPLETING. `done` says the work happened; archiving says it is not going to, and the two must not be confused, because a board whose completion count includes abandoned rows is a board that flatters itself. If the work happened, transition it to done instead.\n\nWrite a `reason`. Whoever finds the row in the archived list three weeks from now sees only your sentence, and "archived" on its own says a decision was made without saying what it was.',
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          reason: {
+            type: "string",
+            description: 'Why, in one line — e.g. "duplicate of the index row" or "the goal moved past this". Capped at 200 characters. Optional, and the row is archived either way; it is the half a later reader acts on.'
+          }
+        },
+        required: ["taskId"]
+      }
+    },
+    {
+      name: "unarchive_task",
+      description: "Put an archived task back on the board. The undo half of `archive_task`, and the reason archiving is safe to reach for: everything the archive did was write three fields, so this clears them and the row rejoins its goal band at the position, status and owner it always had. Nothing is reconstructed and nothing can come back wrong.\n\nUse it when an archive was a mistake, or when a row you put aside turns out to matter again. To FIND what was archived, call `list_tasks` with `includeArchived: true` — the archived rows come back carrying `archivedAt`, `archivedBy` and `archiveReason`.\n\nA row that was not archived is not an error: the call answers `changed: false` and does nothing.",
+      inputSchema: {
+        type: "object",
+        properties: { taskId: { type: "string" } },
+        required: ["taskId"]
       }
     },
     {
@@ -16560,7 +16592,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "next_tasks": {
-        const { workspaceId, assignee, limit, includeBlocked } = a;
+        const { workspaceId, assignee, limit, includeBlocked, includeArchived } = a;
         const qs = new URLSearchParams;
         if (assignee !== undefined)
           qs.set("assignee", assignee);
@@ -16568,6 +16600,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           qs.set("limit", String(limit));
         if (includeBlocked === true)
           qs.set("includeBlocked", "true");
+        if (includeArchived === true)
+          qs.set("includeArchived", "true");
         const query = qs.size > 0 ? `?${qs.toString()}` : "";
         const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
         return ok({
@@ -16577,7 +16611,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "list_tasks": {
-        const { workspaceId, goal, status, assignee, needs, fields } = a;
+        const { workspaceId, goal, status, assignee, needs, fields, includeArchived } = a;
         const qs = new URLSearchParams;
         if (goal !== undefined)
           qs.set("goal", goal);
@@ -16587,6 +16621,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           qs.set("assignee", assignee);
         if (needs !== undefined)
           qs.set("needs", needs);
+        if (includeArchived === true)
+          qs.set("includeArchived", "true");
         const query = qs.size > 0 ? `?${qs.toString()}` : "";
         const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tasks${query}`);
         return ok({
@@ -16668,6 +16704,31 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           taskId,
           parkedUntil: res.task.parkedUntil ?? null,
           ...res.task.parkedReason !== undefined ? { parkedReason: res.task.parkedReason } : {},
+          status: res.task.status,
+          changed: res.changed
+        });
+      }
+      case "archive_task": {
+        const { taskId, reason } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/archive`, {
+          ...reason !== undefined ? { reason } : {},
+          author: AUTHOR
+        });
+        return ok({
+          taskId,
+          archivedAt: res.task.archivedAt ?? null,
+          ...res.task.archiveReason !== undefined ? { archiveReason: res.task.archiveReason } : {},
+          changed: res.changed
+        });
+      }
+      case "unarchive_task": {
+        const { taskId } = a;
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, {
+          author: AUTHOR
+        });
+        return ok({
+          taskId,
+          goal: res.task.goal,
           status: res.task.status,
           changed: res.changed
         });

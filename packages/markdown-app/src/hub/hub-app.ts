@@ -45,12 +45,14 @@ import {
   type UptimeReport,
   advanceWalk,
   applyRefresh,
+  archivedTasks,
   boardSections,
   clientDriftNotice,
   goalLabel,
   hubTabTitle,
   humanBlockerRows,
   initialsOf,
+  isTaskArchived,
   navFromPath,
   navPath,
   paneForNav,
@@ -74,6 +76,7 @@ import {
   type WalkProgress,
   discussionIsBusy,
   renderActivity,
+  renderArchivedList,
   renderBoardForPane,
   renderHomeBrief,
   renderHomeReview,
@@ -117,6 +120,16 @@ interface HubState {
   tab: BoardTab;
   doneWindow: DoneWindow;
   view: 'board' | 'activity';
+  /**
+   * The board column is showing the restore list instead of the lanes.
+   *
+   * A flag on the board rather than a fifth `nav` destination, and it is the
+   * shape the design asked for: the phone rail has four seats, and the way in
+   * is one line above the first goal. It rides `?view=archived` so a reload
+   * or a shared link lands back on it, and any nav tap clears it — leaving the
+   * board is leaving this.
+   */
+  showArchived: boolean;
   activityFilter: ActivityFilter;
   events: ActivityEvent[];
   /** Deploy readiness (§3.12 commit 11) — null until the log has lines. */
@@ -230,14 +243,42 @@ async function send(
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
-function showToast(msg: string): void {
+/**
+ * The board's one-line report, optionally carrying a way to take it back.
+ *
+ * `action` is what makes an undoable act safe to perform without a dialog:
+ * the row leaves, and the way back is in the same place the news arrived,
+ * for as long as the toast stands. Ten seconds for an archive rather than
+ * the default three and a half — a confirm dialog is what this replaces, and
+ * three seconds is not long enough to read a sentence and decide against it.
+ */
+function showToast(msg: string, action?: { label: string; run: () => void; ms?: number }): void {
   const el = document.getElementById('hub-toast');
   if (!el) return;
-  el.textContent = msg;
+  el.replaceChildren(document.createTextNode(msg));
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hub-toast-action';
+    btn.textContent = action.label;
+    btn.addEventListener('click', () => {
+      // Dismiss FIRST. The action re-renders the board, and a toast still
+      // offering "Undo" over a row that is already back reads as an undo
+      // that did not take.
+      if (toastTimer) clearTimeout(toastTimer);
+      el.classList.add('hidden');
+      action.run();
+    });
+    el.append(btn);
+  }
   el.classList.remove('hidden');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), 3500);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), action?.ms ?? 3500);
 }
+
+/** How long the Undo stands after an archive. Ten seconds, and it is the
+ *  reason no confirm dialog is asked for. */
+const ARCHIVE_UNDO_MS = 10_000;
 
 /** Icons. The four nav glyphs are the approved mockup's (home-pane-mockup-v1);
  *  share and settings are new, for the top-right cluster. The shared
@@ -336,6 +377,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>o or Enter</dt><dd>open the focused task</dd>
           <dt>s</dt><dd>open the focused task's status dropdown</dd>
           <dt>a</dt><dd>open the focused task's assignee picker</dd>
+          <dt>e</dt><dd>archive the focused task — it leaves the board, and a 10-second Undo offers it back. Nothing is destroyed; the archived list restores it later</dd>
           <dt>r or F2</dt><dd>rename the focused task in place — clicking its title does the same, with the cursor where you clicked</dd>
           <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
           <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
@@ -380,6 +422,7 @@ async function main(): Promise<void> {
     tab: tabForNav(initialNav) ?? 'all',
     doneWindow: DEFAULT_DONE_WINDOW,
     view: initialNav === 'activity' ? 'activity' : 'board',
+    showArchived: new URLSearchParams(location.search).get('view') === 'archived',
     activityFilter: 'all',
     events: [],
     uptime: null,
@@ -574,6 +617,24 @@ async function main(): Promise<void> {
     );
   }
 
+  /**
+   * Show or leave the restore list, and put it in the address bar.
+   *
+   * `replaceState`, matching `syncTaskParam` next to it and for the same
+   * reason: this is a filter on the board rather than a page, and Back should
+   * leave the workspace rather than unwind a list somebody glanced at.
+   */
+  function setShowArchived(on: boolean): void {
+    if (state.showArchived === on) return;
+    state.showArchived = on;
+    const params = new URLSearchParams(location.search);
+    if (on) params.set('view', 'archived');
+    else params.delete('view');
+    const q = params.toString();
+    history.replaceState(null, '', `${location.pathname}${q ? `?${q}` : ''}${location.hash}`);
+    renderBoardRegion();
+  }
+
   function renderBoardRegion(): void {
     const filters = {
       tab: state.tab,
@@ -594,15 +655,29 @@ async function main(): Promise<void> {
     // can see and no repaint reaches. Everything below this line still runs on
     // Home — the walkthrough is Home's own, and the strip and banner are one
     // element each.
-    renderBoardForPane(
-      el('hub-board'),
-      state.pane,
-      boardSections(state.info?.goals ?? [], taskList(), filters),
-      // Read at render time, not once at wiring time: attachments arrive
-      // after the first paint and change while the board is open, and a
-      // picker built from a stale list offers agents who have left.
-      { ...boardHandlers, knownAgentIds: knownAgentIds() },
-    );
+    const archived = archivedTasks(taskList());
+    if (state.pane === 'board' && state.showArchived) {
+      renderArchivedList(el('hub-board'), archived, {
+        onRestore: (task) => void restoreTask(task),
+        onOpenTask: (task) => boardHandlers.onOpenTask(task),
+        onBack: () => setShowArchived(false),
+      });
+    } else {
+      renderBoardForPane(
+        el('hub-board'),
+        state.pane,
+        boardSections(state.info?.goals ?? [], taskList(), filters),
+        // Read at render time, not once at wiring time: attachments arrive
+        // after the first paint and change while the board is open, and a
+        // picker built from a stale list offers agents who have left.
+        {
+          ...boardHandlers,
+          knownAgentIds: knownAgentIds(),
+          archivedCount: archived.length,
+          onShowArchived: () => setShowArchived(true),
+        },
+      );
+    }
     if (focusedTaskId) {
       // By scan, not by attribute selector: a task id is server-generated but
       // it is still untrusted text to a selector parser, and CSS.escape is
@@ -708,6 +783,10 @@ async function main(): Promise<void> {
     const same = state.nav === nav;
     state.nav = nav;
     state.pane = paneForNav(nav);
+    // Leaving the board leaves the restore list. It is a view OF the board,
+    // so carrying it across a nav tap would put a reader back on it later
+    // with no memory of having asked.
+    if (state.showArchived) setShowArchived(false);
     state.view = nav === 'activity' ? 'activity' : 'board';
     const tab = tabForNav(nav);
     if (tab !== undefined) state.tab = tab;
@@ -890,6 +969,8 @@ async function main(): Promise<void> {
         onGoalSet: (t, goalId) => void setTaskGoal(t, goalId),
         onDueSet: (t, dueAt) => void setTaskDue(t, dueAt),
         onParkSet: (t, parkedUntil) => void setTaskPark(t, parkedUntil),
+        onArchive: (t) => void archiveTask(t),
+        onRestore: (t) => void restoreTask(t),
         onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
@@ -1333,6 +1414,48 @@ async function main(): Promise<void> {
       author,
     });
     if (!res.ok) showToast(parkedUntil === null ? 'Un-parking failed' : 'Parking the task failed');
+  }
+
+  /**
+   * Take a task off the board, and offer the way back in the same breath.
+   *
+   * No confirm dialog, deliberately. Archiving is reversible by construction
+   * — three fields on the row — and this is a SECONDARY action that must not
+   * cost a modal (Bryan, on the design thread: *"It's a secondary action.
+   * Should not take up space from primary flows."*). The ten-second Undo is
+   * what pays for the missing dialog, and it is the only thing that does, so
+   * it goes up on the success path only: a toast offering to undo a write
+   * that never landed is worse than no toast.
+   *
+   * The open panel closes, because a panel left standing on a row that just
+   * left the board is a surface with no way to explain itself.
+   */
+  async function archiveTask(task: HubTask): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/archive`, 'POST', { author });
+    if (!res.ok) {
+      showToast('Archiving failed — the task is still on the board');
+      return;
+    }
+    if (state.detailTaskId === task.id) {
+      state.detailTaskId = null;
+      renderDetail();
+    }
+    showToast(`Archived “${task.title}”`, {
+      label: 'Undo',
+      run: () => void restoreTask(task),
+      ms: ARCHIVE_UNDO_MS,
+    });
+  }
+
+  /** Put an archived task back. The Undo button, the panel's Restore, and the
+   *  restore list's rows are all this one call. */
+  async function restoreTask(task: HubTask): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/restore`, 'POST', { author });
+    if (!res.ok) {
+      showToast('Restoring failed — the task is still archived');
+      return;
+    }
+    showToast(`Restored “${task.title}”`);
   }
 
   /**
@@ -1983,6 +2106,13 @@ async function main(): Promise<void> {
       closeDetail: () => {
         state.detailTaskId = null;
         renderDetail();
+      },
+      archiveTask: (taskId) => {
+        const task = state.tasks.get(taskId);
+        // An already-archived row is unreachable from the board (it is not in
+        // a lane to focus) but IS reachable from the restore list, where `e`
+        // must not re-archive what is already gone.
+        if (task && !isTaskArchived(task)) void archiveTask(task);
       },
     }),
   );

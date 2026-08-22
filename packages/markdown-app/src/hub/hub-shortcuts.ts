@@ -1,8 +1,8 @@
 /**
  * Gmail-style shortcuts (§3.9): j/k walk rows, o/Enter opens, s opens the
- * status dropdown, ? shows help. Never while typing — including while typing
- * inside an embedded component's shadow root, which `ev.target` cannot see
- * (see hotkeysBlocked).
+ * status dropdown, e archives, ? shows help. Never while typing — including
+ * while typing inside an embedded component's shadow root, which `ev.target`
+ * cannot see (see hotkeysBlocked).
  *
  * A factory rather than an inline listener in hub-app's `main()` so the
  * handler is testable — hub-app runs `main()` on import, which needs a live
@@ -20,6 +20,20 @@ export interface HubShortcutDeps {
   helpEl: () => HTMLElement;
   openDetail: (taskId: string) => void;
   closeDetail: () => void;
+  /**
+   * Archive the anchored task — Gmail's own `e`, on a board that already
+   * borrowed j/k/o/s from it.
+   *
+   * It resolves its target through the SAME anchor as `o`, `s` and `a`: the
+   * focused row, or the open panel's row when the panel holds focus. Hover is
+   * deliberately not a target. Hover is not focus, it does not exist on the
+   * iPad this board is mostly read on, and "whatever the pointer happens to
+   * be over" is the one way this key could archive a row the person was not
+   * looking at. With nothing anchored the key does nothing at all — a
+   * destructive-looking action with an ambiguous target must miss rather than
+   * guess, and the ten-second Undo is a safety net, not a licence.
+   */
+  archiveTask?: (taskId: string) => void;
 }
 
 export function hubShortcutKeydown(deps: HubShortcutDeps): (ev: KeyboardEvent) => void {
@@ -64,12 +78,21 @@ export function hubShortcutKeydown(deps: HubShortcutDeps): (ev: KeyboardEvent) =
       const next = ev.key === 'j' ? Math.min(rows.length - 1, anchor + 1) : Math.max(0, anchor - 1);
       rows[next]?.focus();
       ev.preventDefault();
-    } else if ((ev.key === 'o' || ev.key === 's' || ev.key === 'a') && anchor >= 0) {
+    } else if (
+      (ev.key === 'o' || ev.key === 's' || ev.key === 'a' || ev.key === 'e') &&
+      anchor >= 0
+    ) {
       const taskId = rows[anchor]?.dataset.taskId;
       const task = taskId ? state.tasks.get(taskId) : undefined;
       if (!task) return;
       if (ev.key === 'o') {
         deps.openDetail(task.id);
+      } else if (ev.key === 'e') {
+        // No confirm. The row leaves and a ten-second toast offers Undo —
+        // the same trade Gmail makes, and the one the design thread asked
+        // for: a secondary action must not cost a dialog.
+        if (!deps.archiveTask) return;
+        deps.archiveTask(task.id);
       } else if (ev.key === 'a') {
         // Focus the picker rather than choosing for them — for the same
         // reason `s` does below, and because there is no longer an "other
