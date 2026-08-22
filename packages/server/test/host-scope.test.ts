@@ -97,6 +97,12 @@ describe('host gate + share scoping over HTTP', () => {
   // are filled in at setup.
   let boardShared: string;
   let boardOther: string;
+  /**
+   * The id the server MINTED for the doc created as `shared-doc`. `SHARED`
+   * stays its readable alias — every request below still addresses it by that
+   * name, and the payloads answer under the minted id.
+   */
+  let sharedId: string;
 
   /** Request against the real server with an arbitrary Host header. */
   const req = (path: string, host: string, init: RequestInit = {}) =>
@@ -160,7 +166,10 @@ describe('host gate + share scoping over HTTP', () => {
         body: JSON.stringify({ docId: id, type: 'markdown', sourceUrl: path, workspaceId: ws }),
       });
       expect(r.status).toBe(200);
+      const minted = ((await r.json()) as { docId: string }).docId;
+      if (id === SHARED) sharedId = minted;
     }
+    expect(sharedId).toBeTruthy();
 
     // File each grouping on a board of its own. `attach_doc` links a grouping
     // id as one row, which is how a review goes on a board; the board is then
@@ -288,10 +297,12 @@ describe('host gate + share scoping over HTTP', () => {
 
   describe('B. share scoping (authenticated visitor)', () => {
     it('can read the doc it was shared', async () => {
+      // Addressed by the READABLE ALIAS, which resolves inside the share
+      // scope too; the payload answers under the minted id.
       const r = await asVisitor(`/api/docs/${SHARED}`);
       expect(r.status).toBe(200);
       const body = (await r.json()) as { meta: { docId: string } };
-      expect(body.meta.docId).toBe(SHARED);
+      expect(body.meta.docId).toBe(sharedId);
     });
 
     it('can reach its own review page and event stream route', async () => {
@@ -311,8 +322,10 @@ describe('host gate + share scoping over HTTP', () => {
     it('is redirected to the workspace it was shared, not to some other one', async () => {
       const r = await asVisitor(`/review/${SHARED}`, { redirect: 'manual' });
       expect(r.status).toBe(302);
+      // The redirect lands on the doc's ADDRESS — a URL a reviewer captures
+      // must not be spelled with a name that could later be re-minted.
       expect(r.headers.get('location')).toBe(
-        `/workspaces/${boardShared}/docs/${encodeURIComponent(SHARED)}`,
+        `/workspaces/${boardShared}/docs/${encodeURIComponent(sharedId)}`,
       );
     });
 

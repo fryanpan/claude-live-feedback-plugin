@@ -8,6 +8,7 @@ import {
   findMalformedGroups,
   findOverlongGroupDetails,
 } from './diff-groups.ts';
+import { isReservedDocId } from './doc-ids.ts';
 import { scanFolder } from './fs-scan.ts';
 import {
   type DiffFileEntry,
@@ -117,7 +118,7 @@ export type BindFolderResult =
       skipped: Array<{ path: string; reason: string }>;
       files: Array<{ docId: string; relPath: string; type: DocType; title: string }>;
     }
-  | { ok: false; error: 'not-found' | 'too-many-files'; fileCount?: number };
+  | { ok: false; error: 'not-found' | 'too-many-files' | 'reserved-namespace'; fileCount?: number };
 
 /**
  * bind_folder is now an alias for a BROWSE-mode diff workspace (bindDiff
@@ -152,6 +153,10 @@ export function bindFolder(host: BindHost, opts: BindFolderOpts): BindFolderResu
         files: [],
       };
     }
+    // Flattening everything else to not-found would turn a namespace refusal
+    // into "your folder doesn't exist", which sends the caller looking at the
+    // wrong thing entirely.
+    if (res.error === 'reserved-namespace') return { ok: false, error: 'reserved-namespace' };
     return { ok: false, error: 'not-found' };
   }
   return {
@@ -228,6 +233,7 @@ export type BindDiffResult =
         | 'too-many-files'
         | 'group-details-too-long'
         | 'bad-groups'
+        | 'reserved-namespace'
         | 'review-exists-different-range';
       detail?: string;
       fileCount?: number;
@@ -252,6 +258,19 @@ export type BindDiffResult =
  * content).
  */
 export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
+  // The review id is the `groupId` half of every member docId this bind is
+  // about to mint, so a reserved one mints reserved rooms: `reviewId: 'task'`
+  // over a folder with a README produced a real `task:README.md`. The seam in
+  // `getOrCreate` refuses those anyway — this is here so the caller gets one
+  // legible 400 naming the id it chose, instead of a throw from the middle of
+  // a file loop.
+  if (opts.reviewId !== undefined && isReservedDocId(`${opts.reviewId}:`)) {
+    return {
+      ok: false,
+      error: 'reserved-namespace',
+      detail: `"${opts.reviewId}" names a namespace the server owns; pick another review id.`,
+    };
+  }
   const root = resolvePath(opts.repoPath);
   if (!existsSync(root)) return { ok: false, error: 'not-found' };
 

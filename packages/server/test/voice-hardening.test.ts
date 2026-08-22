@@ -368,14 +368,16 @@ describe('voice actions, hardened: end to end', () => {
     return ((await r.json()) as { task: { id: string } }).task.id;
   };
 
+  /** Returns the id the server MINTED — `docId` here is only the readable
+   *  name, and a voice context carries the doc's own id. */
   const newDoc = async (docId: string): Promise<string> => {
     const file = join(dataDir, `${docId}.md`);
     writeFileSync(file, '# Ranking\n\nthe ranking clause\n');
-    expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: file })).status).toBe(
-      200,
-    );
-    expect((await post(`/api/workspaces/${hubId}/docs`, { docId })).status).toBe(200);
-    return docId;
+    const made = await post('/api/docs', { docId, type: 'markdown', sourceUrl: file });
+    expect(made.status).toBe(200);
+    const mintedId = ((await made.json()) as { docId: string }).docId;
+    expect((await post(`/api/workspaces/${hubId}/docs`, { docId: mintedId })).status).toBe(200);
+    return mintedId;
   };
 
   /** An agent-DECLARED review item — the `declared` band. */

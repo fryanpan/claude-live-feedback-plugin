@@ -68,6 +68,12 @@ describe('hands-on activity stream', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
+  /**
+   * The MINTED id of the doc created as `act-doc`. Activity rows record the
+   * doc's address, not the readable name the caller asked for — `act-doc`
+   * still routes to it, which is why every fetch below keeps using it.
+   */
+  let actDocId: string;
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-activity-'));
@@ -87,13 +93,15 @@ describe('hands-on activity stream', () => {
   it('appends a comment activity event when a PERSON comments via REST', async () => {
     const file = join(dataDir, 'act-doc.md');
     writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
-    await j(
-      await fetch(`${base}/api/docs`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ docId: 'act-doc', type: 'markdown', sourceUrl: file }),
-      }),
-    );
+    actDocId = (
+      await j<{ docId: string }>(
+        await fetch(`${base}/api/docs`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ docId: 'act-doc', type: 'markdown', sourceUrl: file }),
+        }),
+      )
+    ).docId;
 
     await j(
       await fetch(`${base}/api/docs/act-doc/threads`, {
@@ -108,7 +116,7 @@ describe('hands-on activity stream', () => {
     );
 
     const events = readEvents(dataDir);
-    const comment = events.find((e) => e.type === 'comment' && e.doc.docId === 'act-doc');
+    const comment = events.find((e) => e.type === 'comment' && e.doc.docId === actDocId);
     expect(comment).toBeDefined();
     expect(comment!.actor).toBe('person');
     expect(comment!.actorId).toBe('known-bryan');
@@ -129,7 +137,7 @@ describe('hands-on activity stream', () => {
   it('classifies an agent comment as actor:agent', async () => {
     const file = join(dataDir, 'act-agent.md');
     writeFileSync(file, 'Agent target text.\n');
-    await j(
+    const { docId: agentDocId } = await j<{ docId: string }>(
       await fetch(`${base}/api/docs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -144,7 +152,7 @@ describe('hands-on activity stream', () => {
       }),
     );
     const events = readEvents(dataDir);
-    const ev = events.find((e) => e.doc.docId === 'act-agent' && e.type === 'comment');
+    const ev = events.find((e) => e.doc.docId === agentDocId && e.type === 'comment');
     expect(ev?.actor).toBe('agent');
     expect(ev?.isOwner).toBe(false);
   });
@@ -171,7 +179,7 @@ describe('hands-on activity stream', () => {
     expect(r.status).toBe(200);
 
     const events = readEvents(dataDir);
-    const read = events.find((e) => e.type === 'read_session' && e.doc.docId === 'act-doc');
+    const read = events.find((e) => e.type === 'read_session' && e.doc.docId === actDocId);
     expect(read).toBeDefined();
     expect(read!.actor).toBe('person');
     expect(read!.payload.interactionBounded).toBe(true);
@@ -214,10 +222,10 @@ describe('hands-on activity stream', () => {
       }),
     );
 
-    // The live event the REST comment just appended.
-    const live = readEvents(dataDir).find(
-      (e) => e.type === 'comment' && e.doc.docId === 'act-dedup',
-    );
+    // The live event the REST comment just appended, under the id the server
+    // minted for `act-dedup`.
+    const dedupId = docRes.docId;
+    const live = readEvents(dataDir).find((e) => e.type === 'comment' && e.doc.docId === dedupId);
     expect(live).toBeDefined();
 
     // Reconstruct the SAME comment via the backfill path (eventsForDoc) over
@@ -225,8 +233,8 @@ describe('hands-on activity stream', () => {
     // the contract that lets a backfill re-run dedupe against live capture —
     // it only holds because the live event hashes the comment's PERSISTED ts,
     // not a fresh Date.now().
-    const summary = handle.rooms.listThreads('act-dedup')[0];
-    const full = handle.rooms.getThread('act-dedup', summary!.id);
+    const summary = handle.rooms.listThreads(dedupId)[0];
+    const full = handle.rooms.getThread(dedupId, summary!.id);
     expect(full).not.toBeNull();
     const backfill = eventsForDoc(docRes.meta, [full!]).find((e) => e.type === 'comment');
     expect(backfill).toBeDefined();

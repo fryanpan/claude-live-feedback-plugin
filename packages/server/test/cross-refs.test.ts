@@ -182,6 +182,15 @@ describe('cross-reference routes + payload surfacing', () => {
   let dataDir: string;
   let base: string;
   let wsId: string;
+  /**
+   * The MINTED id of the doc the caller asked to call `xref-notes`.
+   *
+   * A `Ref` addresses a doc, so it carries the address rather than the
+   * readable name — two spellings of one doc must not surface as two docs.
+   * The alias still routes: every `/api/docs/xref-notes/...` fetch below
+   * reaches this same room.
+   */
+  let notesId: string;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -215,7 +224,12 @@ describe('cross-reference routes + payload surfacing', () => {
     wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
     const mdPath = join(dataDir, 'notes.md');
     writeFileSync(mdPath, '# Notes\n\nBody.\n');
-    await post('/api/docs', { docId: 'xref-notes', type: 'markdown', sourceUrl: mdPath });
+    const doc = await post('/api/docs', {
+      docId: 'xref-notes',
+      type: 'markdown',
+      sourceUrl: mdPath,
+    });
+    notesId = ((await doc.json()) as { docId: string }).docId;
   });
 
   afterAll(async () => {
@@ -298,15 +312,18 @@ describe('cross-reference routes + payload surfacing', () => {
     it('GET /api/docs/:id carries chips for referencing tasks; an unreferenced doc has none', async () => {
       const t = await mkTask({
         title: 'about the notes doc',
-        links: [{ kind: 'doc', docId: 'xref-notes' }],
+        links: [{ kind: 'doc', docId: notesId }],
       });
 
+      // Fetched through the readable ALIAS; the payload answers under the
+      // minted id, and the chip surfaces because the two are one doc.
       const r = await local('/api/docs/xref-notes');
       expect(r.status).toBe(200);
       const body = (await r.json()) as {
         meta: { docId: string };
         tasks?: Array<{ id: string; title: string; status: string; assignee: string }>;
       };
+      expect(body.meta.docId).toBe(notesId);
       // Positive control: the referenced doc surfaces the chip…
       expect(body.tasks?.some((c) => c.id === t.id && c.title === 'about the notes doc')).toBe(
         true,
@@ -342,7 +359,7 @@ describe('cross-reference routes + payload surfacing', () => {
       otherThreadId = await mk('leave this one');
       promoted = await mkTask({
         title: 'promoted from thread',
-        origin: { kind: 'thread', docId: 'xref-notes', threadId },
+        origin: { kind: 'thread', docId: notesId, threadId },
         quote: 'promote this',
       });
     });

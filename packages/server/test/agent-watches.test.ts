@@ -154,27 +154,30 @@ describe('/api/agents/:agentId/watches', () => {
       body: JSON.stringify({ docId, sourceUrl: path }),
     });
     expect(res.status).toBe(200);
+    // The doc's OWN id, which is what a watch is stored under whichever name
+    // the caller watched by.
+    return ((await res.json()) as { docId: string }).docId;
   };
 
   it('remembers what one identity watched, and hands a different identity nothing', async () => {
     const base = start();
-    await createDoc(base, 'doc-one');
-    await createDoc(base, 'doc-two');
+    const oneId = await createDoc(base, 'doc-one');
+    const twoId = await createDoc(base, 'doc-two');
 
+    // Watched by their READABLE names; stored under the ids they resolve to.
+    // Compared SORTED: the watch set is a set, and its order only ever looked
+    // meaningful because `doc-one` sorts before `doc-two`.
+    const keysOf = (r: { json: Record<string, unknown> }): string[] =>
+      (r.json.watches as Array<{ key: string }>).map((w) => w.key).sort();
+    const expected = [oneId, twoId].sort();
     const post = await call(base, 'agent-alpha', 'POST', { add: ['doc-one', 'doc-two'] });
     expect(post.status).toBe(200);
-    expect((post.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([
-      'doc-one',
-      'doc-two',
-    ]);
+    expect(keysOf(post)).toEqual(expected);
 
     // The restore read — what a respawned child asks.
     const restored = await call(base, 'agent-alpha', 'GET');
     expect(restored.status).toBe(200);
-    expect((restored.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([
-      'doc-one',
-      'doc-two',
-    ]);
+    expect(keysOf(restored)).toEqual(expected);
     expect(restored.json.pruned).toEqual([]);
 
     // Positive control for the absence below: alpha's read is non-empty in
@@ -191,34 +194,35 @@ describe('/api/agents/:agentId/watches', () => {
 
   it('unions a second writer for the same identity instead of replacing', async () => {
     const base = start();
-    await createDoc(base, 'doc-one');
-    await createDoc(base, 'doc-two');
+    const oneId = await createDoc(base, 'doc-one');
+    const twoId = await createDoc(base, 'doc-two');
     await call(base, 'agent-alpha', 'POST', { add: ['doc-one'] });
     // A second live session with the same name reports only its own doc…
     const second = await call(base, 'agent-alpha', 'POST', { add: ['doc-two'] });
     // …and the set is the union, not the last writer.
-    expect((second.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([
-      'doc-one',
-      'doc-two',
-    ]);
+    expect((second.json.watches as Array<{ key: string }>).map((w) => w.key).sort()).toEqual(
+      [oneId, twoId].sort(),
+    );
+    // Unwatching by the readable name still finds the canonical key.
     const removed = await call(base, 'agent-alpha', 'POST', { remove: ['doc-one'] });
-    expect((removed.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual(['doc-two']);
+    expect((removed.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([twoId]);
   });
 
   it('prunes a watch whose doc is gone on read — and keeps the live one beside it', async () => {
     const base = start();
-    await createDoc(base, 'doc-live');
+    const liveId = await createDoc(base, 'doc-live');
     // `doc-ghost` was watched before it existed (the auto-watch fires ahead
     // of the creating tool) and the tool then failed, so it never appeared.
+    // It resolves to nothing, so it is stored — and pruned — as written.
     await call(base, 'agent-alpha', 'POST', { add: ['doc-live', 'doc-ghost'] });
     const res = await call(base, 'agent-alpha', 'GET');
-    expect((res.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual(['doc-live']);
+    expect((res.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([liveId]);
     expect(res.json.pruned).toEqual(['doc-ghost']);
     // The read is what the store persisted, so it does not come back later.
     const again = await call(base, 'agent-alpha', 'GET');
     expect(again.json.pruned).toEqual([]);
     expect(handle?.agentWatches.list('agent-alpha', () => true).watches.map((w) => w.key)).toEqual([
-      'doc-live',
+      liveId,
     ]);
   });
 

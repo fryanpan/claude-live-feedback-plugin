@@ -98,18 +98,25 @@ describe('hub workspace + task routes', () => {
     it('attaches an existing doc; the workspace lists it; nothing is migrated', async () => {
       const mdPath = join(dataDir, 'plan.md');
       writeFileSync(mdPath, '# Plan\n\nBody.\n');
-      await post('/api/docs', { docId: 'hub-plan-doc', type: 'markdown', sourceUrl: mdPath });
+      const planDocId = (
+        (await (
+          await post('/api/docs', { docId: 'hub-plan-doc', type: 'markdown', sourceUrl: mdPath })
+        ).json()) as { docId: string }
+      ).docId;
 
       const ws = (await (await post('/api/workspaces', { name: 'attach-ws' })).json()) as {
         workspace: { id: string };
       };
+      // Attached by the readable name…
       const r = await post(`/api/workspaces/${ws.workspace.id}/docs`, { docId: 'hub-plan-doc' });
       expect(r.status).toBe(200);
 
       const got = (await (await local(`/api/workspaces/${ws.workspace.id}`)).json()) as {
         workspace: { docIds: string[] };
       };
-      expect(got.workspace.docIds).toEqual(['hub-plan-doc']);
+      // …and recorded under the doc's own id, so two spellings of one doc
+      // cannot become two rows on the board.
+      expect(got.workspace.docIds).toEqual([planDocId]);
       // The doc itself keeps working at its current URL — no migration.
       const doc = await local('/api/docs/hub-plan-doc');
       expect(doc.status).toBe(200);

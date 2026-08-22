@@ -110,10 +110,15 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
       docId: 'mcp-doc-named',
       path,
       hubWorkspaceId: wsId,
-    })) as { hubWorkspaceId?: string };
+    })) as { docId?: string; hubWorkspaceId?: string };
 
+    // The server MINTS the id; `mcp-doc-named` is the readable alias for it.
+    const docId = res.docId as string;
+    expect(docId).toBeTruthy();
     expect(res.hubWorkspaceId).toBe(wsId);
-    expect(handle.tasks.workspaceOfDoc('mcp-doc-named')).toBe(wsId);
+    expect(handle.tasks.workspaceOfDoc(docId)).toBe(wsId);
+    // ...and the name the tool was given still reaches the same room.
+    expect(handle.rooms.get('mcp-doc-named')?.docId).toBe(docId);
   });
 
   it('create_review_doc with no workspace still lands the doc in one, in a single call', async () => {
@@ -122,12 +127,14 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
     const res = (await callTool('create_review_doc', {
       docId: 'mcp-doc-unfiled',
       path,
-    })) as { hubWorkspaceId?: string; meta?: { reviewUrl?: string } };
+    })) as { docId?: string; hubWorkspaceId?: string; meta?: { reviewUrl?: string } };
 
     // One call: the review URL a human gets AND the workspace it landed in.
     expect(res.meta?.reviewUrl).toBeTruthy();
     expect(res.hubWorkspaceId).toBeTruthy();
-    expect(handle.tasks.workspaceOfDoc('mcp-doc-unfiled')).toBe(res.hubWorkspaceId as string);
+    expect(res.docId).toBeTruthy();
+    expect(handle.tasks.workspaceOfDoc(res.docId as string)).toBe(res.hubWorkspaceId as string);
+    expect(handle.rooms.get('mcp-doc-unfiled')?.docId).toBe(res.docId as string);
   });
 
   it('bind_mock forwards it too — two tools reach the one route', async () => {
@@ -143,9 +150,12 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
       docId: 'mcp-mock-named',
       sourceHtmlPath: html,
       hubWorkspaceId: wsId,
-    })) as { hubWorkspaceId?: string };
+    })) as { docId?: string; hubWorkspaceId?: string };
 
+    const docId = res.docId as string;
+    expect(docId).toBeTruthy();
     expect(res.hubWorkspaceId).toBe(wsId);
-    expect(handle.tasks.workspaceOfDoc('mcp-mock-named')).toBe(wsId);
+    expect(handle.tasks.workspaceOfDoc(docId)).toBe(wsId);
+    expect(handle.rooms.get('mcp-mock-named')?.docId).toBe(docId);
   });
 });

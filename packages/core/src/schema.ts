@@ -47,6 +47,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const docId = (m.get('docId') as string) ?? '';
   const type = (m.get('type') as DocMeta['type']) ?? 'markdown';
   const createdAt = (m.get('createdAt') as number) ?? Date.now();
+  const alias = m.get('alias') as string | undefined;
   const sourceUrl = m.get('sourceUrl') as string | undefined;
   const title = m.get('title') as string | undefined;
   const setId = m.get('setId') as string | undefined;
@@ -69,6 +70,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
     docId,
     type,
     createdAt,
+    alias,
     sourceUrl,
     title,
     setId,
@@ -103,6 +105,11 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
     // this map is a key the person holding a share link can read. The server
     // keeps them in a sidecar instead (server/src/private-meta.ts).
     if (meta.title !== undefined) m.set('title', meta.title);
+    // `!m.has` rather than an unconditional set, matching the other
+    // create-time keys — and load-bearing here rather than stylistic, because
+    // it is what makes the alias unwritable a second time even from inside
+    // the server.
+    if (meta.alias !== undefined && !m.has('alias')) m.set('alias', meta.alias);
     if (meta.setId !== undefined) m.set('setId', meta.setId);
     if (meta.workspaceId !== undefined && !m.has('workspaceId'))
       m.set('workspaceId', meta.workspaceId);
