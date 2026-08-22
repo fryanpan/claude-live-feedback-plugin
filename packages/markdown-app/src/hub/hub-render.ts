@@ -358,6 +358,41 @@ function wireInPlaceTitle(
   return begin;
 }
 
+// ── Topbar: the board's name, and whether it has been stood down ───────────
+
+/**
+ * Repaint the two things in the topbar the board itself can change.
+ *
+ * Both used to be impossible: the name was set once at creation and nothing
+ * could change it, and there was no such thing as a retired board. Now
+ * `rename_workspace` and `retire_workspace` exist, and this page never
+ * reloads — so a header painted once at boot is simply wrong from the moment
+ * either lands.
+ *
+ * The badge is the answer to the question the incident asked. Two boards
+ * carried one name and one lead agent; the only way to tell them apart was to
+ * read their goal lists. A word in the header is what makes the stale one
+ * look different from the live one at a glance.
+ */
+export function renderWorkspaceIdentity(
+  nameEl: HTMLElement | null,
+  badgeEl: HTMLElement | null,
+  info: { name?: string; retiredAt?: number; retiredReason?: string } | null,
+  fallbackName: string,
+): void {
+  if (nameEl) nameEl.textContent = info?.name ?? fallbackName;
+  if (!badgeEl) return;
+  const retiredAt = info?.retiredAt;
+  badgeEl.classList.toggle('hidden', retiredAt === undefined);
+  // The reason is the actionable half — usually the name of the board that
+  // replaced this one — so it rides on the badge rather than being dropped.
+  const reason = info?.retiredReason;
+  badgeEl.title =
+    retiredAt === undefined
+      ? ''
+      : `Retired ${new Date(retiredAt).toLocaleDateString()}${reason ? ` — ${reason}` : ''}`;
+}
+
 // ── Lead-agent strip ───────────────────────────────────────────────────────
 
 export interface LeadStripHandlers {
