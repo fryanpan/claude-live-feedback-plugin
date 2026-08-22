@@ -125,11 +125,15 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
   }
 
   /** A markdown doc with one PERSON-authored thread. */
+  /** `docId` out is the id the server MINTED — `promote-N` is only the
+   *  readable name the create call asked for. */
   async function seedThread(): Promise<{ docId: string; threadId: string }> {
-    const docId = `promote-${docSeq++}`;
-    const file = join(dataDir, `${docId}.md`);
+    const name = `promote-${docSeq++}`;
+    const file = join(dataDir, `${name}.md`);
     writeFileSync(file, '# Doc\n\nthe ranking clause\n');
-    await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
+    const { docId } = await jj<{ docId: string }>(
+      await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+    );
     const { thread } = await jj<{ thread: Thread }>(
       await post(`/api/docs/${docId}/threads`, {
         author: PERSON,

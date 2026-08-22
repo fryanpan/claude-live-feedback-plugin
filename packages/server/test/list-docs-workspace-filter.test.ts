@@ -28,6 +28,9 @@ describe('GET /api/docs honours its workspaceId filter', () => {
   let base: string;
   let wsA: string;
   let wsB: string;
+  /** Readable name → the id the server minted for it. The name a caller posts
+   *  is an alias now; the listing answers in minted ids. */
+  const mintedId: Record<string, string> = {};
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -75,6 +78,7 @@ describe('GET /api/docs honours its workspaceId filter', () => {
         hubWorkspaceId: ws,
       });
       expect(r.status).toBe(200);
+      mintedId[docId] = ((await r.json()) as { docId: string }).docId;
     }
   });
 
@@ -87,12 +91,18 @@ describe('GET /api/docs honours its workspaceId filter', () => {
     // Positive control first: without the param both docs are in the listing,
     // so "absent when filtered" below is a claim about the filter.
     const all = (await listDocs()).map((d) => d.docId);
-    expect(all).toContain('doc-in-a');
-    expect(all).toContain('doc-in-b');
+    expect(all).toContain(mintedId['doc-in-a']);
+    expect(all).toContain(mintedId['doc-in-b']);
 
     const scoped = (await listDocs(`?workspaceId=${encodeURIComponent(wsA)}`)).map((d) => d.docId);
-    expect(scoped).toContain('doc-in-a');
-    expect(scoped).not.toContain('doc-in-b');
+    expect(scoped).toContain(mintedId['doc-in-a']);
+    expect(scoped).not.toContain(mintedId['doc-in-b']);
+
+    // …and the readable name the caller chose still addresses the doc it
+    // named, which is the other half of the alias contract.
+    const byName = await local('/api/docs/doc-in-a');
+    expect(byName.status).toBe(200);
+    expect(((await byName.json()) as { meta: DocMetaOut }).meta.docId).toBe(mintedId['doc-in-a']);
   });
 
   it('matches the meta.workspaceId grouping tag too, not just board membership', async () => {
@@ -106,13 +116,14 @@ describe('GET /api/docs honours its workspaceId filter', () => {
       workspaceId: 'grouping-tag-1',
     });
     expect(r.status).toBe(200);
+    const groupedId = ((await r.json()) as { docId: string }).docId;
     // Positive control: the tag really landed in meta.
-    const created = (await listDocs()).find((d) => d.docId === 'doc-grouped');
+    const created = (await listDocs()).find((d) => d.docId === groupedId);
     expect(created?.workspaceId).toBe('grouping-tag-1');
 
     const scoped = (await listDocs('?workspaceId=grouping-tag-1')).map((d) => d.docId);
-    expect(scoped).toContain('doc-grouped');
-    expect(scoped).not.toContain('doc-in-a');
+    expect(scoped).toContain(groupedId);
+    expect(scoped).not.toContain(mintedId['doc-in-a']);
   });
 
   it('an unknown workspaceId returns an empty list, not everything', async () => {

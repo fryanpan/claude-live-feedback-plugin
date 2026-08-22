@@ -72,34 +72,36 @@ describe('POST /api/docs/:id/archive', () => {
   it('takes the doc off its board, and unarchive puts it back', async () => {
     const ws = await post('/api/workspaces', { name: 'drafts', goal: 'Ship the draft.' });
     const boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
-    expect(
-      (
-        await post('/api/docs', {
-          docId: 'draft-doc',
-          type: 'markdown',
-          title: 'The Draft',
-          sourceUrl: mdFile('draft.md'),
-          hubWorkspaceId: boardId,
-        })
-      ).status,
-    ).toBe(200);
+    const created = await post('/api/docs', {
+      docId: 'draft-doc',
+      type: 'markdown',
+      title: 'The Draft',
+      sourceUrl: mdFile('draft.md'),
+      hubWorkspaceId: boardId,
+    });
+    expect(created.status).toBe(200);
+    // `draft-doc` was the NAME; the server minted the id, and a board row —
+    // like the archive manifest and the `.ydoc` filename — holds that.
+    const docId = ((await created.json()) as { docId: string }).docId;
     // Positive control: the row is on the board BEFORE we archive. Without it
     // "the row is gone" passes against a board that never had one.
-    expect(await boardDocIds(boardId)).toContain('draft-doc');
+    expect(await boardDocIds(boardId)).toContain(docId);
 
-    const archived = await post('/api/docs/draft-doc/archive', {
+    const archived = await post(`/api/docs/${docId}/archive`, {
       author: { name: 'Tester' },
       reason: 'published',
     });
     expect(archived.status).toBe(200);
-    expect(await boardDocIds(boardId)).not.toContain('draft-doc');
+    expect(await boardDocIds(boardId)).not.toContain(docId);
     // The doc no longer loads — that is what taking it out of the top level
-    // of the data dir buys.
+    // of the data dir buys. Not under its id, and not under the readable name
+    // either: the alias goes with the room it named.
+    expect((await local(`/api/docs/${docId}`)).status).toBe(404);
     expect((await local('/api/docs/draft-doc')).status).toBe(404);
 
     const listing = await archivedListing();
-    expect(listing.docs.map((d) => d.docId)).toContain('draft-doc');
-    const entry = listing.docs.find((d) => d.docId === 'draft-doc');
+    expect(listing.docs.map((d) => d.docId)).toContain(docId);
+    const entry = listing.docs.find((d) => d.docId === docId);
     expect(entry?.archivedBy).toBe('Tester');
     expect(entry?.reason).toBe('published');
     // The board it will return to is recorded, which is what makes the round
@@ -108,10 +110,15 @@ describe('POST /api/docs/:id/archive', () => {
     // A doc is not a review: the review listing stays empty.
     expect(listing.archived).toEqual([]);
 
-    const back = await post('/api/docs/draft-doc/unarchive', { author: { name: 'Tester' } });
+    const back = await post(`/api/docs/${docId}/unarchive`, { author: { name: 'Tester' } });
     expect(back.status).toBe(200);
-    expect((await local('/api/docs/draft-doc')).status).toBe(200);
-    expect(await boardDocIds(boardId)).toContain('draft-doc');
+    expect((await local(`/api/docs/${docId}`)).status).toBe(200);
+    // The alias rides in the doc's own meta, so it comes back with it — a
+    // link captured before the archive still resolves after the restore.
+    const byName = await local('/api/docs/draft-doc');
+    expect(byName.status).toBe(200);
+    expect(((await byName.json()) as { meta: { docId: string } }).meta.docId).toBe(docId);
+    expect(await boardDocIds(boardId)).toContain(docId);
     expect((await archivedListing()).docs).toEqual([]);
   });
 

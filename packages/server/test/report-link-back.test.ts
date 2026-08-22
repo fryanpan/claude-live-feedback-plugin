@@ -171,12 +171,18 @@ describe('a report comes back with the link to hand over', () => {
     // a task. Answering only for `task:` docs would leave the most-travelled
     // path with no link and no fallback, which is the exact friction this
     // change exists to remove.
-    const docId = 'plain-notes';
-    const p = join(dataDir, `${docId}.md`);
+    const name = 'plain-notes';
+    const p = join(dataDir, `${name}.md`);
     writeFileSync(p, '# Notes\n\nSome body text to anchor to.\n');
-    expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: p })).status).toBe(200);
+    const created = await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: p });
+    expect(created.status).toBe(200);
+    // `plain-notes` was the NAME; the link the server hands back addresses the
+    // doc by the id it minted, which is the address that never moves.
+    const docId = ((await created.json()) as { docId: string }).docId;
 
-    const r = await post(`/api/docs/${encodeURIComponent(docId)}/threads`, {
+    // Addressed by the readable name, so the link is also proof the alias
+    // resolves to the same doc the URL points at.
+    const r = await post(`/api/docs/${encodeURIComponent(name)}/threads`, {
       author: AGENT,
       text: 'A note on the doc itself.',
       anchor: { kind: 'subject' },

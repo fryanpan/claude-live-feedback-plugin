@@ -169,6 +169,9 @@ describe('the back target is not handed to a share visitor', () => {
   let base: string;
   let boardId: string;
   let cookie: string;
+  /** The id the server minted for the doc posted as `shared-doc` — the name
+   *  is an alias, and every URL the server emits carries the minted id. */
+  let sharedId: string;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -201,9 +204,13 @@ describe('the back target is not handed to a share visitor', () => {
 
     const p = join(dataDir, 'shared.md');
     writeFileSync(p, '# Shared\n\nBody.\n');
-    expect(
-      (await post('/api/docs', { docId: 'shared-doc', type: 'markdown', sourceUrl: p })).status,
-    ).toBe(200);
+    const createdShared = await post('/api/docs', {
+      docId: 'shared-doc',
+      type: 'markdown',
+      sourceUrl: p,
+    });
+    expect(createdShared.status).toBe(200);
+    sharedId = ((await createdShared.json()) as { docId: string }).docId;
 
     const ws = await post('/api/workspaces', { name: 'shared-board', goal: 'Ship it.' });
     boardId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
@@ -234,12 +241,18 @@ describe('the back target is not handed to a share visitor', () => {
     // Presence, on the same doc in the same pass: without this, the
     // `undefined` below is equally consistent with a resolver that never
     // resolves anything for anybody.
+    // Addressed by the readable name on purpose: the owner's half of the
+    // alias contract, answered by the same doc the visitor reads below.
     const owner = (await (await local('/api/docs/shared-doc')).json()) as {
+      meta?: { docId: string };
       backTo?: { workspaceId: string };
     };
+    expect(owner.meta?.docId).toBe(sharedId);
     expect(owner.backTo?.workspaceId).toBe(boardId);
 
-    const seen = await pub('/api/docs/shared-doc');
+    // The canonical id for the visitor: share scope is decided from the raw
+    // path segment against the board's membership, which holds minted ids.
+    const seen = await pub(`/api/docs/${sharedId}`);
     expect(seen.status).toBe(200); // the visitor really can read this doc
     const visitor = (await seen.json()) as {
       meta?: unknown;
@@ -264,11 +277,11 @@ describe('the back target is not handed to a share visitor', () => {
       200,
     );
 
-    const body = await (await pub('/api/docs/shared-doc')).text();
+    const body = await (await pub(`/api/docs/${sharedId}`)).text();
     expect(body).not.toContain(otherId);
     // Control, same payload: the resolver IS producing workspace-addressed
     // URLs here, so the absence above is a refusal rather than a URL shape
     // that happens to carry no workspace id at all.
-    expect(body).toContain(`/workspaces/${boardId}/docs/shared-doc`);
+    expect(body).toContain(`/workspaces/${boardId}/docs/${sharedId}`);
   });
 });

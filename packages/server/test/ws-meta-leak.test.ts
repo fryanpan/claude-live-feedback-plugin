@@ -87,6 +87,15 @@ describe('the sync channel leaks no host metadata', () => {
   let docPath: string;
   let base: string;
   let cookie: string;
+  /**
+   * The id the server MINTED for the doc the caller named `leaky`.
+   *
+   * The sync channel is addressed by the doc's ADDRESS: `ws.data.docId` is
+   * re-resolved per frame and share scope is checked against the board's
+   * membership, both of which hold the minted id. `leaky` stays a working
+   * name on the REST reads below.
+   */
+  let leakyId: string;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -121,7 +130,7 @@ describe('the sync channel leaks no host metadata', () => {
     const boardId = board.workspace.id as string;
     expect(boardId).toBeTruthy();
 
-    await local('/api/docs', {
+    const created = await local('/api/docs', {
       method: 'POST',
       body: JSON.stringify({
         docId: 'leaky',
@@ -134,6 +143,8 @@ describe('the sync channel leaks no host metadata', () => {
         producedBy: { agentId: 'secret-agent', sessionId: 'sess-1' },
       }),
     });
+    leakyId = ((await created.json()) as { docId: string }).docId;
+    expect(leakyId).toBeTruthy();
 
     const mint = await local('/api/share/link', {
       method: 'POST',
@@ -157,7 +168,7 @@ describe('the sync channel leaks no host metadata', () => {
   });
 
   it('gives a share visitor the document and none of the machine', async () => {
-    const { text, meta, close } = await syncAs(handle.port, 'leaky', {
+    const { text, meta, close } = await syncAs(handle.port, leakyId, {
       host: PUBLIC_HOST,
       cookie: `${SHARE_COOKIE}=${cookie}`,
     });
@@ -180,7 +191,7 @@ describe('the sync channel leaks no host metadata', () => {
     // Not a per-connection filter: there is nothing to filter. Asserting on
     // the owner's own connection is what keeps a future "just re-add it for
     // the local UI" change from quietly reopening the share hole.
-    const { text, meta, close } = await syncAs(handle.port, 'leaky', {
+    const { text, meta, close } = await syncAs(handle.port, leakyId, {
       host: `localhost:${handle.port}`,
     });
     expect(text).toContain(CANARY);
@@ -197,7 +208,7 @@ describe('the sync channel leaks no host metadata', () => {
     expect(doc.meta.sourceUrl).toBe(docPath);
     expect(doc.meta.owner).toBe(OWNER);
     expect(doc.meta.producedBy).toEqual({ agentId: 'secret-agent', sessionId: 'sess-1' });
-    expect(readPrivateMeta(dataDir, 'leaky').sourceUrl).toBe(docPath);
+    expect(readPrivateMeta(dataDir, leakyId).sourceUrl).toBe(docPath);
   });
 
   it('keeps the write-back binding alive across the move', async () => {

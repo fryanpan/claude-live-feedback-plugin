@@ -581,16 +581,19 @@ describe('undo respects the visitor gate — a share visitor cannot spend the AP
   }
 
   it('a gated undo schedules nothing; an ungated one still funnels through the event', async () => {
-    const docId = 'undo-gate-doc';
-    const file = join(gatedDir, `${docId}.md`);
+    const name = 'undo-gate-doc';
+    const file = join(gatedDir, `${name}.md`);
     writeFileSync(file, BODY);
     const created = await fetch(`${gatedBase}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
+      body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: file }),
     });
     expect(created.status).toBe(200);
-    const seeded = await fetch(`${gatedBase}/api/docs/${docId}/threads/by_find`, {
+    // The caller NAMED the doc; the server minted its id. The rooms handle
+    // below keys on the minted one, while the route still takes the name.
+    const docId = ((await created.json()) as { docId: string }).docId;
+    const seeded = await fetch(`${gatedBase}/api/docs/${name}/threads/by_find`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

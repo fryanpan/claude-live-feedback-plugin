@@ -168,6 +168,11 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
       body: JSON.stringify({ docId: 'h1', type: 'markdown', sourceUrl: path }),
     });
     expect(create.ok).toBe(true);
+    // `h1` was the NAME; the server minted the id. The rooms handle keys on
+    // the canonical one, and the stream below is opened by the name — so this
+    // exercise is also the alias contract: a watcher that subscribed by name
+    // and a writer that fired on the doc's own id have to meet.
+    const h1 = ((await create.json()) as { docId: string }).docId;
 
     // Subscribe the way the MCP child does: a live SSE stream on the doc.
     const controller = new AbortController();
@@ -193,15 +198,15 @@ describe('doc.sync_error reaches a watching SSE stream (HTTP end-to-end)', () =>
     // The git-shaped overwrite: un-flushed live edits, then the file is
     // rewritten out from under the doc.
     expect(
-      handle.rooms.findAndReplace('h1', { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
+      handle.rooms.findAndReplace(h1, { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
     ).toBe(true);
     writeExternal(path, EXT_ONE);
-    expect(handle.rooms.reconcileNow('h1')).toBe('conflict');
+    expect(handle.rooms.reconcileNow(h1)).toBe('conflict');
 
     const ev = await Promise.race([gotEvent, sleep(3000).then(() => null)]);
     controller.abort();
     if (!ev) throw new Error('watching stream never received doc.sync_error');
-    expect(ev.docId).toBe('h1');
+    expect(ev.docId).toBe(h1);
     expect(ev.path).toBe(path);
     expect(ev.backupPath).toContain('clobber-backups');
     expect(readFileSync(ev.backupPath as string, 'utf8')).toContain('first external edit');

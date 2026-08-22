@@ -254,7 +254,9 @@ describe('suggested edits — HTTP routes', () => {
       const webhookUrl = `http://localhost:${sink.port}/hook`;
       const file = join(dataDir, 'sug-hook.md');
       writeFileSync(file, 'Alpha beta gamma.\n');
-      await j(
+      // `sug-hook` is the readable name; the server mints the id, and every
+      // event it fires carries the minted one.
+      const { docId: hookDocId } = await j<{ docId: string }>(
         await fetch(`${base}/api/docs`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -288,7 +290,7 @@ describe('suggested edits — HTTP routes', () => {
       expect(events).toContain('suggestion.accepted');
       const acceptedHit = hits.find((h) => h.event === 'suggestion.accepted');
       expect(acceptedHit?.sid).toBe(created.suggestionId);
-      expect(acceptedHit?.docId).toBe('sug-hook');
+      expect(acceptedHit?.docId).toBe(hookDocId);
     } finally {
       sink.stop();
     }

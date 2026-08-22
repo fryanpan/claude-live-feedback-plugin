@@ -41,6 +41,9 @@ describe('GET /api/docs/:docId/status', () => {
   let base: string;
   let boundPath: string;
   let cookie: string;
+  /** The id the server minted for the doc this file posts as `status-doc`.
+   *  `status-doc` is the readable ALIAS from here on. */
+  let docId: string;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -76,16 +79,14 @@ describe('GET /api/docs/:docId/status', () => {
     const bigSection = `Filler paragraph about synthetic rockets. ${'x'.repeat(400)}\n\n`;
     boundPath = join(dataDir, 'status-doc.md');
     writeFileSync(boundPath, `# Status Fixture\n\n${bigSection.repeat(80)}`);
-    expect(
-      (
-        await post('/api/docs', {
-          docId: 'status-doc',
-          type: 'markdown',
-          sourceUrl: boundPath,
-          title: 'Status Fixture',
-        })
-      ).status,
-    ).toBe(200);
+    const created = await post('/api/docs', {
+      docId: 'status-doc',
+      type: 'markdown',
+      sourceUrl: boundPath,
+      title: 'Status Fixture',
+    });
+    expect(created.status).toBe(200);
+    docId = ((await created.json()) as { docId: string }).docId;
 
     // One open + one resolved thread, so the counts are non-vacuous.
     const mkThread = async () => {
@@ -132,7 +133,9 @@ describe('GET /api/docs/:docId/status', () => {
     const text = await res.text();
     const status = JSON.parse(text) as DocStatus;
 
-    expect(status.docId).toBe('status-doc');
+    // Addressed by the readable name, answered under the doc's own id — both
+    // halves of the alias contract in one call.
+    expect(status.docId).toBe(docId);
     expect(status.type).toBe('markdown');
     expect(status.title).toBe('Status Fixture');
     expect(status.bound).toBe(true);
@@ -171,7 +174,9 @@ describe('GET /api/docs/:docId/status', () => {
   });
 
   it('omits the bound path (and any path-shaped detail) for a share visitor', async () => {
-    const res = await pub('/api/docs/status-doc/status');
+    // The canonical id, because the share scope is decided from the raw path
+    // segment against the board's membership — and a board holds minted ids.
+    const res = await pub(`/api/docs/${docId}/status`);
     expect(res.status).toBe(200); // the visitor really can read status
     const text = await res.text();
     const status = JSON.parse(text) as DocStatus;

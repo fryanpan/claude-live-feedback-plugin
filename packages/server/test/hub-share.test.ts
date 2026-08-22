@@ -145,6 +145,15 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
   const ATTACHED = 'plan-doc';
   const PRIVATE = 'private-doc';
+  /**
+   * The id the server MINTED for `plan-doc`. The board's membership — and so
+   * every share-scope answer about it — is keyed by this; `plan-doc` stays
+   * the readable alias the attach below is written with.
+   */
+  let attachedId: string;
+  /** …and for `private-doc`, so the refusals below are refusals of a doc that
+   *  really exists rather than of a name that resolves to nothing. */
+  let privateId: string;
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -197,7 +206,12 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       writeFileSync(path, `# ${id}\n\nBody text to comment on.\n`);
       const r = await post('/api/docs', { docId: id, type: 'markdown', sourceUrl: path });
       expect(r.status).toBe(200);
+      const minted = ((await r.json()) as { docId: string }).docId;
+      if (id === ATTACHED) attachedId = minted;
+      else privateId = minted;
     }
+    expect(attachedId).toBeTruthy();
+    expect(privateId).toBeTruthy();
 
     // The hub workspace, one attached doc, one task, one open decision.
     const ws = await post('/api/workspaces', { name: 'search-revamp' });
@@ -223,7 +237,8 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
     // Cross-reference so the chip endpoint has something to resolve.
     expect(
-      (await post(`/api/tasks/${taskId}/links`, { ref: { kind: 'doc', docId: ATTACHED } })).status,
+      (await post(`/api/tasks/${taskId}/links`, { ref: { kind: 'doc', docId: attachedId } }))
+        .status,
     ).toBe(200);
 
     // A transition so the projected task carries an attributed history.
@@ -619,14 +634,14 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     it('promoting a thread to a task is refused even on an in-scope doc', async () => {
       // The thread exists and the visitor can SEE it (positive control below
       // proves comment access) — but promote CREATES a task.
-      const mk = await post(`/api/docs/${ATTACHED}/threads/by_find`, {
+      const mk = await post(`/api/docs/${attachedId}/threads/by_find`, {
         author: PERSON,
         text: 'This paragraph needs a task.',
         find: 'Body text',
       });
       expect(mk.status).toBe(200);
       const threadId = ((await mk.json()) as { thread: { id: string } }).thread.id;
-      const r = await pub(`/api/docs/${ATTACHED}/threads/${threadId}/promote`, hubCookie, {
+      const r = await pub(`/api/docs/${attachedId}/threads/${threadId}/promote`, hubCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: hubId }),
@@ -634,7 +649,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       expect(r.status).toBe(403);
       // And the visitor CAN reply on the same thread — comments are the one
       // write they keep.
-      const reply = await pub(`/api/docs/${ATTACHED}/threads/${threadId}/comments`, hubCookie, {
+      const reply = await pub(`/api/docs/${attachedId}/threads/${threadId}/comments`, hubCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: PERSON, text: 'Agreed — but from a visitor.' }),
@@ -645,25 +660,25 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
   describe('a workspace visitor reaches the workspace’s own docs, comments only', () => {
     it('reads the attached doc and the task body room', async () => {
-      expect((await pub(`/api/docs/${ATTACHED}`, hubCookie)).status).toBe(200);
+      expect((await pub(`/api/docs/${attachedId}`, hubCookie)).status).toBe(200);
       expect((await pub(`/api/docs/task%3A${taskId}`, hubCookie)).status).toBe(200);
     });
 
     it('the doc payload never hands a visitor the hub workspace id', async () => {
       // Positive control: the owner's copy of the same payload carries it —
       // the doc-surface voice dock resolves its workspace from this field.
-      const owner = (await (await local(`/api/docs/${ATTACHED}`)).json()) as {
+      const owner = (await (await local(`/api/docs/${attachedId}`)).json()) as {
         hubWorkspaceId?: string;
       };
       expect(owner.hubWorkspaceId).toBe(hubId);
-      const seen = (await (await pub(`/api/docs/${ATTACHED}`, hubCookie)).json()) as {
+      const seen = (await (await pub(`/api/docs/${attachedId}`, hubCookie)).json()) as {
         hubWorkspaceId?: string;
       };
       expect(seen.hubWorkspaceId).toBeUndefined();
     });
 
     it('posts a comment attributed as a guest, never as a fleet identity', async () => {
-      const r = await pub(`/api/docs/${ATTACHED}/threads/by_find`, hubCookie, {
+      const r = await pub(`/api/docs/${attachedId}/threads/by_find`, hubCookie, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -680,8 +695,8 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     });
 
     it('still cannot reach a doc outside the workspace (absence)', async () => {
-      expect((await pub(`/api/docs/${PRIVATE}`, hubCookie)).status).toBe(403);
-      expect((await pub(`/review/${PRIVATE}`, hubCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${privateId}`, hubCookie)).status).toBe(403);
+      expect((await pub(`/review/${privateId}`, hubCookie)).status).toBe(403);
     });
   });
 
@@ -696,7 +711,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
    */
   describe('task chips resolve via REST, in the §3.3 rule-2 shape', () => {
     it('GET /api/docs/<id>/tasks returns the chip shape, nothing more', async () => {
-      const r = await pub(`/api/docs/${ATTACHED}/tasks`, hubCookie);
+      const r = await pub(`/api/docs/${attachedId}/tasks`, hubCookie);
       expect(r.status).toBe(200);
       const { tasks } = (await r.json()) as { tasks: Array<Record<string, unknown>> };
       const chip = tasks.find((t) => t.id === taskId);
@@ -709,8 +724,8 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     it('the chip endpoint stays scoped — not a task enumeration oracle', async () => {
       // A doc in no shared workspace, and a doc in someone else's — both
       // refused, next to the 200 the in-scope read gets above.
-      expect((await pub(`/api/docs/${PRIVATE}/tasks`, hubCookie)).status).toBe(403);
-      expect((await pub(`/api/docs/${ATTACHED}/tasks`, otherCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${privateId}/tasks`, hubCookie)).status).toBe(403);
+      expect((await pub(`/api/docs/${attachedId}/tasks`, otherCookie)).status).toBe(403);
     });
   });
 

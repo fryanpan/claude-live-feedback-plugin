@@ -51,24 +51,33 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-async function seedThread(base: string, dataDir: string, docId: string): Promise<string> {
-  const file = join(dataDir, `${docId}.md`);
+/**
+ * Seed one doc + thread. `name` is the readable name the caller asks for; the
+ * server mints the doc's real id, and the rooms handle keys on THAT — so the
+ * minted id comes back with the thread rather than being reconstructed.
+ */
+async function seedThread(
+  base: string,
+  dataDir: string,
+  name: string,
+): Promise<{ docId: string; threadId: string }> {
+  const file = join(dataDir, `${name}.md`);
   writeFileSync(file, '# Doc\n\nsome text\n');
-  await j(
+  const { docId } = await j<{ docId: string }>(
     await fetch(`${base}/api/docs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
+      body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: file }),
     }),
   );
   const { thread } = await j<{ thread: Thread }>(
-    await fetch(`${base}/api/docs/${docId}/threads`, {
+    await fetch(`${base}/api/docs/${name}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: bryan, text: 'why does this not bubble up?', anchor }),
     }),
   );
-  return thread.id;
+  return { docId, threadId: thread.id };
 }
 
 function markerOf(handle: ServerHandle, docId: string, threadId: string): unknown {
@@ -112,21 +121,24 @@ describe('summaryPendingTs marker', () => {
 
     it('stamps the queue time into the synced thread map when activity schedules one', async () => {
       const before = Date.now();
-      const threadId = await seedThread(base, dataDir, 'marker-on');
-      const ts = markerOf(handle, 'marker-on', threadId);
+      const { docId, threadId } = await seedThread(base, dataDir, 'marker-on');
+      const ts = markerOf(handle, docId, threadId);
       expect(typeof ts).toBe('number');
       expect(ts as number).toBeGreaterThanOrEqual(before);
     });
 
     it('does NOT stamp for a gated write — visitor activity queues nothing', async () => {
-      const threadId = await seedThread(base, dataDir, 'marker-gated');
+      const { docId, threadId } = await seedThread(base, dataDir, 'marker-gated');
+      // The readable name still addresses the doc — and resolves to the id the
+      // rooms handle keys on.
       const room = handle.rooms.get('marker-gated');
       if (!room) throw new Error('room missing');
-      const stampedAtCreate = markerOf(handle, 'marker-gated', threadId) as number;
+      expect(room.docId).toBe(docId);
+      const stampedAtCreate = markerOf(handle, docId, threadId) as number;
 
       // The same gate the routes apply to share visitors (`generate: !visitor`).
       const res = await handle.rooms.postComment(
-        'marker-gated',
+        docId,
         threadId,
         bryan,
         'a visitor said this',
@@ -137,7 +149,7 @@ describe('summaryPendingTs marker', () => {
       // Positive control above: the create DID stamp. The gated reply must not
       // move the marker — a card claiming "generating" here would promise a
       // summary nobody scheduled.
-      expect(markerOf(handle, 'marker-gated', threadId)).toBe(stampedAtCreate);
+      expect(markerOf(handle, docId, threadId)).toBe(stampedAtCreate);
     });
   });
 
@@ -165,8 +177,8 @@ describe('summaryPendingTs marker', () => {
     it('never stamps — a client must not promise a summary that never comes', async () => {
       // Positive control: this summarizer really is off.
       expect(summarizer.enabled).toBe(false);
-      const threadId = await seedThread(base, dataDir, 'marker-off');
-      expect(markerOf(handle, 'marker-off', threadId)).toBeUndefined();
+      const { docId, threadId } = await seedThread(base, dataDir, 'marker-off');
+      expect(markerOf(handle, docId, threadId)).toBeUndefined();
     });
   });
 });
