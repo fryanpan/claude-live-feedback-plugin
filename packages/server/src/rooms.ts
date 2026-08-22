@@ -79,12 +79,16 @@ import {
   writePrivateMeta,
 } from './private-meta.ts';
 import {
+  type ArchivedDoc,
   type ArchivedReview,
   archiveDirPath,
   ensureArchiveDir,
   readArchiveManifest,
+  readDocArchiveManifest,
   removeArchiveManifest,
+  removeDocArchiveManifest,
   writeArchiveManifest,
+  writeDocArchiveManifest,
 } from './review-archive.ts';
 import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
@@ -1932,6 +1936,102 @@ export class Rooms {
   }
 
   /**
+   * RETIRE ONE free-standing doc: flush it, move its persisted state into
+   * `data/_archive/`, and unbind the room.
+   *
+   * `archiveReview` is the same act over a member list, and it is the verb for
+   * anything that HAS a member list. This one exists for what that cannot
+   * express — a markdown doc from `create_review_doc`, a mockup from
+   * `bind_mock`: a few hundred docs on the production box whose only removal
+   * path was `delete_doc`, which purges the `.ydoc` the activity analyses are
+   * rebuilt from. Everything mechanical is shared with the review path
+   * (`moveDocFiles`, `teardownRoom`, `hydrateDoc`), so the two cannot drift
+   * about what archiving means.
+   *
+   * Three refusals, each because the right verb is a different one:
+   *
+   *   - `review-member` — the doc carries a review id, so `archiveReview` would
+   *     sweep it up with its siblings. The test is deliberately the broad
+   *     `reviewIdOf` rather than `isReviewMember`: the question is not "is this
+   *     a proper review" but "would `archiveReview` move this file", and that
+   *     selector is `reviewIdOf`. Answering the narrower question would let two
+   *     verbs both claim the same doc.
+   *   - `hub-owned` — a `task:` body or a `ws:` board room is live furniture
+   *     the hub re-creates, not a document anyone archives.
+   *   - `archive-collision` — an older snapshot of this id is already parked.
+   *     Nothing here decides which of two snapshots is worth less.
+   *
+   * Open threads do not block it, for the same reason they do not block
+   * `archiveReview`: archiving strands nothing, and `unarchiveDoc` puts it
+   * back with its threads intact.
+   */
+  archiveDoc(
+    docId: string,
+    opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
+  ):
+    | { ok: true; docId: string; manifest: ArchivedDoc }
+    | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
+    | { ok: false; error: 'review-member'; setId: string } {
+    if (isHubOwnedRoom(docId)) return { ok: false, error: 'hub-owned' };
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    const setId = reviewIdOf(room.meta);
+    if (setId !== undefined) return { ok: false, error: 'review-member', setId };
+
+    const dir = ensureArchiveDir(this.cfg.dataDir);
+    if (existsSync(join(dir, `${docId}.ydoc`))) return { ok: false, error: 'archive-collision' };
+
+    // Flush BEFORE tearing down: teardown cancels the pending debounced write,
+    // so without this the archived snapshot is up to 200ms stale — and for a
+    // doc edited right up to the moment it was retired, that is the edit the
+    // reviewer just made.
+    this.persistRoomNow(room);
+    if (!this.moveDocFiles(docId, this.cfg.dataDir, dir))
+      return { ok: false, error: 'move-failed' };
+    // Commit point passed: the files are parked. Now unbind the room.
+    this.teardownRoom(room, 'doc archived');
+
+    const manifest: ArchivedDoc = {
+      docId,
+      archivedAt: toUtcIso(Date.now()),
+      archivedBy: opts.archivedBy,
+      ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      ...(room.meta.title !== undefined ? { title: room.meta.title } : {}),
+      linkedWorkspaces: opts.linkedWorkspaces ?? [],
+    };
+    writeDocArchiveManifest(this.cfg.dataDir, manifest);
+    this.recordArchiveLifecycle('archive', docId, {}, opts);
+    return { ok: true, docId, manifest };
+  }
+
+  /**
+   * Put an archived doc back where it was: move its persisted state up out of
+   * `_archive`, hydrate the room, re-arm the file binding, drop the manifest.
+   *
+   * Refuses if the id has been re-minted at the top level while the doc was
+   * away — restoring over a live doc would destroy the newer one, which is the
+   * failure this whole feature exists to avoid.
+   */
+  unarchiveDoc(
+    docId: string,
+    opts: { archivedBy: string },
+  ):
+    | { ok: true; docId: string; manifest: ArchivedDoc }
+    | { ok: false; error: 'not-found' | 'restore-collision' | 'move-failed' } {
+    const manifest = readDocArchiveManifest(this.cfg.dataDir, docId);
+    if (!manifest) return { ok: false, error: 'not-found' };
+    if (existsSync(this.pathFor(docId))) return { ok: false, error: 'restore-collision' };
+
+    const dir = archiveDirPath(this.cfg.dataDir);
+    if (!this.moveDocFiles(docId, dir, this.cfg.dataDir))
+      return { ok: false, error: 'move-failed' };
+    this.hydrateDoc(docId);
+    removeDocArchiveManifest(this.cfg.dataDir, docId);
+    this.recordArchiveLifecycle('unarchive', docId, {}, opts);
+    return { ok: true, docId, manifest };
+  }
+
+  /**
    * Move a doc's `.ydoc` and its private-meta sidecar between the data dir and
    * `_archive`. Rename, not copy: it is atomic within the volume and it is
    * undoable by calling this with the directories swapped.
@@ -1979,18 +2079,33 @@ export class Rooms {
     docIds: string[],
     opts: { archivedBy: string; reason?: string },
   ): void {
+    this.recordArchiveLifecycle(type, setId, { reviewId: setId, memberCount: docIds.length }, opts);
+  }
+
+  /**
+   * Write the row itself. Shared by the review and single-doc paths so a log
+   * that mixes them cannot disagree with itself about the shape of an
+   * `archive`. The subject id is the docId on the event either way — a review's
+   * id, or the doc's own — and `reviewId` in the payload is what tells a reader
+   * which kind of thing was retired.
+   */
+  private recordArchiveLifecycle(
+    type: 'archive' | 'unarchive',
+    subjectId: string,
+    extra: Event['payload'],
+    opts: { archivedBy: string; reason?: string },
+  ): void {
     try {
       const ts = toUtcIso(Date.now());
       const payload: Event['payload'] = {
-        reviewId: setId,
-        memberCount: docIds.length,
+        ...extra,
         ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
       };
       const event: Event = {
         eventId: eventId({
           ts,
           actor: 'agent',
-          docId: setId,
+          docId: subjectId,
           type,
           payloadDigest: payloadDigest(opts.reason),
         }),
@@ -1999,12 +2114,12 @@ export class Rooms {
         actor: 'agent',
         actorName: opts.archivedBy,
         isOwner: false,
-        doc: buildEventDoc({ docId: setId } as DocMeta),
+        doc: buildEventDoc({ docId: subjectId } as DocMeta),
         payload,
       };
       appendActivity(this.cfg.dataDir, event);
     } catch (err) {
-      console.error('[rooms] recordReviewLifecycle failed:', err);
+      console.error('[rooms] recordArchiveLifecycle failed:', err);
     }
   }
 

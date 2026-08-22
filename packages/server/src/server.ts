@@ -76,7 +76,7 @@ import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
 import { READY_IDLE_DEFAULT_MS, ReadyWorkNudger, type ReadyWorkSnapshot } from './ready-nudge.ts';
-import { listArchivedReviews } from './review-archive.ts';
+import { listArchivedDocs, listArchivedReviews } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -4954,9 +4954,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         };
         // Everything currently parked in `data/_archive/` with a manifest.
         // Read-only, and the answer to "what can I bring back".
+        //
+        // Both kinds, under separate keys. `docs` is ADDITIVE: an older bundle
+        // reading `archived` still gets reviews and only reviews, so nothing
+        // it already reads changes meaning — which is the rule for this
+        // server's REST routes, where the caller is a plugin nobody can
+        // restart. Keys rather than one merged list with a discriminator,
+        // because the two manifests genuinely differ (a review has `docIds`
+        // and a `root`; a doc is one id) and a caller almost always wants one
+        // kind or the other.
         if (pathname === '/api/reviews/archived' && req.method === 'GET') {
           if (visitor) return j(403, { error: 'not available to share visitors' });
-          return j(200, { archived: listArchivedReviews(dataDir) });
+          return j(200, {
+            archived: listArchivedReviews(dataDir),
+            docs: listArchivedDocs(dataDir),
+          });
         }
         const reviewArchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/archive$/);
         if (reviewArchiveMatch && req.method === 'POST') {
@@ -4978,6 +4990,44 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Put the review back on every board it was on when it was archived.
           for (const workspaceId of res.manifest.linkedWorkspaces) {
             if (taskStore.attachDoc(workspaceId, setId).ok)
+              taskProjection.ensureWorkspace(workspaceId);
+          }
+          return j(200, res);
+        }
+        // The same pair for ONE free-standing doc. They sit HERE rather than in
+        // the `/api/docs/:id/...` block below because that block opens with
+        // `rooms.get(docId)` and 404s without a room — which is precisely the
+        // state an archived doc is in, so an unarchive route inside it could
+        // never be reached.
+        const docArchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/archive$/);
+        if (docArchiveMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const docId = decodeURIComponent(docArchiveMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = body?.author as { name?: string } | undefined;
+          const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
+          const res = rooms.archiveDoc(docId, {
+            archivedBy: author?.name ?? 'unknown',
+            ...(reason !== undefined ? { reason } : {}),
+            linkedWorkspaces: boardsLinking(docId),
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
+          // A board row pointing at a doc that no longer loads is a dead end,
+          // so archiving takes the row too — and the manifest remembers which
+          // boards, so unarchiving puts it back rather than orphaning it.
+          unlinkFromEveryHubWorkspace(docId);
+          return j(200, res);
+        }
+        const docUnarchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/unarchive$/);
+        if (docUnarchiveMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const docId = decodeURIComponent(docUnarchiveMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = body?.author as { name?: string } | undefined;
+          const res = rooms.unarchiveDoc(docId, { archivedBy: author?.name ?? 'unknown' });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
+          for (const workspaceId of res.manifest.linkedWorkspaces) {
+            if (taskStore.attachDoc(workspaceId, docId).ok)
               taskProjection.ensureWorkspace(workspaceId);
           }
           return j(200, res);

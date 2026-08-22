@@ -40,6 +40,36 @@ export interface ArchivedReview {
   linkedWorkspaces: string[];
 }
 
+/**
+ * The same record for ONE doc that belongs to no review — a markdown doc from
+ * `create_review_doc`, a mockup from `bind_mock`.
+ *
+ * It needs a manifest for a different reason than a review does. A review's
+ * membership is only knowable from `rooms.list()`, so without a manifest the
+ * member list would be unrecoverable; a single doc's id is the filename, so
+ * that part is never in doubt. What is lost without a manifest is everything
+ * ELSE the round trip needs — which boards to re-attach it to, and who retired
+ * it and why — plus the ability to answer "what can I bring back" without
+ * parsing every `.ydoc` in `_archive`.
+ *
+ * The suffix is `.doc.json` rather than `.review.json`, and the difference is
+ * load-bearing twice over: neither ends in `.ydoc`, so the backfill's
+ * enumerator skips both, and the two listings can enumerate their own kind
+ * without a manifest of one kind ever being read as the other.
+ */
+export interface ArchivedDoc {
+  docId: string;
+  /** ISO-8601 UTC. */
+  archivedAt: string;
+  /** Display name of whoever asked — an agent's `CW_AGENT_NAME`, usually. */
+  archivedBy: string;
+  /** Free text: why this doc is finished. Replayed on the archived list. */
+  reason?: string;
+  title?: string;
+  /** Boards the doc was on when it was archived; unarchive re-attaches these. */
+  linkedWorkspaces: string[];
+}
+
 export const ARCHIVE_DIR = '_archive';
 
 export function archiveDirPath(dataDir: string): string {
@@ -116,6 +146,70 @@ export function listArchivedReviews(dataDir: string): ArchivedReview[] {
     }
   } catch (err) {
     console.error('[archive] failed to list archived reviews:', err);
+    return out;
+  }
+  return out.sort((a, b) => b.archivedAt.localeCompare(a.archivedAt));
+}
+
+const DOC_MANIFEST_SUFFIX = '.doc.json';
+
+function docManifestPath(dataDir: string, docId: string): string {
+  return join(archiveDirPath(dataDir), `${docId}${DOC_MANIFEST_SUFFIX}`);
+}
+
+export function writeDocArchiveManifest(dataDir: string, manifest: ArchivedDoc): void {
+  ensureArchiveDir(dataDir);
+  writeFileSync(docManifestPath(dataDir, manifest.docId), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/** Read one doc's manifest, or null when nothing is archived under that id. */
+export function readDocArchiveManifest(dataDir: string, docId: string): ArchivedDoc | null {
+  const path = docManifestPath(dataDir, docId);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<ArchivedDoc>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      docId: parsed.docId ?? docId,
+      archivedAt: parsed.archivedAt ?? '',
+      archivedBy: parsed.archivedBy ?? 'unknown',
+      ...(parsed.reason !== undefined ? { reason: parsed.reason } : {}),
+      ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+      linkedWorkspaces: Array.isArray(parsed.linkedWorkspaces)
+        ? parsed.linkedWorkspaces.filter((d): d is string => typeof d === 'string')
+        : [],
+    };
+  } catch (err) {
+    console.error(`[archive] unreadable doc manifest for ${docId}:`, err);
+    return null;
+  }
+}
+
+/** Drop a doc manifest once its `.ydoc` is back at the top level. Same
+ *  permitted hard delete as `removeArchiveManifest`: a control file, removed
+ *  only after the content it described has already moved back. */
+export function removeDocArchiveManifest(dataDir: string, docId: string): void {
+  try {
+    rmSync(docManifestPath(dataDir, docId), { force: true });
+  } catch (err) {
+    console.error(`[archive] failed to remove doc manifest for ${docId}:`, err);
+  }
+}
+
+/** Every archived free-standing doc, newest first. */
+export function listArchivedDocs(dataDir: string): ArchivedDoc[] {
+  const dir = archiveDirPath(dataDir);
+  if (!existsSync(dir)) return [];
+  const out: ArchivedDoc[] = [];
+  try {
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith(DOC_MANIFEST_SUFFIX)) continue;
+      const docId = file.slice(0, -DOC_MANIFEST_SUFFIX.length);
+      const m = readDocArchiveManifest(dataDir, docId);
+      if (m) out.push(m);
+    }
+  } catch (err) {
+    console.error('[archive] failed to list archived docs:', err);
     return out;
   }
   return out.sort((a, b) => b.archivedAt.localeCompare(a.archivedAt));
