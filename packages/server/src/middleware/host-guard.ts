@@ -202,9 +202,9 @@ export function shareScopeAllows(
    * because two rules that agree today drift apart later and the one that
    * drifts open is a breach.
    *
-   * The id may be a doc OR a grouping (folder bind / diff review), and a
-   * doc belongs to more than one workspace at once: its grouping, and the
-   * hub board that grouping is filed on. Membership is therefore a SET, not
+   * The id may be a doc OR a review (folder bind / diff review), and a
+   * doc belongs to more than one workspace at once: its review, and the
+   * hub board that review is filed on. Membership is therefore a SET, not
    * a single answer — an exact `=== workspaceOf(id)` was what refused a hub
    * visitor every review row on their own board.
    *
@@ -250,7 +250,7 @@ export function shareScopeAllows(
 
   /**
    * Does this `/api/workspaces/<seg>/…` segment name a workspace the share
-   * covers — the shared workspace itself, or a grouping filed on it?
+   * covers — the shared workspace itself, or a review filed on it?
    *
    * Deliberately NOT `inScope`: a workspace id and a doc id come from the
    * same string space, and letting the entry DOC of a workspace share match
@@ -392,7 +392,7 @@ export function shareScopeAllows(
   // fix for a shared BOARD: a group bind is filed on a hub workspace, so the
   // review row a visitor can see on the board is reached through the
   // GROUPING's id while the share is scoped to the HUB's. An exact `!==`
-  // refused every one of them. A grouping filed on a different board is not
+  // refused every one of them. A review filed on a different board is not
   // in the set `workspacesOf` returns, so it stays refused — that half is
   // the one under test, because widening is the direction that costs.
   //

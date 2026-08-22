@@ -1,7 +1,7 @@
 /**
  * One channel message per event, however many SSE streams carried it.
  *
- * A doc's thread events now reach its own channel, its `ws~<grouping>`
+ * A doc's thread events now reach its own channel, its `ws~<setId>`
  * channel, AND every `ws~<board>` whose `workspace.docIds` holds it. That is
  * deliberate — it is what lets a lead declare itself once and receive
  * everything filed on the board afterwards, with no per-doc subscribe. The

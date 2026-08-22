@@ -186,7 +186,7 @@ const server = new Server(
       'unless you pass new ones). Share the returned entryUrl with the human',
       '(bare URL on its own line); the file tree navigates the rest. Thread',
       'events arrive per file via the auto-watch; resolve threads as you address',
-      'them; refresh_review(setId) to re-sync membership and groupings as files move (threads survive); delete_review(setId) when the review is done.',
+      'them; refresh_review(setId) to re-sync membership and reviews as files move (threads survive); delete_review(setId) when the review is done.',
       '',
       'SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to',
       'PROPOSE a change instead of applying it — the match is marked pending and',
@@ -330,14 +330,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_docs',
       description:
-        'List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or grouping id) — omit it to list every doc on the server.',
+        'List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or review id) — omit it to list every doc on the server.',
       inputSchema: {
         type: 'object',
         properties: {
           workspaceId: {
             type: 'string',
             description:
-              'Only docs in this workspace. Matches hub-board membership and the grouping workspaceId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
+              'Only docs in this workspace. Matches hub-board membership and the reviewId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
           },
         },
       },
@@ -483,7 +483,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.',
+              'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.',
           },
           producedBy: {
             type: 'object',
@@ -551,7 +551,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
+              'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
         },
         required: ['docId', 'sourceHtmlPath'],
@@ -560,7 +560,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bind_folder',
       description:
-        'Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id (the grouping), the hub workspace it was filed on (hubWorkspaceId — the board, so the bind is discoverable without the URL), root, scan fileCount, and the entry file.',
+        'Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id (the review), the hub workspace it was filed on (hubWorkspaceId — the board, so the bind is discoverable without the URL), root, scan fileCount, and the entry file.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1029,7 +1029,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: {
             type: 'string',
             description:
-              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a grouping/review id.',
+              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id.',
           },
           allowDomains: {
             type: 'array',
@@ -1052,7 +1052,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: {
             type: 'string',
             description:
-              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a grouping/review id.',
+              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id.',
           },
           ttlSeconds: { type: 'number', description: 'Defaults to one week (604800).' },
           label: { type: 'string', description: 'Human label shown in list_shares.' },
@@ -1106,7 +1106,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_workspace',
       description:
-        "Create a hub WORKSPACE — a goal + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc groupings; link one to a hub workspace with attach_doc). `goal` is the north-star statement every triage decision is judged against — write it as a sentence or two of markdown, and keep it current with set_workspace_goal. Board sections come later via set_goal_list. YOU become the workspace's LEAD AGENT — the addressee for goal-edit re-triage — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
+        "Create a hub WORKSPACE — a goal + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc reviews; link one to a hub workspace with attach_doc). `goal` is the north-star statement every triage decision is judged against — write it as a sentence or two of markdown, and keep it current with set_workspace_goal. Board sections come later via set_goal_list. YOU become the workspace's LEAD AGENT — the addressee for goal-edit re-triage — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1467,7 +1467,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           batchId: {
             type: 'string',
             description:
-              'Echo the batchId from a goal-change re-triage request. It ties this placement to the goal edit that asked for it, so the activity view reads N moves as one edit instead of N unexplained regroupings.',
+              'Echo the batchId from a goal-change re-triage request. It ties this placement to the goal edit that asked for it, so the activity view reads N moves as one edit instead of N unexplained rereviews.',
           },
         },
         required: ['taskId', 'goal'],
@@ -2125,7 +2125,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           folderPath,
           owner: process.cwd(),
           ...(workspaceId ? { workspaceId } : {}),
-          // The BOARD, next to the grouping id above. Two ids, two meanings,
+          // The BOARD, next to the review id above. Two ids, two meanings,
           // one payload — which is why they are spelled apart.
           ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
           ...(title ? { title } : {}),
@@ -2173,7 +2173,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(target ? { target } : {}),
           owner: process.cwd(),
           ...(reviewId ? { reviewId } : {}),
-          // The BOARD, next to the grouping id above. Two ids, two meanings,
+          // The BOARD, next to the review id above. Two ids, two meanings,
           // one payload — which is why they are spelled apart.
           ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
           ...(title ? { title } : {}),
@@ -3679,7 +3679,7 @@ async function watchDoc(docId: string, persist = true): Promise<boolean> {
  * it meant.
  *
  *  - A GROUPING (a diff review / folder bind): its member docs carry the
- *    grouping tag and `rooms.ts` has always double-broadcast on it. True from
+ *    review tag and `rooms.ts` has always double-broadcast on it. True from
  *    the start.
  *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
  *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
@@ -3859,7 +3859,7 @@ function startSseLoop(label: string, path: string, controller: AbortController):
 }
 
 /** Shared across every SSE loop in this process — the whole point is to catch
- *  a frame arriving on the board stream that the grouping stream already
+ *  a frame arriving on the board stream that the review stream already
  *  delivered, so a per-loop instance would see nothing. See frame-dedup.ts
  *  for what identifies an event (the server's `eid` first, `event#docId#seq`
  *  for an older one), why the fallback needs a window, and why anything it
