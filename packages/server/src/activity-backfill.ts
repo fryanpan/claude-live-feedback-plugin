@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type DocMeta, type Thread, listThreads, readDocMeta } from '@feedback/core';
 import * as Y from 'yjs';
 import {
@@ -190,7 +190,18 @@ export function runBackfill(opts: BackfillOptions): BackfillStats {
     // visitors). This reads .ydoc files directly rather than through a room,
     // so it has to merge the sidecar itself or every event loses its repo
     // and its producedBy attribution.
+    //
+    // The data dir is the fallback and the .ydoc's own directory wins.
+    // Archiving
+    // carries the sidecar along with its .ydoc into `_archive`, so a
+    // dataDir-only lookup would silently strip repo and producedBy off every
+    // archived doc's events — the archive would still be scanned and the
+    // stream would still be non-empty, which is precisely the shape of a
+    // regression nobody notices. The fallback is not belt-and-braces: the
+    // ~174 ydocs hand-moved into `_archive` in June left their sidecars
+    // behind at the top level, and they still have to resolve.
     Object.assign(meta, readPrivateMeta(opts.dataDir, meta.docId));
+    Object.assign(meta, readPrivateMeta(dirname(path), meta.docId));
     const threads = listThreads(ydoc);
     if (threads.length === 0) {
       ydoc.destroy();

@@ -74,9 +74,18 @@ import {
   deletePrivateMeta,
   isPrivateMetaKey,
   liftPrivateMetaFromYdoc,
+  privateMetaPath,
   readPrivateMeta,
   writePrivateMeta,
 } from './private-meta.ts';
+import {
+  type ArchivedReview,
+  archiveDirPath,
+  ensureArchiveDir,
+  readArchiveManifest,
+  removeArchiveManifest,
+  writeArchiveManifest,
+} from './review-archive.ts';
 import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
@@ -310,12 +319,33 @@ export class Rooms {
     if (openThreads > 0 && !opts?.force) {
       return { ok: false, error: 'has-open-threads', openThreads };
     }
-    // Cancel pending persistence first so it can't recreate the .ydoc after
-    // we remove it.
+    this.teardownRoom(room, 'doc deleted');
+    this.purgePersisted(docId);
+    return { ok: true };
+  }
+
+  /**
+   * Unbind a room from this process: cancel its pending persistence, drop its
+   * file binding and every timer that binding owns, close live viewers, and
+   * take it out of memory.
+   *
+   * Shared by the two verbs that stop serving a doc — `deleteDoc`, which then
+   * removes the persisted state, and `archiveReview`, which then moves it into
+   * `_archive`. They differ only in what happens to the FILE; everything about
+   * unhooking the room is the same, and keeping one copy is what stops an
+   * archive from leaving a poll running against a doc nobody can open.
+   *
+   * Cancelling the save timer is load-bearing rather than tidy: a pending
+   * debounced write fires 200ms later and re-creates `<docId>.ydoc` at the top
+   * level, which for an archive means the doc quietly comes back at the next
+   * restart. Callers that need the CURRENT state on disk must flush BEFORE
+   * calling this.
+   */
+  private teardownRoom(room: DocRoom, closeReason: string): void {
+    const docId = room.docId;
     const saveTimer = this.saveTimers.get(docId);
     if (saveTimer) clearTimeout(saveTimer);
     this.saveTimers.delete(docId);
-    // Tear down the file binding + its poll/write/read timers.
     const binding = this.fileBindings.get(docId);
     if (binding) {
       if (binding.writeTimer) clearTimeout(binding.writeTimer);
@@ -323,19 +353,16 @@ export class Rooms {
       if (binding.pollTimer) clearInterval(binding.pollTimer);
       this.fileBindings.delete(docId);
     }
-    // Close any live viewers so they don't hold a dead room reference.
     for (const ws of room.conns) {
       try {
-        ws.close(1000, 'doc deleted');
+        ws.close(1000, closeReason);
       } catch {}
     }
     this.rooms.delete(docId);
-    this.purgePersisted(docId);
     try {
       room.awareness.destroy();
       room.ydoc.destroy();
     } catch {}
-    return { ok: true };
   }
 
   /**
@@ -429,35 +456,8 @@ export class Rooms {
         if (!file.endsWith('.ydoc')) continue;
         const docId = file.slice(0, -'.ydoc'.length);
         if (!docId) continue;
-        const room = this.getOrCreate(docId);
         count++;
-        const src = room.meta.sourceUrl;
-        // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
-        // can only have arrived from a peer's ydoc write. Refusing to bind
-        // here is the second, independent stop behind `guardPrivateMeta` —
-        // binding is what turns a stray meta key into "read (then overwrite)
-        // any file this process can reach".
-        if (src && isHubOwnedRoom(docId)) {
-          console.error(`[rooms] ${docId}: ignoring a sourceUrl on a server-owned hub room`);
-          continue;
-        }
-        if (src && existsSync(src)) {
-          if (contentKind(room.meta.type) === 'prose') {
-            if (this.attachFile(docId, src).ok) rebound++;
-          } else if (contentKind(room.meta.type) === 'flat') {
-            // Working-tree diff docs have a sourceUrl and re-arm their live
-            // poll like code docs. Pinned diff docs have no sourceUrl and
-            // need no binding — content is already in the .ydoc. Editable
-            // (write-back) members must come back editable: binding
-            // hydration ≠ state hydration, and a read-only re-attach here
-            // silently ate every post-restart File-view edit.
-            const writeBack =
-              room.meta.type === 'diff' &&
-              !room.meta.diffTarget &&
-              !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
-            if (this.attachFlatFile(docId, src, { writeBack }).ok) rebound++;
-          }
-        }
+        if (this.hydrateDoc(docId)) rebound++;
       }
     } catch (err) {
       console.error('[rooms] hydrateFromDisk failed:', err);
@@ -468,6 +468,48 @@ export class Rooms {
           (rebound > 0 ? ` (${rebound} markdown docs auto-rebound)` : ''),
       );
     }
+  }
+
+  /**
+   * Load ONE persisted doc into memory and re-arm its file binding. Returns
+   * whether a binding was re-established.
+   *
+   * Extracted from `hydrateFromDisk` so `unarchiveReview` restores a doc the
+   * same way a restart would. A doc that came back into memory without its
+   * binding would read fine and never write back — the exact 2026-05-09 bug
+   * hydration exists to prevent — so a second, drifting copy of this logic is
+   * the thing most worth not having.
+   */
+  private hydrateDoc(docId: string): boolean {
+    const room = this.getOrCreate(docId);
+    const src = room.meta.sourceUrl;
+    // A hub-owned room is never file-bound (§3.3), so a sourceUrl on one
+    // can only have arrived from a peer's ydoc write. Refusing to bind
+    // here is the second, independent stop behind `guardPrivateMeta` —
+    // binding is what turns a stray meta key into "read (then overwrite)
+    // any file this process can reach".
+    if (src && isHubOwnedRoom(docId)) {
+      console.error(`[rooms] ${docId}: ignoring a sourceUrl on a server-owned hub room`);
+      return false;
+    }
+    if (!src || !existsSync(src)) return false;
+    if (contentKind(room.meta.type) === 'prose') {
+      return this.attachFile(docId, src).ok;
+    }
+    if (contentKind(room.meta.type) === 'flat') {
+      // Working-tree diff docs have a sourceUrl and re-arm their live
+      // poll like code docs. Pinned diff docs have no sourceUrl and
+      // need no binding — content is already in the .ydoc. Editable
+      // (write-back) members must come back editable: binding
+      // hydration ≠ state hydration, and a read-only re-attach here
+      // silently ate every post-restart File-view edit.
+      const writeBack =
+        room.meta.type === 'diff' &&
+        !room.meta.diffTarget &&
+        !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
+      return this.attachFlatFile(docId, src, { writeBack }).ok;
+    }
+    return false;
   }
 
   getOrCreate(
@@ -1762,6 +1804,208 @@ export class Rooms {
       if (res.ok) deleted += 1;
     }
     return { ok: true, deleted };
+  }
+
+  /**
+   * RETIRE a review without destroying it: move every member's persisted
+   * state into `data/_archive/` and unbind the live rooms.
+   *
+   * This is the soft counterpart to `deleteWorkspace`, and it is the one to
+   * reach for when a review is finished — a merged diff review that keeps
+   * presenting its unresolved threads forever is the problem it exists to
+   * solve. What archiving buys, mechanically:
+   *
+   *   - `hydrateFromDisk` reads only the TOP LEVEL of the data dir, so an
+   *     archived member stops loading at every restart and stops costing a
+   *     file poll and a room's worth of memory.
+   *   - `activity-backfill` scans `_archive` explicitly, so the `.ydoc` keeps
+   *     feeding the Weekly Review analyses. The stream over an archived doc is
+   *     byte-identical to the stream before it was archived; that is the
+   *     property the suite pins, because it is the whole reason this verb is
+   *     not a delete.
+   *   - `unarchiveReview` puts it back, so nothing here needs to be right the
+   *     first time.
+   *
+   * Open threads do NOT block it. The guardrail on `deleteWorkspace` exists
+   * because deleting strands someone's unread feedback; archiving strands
+   * nothing, and a review is usually retired precisely because its remaining
+   * threads have stopped mattering.
+   *
+   * ALL-OR-NOTHING on a docId that is already in `_archive`: rather than write
+   * over an older snapshot of the same id — the state a handful of ids on the
+   * production box are in, from a hand-move that predates this verb — the
+   * whole archive is refused and the colliding ids are named. Unarchive the
+   * older copy first, or purge it deliberately; nothing here decides for you
+   * which of two snapshots is worth less.
+   */
+  archiveReview(
+    setId: string,
+    opts: { archivedBy: string; reason?: string; linkedWorkspaces?: string[] },
+  ):
+    | { ok: true; archived: number; docIds: string[]; manifest: ArchivedReview }
+    | { ok: false; error: 'not-found' }
+    | { ok: false; error: 'archive-collision' | 'move-failed'; docIds: string[] } {
+    const members = this.list().filter((m) => reviewIdOf(m) === setId);
+    if (members.length === 0) return { ok: false, error: 'not-found' };
+    const dir = ensureArchiveDir(this.cfg.dataDir);
+
+    // Pre-flight the collision check across ALL members before moving any.
+    const collisions = members
+      .map((m) => m.docId)
+      .filter((docId) => existsSync(join(dir, `${docId}.ydoc`)));
+    if (collisions.length > 0) return { ok: false, error: 'archive-collision', docIds: collisions };
+
+    const moved: string[] = [];
+    for (const m of members) {
+      const room = this.rooms.get(m.docId);
+      // Flush BEFORE tearing down: the pending debounced write is cancelled by
+      // teardown, so without this the archived snapshot is up to 200ms stale —
+      // and for a doc edited right up to the moment it was retired, that is
+      // the edit the reviewer just made.
+      if (room) this.persistRoomNow(room);
+      if (!this.moveDocFiles(m.docId, this.cfg.dataDir, dir)) {
+        // Undo every move so a failed archive costs nothing — not even to a
+        // restart that lands right after it. Nothing has been torn down yet,
+        // so the live rooms are still exactly as they were.
+        for (const done of moved) this.moveDocFiles(done, dir, this.cfg.dataDir);
+        return { ok: false, error: 'move-failed', docIds: [m.docId] };
+      }
+      moved.push(m.docId);
+    }
+    // Commit point passed: every file is parked. Now unbind the rooms.
+    for (const m of members) {
+      const room = this.rooms.get(m.docId);
+      if (room) this.teardownRoom(room, 'review archived');
+    }
+
+    const entry = members.find((m) => reviewIdOf(m) === setId);
+    const manifest: ArchivedReview = {
+      setId,
+      archivedAt: toUtcIso(Date.now()),
+      archivedBy: opts.archivedBy,
+      ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      ...(entry?.title !== undefined ? { title: entry.title } : {}),
+      ...(entry?.workspaceRoot !== undefined ? { root: entry.workspaceRoot } : {}),
+      docIds: moved,
+      linkedWorkspaces: opts.linkedWorkspaces ?? [],
+    };
+    writeArchiveManifest(this.cfg.dataDir, manifest);
+    this.recordReviewLifecycle('archive', setId, moved, opts);
+    return { ok: true, archived: moved.length, docIds: moved, manifest };
+  }
+
+  /**
+   * Put an archived review back exactly where it was: move each member's
+   * persisted state up out of `_archive`, hydrate the rooms, re-arm the file
+   * bindings, and drop the manifest.
+   *
+   * Refuses, all-or-nothing, if any member id has been re-minted at the top
+   * level while the review was away — restoring over a live doc would destroy
+   * the newer one, which is the failure this whole feature exists to avoid.
+   */
+  unarchiveReview(
+    setId: string,
+    opts: { archivedBy: string },
+  ):
+    | { ok: true; restored: number; docIds: string[]; manifest: ArchivedReview }
+    | { ok: false; error: 'not-found' }
+    | { ok: false; error: 'restore-collision' | 'move-failed'; docIds: string[] } {
+    const manifest = readArchiveManifest(this.cfg.dataDir, setId);
+    if (!manifest) return { ok: false, error: 'not-found' };
+    const dir = archiveDirPath(this.cfg.dataDir);
+
+    const collisions = manifest.docIds.filter((docId) => existsSync(this.pathFor(docId)));
+    if (collisions.length > 0) return { ok: false, error: 'restore-collision', docIds: collisions };
+
+    const moved: string[] = [];
+    for (const docId of manifest.docIds) {
+      if (!this.moveDocFiles(docId, dir, this.cfg.dataDir)) {
+        for (const done of moved) this.moveDocFiles(done, this.cfg.dataDir, dir);
+        return { ok: false, error: 'move-failed', docIds: [docId] };
+      }
+      moved.push(docId);
+    }
+    for (const docId of moved) this.hydrateDoc(docId);
+    removeArchiveManifest(this.cfg.dataDir, setId);
+    this.recordReviewLifecycle('unarchive', setId, moved, opts);
+    return { ok: true, restored: moved.length, docIds: moved, manifest };
+  }
+
+  /**
+   * Move a doc's `.ydoc` and its private-meta sidecar between the data dir and
+   * `_archive`. Rename, not copy: it is atomic within the volume and it is
+   * undoable by calling this with the directories swapped.
+   *
+   * A missing sidecar is fine — plenty of docs never had one, and it is a
+   * cache of host-side facts rather than content. A missing `.ydoc` is also
+   * fine, and is what a doc that has never been persisted looks like.
+   */
+  private moveDocFiles(docId: string, fromDir: string, toDir: string): boolean {
+    const ydocFrom = join(fromDir, `${docId}.ydoc`);
+    const ydocTo = join(toDir, `${docId}.ydoc`);
+    try {
+      if (existsSync(ydocFrom)) renameSync(ydocFrom, ydocTo);
+    } catch (err) {
+      console.error(`[rooms] failed to move ${docId}.ydoc to ${toDir}:`, err);
+      return false;
+    }
+    const sidecarFrom = privateMetaPath(fromDir, docId);
+    const sidecarTo = privateMetaPath(toDir, docId);
+    try {
+      if (existsSync(sidecarFrom)) renameSync(sidecarFrom, sidecarTo);
+    } catch (err) {
+      // The sidecar is recoverable state, so a failure here is logged and the
+      // move stands — but put the .ydoc back first so the pair never splits.
+      console.error(`[rooms] failed to move sidecar for ${docId} to ${toDir}:`, err);
+      try {
+        if (existsSync(ydocTo)) renameSync(ydocTo, ydocFrom);
+      } catch {}
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Record an `archive` / `unarchive` row in the activity log: who retired the
+   * review, when, and why.
+   *
+   * Live-capture only, like `read_session` and `doc_open` — a backfill cannot
+   * reconstruct it, because nothing about a moved file says who moved it. That
+   * is exactly why it is written at the moment it happens.
+   */
+  private recordReviewLifecycle(
+    type: 'archive' | 'unarchive',
+    setId: string,
+    docIds: string[],
+    opts: { archivedBy: string; reason?: string },
+  ): void {
+    try {
+      const ts = toUtcIso(Date.now());
+      const payload: Event['payload'] = {
+        reviewId: setId,
+        memberCount: docIds.length,
+        ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      };
+      const event: Event = {
+        eventId: eventId({
+          ts,
+          actor: 'agent',
+          docId: setId,
+          type,
+          payloadDigest: payloadDigest(opts.reason),
+        }),
+        ts,
+        type,
+        actor: 'agent',
+        actorName: opts.archivedBy,
+        isOwner: false,
+        doc: buildEventDoc({ docId: setId } as DocMeta),
+        payload,
+      };
+      appendActivity(this.cfg.dataDir, event);
+    } catch (err) {
+      console.error('[rooms] recordReviewLifecycle failed:', err);
+    }
   }
 
   /**

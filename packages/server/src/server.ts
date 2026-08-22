@@ -76,6 +76,7 @@ import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
 import { READY_IDLE_DEFAULT_MS, ReadyWorkNudger, type ReadyWorkSnapshot } from './ready-nudge.ts';
+import { listArchivedReviews } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -4885,10 +4886,63 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, { ok: true });
         }
+        /** Boards that link this review, so an archive can put them back. */
+        const boardsLinking = (attachmentId: string): string[] =>
+          taskStore
+            .listWorkspaces()
+            .filter((w) => w.docIds?.includes(attachmentId))
+            .map((w) => w.id);
+        /**
+         * Retire a review WITHOUT destroying it: its members' `.ydoc` files
+         * move to `data/_archive/`, out of the top level `hydrateFromDisk`
+         * reads and into the directory `activity-backfill` scans. Open threads
+         * do not block it — a review is usually retired precisely because the
+         * threads it still shows have stopped mattering.
+         */
+        const archiveReview = (setId: string, by: string, reason: string | undefined): Response => {
+          const res = rooms.archiveReview(setId, {
+            archivedBy: by,
+            ...(reason !== undefined ? { reason } : {}),
+            linkedWorkspaces: boardsLinking(setId),
+          });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
+          // A board row pointing at a review that no longer loads is a dead
+          // end, so archiving takes the row too — and the manifest remembers
+          // which boards, so unarchiving puts it back rather than orphaning it.
+          unlinkFromEveryHubWorkspace(setId);
+          return j(200, res);
+        };
         // Delete a REVIEW as one unit (all-or-nothing open-thread guardrail;
         // ?force=true to override). Member SOURCE files are left untouched,
         // same as DELETE /api/docs/:id.
-        const deleteReview = (setId: string, force: boolean): Response => {
+        //
+        // SOFT BY DEFAULT since 0.1.92. The guardrail and the response shape
+        // are unchanged — what changed is what happens to the files once it
+        // commits: they are archived, not purged. The old payload still works
+        // and still means "retire this review"; `?purge=true` is the way to
+        // ask for the destructive half, and asking is the point. The project
+        // rule is that the `.ydoc` is the durable record the Weekly Review
+        // analyses are rebuilt from, so purging is a decision, never a default.
+        const deleteReview = (setId: string, force: boolean, purge: boolean): Response => {
+          if (!purge) {
+            // Apply the SAME open-thread guardrail before archiving, so a
+            // caller that passed no `force` gets the refusal it has always
+            // got rather than a surprise retirement.
+            if (!force) {
+              const blocked = rooms
+                .list()
+                .filter((m) => reviewIdOf(m) === setId)
+                .map((m) => ({
+                  docId: m.docId,
+                  openThreads: rooms.listThreads(m.docId, { status: 'open' }).length,
+                }))
+                .filter((f) => f.openThreads > 0);
+              if (blocked.length > 0) {
+                return j(409, { ok: false, error: 'has-open-threads', files: blocked });
+              }
+            }
+            return archiveReview(setId, 'delete_review', undefined);
+          }
           const res = rooms.deleteWorkspace(setId, { force });
           if (res.ok) {
             // The review was one row on a board; deleting it must take the
@@ -4898,6 +4952,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(res.error === 'has-open-threads' ? 409 : 404, res);
         };
+        // Everything currently parked in `data/_archive/` with a manifest.
+        // Read-only, and the answer to "what can I bring back".
+        if (pathname === '/api/reviews/archived' && req.method === 'GET') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          return j(200, { archived: listArchivedReviews(dataDir) });
+        }
+        const reviewArchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/archive$/);
+        if (reviewArchiveMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const setId = decodeURIComponent(reviewArchiveMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = body?.author as { name?: string } | undefined;
+          const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
+          return archiveReview(setId, author?.name ?? 'unknown', reason);
+        }
+        const reviewUnarchiveMatch = pathname.match(/^\/api\/reviews\/([^/]+)\/unarchive$/);
+        if (reviewUnarchiveMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const setId = decodeURIComponent(reviewUnarchiveMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = body?.author as { name?: string } | undefined;
+          const res = rooms.unarchiveReview(setId, { archivedBy: author?.name ?? 'unknown' });
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 409, res);
+          // Put the review back on every board it was on when it was archived.
+          for (const workspaceId of res.manifest.linkedWorkspaces) {
+            if (taskStore.attachDoc(workspaceId, setId).ok)
+              taskProjection.ensureWorkspace(workspaceId);
+          }
+          return j(200, res);
+        }
         const reviewDeleteMatch = pathname.match(REVIEW_DELETE);
         if (reviewDeleteMatch && req.method === 'DELETE') {
           // Review-only, and that is the point of the separate verb: a BOARD
@@ -4906,6 +4990,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return deleteReview(
             decodeURIComponent(reviewDeleteMatch[1] ?? ''),
             url.searchParams.get('force') === 'true',
+            url.searchParams.get('purge') === 'true',
           );
         }
         const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
@@ -4956,7 +5041,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             taskProjection.dropWorkspaceRooms(workspaceId, hub.taskIds);
             return j(200, { ok: true, deletedTasks: hub.deletedTasks });
           }
-          return deleteReview(workspaceId, force);
+          return deleteReview(workspaceId, force, url.searchParams.get('purge') === 'true');
         }
         // File-tree view for a bound workspace: nested directory tree with
         // per-file unresolved-comment counts + folder roll-ups. Files are

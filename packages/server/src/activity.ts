@@ -18,7 +18,23 @@ import type { DocMeta } from '@feedback/core';
  *     excluded so a tab left open doesn't inflate reading hours.
  */
 
-export type ActivityType = 'comment' | 'reply' | 'resolve' | 'reopen' | 'read_session' | 'doc_open';
+/**
+ * `archive` / `unarchive` are review-lifecycle rows: a review was retired
+ * (soft — its ydocs moved to `_archive`) or brought back, by whom and why.
+ * Like `read_session` and `doc_open` they are LIVE-CAPTURE ONLY — a backfill
+ * reconstructs events from ydoc contents, and nothing in a moved file records
+ * who moved it. A consumer that buckets by type should expect them the same
+ * way it expects the read-family rows.
+ */
+export type ActivityType =
+  | 'comment'
+  | 'reply'
+  | 'resolve'
+  | 'reopen'
+  | 'read_session'
+  | 'doc_open'
+  | 'archive'
+  | 'unarchive';
 
 export type ActorKind = 'person' | 'agent';
 
@@ -55,6 +71,12 @@ export interface EventPayload {
   startTs?: string;
   endTs?: string;
   interactionBounded?: boolean;
+  /** archive / unarchive: the review that was retired or restored. */
+  reviewId?: string;
+  /** archive / unarchive: how many member docs moved. */
+  memberCount?: number;
+  /** archive: why, in the operator's words. */
+  reason?: string;
 }
 
 export interface Event {
