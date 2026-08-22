@@ -4297,6 +4297,17 @@ body.thread-card-open .voice-indicator {
   bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
+  /* Say how wide, or the DOCK decides. An absolutely positioned box with a
+     `left` and no `width` is shrink-to-fit, and shrink-to-fit's upper bound is
+     the space left in its CONTAINING BLOCK — the viewport for the floating
+     form, but the dock's own column once the mic is docked. A `max-width`
+     cannot raise that bound, so the cap below was doing nothing on the hub:
+     measured 2026-08-21 against a full sentence, the readout came out 45×978
+     in the collapsed rail (49 lines, one syllable each, starting 248px ABOVE
+     the viewport), 54×645 in the ≤1100px strip and 64×527 in the phone's
+     bottom bar. `max-content` sizes it from the sentence instead, and the
+     `max-width` pair below then means what it says at every width. */
+  width: max-content;
   /* Twice the 420px it used to cap at. This box holds a LIVE transcript: the
      interim result is rewritten on every word, so a narrow box re-wraps the
      whole sentence under the reader several times a second and the text moves
