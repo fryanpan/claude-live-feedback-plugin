@@ -71,8 +71,14 @@ board task that proposed it; what follows is the operating rule.
   where he reads.
 - **Goal bands run automatically.** Work goal-band tasks in priority order
   without being told, unless a task is blocked by a decision or dependency —
-  and record that blockage as an `after` edge, never in your head. Backlog is
-  NOT auto-dispatched: obviously useful items only, lead's judgment.
+  and record that blockage as an `after` edge, never in your head. **Backlog
+  is NOT dispatched at all** — *"above all else go in priority order"*
+  (Bryan, 2026-08-22, superseding the earlier "obviously useful items only,
+  lead's judgment" clause; the judgment call is withdrawn for now). When
+  everything above the backlog is blocked or waiting on Bryan, the correct
+  state is idle capacity plus filed review items naming what it is blocked
+  on — not a backlog pick. A `ready_idle` nudge naming a backlog row is
+  awareness, not a dispatch order.
 - **Complex tasks clear a human gate first.** When an agent files a task that
   is complex by the usual risk assessment — or includes UI design — its
   acceptance criteria must include "review ticket body (and mocks, for UI)
