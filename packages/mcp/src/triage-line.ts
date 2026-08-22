@@ -33,16 +33,16 @@ export interface TriageRequestPayload {
 }
 
 /**
- * The contract a goal-change re-triage asks the reader to follow: re-read the
- * goal, re-place every open task, reorder, flag what the edit made obsolete
- * WITHOUT closing it, report on the board. Named in the request itself because
- * delivery without instructions is what the request kept producing — the
- * addressee knew N tasks needed re-placing and had to invent the rest.
+ * The goal-change re-triage used to point at a skill of its own
+ * (`handling-a-goal-change`). It is gone, and the pointer with it.
  *
- * Exported so the same name reaches the OTHER delivery path (a queued edit
- * handed over on `attach_agent`), which is the one a lead who was away gets.
+ * The reason is that the operations already do the work the skill described.
+ * Removing a band sweeps its tasks itself, a reorder carries tasks with it,
+ * and `set_goal_list` refuses a removal that would strand work rather than
+ * relying on the reader to have been warned. What is left that the addressee
+ * actually needs is the ids, the previous goal text, and the verb — and the
+ * line below carries all three, so it is self-sufficient without a pointer.
  */
-export const RETRIAGE_SKILL = 'claude-workspaces:handling-a-goal-change';
 
 /**
  * What triaging ONE task asks for, spelled out in the request itself.
@@ -76,9 +76,8 @@ const SHAPE_THEN_PLACE =
 /**
  * The judgment half of a task-review — when to rewrite versus ask the filer,
  * and why a human's deliberate words are never silently replaced. Named in the
- * request the same way RETRIAGE_SKILL is, and exported for the same reason:
- * the away lead gets the queued rows on `attach_agent`, and both delivery
- * paths must name the same contract.
+ * request itself, and exported so the same name reaches the OTHER delivery
+ * path (rows queued for a lead who was away, handed over on `attach_agent`).
  *
  * This used to name a skill of its own (`reviewing-task-shape`). It was
  * retired: the ask is the lead seat's, §2 of the lead skill claims it outright,
@@ -104,10 +103,9 @@ export const TASK_REVIEW_SKILL = 'claude-workspaces:leading-a-workspace';
  *
  *  - **No cap on the list.** A cap is "the present lead gets less" in a
  *    smaller form. The replayed payload has no cap, so neither does this.
- *  - **`oldGoal` verbatim, never clipped.** The skill's own step 4 says
- *    re-triaging against the first 120 characters of a goal is how the second
- *    half of an edit gets ignored — a clipped baseline would deliver the
- *    field and keep the defect.
+ *  - **`oldGoal` verbatim, never clipped.** Re-triaging against the first 120
+ *    characters of a goal is how the second half of an edit gets ignored, so a
+ *    clipped baseline would deliver the field and keep the defect.
  *
  * A missing field drops its whole line rather than rendering as the word
  * "undefined" beside an instruction to act on it.
@@ -145,8 +143,8 @@ function retriageDetail(p: TriageRequestPayload): string {
  * is a valid answer, because the server deliberately places nothing: an
  * auto-assign would stamp a ranking decision no human made, and a line read
  * as "empty this bucket" is that same decision made of words. It does NOT
- * carry the goal-change contract skill: that asks for a re-triage of every
- * open task against a new north star, which is not what happened here.
+ * borrow the goal-change wording: that asks for a re-triage of every open task
+ * against a new north star, which is not what happened here.
  */
 function bucketReviewDetail(p: TriageRequestPayload): string {
   const bands = (p.newBands ?? [])
@@ -200,7 +198,7 @@ export function triageRequestLine(p: TriageRequestPayload, selfAgentId: string):
   const detail = retriageDetail(p);
   const lead = p.leadAgentId;
   if (lead !== undefined && lead !== selfAgentId) {
-    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you (${RETRIAGE_SKILL}).${detail}`;
+    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you.${detail}`;
   }
-  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}${detail}`;
+  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}.${detail}`;
 }
