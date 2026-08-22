@@ -45,6 +45,26 @@ describe('MCP tool wiring', () => {
     // for whoever wrote it, invisible to every other agent.
     expect([...dispatched].filter((n) => !declared.has(n))).toEqual([]);
   });
+
+  /**
+   * A RENAMED tool keeps answering to its old name, and that is not the bug
+   * the two assertions above look for. An alias is a fallthrough label with
+   * no brace, so it is invisible to the `dispatched` regex — which is why it
+   * is asserted here by name instead. Listing it makes the alias a decision
+   * somebody wrote down, rather than a line that reads like a typo.
+   */
+  it('still answers the names these tools had before the rename', () => {
+    for (const [alias, now] of [
+      ['refresh_workspace', 'refresh_review'],
+      ['set_workspace_groups', 'set_review_groups'],
+    ] as const) {
+      expect(SRC, alias).toContain(`case '${alias}':\n      case '${now}': {`);
+      // …and the old name is NOT advertised: an agent reading the tool list
+      // should find one name for one thing.
+      expect(declared.has(alias), alias).toBe(false);
+      expect(declared.has(now), now).toBe(true);
+    }
+  });
 });
 
 /** The `case 'x': {` block for one tool, up to the next case. */

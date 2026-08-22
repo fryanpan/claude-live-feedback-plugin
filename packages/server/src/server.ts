@@ -555,6 +555,39 @@ export interface ServerHandle {
   stop: () => Promise<void>;
 }
 
+/**
+ * ===== COMPAT: the review API answers at two prefixes =====
+ *
+ * A diff review and a bound folder are REVIEWS. They were built as a second
+ * thing called a "workspace" and their endpoints are still spelled
+ * `/api/workspaces/<id>/…`, which is the vocabulary this change removes: the
+ * canonical name is now `/api/reviews/<setId>/…`.
+ *
+ * Every one of these routes therefore matches BOTH prefixes. This is the whole
+ * of the alias — one helper, one comment — and it exists because the callers
+ * are plugin bundles running inside sessions nobody can restart, plus browser
+ * tabs that are already open. They keep calling the address they were built
+ * against and would get a 404 they could not explain from their own version.
+ *
+ * The bare `DELETE /api/workspaces/<id>` is deliberately NOT in here: that one
+ * route fronts two stores (a board or a review, dispatched by id) and is
+ * handled on its own.
+ */
+const reviewApi = (sub: string): RegExp =>
+  new RegExp(`^/api/(?:reviews|workspaces)/([^/]+)/${sub}$`);
+const REVIEW_API = {
+  refresh: reviewApi('refresh'),
+  groups: reviewApi('groups'),
+  grouped: reviewApi('grouped'),
+  threads: reviewApi('threads'),
+  files: reviewApi('files'),
+  tree: reviewApi('tree'),
+  contextFile: reviewApi('context-file'),
+  editableFile: reviewApi('editable-file'),
+} as const;
+/** Review-only delete. `DELETE /api/workspaces/<id>` still fronts both. */
+const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
+
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const dataDir = opts.dataDir ?? join(process.cwd(), 'data');
@@ -2502,6 +2535,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           );
           return j(200, {
             ...res,
+            // The review's id, under the name the CRDT already stores it as.
+            // `workspaceId` (from ...res) carries the SAME value and is
+            // deprecated for one release — a caller built before the rename
+            // reads it by that name, and a key must never change MEANING.
+            setId: res.workspaceId,
             hubWorkspaceId,
             files: res.files.map((f) => ({
               ...f,
@@ -2581,7 +2619,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             res.reviewId,
             body?.hubWorkspaceId as string | undefined,
           );
-          return j(200, { ...res, hubWorkspaceId, files, entryUrl: entry?.reviewUrl });
+          // `setId` is the same value as `reviewId`, under the name the CRDT
+          // stores it as — both stay, and neither changes meaning.
+          return j(200, {
+            ...res,
+            setId: res.reviewId,
+            hubWorkspaceId,
+            files,
+            entryUrl: entry?.reviewUrl,
+          });
         }
         // List bound workspaces with rolled-up triage signals (fileCount,
         // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
@@ -4355,19 +4401,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, { ok: true });
         }
-        // Delete a whole workspace as one unit (all-or-nothing open-thread
-        // guardrail; ?force=true to override). Member SOURCE files are left
-        // untouched, same as DELETE /api/docs/:id.
+        // Delete a REVIEW as one unit (all-or-nothing open-thread guardrail;
+        // ?force=true to override). Member SOURCE files are left untouched,
+        // same as DELETE /api/docs/:id.
+        const deleteReview = (setId: string, force: boolean): Response => {
+          const res = rooms.deleteWorkspace(setId, { force });
+          if (res.ok) {
+            // The review was one row on a board; deleting it must take the
+            // row with it, the same way a deleted doc does.
+            unlinkFromEveryHubWorkspace(setId);
+            return j(200, res);
+          }
+          return j(res.error === 'has-open-threads' ? 409 : 404, res);
+        };
+        const reviewDeleteMatch = pathname.match(REVIEW_DELETE);
+        if (reviewDeleteMatch && req.method === 'DELETE') {
+          // Review-only, and that is the point of the separate verb: a BOARD
+          // id here answers not-found rather than being destroyed by a call
+          // that meant to clean up a diff review.
+          return deleteReview(
+            decodeURIComponent(reviewDeleteMatch[1] ?? ''),
+            url.searchParams.get('force') === 'true',
+          );
+        }
         const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
         if (wsDeleteMatch && req.method === 'DELETE') {
           const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
           const force = url.searchParams.get('force') === 'true';
-          // Two different stores answer to the word "workspace", and this one
-          // route fronts both: `POST /api/workspaces` mints a hub board from
-          // `name` and a doc grouping from `folderPath`. `rooms.deleteWorkspace`
-          // enumerates DOC members, so a hub board — which has none — always
-          // came back not-found, and a board created for a five-minute
-          // experiment was permanent. Ask the task store first, by id.
+          // COMPAT — this ONE route fronts two stores, dispatching by id, and
+          // it is the last place that does. A board is what it deletes now;
+          // a review id still resolves because `delete_workspace(reviewId)` is
+          // what every shipped plugin bundle and skill has always called, from
+          // sessions nobody can restart. New callers use DELETE
+          // /api/reviews/<setId> above, which cannot touch a board at all.
+          // Ask the task store first: `rooms.deleteWorkspace` enumerates DOC
+          // members, so a board — which has none — always came back not-found,
+          // and a board created for a five-minute experiment was permanent.
           if (taskStore.getWorkspace(workspaceId)) {
             const openTasks = taskStore.openTaskCount(workspaceId) ?? 0;
             if (openTasks > 0 && !force) {
@@ -4403,14 +4472,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             taskProjection.dropWorkspaceRooms(workspaceId, hub.taskIds);
             return j(200, { ok: true, deletedTasks: hub.deletedTasks });
           }
-          const res = rooms.deleteWorkspace(workspaceId, { force });
-          if (res.ok) {
-            // The grouping was one row on a board; deleting it must take the
-            // row with it, the same way a deleted doc does.
-            unlinkFromEveryHubWorkspace(workspaceId);
-            return j(200, res);
-          }
-          return j(res.error === 'has-open-threads' ? 409 : 404, res);
+          return deleteReview(workspaceId, force);
         }
         // File-tree view for a bound workspace: nested directory tree with
         // per-file unresolved-comment counts + folder roll-ups. Files are
@@ -4418,51 +4480,53 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // All threads across a workspace (folder bind or diff review) in one
         // call — lets a watching agent poll a single endpoint per review
         // instead of one per member file. ?status=open|resolved filters.
-        const wsThreadsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/threads$/);
+        const wsThreadsMatch = pathname.match(REVIEW_API.threads);
         if (wsThreadsMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsThreadsMatch[1] ?? '');
-          if (!rooms.list().some((m) => m.workspaceId === workspaceId)) {
-            return j(404, { error: 'workspace not found', workspaceId });
+          const setId = decodeURIComponent(wsThreadsMatch[1] ?? '');
+          if (!rooms.list().some((m) => reviewIdOf(m) === setId)) {
+            return j(404, { error: 'review not found', setId, workspaceId: setId });
           }
           const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
           const threads = rooms
-            .listWorkspaceThreads(workspaceId, status ? { status } : undefined)
+            .listWorkspaceThreads(setId, status ? { status } : undefined)
             .map((t) => withTaskChips(t.docId, t));
-          return j(200, { workspaceId, threads });
+          // `workspaceId` carries the SAME value and is deprecated for one
+          // release: callers built before the rename read it by that name.
+          return j(200, { setId, workspaceId: setId, threads });
         }
         // Grouped-diff sidebar model: changed files organized into logical
         // groups (agent-supplied or heuristic). The default nav for diff
         // reviews.
-        const wsGroupedMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/grouped$/);
+        const wsGroupedMatch = pathname.match(REVIEW_API.grouped);
         if (wsGroupedMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsGroupedMatch[1] ?? '');
-          const grouped = rooms.listGroupedDiff(workspaceId);
+          const setId = decodeURIComponent(wsGroupedMatch[1] ?? '');
+          const grouped = rooms.listGroupedDiff(setId);
           if (grouped.groups.length === 0) {
-            return j(404, { error: 'no diff review found', workspaceId });
+            return j(404, { error: 'no diff review found', setId, workspaceId: setId });
           }
           return j(200, grouped);
         }
         // Re-reconcile a workspace against disk: pick up files that changed
         // since the bind, flag members whose file is gone. Never re-mints a
         // docId, so every comment thread survives.
-        const wsRefreshMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/refresh$/);
+        const wsRefreshMatch = pathname.match(REVIEW_API.refresh);
         if (wsRefreshMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsRefreshMatch[1] ?? '');
-          const res = rooms.refreshWorkspace(workspaceId);
+          const setId = decodeURIComponent(wsRefreshMatch[1] ?? '');
+          const res = rooms.refreshWorkspace(setId);
           if (res.ok) return j(200, res);
           return j(res.error === 'not-found' ? 404 : 400, res);
         }
         // Re-group a diff review's sidebar in place. An empty `groups` array
         // is meaningful (fall back to the heuristic); a MISSING one is a
         // caller mistake, so it 400s rather than silently regrouping.
-        const wsGroupsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/groups$/);
+        const wsGroupsMatch = pathname.match(REVIEW_API.groups);
         if (wsGroupsMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsGroupsMatch[1] ?? '');
+          const setId = decodeURIComponent(wsGroupsMatch[1] ?? '');
           const body = await safeJson(req);
           const groups = body?.groups;
           if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
           const res = rooms.setWorkspaceGroups(
-            workspaceId,
+            setId,
             groups as Array<{ title: string; paths: string[]; details?: string }>,
           );
           if (res.ok) return j(200, res);
@@ -4470,10 +4534,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         // Every file in the workspace's repo (changed ones marked) — the
         // "Show All Files" context view.
-        const wsFilesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/files$/);
+        const wsFilesMatch = pathname.match(REVIEW_API.files);
         if (wsFilesMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsFilesMatch[1] ?? '');
-          const res = rooms.listRepoFiles(workspaceId);
+          const setId = decodeURIComponent(wsFilesMatch[1] ?? '');
+          const res = rooms.listRepoFiles(setId);
           if (!res.ok) return j(404, res);
           // `root` is an absolute host path and every reviewUrl carries the
           // tailnet hostname — neither belongs in a visitor's copy.
@@ -4481,23 +4545,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         // Lazily open an unchanged repo file for context (read-only code doc
         // in the same workspace).
-        const wsCtxMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/context-file$/);
+        const wsCtxMatch = pathname.match(REVIEW_API.contextFile);
         if (wsCtxMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsCtxMatch[1] ?? '');
+          const setId = decodeURIComponent(wsCtxMatch[1] ?? '');
           const body = await safeJson(req);
           const relPath = body?.relPath as string | undefined;
           if (!relPath) return j(400, { error: 'relPath required' });
-          const res = rooms.openContextFile(workspaceId, relPath);
+          const res = rooms.openContextFile(setId, relPath);
           if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
           return j(200, { docId: res.docId, meta: metaFor(res.meta) });
         }
-        const wsEditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/editable-file$/);
+        const wsEditMatch = pathname.match(REVIEW_API.editableFile);
         if (wsEditMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsEditMatch[1] ?? '');
+          const setId = decodeURIComponent(wsEditMatch[1] ?? '');
           const body = await safeJson(req);
           const relPath = body?.relPath as string | undefined;
           if (!relPath) return j(400, { error: 'relPath required' });
-          const res = rooms.openEditableFile(workspaceId, relPath);
+          const res = rooms.openEditableFile(setId, relPath);
           if (!res.ok) {
             const status =
               res.error === 'bad-path' || res.error === 'not-markdown'
@@ -4509,12 +4573,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, { docId: res.docId, meta: metaFor(res.meta) });
         }
-        const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
+        const wsTreeMatch = pathname.match(REVIEW_API.tree);
         if (wsTreeMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
-          const tree = rooms.buildWorkspaceTree(workspaceId);
+          const setId = decodeURIComponent(wsTreeMatch[1] ?? '');
+          const tree = rooms.buildWorkspaceTree(setId);
           if (tree.tree.children.length === 0) {
-            return j(404, { error: 'workspace not found', workspaceId });
+            return j(404, { error: 'review not found', setId, workspaceId: setId });
           }
           // Same redaction as /files — see redactWorkspaceTreeForVisitor.
           return j(200, visitor ? redactWorkspaceTreeForVisitor(tree, visitor.workspaceId) : tree);
