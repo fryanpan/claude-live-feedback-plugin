@@ -11,6 +11,12 @@
          The chrome replaces it with the doc's own name as soon as the label
          resolves (review-chrome.ts → tab-title.ts). -->
     <title>Workspaces</title>
+    <!-- Makes "Add to Home Screen" install a web app rather than a bookmark.
+         On iOS that is what unlocks Web Push at all: a plain Safari tab has
+         no PushManager, only a Home Screen web app does. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#2e7dd7" />
     <link rel="stylesheet" href="/app/styles.css" />
   </head>
   <body>
