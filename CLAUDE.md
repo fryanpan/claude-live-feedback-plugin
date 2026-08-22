@@ -205,25 +205,34 @@ there. That is how 25 feature commits sat undelivered between 2026-05-09 and
   0.1.44 leaves a green PR sitting at 0.1.42 unable to merge without a rebase it
   never needed. This bullet exists because the heading above read "on every PR"
   for months and agents dutifully bumped changes that shipped nothing.
-- **When several branches are in flight, the number is a merge-queue position —
-  ask the merger for it, don't read it off main.** Three branches independently
-  pushed 0.1.46 on 2026-08-17 with main at 0.1.45, and **nothing went red**:
-  identical strings merge clean because both sides agree, and at the time
-  `check:plugin-version` compared against the *fork point*, which stays frozen
-  however many times the job re-runs. **That half is now fixed** — the gate
-  compares against `origin/main`'s TIP, so a stale number goes red instead of
-  green (see "A gate that compares against the merge-base is green precisely
-  when the regression is largest" in learnings.md). It is a narrowing, not a
-  closure: CI runs at push time, so main can still move between your last green
-  run and the merge. And re-reading main before you push still does not help
-  with the other half — the branch you are about to collide with has not merged,
-  so main cannot tell you about it. Whoever owns the merges hands out numbers
-  and merges in ascending order; **an agent that finds its number taken reports
-  rather than bumps**, because bumping is how it collides with the next one.
-  This matters past tidiness: a merge order that steps the number backwards
-  leaves peers silently
-  un-updated, since `claude plugin update` copies nothing when the string has not
-  moved forward and reports success anyway.
+- **When several branches are in flight, CI now tells you if your number is
+  taken — nobody has to hold a queue and hand numbers out.** Three branches
+  independently pushed 0.1.46 on 2026-08-17 with main at 0.1.45, and **nothing
+  went red**, and neither half of that was an oversight. Identical strings merge
+  clean because a conflict requires disagreement; and `check:plugin-version`
+  compared against the *fork point*, which stays frozen however many times the
+  job re-runs.
+  - **The stale-number half was fixed first** — the gate compares against
+    `origin/main`'s TIP (see "A gate that compares against the merge-base is
+    green precisely when the regression is largest" in learnings.md).
+  - **The concurrent half is now checked too.** A PR that touches the plugin
+    also asks GitHub what every *other open PR* declares
+    (`scripts/collect-open-pr-versions.ts`, ambient `GITHUB_TOKEN`) and goes red
+    when one of them already claims its version. The tie-break is **the lowest
+    PR number holds the number**, chosen because each PR computes it alone from
+    inputs both of them see — so of any colliding pair exactly one goes red, and
+    resolving it needs no coordinator. If the PR holding your number is
+    abandoned, close it; an open PR keeps reserving what it declares.
+  - **A failed lookup SKIPS LOUDLY and does not fail the build.** A network
+    flake must not take an unrelated PR red — but a skipped check and a clean
+    one share an exit code, so read the log: `concurrent-version check SKIPPED`
+    means nobody asked, not that nobody has your number.
+  - **Still a narrowing, not a closure.** CI runs at push time, so main can move
+    — and a sibling can push your number — between your last green run and the
+    merge. What shrank is the window. Merging in ascending order still helps,
+    because a merge order that steps the number backwards leaves peers silently
+    un-updated: `claude plugin update` copies nothing when the string has not
+    moved forward, and reports success anyway.
 - **The MCP bundle is checked the same way.** CI rebuilds it and fails if the
   committed `packages/plugin/mcp/index.js` differs from a fresh build, because
   peers load that artifact rather than the TypeScript source. Any PR touching

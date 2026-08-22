@@ -14151,7 +14151,8 @@ function readyIdleLine(p) {
 function reviewAnsweredLine(p) {
   const about = namedTask(p);
   const subject = about ? `your review item on ${about}` : "a review item you raised";
-  return `[workspace.review_answered] ${subject} has an answer — read it and act on it now; walk its links as the propagation checklist.`;
+  const walk = Array.isArray(p.links) && p.links.length > 0 ? "; walk its links as the propagation checklist" : "";
+  return `[workspace.review_answered] ${subject} has an answer — read it and act on it now${walk}.`;
 }
 
 // packages/mcp/src/sse-cursor.ts
@@ -14342,7 +14343,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.97";
+var PLUGIN_VERSION = "0.1.99";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({

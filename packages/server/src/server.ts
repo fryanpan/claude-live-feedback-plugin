@@ -1150,12 +1150,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // Resolved HERE rather than inside the nudger: the nudger's snapshot
       // carries the ready set, and an answered row is usually not in it —
       // being blocked on that very answer is why it was asked. The title is
-      // what makes the wake readable without a lookup on the far end.
+      // what makes the wake readable without a lookup on the far end, and the
+      // links are what decide whether the line may offer a propagation
+      // checklist — sent as they stand, empty included, because the renderer
+      // has to tell an empty list from a frame that carries no row at all.
       const answered = ev.taskId ? taskStore.getTask(ev.taskId) : undefined;
       readyNudger.reviewAnswered({
         workspaceId: ev.workspaceId,
         taskId: ev.taskId,
         ...(answered?.title !== undefined ? { taskTitle: answered.title } : {}),
+        ...(answered?.links !== undefined ? { taskLinks: answered.links } : {}),
         actorId: ev.actor?.id,
       });
     }
