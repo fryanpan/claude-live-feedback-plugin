@@ -15,6 +15,9 @@
  *      the marketplace advertises. A mismatch means one of them is lying.
  *   2. If this change touches anything under `packages/plugin/`, the version is
  *      strictly greater than the one the base branch currently PUBLISHES.
+ *   3. No OTHER open PR has already claimed that version. Invariants 1 and 2
+ *      read the checkout, and the checkout cannot see an unmerged sibling; the
+ *      open-PR list is supplied by `scripts/collect-open-pr-versions.ts`.
  *
  * Two refs, two different questions — do not collapse them back into one.
  *
@@ -60,6 +63,7 @@
  * the number at merge time is still load-bearing.
  *
  * Usage: bun run check:plugin-version [--base <ref>]
+ *                                     [--open-prs-file <path>] [--pr <number>]
  */
 
 import { execFileSync } from 'node:child_process';
@@ -70,8 +74,14 @@ const MARKETPLACE_MANIFEST = '.claude-plugin/marketplace.json';
 const GUARDED_PREFIX = 'packages/plugin/';
 
 const args = process.argv.slice(2);
-const baseIdx = args.indexOf('--base');
-const base = baseIdx === -1 ? 'origin/main' : args[baseIdx + 1];
+function argOf(name: string): string | undefined {
+  const i = args.indexOf(name);
+  return i === -1 ? undefined : args[i + 1];
+}
+const base = argOf('--base') ?? 'origin/main';
+const openPrsFile = argOf('--open-prs-file');
+const selfPrRaw = argOf('--pr');
+const selfPr = selfPrRaw === undefined ? undefined : Number(selfPrRaw);
 
 function fail(msg: string): never {
   console.error(`\n✗ plugin version gate\n\n${msg}\n`);
@@ -228,3 +238,112 @@ console.log(
   `✓ plugin version gate — ${pluginChanges.length} file(s) under ${GUARDED_PREFIX}, ` +
     `version ${baseVersion} (${base} tip) → ${pluginVersion}.`,
 );
+
+// --- invariant 3: no other open PR has already claimed this version -------
+//
+// Everything above compares this branch against a ref the checkout holds, and
+// an unmerged sibling is not in the checkout. So two PRs can both declare N+1
+// over a base at N, both pass every check above (each IS strictly ahead of the
+// tip), and both merge clean — identical strings never conflict, because a
+// conflict requires disagreement. The second merge then publishes a version
+// string that has not moved, `claude plugin update` copies nothing, and it
+// reports success. Measured twice: #178 and #176 both carried 0.1.43, and three
+// branches pushed 0.1.46 on 2026-08-17 with nothing anywhere going red.
+//
+// THE TIE-BREAK IS: THE LOWEST PR NUMBER HOLDS THE NUMBER. Not because the
+// oldest PR deserves it, but because the rule has to be computable by each PR
+// from inputs both of them see — otherwise resolving a collision needs a person
+// holding a queue and handing out numbers, which is the thing this replaces.
+// It also makes the outcome a clean split rather than a standoff: of any
+// colliding pair, exactly one goes red and the other is told what happened.
+
+type OpenPr = { number: number; headRefName?: string; version: string | null };
+type OpenPrPayload = { status: 'ok'; prs: OpenPr[] } | { status: 'unavailable'; reason?: string };
+
+/**
+ * Never silent. A skipped concurrent check and a clean one are the same exit
+ * code, so the log line is the only thing that separates "nobody has your
+ * number" from "nobody asked" — and reading the second as the first is exactly
+ * how a collision merges. Same failure as an empty `behind` list being read as
+ * a fleet-wide all-clear (CLAUDE.md, "The board now says who is behind").
+ */
+function skipConcurrent(why: string): void {
+  console.warn(
+    `⚠ concurrent-version check SKIPPED — ${why}\n` +
+      `  Nothing here can tell you whether another open PR already declares ${pluginVersion}.\n` +
+      '  This is a WARNING, not a pass: two PRs at the same version merge clean,\n' +
+      '  and the second one publishes nothing.',
+  );
+}
+
+function readOpenPrs(path: string): OpenPrPayload | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    if (parsed?.status === 'unavailable') return parsed as OpenPrPayload;
+    if (parsed?.status === 'ok' && Array.isArray(parsed.prs)) return parsed as OpenPrPayload;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+if (openPrsFile === undefined) {
+  skipConcurrent('no --open-prs-file was supplied');
+} else {
+  const payload = readOpenPrs(openPrsFile);
+  if (payload === null) {
+    skipConcurrent(`${openPrsFile} is missing or does not carry a usable open-PR list`);
+  } else if (payload.status === 'unavailable') {
+    skipConcurrent(`the open-PR list could not be fetched: ${payload.reason ?? 'no reason given'}`);
+  } else if (selfPr === undefined || Number.isNaN(selfPr)) {
+    skipConcurrent('no --pr <number> was supplied, so the tie-break cannot be computed');
+  } else {
+    const others = payload.prs.filter((p) => p.number !== selfPr);
+
+    // An unread manifest is not evidence of no collision, so say which PRs
+    // the answer does not cover rather than counting them as clear.
+    for (const pr of others.filter((p) => p.version === null)) {
+      console.warn(
+        `⚠ PR #${pr.number}${pr.headRefName ? ` (${pr.headRefName})` : ''} — its plugin manifest\n` +
+          `  could not be read, so whether it declares ${pluginVersion} is unknown.`,
+      );
+    }
+
+    const colliding = others.filter((p) => p.version === pluginVersion);
+    const ahead = colliding.filter((p) => p.number < selfPr);
+
+    if (ahead.length > 0) {
+      const named = ahead
+        .map((p) => `    #${p.number}${p.headRefName ? `  ${p.headRefName}` : ''}`)
+        .join('\n');
+      fail(
+        `Version ${pluginVersion} is already claimed by an open PR with a lower number:\n\n` +
+          `${named}\n\n` +
+          `This PR is #${selfPr}. Both branches are strictly ahead of the ${baseVersion} that\n` +
+          `${base} publishes today, so every other check here passes on both — and both merge\n` +
+          'clean, because identical strings do not conflict. Whichever lands second publishes\n' +
+          `a string that never moved: "claude plugin update" copies nothing and reports\n` +
+          'success, so that PR reaches no peer and nothing anywhere goes red.\n\n' +
+          'The tie-break is the lowest PR number, so it is this PR that re-bumps. Move all\n' +
+          `three sites past ${pluginVersion} — and past anything else in flight:\n` +
+          `    ${PLUGIN_MANIFEST}\n` +
+          `    ${MARKETPLACE_MANIFEST}\n` +
+          '    PLUGIN_VERSION in packages/mcp/src/mcp.ts\n\n' +
+          'If the PR above is abandoned, close it rather than racing it — a version an open\n' +
+          'PR declares is a version this check will keep reserving.',
+      );
+    }
+
+    const behind = colliding.filter((p) => p.number > selfPr);
+    if (behind.length > 0) {
+      console.log(
+        `  ↳ ${behind.map((p) => `#${p.number}`).join(', ')} also declare(s) ${pluginVersion}. ` +
+          `This PR (#${selfPr}) holds the number — lowest wins — and they will be told to re-bump.`,
+      );
+    } else {
+      console.log(
+        `  ↳ no other open PR declares ${pluginVersion} (${others.length} open PR(s) checked).`,
+      );
+    }
+  }
+}
