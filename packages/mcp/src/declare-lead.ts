@@ -61,6 +61,13 @@ interface AttachResponse {
     taskIds: string[];
   };
   taskReviews?: Array<{ taskId: string; trigger: string; actor?: unknown; ts: number }>;
+  /** This board has been stood down — no new work, not ranked. */
+  retired?: { since: number; reason?: string; notice: string };
+  /** This agent leads another LIVE board with the same name. */
+  leadNameConflicts?: {
+    boards: Array<{ workspaceId: string; name: string }>;
+    notice: string;
+  };
 }
 
 export async function declareWorkspaceLead(
@@ -192,6 +199,12 @@ export async function declareWorkspaceLead(
             'Coordinate with them; pass takeover: true only if you mean to take the seat.',
         }
       : {}),
+    // THE BOARD IS RETIRED / YOU LEAD A SECOND BOARD OF THIS NAME. Both come
+    // from the same attach as everything below, and both belong at the top:
+    // this is the call a session makes at startup to decide where its work
+    // goes, and either condition means the answer is "not here, not yet".
+    ...(a.retired ? { retired: a.retired } : {}),
+    ...(a.leadNameConflicts ? { leadNameConflicts: a.leadNameConflicts } : {}),
     gating: a.gating,
     untriaged: a.untriaged ?? [],
     // Everything below is DRAINED by the attach above: nothing will offer it

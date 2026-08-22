@@ -687,12 +687,37 @@ body.hub-body {
   color: var(--fg-muted);
   font-size: 18px;
 }
+/* The name and, when the board has been stood down, the badge that says so.
+   A flex row rather than a bare span so the badge can sit beside the name
+   without taking a grid column of its own — the topbar's three areas are
+   load-bearing and the row's 48px height is the scarce axis on the iPad. */
 .hub-ws-name {
   grid-area: name;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   font-weight: 650;
   font-size: 17px;
+}
+/* The ellipsis moved here from the parent: the NAME is what may be too long,
+   and the badge must never be the thing that gets cut off. */
+.hub-ws-name-text {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hub-retired-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle, transparent);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 

@@ -84,6 +84,7 @@ import {
   renderReviewWalkthrough,
   renderTaskDetail,
   renderUnplacedStrip,
+  renderWorkspaceIdentity,
 } from './hub-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountPushToggle } from './push-toggle.ts';
@@ -269,7 +270,7 @@ function buildShell(root: HTMLElement, name: string): void {
   root.innerHTML = `
     <header class="hub-topbar">
       <a href="/" class="back-link" title="All workspaces" aria-label="Back">←</a>
-      <span class="hub-ws-name">${escapeHtml(name)}</span>
+      <span class="hub-ws-name"><span class="hub-ws-name-text" id="hub-ws-name-text">${escapeHtml(name)}</span><span id="hub-retired-badge" class="hub-retired-badge hidden">Retired</span></span>
       <div class="hub-cluster">
         <div id="hub-people" class="hub-presence hub-people hidden"></div>
         <button type="button" id="hub-share" class="hub-icon-btn" title="Share workspace" aria-label="Share workspace">${NAV_ICONS.share}</button>
@@ -401,6 +402,10 @@ async function main(): Promise<void> {
   );
   if (initial) state.info = initial.workspace;
   buildShell(root, state.info?.name ?? workspaceId);
+  // The REST read above already knows whether this board is retired, and the
+  // board room's first sync can be a second away on a cold connection. Paint
+  // it now so nobody reads a retired board as live in that window.
+  syncHeader();
 
   const el = (id: string) => document.getElementById(id) as HTMLElement;
 
@@ -449,10 +454,30 @@ async function main(): Promise<void> {
         ...(wsMap.get('pendingBucketReview')
           ? { pendingBucketReview: wsMap.get('pendingBucketReview') as PendingBucketReviewView }
           : {}),
+        ...(wsMap.get('retiredAt') ? { retiredAt: Number(wsMap.get('retiredAt')) } : {}),
+        ...(wsMap.get('retiredReason')
+          ? { retiredReason: String(wsMap.get('retiredReason')) }
+          : {}),
         createdAt: Number(wsMap.get('createdAt') ?? 0),
       };
     }
+    syncHeader();
     syncTabTitle();
+  }
+
+  /**
+   * The board's name and its retired badge, repainted from current state.
+   * Called from both writers of what it reads — the boot fetch and every
+   * projection read — because a header set once is wrong the moment somebody
+   * renames or retires the board, and this page never reloads.
+   */
+  function syncHeader(): void {
+    renderWorkspaceIdentity(
+      document.getElementById('hub-ws-name-text'),
+      document.getElementById('hub-retired-badge'),
+      state.info,
+      workspaceId,
+    );
   }
 
   /**

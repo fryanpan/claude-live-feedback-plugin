@@ -47,6 +47,14 @@ export interface LandingWorkspaceInput {
    * 1 in the header).
    */
   lastActivity: number;
+  /**
+   * The board has been RETIRED — stood down deliberately, rather than merely
+   * gone quiet. It leaves the recency split entirely and folds into its own
+   * counted section, because "nobody has touched this in three weeks" and
+   * "somebody decided this board is over" are different facts and a reader
+   * acts differently on each.
+   */
+  retired?: boolean;
 }
 
 /** One row of the page: a place to go, not its contents. */
@@ -66,6 +74,14 @@ export interface LandingModel {
   active: LandingWorkspaceRow[];
   /** Everything else, same order — rendered folded, with its count. */
   inactive: LandingWorkspaceRow[];
+  /**
+   * Boards somebody stood down, same order, in their own labelled fold.
+   *
+   * They are FOLDED and not hidden, for rule 2 in the header: a cut list
+   * states what it cut. A retired board is still readable — that is the whole
+   * point of retiring instead of deleting — so the page has to keep a way in.
+   */
+  retired: LandingWorkspaceRow[];
   /** The review-doc index, one link per project owner, label order. */
   projects: LandingProjectLink[];
   /** The window the split used, so the renderer states the criterion. */
@@ -105,7 +121,15 @@ export function buildLandingModel(
 ): LandingModel {
   const active: LandingWorkspaceRow[] = [];
   const inactive: LandingWorkspaceRow[] = [];
+  const retired: LandingWorkspaceRow[] = [];
   for (const w of workspaces) {
+    // Retirement wins over recency: a board somebody retired an hour ago is
+    // the most recently-touched board on the server, and putting it at the
+    // top of "active" is the exact confusion the retire verb exists to end.
+    if (w.retired) {
+      retired.push(toRow(w));
+      continue;
+    }
     // `>=` on the boundary: activity exactly window-old still counts. The
     // failure mode of counting too much is one extra row; of counting too
     // little, a board Bryan is working vanishing from the page.
@@ -113,6 +137,7 @@ export function buildLandingModel(
   }
   active.sort(byRecency);
   inactive.sort(byRecency);
+  retired.sort(byRecency);
 
   const projectLinks: LandingProjectLink[] = Array.from(projects, (p) => ({
     owner: p.owner,
@@ -121,5 +146,5 @@ export function buildLandingModel(
   }));
   projectLinks.sort((a, b) => a.label.localeCompare(b.label) || a.owner.localeCompare(b.owner));
 
-  return { active, inactive, projects: projectLinks, windowMs: ACTIVE_WINDOW_MS };
+  return { active, inactive, retired, projects: projectLinks, windowMs: ACTIVE_WINDOW_MS };
 }
