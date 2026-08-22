@@ -209,7 +209,6 @@ export function promptSafe(text: string, max: number): string {
 /** Per-field prompt budgets. Named so the numbers are readable next to each
  *  other rather than scattered through the renderers. */
 const FIELD_MAX = {
-  goal: 300,
   title: 200,
   ask: 200,
   name: 80,
@@ -430,7 +429,6 @@ function heard(transcript: string): string {
  */
 export function buildVoicePrompt(
   index: {
-    goal: string;
     goals: Array<{ id: string; title: string }>;
     tasks: Array<{ id: string; title: string; status: string; needs?: string }>;
     docIds: string[];
@@ -473,7 +471,6 @@ export function buildVoicePrompt(
   ].join('\n');
   const lines: string[] = [];
   lines.push(PROMPT_DATA_BEGIN);
-  lines.push(`Workspace goal: ${promptSafe(index.goal, FIELD_MAX.goal) || '(none)'}`);
   if (index.goals.length > 0) {
     lines.push('Goals:');
     for (const g of index.goals) {
@@ -1247,7 +1244,6 @@ export class VoiceRouter {
     let resource: VoiceResource | undefined;
     if (this.complete) {
       const index = {
-        goal: workspace.goal,
         goals: workspace.goals.flatMap((g) => [
           { id: g.id, title: g.title },
           ...(g.subgoals ?? []).map((sg) => ({ id: sg.id, title: sg.title })),

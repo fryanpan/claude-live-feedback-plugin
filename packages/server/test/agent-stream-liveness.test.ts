@@ -75,7 +75,7 @@ describe('an open agent stream is a delivery signal', () => {
 
   it('reaches an agent working off-server for longer than the observed window', async () => {
     const store = tightStore();
-    const ws = store.createWorkspace('stream-hub', 'Ship it.');
+    const ws = store.createWorkspace('stream-hub');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
 
     // Nineteen minutes of grep, in miniature: no heartbeat, no write, no tool
@@ -96,7 +96,7 @@ describe('an open agent stream is a delivery signal', () => {
     // had — an open tab impersonating a working agent, and the request handed
     // to it lost rather than late.
     const store = tightStore();
-    const ws = store.createWorkspace('other-hub', 'Ship it.');
+    const ws = store.createWorkspace('other-hub');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
     await new Promise((r) => setTimeout(r, 60));
 
@@ -119,7 +119,7 @@ describe('an open agent stream is a delivery signal', () => {
     // A long-running session attaches once. Before this, `drainVoiceQueue`
     // ran only from `attachAgent`, so a queued message waited for a restart.
     const store = tightStore();
-    const ws = store.createWorkspace('queue-hub', 'Ship it.');
+    const ws = store.createWorkspace('queue-hub');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
 
     store.queueVoiceRequest(ws.id, {
@@ -140,7 +140,7 @@ describe('an open agent stream is a delivery signal', () => {
 
   it('POSITIVE CONTROL: a heartbeat from an agent with nothing queued drains nothing', () => {
     const store = tightStore();
-    const ws = store.createWorkspace('empty-queue-hub', 'Ship it.');
+    const ws = store.createWorkspace('empty-queue-hub');
     store.attachAgent(ws.id, { agentId: 'worker', runtime: 'claude-code-local' });
     const beat = store.heartbeat(ws.id, 'worker');
     if (!beat.ok) throw new Error('unreachable');

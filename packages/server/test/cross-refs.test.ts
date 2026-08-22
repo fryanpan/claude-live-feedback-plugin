@@ -50,7 +50,7 @@ describe('TaskStore cross-references (unit)', () => {
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'xref-store-'));
     store = new TaskStore({ dataDir, debounceMs: 5 });
-    wsId = store.createWorkspace('xref-ws', 'Ship the demo.').id;
+    wsId = store.createWorkspace('xref-ws').id;
   });
 
   afterAll(() => {

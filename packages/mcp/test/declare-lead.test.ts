@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { declareWorkspaceLead } from '../src/declare-lead.ts';
-import { RETRIAGE_SKILL, TASK_REVIEW_SKILL } from '../src/triage-line.ts';
+import { TASK_REVIEW_SKILL } from '../src/triage-line.ts';
 
 const SELF = { id: 'agent-self', name: 'Self Agent', kind: 'agent' };
 const WS = 'ws-1';
@@ -106,12 +106,6 @@ describe('declareWorkspaceLead — declaring yourself', () => {
         gating: { summary: 'no open gating decisions' },
         untriaged: ['t-7'],
         queuedVoice: [{ transcript: 'make the second goal the top one', ts: 11 }],
-        pendingRetriage: {
-          batchId: 'b-1',
-          oldGoal: 'old',
-          newGoal: 'new',
-          taskIds: ['t-1', 't-2'],
-        },
         pendingBucketReview: {
           batchId: 'b-2',
           newBands: [{ id: 'g-9', title: 'Reliability' }],
@@ -131,7 +125,6 @@ describe('declareWorkspaceLead — declaring yourself', () => {
     // Same field names AND the same contracts attach_agent hands over — an
     // away lead that arrives through this door must not be told half of what
     // one arriving through the other door is told.
-    expect(res.pendingRetriage).toMatchObject({ batchId: 'b-1', contract: RETRIAGE_SKILL });
     expect(res.pendingBucketReview).toMatchObject({ batchId: 'b-2' });
     expect(res.taskReviews).toEqual([{ taskId: 't-4', trigger: 'created', ts: 12 }]);
     expect(res.taskReviewContract).toBe(TASK_REVIEW_SKILL);

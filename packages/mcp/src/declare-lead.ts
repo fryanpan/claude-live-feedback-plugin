@@ -15,7 +15,7 @@
  * read its source. Order and drained state are not things source-reading can
  * check.
  */
-import { RETRIAGE_SKILL, TASK_REVIEW_SKILL } from './triage-line.ts';
+import { TASK_REVIEW_SKILL } from './triage-line.ts';
 
 export interface DeclareLeadDeps {
   http: (method: string, path: string, body?: unknown) => Promise<unknown>;
@@ -55,7 +55,6 @@ interface AttachResponse {
     ts: number;
   }>;
   lead?: boolean;
-  pendingRetriage?: { batchId: string; oldGoal: string; newGoal: string; taskIds: string[] };
   pendingBucketReview?: {
     batchId: string;
     newBands: Array<{ id: string; title: string }>;
@@ -211,9 +210,6 @@ export async function declareWorkspaceLead(
       text: q.text,
       ts: q.ts,
     })),
-    ...(a.pendingRetriage
-      ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } }
-      : {}),
     ...(a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {}),
     ...(a.taskReviews !== undefined && a.taskReviews.length > 0
       ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL }

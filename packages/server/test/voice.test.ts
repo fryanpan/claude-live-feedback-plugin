@@ -773,7 +773,7 @@ describe('voice routing (§3.8)', () => {
     it('routes a change honestly and reports unknown workspaces', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'voice-unit-'));
       const store = new TaskStore({ dataDir: dir, debounceMs: 1 });
-      const ws = store.createWorkspace('bare', 'Goal.');
+      const ws = store.createWorkspace('bare');
       const router = new VoiceRouter({ tasks: store });
       const res = await router.handle(ws.id, {
         transcript: 'regroup everything',

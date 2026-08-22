@@ -108,7 +108,7 @@ function seededGoalList(): { goals: WorkspaceGoal[]; G: Bands } {
   const dir = mkdtempSync(join(tmpdir(), 'goal-list-'));
   const s = new TaskStore({ dataDir: dir, debounceMs: 5 });
   try {
-    const ws = s.createWorkspace('search-revamp', 'Ship search v2.');
+    const ws = s.createWorkspace('search-revamp');
     const G = bands(seedGoals(s, ws.id, GOAL_SPEC, PERSON));
     return { goals: s.getWorkspace(ws.id)?.goals ?? [], G };
   } finally {
@@ -136,7 +136,7 @@ describe('TaskStore.reorderGoals', () => {
 
   /** A workspace seeded with GOAL_SPEC and no events recorded yet. */
   function seed(): { wsId: string; G: Bands } {
-    const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
+    const ws = store.createWorkspace('search-revamp');
     const G = bands(seedGoals(store, ws.id, GOAL_SPEC, PERSON));
     events.length = 0;
     return { wsId: ws.id, G };
@@ -345,7 +345,7 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
     const dir = mkdtempSync(join(tmpdir(), 'goal-rows-'));
     const s = new TaskStore({ dataDir: dir, debounceMs: 5 });
     try {
-      const ws = s.createWorkspace('search-revamp', 'Ship search v2.');
+      const ws = s.createWorkspace('search-revamp');
       const G = bands(seedGoals(s, ws.id, GOAL_SPEC, PERSON));
       seed(s, ws.id, G);
       return {
@@ -425,7 +425,7 @@ describe('TaskStore.reorderGoals names a RESERVED id as reserved', () => {
   });
 
   function seeded(): { wsId: string; G: Bands } {
-    const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
+    const ws = store.createWorkspace('search-revamp');
     const G = bands(seedGoals(store, ws.id, GOAL_SPEC, PERSON));
     return { wsId: ws.id, G };
   }
