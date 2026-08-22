@@ -37,6 +37,7 @@ import {
   type HubDecisionOption,
   type HubEvidence,
   type HubGoal,
+  type HubPane,
   type HubTask,
   type HubTransition,
   type PendingBucketReviewView,
@@ -1175,6 +1176,36 @@ function wireBoardReorder(
       handle.addEventListener('pointercancel', onCancel);
     });
   }
+}
+
+/**
+ * The board, mounted only on the pane that shows it.
+ *
+ * Home hides the whole column (`.hub-main--home .hub-board-col { display: none }`)
+ * and the render path used to run there regardless, so arriving at Home built
+ * a `.hub-task-row` per task — 70 on the real board — with their selects and
+ * their drag and keyboard listeners, and collapsed all of it to zero height.
+ * The comment on that CSS said the board was being hidden rather than
+ * unmounted so it could "keep its realtime projection warm", but the
+ * projection is the task map the ydoc feeds; the rows are derived output, and
+ * re-entering the board rebuilds them from it in one pass. Nothing was being
+ * kept warm that a render does not recreate.
+ *
+ * Zero-height rows also answer selectors, which makes them worse than waste:
+ * anything reading the board by query gets a full row set on a page showing
+ * none of it.
+ */
+export function renderBoardForPane(
+  container: HTMLElement,
+  pane: HubPane,
+  sections: BoardSection[],
+  handlers: BoardHandlers,
+): void {
+  if (pane !== 'board') {
+    container.replaceChildren();
+    return;
+  }
+  renderBoard(container, sections, handlers);
 }
 
 /** Goals-as-sections, Backlog last (already ordered by the model); done rows
