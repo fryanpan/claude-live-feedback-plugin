@@ -90,15 +90,18 @@ export interface ReadyWorkSnapshot {
   lastActivityAt: number;
 }
 
-/** What goes on the wire. Flat, because the plugin's fallback renderer reads
- *  `taskId` off the top level and nothing else. */
+/** What goes on the wire. Flat, because the plugin's renderer reads these
+ *  fields off the top level — see `nudge-line.ts` in packages/mcp. */
 export interface NudgeFrame {
   event: typeof READY_IDLE_EVENT | typeof REVIEW_ANSWERED_EVENT;
   workspaceId: string;
-  /** The row the lead should look at first. Present so the fallback renderer
-   *  has something to name; a bare `[workspace.ready_idle]` is a wake with no
-   *  subject. */
+  /** The row the lead should look at first (idle), or the row the answer was
+   *  about (answered). A bare `[workspace.ready_idle]` is a wake with no
+   *  subject, which costs a turn and says nothing. */
   taskId?: string;
+  /** That row's name — what the recipient actually recognises. Sent on BOTH
+   *  events: the id alone makes the reader call `get_task` before it can tell
+   *  whether the wake was worth the turn. */
   title?: string;
   readyCount?: number;
   /** How long the board had stood still. Idle nudges only. */
@@ -152,7 +155,16 @@ export class ReadyWorkNudger {
    * An answer the LEAD wrote wakes nobody: the same author-suppression rule
    * every other addressed delivery applies.
    */
-  reviewAnswered(input: { workspaceId: string; taskId?: string; actorId?: string }): void {
+  reviewAnswered(input: {
+    workspaceId: string;
+    taskId?: string;
+    /** The row's name, resolved by the caller. The nudger cannot look it up
+     *  itself: its snapshot carries the READY set, and an answered row is
+     *  typically not in it — it is blocked or in progress, which is why
+     *  somebody was asked in the first place. */
+    taskTitle?: string;
+    actorId?: string;
+  }): void {
     const ts = this.now();
     this.noteActivity(input.workspaceId, ts);
     let board: ReadyWorkSnapshot | undefined;
@@ -174,6 +186,7 @@ export class ReadyWorkNudger {
       event: REVIEW_ANSWERED_EVENT,
       workspaceId: board.workspaceId,
       ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+      ...(input.taskTitle !== undefined ? { title: input.taskTitle } : {}),
       ts,
     });
   }
