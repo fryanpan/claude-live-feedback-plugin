@@ -65,6 +65,7 @@ import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-ac
 import {
   type ShareTarget,
   classifyHost,
+  collabScope,
   isLoopbackAddress,
   isTrustedLocalHost,
   shareScopeAllows,
@@ -373,6 +374,24 @@ export interface ServerOptions {
    * see middleware/host-guard.ts. Tests use this to simulate a local caller.
    */
   trustedHosts?: string[];
+  /**
+   * Hostnames served through the Cloudflare tunnel that may reach the
+   * COLLABORATION surface — the share surface, for whichever workspace the
+   * path names — once Cloudflare Access has authenticated the visitor.
+   *
+   * A second list rather than a widening of `trustedHosts`, because the two
+   * grant different things: a trusted host is another name for this machine
+   * and classifies `local` (the whole product, unauthenticated), while an
+   * entry here is a public address and classifies `collab` (Access token
+   * required, share scope enforced, every operator verb refused). The
+   * `cf-ray` veto that keeps a proxied request out of `local` is untouched.
+   *
+   * IGNORED unless `cfAccess` is configured with a static audience — see
+   * `collabAccessVerifier` below. An opt-in host with no Access application
+   * in front of it would be the whole API exposed to anyone who can reach the
+   * tunnel, so the list fails closed rather than open.
+   */
+  accessTunnelHosts?: string[];
   /**
    * Browser origins allowed to call the API cross-origin, beyond the server's
    * own origin and loopback (which the widget on a dev server needs). Matched
@@ -711,6 +730,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       ? { ...opts.cfAccess, audience: shares.audienceResolver }
       : opts.cfAccess;
   const cfAccessVerifier = cfAccessConfig ? createCfAccessVerifier(cfAccessConfig) : null;
+
+  /**
+   * The Access verifier for the collaboration hostnames — its OWN verifier,
+   * built from the static env audience rather than the share registry's
+   * per-hostname resolver.
+   *
+   * That separation is not tidiness, it is the only thing that makes the
+   * feature work beside link sharing. When `shares` is wired, the resolver
+   * above answers `null` for any host that is not a live share hostname, and
+   * a collaboration host is by definition not one — so a shared verifier
+   * would refuse every collab request with `no_share_for_host`. Cloudflare
+   * issues one AUD per Access application, and the collaboration hostname has
+   * its own application, so the static `CF_ACCESS_AUD` is the right tag for it.
+   *
+   * Null — and therefore the whole opt-in list ignored — unless BOTH a
+   * hostname is listed and `cfAccess` carries a string audience. This is the
+   * server-side half of the refusal; bin.ts also warns at boot. Two checks
+   * because only this one is in the request path: an embedded caller that
+   * never goes through bin.ts must fail closed too.
+   */
+  const accessTunnelHosts = opts.accessTunnelHosts ?? [];
+  const collabAccessVerifier =
+    accessTunnelHosts.length > 0 && opts.cfAccess && typeof opts.cfAccess.audience === 'string'
+      ? createCfAccessVerifier(opts.cfAccess)
+      : null;
 
   const sse = new SseHub();
   // Pick up where the last clean shutdown left off, so a deploy is silent on
@@ -2157,6 +2201,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // stamps cf-ray on everything it proxies (overwriting any the
             // client sent), so its presence means "not from our LAN".
             viaProxy: req.headers.has('cf-ray'),
+            // The opt-in collaboration hostnames, and the fact that Access
+            // really is configured for them. Both are required before a
+            // proxied host can classify anything but `deny` — see
+            // `isAccessTunnelHost`.
+            proxiedAccessHosts: accessTunnelHosts,
+            accessFronted: collabAccessVerifier !== null,
             lookupShare: (h) => {
               // LIVE, not merely known: an expired share's hostname must stop
               // being a share hostname, or expiry never takes effect for
@@ -2177,7 +2227,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Only external hosts pass through here — `local` returned above
           // this point untouched, so the agent's MCP calls over loopback and
           // Bryan's own browser keep working while the outside door is shut.
-          if ((decision.kind === 'share' || decision.kind === 'link') && !sharingGate.isEnabled()) {
+          //
+          // `collab` is in here with the other two: it is external reach by
+          // the same definition, so the one switch that answers "is anything
+          // reachable from outside right now?" has to cover it. One honest
+          // limit — a collab request carries no shareId, so the hang-up sweep
+          // that runs when the switch is flipped off (`closeSocketsForShare`)
+          // cannot find its live sockets. Flipping the switch closes the door
+          // to new requests immediately; an already-open collab websocket
+          // survives until the process restarts.
+          if (
+            (decision.kind === 'share' || decision.kind === 'link' || decision.kind === 'collab') &&
+            !sharingGate.isEnabled()
+          ) {
             return j(403, { error: 'sharing_disabled' });
           }
           if (decision.kind === 'share') {
@@ -2215,6 +2277,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               visitor = target;
               visitorShareId = linkSessionShareId(req);
             }
+          } else if (decision.kind === 'collab') {
+            // The collaboration hostname: one stable public address, an
+            // Access application in front of it, and the SHARE surface behind
+            // it — scoped per request to whichever workspace the path names.
+            //
+            // Non-null by construction (the host could not have classified
+            // collab otherwise), re-checked because "I could not verify"
+            // must never mean "serve it".
+            if (!collabAccessVerifier) {
+              return j(503, { error: 'access_not_configured' });
+            }
+            const result = await collabAccessVerifier(req);
+            if (!result.ok) return j(result.status, { error: result.error });
+            // Access proves an identity Bryan admitted, not what they may
+            // touch. `collabScope` is `shareScopeAllows` with the path's own
+            // workspace as the target, so every operator verb a share visitor
+            // is refused — the doc list, share administration, folder binds,
+            // diff creation, delete, wholesale rewrite, the landing page — is
+            // refused here by the same lines.
+            const scope = collabScope(pathname, req.method, shareWorkspacesOf);
+            if (!scope.allowed) return j(403, { error: 'out_of_share_scope' });
+            // An outsider like any other: identity rewritten to a guest, doc
+            // metadata redacted, `visitor`-gated routes closed. What it does
+            // NOT get is a `visitorShareId` — there is no share behind it.
+            visitor = scope.target;
           } else if (cfAccessVerifier && !shares) {
             // Legacy whole-server mode: cfAccess configured WITHOUT per-share
             // hostnames means the entire deployment sits behind Access, so

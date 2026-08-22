@@ -2,7 +2,8 @@
   "$comment": "Hostnames listed here are auto-approved for mcp__claude-in-chrome__navigate via the PreToolUse hook at .claude/hooks/auto-approve-preview-nav.ts. Each entry matches the domain itself AND any subdomain. The host is the only gate. Do NOT add shared domains like trycloudflare.com or ngrok.io — that would let the agent navigate to anyone's tunnel.",
   "trustedPreviewDomains": [
     "tailb53801.ts.net",
-    "local"
+    "local",
+    "fryanpan.com"
   ],
   "share": {
     "$comment": "Per-repo Cloudflare Access share defaults. No default allow-list is committed here (this repo is public): the agent MUST ask the user which email domains to allow before sharing — never default to 'anyone'. defaultTTL is the share lifetime; the cf-access cookie + the registry entry both expire after this window.",

@@ -58,6 +58,33 @@ export interface TrustedHostOpts {
    * local, whatever its Host claims.
    */
   viaProxy?: boolean;
+  /**
+   * Hostnames an operator has opted in as COLLABORATION addresses — reachable
+   * through the tunnel from outside the tailnet, gated by Cloudflare Access,
+   * and scoped to the share surface (`collabScope` below).
+   *
+   * Deliberately a SECOND list rather than a widening of `extraHosts`, and
+   * the difference is the security property. `extraHosts` means "another name
+   * for this machine on a network I control", so its entries classify
+   * `local` — the whole product, unauthenticated. Reusing it here would hand
+   * tunnel visitors everything anyone ever added for a LAN reason.
+   *
+   * The `viaProxy` veto above is untouched: an entry here never classifies
+   * local, and a request that did NOT arrive through the proxy never
+   * classifies collab. The two lists cannot leak into each other.
+   */
+  proxiedAccessHosts?: string[];
+  /**
+   * True when a Cloudflare Access verifier really is configured for the
+   * proxied hosts above — team domain AND a static audience.
+   *
+   * Without it the list is ignored entirely. That is the load-bearing half:
+   * an opt-in host that classified collab with no Access application in front
+   * would hand the share surface to anyone who can reach the tunnel and type
+   * the hostname, which is precisely the hole the `viaProxy` veto closed
+   * (security review 2026-08-05). Failure mode is refusal, never exposure.
+   */
+  accessFronted?: boolean;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
@@ -131,6 +158,36 @@ export function isTrustedLocalHost(
 }
 
 /**
+ * Is this Host an operator-declared COLLABORATION address arriving through
+ * the Cloudflare tunnel?
+ *
+ * Three conditions, all required, and each one closes a different door:
+ *
+ *   - `viaProxy` — the request really came through the edge. A host in the
+ *     list reached any other way (a LAN client sending the name directly)
+ *     has no Access token in front of it, so it is denied rather than
+ *     collab. Note this is the OPPOSITE test to `isTrustedLocalHost`, on
+ *     purpose: that one refuses proxied requests, this one requires them, and
+ *     no request can satisfy both.
+ *   - `accessFronted` — Cloudflare Access is configured. See the field.
+ *   - exact membership — no suffix matching, same rule as the local list:
+ *     `workspaces.example.com.attacker.com` must not match.
+ */
+export function isAccessTunnelHost(
+  host: string | null | undefined,
+  opts: TrustedHostOpts,
+): boolean {
+  if (!opts.viaProxy) return false;
+  if (!opts.accessFronted) return false;
+  const h = normalizeHost(host);
+  if (h === '') return false;
+  return (opts.proxiedAccessHosts ?? [])
+    .map((c) => normalizeHost(c))
+    .filter((c) => c !== '')
+    .includes(h);
+}
+
+/**
  * What a share hostname grants access to.
  *
  * One field, and that is the whole point. A target used to carry a `docId`
@@ -157,15 +214,23 @@ export type HostDecision =
   | { kind: 'local' } // trusted local caller: no gate
   | { kind: 'share'; target: ShareTarget } // per-share Access host: JWT + scope
   | { kind: 'link' } // public link host: authorize from the session cookie
+  | { kind: 'collab' } // Access-fronted collaboration host: JWT + collabScope
   | { kind: 'deny'; reason: 'unknown_host' }; // anything else: refuse
 
 /**
  * Classify a request's Host.
  *
  * Order matters: our own names win, then a per-share Access hostname, then
- * the single public hostname that link shares live on. Anything else is
- * refused — the tunnel forwards every hostname under its ingress here, so
- * "unrecognised" must mean refuse, never "skip the gate".
+ * the single public hostname that link shares live on, then the operator's
+ * opt-in collaboration hosts. Anything else is refused — the tunnel forwards
+ * every hostname under its ingress here, so "unrecognised" must mean refuse,
+ * never "skip the gate".
+ *
+ * Collab is checked LAST on purpose. It is the newest and widest of the
+ * external kinds, so putting a name in the opt-in list must never quietly
+ * take a hostname AWAY from the narrower rule that already claimed it. With
+ * the list empty — every deployment that has not opted in — this function
+ * behaves exactly as it did before the branch existed.
  */
 export function classifyHost(
   host: string | null | undefined,
@@ -181,6 +246,7 @@ export function classifyHost(
   if (target) return { kind: 'share', target };
   const linkHost = normalizeHost(opts.linkHost ?? '');
   if (linkHost !== '' && h === linkHost) return { kind: 'link' };
+  if (isAccessTunnelHost(host, opts)) return { kind: 'collab' };
   return { kind: 'deny', reason: 'unknown_host' };
 }
 
@@ -432,6 +498,96 @@ export function shareScopeAllows(
   // Everything else — /api/share*, /api/docs (list), /api/workspaces (list
   // + create), /api/diffs, /demos, /mockup … — is out of scope.
   return false;
+}
+
+/**
+ * A workspace id no store can mint, used as the target when a path names no
+ * workspace at all. Every workspace-dependent rule in `shareScopeAllows`
+ * compares against `target.workspaceId` or looks it up in `workspacesOf`, so
+ * a value containing a NUL byte answers false everywhere — leaving exactly
+ * the static app-shell allowances, which is what a shell path should get.
+ *
+ * A sentinel rather than an `undefined` workspace because an absent
+ * `workspaceId` is refused outright by the guard, shell and all.
+ */
+const NO_WORKSPACE = '\u0000collab-no-workspace';
+
+/**
+ * May a request on a COLLABORATION host touch this path?
+ *
+ * The surface is the share surface — read the docs, open the board, comment —
+ * for whichever workspace the path names, rather than for one workspace fixed
+ * at mint time. That is the whole difference between this and a share host:
+ * a share hostname carries its scope, and a collaboration hostname is one
+ * stable address whose scope is decided per request.
+ *
+ * It is ONE rule, not two. Everything is answered by `shareScopeAllows` with
+ * the path's own workspace as the target, so the operator verbs a share
+ * visitor is refused — the doc list, share administration, folder binds, diff
+ * creation, DELETE, `content`, `reparse_from_disk`, the landing page — are
+ * refused here by the same lines, and a route added to one is added to both.
+ * A second allowlist would agree today and drift later, and the one that
+ * drifts open is the breach.
+ *
+ * Returns the target as well as the verdict because the caller needs it: the
+ * request is served as an untrusted visitor scoped to that workspace, exactly
+ * as a share visitor is.
+ */
+export function collabScope(
+  pathname: string,
+  method: string,
+  workspacesOf?: (id: string) => string[],
+): { allowed: false } | { allowed: true; target: ShareTarget } {
+  const workspaceId = pathWorkspace(pathname, workspacesOf);
+  const allowed = shareScopeAllows(
+    pathname,
+    method,
+    { workspaceId: workspaceId ?? NO_WORKSPACE },
+    workspacesOf,
+  );
+  if (!allowed) return { allowed: false };
+  // A shell path names no workspace, so the visitor it creates is scoped to
+  // none — `{}` rather than the sentinel, which must never escape this file.
+  return { allowed: true, target: workspaceId ? { workspaceId } : {} };
+}
+
+/**
+ * Which workspace does this path address — directly, or through the doc it
+ * names? Null when it names neither, which is every static asset and every
+ * enumerate-the-server route.
+ *
+ * Deliberately permissive: it only proposes a candidate, and
+ * `shareScopeAllows` then decides whether the path is reachable AT ALL and
+ * whether the id really belongs to that workspace. Proposing the wrong
+ * workspace cannot open anything — the membership check refuses it — so the
+ * failure mode of a parsing mistake here is a 403, not a leak.
+ */
+function pathWorkspace(pathname: string, workspacesOf?: (id: string) => string[]): string | null {
+  /** The first path segment after `prefix`, or null when it doesn't match. */
+  const seg = (prefix: string): string | null => {
+    if (!pathname.startsWith(prefix)) return null;
+    const rest = pathname.slice(prefix.length);
+    const slash = rest.indexOf('/');
+    const s = slash < 0 ? rest : rest.slice(0, slash);
+    return s === '' ? null : safeDecode(s);
+  };
+
+  // Paths whose segment IS a workspace (or a review filed on one — the guard
+  // accepts either through `inWorkspaceScope`).
+  const named = seg('/events/workspace/') ?? seg('/workspaces/') ?? seg('/api/reviews/');
+  if (named) return named;
+  // `/api/workspaces/` splits: `<id>/tree` names a workspace, and so does the
+  // bare `<id>`; the LIST route has no segment and falls through to null.
+  const wsApi = seg('/api/workspaces/');
+  if (wsApi) return wsApi;
+  // The board room socket is `/y/ws:<id>`; every other `/y/<id>` is a doc.
+  const room = seg('/y/');
+  if (room?.startsWith('ws:')) return room.slice('ws:'.length);
+
+  // Paths that name a DOC — its own workspace, most specific first.
+  const doc = seg('/review/') ?? room ?? seg('/events/') ?? seg('/api/docs/');
+  if (!doc) return null;
+  return workspacesOf?.(doc)?.[0] ?? null;
 }
 
 /**

@@ -111,6 +111,39 @@ const cfAccess = cfAccessTeam
   ? { teamDomain: cfAccessTeam, audience: cfAccessAud ?? 'placeholder-overridden-by-shares' }
   : undefined;
 
+/**
+ * Hostnames the Cloudflare tunnel serves that should reach the COLLABORATION
+ * surface from outside the tailnet — the share surface, gated by an Access
+ * application over that hostname.
+ *
+ * Deliberately NOT `TRUSTED_HOSTS`. That variable means "another name for this
+ * machine on a network I control" and its entries classify `local`, which is
+ * the whole product with no authentication at all; quietly widening it would
+ * grant tunnel access to every name added for a LAN reason. The `cf-ray` veto
+ * in host-guard stays exactly as it was — an entry here classifies `collab`,
+ * never `local`.
+ *
+ * Honoured ONLY with `CF_ACCESS_TEAM_DOMAIN` *and* `CF_ACCESS_AUD` set: the
+ * hostname has its own Access application, so it has its own AUD tag, and
+ * without one there is nothing to verify a token against. The server refuses
+ * the list on its own (see `collabAccessVerifier`); this is the loud half, so
+ * a misconfiguration reads as a misconfiguration instead of as a hostname
+ * that mysteriously 403s.
+ */
+const accessTunnelHosts = (process.env.CF_ACCESS_TUNNEL_HOSTS ?? '')
+  .split(',')
+  .map((h) => h.trim())
+  .filter((h) => h !== '');
+const accessTunnelReady = Boolean(cfAccessTeam && cfAccessAud);
+if (accessTunnelHosts.length && !accessTunnelReady) {
+  console.error(
+    `[feedback] IGNORING CF_ACCESS_TUNNEL_HOSTS (${accessTunnelHosts.join(', ')}): ` +
+      'CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD must BOTH be set, or there is no ' +
+      'Access application in front of those hostnames and they would expose the ' +
+      'server to anyone who can reach the tunnel. They will answer 403 unknown_host.',
+  );
+}
+
 // Sharing.
 //
 // LINK mode needs only CF_SHARE_PUBLIC_HOSTNAME — the single hostname the
@@ -216,6 +249,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       clientReleaseRootDir,
       demosDir,
       trustedHosts,
+      accessTunnelHosts: accessTunnelReady ? accessTunnelHosts : [],
       allowedOrigins,
       publicBaseUrl: publicBaseUrlOverride,
       sharingEnvLocked,
@@ -250,6 +284,12 @@ if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
 if (publicBaseUrlOverride) console.log(`[feedback]   links use:  ${publicBaseUrlOverride}`);
 for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
 if (trustedHosts.length) console.log(`[feedback]   trusted:    ${trustedHosts.join(', ')}`);
+// Named at boot because the alternative is a security-relevant setting nobody
+// can see. "collab" is the whole claim: Access-gated, share-scoped, and not
+// the privileged surface the tailnet names get.
+if (accessTunnelHosts.length && accessTunnelReady) {
+  console.log(`[feedback]   collab:     ${accessTunnelHosts.join(', ')} (via Cloudflare Access)`);
+}
 if (allowedOrigins.length) console.log(`[feedback]   origins:    ${allowedOrigins.join(', ')}`);
 console.log(
   '[feedback]   routes:     /  /workspaces/<id>/docs/<docId>  /widget.iife.js  /demos/mockup',
