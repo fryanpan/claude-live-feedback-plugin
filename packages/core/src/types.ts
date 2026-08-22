@@ -43,6 +43,20 @@ export type DiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 export interface DocMeta {
   docId: string;
   type: DocType;
+  /**
+   * The readable name the doc was created under, which resolves to `docId`
+   * everywhere a docId is accepted.
+   *
+   * The split exists because a name and an address want opposite things: a
+   * name should be legible and improvable, an address must never move. Merging
+   * them meant the only way to rename a doc was to re-key it, which orphans
+   * every thread anchored to it and every link anyone saved.
+   *
+   * Written once, at creation, and never repointed — see `Rooms.claimAlias`.
+   * Absent on docs created before minting: those carry the caller's string as
+   * their `docId` and need no alias to keep resolving.
+   */
+  alias?: string;
   sourceUrl?: string;
   title?: string;
   /**
