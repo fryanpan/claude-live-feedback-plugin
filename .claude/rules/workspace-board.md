@@ -57,3 +57,46 @@ top of the queue, spin off a subagent to research it — but only once the
 higher-priority work is actually taken care of, not merely started. The point
 is that the main flow keeps moving; a background researcher is fine, a
 foreground detour is not.
+
+## The keep-moving protocol (Bryan, 2026-08-22)
+
+Adopted after a 24-hour transcript audit of two lead sessions found 18
+chat-only asks (13 died unanswered) and ~15 hours of dark stalls, every one
+ended by Bryan typing. Full evidence and his verbatim refinements live on the
+board task that proposed it; what follows is the operating rule.
+
+- **No unfiled asks.** Any ask to Bryan exists as an answerable review item
+  before the turn ends; chat carries a pointer only. A "still waiting on you"
+  list in chat is a smell — each entry must already be an item he can answer
+  where he reads.
+- **Goal bands run automatically.** Work goal-band tasks in priority order
+  without being told, unless a task is blocked by a decision or dependency —
+  and record that blockage as an `after` edge, never in your head. Backlog is
+  NOT auto-dispatched: obviously useful items only, lead's judgment.
+- **Complex tasks clear a human gate first.** When an agent files a task that
+  is complex by the usual risk assessment — or includes UI design — its
+  acceptance criteria must include "review ticket body (and mocks, for UI)
+  with Bryan before implementing", surfaced as a review item when the task
+  comes up for dispatch. Small/obvious tasks run without the gate.
+- **Never go dark.** A turn that stands every agent down and posts "waiting
+  on you" has extinguished all three of a session's resume sources (human
+  chat, channel events, agent reports). When genuinely blocked with nothing
+  ready, arm a periodic self-wakeup (~20 min) that re-reads the board and the
+  agent roster — a wake that finds nothing changed is one cheap read and ends
+  there, no fan-out, no re-verifying proven state.
+- **Watchdog every dispatch.** An idle notification without a report is the
+  known harness bug that drops a subagent's final message (measured at 41% of
+  one day's dispatches) — nudge immediately; recovery is ~30s. Probe every
+  fresh spawn within a minute: spawns can die instantly while the parent sees
+  "spawned successfully".
+- **Respect capacity.** Parallelism stays within comfortable limits, and
+  resource-exclusive lanes hold ONE agent at a time — a physical device, host
+  Gradle builds, this repo's merge/deploy queue. Work needing an occupied
+  lane queues behind it. Peers discuss overlap and coordination directly with
+  each other over hive messages, not through Bryan.
+- **Re-rank the band on a trigger** (Bryan's chosen mechanism for band
+  order): when a row is filed above the band's median, a goal is edited, or
+  several rows have arrived since the last pass, the lead re-reads the whole
+  band against the current goal and rewrites the order — never moving a row a
+  person placed without asking, documenting what moved and why, and folding
+  duplicates / minor extensions into their covering ticket as it goes.
