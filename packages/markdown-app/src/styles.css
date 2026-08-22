@@ -1079,8 +1079,12 @@ body.hub-body {
   min-height: calc(100vh - 64px);
 }
 /* Home showing: the board column leaves the grid and the Home section takes
-   the one content track. Hiding rather than unmounting — the board keeps its
-   realtime projection warm underneath. (The `min-height` this pair used to
+   the one content track. This rule hides the COLUMN; the rows inside it are
+   not rendered at all on Home (`renderBoardForPane`). It used to say the
+   hiding kept "the board's realtime projection warm", which was never what
+   the DOM was doing — the projection is the task map the ydoc feeds, and the
+   rows are output rebuilt from it — so Home carried one collapsed row per
+   task, 70 of them on the real board. (The `min-height` this pair used to
    carry moved onto `.hub-main` — every view needs the rail to reach the fold,
    not only Home.) */
 .hub-main--home .hub-board-col {
