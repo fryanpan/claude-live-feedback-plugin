@@ -19,6 +19,10 @@ TEMPLATE="${SCRIPT_DIR}/${LABEL}.plist.template"
 PLIST_DEST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 LOG_DIR="${HOME}/Library/Logs"
 
+# Same bootout-then-bootstrap window as install.sh, so the same helpers.
+# shellcheck source=scripts/launchd/bootstrap-retry.sh
+. "${SCRIPT_DIR}/bootstrap-retry.sh"
+
 # Resolve the claude CLI. launchd doesn't run a login shell, so we need an
 # absolute path. ~/.local/bin/claude is the official installer's location.
 if [ -x "${HOME}/.local/bin/claude" ]; then
@@ -38,9 +42,10 @@ echo "[install-triage] plist:  ${PLIST_DEST}"
 
 DOMAIN="gui/$(id -u)"
 
-if launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+if "${LAUNCHCTL}" print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
     echo "[install-triage] existing job found — bootout first"
-    launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+    "${LAUNCHCTL}" bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+    wait_for_bootout "${DOMAIN}/${LABEL}"
 fi
 
 mkdir -p "$(dirname "${PLIST_DEST}")" "${LOG_DIR}"
@@ -53,7 +58,9 @@ sed \
     -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
 
-launchctl bootstrap "${DOMAIN}" "${PLIST_DEST}"
+if ! bootstrap_with_retry "${DOMAIN}" "${PLIST_DEST}"; then
+    exit 3
+fi
 
 echo "[install-triage] loaded. Next fire: 09:00 local (per StartCalendarInterval)."
 echo "[install-triage] Run now to test:  launchctl kickstart -k ${DOMAIN}/${LABEL}"
