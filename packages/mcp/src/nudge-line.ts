@@ -32,6 +32,11 @@ export interface NudgePayload {
   readyCount?: number;
   /** How long the board had stood still. Idle nudges only. */
   idleMs?: number;
+  /** The answered row's own links. Answer nudges only, and routinely EMPTY —
+   *  most rows annotate nothing. Absent from a server older than the field,
+   *  and absent by construction on an answer recorded against a comment,
+   *  which moves no row and so has no links to send. */
+  links?: unknown[];
 }
 
 /** Mirrors mcp.ts's helper of the same name. Duplicated rather than shared
@@ -91,9 +96,22 @@ export function readyIdleLine(p: NudgePayload): string {
  * and it is about one thing. What it must carry is which ask was answered and
  * that the answer is now the input to something — an answered item nobody
  * reads is the same dead end as an unasked question.
+ *
+ * The propagation clause follows that ONLY when the row actually has links.
+ * It used to be unconditional, on a frame that carried no links field at all
+ * — so the commonest wake on this board told its reader to walk a checklist
+ * nothing anywhere could produce, and an instruction that cannot be followed
+ * cannot be told apart from one that can. Worse here than on
+ * `decision.answered`, which at least sometimes had links to walk: an answer
+ * recorded against a COMMENT names no row whatsoever, and this line still
+ * sent its reader after that row's links.
  */
 export function reviewAnsweredLine(p: NudgePayload): string {
   const about = namedTask(p);
   const subject = about ? `your review item on ${about}` : 'a review item you raised';
-  return `[workspace.review_answered] ${subject} has an answer — read it and act on it now; walk its links as the propagation checklist.`;
+  const walk =
+    Array.isArray(p.links) && p.links.length > 0
+      ? '; walk its links as the propagation checklist'
+      : '';
+  return `[workspace.review_answered] ${subject} has an answer — read it and act on it now${walk}.`;
 }
