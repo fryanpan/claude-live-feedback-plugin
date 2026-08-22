@@ -582,30 +582,13 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     onSwitchThread: (id) => engageThread(id),
   });
 
-  /**
-   * Tell the document that a comment card is open over it, in the band where
-   * the card is the full width of the viewport.
-   *
-   * One consumer today: the floating hold-to-talk mic. `.voice-mic` is fixed
-   * bottom-LEFT specifically to stay out of the deep-work path, which is true
-   * while the composer is a 300px column on the right and stops being true at
-   * 430px, where the card and its reply box span the screen and the 44px
-   * launcher lands on top of them.
-   *
-   * The CLASS carries the width test and the stylesheet just reads it. A media
-   * query there would be a second copy of the 1100px constant, and a width
-   * constant that exists twice is one this project has already watched drift.
-   */
-  function syncCardOpenClass(activeId: string | null): void {
-    document.body.classList.toggle('thread-card-open', activeId !== null && inlineCardsVisible());
-  }
-  // The class is on <body>, which outlives this chrome — a router swap that
-  // left it set would take the mic away on a page with no card on it.
-  {
-    const drop = () => document.body.classList.remove('thread-card-open');
-    if (opts.scope) opts.scope.onCleanup(drop);
-    else modalCleanups.push(drop);
-  }
+  /* `body.thread-card-open` is gone. It existed to tell the stylesheet that a
+     full-width comment card was open over the document, and it had exactly one
+     consumer: the hold-to-talk mic, which was fixed bottom-LEFT and landed on
+     the card's reply box at ≤1100px. The mic is docked in the topbar now
+     (`.doc-nav-dock`), where a card cannot reach it — so the class described a
+     collision that can no longer happen and its only effect was to take voice
+     away from the reader mid-conversation. */
 
   /**
    * Open `id` in the wide modal, or say no.
@@ -673,7 +656,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // own tap handler — so the highlight used to stay lit with no card open.
     onActiveChange: (id) => {
       refreshThreadDecorations(id);
-      syncCardOpenClass(id);
       // The selection moved off whatever the modal is showing — a different
       // thread, or nothing. The modal is a view of ONE thread and the panel's
       // selection is the authority, so it follows rather than argues.
@@ -823,9 +805,6 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
     // same thread — and page zoom moves a reviewer across this line, so it is
     // not a hypothetical transition.
     if (inlineCardsVisible()) threadModal.close();
-    // Recomputed rather than left alone: the same zoom that moves the tier
-    // decides whether the floating mic and an open card are in each other's way.
-    syncCardOpenClass(threadsPanel.getActive());
   });
 
   // A card's folding slots hold a height we MEASURED, so anything that

@@ -7,6 +7,28 @@
  *
  * Docs attached to no hub workspace still get an answer (voice always
  * answers): a local ack explaining there is nowhere to route to.
+ *
+ * DOCKED IN THE TOPBAR, not appended to <body>. This surface was the last one
+ * still wearing the float: the mic went on the document as a `position: fixed`
+ * launcher in the bottom-left corner and sat on top of whatever prose happened
+ * to be there — measured at 430, 1000, 1180x820 and 1440, its 44px box covered
+ * a paragraph (and at 1000x800 a heading as well) at every scroll position,
+ * because a fixed box over a scrolling document is always over something.
+ * Nothing under it was a control, which is why this outlived the board's own
+ * docking; covering prose on the surface whose entire job is prose is still
+ * the same bug.
+ *
+ * The board docks into a nav rail or a tab bar. This shell has neither — but
+ * it does have `#topbar`, a hard 48px row (`#shell`'s
+ * `grid-template-rows: 48px 1fr`) that already holds the doc's own controls.
+ * Putting the mic at the head of that toolbar costs the layout nothing, cannot
+ * cover the document, and gives the readout a positioned box to hang from
+ * instead of the viewport corner.
+ *
+ * The <body> fallback is not dead code: `mountDocVoice` runs once per session
+ * from `main()`, before the router has resolved anything, and a shell without
+ * a toolbar (a stripped embed, a future surface) should still get a mic rather
+ * than none.
  */
 import { type User } from '@feedback/core';
 import { docIdFromPathOrNull } from './doc-path.ts';
@@ -50,7 +72,21 @@ export function mountDocVoice(user: User): { destroy(): void } {
   indicator.id = 'doc-voice';
   indicator.className = 'voice-indicator hidden';
   indicator.setAttribute('aria-live', 'polite');
-  document.body.append(button, indicator);
+  // A wrapper of its own, like the board's `.hub-nav-dock`: it is what carries
+  // the divider and the gap that say "this is not one more doc button", and
+  // what the readout is positioned against.
+  const dock = document.createElement('div');
+  dock.className = 'doc-nav-dock';
+  dock.setAttribute('role', 'group');
+  dock.setAttribute('aria-label', 'Voice');
+  dock.append(button, indicator);
+  // FIRST in the toolbar, so the mic leads the cluster and the divider falls
+  // between it and the doc's own actions — the same "at one end, fenced off"
+  // shape the rail's foot has. `prepend` on the toolbar rather than the
+  // header: `.doc-crumb` is `flex: 1` with `overflow: hidden` and would clip it.
+  const toolbar = document.querySelector('#topbar .toolbar');
+  if (toolbar) toolbar.prepend(dock);
+  else document.body.append(dock);
 
   const hubWorkspaceOf = createWorkspaceResolver(async (docId) => {
     const res = await fetch(`/api/docs/${encodeURIComponent(docId)}`);
@@ -103,6 +139,9 @@ export function mountDocVoice(user: User): { destroy(): void } {
   return {
     destroy: () => {
       capture.destroy();
+      // The wrapper goes too, or a teardown leaves an empty divider in the
+      // toolbar.
+      dock.remove();
       button.remove();
       indicator.remove();
     },
