@@ -155,7 +155,16 @@ describe('the docked mic reads as a control, not as a nav item', () => {
     // Insecure origin: dimmed but still PRESSABLE — the press is how the
     // reason gets surfaced, so `disabled` would swallow the explanation.
     expect(rule('.voice-mic.voice-unavailable')).toMatch(/opacity:\s*0\.45/);
-    expect(declarationsOnly(CSS)).not.toMatch(/\.voice-mic[^{]*\{[^}]*pointer-events:\s*none/);
+    // No rule may take the press away from the BUTTON. Written against
+    // selectors that end at `.voice-mic` (optionally with a state class), not
+    // against every selector containing it: `.voice-mic svg` sets
+    // `pointer-events: none` on purpose, so hit-testing over the mic keeps
+    // answering "the mic" now that the glyph is an element rather than a text
+    // node. Deadening a child is the opposite of deadening the control.
+    const deadened = /(^|\n|\{)\s*\.voice-mic(\.[\w-]+|:[\w-]+)*\s*\{[^}]*pointer-events:\s*none/;
+    expect(declarationsOnly(CSS)).not.toMatch(deadened);
+    // Positive control: the pattern really can find a deadened `.voice-mic`.
+    expect('.voice-mic.voice-unavailable { pointer-events: none; }').toMatch(deadened);
   });
 
   it('stays a 44px touch target, and a hold rather than a scroll', () => {

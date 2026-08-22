@@ -10,6 +10,7 @@
  */
 import { type User } from '@feedback/core';
 import { docIdFromPathOrNull } from './doc-path.ts';
+import { MIC_ICON } from './icons.ts';
 import { type VoiceAck, createVoiceCapture, visibleHeadingIn } from './voice-capture.ts';
 
 /** The docId of the doc the page is showing, or null elsewhere. */
@@ -44,7 +45,7 @@ export function mountDocVoice(user: User): { destroy(): void } {
   button.className = 'voice-mic';
   button.title = 'Hold to talk (or hold Space)';
   button.setAttribute('aria-label', 'Hold to talk');
-  button.textContent = '🎙';
+  button.innerHTML = MIC_ICON;
   const indicator = document.createElement('div');
   indicator.id = 'doc-voice';
   indicator.className = 'voice-indicator hidden';

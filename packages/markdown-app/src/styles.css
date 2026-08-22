@@ -1135,16 +1135,30 @@ body.hub-body {
    target on a phone, which is where talking beats typing by the most. */
 .hub-quick-mic {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 40px;
   min-width: 44px;
   padding-inline: 8px;
-  font-size: 16px;
   line-height: 1;
   /* iOS turns a long press on a button into text selection / the callout
      menu, which cancels the hold before a word is said. */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+/* The same stroked glyph the docked mic wears — two mics on one screen (this
+   one in the capture box, the docked one in the rail) that disagreed about
+   whether a mic is an emoji or an outline was the loudest half of "distinct
+   reads as unfinished". Sized as a box, so the `font-size: 16px` that used to
+   scale a `🎤` is gone rather than left meaning nothing. */
+.hub-quick-mic svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  /* Decoration, not a target — see `.voice-mic svg`. */
+  pointer-events: none;
 }
 /* Recording. Same red as the board-wide dock's mic — one meaning, one colour,
    whichever mic you are holding. */
@@ -4246,7 +4260,6 @@ a.hub-link-chip:hover {
   border: 1px solid var(--border);
   background: var(--bg-panel);
   color: var(--fg);
-  font-size: 19px;
   line-height: 1;
   cursor: pointer;
   touch-action: none; /* the hold IS the gesture — never a scroll */
@@ -4257,8 +4270,39 @@ a.hub-link-chip:hover {
   justify-content: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
+/* The glyph is a stroked SVG in the nav's own vocabulary (`MIC_ICON`,
+   src/icons.ts), so the size is a box rather than a `font-size` — the 19px
+   this rule used to carry sized a `🎙` and would size nothing now. 20 against
+   the nav's 18: the nav glyph sits beside a label and this one is alone in a
+   44px circle. */
+.voice-mic svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+  /* The glyph is decoration, and hit-testing over the mic has to keep
+     answering "the mic". A text node was never a target; an element is, so
+     without this the topmost hit at the mic's centre is the SVG. Presses
+     still work either way — they bubble to the button — but every overlap
+     check written against the mic would start reporting a glyph where it used
+     to report the control. Deadening the child is the opposite of deadening
+     the button, which must stay pressable even when it cannot record. */
+  pointer-events: none;
+}
 .voice-mic:hover {
   background: var(--bg-hover);
+}
+/* Keyboard focus. The mic is `tabIndex 0` and reachable — measured 2026-08-21,
+   ten Tabs from the top of the board — and Chrome's UA default DID already
+   draw a ring there (`outline: auto 1px rgb(0, 95, 204)`), so this is not a
+   missing ring being restored. It is the platform blue being replaced by the
+   one every other focusable in this chrome uses: `.doc-switcher`,
+   `.hub-drag-handle` and `.thread-caret` all set `2px solid var(--accent)`,
+   and a control that focuses in a different colour from its neighbours reads
+   as belonging to a different app. `:focus-visible`, not `:focus`, so a
+   press-and-hold does not leave a ring behind. */
+.voice-mic:focus-visible {
+  outline: 2px solid var(--accent, #2e7dd7);
+  outline-offset: 2px;
 }
 /* An open comment card wins the corner. Measured at 430px: a thread there
    opens as a full-WIDTH inline card whose reply box reaches bottom-left too,
@@ -4297,6 +4341,17 @@ body.thread-card-open .voice-indicator {
   bottom: calc(68px + var(--kb-bottom, 0px) + var(--safe-bottom, 0px));
   left: 16px;
   z-index: 70;
+  /* Say how wide, or the DOCK decides. An absolutely positioned box with a
+     `left` and no `width` is shrink-to-fit, and shrink-to-fit's upper bound is
+     the space left in its CONTAINING BLOCK — the viewport for the floating
+     form, but the dock's own column once the mic is docked. A `max-width`
+     cannot raise that bound, so the cap below was doing nothing on the hub:
+     measured 2026-08-21 against a full sentence, the readout came out 45×978
+     in the collapsed rail (49 lines, one syllable each, starting 248px ABOVE
+     the viewport), 54×645 in the ≤1100px strip and 64×527 in the phone's
+     bottom bar. `max-content` sizes it from the sentence instead, and the
+     `max-width` pair below then means what it says at every width. */
+  width: max-content;
   /* Twice the 420px it used to cap at. This box holds a LIVE transcript: the
      interim result is rewritten on every word, so a narrow box re-wraps the
      whole sentence under the reader several times a second and the text moves
