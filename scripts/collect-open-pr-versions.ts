@@ -29,6 +29,7 @@
  * unrelated PR red; it must make the gate SAY the concurrent half did not run.
  *
  * Usage: bun run scripts/collect-open-pr-versions.ts [--exclude <pr-number>]
+ *                                                    [--base <branch>]
  *        GH_BIN overrides the `gh` binary (tests point it at a stub).
  */
 
@@ -45,6 +46,13 @@ function argOf(name: string): string | undefined {
 }
 const excludeRaw = argOf('--exclude');
 const exclude = excludeRaw === undefined ? undefined : Number(excludeRaw);
+/**
+ * Only PRs merging into the SAME branch can collide. A stacked PR targets its
+ * parent branch and inherits the parent's version, so without this it reads as
+ * a collision with the parent it is built on — a false red on a pair that is
+ * one release between them.
+ */
+const baseBranch = argOf('--base');
 
 function gh(...a: string[]): string {
   return execFileSync(GH, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -73,6 +81,7 @@ try {
       'open',
       '--limit',
       PR_LIMIT,
+      ...(baseBranch ? ['--base', baseBranch] : []),
       '--json',
       'number,headRefName,headRefOid',
     ),

@@ -9,7 +9,7 @@
  * that never ran.
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -33,7 +33,7 @@ function stubGh(opts: {
   prs: StubPr[];
   manifests: Record<string, string | undefined>;
   listFails?: boolean;
-}): { bin: string } {
+}): { bin: string; lastPrArgs: () => string } {
   const dir = mkdtempSync(join(tmpdir(), 'gh-stub-'));
   built.push(dir);
   mkdirSync(join(dir, 'data'), { recursive: true });
@@ -54,6 +54,7 @@ function stubGh(opts: {
       `DATA="${join(dir, 'data')}"`,
       'case "$1" in',
       '  pr)',
+      '    printf "%s\\n" "$*" > "$DATA/last-pr-args";',
       opts.listFails
         ? '    echo "gh: could not reach github.com" >&2; exit 1;;'
         : '    cat "$DATA/prs.json";;',
@@ -68,7 +69,7 @@ function stubGh(opts: {
     ].join('\n'),
   );
   chmodSync(bin, 0o755);
-  return { bin };
+  return { bin, lastPrArgs: () => readFileSync(join(dir, 'data/last-pr-args'), 'utf8').trim() };
 }
 
 type Payload =
@@ -143,6 +144,19 @@ describe('open-PR version collector', () => {
       { number: 176, headRefName: 'feat/one', version: '0.1.43' },
       { number: 177, headRefName: 'feat/no-manifest', version: null },
     ]);
+  }, 30_000);
+
+  // Only PRs merging into the same branch can collide over its version. A
+  // stacked PR targets its parent branch and inherits the parent's version, so
+  // an unscoped list reads the parent as a collision with its own child.
+  it('asks only for PRs targeting the given base branch', () => {
+    const stub = stubGh({
+      prs: [{ number: 176, headRefName: 'feat/one', headRefOid: 'aaa' }],
+      manifests: { aaa: '0.1.43' },
+    });
+
+    run(stub.bin, '--exclude', '180', '--base', 'main');
+    expect(stub.lastPrArgs()).toContain('--base main');
   }, 30_000);
 
   it('keeps every PR when nothing is excluded', () => {
