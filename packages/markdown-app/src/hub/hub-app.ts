@@ -74,7 +74,7 @@ import {
   type WalkProgress,
   discussionIsBusy,
   renderActivity,
-  renderBoard,
+  renderBoardForPane,
   renderHomeBrief,
   renderHomeReview,
   renderLeadStrip,
@@ -589,8 +589,14 @@ async function main(): Promise<void> {
     const focusedRow = active?.closest?.('.hub-task-row') as HTMLElement | null;
     const focusedTaskId = focusedRow?.dataset.taskId;
     const focusedHandle = active?.classList.contains('hub-drag-handle') ?? false;
-    renderBoard(
+    // `state.pane`, not an unconditional render: Home hides the board column
+    // outright, and a row built into it is a node with listeners that nobody
+    // can see and no repaint reaches. Everything below this line still runs on
+    // Home — the walkthrough is Home's own, and the strip and banner are one
+    // element each.
+    renderBoardForPane(
       el('hub-board'),
+      state.pane,
       boardSections(state.info?.goals ?? [], taskList(), filters),
       // Read at render time, not once at wiring time: attachments arrive
       // after the first paint and change while the board is open, and a
