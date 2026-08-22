@@ -28,6 +28,9 @@ describe('GET /api/docs honours its setId filter', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
+  /** Readable name → the id the server minted for it. A caller NAMES a doc
+   *  now; the listing answers in the ids the server chose. */
+  const mintedId: Record<string, string> = {};
 
   const local = (path: string, init: RequestInit = {}) =>
     fetch(`${base}${path}`, {
@@ -71,6 +74,7 @@ describe('GET /api/docs honours its setId filter', () => {
         setId,
       });
       expect(r.status).toBe(200);
+      mintedId[docId] = ((await r.json()) as { docId: string }).docId;
     }
     // A doc in no set at all — the 99.8% the sidebar throws away today.
     const loose = await post('/api/docs', {
@@ -79,6 +83,7 @@ describe('GET /api/docs honours its setId filter', () => {
       sourceUrl: mdFile('loose.md'),
     });
     expect(loose.status).toBe(200);
+    mintedId['doc-loose'] = ((await loose.json()) as { docId: string }).docId;
   });
 
   afterAll(() => {
@@ -92,11 +97,23 @@ describe('GET /api/docs honours its setId filter', () => {
     // an empty server.
     const all = (await listDocs()).map((d) => d.docId);
     expect(all).toEqual(
-      expect.arrayContaining(['doc-set-a-1', 'doc-set-a-2', 'doc-set-b-1', 'doc-loose']),
+      expect.arrayContaining([
+        mintedId['doc-set-a-1'],
+        mintedId['doc-set-a-2'],
+        mintedId['doc-set-b-1'],
+        mintedId['doc-loose'],
+      ]),
     );
 
     const scoped = (await listDocs('?setId=set-a')).map((d) => d.docId);
-    expect(scoped.sort()).toEqual(['doc-set-a-1', 'doc-set-a-2']);
+    expect(scoped.sort()).toEqual([mintedId['doc-set-a-1'], mintedId['doc-set-a-2']].sort());
+
+    // The readable name is still an address: it resolves to the doc it named.
+    const byName = await local('/api/docs/doc-set-a-1');
+    expect(byName.status).toBe(200);
+    expect(((await byName.json()) as { meta: DocMetaOut }).meta.docId).toBe(
+      mintedId['doc-set-a-1'],
+    );
   });
 
   it('matches a doc carrying only the deprecated workspaceId spelling', async () => {
@@ -110,10 +127,11 @@ describe('GET /api/docs honours its setId filter', () => {
       workspaceId: 'set-legacy',
     });
     expect(r.status).toBe(200);
-    const created = (await listDocs()).find((d) => d.docId === 'doc-old-spelling');
+    const oldSpellingId = ((await r.json()) as { docId: string }).docId;
+    const created = (await listDocs()).find((d) => d.docId === oldSpellingId);
     expect(created?.workspaceId).toBe('set-legacy');
 
-    expect((await listDocs('?setId=set-legacy')).map((d) => d.docId)).toEqual(['doc-old-spelling']);
+    expect((await listDocs('?setId=set-legacy')).map((d) => d.docId)).toEqual([oldSpellingId]);
   });
 
   it('an unknown setId returns an empty list, not everything', async () => {

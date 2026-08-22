@@ -58,6 +58,10 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
 
   let workspaceId: string;
   let files: Map<string, BindFile>;
+  /** The id minted for the doc posted as `standalone-doc`. A folder bind's
+   *  members keep their deterministic `<setId>:<relPath>` ids; only a
+   *  free-standing doc gets a minted one, so only this needs capturing. */
+  let standaloneId: string;
 
   it('binds a folder + a standalone doc as artifacts under one project owner', async () => {
     const r = await fetch(`${base}/api/workspaces`, {
@@ -97,7 +101,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
         title: 'Standalone',
       }),
     });
-    await j(sr);
+    standaloneId = (await j<{ docId: string }>(sr)).docId;
   });
 
   it('GET / renders a project LINK for the review docs and NOT their artifacts', async () => {
@@ -124,7 +128,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // response is a rendered page, not an error or an empty body.
     expect(html).not.toContain('README.md');
     expect(html).not.toContain('src/index.ts');
-    expect(html).not.toContain('review/standalone-doc');
+    expect(html).not.toContain(`review/${standaloneId}`);
     // A landing response measured in kilobytes, not hundreds of them.
     expect(html.length).toBeLessThan(20_000);
   });
@@ -142,7 +146,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // The standalone markdown artifact shows its source basename + a markdown
     // kind label, linking to its own review URL.
     expect(html).toContain('STANDALONE.md');
-    expect(html).toContain('/docs/standalone-doc');
+    expect(html).toContain(`/docs/${standaloneId}`);
     expect(html).toContain('markdown');
     // Back to the index.
     expect(html).toContain('href="/"');
@@ -216,8 +220,9 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     for (const f of files.values()) {
       expect(existsSync(join(dataDir, '_archive', `${f.docId}.ydoc`))).toBe(true);
     }
-    // Standalone doc is untouched.
-    expect(handle.rooms.get('standalone-doc')).toBeTruthy();
+    // Standalone doc is untouched — and still answers to the readable name
+    // it was created under, resolving to the id the server minted.
+    expect(handle.rooms.get('standalone-doc')?.docId).toBe(standaloneId);
   });
 
   it('DELETE ?purge=true is the destructive half, and it has to be asked for', async () => {

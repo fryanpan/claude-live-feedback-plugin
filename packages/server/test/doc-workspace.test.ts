@@ -27,7 +27,7 @@ import { type ServerHandle, createServer } from '../src/server.ts';
 interface DocResponse {
   docId: string;
   hubWorkspaceId?: string;
-  meta: { workspaceId?: string; type?: string };
+  meta: { docId?: string; workspaceId?: string; type?: string };
 }
 
 describe('a doc always lands in a workspace', () => {
@@ -121,8 +121,15 @@ describe('a doc always lands in a workspace', () => {
 
     // Attached, not merely reported: the doc has to be reachable FROM the
     // workspace as well, or the id in the response is a label on nothing.
+    // The board holds the MINTED id — the address — not the name the caller
+    // asked for, so that two spellings never produce two memberships.
     const wsBody = (await ws.json()) as { workspace: { docIds: string[] } };
-    expect(wsBody.workspace.docIds).toContain('doc-no-ws');
+    expect(wsBody.workspace.docIds).toContain(body.docId);
+
+    // ...and the readable name the caller chose still gets there.
+    const viaAlias = await local('/api/docs/doc-no-ws');
+    expect(viaAlias.status).toBe(200);
+    expect(((await viaAlias.json()) as DocResponse).meta.docId).toBe(body.docId);
   });
 
   it('puts the auto-created workspace in the list the hub renders', async () => {
@@ -180,23 +187,27 @@ describe('a doc always lands in a workspace', () => {
       type: 'markdown',
       sourceUrl: mdFile('then-attached.md'),
     });
-    const holdingId = ((await created.json()) as DocResponse).hubWorkspaceId as string;
+    const createdBody = (await created.json()) as DocResponse;
+    const docId = createdBody.docId;
+    const holdingId = createdBody.hubWorkspaceId as string;
     // Positive control: it really is in the holding pen right now, so the
     // "no longer there" assertion below is a claim about a move.
     expect(holdingId).toBeTruthy();
-    expect(handle.tasks.getWorkspace(holdingId)?.docIds).toContain('doc-then-attached');
+    expect(handle.tasks.getWorkspace(holdingId)?.docIds).toContain(docId);
 
     const ws = await post('/api/workspaces', { name: 'real-home', goal: 'Ship.' });
     const realId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    // Attached by the READABLE name — the attach route resolves it, and the
+    // membership it writes is still keyed by the minted id below.
     expect(
       (await post(`/api/workspaces/${realId}/docs`, { docId: 'doc-then-attached' })).status,
     ).toBe(200);
 
-    expect(handle.tasks.getWorkspace(realId)?.docIds).toContain('doc-then-attached');
-    expect(handle.tasks.getWorkspace(holdingId)?.docIds).not.toContain('doc-then-attached');
+    expect(handle.tasks.getWorkspace(realId)?.docIds).toContain(docId);
+    expect(handle.tasks.getWorkspace(holdingId)?.docIds).not.toContain(docId);
     // One home, and it is the one the caller asked for — this is the value
     // share scoping and the doc surface's voice dock both read.
-    expect(handle.tasks.workspaceOfDoc('doc-then-attached')).toBe(realId);
+    expect(handle.tasks.workspaceOfDoc(docId)).toBe(realId);
   });
 
   it('a deleted doc leaves no link behind on the board', async () => {
@@ -208,14 +219,18 @@ describe('a doc always lands in a workspace', () => {
       type: 'markdown',
       sourceUrl: mdFile('to-delete.md'),
     });
-    const wsId = ((await created.json()) as DocResponse).hubWorkspaceId as string;
+    const createdBody = (await created.json()) as DocResponse;
+    const docId = createdBody.docId;
+    const wsId = createdBody.hubWorkspaceId as string;
     // Positive control: it is linked right now, so "not linked" below is a
     // claim about the delete rather than about a link that never existed.
-    expect(handle.tasks.getWorkspace(wsId)?.docIds).toContain('doc-to-delete');
+    expect(handle.tasks.getWorkspace(wsId)?.docIds).toContain(docId);
 
+    // Deleted by the readable name — which must unlink the minted id it
+    // resolves to, not a second membership under the alias.
     const del = await local('/api/docs/doc-to-delete', { method: 'DELETE' });
     expect(del.status).toBe(200);
-    expect(handle.tasks.getWorkspace(wsId)?.docIds).not.toContain('doc-to-delete');
+    expect(handle.tasks.getWorkspace(wsId)?.docIds).not.toContain(docId);
   });
 
   it('files the doc the WIDGET conjures, not just the ones a route creates', async () => {

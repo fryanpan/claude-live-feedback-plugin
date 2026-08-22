@@ -84,6 +84,8 @@ describe('normalizePublicBaseUrl', () => {
 describe('the override reaches the links the route table hands out', () => {
   let handle: ServerHandle;
   let dataDir: string;
+  /** The id the server MINTED for the doc the caller asked to call `doc-1`. */
+  let mintedId: string;
   const PUBLIC = 'https://host.example.ts.net';
 
   beforeAll(async () => {
@@ -91,11 +93,12 @@ describe('the override reaches the links the route table hands out', () => {
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, '# Notes\n\nBody.\n');
     handle = createServer({ port: 0, dataDir, publicBaseUrl: PUBLIC });
-    await fetch(`http://localhost:${handle.port}/api/docs`, {
+    const created = await fetch(`http://localhost:${handle.port}/api/docs`, {
       method: 'POST',
       headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'doc-1', type: 'markdown', sourceUrl: docPath }),
     });
+    mintedId = ((await created.json()) as { docId: string }).docId;
   });
 
   afterAll(() => {
@@ -104,10 +107,13 @@ describe('the override reaches the links the route table hands out', () => {
   });
 
   const reviewUrlOf = async (): Promise<string> => {
+    // Fetched through the READABLE ALIAS the caller asked for — the address is
+    // the minted id, but `doc-1` still resolves to it.
     const res = await fetch(`http://localhost:${handle.port}/api/docs/doc-1`, {
       headers: { host: `localhost:${handle.port}` },
     });
-    const body = (await res.json()) as { meta?: { reviewUrl?: string } };
+    const body = (await res.json()) as { meta?: { docId?: string; reviewUrl?: string } };
+    expect(body.meta?.docId).toBe(mintedId);
     // Assert the field is THERE before asserting anything about its content —
     // otherwise "does not contain localhost" passes on `undefined`, which is
     // the vacuous-negative shape this repo keeps rediscovering.
@@ -124,7 +130,7 @@ describe('the override reaches the links the route table hands out', () => {
     // has nothing to do with the override.
     const url = await reviewUrlOf();
     expect(url.startsWith(`${PUBLIC}/`)).toBe(true);
-    expect(url.endsWith('/docs/doc-1')).toBe(true);
+    expect(url.endsWith(`/docs/${mintedId}`)).toBe(true);
   });
 
   it('leaves no trace of the loopback origin it is actually served on', async () => {
@@ -144,17 +150,19 @@ describe('without an override the server still describes itself', () => {
   // it rather than the field being empty or the route being missing.
   let handle: ServerHandle;
   let dataDir: string;
+  let mintedId: string;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'public-base-url-default-'));
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, '# Notes\n\nBody.\n');
     handle = createServer({ port: 0, dataDir });
-    await fetch(`http://localhost:${handle.port}/api/docs`, {
+    const created = await fetch(`http://localhost:${handle.port}/api/docs`, {
       method: 'POST',
       headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
       body: JSON.stringify({ docId: 'doc-1', type: 'markdown', sourceUrl: docPath }),
     });
+    mintedId = ((await created.json()) as { docId: string }).docId;
   });
 
   afterAll(() => {
@@ -166,11 +174,12 @@ describe('without an override the server still describes itself', () => {
     const res = await fetch(`http://localhost:${handle.port}/api/docs/doc-1`, {
       headers: { host: `localhost:${handle.port}` },
     });
-    const body = (await res.json()) as { meta?: { reviewUrl?: string } };
+    const body = (await res.json()) as { meta?: { docId?: string; reviewUrl?: string } };
+    expect(body.meta?.docId).toBe(mintedId);
     const reviewUrl = body.meta?.reviewUrl;
     expect(typeof reviewUrl).toBe('string');
     expect((reviewUrl as string).startsWith('http://')).toBe(true);
     expect(reviewUrl).toContain(String(handle.port));
-    expect((reviewUrl as string).endsWith('/docs/doc-1')).toBe(true);
+    expect((reviewUrl as string).endsWith(`/docs/${mintedId}`)).toBe(true);
   });
 });

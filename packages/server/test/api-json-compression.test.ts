@@ -124,6 +124,9 @@ describe('GET /api/docs over the wire', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
+  /** The id minted for the doc named `gz-doc-39` — the listing answers in
+   *  minted ids, not in the names the fixtures asked for. */
+  let lastDocId: string;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'api-gzip-'));
@@ -140,6 +143,7 @@ describe('GET /api/docs over the wire', () => {
         body: JSON.stringify({ docId: `gz-doc-${i}`, type: 'markdown', sourceUrl: p }),
       });
       expect(r.status).toBe(200);
+      lastDocId = ((await r.json()) as { docId: string }).docId;
     }
   });
 
@@ -165,6 +169,6 @@ describe('GET /api/docs over the wire', () => {
     // body, so both halves of the claim are checkable from one response.
     expect(Number(gz.headers.get('content-length'))).toBeLessThan(plainBytes / 2);
     const docs = ((await gz.json()) as { docs: Array<{ docId: string }> }).docs;
-    expect(docs.map((d) => d.docId)).toContain('gz-doc-39');
+    expect(docs.map((d) => d.docId)).toContain(lastDocId);
   });
 });

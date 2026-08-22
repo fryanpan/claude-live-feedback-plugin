@@ -131,7 +131,12 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     return ((await r.json()) as { workspace: { id: string } }).workspace.id;
   };
 
-  const makeDoc = async (docId: string, hubWorkspaceId?: string): Promise<void> => {
+  /**
+   * Returns the id the server MINTED. The name passed in is only the readable
+   * alias, and a watch key is the doc's own id — which is what an agent holds,
+   * because the create call handed it back.
+   */
+  const makeDoc = async (docId: string, hubWorkspaceId?: string): Promise<string> => {
     const path = join(srcDir, `${docId}.md`);
     writeFileSync(path, `# ${docId}\n\nFirst paragraph.\n`);
     const res = await post('/api/docs', {
@@ -141,6 +146,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
     });
     expect(res.status).toBe(200);
+    return ((await res.json()) as { docId: string }).docId;
   };
 
   /**
@@ -201,11 +207,11 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
 
   it('names the board holding this agent’s watched docs where it has no attachment, with what is waiting', async () => {
     const boardId = await makeBoard('coverage-board');
-    await makeDoc('doc-one', boardId);
-    await makeDoc('doc-two', boardId);
+    const one = await makeDoc('doc-one', boardId);
+    const two = await makeDoc('doc-two', boardId);
     await queueThreeForLead(boardId);
     // Exactly the incident: docs watched, board never attached.
-    expect((await watch(['doc-one', 'doc-two'])).status).toBe(200);
+    expect((await watch([one, two])).status).toBe(200);
 
     const coverage = await coverageOf();
     expect(coverage.agentId).toBe(AGENT);
@@ -216,7 +222,9 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     const row = coverage.unattachedBoards[0] as UnattachedBoard;
     expect(row.workspaceId).toBe(boardId);
     expect(row.name).toBe('coverage-board');
-    expect(row.watchedDocs).toEqual(['doc-one', 'doc-two']);
+    // Sorted on both sides: the watch set is a SET, and minted ids no longer
+    // happen to sort the way `doc-one` / `doc-two` did.
+    expect([...row.watchedDocs].sort()).toEqual([one, two].sort());
     expect(row.queued).toEqual({
       queuedVoice: 1,
       pendingBucketReview: 1,
@@ -227,9 +235,9 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
 
   it('reading coverage does not DRAIN the queue it reports', async () => {
     const boardId = await makeBoard('non-draining-board');
-    await makeDoc('doc-one', boardId);
+    const one = await makeDoc('doc-one', boardId);
     await queueThreeForLead(boardId);
-    await watch(['doc-one']);
+    await watch([one]);
 
     const first = await coverageOf();
     expect(first.unattachedBoards[0]?.queuedTotal).toBe(3);
@@ -253,9 +261,9 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
 
   it('POSITIVE CONTROL 1: after attaching, the board leaves unattachedBoards and reports attached + lead truthfully', async () => {
     const boardId = await makeBoard('seated-board');
-    await makeDoc('doc-one', boardId);
+    const one = await makeDoc('doc-one', boardId);
     await queueThreeForLead(boardId);
-    await watch(['doc-one', `ws:${boardId}`]);
+    await watch([one, `ws:${boardId}`]);
 
     // Before: the gap is real, so the absence after means something.
     const before = await coverageOf();
@@ -286,17 +294,17 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   it('POSITIVE CONTROL 2: a doc on a board the agent IS attached to is never listed', async () => {
     const seated = await makeBoard('board-with-seat');
     const absent = await makeBoard('board-without-seat');
-    await makeDoc('doc-seated', seated);
-    await makeDoc('doc-absent', absent);
+    const seatedDoc = await makeDoc('doc-seated', seated);
+    const absentDoc = await makeDoc('doc-absent', absent);
     await attach(seated);
-    await watch(['doc-seated', 'doc-absent']);
+    await watch([seatedDoc, absentDoc]);
 
     const coverage = await coverageOf();
     // The board it is attached to is absent from the alarm list; the board it
     // is not attached to is present in the SAME read. Without the second, the
     // first would prove only that the builder produced nothing at all.
     expect(coverage.unattachedBoards.map((b) => b.workspaceId)).toEqual([absent]);
-    expect(coverage.unattachedBoards[0]?.watchedDocs).toEqual(['doc-absent']);
+    expect(coverage.unattachedBoards[0]?.watchedDocs).toEqual([absentDoc]);
   });
 
   it('POSITIVE CONTROL 3: a `ws:` key naming a GROUPING is reported as a grouping and raises no board alarm', async () => {
@@ -328,8 +336,8 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // Positive control on that empty list, in the same pass: the board really
     // does have three items waiting and no attachment — watching one of its
     // DOCS surfaces it immediately.
-    await makeDoc('doc-on-board', boardId);
-    await watch(['doc-on-board']);
+    const onBoard = await makeDoc('doc-on-board', boardId);
+    await watch([onBoard]);
     const widened = await coverageOf();
     expect(widened.unattachedBoards.map((b) => b.workspaceId)).toEqual([boardId]);
     expect(widened.unattachedBoards[0]?.queuedTotal).toBe(3);
@@ -579,13 +587,17 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       // A second agent watches a doc on the board, never attaches.
       const path = join(srcDir, 'doc-shared.md');
       writeFileSync(path, '# doc-shared\n\nBody.\n');
-      await tpost('/api/docs', {
-        docId: 'doc-shared',
-        sourceUrl: path,
-        title: 'doc-shared',
-        hubWorkspaceId: boardId,
-      });
-      await tpost(`/api/agents/${AGENT}/watches`, { add: ['doc-shared'], name: AGENT });
+      const sharedDoc = (
+        (await (
+          await tpost('/api/docs', {
+            docId: 'doc-shared',
+            sourceUrl: path,
+            title: 'doc-shared',
+            hubWorkspaceId: boardId,
+          })
+        ).json()) as { docId: string }
+      ).docId;
+      await tpost(`/api/agents/${AGENT}/watches`, { add: [sharedDoc], name: AGENT });
 
       const alarm = (await tcoverage()).unattachedBoards[0] as UnattachedBoard;
       expect(alarm.workspaceId).toBe(boardId);

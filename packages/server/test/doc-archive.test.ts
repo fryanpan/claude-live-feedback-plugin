@@ -242,7 +242,10 @@ describe('Rooms.archiveDoc / unarchiveDoc', () => {
 
   it('refuses a task body and a board room — live furniture, not a doc', async () => {
     for (const docId of ['task:t-abc', 'ws:w-abc']) {
-      rooms.getOrCreate(docId, { type: 'markdown' });
+      // Server authority, because a CALLER may not occupy these prefixes at
+      // all now — the projection is the only thing that mints them, and this
+      // test is about what `archiveDoc` does once one exists.
+      rooms.getOrCreate(docId, { type: 'markdown' }, { authority: 'server' });
       const res = rooms.archiveDoc(docId, { archivedBy: 'Tester' });
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toBe('hub-owned');

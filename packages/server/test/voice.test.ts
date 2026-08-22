@@ -120,11 +120,18 @@ describe('voice routing (§3.8)', () => {
     expect(t.status).toBe(200);
     taskId = ((await t.json()) as { task: { id: string } }).task.id;
 
-    // One attached doc so doc lookups have a target.
-    docId = 'expansion-plan';
-    const p = join(dataDir, `${docId}.md`);
+    // One attached doc so doc lookups have a target. `expansion-plan` is only
+    // the readable name asked for; the doc's id is the one the server minted,
+    // and that is what a voice context and a task link carry.
+    const p = join(dataDir, 'expansion-plan.md');
     writeFileSync(p, '# Expansion plan\n\nBody.\n');
-    expect((await post('/api/docs', { docId, type: 'markdown', sourceUrl: p })).status).toBe(200);
+    const madeDoc = await post('/api/docs', {
+      docId: 'expansion-plan',
+      type: 'markdown',
+      sourceUrl: p,
+    });
+    expect(madeDoc.status).toBe(200);
+    docId = ((await madeDoc.json()) as { docId: string }).docId;
     expect((await post(`/api/workspaces/${hubId}/docs`, { docId })).status).toBe(200);
 
     // A task carrying links + an owner, so the resource block has something to
@@ -173,12 +180,15 @@ describe('voice routing (§3.8)', () => {
     expect(big.status).toBe(200);
     bigTaskId = ((await big.json()) as { task: { id: string } }).task.id;
 
-    otherDocId = 'invoice-runbook';
-    const op = join(dataDir, `${otherDocId}.md`);
+    const op = join(dataDir, 'invoice-runbook.md');
     writeFileSync(op, '# Invoice runbook\n\nBody.\n');
-    expect(
-      (await post('/api/docs', { docId: otherDocId, type: 'markdown', sourceUrl: op })).status,
-    ).toBe(200);
+    const madeOtherDoc = await post('/api/docs', {
+      docId: 'invoice-runbook',
+      type: 'markdown',
+      sourceUrl: op,
+    });
+    expect(madeOtherDoc.status).toBe(200);
+    otherDocId = ((await madeOtherDoc.json()) as { docId: string }).docId;
     expect((await post(`/api/workspaces/${otherHubId}/docs`, { docId: otherDocId })).status).toBe(
       200,
     );
