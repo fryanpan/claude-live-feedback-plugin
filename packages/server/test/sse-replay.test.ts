@@ -22,7 +22,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
-import { REPLAY_MAX_EVENTS, SseHub, openSseStream } from '../src/sse.ts';
+import { claimReplayMarks, saveReplayMarks } from '../src/sse-marks.ts';
+import { REPLAY_MAX_AGE_MS, REPLAY_MAX_EVENTS, SseHub, openSseStream } from '../src/sse.ts';
 
 const PERSON = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
@@ -370,5 +371,238 @@ describe('SseHub addressed-frame replay', () => {
     expect(typeof got[0]?.id).toBe('string');
     expect((got[0]?.id ?? '').length).toBeGreaterThan(0);
     await l.stop();
+  });
+});
+
+/**
+ * VACUOUS GAPS — a `replay.gap` for a reconnect that missed nothing.
+ *
+ * Measured in the field 2026-08-21 by two independent sessions: after every
+ * server restart, subscriber sessions received waves of `replay.gap` for their
+ * whole watch set — 8+ over 40 minutes for the same doc ids — and every
+ * refetch that followed found zero missed events, while real events delivered
+ * fine in the same window.
+ *
+ * The cause is that `replayAfter` had exactly one way to say no. It answered
+ * `ok: false` — "I cannot prove completeness" — for the case where it CAN
+ * prove it: a cursor naming the newest event a channel has ever carried.
+ * Nothing came after that id, so nothing was missed; the buffer holding it had
+ * merely aged out under a quiet channel (`REPLAY_MAX_AGE_MS`, then deleted
+ * outright once empty), or the process had restarted without that channel
+ * being touched.
+ *
+ * A gap notice is expensive on purpose — it tells an agent to drop its stream
+ * and refetch. Firing one where nothing was missed teaches sessions to ignore
+ * the signal, which is how a REAL gap gets ignored too. So the fix is a
+ * narrowing, and every test below is paired with a positive control: the
+ * genuinely-missed event still produces exactly its notice.
+ */
+describe('vacuous replay gaps — a quiet channel is not a gap', () => {
+  it('a cursor at the newest event survives the buffer ageing out: empty ok replay, no gap', () => {
+    let now = 1_000_000;
+    const hub = new SseHub(() => now);
+    hub.broadcast('doc-quiet', { event: 'thread.created', n: 1 } as never);
+    const cursor = hub.lastIdOn('doc-quiet') as string;
+    expect(typeof cursor).toBe('string');
+
+    // The channel goes quiet for longer than the buffer's age bound. Nothing
+    // is broadcast — this is a doc nobody touched, which is most of a watch
+    // set most of the time.
+    now += REPLAY_MAX_AGE_MS + 60_000;
+
+    const res = hub.replayAfter('doc-quiet', cursor);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.events).toEqual([]);
+    // The buffer really is gone — this is the state the old code called a gap.
+    expect(hub.eventsOn('doc-quiet').length).toBe(0);
+  });
+
+  it('POSITIVE CONTROL: an event the cursor never saw still yields a gap after the same ageing', () => {
+    let now = 2_000_000;
+    const hub = new SseHub(() => now);
+    hub.broadcast('doc-real', { event: 'thread.created', n: 1 } as never);
+    const cursor = hub.lastIdOn('doc-real') as string;
+
+    // A second event lands — the one this subscriber is about to miss — and
+    // THEN everything ages out.
+    hub.broadcast('doc-real', { event: 'thread.created', n: 2 } as never);
+    now += REPLAY_MAX_AGE_MS + 60_000;
+
+    // Same pruned-to-nothing buffer as the test above (the read below prunes
+    // it, as any reconnect would), opposite answer: the cursor is no longer
+    // the newest thing this channel carried.
+    expect(hub.replayAfter('doc-real', cursor).ok).toBe(false);
+    expect(hub.eventsOn('doc-real').length).toBe(0);
+  });
+
+  it('a cursor at the newest event is clean even for a channel whose buffer never existed here', () => {
+    const hub = new SseHub();
+    // What a restart looks like from inside the hub: marks recovered from the
+    // previous process, no buffer for the channel because nothing has been
+    // broadcast on it since boot.
+    hub.restoreMarks({ 'doc-restored': 'oldboot:7' });
+    const res = hub.replayAfter('doc-restored', 'oldboot:7');
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.events).toEqual([]);
+    // POSITIVE CONTROL: any other id on that channel is still a gap.
+    expect(hub.replayAfter('doc-restored', 'oldboot:6').ok).toBe(false);
+    // …and a channel the marks say nothing about is a gap, not a shrug.
+    expect(hub.replayAfter('doc-unknown', 'oldboot:7').ok).toBe(false);
+  });
+
+  it('a mark is superseded the moment this process broadcasts on the channel', () => {
+    const hub = new SseHub();
+    hub.restoreMarks({ 'doc-moved': 'oldboot:7' });
+    hub.broadcast('doc-moved', { event: 'task.updated', n: 1 } as never);
+    // The recovered cursor is now genuinely behind — the new event is exactly
+    // what a reconnect at that id missed.
+    expect(hub.replayAfter('doc-moved', 'oldboot:7').ok).toBe(false);
+    expect(hub.marks()['doc-moved']).toBe(hub.lastIdOn('doc-moved') as string);
+  });
+
+  it('restoreMarks never overwrites what this process already knows', () => {
+    const hub = new SseHub();
+    hub.broadcast('doc-live', { event: 'task.updated', n: 1 } as never);
+    const live = hub.lastIdOn('doc-live') as string;
+    hub.restoreMarks({ 'doc-live': 'oldboot:7' });
+    expect(hub.marks()['doc-live']).toBe(live);
+    expect(hub.replayAfter('doc-live', 'oldboot:7').ok).toBe(false);
+  });
+});
+
+/**
+ * The marks file — the cursor's half of a restart.
+ *
+ * Trusted ONLY across a clean shutdown, and the flag that says so is written
+ * at two moments: `claimReplayMarks` re-stamps the file open as it reads,
+ * `saveReplayMarks` closes it on the way out. A process that dies without
+ * reaching its shutdown path therefore leaves the file open, and the next boot
+ * discards its marks rather than believing a record that stops mid-history.
+ * That direction is the whole safety argument: a stale mark that reads as
+ * current is a subscriber told "nothing was missed" about events that were.
+ */
+describe('replay marks across a restart', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sse-marks-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a clean shutdown hands its marks to the next boot', () => {
+    expect(claimReplayMarks(dir)).toEqual({});
+    saveReplayMarks(dir, { 'doc-a': 'boot1:4', 'ws:w-1': 'boot1:9' });
+    expect(claimReplayMarks(dir)).toEqual({ 'doc-a': 'boot1:4', 'ws:w-1': 'boot1:9' });
+  });
+
+  it('an unclean exit discards them — a mid-history record must not read as current', () => {
+    saveReplayMarks(dir, { 'doc-a': 'boot1:4' });
+    // Boot, read the marks… and die before the next shutdown. The claim above
+    // left the file open, so this is exactly that process's leftovers.
+    expect(claimReplayMarks(dir)).toEqual({ 'doc-a': 'boot1:4' });
+    expect(claimReplayMarks(dir)).toEqual({});
+  });
+
+  it('no file, or an unreadable one, is an empty answer rather than a throw', () => {
+    expect(claimReplayMarks(join(dir, 'nope'))).toEqual({});
+    writeFileSync(join(dir, 'sse-replay-marks.json'), 'not json');
+    expect(claimReplayMarks(dir)).toEqual({});
+  });
+});
+
+/**
+ * End to end, through a real server stopped and restarted on the same data
+ * dir — the shape of a deploy. This is the test the ticket asks for: a restart
+ * that missed nothing must be silent on every stream, and a restart that DID
+ * miss something must still say so exactly once.
+ */
+describe('a restart is silent when nothing was missed', () => {
+  let dataDir: string;
+  let srcDir: string;
+  let handle: ServerHandle;
+  let base: string;
+
+  const post = (path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const get = (path: string, headers: Record<string, string> = {}) =>
+    fetch(`${base}${path}`, { headers: { host: `localhost:${handle.port}`, ...headers } });
+  const comment = (text: string) =>
+    post('/api/docs/doc-boot/threads', { author: PERSON, text, anchor: { kind: 'subject' } });
+
+  const boot = async () => {
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  };
+
+  beforeEach(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'sse-boot-'));
+    srcDir = mkdtempSync(join(tmpdir(), 'sse-boot-src-'));
+    await boot();
+    const path = join(srcDir, 'doc-boot.md');
+    writeFileSync(path, '# doc-boot\n\nBody.\n');
+    await post('/api/docs', { docId: 'doc-boot', sourceUrl: path, title: 'doc-boot' });
+  });
+
+  afterEach(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(srcDir, { recursive: true, force: true });
+  });
+
+  it('a reconnect at the pre-restart cursor gets no gap and no duplicate', async () => {
+    const first = listenFrames(await get('/events/doc-boot'));
+    await settle(150);
+    await comment('Before the deploy.');
+    await settle();
+    const cursor = first.frames.find((f) => f.event === 'thread.created')?.id as string;
+    expect(typeof cursor).toBe('string');
+    await first.stop();
+
+    // The deploy: clean shutdown, fresh process, same data dir. Event ids are
+    // stamped with a per-process boot nonce, so `cursor` is now from an epoch
+    // this server never issued — the case that used to be an automatic gap.
+    await handle.stop();
+    await boot();
+
+    const second = listenFrames(await get('/events/doc-boot', { 'Last-Event-ID': cursor }));
+    await settle();
+    expect(second.frames.some((f) => f.event === 'replay.gap')).toBe(false);
+    expect(second.frames.filter((f) => f.event === 'thread.created').length).toBe(0);
+
+    // …and the stream is live rather than quietly dead.
+    await comment('After the deploy.');
+    await settle();
+    expect(second.frames.filter((f) => f.event === 'thread.created').map(commentText)).toEqual([
+      'After the deploy.',
+    ]);
+    await second.stop();
+  });
+
+  it('POSITIVE CONTROL: an event missed across the restart still produces exactly one gap', async () => {
+    const first = listenFrames(await get('/events/doc-boot'));
+    await settle(150);
+    await comment('Seen.');
+    await settle();
+    const cursor = first.frames.find((f) => f.event === 'thread.created')?.id as string;
+    await first.stop();
+
+    // Broadcast into the disconnect, THEN restart. The subscriber's cursor is
+    // behind by one event that no buffer survives — a real hole.
+    await comment('Missed, then the deploy.');
+    await settle();
+    await handle.stop();
+    await boot();
+
+    const second = listenFrames(await get('/events/doc-boot', { 'Last-Event-ID': cursor }));
+    await settle();
+    expect(second.frames.filter((f) => f.event === 'replay.gap').length).toBe(1);
+    // Still no partial replay — a half-answer would read as a whole one.
+    expect(second.frames.filter((f) => f.event === 'thread.created').length).toBe(0);
+    await second.stop();
   });
 });
