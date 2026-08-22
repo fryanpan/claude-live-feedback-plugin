@@ -72,7 +72,9 @@ export interface ClientRelease {
  */
 const REQUIRED: Record<keyof ClientSources, string[]> = {
   widget: ['widget.iife.js', 'widget.esm.js'],
-  markdownApp: ['app.js', 'index.html'],
+  // `sw.js` and the manifest are listed because their absence is silent:
+  // notifications simply never arrive and the page looks entirely healthy.
+  markdownApp: ['app.js', 'index.html', 'sw.js', 'manifest.webmanifest'],
 };
 
 /** Where releases live. Not inside any checkout, so a `git checkout` in the

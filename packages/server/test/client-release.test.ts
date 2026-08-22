@@ -46,6 +46,10 @@ function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: 
   writeFileSync(join(markdownApp, 'index.html'), `<!--${marker}-->\n`);
   writeFileSync(join(markdownApp, 'styles.css'), `/*${marker}*/\n`);
   writeFileSync(join(markdownApp, 'BUILD_INFO.txt'), `built ${marker}\n`);
+  // Part of a complete build: a release without them publishes a page whose
+  // notifications silently never arrive.
+  writeFileSync(join(markdownApp, 'sw.js'), `/*${marker}*/\n`);
+  writeFileSync(join(markdownApp, 'manifest.webmanifest'), '{"name":"Claude Workspaces"}\n');
   return { dir, widget, markdownApp };
 }
 
@@ -154,6 +158,21 @@ describe('publishClientRelease', () => {
       expect(readdirSync(join(root, 'releases')).length).toBe(1);
     } finally {
       for (const d of [root, good.dir, broken.dir]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a build with no service worker — the failure that is otherwise silent', () => {
+    // A missing app.js is a blank page and gets reported within a minute. A
+    // missing sw.js is a page that looks entirely healthy and simply never
+    // notifies anyone, which is why it belongs in the same check rather than
+    // being left to whoever eventually notices nothing arriving.
+    const root = tmpRoot();
+    const broken = fakeBuild('gen-1');
+    rmSync(join(broken.markdownApp, 'sw.js'));
+    try {
+      expect(() => publishClientRelease({ root, sources: broken })).toThrow(/sw\.js/);
+    } finally {
+      for (const d of [root, broken.dir]) rmSync(d, { recursive: true, force: true });
     }
   });
 
