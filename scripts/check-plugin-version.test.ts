@@ -85,13 +85,24 @@ function pluginPaths(root: string, range: string): string[] {
     .filter((f) => f.startsWith('packages/plugin/'));
 }
 
-function runGate(root: string): { code: number; out: string } {
-  const r = spawnSync('bun', ['run', GATE, '--base', 'main'], {
+function runGate(root: string, ...extra: string[]): { code: number; out: string } {
+  const r = spawnSync('bun', ['run', GATE, '--base', 'main', ...extra], {
     cwd: root,
     encoding: 'utf8',
     env: gitSafeEnv(),
   });
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+/**
+ * The concurrent half takes its open-PR list from a file rather than the
+ * network, so a test can state the exact situation it means. `null` payloads
+ * are written verbatim, which is how the missing / malformed cases are set up.
+ */
+function writeOpenPrs(root: string, payload: unknown): string {
+  const rel = 'open-pr-versions.json';
+  write(root, rel, `${JSON.stringify(payload)}\n`);
+  return rel;
 }
 
 /**
@@ -332,5 +343,140 @@ describe('plugin version gate', () => {
     const { code, out } = runGate(root);
     expect(code).toBe(1);
     expect(out).toContain('0.1.60');
+  }, 30_000);
+});
+
+/**
+ * The concurrent case. Everything above compares this branch against a ref the
+ * checkout can see; none of it can see an unmerged sibling. Two PRs that both
+ * declare N+1 over a main sitting at N are each strictly ahead of the tip, so
+ * every check above passes on both — and they merge clean, because identical
+ * strings do not conflict. The second merge publishes a string that never
+ * moved, and `claude plugin update` copies nothing while reporting success.
+ *
+ * The tie-break is LOWEST PR NUMBER HOLDS THE NUMBER. It has to be something
+ * each PR can compute alone from the same inputs, or the rule needs a person
+ * holding a queue and handing out numbers — which is the thing this replaces.
+ */
+describe('plugin version gate — a number another open PR has already claimed', () => {
+  /** main publishes 0.1.51; this branch is at 0.1.52 and passes every other check. */
+  function branchAt(version: string): string {
+    return repoWhereBaseMovedAhead(version);
+  }
+
+  it('fails when a LOWER-numbered open PR already declares this version', () => {
+    const root = branchAt('0.1.52');
+
+    // Positive control, and the whole reason this check exists: with no
+    // open-PR list in hand the gate is GREEN on exactly this branch. Every
+    // signal the checkout carries says the number is fine.
+    expect(runGate(root).code).toBe(0);
+
+    const file = writeOpenPrs(root, {
+      status: 'ok',
+      prs: [
+        { number: 176, headRefName: 'feat/one', version: '0.1.52' },
+        { number: 177, headRefName: 'feat/unreadable', version: null },
+      ],
+    });
+
+    const { code, out } = runGate(root, '--open-prs-file', file, '--pr', '178');
+    expect(code).toBe(1);
+    expect(out).toContain('#176');
+    expect(out).toContain('0.1.52');
+    // The unreadable sibling is reported as unknown in the same run — an
+    // unread manifest is not evidence of no collision.
+    expect(out).toContain('#177');
+  }, 30_000);
+
+  // The other side of the same collision, run from the other PR. Exactly one
+  // of the two goes red, so the pair is never both-green and never both-red.
+  it('passes, with a notice, when the colliding PR has a HIGHER number', () => {
+    const root = branchAt('0.1.52');
+    const file = writeOpenPrs(root, {
+      status: 'ok',
+      prs: [{ number: 190, headRefName: 'feat/later', version: '0.1.52' }],
+    });
+
+    const { code, out } = runGate(root, '--open-prs-file', file, '--pr', '178');
+    expect(code).toBe(0);
+    expect(out).toContain('#190');
+    expect(out).toContain('holds');
+  }, 30_000);
+
+  it('passes and states how many open PRs it checked when none declares this version', () => {
+    const root = branchAt('0.1.52');
+    const file = writeOpenPrs(root, {
+      status: 'ok',
+      prs: [
+        { number: 176, headRefName: 'feat/one', version: '0.1.50' },
+        { number: 180, headRefName: 'feat/two', version: '0.1.53' },
+      ],
+    });
+
+    const { code, out } = runGate(root, '--open-prs-file', file, '--pr', '178');
+    expect(code).toBe(0);
+    expect(out).toContain('2 open PR');
+  }, 30_000);
+
+  // Read this next to the empty-list case above: same exit code, opposite
+  // meaning. A silent skip here would be a green that says "nobody has your
+  // number" when what happened is "nobody asked".
+  it('skips loudly, without failing, when the list says it could not be fetched', () => {
+    const root = branchAt('0.1.52');
+    const file = writeOpenPrs(root, {
+      status: 'unavailable',
+      reason: 'could not list open PRs: dial tcp: lookup api.github.com',
+    });
+
+    const { code, out } = runGate(root, '--open-prs-file', file, '--pr', '178');
+    expect(code).toBe(0);
+    expect(out).toContain('SKIPPED');
+    expect(out).toContain('api.github.com');
+  }, 30_000);
+
+  it('skips loudly when the list file is absent', () => {
+    const root = branchAt('0.1.52');
+
+    const { code, out } = runGate(root, '--open-prs-file', 'nowhere.json', '--pr', '178');
+    expect(code).toBe(0);
+    expect(out).toContain('SKIPPED');
+  }, 30_000);
+
+  it('skips loudly when no --pr number is supplied, since the tie-break needs one', () => {
+    const root = branchAt('0.1.52');
+    const file = writeOpenPrs(root, {
+      status: 'ok',
+      prs: [{ number: 176, headRefName: 'feat/one', version: '0.1.52' }],
+    });
+
+    const { code, out } = runGate(root, '--open-prs-file', file);
+    expect(code).toBe(0);
+    expect(out).toContain('SKIPPED');
+  }, 30_000);
+
+  // Non-vacuity for the guard: the concurrent check must inherit the same
+  // "only when this branch ships a plugin" scope as everything above it, or
+  // every server-only PR in the repo starts arguing about version numbers it
+  // does not declare.
+  it('does not run at all on a branch that touches no plugin files', () => {
+    const root = newRepo();
+    setVersion(root, '0.1.47');
+    write(root, 'README.md', 'fork point\n');
+    commit(root, 'fork point publishes 0.1.47');
+
+    git(root, 'checkout', '-q', '-b', 'feature');
+    write(root, 'packages/server/src/unrelated.ts', 'export const x = 1;\n');
+    commit(root, 'server-only work, ships no plugin');
+
+    const file = writeOpenPrs(root, {
+      status: 'ok',
+      prs: [{ number: 1, headRefName: 'feat/one', version: '0.1.47' }],
+    });
+
+    const { code, out } = runGate(root, '--open-prs-file', file, '--pr', '178');
+    expect(code).toBe(0);
+    expect(out).toContain('no packages/plugin/ changes');
+    expect(out).not.toContain('#1 ');
   }, 30_000);
 });
