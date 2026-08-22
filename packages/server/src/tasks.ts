@@ -296,15 +296,28 @@ export function isParked(task: { parkedUntil?: number }, now: number = Date.now(
   return task.parkedUntil !== undefined && task.parkedUntil > now;
 }
 
-/** How long a park reason may run. A reason is a line on a chip and a line in
- *  the audit trail, not a place to restate the ticket. */
-const PARK_REASON_MAX = 200;
+/**
+ * Is this row archived — soft-deleted, off every lane and every queue, and one
+ * call from coming back?
+ *
+ * The ONE reader of `archivedAt`, for the same reason `isParked` is the one
+ * reader of `parkedUntil`: "archived" has to mean the same thing to the board,
+ * the queue and the nudger, and a second comparison of the field with a
+ * different default is how two surfaces come to disagree about the same row.
+ */
+export function isArchived(task: { archivedAt?: number }): boolean {
+  return task.archivedAt !== undefined;
+}
+
+/** How long a park or archive reason may run. A reason is a line on a chip and
+ *  a line in the audit trail, not a place to restate the ticket. */
+const REASON_MAX = 200;
 
 /** Trimmed, capped, and `undefined` when there is nothing left — so an empty
  *  string never becomes a reason the board renders as a blank chip title. */
-function normalizeParkReason(raw: unknown): string | undefined {
+function normalizeReason(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;
-  const text = raw.trim().slice(0, PARK_REASON_MAX).trim();
+  const text = raw.trim().slice(0, REASON_MAX).trim();
   return text === '' ? undefined : text;
 }
 
@@ -546,6 +559,35 @@ export interface Task {
    *  was waiting for. Cleared whenever `parkedUntil` moves without one, since
    *  a stale reason on a new date is a claim nobody made. */
   parkedReason?: string;
+  /**
+   * When this row was archived — the board's ONLY removal, and a soft one.
+   *
+   * The project rule is that user content is never hard-deleted, and until
+   * this field a task had no reversible removal at all: a row nobody was ever
+   * going to do either sat on the board forever or was destroyed outright.
+   * Archiving is the third answer, and it is deliberately the CHEAPEST one
+   * available — three fields on the row. Nothing moves on disk, the id still
+   * resolves, the task's body room and every comment thread hanging off it
+   * keep working, and `after` edges pointing at it keep pointing at it. So a
+   * restore is a field clear rather than a restore-from-anywhere, and there
+   * is no window in which the record is half-moved.
+   *
+   * DELIBERATELY NOT A STATUS, for the same reason a park is not one: `done`
+   * means the work happened, and a row archived as a duplicate did not
+   * happen. Folding it into the status enum would have made the board's own
+   * completion count lie in the flattering direction.
+   *
+   * Absent means not archived — `isArchived` is the one reader, so no surface
+   * asks the question twice with two defaults.
+   */
+  archivedAt?: number;
+  /** Who archived it, as a display name — the same register as a transition's
+   *  `by`, and what the restore list shows beside the row. */
+  archivedBy?: string;
+  /** Why, in the archiver's words. The half a reader acts on: "archived" says
+   *  a decision was made and not what it was. Cleared by a restore, since a
+   *  reason about a removal that has been undone is a claim nobody makes. */
+  archiveReason?: string;
   links: Ref[];
   /** The thread/doc this was promoted from. */
   origin?: Ref;
@@ -1472,6 +1514,43 @@ export interface TaskParkedEvent {
   ts: number;
 }
 
+/**
+ * A row soft-deleted, and the row that came back.
+ *
+ * Two event types rather than one with a boolean, because the trail is read as
+ * sentences and "restored" is the half somebody goes looking for: a row that
+ * disappeared and reappeared is a story, and an `archived: false` would spell
+ * it as a repeated field write.
+ *
+ * `reason` rides the event as well as the row for the same reason the park's
+ * does — the trail is where a removal gets argued with weeks later, and the
+ * row's own copy is cleared the moment it is restored.
+ */
+export interface TaskArchivedEvent {
+  type: 'task.archived';
+  workspaceId: string;
+  taskId: string;
+  /** The row's title at the moment it left the board. Kept on the event
+   *  because the trail is read long after, and the restore surfaces name it —
+   *  a later rewrite must not change what this line says happened. */
+  title: string;
+  reason?: string;
+  actor: TaskActor;
+  ts: number;
+}
+
+export interface TaskRestoredEvent {
+  type: 'task.restored';
+  workspaceId: string;
+  taskId: string;
+  title: string;
+  /** The reason the archive carried, echoed here so the pair reads as one
+   *  story without a lookup. Absent when it was archived without one. */
+  reason?: string;
+  actor: TaskActor;
+  ts: number;
+}
+
 export interface TaskRegroupedEvent {
   type: 'task.regrouped';
   workspaceId: string;
@@ -1702,6 +1781,8 @@ export type TaskStoreEvent =
   | TaskRetitledEvent
   | TaskDueSetEvent
   | TaskParkedEvent
+  | TaskArchivedEvent
+  | TaskRestoredEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | DecisionAnswerWithdrawnEvent
@@ -2187,6 +2268,21 @@ export interface ListTasksFilter {
   status?: TaskStatus;
   assignee?: string;
   needs?: 'action' | 'decision';
+  /**
+   * Include soft-deleted rows. Absent means NO, which is the narrowing every
+   * existing caller wanted the day archiving arrived: an archived row leaves
+   * the lanes, the queue and the wake without any of those surfaces having to
+   * learn a new question.
+   *
+   * The opt-in exists because a handful of callers legitimately need every
+   * row and would be BROKEN by the default — the projection (an archived row
+   * still has to reach the browser, or nothing can draw the restore list),
+   * the room-file enumerations behind a workspace delete, and the two API
+   * verbs a person uses to find what they archived. Each of those passes it
+   * explicitly, so the list of readers that can see an archived task is a
+   * list you can grep for rather than an absence you have to prove.
+   */
+  includeArchived?: boolean;
 }
 
 interface WorkspaceState {
@@ -3113,6 +3209,9 @@ export class TaskStore {
     const state = this.workspaces.get(workspaceId);
     if (!state) return [];
     let tasks = Array.from(state.tasks.values());
+    // First, and unconditionally unless asked otherwise: a soft-deleted row is
+    // not a row this board is working. See `includeArchived`.
+    if (filter?.includeArchived !== true) tasks = tasks.filter((t) => !isArchived(t));
     if (filter?.goal !== undefined) tasks = tasks.filter((t) => t.goal === filter.goal);
     if (filter?.status !== undefined) tasks = tasks.filter((t) => t.status === filter.status);
     if (filter?.assignee !== undefined) tasks = tasks.filter((t) => t.assignee === filter.assignee);
@@ -4238,7 +4337,7 @@ export class TaskStore {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     const from = task.parkedUntil ?? null;
-    const reason = parkedUntil === null ? undefined : normalizeParkReason(opts.reason);
+    const reason = parkedUntil === null ? undefined : normalizeReason(opts.reason);
     if (from === parkedUntil && (task.parkedReason ?? undefined) === reason) {
       return { ok: true, task, changed: false };
     }
@@ -4256,6 +4355,83 @@ export class TaskStore {
       taskId: task.id,
       from,
       to: parkedUntil,
+      ...(reason !== undefined ? { reason } : {}),
+      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      ts,
+    });
+    return { ok: true, task, changed: true };
+  }
+
+  /**
+   * Take a row off the board, reversibly — the SOFT delete, and the only
+   * removal this store offers a task.
+   *
+   * Three fields and one event. Nothing moves, nothing is rewritten, and the
+   * id keeps resolving through `getTask`, which is what lets the task's body
+   * room, its comment threads and every `after` edge pointing at it go on
+   * working while it is gone from the lanes. `unarchiveTask` clears the same
+   * three fields, so a restore has nothing to reconstruct and no half-state to
+   * crash in.
+   *
+   * Idempotent by construction: archiving an archived row reports
+   * `changed: false` and emits nothing, the same rule `setDueAt` and
+   * `parkTask` follow. A re-send that produced an audit row would put a line
+   * in the trail for a decision nobody made twice. Note what this costs — a
+   * reason cannot be EDITED by re-archiving; restore and archive again, which
+   * is honest, because the second reason is a second decision.
+   */
+  archiveTask(
+    taskId: string,
+    opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
+  ): SetAssigneeResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (isArchived(task)) return { ok: true, task, changed: false };
+    const ts = Date.now();
+    const reason = normalizeReason(opts.reason);
+    task.archivedAt = ts;
+    task.archivedBy = opts.actor.name;
+    task.archiveReason = reason;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'task.archived',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      title: task.title,
+      ...(reason !== undefined ? { reason } : {}),
+      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      ts,
+    });
+    return { ok: true, task, changed: true };
+  }
+
+  /** Put an archived row back. The undo half, and the reason the archive is
+   *  safe to reach for: everything it did was three field writes. */
+  unarchiveTask(
+    taskId: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): SetAssigneeResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (!isArchived(task)) return { ok: true, task, changed: false };
+    const ts = Date.now();
+    // The reason is read BEFORE it is cleared — the restored event carries it
+    // so the pair reads as one story in the trail.
+    const reason = task.archiveReason;
+    // Assignment rather than `delete` (biome noDelete); JSON.stringify drops
+    // an undefined from the sidecar, which is what keeps a row that was never
+    // archived free of the keys entirely.
+    task.archivedAt = undefined;
+    task.archivedBy = undefined;
+    task.archiveReason = undefined;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'task.restored',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      title: task.title,
       ...(reason !== undefined ? { reason } : {}),
       actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
       ts,
