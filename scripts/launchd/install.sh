@@ -26,6 +26,12 @@ TEMPLATE="${SCRIPT_DIR}/${LABEL}.plist.template"
 PLIST_DEST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 LOG_DIR="${HOME}/Library/Logs"
 
+# wait_for_bootout + bootstrap_with_retry. Kept in a separate file so tests can
+# drive them against a stub launchctl; see the header there for the outage that
+# put them in.
+# shellcheck source=scripts/launchd/bootstrap-retry.sh
+. "${SCRIPT_DIR}/bootstrap-retry.sh"
+
 # Resolve bun: prefer ~/.bun/bin/bun (the official installer's path), fall back
 # to PATH, fail loudly if neither works. launchd does NOT run login shells, so
 # relying on a PATH that only your shell config sets up will leave the service
@@ -99,9 +105,12 @@ echo "[install] collab:   ${ACCESS_TUNNEL_HOSTS:-<off>}"
 DOMAIN="gui/$(id -u)"
 
 # Stop and remove any existing instance so re-running is idempotent.
-if launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+if "${LAUNCHCTL}" print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
     echo "[install] existing service found — bootout first"
-    launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+    "${LAUNCHCTL}" bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+    # The bootout returns before launchd has finished with the job, and
+    # bootstrapping into that gap is what produced the 2026-08-17 outage.
+    wait_for_bootout "${DOMAIN}/${LABEL}"
 fi
 
 # Stop any foreground server squatting on the port. The supervised instance
@@ -151,7 +160,9 @@ sed \
     -e "s|{{ACCESS_AUD}}|${ACCESS_AUD}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
 
-launchctl bootstrap "${DOMAIN}" "${PLIST_DEST}"
+if ! bootstrap_with_retry "${DOMAIN}" "${PLIST_DEST}"; then
+    exit 3
+fi
 
 # Wait up to 15s for the service to start listening so the install reports the
 # right state. The serve.ts supervisor binds the port within a few seconds in
