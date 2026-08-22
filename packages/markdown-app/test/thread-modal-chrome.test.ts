@@ -322,63 +322,56 @@ describe('Escape dismisses the thread, whatever it opened in', () => {
 });
 
 /**
- * The floating mic and an open comment card want the same corner.
+ * The mic and an open comment card no longer want the same corner.
  *
- * Measured at 430px: `.voice-mic` is `position: fixed` bottom-left over the
- * document, and a thread at that width opens as a FULL-WIDTH inline card whose
- * reply box reaches the bottom-left too — so the 44px launcher sat on top of
- * the composer. It is bottom-left precisely to stay out of the deep-work path,
- * which holds on a wide screen and stops holding when the card is the width of
- * the viewport.
+ * They used to. `.voice-mic` was `position: fixed` bottom-left over the
+ * document, and a thread at ≤1100px opens as a FULL-WIDTH inline card whose
+ * reply box reaches that corner too, so the 44px launcher sat on the composer.
+ * The chrome answered by putting `body.thread-card-open` on the document
+ * whenever a card was open in that band, and the stylesheet hid the mic.
  *
- * The class carries the width test rather than the stylesheet repeating the
- * 1100px constant: a second copy of that number is exactly the drift this
- * project has already been bitten by.
+ * The mic is docked in the topbar now (`.doc-nav-dock`), which no card can
+ * reach — so the class described a collision that cannot happen, and its only
+ * remaining effect was to take voice away from a reader mid-conversation. The
+ * chrome sets nothing; these assert that it stays that way, because a
+ * reappearing stand-down would be invisible from the outside.
  */
 const micHidden = (): boolean => document.body.classList.contains('thread-card-open');
 
-describe('the doc mic yields to an open card where they would overlap', () => {
-  it('stands down while a card is open at phone width', () => {
+describe('the doc mic stays put while a card is open', () => {
+  it('keeps the mic at phone width, where the card is full-width', () => {
     setViewportWidth(430);
     harness({ text: 'Looks good to me' });
     tapCard();
-    expect(micHidden()).toBe(true);
+    expect(micHidden()).toBe(false);
   });
 
-  it('comes back when the card folds', () => {
+  it('keeps the mic on a desktop width too', () => {
+    setViewportWidth(1180);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    expect(micHidden()).toBe(false);
+  });
+
+  it('does not start hiding it when the viewport crosses the band', () => {
+    // Page zoom moves a reviewer across this line, so the transition is real
+    // rather than hypothetical — it is what used to make the mic vanish
+    // mid-sentence.
+    setViewportWidth(1180);
+    harness({ text: 'Looks good to me' });
+    tapCard();
+    setViewportWidth(430);
+    window.matchMedia('(max-width: 1100px)').dispatchEvent(new Event('change'));
+    expect(micHidden()).toBe(false);
+  });
+
+  // Positive control: the harness really does open a card, so the assertions
+  // above are measuring a state rather than an inert page.
+  it('really has a card open when it says so', () => {
     setViewportWidth(430);
     const { chrome } = harness({ text: 'Looks good to me' });
     tapCard();
-    chrome.threadsPanel.setActive(null);
-    expect(micHidden()).toBe(false);
-  });
-
-  // The control: on a wide screen the card opens in a 300px column nowhere
-  // near the corner, so taking the mic away would be a loss for nothing.
-  it('keeps the mic on a desktop width, where nothing overlaps', () => {
-    setViewportWidth(1180);
-    harness({ text: 'Looks good to me' });
-    tapCard();
-    expect(micHidden()).toBe(false);
-  });
-
-  it('follows the viewport when it crosses the band with a card open', () => {
-    setViewportWidth(1180);
-    harness({ text: 'Looks good to me' });
-    tapCard();
-    expect(micHidden()).toBe(false);
-    setViewportWidth(430);
-    window.matchMedia('(max-width: 1100px)').dispatchEvent(new Event('change'));
-    expect(micHidden()).toBe(true);
-  });
-
-  it('leaves nothing stuck on the document after the chrome goes away', () => {
-    setViewportWidth(430);
-    harness({ text: 'Looks good to me' });
-    tapCard();
-    expect(micHidden()).toBe(true);
-    for (const s of scopes.splice(0)) s.dispose();
-    expect(micHidden()).toBe(false);
+    expect(chrome.threadsPanel.getActive()).not.toBeNull();
   });
 });
 

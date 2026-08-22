@@ -3929,8 +3929,25 @@ a.hub-link-chip:hover {
    the full-screen walkthrough, the badge drops, the row padding — because
    those are about a phone-shaped screen rather than about column arithmetic. */
 @media (max-width: 1100px) {
+  /* A COLUMN, not a one-track grid, and the reason is the strip's `position:
+     sticky` below. A grid item's containing block is its GRID AREA, and the
+     strip's area is its own 57px row — measured `grid-template-rows: 57px
+     2988px` on a real board — so by the spec a sticky strip has nowhere to
+     travel and pins nothing. Chromium sticks it anyway, against the grid
+     CONTAINER; that is an engine's reading of an under-specified corner, and
+     the reviewer this band exists for is on Safari. A flex column makes the
+     containing block `.hub-main`'s own content box, where the travel is
+     defined rather than observed.
+     `minmax(0, 1fr)` is not lost with the grid: a block-level flex item is
+     sized from the container, so it cannot be widened by a long unbreakable
+     title the way an `auto`/`1fr` track can. `align-items` has to be restated
+     — the base rule's `start` means block-start in a grid and SHRINK-TO-FIT in
+     a column flex container, which would narrow the board to its own content
+     rather than the page. */
   .hub-main {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: 8px;
   }
   /* Every rail declaration gets an explicit undo here — a media query adds
@@ -3941,10 +3958,41 @@ a.hub-link-chip:hover {
     align-self: auto;
     width: auto;
     padding: 6px 8px;
-    background: none;
     border-right: none;
     border-bottom: 1px solid var(--border);
     transition: none;
+    /* --- the strip stays on screen, which is what makes the mic's location a
+       location ---
+       In flow this strip scrolls off the top with the page: measured at
+       1000x800 on a 70-row board, the mic sat at y=54 at the top and y=-2271
+       at the bottom, and hit-testing over it returned nothing at every scroll
+       position past the first screen. That is the float era's failure
+       in reverse — not a mic on top of the wrong thing, a mic on top of
+       nothing because it is not on the screen at all. The rail (≥1101px) keeps
+       its promise with a sticky DOCK inside a full-height rail; this band has
+       no full-height column to hang one in, so the strip itself sticks.
+
+       `background` rather than the rail's `none`: a pinned bar with a
+       transparent background is a bar the page scrolls THROUGH. `var(--bg)` is
+       the page's own colour, so the strip reads as chrome rather than as a
+       panel, and it follows the colour scheme.
+
+       The layer is the load-bearing half, and it is a NARROW one. Board rows
+       carry absolutely positioned marks (`.hub-status-select` is `inset: -6px`
+       over its mark), and a positioned box later in tree order paints over a
+       positioned box with no layer — so at `z-index: auto` the rows scroll
+       OVER the pinned strip and take the mic's clicks with them: measured, the
+       topmost element at the mic's centre came back
+       `select.hub-status-select` at three of five scroll positions. 30 is
+       above every layer the board itself uses (the highest is 5) and below
+       `.hub-detail`'s 60 and the settings popover's 65, which is the whole
+       point: the strip covers the CONTENT SCROLLING UNDER IT and covers
+       nothing else. The dock inside keeps no layer of its own — see
+       `.hub-nav-dock` below, where the reasoning for that has not changed. */
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: var(--bg);
   }
   .hub-nav-collapse {
     display: none;
@@ -3963,16 +4011,23 @@ a.hub-link-chip:hover {
        dock — divider and all — out of line with the tabs beside it and over
        the bar's top border. */
     bottom: auto;
-    /* The rail's layer, undone — and this is the load-bearing line. The strip
-       is IN FLOW here, so it scrolls, and a z-index that lifts it over the
-       task overlay promises a column the panel can pass under at some scroll
-       positions and not others. That promise is the one docking was built to
-       retire. Under the scrim the mic is unreachable while a task is open in
-       this band; that is a real loss and it is the smaller one, because the
-       alternative measured as a control that paints over the task's title and
-       swallows clicks meant for it. The ≤900px band keeps the capability by
-       geometry instead — a FIXED bar the panel's box ends above — which is
-       available there and is not available to a strip that scrolls. */
+    /* The rail's layer, undone — and this is still the load-bearing line, for
+       the same reason it always was. The rail earns `z-index: 70` on one
+       premise: nothing of the page sits behind its column, so a mic painted
+       over the task overlay covers nothing. In this band the nav is a strip
+       across the top and the centred panel runs UNDER it, so the premise is
+       false and the same number reproduces the float — measured 2026-08-19 at
+       905px, the mic covered the panel whole, clipped the first characters of
+       the task title, and took the click meant for it.
+       What changed since is only where the strip is, not what is behind it:
+       the strip is `sticky` now rather than scrolling away, and it carries
+       `z-index: 30` so the ROWS stop painting over it. That number is under
+       `.hub-detail`'s 60 on purpose, so the panel still covers the strip and
+       the dock inside it. Under the scrim the mic is unreachable while a task
+       is open in this band; that is a real loss and it is still the smaller
+       one. The ≤900px band keeps the capability by geometry instead — a FIXED
+       bar whose row the panel's box ends above — which is available there and
+       is not available to a strip the panel is allowed to cover. */
     z-index: auto;
     align-self: stretch;
     margin: 0;
@@ -4265,14 +4320,20 @@ a.hub-link-chip:hover {
    The mic button + streaming-dictation/ack indicator, shared by the hub and
    the /review/<docId> doc surface.
 
-   These base rules are the FLOATING form, and the doc surface is the only
-   thing still wearing it: `mountDocVoice` appends the mic to <body> on a page
-   with no nav to dock into, so a bottom-left launcher is what it has. The hub
-   docks the same element in its nav rail / bottom tab bar instead — see
-   `.hub-nav-dock` in the workspace-hub section, which un-fixes it. Bottom-LEFT
-   here, out of the deep-work path (the composer and comment pill live
-   bottom-right/center), rising with the keyboard via --kb-bottom like every
-   bottom-docked element on that surface. */
+   Two things live here. The SHARED LOOK — a 44px round bordered button, the
+   stroked glyph, the recording red, the dimmed insecure-origin state — belongs
+   to the mic wherever it is mounted. The positioning in the same rule is the
+   FLOATING form, and nothing ships wearing it any more: the hub docks the mic
+   in its nav rail / bottom tab bar (`.hub-nav-dock`, workspace-hub section) and
+   the doc surface docks it at the head of the topbar's toolbar
+   (`.doc-nav-dock`, below). Both un-fix it.
+
+   The float is kept as the fallback for a shell with no toolbar to dock into
+   (`mountDocVoice` appends to <body> then), and it stays bottom-LEFT, out of
+   the deep-work path — the composer and the comment pill live
+   bottom-right/center — rising with the keyboard via --kb-bottom like every
+   bottom-docked element on that surface. It is a fallback rather than a
+   surface: the doc shell has had a toolbar since it was written. */
 
 .voice-mic {
   position: fixed;
@@ -4329,22 +4390,14 @@ a.hub-link-chip:hover {
   outline: 2px solid var(--accent, #2e7dd7);
   outline-offset: 2px;
 }
-/* An open comment card wins the corner. Measured at 430px: a thread there
-   opens as a full-WIDTH inline card whose reply box reaches bottom-left too,
-   so the launcher sat on top of the composer. "Out of the deep-work path"
-   above is true of a 300px column on the right and stops being true when the
-   card is the width of the screen.
-
-   No media query here on purpose. `review-chrome.ts` only sets
-   `.thread-card-open` in the band where the two overlap, so the width test
-   lives in one place — a second copy of the 1100px constant is the drift this
-   project has been bitten by before. Nothing is lost while it is down: this
-   mic routes dictation to the workspace hub, it does not type into the
-   composer, and folding the card brings it straight back. */
-body.thread-card-open .voice-mic,
-body.thread-card-open .voice-indicator {
-  display: none;
-}
+/* The `body.thread-card-open` hide is GONE, with the float that needed it. It
+   stood the mic down whenever a comment card opened at ≤1100px, because a
+   thread there opens as a full-WIDTH inline card whose reply box reached the
+   bottom-left corner the launcher was fixed in. The mic is in the topbar now
+   and the card cannot reach it, so the rule bought nothing and cost the one
+   thing it was hiding: hold-to-talk while reading the comment you want to
+   answer. `review-chrome.ts` no longer sets the class either — it had exactly
+   this one consumer. */
 .voice-mic.voice-active {
   background: #c53030;
   border-color: #c53030;
@@ -4428,6 +4481,69 @@ body.thread-card-open .voice-indicator {
     border-top-color: var(--accent, #2e7dd7);
     opacity: 0.8;
   }
+}
+
+/* --- the mic docked in the review shell's topbar ---
+
+   The doc surface's answer to the same question the rail answered: the mic
+   needs a place that is not on top of the page. It has no nav rail and no tab
+   bar, so it takes the one strip of chrome it does have — `#topbar`, whose
+   height is a hard 48px from `#shell`'s `grid-template-rows: 48px 1fr`. A 44px
+   control fits that row whole, so docking here costs the reading area nothing:
+   the topbar does not grow, and the document gains a column no floating box
+   sits in.
+
+   Why this and not a reservation. As a `position: fixed` launcher the mic
+   covered prose at every width and every scroll position — a fixed box over a
+   scrolling document always covers something — and the fix for that is not a
+   gutter nothing may be laid out in (the promise the board spent two commits
+   renewing) but a home in the chrome. Same conclusion as `.hub-nav-dock`,
+   different chrome. */
+.doc-nav-dock {
+  /* Positioned, so the readout below hangs off the DOCK. A static wrapper
+     would silently re-anchor it: `#topbar` and `#shell` are both static, so an
+     absolute box inside them resolves against the viewport instead and the
+     readout lands wherever the page happens to be scrolled to. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+  /* *"slightly separate … so it's clear it's not a navbar item"*, in a
+     left-to-right toolbar: the rail's divider-below becomes a divider-after.
+     The 2px margin rides on top of `.toolbar`'s own 6px gap, so the mic has
+     8px of air either side of its rule. */
+  margin-right: 2px;
+  padding-right: 8px;
+  border-right: 1px solid var(--border);
+}
+.doc-nav-dock .voice-mic {
+  /* Out of the fixed layer entirely — the same undo the rail's dock does, and
+     for the same reason: the offsets and the z-index it needed as a FAB mean
+     nothing in flow, and leaving them set is how the next reader concludes it
+     is still floating. */
+  position: static;
+  left: auto;
+  bottom: auto;
+  z-index: auto;
+  flex: none;
+  /* A docked control casts no shadow — the shadow is what read as hovering
+     above the page. */
+  box-shadow: none;
+}
+/* The readout hangs BELOW the topbar, because the topbar is at the top: the
+   floating form's `bottom` would put a transcript above the window's edge.
+
+   Anchored RIGHT, unlike the rail's, and that is not symmetry for its own
+   sake. The box is `width: max-content` up to `min(92vw, 840px)`, and this
+   dock sits far along a wide screen — from `left: 0` a full sentence would
+   run off the right edge of the viewport. Growing leftwards into the page it
+   has the whole width to use at 1180px and still fits at 430px. */
+.doc-nav-dock .voice-indicator {
+  position: absolute;
+  top: calc(100% + 8px);
+  bottom: auto;
+  right: 0;
+  left: auto;
 }
 
 /* ================= FORMAT BAR ================= */
