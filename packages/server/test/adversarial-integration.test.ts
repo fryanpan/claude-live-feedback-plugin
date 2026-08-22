@@ -334,12 +334,15 @@ describe('ADVERSARIAL: landing project->artifacts + delete_workspace guardrail',
     expect(handle.rooms.get(files.get('src/index.ts')!.docId)).toBeTruthy();
   });
 
-  it('DELETE /api/workspaces/:id?force=true removes ALL members', async () => {
+  it('DELETE /api/workspaces/:id?force=true retires ALL members', async () => {
+    // Soft since 0.1.92: the whole review leaves the live server as one unit,
+    // which is what this test has always been about, but the persisted state
+    // is archived rather than destroyed.
     const r = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}?force=true`, {
       method: 'DELETE',
     });
-    const body = await j<{ ok: true; deleted: number }>(r);
-    expect(body.deleted).toBe(2);
+    const body = await j<{ ok: true; archived: number }>(r);
+    expect(body.archived).toBe(2);
     for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeUndefined();
   });
 });
