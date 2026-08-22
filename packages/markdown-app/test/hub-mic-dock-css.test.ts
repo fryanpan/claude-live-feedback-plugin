@@ -107,11 +107,13 @@ describe('the mic lives in the nav, not on top of the page', () => {
     expect(docked).toMatch(/bottom:\s*auto/);
   });
 
-  it('keeps the doc surface — which has no nav rail — on the floating mic', () => {
-    // `.voice-mic` is shared by the hub and the /review/<docId> surface, and
-    // that surface mounts it on <body> with no rail to dock into (voice-dock.ts).
-    // Docking the base rule would strand it there, so the base stays the FAB
-    // and only the nav's copy is un-fixed.
+  it('keeps the float as a fallback, for a shell with nothing to dock into', () => {
+    // `.voice-mic` is shared by the hub and the /review/<docId> surface. Both
+    // dock it now — the hub in its rail/bar, the doc surface at the head of the
+    // topbar's toolbar (`.doc-nav-dock`) — so the base rule's positioning is
+    // what a shell with NEITHER falls back to, and the rest of the rule is the
+    // look both docks share. Docking the base would strand that fallback in
+    // flow at the end of <body>.
     const base = rule('.voice-mic');
     expect(base).toMatch(/position:\s*fixed/);
     expect(base).toMatch(/left:\s*16px/);
@@ -267,6 +269,86 @@ describe('the phone gets the mic in the bottom tab bar', () => {
     expect(bar).toBeLessThanOrEqual(z(rule('.hub-detail')));
     // And the docked mic carries no layer of its own — it rides the dock's.
     expect(rule('.hub-nav-dock .voice-mic')).toMatch(/z-index:\s*auto/);
+  });
+});
+
+/**
+ * The 901–1100px band — the third thing, and the one the dock was never given.
+ *
+ * ≤1100px turns the rail into a horizontal strip and ≤900px pins that strip to
+ * the bottom as a fixed bar. Between them the strip is neither: it sat at the
+ * top of the content IN FLOW, so it scrolled away and took the mic with it.
+ * Measured at 1000x800 on a 70-row board: the mic was at y=54 at the top and
+ * y=-2271 at the bottom, and `elementFromPoint` over it returned nothing at
+ * every scroll position past the first screen. A docked mic that is off the
+ * screen keeps none of docking's promise — "a fixed location" is a location
+ * you can still reach.
+ */
+describe('the strip band keeps the mic on screen', () => {
+  const strip = media('(max-width: 1100px)');
+  const z = (decl: string) => Number(/z-index:\s*(\d+)/.exec(decl)?.[1]);
+
+  it('pins the strip to the top of the scrollport', () => {
+    const nav = rule('.hub-nav', strip);
+    expect(nav, 'the strip band no longer styles the nav').not.toBe('');
+    expect(nav).toMatch(/position:\s*sticky/);
+    expect(nav).toMatch(/top:\s*0/);
+    // Positive control: the BASE rail rule is where this is absent, so the
+    // band is really what introduces it rather than the file having always
+    // said so.
+    expect(rule('.hub-nav')).not.toMatch(/position:/);
+  });
+
+  it('gives the strip a containing block its sticky can travel in', () => {
+    // A grid item's containing block is its GRID AREA — the strip's own 57px
+    // row — so a sticky strip has nowhere to go by the spec. Chromium sticks
+    // it against the grid CONTAINER regardless; that is an engine reading an
+    // under-specified corner, and this band's reviewer is on Safari. A flex
+    // column makes `.hub-main`'s content box the containing block, where the
+    // travel is defined.
+    const main = rule('.hub-main', strip);
+    expect(main).toMatch(/display:\s*flex/);
+    expect(main).toMatch(/flex-direction:\s*column/);
+    // `align-items: start` on the base rule means block-start in a grid and
+    // SHRINK-TO-FIT in a column flex container — the board would narrow to its
+    // own content instead of the page. The undo has to be written.
+    expect(main).toMatch(/align-items:\s*stretch/);
+    // Positive control: the base layout really is the grid this overrides.
+    expect(rule('.hub-main')).toMatch(/display:\s*grid/);
+    expect(rule('.hub-main')).toMatch(/align-items:\s*start/);
+  });
+
+  it('paints over the rows it is pinned above, and under the task panel', () => {
+    const nav = rule('.hub-nav', strip);
+    // A pinned bar with no layer is a bar the board scrolls THROUGH: rows
+    // carry absolutely positioned marks (`.hub-status-select` is `inset: -6px`
+    // over its mark) and a positioned box later in tree order beats a
+    // positioned box with no layer. Measured at `z-index: auto`, the topmost
+    // element at the mic's centre came back `select.hub-status-select` at
+    // three of five scroll positions — visible mic, stolen click.
+    expect(z(nav), 'the pinned strip has no layer').not.toBeNaN();
+    // …and under the overlay, which is what keeps the deliberate loss below
+    // (`.hub-nav-dock`'s own note) true: the panel still covers the strip.
+    expect(z(nav)).toBeLessThan(z(rule('.hub-detail')));
+    expect(z(nav)).toBeLessThan(z(rule('.hub-settings-panel')));
+    // Opaque, or the page shows through the thing it is scrolling under.
+    expect(nav).toMatch(/background:\s*var\(--bg\)/);
+  });
+
+  it('does not follow the strip onto the phone, where the bar is at the bottom', () => {
+    // Same specificity, so SOURCE ORDER is the whole guarantee: the ≤900 block
+    // has to restate every offset the sticky strip sets, and has to sit below
+    // it in the file. The existing bar assertions are the positive control.
+    const phone = media('(max-width: 900px)');
+    const bar = rule('.hub-nav', phone);
+    expect(bar).toMatch(/position:\s*fixed/);
+    expect(bar).toMatch(/top:\s*auto/);
+    expect(bar).toMatch(/bottom:\s*0/);
+    expect(bar).toMatch(/background:\s*var\(--bg-panel\)/);
+    const css = declarationsOnly(CSS);
+    expect(css.indexOf('@media (max-width: 900px)')).toBeGreaterThan(
+      css.indexOf('@media (max-width: 1100px)'),
+    );
   });
 });
 
