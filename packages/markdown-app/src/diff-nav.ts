@@ -2,6 +2,7 @@ import { escapeHtml } from '@feedback/core';
 import { docIdFromPathOrNull } from './doc-path.ts';
 import {
   beginSidebarRender,
+  commitSidebarColumn,
   isCurrentSidebarRender,
   setSidebarSignature,
   sidebarShowsSignature,
@@ -201,8 +202,10 @@ export async function renderDiffNav(
     }
   }
 
-  document.body.classList.add('has-set');
-  document.getElementById('set-pane')?.setAttribute('aria-hidden', 'false');
+  // Past the viability checks above, so this is the first point at which the
+  // column is known to have something in it. Everything before here returns
+  // without reserving it — see `commitSidebarColumn`.
+  commitSidebarColumn(true);
 
   // Same content already on screen (shared signature, not a per-renderer key) →
   // skip the rebuild that resets scroll; just move the active-file marker.
