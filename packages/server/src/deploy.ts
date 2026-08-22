@@ -31,6 +31,16 @@
  * --ff-only` rather than `git pull`, which does whatever `pull.rebase`
  * happens to say on this machine.
  *
+ * ## What "already deployed" means
+ *
+ * Not "the checkout is at origin's tip". A deploy delivers a browser client,
+ * and that client is rebuilt by the restart — so the question is whether the
+ * SERVED release was built from what the checkout is on now, which is exactly
+ * what `release.json`'s `sourceRef` records. A source somebody pulled by hand
+ * and did not restart is current by git and stale by the only measure a
+ * reader cares about. It gets a restart; a source whose served client matches
+ * gets left alone.
+ *
  * ## What it reports
  *
  * The ref before and after, both READ from the checkout with
@@ -42,6 +52,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
+import { clientReleaseStatus } from './client-release.ts';
 import {
   type DeploySource,
   type GitRunner,
@@ -63,6 +74,12 @@ export const RESTART_DELAY_MS = 1500;
  *  single-flight slot open forever. */
 const GIT_TIMEOUT_MS = 120_000;
 
+/** How long a busy bound document is given to finish before the deploy
+ *  refuses over it. The write-back debounce is ~800ms (`rooms.ts`), so this
+ *  covers a flush that was already in flight when the deploy arrived,
+ *  without covering someone who is still typing. */
+export const BUSY_SETTLE_MS = 1500;
+
 // ---------------------------------------------------------------------------
 // The decision
 // ---------------------------------------------------------------------------
@@ -78,10 +95,25 @@ export interface DeployFacts {
   incomingPaths: readonly string[];
   /** What the checkout is parked on now, for the message. */
   currentRef: string | null;
+  /**
+   * What the SERVED client release was built from — the `sourceRef` in its
+   * `release.json`. Three states, and they are three different questions:
+   *
+   * - a string: compare it with `currentRef`.
+   * - `null`: this deployment publishes a client, but what it published
+   *   cannot be read (nothing published yet, or a release with no
+   *   provenance). Not a match — claiming the browser is current would be
+   *   claiming something nobody checked.
+   * - absent: this deployment publishes no client at all (dev, staging, a
+   *   bare `bin.ts`). There is no served bundle to be stale, so the git
+   *   answer is the whole answer.
+   */
+  servedRef?: string | null;
 }
 
 export type DeployDecision =
   | { kind: 'up-to-date'; reason: string }
+  | { kind: 'restart-only'; reason: string }
   | { kind: 'fast-forward'; reason: string }
   | { kind: 'refuse-diverged'; reason: string }
   | { kind: 'refuse-dirty'; reason: string; blockingPaths: string[] };
@@ -104,6 +136,26 @@ export function parseAheadBehind(out: string): { ahead: number; behind: number }
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /**
+ * Is the client this server is SERVING older than the checkout it would build
+ * from?
+ *
+ * The two refs are stamped by the same `describeDeploySource`, so they are
+ * comparable as written — including the `-dirty` suffix, which is a real
+ * content difference and not noise: a release built from an uncommitted tree
+ * is not the same bundle as one built after the commit landed.
+ *
+ * Two deliberate silences, both of which would otherwise restart a server to
+ * rebuild something nobody can name: a deployment that publishes no release
+ * (`servedRef` absent) has no served bundle to be stale, and a checkout git
+ * cannot describe (`currentRef` null) gives nothing to compare against.
+ */
+function servedClientIsOlder(f: DeployFacts): { stale: false } | { stale: true; ref: string } {
+  if (f.servedRef === undefined || f.currentRef === null) return { stale: false };
+  if (f.servedRef === f.currentRef) return { stale: false };
+  return { stale: true, ref: f.servedRef ?? 'an unrecorded ref' };
+}
+
+/**
  * What this deploy is allowed to do to the deploy source.
  *
  * Order matters: divergence is checked before dirt, because a checkout that
@@ -119,6 +171,22 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
  * applies — `merge --ff-only` refuses exactly when an incoming change
  * touches a locally-modified file — so refusing on the intersection means we
  * refuse where git would, with a message that names the file.
+ *
+ * ## "Up-to-date" is served-vs-HEAD, not git-vs-origin
+ *
+ * `behind === 0` answers "is the CHECKOUT current", and that was never the
+ * question. A deploy delivers a browser client, and the client is rebuilt by
+ * the restart — so a checkout somebody pulled by hand and did not restart is
+ * at origin's tip while the fleet is still loading the bundle built from the
+ * older commit. Answering `up-to-date` there both refuses to restart and
+ * reports the gap as absent, which is the same shape as the ten-hour stale
+ * prod this module was written for: a successful-looking answer with the
+ * delivery still undone.
+ *
+ * So `up-to-date` requires BOTH — nothing to pull and a served client built
+ * from what the checkout is on. Nothing to pull with an older client is
+ * `restart-only`: no merge, no files touched, just the restart that rebuilds
+ * and republishes.
  */
 export function decideDeploy(facts: DeployFacts): DeployDecision {
   const at = facts.currentRef ?? 'an unknown ref';
@@ -132,7 +200,21 @@ export function decideDeploy(facts: DeployFacts): DeployDecision {
     };
   }
   if (facts.behind === 0) {
-    return { kind: 'up-to-date', reason: `the deploy source is already at ${at}` };
+    const served = servedClientIsOlder(facts);
+    if (served.stale) {
+      return {
+        kind: 'restart-only',
+        reason:
+          `the deploy source is at ${at}, but the client this server is serving was built ` +
+          `from ${served.ref} — restarting rebuilds and republishes it`,
+      };
+    }
+    return {
+      kind: 'up-to-date',
+      reason:
+        `the deploy source is already at ${at}` +
+        (facts.servedRef ? ', and the served client was built from it' : ''),
+    };
   }
   const incoming = new Set(facts.incomingPaths);
   const blockingPaths = [...new Set(facts.dirtyPaths.filter((p) => incoming.has(p)))].sort();
@@ -163,6 +245,9 @@ export interface BusyDoc {
 
 export type DeployStatus =
   | 'deployed'
+  /** Nothing to pull, but the served client was built from an older ref, so
+   *  the server was restarted to rebuild and republish it. */
+  | 'restarted'
   | 'up-to-date'
   | 'refuse-diverged'
   | 'refuse-dirty'
@@ -213,6 +298,16 @@ export interface DeployDeps {
   readSource: () => DeploySource | null;
   /** Bound documents inside the deploy source with a pending flush. */
   busyDocs: () => BusyDoc[];
+  /**
+   * What the served client release was built from. Absent when this
+   * deployment publishes no release — see `DeployFacts.servedRef`.
+   */
+  readServed?: () => string | null;
+  /**
+   * Sleep. REQUIRED rather than defaulted, so a caller that forgets it is a
+   * compile error instead of a test suite that sleeps for real.
+   */
+  wait: (ms: number) => Promise<void>;
   /** Schedule the service restart. Never awaited — it ends this process. */
   restart: () => void;
   now: () => number;
@@ -306,12 +401,15 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
     incomingPaths = names.stdout.split('\0').filter((p) => p.length > 0);
   }
 
+  // `undefined` when this deployment publishes no client release at all —
+  // the optional call and the optional field carry the same three states.
   const decision = decideDeploy({
     behind: ab.behind,
     ahead: ab.ahead,
     dirtyPaths,
     incomingPaths,
     currentRef: before,
+    servedRef: deps.readServed?.(),
   });
 
   const common = {
@@ -330,6 +428,22 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
     // Deliberately does NOT restart. A restart here would republish the same
     // client and bounce every live editor for nothing.
     return { ...common, ok: true, status: 'up-to-date', message: decision.reason };
+  }
+  if (decision.kind === 'restart-only') {
+    // Nothing to pull; the served client is just older than the checkout.
+    // No merge, so nothing on disk is rewritten — which is also why the
+    // busy-document refusal below does not apply here. That refusal exists
+    // because a PULL overwrites files under a live editor; a restart writes
+    // nothing, and `handle.stop()` flushes every pending write-back on the
+    // way down (`Rooms.flush`).
+    deps.restart();
+    return {
+      ...common,
+      ok: true,
+      status: 'restarted',
+      restartRequested: true,
+      message: decision.reason,
+    };
   }
   if (decision.kind === 'refuse-diverged') {
     return { ...common, ok: false, status: 'refuse-diverged', message: decision.reason };
@@ -350,14 +464,24 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
   // So the check goes here, after the git decision and before anything
   // touches the tree.
   //
-  // POLICY — refuse, with `force` to override — and it is deliberately one
-  // predicate. The other candidate policy ("report who is busy but deploy
-  // anyway", so a busy board cannot block its own deploy) is this same block
-  // with `busyRefuses` flipped to false: the list is still gathered and still
-  // reported, only the refusal goes. Awaiting a ruling; see the PR.
+  // POLICY — refuse, with `force` to override. Bryan, 2026-08-18, asked and
+  // answered: keep refuse by default. The alternative ("report who is busy
+  // but deploy anyway") loses someone's sentence silently, and this one at
+  // worst asks them to stop typing for a moment.
+  //
+  // But "busy" is a ~800ms write-back debounce, not a person. Asking once
+  // catches every edit that finished a heartbeat before the deploy arrived
+  // and refuses over a flush that was already on its way to disk — a refusal
+  // the caller can only answer by trying again, which is what a wait is. So
+  // the window is given time to close and the question is asked again: a doc
+  // that settled proceeds, one still being typed in still refuses.
   const busyRefuses = !req.force;
   if (busyRefuses) {
-    const busy = deps.busyDocs();
+    let busy = deps.busyDocs();
+    if (busy.length > 0) {
+      await deps.wait(BUSY_SETTLE_MS);
+      busy = deps.busyDocs();
+    }
     if (busy.length > 0) {
       return {
         ...common,
@@ -367,9 +491,10 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
         message:
           `${plural(busy.length, 'bound document')} in the deploy source ${
             busy.length === 1 ? 'has' : 'have'
-          } un-flushed edits: ${busy.map((d) => d.path).join(', ')} — ` +
-          'the pull would be silently undone by the next write-back. Wait ~1s ' +
-          'for them to settle, or deploy with force to accept the loss.',
+          } un-flushed edits after waiting for ${BUSY_SETTLE_MS}ms: ` +
+          `${busy.map((d) => d.path).join(', ')} — the pull would be silently ` +
+          'undone by the next write-back. Stop editing, or deploy with force ' +
+          'to accept the loss.',
       };
     }
   }
@@ -573,6 +698,25 @@ export function launchctlRestart(label: string = LAUNCHD_LABEL, delayMs = RESTAR
 }
 
 /**
+ * A reader for what the SERVED client was built from, or null when this
+ * deployment does not publish one.
+ *
+ * The root is only ever the one this server was EXPLICITLY given. Reaching
+ * for the machine default would make dev and staging read PROD's releases and
+ * report prod's deploy state as their own — the same seam `bin.ts` keeps for
+ * `--client-release-root`, and here it would decide whether to restart.
+ */
+export function servedRefReader(
+  clientReleaseRoot: string | null | undefined,
+): (() => string | null) | null {
+  const root = clientReleaseRoot?.trim();
+  if (!root) return null;
+  // Uncached on purpose: the question is what this machine is serving now,
+  // and a deploy is rare enough that two small file reads are free.
+  return () => clientReleaseStatus(root).sourceRef;
+}
+
+/**
  * The production deployer. Constructed in ONE place (`bin.ts`, behind a flag
  * only `scripts/serve.ts --no-watch` passes) so that no test run, no embedded
  * server and no `bun run staging` can pull or restart the fleet's server.
@@ -583,11 +727,15 @@ export function createDeployer(opts: {
   repoRoot: string;
   dataDir: string;
   busyDocs: () => BusyDoc[];
+  /** Where this deployment publishes client releases, when it publishes any.
+   *  Only what `bin.ts` was explicitly given — see `servedRefReader`. */
+  clientReleaseRoot?: string | null;
   restart?: () => void;
 }): Deployer {
   const git = spawnGit(opts.repoRoot);
   const logFile = deployLogPath(opts.dataDir);
   const restart = opts.restart ?? launchctlRestart();
+  const readServed = servedRefReader(opts.clientReleaseRoot);
   return new Deployer({
     run: (req) =>
       runDeploy(
@@ -595,6 +743,8 @@ export function createDeployer(opts: {
           git,
           readSource: () => readDeploySource(opts.repoRoot, git),
           busyDocs: opts.busyDocs,
+          ...(readServed ? { readServed } : {}),
+          wait: (ms) => new Promise((r) => setTimeout(r, ms)),
           restart,
           now: Date.now,
         },
