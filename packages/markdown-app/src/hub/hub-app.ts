@@ -85,6 +85,7 @@ import {
   renderUnplacedStrip,
 } from './hub-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
+import { mountPushToggle } from './push-toggle.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
 
 interface HubState {
@@ -280,6 +281,15 @@ function buildShell(root: HTMLElement, name: string): void {
         <div id="hub-lead" class="hub-lead"></div>
         <label class="hub-settings-row" for="hub-done-filter">Show done tasks from
           <select id="hub-done-filter" class="hub-select" aria-label="Done task visibility"></select>
+        </label>
+        <!-- Per DEVICE, not per account — a push subscription belongs to this
+             browser on this machine, so the row says so rather than reading
+             like a workspace-wide preference somebody set once. -->
+        <label class="hub-settings-row hub-settings-row--push" for="hub-push-toggle">
+          <span class="hub-settings-label">Notify me on this device
+            <small id="hub-push-note" class="hub-settings-note"></small>
+          </span>
+          <input type="checkbox" id="hub-push-toggle" class="hub-check" aria-describedby="hub-push-note" />
         </label>
       </div>
     </header>
@@ -1837,9 +1847,23 @@ async function main(): Promise<void> {
       renderBoardRegion();
     },
   );
+  // Notifications for THIS device. Mounted once; its state is read from the
+  // browser rather than held here, because the browser is where it actually
+  // lives — a permission revoked in site settings has to show up on the row
+  // without the app being told.
+  const pushToggle = mountPushToggle({
+    toggle: document.getElementById('hub-push-toggle') as HTMLInputElement,
+    note: el('hub-push-note'),
+    author: () => ({ id: user.id, name: user.name }),
+  });
+  void pushToggle.refresh();
+
   el('hub-settings').addEventListener('click', () => {
     state.settingsOpen = !state.settingsOpen;
     renderSettingsPanel();
+    // Re-read on open: permission can change in site settings while the tab
+    // sits here, and the row is only ever read at the moment it is opened.
+    if (state.settingsOpen) void pushToggle.refresh();
   });
   // A popover that only closes by hitting the same small button again is one
   // people leave open over the list they were trying to read.
