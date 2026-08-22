@@ -282,6 +282,56 @@ describe('the board wakes its lead over the wire', () => {
   });
 
   /**
+   * The reason parking exists. A lead who defers an unblocked row had, before
+   * this, no way to say so that the board understood — so this pass kept
+   * finding the row ready and kept spending a wake turn on it. One measured
+   * board fired four identical nudges at one deferred row.
+   */
+  it('stops surfacing a row that has been parked, and resumes when the date passes', async () => {
+    const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
+
+    // A park that expires within the test, so the "it comes back" half is the
+    // date arriving rather than a second write pretending to be one.
+    const parkedUntil = Date.now() + 400;
+    await jj(
+      await post(`/api/tasks/${taskId}/park`, {
+        parkedUntil,
+        reason: 'waiting on the index rebuild',
+        author: PERSON,
+      }),
+    );
+    await settle();
+    handle.nudgeReadyWork();
+    await settle();
+
+    expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(0);
+
+    // The row is still `todo` and still unblocked — parking moved nothing.
+    // Without this the silence above would also be satisfied by a park that
+    // had quietly claimed the row.
+    const { tasks } = await jj<{ tasks: Array<{ id: string; status: string; parked?: unknown }> }>(
+      await fetch(`${base}/api/workspaces/${workspaceId}/next`),
+    );
+    const row = tasks.find((t) => t.id === taskId);
+    expect(row?.status).toBe('todo');
+    // …and next_tasks still LISTS it, saying why. A row that vanished from the
+    // queue would be the same invisibility in a different place.
+    expect(row?.parked).toEqual({ until: parkedUntil, reason: 'waiting on the index rebuild' });
+
+    // The date passes. Nothing runs and nothing is cleared — the next sweep
+    // simply finds the row ready again.
+    await settle(500);
+    handle.nudgeReadyWork();
+    await settle();
+
+    expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(1);
+    expect(nudges(lead.frames, READY_IDLE_EVENT)[0]?.data?.taskId).toBe(taskId);
+
+    await lead.stop();
+    await tab.stop();
+  });
+
+  /**
    * A liveness ping is not board activity, and reading it as activity made the
    * wake self-cancelling: the only lead a nudge can be DELIVERED to is one
    * holding a live stream, and a session holding a live stream is exactly the

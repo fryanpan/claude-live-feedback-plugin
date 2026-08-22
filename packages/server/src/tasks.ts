@@ -281,6 +281,33 @@ export function normalizeWorkspaceName(name: string): string {
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
 
+/**
+ * Is this row deferred right now?
+ *
+ * The ONE reader of `parkedUntil`, deliberately — every surface asks this
+ * question rather than comparing the field itself, so "the date has passed"
+ * means the same thing to the nudger, the queue, and the browser. Nothing
+ * clears the field when the date arrives and nothing should: an expiry
+ * sweeper is a second writer that can fall behind or be the thing that is
+ * down, and a row silently stuck in "parked" is the failure this feature was
+ * filed to remove.
+ */
+export function isParked(task: { parkedUntil?: number }, now: number = Date.now()): boolean {
+  return task.parkedUntil !== undefined && task.parkedUntil > now;
+}
+
+/** How long a park reason may run. A reason is a line on a chip and a line in
+ *  the audit trail, not a place to restate the ticket. */
+const PARK_REASON_MAX = 200;
+
+/** Trimmed, capped, and `undefined` when there is nothing left — so an empty
+ *  string never becomes a reason the board renders as a blank chip title. */
+function normalizeParkReason(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const text = raw.trim().slice(0, PARK_REASON_MAX).trim();
+  return text === '' ? undefined : text;
+}
+
 const TASK_STATUSES: ReadonlySet<string> = new Set(['todo', 'in-progress', 'done']);
 
 /** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
@@ -488,6 +515,37 @@ export interface Task {
    *  a blanket refusal rule would block legitimate work). */
   afterEnforce?: string[];
   dueAt?: number;
+  /**
+   * When this row stops being deferred — "not now, and here is when" (ms
+   * epoch). Absent means it is not parked.
+   *
+   * DELIBERATELY NOT A STATUS, which is the whole point of the field. A row
+   * somebody has decided to come back to next week is still `todo` and still
+   * unblocked; nothing about it has moved. Before this there was no honest
+   * spelling for that, and the ready-work nudger kept re-surfacing it — one
+   * measured board fired four identical wakes at one deferred row, each
+   * costing a full-context turn. The three workarounds a lead was left with
+   * all made the board lie: moving it to `in-progress` (nobody is working
+   * it), inventing an `after` edge (nothing is blocking it), or assigning it
+   * to a person (nobody is being asked for anything).
+   *
+   * Nothing EXPIRES it. When the date passes the row simply counts as ready
+   * again, because every reader asks `isParked(task, now)` rather than
+   * reading a flag somebody had to remember to clear. That is what makes "no
+   * event needed, the next sweep picks it up" true instead of aspirational —
+   * a sweeper that unparks rows would be a second writer that can fall behind,
+   * fail, or be the thing that is down.
+   *
+   * The value is kept after it passes rather than cleared, for the same
+   * reason `transitions` are kept: it is the record that somebody deferred
+   * this row and until when.
+   */
+  parkedUntil?: number;
+  /** Why it is parked, in the parker's words. Short free text, and the half a
+   *  reader acts on — a date alone says a decision was made and not what it
+   *  was waiting for. Cleared whenever `parkedUntil` moves without one, since
+   *  a stale reason on a new date is a claim nobody made. */
+  parkedReason?: string;
   links: Ref[];
   /** The thread/doc this was promoted from. */
   origin?: Ref;
@@ -1390,6 +1448,30 @@ export interface TaskDueSetEvent {
   ts: number;
 }
 
+/**
+ * A row deferred to a date, moved to a different one, or un-parked.
+ *
+ * Shaped like `task.due_set` next door and for the same reasons: both ends
+ * ride the row, because "pushed to Friday" and "parked until Friday" read
+ * differently to whoever is scanning the trail for what slipped, and
+ * `to: null` is an explicit un-park rather than an omission a newer reader
+ * could confuse with a row written by an older writer.
+ *
+ * `reason` is on the event as well as on the task because the trail is where
+ * a deferral gets reviewed — a row that says only "parked until the 2nd"
+ * cannot be argued with three weeks later.
+ */
+export interface TaskParkedEvent {
+  type: 'task.parked';
+  workspaceId: string;
+  taskId: string;
+  from: number | null;
+  to: number | null;
+  reason?: string;
+  actor: TaskActor;
+  ts: number;
+}
+
 export interface TaskRegroupedEvent {
   type: 'task.regrouped';
   workspaceId: string;
@@ -1619,6 +1701,7 @@ export type TaskStoreEvent =
   | TaskBodyEditedEvent
   | TaskRetitledEvent
   | TaskDueSetEvent
+  | TaskParkedEvent
   | TaskRegroupedEvent
   | DecisionAnsweredEvent
   | DecisionAnswerWithdrawnEvent
@@ -4124,6 +4207,56 @@ export class TaskStore {
       taskId: task.id,
       from,
       to: dueAt,
+      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
+      ts,
+    });
+    return { ok: true, task, changed: true };
+  }
+
+  /**
+   * Defer a row to a date, move that date, or un-park it (`null`).
+   *
+   * The row does not move. Parking is not a status and not a dependency — see
+   * `parkedUntil` on the Task type for why the three things a lead used to do
+   * instead all made the board say something untrue.
+   *
+   * `reason` is REPLACED, not merged, on every call that sets a date: a park
+   * moved to a new date with no reason given carries no reason, because the
+   * old one was about the old date. An un-park clears both.
+   *
+   * An unchanged park emits nothing, the same rule `setDueAt` follows — a
+   * repaint that re-sends what is already on the row is not an edit, and an
+   * audit row per repaint is noise in every feed that reads this log. A
+   * REASON edit on an unchanged date is a change, because the reason is the
+   * half a reader acts on.
+   */
+  parkTask(
+    taskId: string,
+    parkedUntil: number | null,
+    opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
+  ): SetAssigneeResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    const from = task.parkedUntil ?? null;
+    const reason = parkedUntil === null ? undefined : normalizeParkReason(opts.reason);
+    if (from === parkedUntil && (task.parkedReason ?? undefined) === reason) {
+      return { ok: true, task, changed: false };
+    }
+    const ts = Date.now();
+    // Assignment rather than `delete` (biome noDelete); JSON.stringify drops
+    // an undefined from the sidecar either way, which is what keeps a row
+    // that was never parked free of the key entirely.
+    task.parkedUntil = parkedUntil === null ? undefined : parkedUntil;
+    task.parkedReason = reason;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'task.parked',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      from,
+      to: parkedUntil,
+      ...(reason !== undefined ? { reason } : {}),
       actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
       ts,
     });
