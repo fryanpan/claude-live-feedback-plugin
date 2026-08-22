@@ -101,3 +101,36 @@ describe('links', () => {
     expect(model.projects[0]?.href).toBe(`/projects/${encodeURIComponent('/proj/alpha')}`);
   });
 });
+
+/**
+ * Retirement is a THIRD bucket, not a recency outcome. A board retired an
+ * hour ago is the most recently-touched board on the server, so a split that
+ * only looked at `lastActivity` would put it at the top of the active list —
+ * which is the confusion the retire verb exists to end.
+ */
+describe('retired boards', () => {
+  it('leaves the recency split however recently it was touched', () => {
+    const model = buildLandingModel(
+      [
+        ws({ id: 'live', lastActivity: NOW - DAY }),
+        ws({ id: 'stood-down', lastActivity: NOW, retired: true }),
+        ws({ id: 'stale', lastActivity: NOW - ACTIVE_WINDOW_MS - 1 }),
+      ],
+      [],
+      NOW,
+    );
+    expect(model.active.map((w) => w.id)).toEqual(['live']);
+    expect(model.inactive.map((w) => w.id)).toEqual(['stale']);
+    expect(model.retired.map((w) => w.id)).toEqual(['stood-down']);
+  });
+
+  it('is reachable — a retired row keeps the same href as any other', () => {
+    const model = buildLandingModel([ws({ id: 'stood-down', retired: true })], [], NOW);
+    expect(model.retired[0]?.href).toBe('/workspaces/stood-down/home');
+  });
+
+  it('is empty, not absent, when nothing is retired', () => {
+    const model = buildLandingModel([ws({ id: 'live' })], [], NOW);
+    expect(model.retired).toEqual([]);
+  });
+});
