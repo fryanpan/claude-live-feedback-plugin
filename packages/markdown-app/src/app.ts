@@ -21,8 +21,10 @@ import {
   wireThreadRangeClicks,
 } from './review-chrome.ts';
 import { navigateTo, startRouter } from './router.ts';
+import { type SetDoc, selectSetSiblings, setDocsUrl } from './set-nav.ts';
 import {
   beginSidebarRender,
+  commitSidebarColumn,
   isCurrentSidebarRender,
   resetSidebarSignature,
   setSidebarSignature,
@@ -45,13 +47,7 @@ interface Selection {
 }
 
 interface LegacyDocs {
-  docs: Array<{
-    docId: string;
-    type: string;
-    sourceUrl?: string;
-    title?: string;
-    setId?: string;
-  }>;
+  docs: SetDoc[];
 }
 
 /**
@@ -612,7 +608,6 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // and topbar dropdown. The sidebar renderers are idempotent per nav key, so
   // navigating between files in the same review keeps the sidebar (and its
   // scroll) intact — only the active marker moves.
-  const setPane = document.getElementById('set-pane');
   const setPaneList = document.getElementById('set-pane-list');
   const docMenu = document.getElementById('doc-menu');
   const docSwitcher = document.getElementById('doc-switcher') as HTMLButtonElement | null;
@@ -629,9 +624,12 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // legacy hand-grouped set. workspaceId implies a folder bind → tree;
     // setId-only stays on the flat list.
     const navKey = workspaceId || setId;
-    document.body.classList.toggle('has-set', !!navKey);
-    setPane?.setAttribute('aria-hidden', navKey ? 'false' : 'true');
+    // Nothing reserves the column here. Knowing the doc names a set is not
+    // knowing the set has anything in it — each renderer below commits once it
+    // has a list, and `commitSidebarColumn` explains what that cost when this
+    // line toggled `has-set` from meta instead.
     if (!navKey) {
+      commitSidebarColumn(false);
       if (setPaneList) setPaneList.innerHTML = '';
       if (docMenu) docMenu.innerHTML = '';
       docSwitcher?.setAttribute('aria-expanded', 'false');
@@ -657,7 +655,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // that froze a failed/partial snapshot for the whole mount.) `scope.disposed`
     // guards the superseded-navigation race after the await.
     try {
-      const res = await fetch('/api/docs');
+      const res = await fetch(setDocsUrl(setId));
       // Bail if the mount was torn down OR a newer sidebar render superseded us
       // (e.g. a later meta tick's fetch already resolved) — an earlier,
       // possibly smaller snapshot must not overwrite it.
@@ -665,13 +663,18 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       if (!res.ok) return;
       const data = (await res.json()) as LegacyDocs;
       if (scope.disposed || !isCurrentSidebarRender(token)) return;
-      const siblings = data.docs.filter((d) => d.setId === setId && d.type === 'markdown');
-      // Stable order: title (or sourceUrl basename) ASC, then docId.
-      siblings.sort((a, b) => {
-        const ka = (a.title ?? a.sourceUrl ?? a.docId).toLowerCase();
-        const kb = (b.title ?? b.sourceUrl ?? b.docId).toLowerCase();
-        return ka < kb ? -1 : ka > kb ? 1 : 0;
-      });
+      const siblings = selectSetSiblings(data.docs, setId);
+      // The list is known now, so the column can be decided. A set whose
+      // members are all non-markdown lands here with zero rows and gives the
+      // width back rather than rendering an empty labelled panel.
+      commitSidebarColumn(siblings.length > 0);
+      if (siblings.length === 0) {
+        if (setPaneList) setPaneList.innerHTML = '';
+        if (docMenu) docMenu.innerHTML = '';
+        docSwitcher?.setAttribute('aria-expanded', 'false');
+        resetSidebarSignature();
+        return;
+      }
       const sig = `set:${setId}:${siblings.map((d) => d.docId).join(',')}`;
       if (sidebarShowsSignature(sig)) {
         setActiveFile(navDocId);
