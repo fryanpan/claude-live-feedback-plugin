@@ -270,10 +270,47 @@ export function shareScopeAllows(
   // here so granting it stays a decision, not a resolver side effect.
   if (target.workspaceId) {
     const wsId = target.workspaceId;
-    // The hub page itself: GET /workspaces/<id>, nothing nested.
+    /**
+     * The workspace's pages: `/workspaces/<id>` and the resources under it.
+     *
+     * This used to be `/workspaces/<id>` and NOTHING nested — the allowance
+     * read `if (!seg.includes('/'))`. That was correct while the workspace
+     * page was the only thing at this prefix, and it silently became a bug the
+     * moment the page grew tabs: a visitor landed on the share link, clicked
+     * Tasks, and was refused by the guard. Now that every doc, review and
+     * mockup also lives under this prefix, "one segment only" would refuse
+     * the entire product.
+     *
+     * Each nested shape is spelled out rather than admitted by depth. A rule
+     * like "anything under the shared workspace" grants routes that do not
+     * exist yet, which makes adding one an accidental publication rather than
+     * a decision.
+     *
+     * Two independent checks on the nested forms, and both are load-bearing:
+     * the WORKSPACE segment must be the shared one, and the resource must be
+     * in that workspace's scope. Dropping the second would let a visitor read
+     * any doc on the server by spelling their own workspace id in front of it.
+     */
     if (method === 'GET' && pathname.startsWith('/workspaces/')) {
-      const seg = pathname.slice('/workspaces/'.length);
-      if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
+      const rest = pathname.slice('/workspaces/'.length);
+      const slash = rest.indexOf('/');
+      const wsSeg = slash === -1 ? rest : rest.slice(0, slash);
+      if (safeDecode(wsSeg) === wsId) {
+        const sub = slash === -1 ? '' : rest.slice(slash + 1);
+        // The workspace page itself and its nav tabs. A named list — a tab
+        // added later has to be added here too, on purpose.
+        if (sub === '' || ['home', 'tasks', 'mine', 'activity'].includes(sub)) return true;
+        // `<kind>/<id>` and nothing deeper. An id never contains a slash, so
+        // a third segment is a typo or a probe either way.
+        const cut = sub.indexOf('/');
+        if (cut !== -1) {
+          const kind = sub.slice(0, cut);
+          const id = sub.slice(cut + 1);
+          if (!id.includes('/') && ['docs', 'reviews', 'mockups'].includes(kind)) {
+            return insideSharedWorkspace(safeDecode(id));
+          }
+        }
+      }
     }
     // The server-owned board room socket (/y/ws:<id>). Reads are the §3.3
     // visitor-contract projection; foreign writes are reverted server-side.

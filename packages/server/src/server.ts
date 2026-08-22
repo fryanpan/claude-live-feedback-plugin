@@ -13,6 +13,7 @@ import {
   contentKind,
   readReviewPayload,
   reviewGapAdvice,
+  reviewIdOf,
   reviewPayloadMessage,
   suggestOps,
   summaryHash,
@@ -69,6 +70,7 @@ import {
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
+import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
@@ -1617,6 +1619,134 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /**
+   * ── Addressing: one prefix, and the compat layer that keeps the old ones
+   * answering. ──
+   *
+   * Every resource lives under the workspace it belongs to:
+   *
+   *   /workspaces/<workspaceId>                     the board
+   *   /workspaces/<workspaceId>/docs/<docId>        a doc, of any content kind
+   *   /workspaces/<workspaceId>/mockups/<docId>     a mockup's own HTML
+   *   /workspaces/<workspaceId>/reviews/<reviewId>  a review, → its entry doc
+   *
+   * `/review/<docId>` and `/mockup/<docId>` are the addresses these used to
+   * have. They still answer, and they always will: those URLs sit in comment
+   * threads, in bookmarks, and in `entryUrl` values returned by plugin bundles
+   * running in sessions nobody can restart. A 404 there reads, to the person
+   * holding the link, exactly like the review having been deleted.
+   */
+
+  /** 302 with the query string preserved. `?mobile=<preset>` rides on it. */
+  const redirectTo = (path: string, search: string): Response =>
+    new Response(null, { status: 302, headers: { location: `${path}${search}` } });
+
+  /**
+   * The workspace to address a doc under, or null when nothing holds it.
+   *
+   * Deliberately `backTargetFor`'s resolution rather than
+   * `taskStore.workspaceOfDoc`: a review is filed as ONE row under its review
+   * id, so a member doc is never in any `docIds` and the direct lookup answers
+   * null for every file in every review — which is most of the docs there are.
+   * Widening `workspaceOfDoc` itself would widen SHARE SCOPING with it, and
+   * that is a security decision rather than an addressing one.
+   */
+  const resolveWorkspaceForDoc = (docId: string): string | null =>
+    backTargetFor(docId, reviewIdOf(rooms.get(docId)?.meta ?? {}))?.id ?? null;
+
+  /**
+   * The workspace to send THIS caller to for a doc.
+   *
+   * For a share visitor it is always the workspace they were shared, never
+   * whichever workspace happens to hold the doc first. The guard has already
+   * established the doc is in their scope by the time they reach a redirect,
+   * and sending them anywhere else fails twice over: it names a workspace
+   * nobody shared with them, and the guard then refuses the very URL we just
+   * handed out — so an old `/review/<docId>` bookmark, which is the shape
+   * every link in every existing comment thread has, would 403 for exactly
+   * the people shares exist to serve.
+   */
+  const addressableWorkspaceFor = (docId: string, visitor: ShareTarget | null): string | null =>
+    visitor?.workspaceId ?? resolveWorkspaceForDoc(docId);
+
+  /**
+   * Which member a review opens on: the meatiest change, matching the entry
+   * `create_diff_review` returns. Alphabetical order would land the reviewer
+   * on dotfile and config noise on any large review.
+   */
+  const reviewEntryDocId = (reviewId: string): string | null => {
+    const members = rooms.list().filter((m) => reviewIdOf(m) === reviewId);
+    if (members.length === 0) return null;
+    const best = members.reduce((a, b) =>
+      (b.diffAdditions ?? 0) + (b.diffDeletions ?? 0) >
+      (a.diffAdditions ?? 0) + (a.diffDeletions ?? 0)
+        ? b
+        : a,
+    );
+    return best.docId;
+  };
+
+  /** The review app shell for a doc, or its 404. Null when no app is built. */
+  const serveDocShell = (docId: string, url: URL): Response | null => {
+    if (!markdownAppDist) return null;
+    // Docs are file-backed and created upfront via POST /api/docs. Arriving
+    // before an agent has done that gets a clean 404 — there is nothing the
+    // app could render for a doc that does not exist.
+    if (!rooms.get(docId)) {
+      return new Response(renderReviewNotFound(docId), {
+        status: 404,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }
+    // Device-frame simulation: `?mobile=<preset>` returns a shell hosting the
+    // real page in an iframe sized to the preset, so media queries inside it
+    // see the small width.
+    const mobilePreset = url.searchParams.get('mobile');
+    if (mobilePreset) {
+      return new Response(renderDeviceFrame(mobilePreset, url), {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }
+    return serveStatic(join(markdownAppDist, 'index.html'));
+  };
+
+  /** A mockup's own HTML, streamed from the file the room is bound to. */
+  const serveMockup = (docId: string): Response => {
+    const notFound = () =>
+      new Response(renderMockupNotFound(docId), {
+        status: 404,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    const room = rooms.get(docId);
+    if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) return notFound();
+    return serveStatic(room.meta.sourceUrl) ?? notFound();
+  };
+
+  /**
+   * File every review that predates `fileUnderHubWorkspace` onto a workspace,
+   * once per boot and never twice. See review-backfill.ts for why this is
+   * needed and why it is safe to re-run; the short version is that 20 of the
+   * 23 reviews in the live data dir were created before filing existed, and a
+   * review with no workspace has no address under `/workspaces/<id>/…`.
+   */
+  const runReviewBackfill = (): void => {
+    const res = backfillReviewFiling({
+      docs: () => rooms.list(),
+      isFiled: (reviewId) => taskStore.workspaceOfDoc(reviewId) !== null,
+      file: (reviewId) => fileUnderHubWorkspace(reviewId),
+    });
+    if (res.filed.length > 0) {
+      console.log(
+        `[reviews] filed ${res.filed.length} previously unfiled review(s) onto a workspace:`,
+        res.filed.map((r) => `${r.reviewId}→${r.workspaceId}`).join(', '),
+      );
+    }
+    if (res.failed.length > 0) {
+      console.error(`[reviews] could not file: ${res.failed.join(', ')} (will retry next boot)`);
+    }
+  };
+  runReviewBackfill();
+
+  /**
    * CORS is decided once, here, for every response the handler produces,
    * rather than by `j()` — which has no request context and used to stamp
    * `Access-Control-Allow-Origin: *` on everything. See
@@ -1777,9 +1907,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...redactMetaForVisitor(decorated, {
               workspaceScoped: Boolean(visitor.workspaceId),
             }),
-            // Same path, no host — correct for every share mode.
-            ...(relativeReviewUrl(decorated.reviewUrl) !== undefined
-              ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl) }
+            // Same path, no host, and under the workspace THIS visitor was
+            // shared rather than whichever one holds the doc first.
+            ...(relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) !== undefined
+              ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) }
               : {}),
           };
         };
@@ -4346,7 +4477,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) return j(404, res);
           // `root` is an absolute host path and every reviewUrl carries the
           // tailnet hostname — neither belongs in a visitor's copy.
-          return j(200, visitor ? redactWorkspaceFilesForVisitor(res) : res);
+          return j(200, visitor ? redactWorkspaceFilesForVisitor(res, visitor.workspaceId) : res);
         }
         // Lazily open an unchanged repo file for context (read-only code doc
         // in the same workspace).
@@ -4386,7 +4517,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(404, { error: 'workspace not found', workspaceId });
           }
           // Same redaction as /files — see redactWorkspaceTreeForVisitor.
-          return j(200, visitor ? redactWorkspaceTreeForVisitor(tree) : tree);
+          return j(200, visitor ? redactWorkspaceTreeForVisitor(tree, visitor.workspaceId) : tree);
         }
         const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
         if (docMatch) {
@@ -5042,33 +5173,77 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           );
         }
 
+        /**
+         * --- Resources under the workspace they belong to ---
+         *
+         * `/workspaces/<workspaceId>/docs/<docId>`,
+         * `/workspaces/<workspaceId>/mockups/<docId>`,
+         * `/workspaces/<workspaceId>/reviews/<reviewId>`.
+         *
+         * The workspace segment is CONTEXT, not authorization. It tells the
+         * page (and the reader) which workspace they are in, and it is what
+         * the back arrow and the sidebar build their links from. It is
+         * deliberately not checked against the doc's own filing: a doc moved
+         * between workspaces would otherwise 404 every link already handed
+         * out, and the check that does matter — is this visitor allowed to
+         * see this resource — belongs to the share guard, which checks the
+         * workspace AND the resource and is the only thing that should.
+         */
+        const wsResourceMatch = pathname.match(
+          /^\/workspaces\/([^/]+)\/(docs|mockups|reviews)\/([^/]+)$/,
+        );
+        if (wsResourceMatch && req.method === 'GET') {
+          const wsSeg = decodeURIComponent(wsResourceMatch[1] ?? '');
+          const kind = wsResourceMatch[2] ?? '';
+          const id = decodeURIComponent(wsResourceMatch[3] ?? '');
+          if (kind === 'reviews') {
+            // A review is a set of docs, not a page. Send the reader to the
+            // member worth opening first — the same entry `create_diff_review`
+            // picks, so the URL and the tool agree on where a review starts.
+            const entry = reviewEntryDocId(id);
+            if (!entry) {
+              return new Response(renderReviewNotFound(id), {
+                status: 404,
+                headers: { 'content-type': 'text/html; charset=utf-8' },
+              });
+            }
+            return redirectTo(
+              `/workspaces/${encodeURIComponent(wsSeg)}/docs/${encodeURIComponent(entry)}`,
+              url.search,
+            );
+          }
+          if (!isValidDocId(id)) return j(400, { error: 'bad docId' });
+          if (kind === 'mockups') return serveMockup(id);
+          const served = serveDocShell(id, url);
+          if (served) return served;
+        }
+
         // --- Markdown app (surface 1) ---
-        if (markdownAppDist && pathname.startsWith('/review/')) {
+        //
+        // COMPAT. `/review/<docId>` is where every doc used to live, and it
+        // still answers — it redirects to the workspace path when the doc's
+        // workspace can be resolved, and serves in place when it cannot. See
+        // the compat block note above `resolveWorkspaceForDoc`.
+        if (pathname.startsWith('/review/')) {
           const docId = decodeURIComponent(pathname.slice('/review/'.length));
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          // Markdown docs are file-backed and must be created upfront via
-          // POST /api/docs with sourceUrl. Navigating here before the
-          // agent has done that gets a clean 404 — the markdown app
-          // can't render anything useful for a doc that doesn't exist.
-          if (!rooms.get(docId)) {
-            return new Response(renderReviewNotFound(docId), {
-              status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
+          // The redirect is deliberately OUTSIDE the `markdownAppDist` guard
+          // that wraps the serve below. Where a doc lives is a fact about
+          // addressing; whether the browser app has been built is a fact
+          // about this deployment. Tying the two together would make an old
+          // URL 404 on a server that simply has no app bundle, which is a
+          // different failure wearing the same status code.
+          if (rooms.get(docId)) {
+            const home = addressableWorkspaceFor(docId, visitor);
+            if (home) {
+              return redirectTo(
+                `/workspaces/${encodeURIComponent(home)}/docs/${encodeURIComponent(docId)}`,
+                url.search,
+              );
+            }
           }
-          // Device-frame simulation: when ?mobile=<preset> is on the URL,
-          // return an HTML shell that hosts the real page in an iframe sized
-          // to the preset's viewport. Media queries inside the iframe see
-          // the small width correctly.
-          const mobilePreset = url.searchParams.get('mobile');
-          if (mobilePreset) {
-            return new Response(renderDeviceFrame(mobilePreset, url), {
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
-          }
-          const p = join(markdownAppDist, 'index.html');
-          const resp = serveStatic(p);
-          if (resp) return resp;
+          const served = serveDocShell(docId, url);
+          if (served) return served;
         }
         if (markdownAppDist && pathname.startsWith('/app/')) {
           const p = join(markdownAppDist, pathname.slice('/app/'.length));
@@ -5087,25 +5262,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         //     relative paths won't resolve since we don't serve the source
         //     directory. Use the existing /demos/ multi-page path for
         //     mockups that ship with sibling files.
+        //     COMPAT, same rule as `/review/`: redirect to the workspace path
+        //     when the mockup's workspace resolves, serve in place when it
+        //     does not.
         if (pathname.startsWith('/mockup/')) {
           const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
           // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
           // share whichever URL feels natural.
           const docId = slug.replace(/\.html?$/i, '');
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          const room = rooms.get(docId);
-          if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) {
-            return new Response(renderMockupNotFound(docId), {
-              status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
+          const home = rooms.get(docId) ? addressableWorkspaceFor(docId, visitor) : null;
+          if (home) {
+            return redirectTo(
+              `/workspaces/${encodeURIComponent(home)}/mockups/${encodeURIComponent(docId)}`,
+              url.search,
+            );
           }
-          const resp = serveStatic(room.meta.sourceUrl);
-          if (resp) return resp;
-          return new Response(renderMockupNotFound(docId), {
-            status: 404,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
+          return serveMockup(docId);
         }
 
         // --- Demos ---
@@ -5259,13 +5432,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     meta: T,
   ): T & { reviewUrl?: string } {
     const base = externalBaseUrl();
+    // The ONE place a resource URL is minted, which is why the whole fleet's
+    // addresses move with this function. A doc is addressed under the
+    // workspace holding it; a doc nothing holds keeps the old address, which
+    // still answers — better a working legacy URL than a link into a
+    // workspace that does not exist.
+    const home = resolveWorkspaceForDoc(meta.docId);
+    const ws = home ? `${base}/workspaces/${encodeURIComponent(home)}` : null;
+    const id = encodeURIComponent(meta.docId);
     if (contentKind(meta.type) !== 'none') {
-      // Every doc kind with LF-held content (markdown/code/diff) shares the
-      // SPA route; the app branches the editor on the doc's type at boot.
-      return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
+      // Every doc kind with server-held content (markdown/code/diff) shares
+      // the SPA route; the app branches the editor on the doc's type at boot.
+      return { ...meta, reviewUrl: ws ? `${ws}/docs/${id}` : `${base}/review/${id}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {
-      return { ...meta, reviewUrl: `${base}/mockup/${encodeURIComponent(meta.docId)}` };
+      return { ...meta, reviewUrl: ws ? `${ws}/mockups/${id}` : `${base}/mockup/${id}` };
     }
     return meta;
   }

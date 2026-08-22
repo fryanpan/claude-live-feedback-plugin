@@ -20,6 +20,7 @@ import {
 import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { workspaceIdFromPath } from './doc-path.ts';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
@@ -157,8 +158,9 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     const inApp = opts.docLink
       ? resolveDocLink({
           href,
-          workspaceId: opts.docLink.workspaceId,
+          reviewId: opts.docLink.workspaceId,
           relPath: opts.docLink.relPath,
+          workspaceId: workspaceIdFromPath(location.pathname),
         })
       : null;
     if (inApp && opts.docLink) {
