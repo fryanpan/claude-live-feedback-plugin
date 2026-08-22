@@ -62,6 +62,7 @@ import {
   dropTarget,
   homeSinceLabel,
   initialsOf,
+  isTaskArchived,
   isTaskParked,
   ownerKind,
   presenceHue,
@@ -498,6 +499,24 @@ export interface BoardHandlers {
    * pointer question rather than a width one. Omitted → asked of the browser.
    */
   inlineTitleEdit?: () => boolean;
+  /**
+   * How many rows this board has archived, and the way to go look at them.
+   *
+   * A single line above the first goal, and deliberately NOT a fifth nav
+   * item: the phone rail has exactly four seats, and "what did I put down"
+   * is not a place people go, it is a thing they check after archiving the
+   * wrong row. Absent, or a zero, draws nothing at all — a board that has
+   * never archived anything should not carry a control saying so.
+   */
+  archivedCount?: number;
+  onShowArchived?: () => void;
+}
+
+/** The restore list's own handlers — one verb, and the way back to the board. */
+export interface ArchivedViewHandlers {
+  onRestore: (task: HubTask) => void;
+  onOpenTask: (task: HubTask) => void;
+  onBack: () => void;
 }
 
 /** The bare word the store used to default to. It names a category rather
@@ -1235,6 +1254,22 @@ export function renderBoard(
   handlers: BoardHandlers,
 ): void {
   container.replaceChildren();
+  // The board's meta line: what is true of the LIST rather than of any row in
+  // it. One entry so far, and it earns its line only when there is something
+  // to point at — see `archivedCount`.
+  if (handlers.onShowArchived && (handlers.archivedCount ?? 0) > 0) {
+    const meta = document.createElement('p');
+    meta.className = 'hub-board-meta';
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'hub-linklike hub-board-meta-archived';
+    const n = handlers.archivedCount ?? 0;
+    link.textContent = `${n} archived`;
+    link.title = 'Show archived tasks — each one can be restored';
+    link.addEventListener('click', () => handlers.onShowArchived?.());
+    meta.append(link);
+    container.append(meta);
+  }
   for (const section of sections) {
     const sec = document.createElement('section');
     // FLAT. `section.depth` is still an honest fact about the goal list —
@@ -1281,6 +1316,76 @@ export function renderBoard(
   // After the rows exist: the drag/keyboard wiring needs the whole board (a
   // drop can cross into another goal's section), so it can't live on the row.
   wireBoardReorder(container, sections, handlers);
+}
+
+/**
+ * The restore list — every archived row, newest removal first, each with the
+ * one control that matters.
+ *
+ * Deliberately NOT the board's own row renderer. A board row is a working
+ * surface: drag handle, status dropdown, owner picker, reorder keys. None of
+ * that applies to a row that is off the board, and offering it would invite
+ * edits whose only effect is to change what comes back. So an archived row is
+ * a title, who removed it and why, and Restore.
+ *
+ * The title still opens the task, because the discussion on an archived row
+ * is often the reason somebody is here.
+ */
+export function renderArchivedList(
+  container: HTMLElement,
+  tasks: HubTask[],
+  handlers: ArchivedViewHandlers,
+): void {
+  container.replaceChildren();
+  const head = document.createElement('div');
+  head.className = 'hub-archived-head';
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'hub-linklike hub-archived-back';
+  back.textContent = '← Back to the board';
+  back.addEventListener('click', () => handlers.onBack());
+  const h = document.createElement('h3');
+  h.className = 'hub-section-title';
+  h.textContent = tasks.length === 1 ? '1 archived task' : `${tasks.length} archived tasks`;
+  head.append(back, h);
+  container.append(head);
+  if (tasks.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'hub-section-empty';
+    // Reached by editing the URL, or by restoring the last one from here —
+    // in which case this line is the confirmation that it worked.
+    empty.textContent = 'Nothing archived. Anything you archive can be restored from here.';
+    container.append(empty);
+    return;
+  }
+  const list = document.createElement('ul');
+  list.className = 'hub-archived-list';
+  for (const task of tasks) {
+    const li = document.createElement('li');
+    li.className = 'hub-archived-row';
+    li.dataset.taskId = task.id;
+    const title = document.createElement('button');
+    title.type = 'button';
+    title.className = 'hub-linklike hub-archived-title';
+    title.textContent = task.title;
+    title.addEventListener('click', () => handlers.onOpenTask(task));
+    const why = document.createElement('span');
+    why.className = 'hub-archived-why';
+    const who = task.archivedBy ? ` by ${task.archivedBy}` : '';
+    const when = task.archivedAt ? new Date(task.archivedAt).toLocaleDateString() : '';
+    why.textContent = task.archiveReason
+      ? `${when}${who} — ${task.archiveReason}`
+      : `${when}${who}`;
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'hub-btn hub-archived-restore';
+    restore.textContent = 'Restore';
+    restore.setAttribute('aria-label', `Restore “${task.title}” to the board`);
+    restore.addEventListener('click', () => handlers.onRestore(task));
+    li.append(title, why, restore);
+    list.append(li);
+  }
+  container.append(list);
 }
 
 /**
@@ -2704,6 +2809,20 @@ export interface DetailHandlers {
   /** Defer the task to a date, or un-park it with `null`. Never moves the
    *  row — parking is not a status. */
   onParkSet?: (task: HubTask, parkedUntil: number | null) => void;
+  /**
+   * Take the task off the board, reversibly. THE PANEL IS THE ONLY PLACE THIS
+   * LIVES (Bryan, on the design thread: *"Detail panel only… It's a secondary
+   * action. Should not take up space from primary flows."*) — an earlier mock
+   * put a `⋯` menu and a swipe on the row itself and he rejected both, so the
+   * board row is deliberately untouched by this feature.
+   *
+   * Also `e` from the keyboard, which is the same act reached without opening
+   * anything; see `hub-shortcuts`.
+   */
+  onArchive?: (task: HubTask) => void;
+  /** Put an archived task back — the panel's other face, drawn in place of
+   *  Archive when the open task is already archived. */
+  onRestore?: (task: HubTask) => void;
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
   onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
@@ -4342,6 +4461,27 @@ export function renderTaskDetail(
   fullState(isFull);
   full.addEventListener('click', () => fullState(container.classList.toggle('hub-detail--full')));
   actions.append(full);
+  // Archive, between the reader's preference and the way out. Last of the
+  // three that DO something to the task, and the only one that changes it —
+  // so it sits closest to Close, which is where a secondary action belongs on
+  // a head whose left-hand end is the title people came to read. The glyph is
+  // the tray every mail client uses; the tooltip says "archive" in words,
+  // because a box outline on its own has been read as both "download" and
+  // "delete" and this action is neither.
+  const archived = isTaskArchived(task);
+  if (archived ? handlers.onRestore : handlers.onArchive) {
+    const arch = document.createElement('button');
+    arch.type = 'button';
+    arch.className = 'hub-btn hub-icon-btn hub-detail-archive';
+    arch.textContent = archived ? '↩︎' : '🗄';
+    const label = archived ? 'Restore this task to the board' : 'Archive this task (e)';
+    arch.title = label;
+    arch.setAttribute('aria-label', label);
+    arch.addEventListener('click', () =>
+      archived ? handlers.onRestore?.(task) : handlers.onArchive?.(task),
+    );
+    actions.append(arch);
+  }
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'hub-btn hub-icon-btn hub-detail-close';
@@ -4429,6 +4569,38 @@ export function renderTaskDetail(
       handlers.onParkSet?.(task, new Date(y, m - 1, d, 12, 0, 0, 0).getTime());
     });
     note.append(k, line, until);
+    before.push(note);
+  }
+
+  // Archived, and the panel has to SAY so. A deep link, a search result or a
+  // restore list can all open a task that is no longer on any board, and
+  // without this the panel would look exactly like any other task's — a row
+  // whose absence from the lanes reads as a rendering bug rather than as
+  // something somebody decided. Same shape as the parked note above, and it
+  // is a note rather than a fields cell for the same reason: it is true of
+  // almost no rows, so a permanent cell would cost every task height to say
+  // nothing.
+  if (isTaskArchived(task)) {
+    const note = document.createElement('div');
+    note.className = 'hub-archived-note';
+    const k = document.createElement('span');
+    k.className = 'hub-decide-k hub-parked-k';
+    k.textContent = 'Archived';
+    const who = task.archivedBy ? ` by ${task.archivedBy}` : '';
+    const when = task.archivedAt ? new Date(task.archivedAt).toLocaleDateString() : '';
+    const line = document.createElement('p');
+    line.textContent = task.archiveReason
+      ? `${when}${who} — ${task.archiveReason}`
+      : `${when}${who}`;
+    note.append(k, line);
+    if (handlers.onRestore) {
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'hub-btn hub-archived-restore';
+      back.textContent = 'Restore to the board';
+      back.addEventListener('click', () => handlers.onRestore?.(task));
+      note.append(back);
+    }
     before.push(note);
   }
 
