@@ -13980,6 +13980,62 @@ async function declareWorkspaceLead(args, deps) {
   };
 }
 
+// packages/mcp/src/deferred-emit.ts
+function createDeferredEmitter(schedule = (fn) => {
+  setTimeout(fn, 0);
+}) {
+  const queue = [];
+  let inFlight = 0;
+  let scheduled = false;
+  let draining = false;
+  const scheduleFlush = () => {
+    if (scheduled || queue.length === 0)
+      return;
+    scheduled = true;
+    schedule(() => {
+      scheduled = false;
+      drain();
+    });
+  };
+  const drain = async () => {
+    if (draining || inFlight > 0)
+      return;
+    draining = true;
+    try {
+      while (queue.length > 0 && inFlight === 0) {
+        const fn = queue.shift();
+        if (!fn)
+          break;
+        try {
+          await fn();
+        } catch {}
+      }
+    } finally {
+      draining = false;
+    }
+  };
+  return {
+    emitOutsideToolCall(fn) {
+      queue.push(fn);
+      if (inFlight === 0)
+        scheduleFlush();
+    },
+    beginToolCall() {
+      inFlight++;
+      let released = false;
+      return () => {
+        if (released)
+          return;
+        released = true;
+        inFlight--;
+        if (inFlight === 0)
+          scheduleFlush();
+      };
+    },
+    pending: () => queue.length
+  };
+}
+
 // packages/mcp/src/frame-dedup.ts
 var DEFAULT_LIMIT = 512;
 var DEFAULT_TTL_MS = 30000;
@@ -14245,7 +14301,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.89";
+var PLUGIN_VERSION = "0.1.90";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -15804,8 +15860,10 @@ async function maybeAutoWatch(name, args) {
     return;
   await watchDoc(a.docId);
 }
+var deferredEmits = createDeferredEmitter();
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
+  const endToolCall = deferredEmits.beginToolCall();
   try {
     await ensureWatchesRestored();
     sendDueHeartbeats();
@@ -16635,6 +16693,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
   } catch (e) {
     return err(e instanceof Error ? e.message : String(e));
+  } finally {
+    endToolCall();
   }
 });
 var watchers = new Map;
@@ -16715,7 +16775,7 @@ async function ensureWatchesRestored() {
           });
           markAttached(workspaceId);
           reattached.push(workspaceId);
-          await deliverAttachBacklog(workspaceId, attachRes, {
+          deferredEmits.emitOutsideToolCall(() => deliverAttachBacklog(workspaceId, attachRes, {
             emit: async (ev, payload) => {
               if (shouldForwardFrame.shouldForward(ev, payload)) {
                 await emitChannelMessage(ev, payload);
@@ -16724,12 +16784,12 @@ async function ensureWatchesRestored() {
             ackComment: async (rowId) => {
               await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`, {});
             }
-          });
+          }));
         } catch {}
       }
       if (reattached.length > 0)
         await refreshCoverage();
-      restoreState = {
+      const state = {
         status: "restored",
         from: "server",
         restored,
@@ -16738,7 +16798,8 @@ async function ensureWatchesRestored() {
         at: new Date().toISOString(),
         attempts
       };
-      await emitRestoreNotice(restoreState).catch(() => {});
+      restoreState = state;
+      deferredEmits.emitOutsideToolCall(() => emitRestoreNotice(state));
     } catch (err) {
       restoreState = {
         ...restoreState,
