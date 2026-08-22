@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Claude Workspaces">
+  <rect width="512" height="512" rx="114" fill="#2e7dd7"/>
+  <path fill="#ffffff" d="M136 130h240a38 38 0 0 1 38 38v150a38 38 0 0 1-38 38H262l-74 62a12 12 0 0 1-20-9v-53h-32a38 38 0 0 1-38-38V168a38 38 0 0 1 38-38z"/>
+  <circle cx="196" cy="243" r="21" fill="#2e7dd7"/>
+  <circle cx="256" cy="243" r="21" fill="#2e7dd7"/>
+  <circle cx="316" cy="243" r="21" fill="#2e7dd7"/>
+</svg>

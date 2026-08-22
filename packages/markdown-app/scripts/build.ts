@@ -9,8 +9,14 @@ const pkgRoot = join(here, '..');
 const dist = join(pkgRoot, 'dist');
 const isWatch = process.argv.includes('--watch');
 
-/** Assets whose bytes decide the build id — everything a browser loads. */
-const HASHED = ['app.js', 'hub.js', 'styles.css', 'index.html'];
+/**
+ * Assets whose bytes decide the build id — everything a browser loads.
+ *
+ * `sw.js` is in here because a service-worker-only change is otherwise
+ * invisible: the id would not move, and "a new version is available" would
+ * stay silent for the one file the browser re-fetches on its own schedule.
+ */
+const HASHED = ['app.js', 'hub.js', 'sw.js', 'styles.css', 'index.html'];
 
 /**
  * Builds both entries plus the copied assets. Runs TWICE per build: once with
@@ -89,8 +95,37 @@ async function emit(buildId: string): Promise<boolean> {
     return false;
   }
 
+  // The service worker: its own entry, and IIFE rather than ESM.
+  //
+  // `register('/sw.js')` without `{ type: 'module' }` loads a CLASSIC script,
+  // and module workers are still the newer path across browsers — an ESM
+  // bundle here fails to register on the devices this feature exists for.
+  // Splitting stays off for the same reason: a worker that imports a chunk
+  // is a worker that can fail to install when the chunk 404s.
+  const swResult = await Bun.build({
+    entrypoints: [join(pkgRoot, 'src', 'sw.ts')],
+    outdir: dist,
+    target: 'browser',
+    format: 'iife',
+    splitting: false,
+    sourcemap: 'external',
+    define,
+    naming: { entry: 'sw.js', chunk: '[name]-[hash].js', asset: '[name].[ext]' },
+    minify: process.env.NODE_ENV !== 'dev' && !isWatch,
+  });
+  if (!swResult.success) {
+    console.error('service worker build failed:');
+    for (const m of swResult.logs) console.error(m);
+    if (!isWatch) process.exit(1);
+    return false;
+  }
+
   cpSync(join(pkgRoot, 'index.html'), join(dist, 'index.html'));
   cpSync(join(pkgRoot, 'src', 'styles.css'), join(dist, 'styles.css'));
+  // Icons and the web app manifest. Copied wholesale rather than listed, so
+  // adding an icon size later needs no build change — and `client-release.ts`
+  // copies dist recursively, so they reach production the same way chunks do.
+  cpSync(join(pkgRoot, 'public'), dist, { recursive: true });
 
   if (!existsSync(join(dist, 'app.js'))) {
     console.error('app.js missing from dist — build emitted:');
