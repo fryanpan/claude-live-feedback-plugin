@@ -37,7 +37,6 @@ const AGENT = 'agent-coverage';
 
 interface CoverageQueue {
   queuedVoice: number;
-  pendingRetriage: number;
   pendingBucketReview: number;
   taskReviews: number;
 }
@@ -163,11 +162,12 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   };
 
   /**
-   * Three of the four things that queue for a board's lead, produced the way
-   * they actually happen: a filed row wants its shape reviewed, a spoken
-   * change has nobody to route to, a goal edit has nobody to re-triage.
-   * `pendingBucketReview` needs a band change and stays 0 here — its count is
-   * still reported, so the shape a reader learns is complete.
+   * Every kind of thing that queues for a board's lead, produced the way each
+   * actually happens: a PLACED row wants its shape reviewed, a spoken change
+   * has nobody to route to, and a new goal band has nobody to ask about the
+   * unplaced bucket. The second row is deliberately unplaced — it is what
+   * gives the band edit something to ask about, and an unplaced create
+   * routes no task review of its own, so the counts below stay exact.
    */
   const queueThreeForLead = async (workspaceId: string): Promise<void> => {
     // `goal` set on create is what routes a new row through task review.
@@ -177,16 +177,26 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
       goal: 'chores',
     });
     expect(t.status).toBe(200);
+    expect(
+      (
+        await post(`/api/workspaces/${workspaceId}/tasks`, {
+          author: PERSON,
+          title: 'Unplaced row',
+        })
+      ).status,
+    ).toBe(200);
     const voice = await post(`/api/workspaces/${workspaceId}/voice`, {
       transcript: 'make cutting token usage the top goal',
       author: PERSON,
     });
     expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
-    const goal = await put(`/api/workspaces/${workspaceId}/goal`, {
-      goal: 'Cut token usage per session in half.',
+    const goal = await put(`/api/workspaces/${workspaceId}/goals`, {
+      goals: [{ title: 'Cut token usage per session in half' }],
       author: PERSON,
     });
-    expect(((await goal.json()) as { retriage: { queued: boolean } }).retriage.queued).toBe(true);
+    expect(((await goal.json()) as { bucketReview: { queued: boolean } }).bucketReview.queued).toBe(
+      true,
+    );
   };
 
   it('names the board holding this agent’s watched docs where it has no attachment, with what is waiting', async () => {
@@ -209,8 +219,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     expect(row.watchedDocs).toEqual(['doc-one', 'doc-two']);
     expect(row.queued).toEqual({
       queuedVoice: 1,
-      pendingRetriage: 1,
-      pendingBucketReview: 0,
+      pendingBucketReview: 1,
       taskReviews: 1,
     });
     expect(row.queuedTotal).toBe(3);
@@ -234,11 +243,11 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // attach received.
     const drained = (await (await attach(boardId)).json()) as {
       queuedVoice: Array<{ transcript: string }>;
-      pendingRetriage?: { taskIds: string[] };
+      pendingBucketReview?: { taskIds: string[] };
       taskReviews?: Array<{ taskId: string }>;
     };
     expect(drained.queuedVoice).toHaveLength(1);
-    expect(drained.pendingRetriage?.taskIds).toHaveLength(1);
+    expect(drained.pendingBucketReview?.taskIds).toHaveLength(1);
     expect(drained.taskReviews).toHaveLength(1);
   });
 
@@ -414,17 +423,20 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         title: 'An open row',
         goal: 'chores',
       });
+      await tpost(`/api/workspaces/${boardId}/tasks`, { author: PERSON, title: 'Unplaced row' });
       const voice = await tpost(`/api/workspaces/${boardId}/voice`, {
         transcript: 'make cutting token usage the top goal',
         author: PERSON,
       });
       // The incident's own signature: routed to a queue, not to an agent.
       expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
-      const goal = await tput(`/api/workspaces/${boardId}/goal`, {
-        goal: 'Cut token usage per session in half.',
+      const goal = await tput(`/api/workspaces/${boardId}/goals`, {
+        goals: [{ title: 'Cut token usage per session in half' }],
         author: PERSON,
       });
-      expect(((await goal.json()) as { retriage: { queued: boolean } }).retriage.queued).toBe(true);
+      expect(
+        ((await goal.json()) as { bucketReview: { queued: boolean } }).bucketReview.queued,
+      ).toBe(true);
     };
 
     it('reports a stale-heartbeat lead holding only a ws: key, with what is queued', async () => {

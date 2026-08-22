@@ -40,17 +40,8 @@ describe('TaskStore', () => {
       expect(a.id).not.toContain('search');
       expect(a.id.length).toBeGreaterThanOrEqual(10);
       expect(a.name).toBe('search-revamp');
-      expect(a.goal).toBe('');
       expect(a.goals).toEqual([]);
       expect(a.docIds).toEqual([]);
-    });
-
-    it('stores the goal when given and stamps goalUpdatedAt', () => {
-      const before = Date.now();
-      const ws = store.createWorkspace('blog', 'Ship the launch post by Friday.');
-      expect(ws.goal).toBe('Ship the launch post by Friday.');
-      expect(ws.goalUpdatedAt).toBeGreaterThanOrEqual(before);
-      expect(store.getWorkspace(ws.id)?.goal).toBe('Ship the launch post by Friday.');
     });
 
     it('lists created workspaces', () => {
@@ -384,7 +375,7 @@ describe('TaskStore', () => {
 
   describe('sidecar persistence', () => {
     it('writes <dataDir>/workspaces/<id>.tasks.json on a debounce', async () => {
-      const ws = store.createWorkspace('ws', 'The goal.');
+      const ws = store.createWorkspace('ws');
       const path = tasksSidecarPath(dataDir, ws.id);
       // Debounced: the write has not landed synchronously…
       // (5ms debounce in this suite; poll briefly rather than assert timing.)
@@ -392,7 +383,7 @@ describe('TaskStore', () => {
       expect(existsSync(path)).toBe(true);
       const parsed = JSON.parse(readFileSync(path, 'utf8'));
       expect(parsed.workspace.id).toBe(ws.id);
-      expect(parsed.workspace.goal).toBe('The goal.');
+      expect(parsed.workspace.name).toBe('ws');
     });
 
     it('coalesces a burst of changes into one settled file', async () => {
@@ -408,7 +399,7 @@ describe('TaskStore', () => {
     });
 
     it('a fresh store hydrates workspaces, tasks, and the audit trail from disk', () => {
-      const ws = store.createWorkspace('search-revamp', 'Ship it.');
+      const ws = store.createWorkspace('search-revamp');
       const a = store.createTask(ws.id, { title: 'a', quote: 'do the thing' });
       if (!a.ok) throw new Error('create failed');
       store.transition(a.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
@@ -420,7 +411,6 @@ describe('TaskStore', () => {
       try {
         const w = reborn.getWorkspace(ws.id);
         expect(w?.name).toBe('search-revamp');
-        expect(w?.goal).toBe('Ship it.');
         expect(w?.docIds).toEqual(['plan-doc']);
         const t = reborn.getTask(a.task.id);
         expect(t?.status).toBe('done');

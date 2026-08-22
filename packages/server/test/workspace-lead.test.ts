@@ -55,7 +55,7 @@ describe('TaskStore lead agent', () => {
   });
 
   it('createWorkspace records the lead agent it was handed', () => {
-    const ws = store.createWorkspace('relay-hub', 'Ship the relay.', {
+    const ws = store.createWorkspace('relay-hub', {
       leadAgentId: 'agent-relay',
     });
     expect(ws.leadAgentId).toBe('agent-relay');
@@ -64,13 +64,13 @@ describe('TaskStore lead agent', () => {
   });
 
   it('a workspace created with no agent has NO lead — the gap is representable, not invented', () => {
-    const ws = store.createWorkspace('leaderless-hub', 'Ship it.');
+    const ws = store.createWorkspace('leaderless-hub');
     expect(ws.leadAgentId).toBeUndefined();
     expect(ws.leadAgentSince).toBeUndefined();
   });
 
   it('the first agent to attach claims a vacant lead, and says so in the result', () => {
-    const ws = store.createWorkspace('claim-hub', 'Ship it.');
+    const ws = store.createWorkspace('claim-hub');
     const res = store.attachAgent(ws.id, { agentId: 'agent-relay', runtime: 'claude-code-local' });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -85,7 +85,7 @@ describe('TaskStore lead agent', () => {
   });
 
   it('a second agent attaching does NOT take the lead (with the claim above as positive control)', () => {
-    const ws = store.createWorkspace('two-agents-hub', 'Ship it.');
+    const ws = store.createWorkspace('two-agents-hub');
     const first = store.attachAgent(ws.id, {
       agentId: 'agent-relay',
       runtime: 'claude-code-local',
@@ -105,7 +105,7 @@ describe('TaskStore lead agent', () => {
   });
 
   it('setLeadAgent reassigns and emits workspace.lead_changed with both sides', () => {
-    const ws = store.createWorkspace('reassign-hub', 'Ship it.', { leadAgentId: 'agent-relay' });
+    const ws = store.createWorkspace('reassign-hub', { leadAgentId: 'agent-relay' });
     // A handover target must be an id the workspace has a record of; the
     // seat is occupied, so this attach does not claim it.
     store.attachAgent(ws.id, { agentId: 'agent-helper', runtime: 'claude-code-local' });
@@ -123,7 +123,7 @@ describe('TaskStore lead agent', () => {
   });
 
   it('re-setting the same lead is a no-op: changed=false, no event', () => {
-    const ws = store.createWorkspace('same-hub', 'Ship it.', { leadAgentId: 'agent-relay' });
+    const ws = store.createWorkspace('same-hub', { leadAgentId: 'agent-relay' });
     events.length = 0;
     const res = store.setLeadAgent(ws.id, 'agent-relay', { actor: AGENT });
     expect(res.ok).toBe(true);
@@ -139,7 +139,7 @@ describe('TaskStore lead agent', () => {
   });
 
   it('the lead survives a restart — it is workspace state, not attachment state', () => {
-    const ws = store.createWorkspace('durable-hub', 'Ship it.', { leadAgentId: 'agent-relay' });
+    const ws = store.createWorkspace('durable-hub', { leadAgentId: 'agent-relay' });
     store.flush();
     expect(readFileSync(tasksSidecarPath(dataDir, ws.id), 'utf8')).toContain('agent-relay');
     const reborn = new TaskStore({ dataDir, debounceMs: 5 });
@@ -198,7 +198,7 @@ describe('setLeadAgent does not displace a LIVE lead without takeover', () => {
 
   /** A board whose seat `agent-relay` holds, attached and freshly beating. */
   const boardWithLiveLead = () => {
-    const ws = store.createWorkspace('held-hub', 'Ship it.');
+    const ws = store.createWorkspace('held-hub');
     const attach = store.attachAgent(ws.id, {
       agentId: RELAY.id,
       runtime: 'claude-code-local',
@@ -338,7 +338,7 @@ describe('setLeadAgent refuses an id the workspace has no record of', () => {
   });
 
   const board = () => {
-    const ws = store.createWorkspace('routed-hub', 'Ship it.');
+    const ws = store.createWorkspace('routed-hub');
     const attach = store.attachAgent(ws.id, { agentId: RELAY.id, runtime: 'claude-code-local' });
     if (!attach.ok || attach.lead !== true) throw new Error('fixture');
     return ws;
@@ -382,7 +382,7 @@ describe('setLeadAgent refuses an id the workspace has no record of', () => {
   it('SELF-declaration needs no attachment history — the bootstrap order must not matter', () => {
     // An empty-seat board and an agent the workspace has never seen: naming
     // ITSELF is by definition a real live caller, so it seats.
-    const ws = store.createWorkspace('fresh-hub', 'Ship it.');
+    const ws = store.createWorkspace('fresh-hub');
     const res = store.setLeadAgent(ws.id, HELPER.id, { actor: HELPER });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
