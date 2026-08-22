@@ -320,10 +320,29 @@ export function isReviewItemOpen(item: TaskReviewItem): boolean {
  * card wraps, so width never enters into it.
  */
 export const REVIEW_LIMITS = {
-  /** ~1 line at 430px/16px, where a line runs about 50 characters. */
+  /**
+   * ~1 line at 430px/16px, where a line runs about 50 characters.
+   *
+   * ADVISORY since 2026-08-22, for the same reason the body targets became
+   * advisory a day earlier: a budget here is a statement about RENDERED WIDTH,
+   * and over-running it wraps the row. Refusing instead turned a rendering
+   * imperfection into a failed filing — measured over one 24-hour window, six
+   * honest asks were bounced with a `why` of 92–102 characters, each at the
+   * moment an agent was routing an ask to the queue instead of to chat, and
+   * each costing a retry to shave two words. A wrapped row is worse than a
+   * tight one and far better than an ask that never got filed.
+   */
   headline: 70,
   why: 90,
   lookFor: 90,
+  /**
+   * The one one-line length that still refuses — the sanity ceiling for a row
+   * field, the counterpart of `detailMaxWords` for a body. Well past anything
+   * a model overshoots a 70/90-character budget by (the measured over-runs sat
+   * at 92–102), so it bounces a paragraph pasted into a row and nothing else.
+   * Shared by the option `label`, which is a row field wearing a button.
+   */
+  lineMaxChars: 500,
   /**
    * Words of body, by shape — Bryan's numbers, verbatim, as the TARGET an
    * author should aim for. ADVISORY since 2026-08-21: exceeding a target no
@@ -341,6 +360,9 @@ export const REVIEW_LIMITS = {
    * or a runaway generation, never to compress a real question's context.
    */
   detailMaxWords: 2000,
+  /** Advisory, like the row budgets above — a fourth word wraps a button, it
+   *  does not break one. Refusing four-word labels was half the measured
+   *  bounces this rule set produced. */
   optionLabelWords: 3,
   /** A 1–3 word label still has to fit a full-width button at 430px. */
   optionLabelChars: 28,
@@ -349,7 +371,22 @@ export const REVIEW_LIMITS = {
   maxOptions: 6,
 } as const;
 
-export type ReviewGap = 'lookFor' | 'detail';
+/**
+ * Something worth telling the author about a payload that WAS filed.
+ *
+ * Two families, and keeping them distinct is what makes the advice usable: a
+ * bare field name means the field is ABSENT ("write one"), a `…Length` gap
+ * means the field is there and runs long ("it will wrap"). Told the same way,
+ * an author who wrote a 100-character `why` would be advised to write a `why`.
+ */
+export type ReviewGap =
+  | 'lookFor'
+  | 'detail'
+  | 'headlineLength'
+  | 'whyLength'
+  | 'lookForLength'
+  | 'optionLabelLength'
+  | 'optionDetailLength';
 
 export interface ReviewCheck {
   /** No refusal-grade problem. `errors` is empty exactly when this is true. */
@@ -378,17 +415,18 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * response to a chore is to route around it — there, by filing the decision as
  * an action instead. So only what the ROW is made of refuses.
  *
- * - **Refused**: `headline`, `why`, the one-line lengths, a detail past the
- *   sanity ceiling, and a `decision` with
- *   fewer than two options. These are the reported bug. A missing or over-long
- *   headline is precisely how the title went back to being a clip of prose,
- *   and truncating it here would re-introduce the clipping under a different
- *   name — the row would still read as a sentence cut in half, and the author
- *   would never learn. Refusing with a message that says what to write is the
- *   only version that makes the next one better.
- * - **Advised**: a missing `lookFor` or `detail`. Both make the card thinner
- *   and neither makes it unreadable, and demanding a third and fourth field
- *   for a two-word question is the chore that gets routed around.
+ * - **Refused**: a missing `headline` or `why`, a line break inside one of
+ *   them, a `decision` with fewer than two options, and anything past a sanity
+ *   ceiling (`lineMaxChars` for a row field, `detailMaxWords` for a body).
+ *   These are structural: the row cannot be built at all without them, and a
+ *   ceiling is only ever reached by a pasted document. Note it refuses rather
+ *   than truncating — clipping a headline is precisely how the title went back
+ *   to being a sentence cut in half, and the author would never learn.
+ * - **Advised**: a missing `lookFor` or `detail`, and any LENGTH over a
+ *   budget. Both make the card thinner or wider than it wants to be; neither
+ *   makes it unreadable. Demanding a third and fourth field for a two-word
+ *   question is the chore that gets routed around, and so is bouncing a
+ *   filing to shave two words off a `why` — measured, six times in one day.
  *
  * Every check is one-directional in the same sense as `checkDecisionShape`:
  * counting words can undercount a field somebody wrote well (a false gap, i.e.
@@ -450,11 +488,16 @@ export function checkReviewPayload(input: unknown): ReviewCheck {
     // header is two lines. Refusing here is what keeps the card's clamp from
     // being the thing that enforces it.
     if (/[\r\n]/.test(v)) fail(`review.${key} must be a single line — it contains a line break.`);
-    const max = REVIEW_LIMITS[key];
-    if (v.trim().length > max) {
+    // Length ADVISES up to the sanity ceiling. The budget describes how much
+    // fits one line on a phone, and over-running it wraps the row — a
+    // rendering imperfection, which refusing turned into a failed filing.
+    const n = v.trim().length;
+    if (n > REVIEW_LIMITS.lineMaxChars) {
       fail(
-        `review.${key} is ${v.trim().length} characters; the limit is ${max} so it fits one line on a phone. Say less, don't abbreviate.`,
+        `review.${key} is ${n} characters; past ${REVIEW_LIMITS.lineMaxChars} it is a paragraph, not a row. Put the context in review.detail — the card renders all of it — and leave one line here.`,
       );
+    } else if (n > REVIEW_LIMITS[key]) {
+      gaps.push(`${key}Length`);
     }
   };
   line('headline', true);
@@ -514,27 +557,29 @@ export function checkReviewPayload(input: unknown): ReviewCheck {
         fail(
           `review.options[${i}].label is required — 1 to ${REVIEW_LIMITS.optionLabelWords} words.`,
         );
-      } else {
-        const n = words(label);
-        if (n > REVIEW_LIMITS.optionLabelWords) {
-          fail(
-            `review.options[${i}].label is ${n} words ("${label.trim()}"); use at most ${REVIEW_LIMITS.optionLabelWords}. The reasoning goes in detail.`,
-          );
-        }
-        if (label.trim().length > REVIEW_LIMITS.optionLabelChars) {
-          fail(
-            `review.options[${i}].label is ${label.trim().length} characters; the limit is ${REVIEW_LIMITS.optionLabelChars} so it fits a button at 430px.`,
-          );
-        }
+      } else if (label.trim().length > REVIEW_LIMITS.lineMaxChars) {
+        // The label's own sanity ceiling; a button cannot hold a paragraph.
+        fail(
+          `review.options[${i}].label is ${label.trim().length} characters; past ${REVIEW_LIMITS.lineMaxChars} it is not a button face. Put the reasoning in the option's detail.`,
+        );
+      } else if (
+        words(label) > REVIEW_LIMITS.optionLabelWords ||
+        label.trim().length > REVIEW_LIMITS.optionLabelChars
+      ) {
+        // Advisory for the same reason the row budgets are: a fourth word
+        // wraps a button, it does not break one.
+        gaps.push('optionLabelLength');
       }
       const d = raw.detail;
       if (d !== undefined) {
         if (typeof d !== 'string') {
           fail(`review.options[${i}].detail must be a markdown string.`);
-        } else if (words(d) > REVIEW_LIMITS.optionDetailWords) {
+        } else if (words(d) > REVIEW_LIMITS.detailMaxWords) {
           fail(
-            `review.options[${i}].detail is ${words(d)} words; the limit is ${REVIEW_LIMITS.optionDetailWords}.`,
+            `review.options[${i}].detail is ${words(d)} words; past ${REVIEW_LIMITS.detailMaxWords} it is a document, not a note under a button.`,
           );
+        } else if (words(d) > REVIEW_LIMITS.optionDetailWords) {
+          gaps.push('optionDetailLength');
         }
       }
     });
@@ -546,7 +591,8 @@ export function checkReviewPayload(input: unknown): ReviewCheck {
     );
   }
 
-  return { ok: errors.length === 0, errors, gaps };
+  // Deduped: six over-long option labels are one thing to say, not six.
+  return { ok: errors.length === 0, errors, gaps: [...new Set(gaps)] };
 }
 
 /**
@@ -579,18 +625,42 @@ export function reviewPayloadMessage(check: ReviewCheck): string {
  */
 export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
   if (gaps.length === 0) return undefined;
-  const parts: string[] = [];
+  const thin: string[] = [];
   if (gaps.includes('lookFor')) {
-    parts.push(
+    thin.push(
       "review.lookFor is missing — one line saying what to look at, so the card says what a useful answer would be about. Without it the reader gets the question and no idea what you're unsure of.",
     );
   }
   if (gaps.includes('detail')) {
-    parts.push(
+    thin.push(
       'review.detail is missing — the markdown body under the header. Without it the card is a headline and two options with nothing behind them.',
     );
   }
-  return ['Filed. It will be thinner than it needs to be:', ...parts].join(' ');
+
+  // The length half. Phrased as what it costs on the screen rather than as a
+  // rule that was broken: these lengths FILED, and an author who reads this as
+  // a refusal retries and files the ask twice.
+  const long: string[] = [];
+  const over = (key: 'headline' | 'why' | 'lookFor') =>
+    `review.${key} runs past ${REVIEW_LIMITS[key]} characters, so it wraps instead of holding its line on a phone.`;
+  if (gaps.includes('headlineLength')) long.push(over('headline'));
+  if (gaps.includes('whyLength')) long.push(over('why'));
+  if (gaps.includes('lookForLength')) long.push(over('lookFor'));
+  if (gaps.includes('optionLabelLength')) {
+    long.push(
+      `An option label runs past ${REVIEW_LIMITS.optionLabelWords} words or ${REVIEW_LIMITS.optionLabelChars} characters, so the button wraps — the reasoning belongs in that option's detail.`,
+    );
+  }
+  if (gaps.includes('optionDetailLength')) {
+    long.push(
+      `An option's detail runs past ${REVIEW_LIMITS.optionDetailWords} words; it sits under a button, so a reader skims it rather than reads it.`,
+    );
+  }
+
+  return [
+    ...(thin.length > 0 ? ['Filed. It will be thinner than it needs to be:', ...thin] : []),
+    ...(long.length > 0 ? ['Filed. Some of it will not fit where it renders:', ...long] : []),
+  ].join(' ');
 }
 
 /**
