@@ -1,6 +1,6 @@
 ---
 name: leading-a-workspace
-description: Use when you hold or are taking the lead-agent seat on a claude-workspaces board — you called set_workspace_lead, or a task-review ask reached you as a triage.requested line or a taskReviews row on attach_agent
+description: Use when you hold or are taking the lead-agent seat on a claude-workspaces board — you called set_workspace_lead
 ---
 
 # Leading a claude-workspaces board
@@ -18,14 +18,6 @@ Goals describe **real-world outcomes** and say what is in scope. Ambitious, spec
 ## 2. Make every task clear, and ranked
 
 Every task you create — and every task you *see* — is yours to check against the standard in the general skill. Where the standard is not met, rewrite it with `rewrite_task`, or add a review item asking the primary user what they meant. This is the whole of the `task-review` ask that routes to you.
-
-**Leaving it alone is one of three honest outcomes, and it is the common one.** A review pass that always finds something is rewriting for its own sake. The other two are rewriting it, when you have the context to do it well, and asking the filer on the task, when you don't. Judge each row relative to the board it sits on — if three rows already say "improve search", the fourth has to say which part — and read `quote` when it is there, because it holds the filer's original words and the title still answers to them.
-
-**A body written from measurement names a probe, a port, or a number, and dates its claim.** One written from inference reads as confident prose, and this project has shipped a week where three of those premises turned out false. A body asserting how the system behaves with no method and no date is worth a question even when it reads tidily.
-
-**Decision rows (`needs: 'decision'`) are exempt from the story shape** — a decision's title is a question, and its body is the question, the stakes, the options with what each costs, and what is blocked until it is answered. Judge clarity, not shape.
-
-**Never silently rewrite a human's deliberate words.** A machine-clipped fragment is fair game; the machine wrote it. Phrasing a person visibly chose gets a question, or a suggested rewrite in a comment, rather than a replacement — and when you cannot tell which it is, ask. Never let the pass delay the write either: the capture has already landed by the time the ask reaches you, and that ordering is the design.
 
 Then **place it**: the right goal, in the right position relative to the rows already there. `after` on a `create_tasks` row for a new one, `set_task_goal` for an existing one.
 
@@ -50,3 +42,5 @@ Everything on the board then reaches you:
 - Events for tasks, review items, comments, docs, voice requests, bucket reviews, task reviews
 - Includes events from resources created later — you listen to everything
 - If you disconnect, events that happen in the meantime will remain queued for when you reconnect
+
+Call `heartbeat(workspaceId)` every few minutes. The server only sends work to agents it has seen recently, so a session that goes quiet stops getting anything.
