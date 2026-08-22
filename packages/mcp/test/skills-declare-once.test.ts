@@ -1,49 +1,51 @@
 /**
  * The skills are how the fleet learns that declaring once is enough.
  *
- * The tool descriptions changed in the earlier commits of this branch, but a
- * tool description is read at the moment a tool is about to be called — and
- * the whole point of this ticket is that an agent never thinks to call
- * anything, because silence from a subscription it never made is
- * indistinguishable from nobody having commented. The skills are the surface
- * that is read at SESSION START, before the mistake, so they are where the
- * one-declaration instruction has to live.
+ * The tool descriptions carry the mechanics, but a tool description is read at
+ * the moment a tool is about to be called — and the whole point of this ticket
+ * is that an agent never thinks to call anything, because silence from a
+ * subscription it never made is indistinguishable from nobody having
+ * commented. The skills are the surface that is read at SESSION START, before
+ * the mistake, so the seat contract has to be legible there.
  *
  * These are content assertions on shipped SKILL.md files, in the spirit of
  * plugin-version-reported.test.ts: the artifact peers install is the file, so
- * the file is what gets pinned. Each assertion names a sentence the incident
- * would have needed; the controls at the bottom pin the guidance that must
- * SURVIVE the edit, because the realistic failure of a doc change is not a
- * missing addition but a rewrite that quietly drops what was already there.
+ * the file is what gets pinned.
  *
- * SPLIT NOTE: the hub skill is two files. `SKILL.md` keeps what must be read
- * BEFORE a call — the two things called "workspace", the work loop, the goal
- * edit — and `tool-reference.md` beside it carries the argument lists. Every
- * pin below still reads the file that actually has to carry the literal, so
- * the liveness assertions stay on `SKILL.md` and the review-item call shapes
- * moved with their section (pinned in review-item-tools.test.ts).
+ * SHAPE NOTE: the lead skill is operator-authored and deliberately minimal —
+ * four sections, ~45 lines. The operational liveness material used to sit in a
+ * `running-a-workspace-hub` skill beside it; that skill is gone, and its
+ * content now lives in the description of the tool that owns each piece
+ * (`set_workspace_lead` for the declare-once behaviour, `list_watched_docs`
+ * for the quiet-board probe, `attach_agent` for the non-lead path). A tool
+ * description is read when the tool is about to be called and costs nothing on
+ * every other turn, which is the trade that retired the skill. What stays here
+ * is the seat CONTRACT: one bare call, it covers surfaces created later,
+ * events queue across a disconnect, and a quiet session has to say so.
  *
- * SHAPE NOTE: the lead skill is Bryan-authored and deliberately
- * minimal — four sections, ~45 lines. The operational liveness material
- * (heartbeat, watch_doc-does-not-stand-in, lead-held/takeover, the quiet-board
- * probe) now lives ONLY in the hub skill, so those assertions run on the hub
- * alone. The lead skill states the seat CONTRACT instead: one bare call,
- * covers surfaces created later, and events queue across a disconnect — which
- * is the durable-queue model the server now implements. The negative guards
- * (the old wrong delivery claims) still run against all three files, because
- * a wrong sentence can come back anywhere.
+ * The negative guards run across every shipped skill, because a wrong sentence
+ * — or a pointer to a skill that no longer ships — can come back anywhere.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILLS = join(HERE, '../../plugin/skills');
-const HUB = readFileSync(join(SKILLS, 'running-a-workspace-hub/SKILL.md'), 'utf8');
-const HUB_REF = readFileSync(join(SKILLS, 'running-a-workspace-hub/tool-reference.md'), 'utf8');
 const LEAD = readFileSync(join(SKILLS, 'leading-a-workspace/SKILL.md'), 'utf8');
 const GENERAL = readFileSync(join(SKILLS, 'working-in-a-workspace/SKILL.md'), 'utf8');
+
+/** Every skill the plugin actually ships, discovered rather than listed — a
+ *  skill added tomorrow is covered by the guards below without an edit here. */
+const SHIPPED: Array<[string, string]> = readdirSync(SKILLS, { withFileTypes: true })
+  .filter((d) => d.isDirectory() && existsSync(join(SKILLS, d.name, 'SKILL.md')))
+  .map((d) => [d.name, readFileSync(join(SKILLS, d.name, 'SKILL.md'), 'utf8')]);
+
+/** Skills that were retired. A dangling name in a skill, a triage line or a
+ *  tool description reads as a skill the agent failed to FIND, not as one that
+ *  no longer exists — which sends the reader looking for a broken install. */
+const RETIRED = ['running-a-workspace-hub', 'handling-a-goal-change', 'reviewing-task-shape'];
 
 /**
  * One line, lower-cased. Every assertion below that searches for a PHRASE runs
@@ -57,7 +59,7 @@ const GENERAL = readFileSync(join(SKILLS, 'working-in-a-workspace/SKILL.md'), 'u
  * banned sentence as absent from the file that contains it.
  *
  * This is not hypothetical. At ecaf378, the last commit before the delivery
- * claim was corrected, both skills carried "Delivery is gated on a heartbeat
+ * claim was corrected, two skills carried "Delivery is gated on a heartbeat
  * inside the ~5-minute window" and `not.toMatch(/gated on a heartbeat/)` fired
  * on exactly one of them — the other file's line break fell between `a` and
  * `heartbeat`. Collapsing the whitespace removes the coin flip.
@@ -67,85 +69,27 @@ const GENERAL = readFileSync(join(SKILLS, 'working-in-a-workspace/SKILL.md'), 'u
  */
 const flatten = (s: string): string => s.replace(/\s+/g, ' ').toLowerCase();
 
-const ALL: Array<[string, string, string]> = [
-  ['running-a-workspace-hub', HUB, flatten(HUB)],
-  ['leading-a-workspace', LEAD, flatten(LEAD)],
-  ['working-in-a-workspace', GENERAL, flatten(GENERAL)],
-];
-
-describe('the hub skill teaches one declaration per session', () => {
-  it('names the bare one-argument declaration', () => {
-    // `set_workspace_lead(workspaceId)` with nothing else — the form that
-    // attaches, subscribes and drains. An agent that reads the two-arg
-    // handover form first will assume it needs an id it does not have.
-    expect(HUB).toMatch(/set_workspace_lead\(workspaceId\)/);
-  });
-
-  it('says the declaration covers surfaces created later', () => {
-    expect(flatten(HUB)).toMatch(/created later/);
-  });
-
-  it('says it survives a respawn without being redone', () => {
-    expect(flatten(HUB)).toMatch(/respawn|restart/);
-    expect(flatten(HUB)).toMatch(/survives|re-?wire|restore|persist/);
-  });
-
-  it('demotes watch_doc — it is for docs outside your board, not a stand-in', () => {
-    expect(flatten(HUB)).toMatch(/outside|does not stand in/);
-    expect(HUB).toMatch(/watch_doc/);
-  });
-
-  it('names list_watched_docs as the way to check coverage', () => {
-    expect(HUB).toMatch(/list_watched_docs/);
-  });
-
-  it('gives the reader a probe for a board that feels quiet', () => {
-    // The exact reading the incident needed and nobody had: a peer that
-    // believed it was listening had no way to ask.
-    expect(HUB).toMatch(/unattachedBoards|coverage/);
-    expect(flatten(HUB)).toMatch(/quiet/);
-  });
-
-  it('says a declaration does not keep you live, and names OBSERVED WORK as the gate', () => {
-    // The gap the skill-split created: one call now covers every surface, so
-    // "I declared" reads as "I am covered" — while an attachment lapses
-    // unless the server keeps seeing the session.
-    //
-    // The rule encoded here: HEARTBEAT_FRESH_MS (~5 min) feeds the DISPLAYED
-    // away label; delivery rides the observed clock,
-    // `max(lastHeartbeat, lastToolCallAt)`. So a ~5-minute claim about
-    // display is fine and a heartbeat-window claim about DELIVERY is not,
-    // and only the second is banned (in the ALL loop below).
-    expect(HUB).toMatch(/heartbeat\(workspaceId\)/);
-    // Positive: the delivery gate is named as BOTH signals, not one.
-    expect(flatten(HUB)).toMatch(/a heartbeat or a tool call|a tool call or a heartbeat/);
-  });
-
-  it('teaches the repair path without leaving the heartbeat behind', () => {
-    expect(HUB).toMatch(/attach_agent\(workspaceId\)/);
-    expect(HUB).toMatch(/set_workspace_lead\(workspaceId\)/);
-    expect(HUB).toMatch(/heartbeat\(workspaceId\)/);
-  });
-
-  it('says declaring will not displace a live lead, and names the override', () => {
-    expect(HUB).toMatch(/lead-held/);
-    expect(HUB).toMatch(/takeover/);
-  });
-});
-
 describe('the wrong delivery claims cannot come back in any skill', () => {
-  for (const [name, , flat] of ALL) {
+  for (const [name, raw] of SHIPPED) {
     it(`${name} does not claim delivery is gated on a heartbeat window`, () => {
-      // Reverting any skill to "Delivery is gated on a heartbeat inside the
-      // ~5-minute window" goes red here. Runs on `flat` — see the note on
-      // `flatten` for why the raw file lets a line wrap hide the sentence.
-      expect(flat).not.toMatch(/gated on a heartbeat/);
-      // And the hub's old display-vs-delivery fusion ("the hub shows you as
-      // **away and triage requests queue**") stays gone. Revert guard, not a
-      // live check: deleted in 278de00.
-      expect(flat).not.toMatch(/away and triage requests queue/);
+      // The rule: HEARTBEAT_FRESH_MS (~5 min) feeds the DISPLAYED away label;
+      // delivery rides the observed clock, `max(lastHeartbeat, lastToolCallAt)`.
+      // So a ~5-minute claim about display is fine and a heartbeat-window claim
+      // about DELIVERY is not, and only the second is banned. Runs on the
+      // flattened text — see the note on `flatten` for why the raw file lets a
+      // line wrap hide the sentence.
+      expect(flatten(raw)).not.toMatch(/gated on a heartbeat/);
+      // And the retired hub's display-vs-delivery fusion stays gone.
+      expect(flatten(raw)).not.toMatch(/away and triage requests queue/);
     });
   }
+
+  // POSITIVE CONTROL: the loop above is vacuous if SHIPPED is empty, which is
+  // exactly what a wrong path or a deleted directory would produce.
+  it('reads a non-empty set of shipped skills', () => {
+    expect(SHIPPED.length).toBeGreaterThan(1);
+    expect(SHIPPED.map(([n]) => n)).toContain('leading-a-workspace');
+  });
 });
 
 describe('the lead skill states the seat contract', () => {
@@ -165,6 +109,15 @@ describe('the lead skill states the seat contract', () => {
     expect(flatten(LEAD)).toMatch(/remain queued|queued for when you reconnect/);
   });
 
+  it('says a quiet session stops being sent work', () => {
+    // The one thing the seat contract cannot leave to a tool description: an
+    // agent that has declared reads "I am covered", and the attachment lapses
+    // anyway unless the server keeps seeing the session. Nothing prompts a
+    // call here, so there is no tool description to read at the right moment.
+    expect(LEAD).toMatch(/heartbeat\(workspaceId\)/);
+    expect(flatten(LEAD)).toMatch(/seen recently/);
+  });
+
   it('requires the general skill as background instead of repeating it', () => {
     expect(LEAD).toMatch(/working-in-a-workspace/);
     expect(flatten(LEAD)).toMatch(/deliberately not repeated/);
@@ -176,24 +129,6 @@ describe('the lead skill states the seat contract', () => {
 });
 
 describe('positive controls — guidance that must survive the edit', () => {
-  it('the hub skill still requires a heartbeat while attached', () => {
-    // A heartbeat is the only signal a session can send when it has nothing
-    // else to say. Tool calls refresh the observed clock for free while you
-    // work THIS board, so the case that needs the explicit call is the quiet
-    // one — a long stretch of thinking, or a board you hold but are not
-    // currently touching.
-    expect(HUB).toMatch(/heartbeat\(workspaceId\)/);
-    expect(flatten(HUB)).toMatch(/stay live/);
-  });
-
-  it('the hub skill still documents attach_agent for agents that do not lead', () => {
-    expect(HUB).toMatch(/attach_agent\(workspaceId\)/);
-  });
-
-  it('the hub skill still keeps handing the seat to someone else a pure handover', () => {
-    expect(HUB).toMatch(/set_workspace_lead\(workspaceId, leadAgentId\)/);
-  });
-
   it('the lead skill still leads with priority order and not-stopping', () => {
     expect(LEAD).toMatch(/^## 3\. Work in priority order — including over the primary user$/m);
     expect(flatten(LEAD)).toMatch(/not until the batch drains/);
@@ -206,15 +141,10 @@ describe('positive controls — guidance that must survive the edit', () => {
     expect(GENERAL).toContain('review_type: "question"');
   });
 
-  it('no substantive sentence appears in two of the board skills', () => {
-    // The split's drift guard, stated mechanically: the lead skill says its
-    // shared ground is "deliberately not repeated here", so any long line
-    // present verbatim in two files is a copy that will rot in one place.
-    //
-    // Widened from LEAD-vs-GENERAL to every pair once the hub was split,
-    // because the hub is the file that HAD the copies: its "File work" section
-    // restated the general skill's task standard and its work loop restated
-    // the lead skill's fan-out default.
+  it('no substantive sentence appears in two shipped skills', () => {
+    // The drift guard, stated mechanically: the lead skill says its shared
+    // ground is "deliberately not repeated here", so any long line present
+    // verbatim in two files is a copy that will rot in one place.
     //
     // FENCED LINES ARE EXEMPT, and that is not a hole. A code block is an API
     // call, not a sentence — `set_workspace_lead(workspaceId) // no second
@@ -235,81 +165,63 @@ describe('positive controls — guidance that must survive the edit', () => {
       }
       return out;
     };
-    const files: Array<[string, Set<string>]> = [
-      ['running-a-workspace-hub/SKILL.md', prose(HUB)],
-      ['running-a-workspace-hub/tool-reference.md', prose(HUB_REF)],
-      ['leading-a-workspace', prose(LEAD)],
-      ['working-in-a-workspace', prose(GENERAL)],
-    ];
+    const files: Array<[string, Set<string>]> = SHIPPED.map(([n, raw]) => [n, prose(raw)]);
     const dups: string[] = [];
     for (let i = 0; i < files.length; i++) {
       for (let j = i + 1; j < files.length; j++) {
-        const [an, a] = files[i];
-        const [bn, b] = files[j];
+        const [an, a] = files[i] as [string, Set<string>];
+        const [bn, b] = files[j] as [string, Set<string>];
         for (const l of a) if (b.has(l)) dups.push(`${an} + ${bn}: ${l}`);
       }
     }
     expect(dups).toEqual([]);
   });
 
-  it('the hub reference is shipped and reachable by name from the skill file', () => {
-    // A sibling file linked by name costs nothing until it is opened — and
-    // buys nothing if the skill file stops naming it, which is how a split
-    // turns into an orphan nobody reads.
-    expect(existsSync(join(SKILLS, 'running-a-workspace-hub/tool-reference.md'))).toBe(true);
-    expect(HUB).toContain('tool-reference.md');
-    // The reference must not re-teach what a task should SAY; that is the
-    // general skill's, and restating it there is what the split was for.
-    expect(HUB_REF).toContain('claude-workspaces:working-in-a-workspace');
-  });
-
-  it('the retired task-shape skill is gone and nothing still points at it', () => {
-    // `reviewing-task-shape` was folded into §2 of the lead skill, which
-    // already claimed the task-review ask outright. A dangling skill name in a
-    // triage line or a tool description reads as a skill the agent failed to
-    // find, not as one that no longer exists.
-    expect(existsSync(join(SKILLS, 'reviewing-task-shape'))).toBe(false);
-    for (const [name, raw] of [
-      ['running-a-workspace-hub/SKILL.md', HUB],
-      ['running-a-workspace-hub/tool-reference.md', HUB_REF],
-      ['leading-a-workspace', LEAD],
-      ['working-in-a-workspace', GENERAL],
-    ] as const) {
-      expect(`${name}: ${raw}`).not.toContain('reviewing-task-shape');
+  it('the retired skills are gone and nothing still points at them', () => {
+    // `reviewing-task-shape` was absorbed by the lead seat's §2, which already
+    // claimed the task-review ask outright. `handling-a-goal-change` went
+    // because the operations do the task movement themselves — removing a band
+    // sweeps its tasks, a reorder carries them, and `set_goal_list` refuses a
+    // removal that would strand work. `running-a-workspace-hub` went because
+    // its content belongs in the description of the tool that owns it.
+    for (const gone of RETIRED) {
+      expect(existsSync(join(SKILLS, gone))).toBe(false);
+      for (const [name, raw] of SHIPPED) {
+        expect(`${name}: ${raw}`).not.toContain(gone);
+      }
     }
-    // Positive control: the assertion above can only mean something if the
-    // lead skill is where the ask now lives.
-    expect(flatten(LEAD)).toMatch(/three honest outcomes/);
+    // POSITIVE CONTROL: the same probe over the same haystack finds a skill
+    // that DOES ship, so a green run above means "absent", not "nothing read".
+    expect(
+      SHIPPED.some(([, raw]) => raw.includes('claude-workspaces:working-in-a-workspace')),
+    ).toBe(true);
   });
 
-  it('the hub skill still keeps its work loop and bucket-review sections', () => {
-    expect(HUB).toMatch(/^## The work loop$/m);
-    expect(HUB).toMatch(/^## A new band asks the bucket to be re-looked-at$/m);
-  });
-
-  it('the retired goal-change skill is gone and nothing still points at it', () => {
-    // `handling-a-goal-change` was entirely about the workspace-level TEXT
-    // goal and the re-triage it fired. Both are removed; a skill name left
-    // behind in a triage line or a tool description reads to an agent as a
-    // skill it failed to find rather than one that no longer exists.
-    expect(existsSync(join(SKILLS, 'handling-a-goal-change'))).toBe(false);
-    for (const [name, raw] of [
-      ['running-a-workspace-hub/SKILL.md', HUB],
-      ['running-a-workspace-hub/tool-reference.md', HUB_REF],
-      ['leading-a-workspace', LEAD],
-      ['working-in-a-workspace', GENERAL],
-    ] as const) {
-      expect(`${name}: ${raw}`).not.toContain('handling-a-goal-change');
+  it('no skill still teaches the removed workspace text goal', () => {
+    // `set_workspace_goal` wrote a single north-star paragraph on the
+    // workspace. It is gone: a board's goals are the ordered LIST now. A skill
+    // that still names the verb teaches a call whose route answers 410, and
+    // the agent reads that as its own install being broken.
+    for (const [name, raw] of SHIPPED) {
       expect(`${name}: ${raw}`).not.toContain('set_workspace_goal');
     }
-    // Positive control: the surviving goal verbs are still taught, so the
-    // absences above are a removal rather than a file that stopped loading.
-    expect(HUB_REF).toContain('set_goal_list');
+    // POSITIVE CONTROL: the surviving goal verbs ARE taught somewhere, so the
+    // absence above is a removal rather than a haystack that stopped loading.
+    expect(SHIPPED.some(([, raw]) => raw.includes('set_goal_list'))).toBe(true);
+    expect(SHIPPED.some(([, raw]) => raw.includes('set_task_goal'))).toBe(true);
   });
 
-  it('the skills still carry their frontmatter names', () => {
-    expect(HUB).toMatch(/^name: running-a-workspace-hub$/m);
-    expect(LEAD).toMatch(/^name: leading-a-workspace$/m);
-    expect(GENERAL).toMatch(/^name: working-in-a-workspace$/m);
+  it('every skill declares a frontmatter name, and it matches the directory', () => {
+    // `embedding-widget/` ships as `embedding-feedback-widget` and has since
+    // it was written. Renaming either half changes the name peers invoke, so
+    // it is listed as a known exception rather than silently accommodated by
+    // weakening the check for everyone.
+    const KNOWN_MISMATCH: Record<string, string> = {
+      'embedding-widget': 'embedding-feedback-widget',
+    };
+    for (const [dir, raw] of SHIPPED) {
+      const declared = /^name: (.+)$/m.exec(raw)?.[1];
+      expect(`${dir}: ${declared}`).toBe(`${dir}: ${KNOWN_MISMATCH[dir] ?? dir}`);
+    }
   });
 });

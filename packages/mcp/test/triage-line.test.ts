@@ -1,5 +1,7 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { triageRequestLine } from '../src/triage-line.ts';
+import { TASK_REVIEW_SKILL, triageRequestLine } from '../src/triage-line.ts';
 
 describe('a single-task placement (kind: task)', () => {
   it('is addressed to whoever is attached, never turned into an FYI', () => {
@@ -152,5 +154,46 @@ describe('a task shape review (kind: task-review)', () => {
     const line = triageRequestLine({ kind: 'task-review', taskId: 't-r2' }, 'agent-whoever');
     expect(line).not.toContain('undefined');
     expect(line).toContain('t-r2');
+  });
+});
+
+describe('every skill a triage line names actually ships', () => {
+  // A line naming a skill is a promise that a skill by that name SHIPS. A
+  // deletion that leaves a name behind produces a message telling an agent to
+  // go read something that does not exist — which reads as a broken install
+  // rather than as a skill that was retired on purpose.
+  const NAMED = [TASK_REVIEW_SKILL];
+
+  for (const ref of NAMED) {
+    it(`${ref} resolves to a skill directory in the plugin`, () => {
+      const dir = ref.split(':')[1] as string;
+      const path = join(import.meta.dirname, '..', '..', 'plugin', 'skills', dir, 'SKILL.md');
+      expect(existsSync(path)).toBe(true);
+      expect(readFileSync(path, 'utf8')).toContain(`name: ${dir}`);
+    });
+  }
+
+  // POSITIVE CONTROL: the loop above is vacuous if NAMED is empty, and the
+  // retired skills are exactly what would empty it. Prove it ran.
+  it('checks at least one name', () => {
+    expect(NAMED.length).toBeGreaterThan(0);
+  });
+
+  // The retired ones must not come back as a dangling reference.
+  it('names no retired skill anywhere in a rendered line', () => {
+    const lines = [
+      triageRequestLine({ kind: 'task', taskId: 't-z' }, 'agent-whoever'),
+      triageRequestLine({ kind: 'bucket-review', taskIds: ['t-1'] }, 'agent-whoever'),
+      triageRequestLine({ kind: 'task-review', taskId: 't-r1', leadAgentId: 'a' }, 'a'),
+    ];
+    for (const line of lines) {
+      for (const gone of [
+        'handling-a-goal-change',
+        'running-a-workspace-hub',
+        'reviewing-task-shape',
+      ]) {
+        expect(line).not.toContain(gone);
+      }
+    }
   });
 });

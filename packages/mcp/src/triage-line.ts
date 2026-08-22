@@ -60,8 +60,8 @@ const SHAPE_THEN_PLACE =
 /**
  * The judgment half of a task-review — when to rewrite versus ask the filer,
  * and why a human's deliberate words are never silently replaced. Named in the
- * Named in the request itself, and exported so the OTHER delivery path — the
- * queued rows an away lead gets on `attach_agent` — names the same contract.
+ * request itself, and exported so the same name reaches the OTHER delivery
+ * path (rows queued for a lead who was away, handed over on `attach_agent`).
  *
  * This used to name a skill of its own (`reviewing-task-shape`). It was
  * retired: the ask is the lead seat's, §2 of the lead skill claims it outright,
@@ -83,18 +83,13 @@ export const TASK_REVIEW_SKILL = 'claude-workspaces:leading-a-workspace';
 /**
  * The body of a `bucket-review` — "a band appeared, re-look at the pile".
  *
- * Rendered on its own branch rather than through the re-triage one, because
- * the north-star text did NOT move: borrowing that branch would tell the lead
- * their placements were judged against a goal that never changed, which is
- * the same lie that kept this request out of the re-triage sidecar.
- *
- * Two things the line must say and one it must not. It names the bands and
- * every task id, for the same parity reason the re-triage line does — the
- * present lead must not get less than the away one, who receives the whole
- * `pendingBucketReview` on attach. And it says that leaving a task unplaced
- * is a valid answer, because the server deliberately places nothing: an
- * auto-assign would stamp a ranking decision no human made, and a line read
- * as "empty this bucket" is that same decision made of words.
+ * Two things the line must say. It names the bands and every task id, for
+ * parity across the two delivery paths — the present lead must not get less
+ * than the away one, who receives the whole `pendingBucketReview` on their
+ * next attach. And it says that leaving a task unplaced is a valid answer,
+ * because the server deliberately places nothing: an auto-assign would stamp
+ * a ranking decision no human made, and a line read as "empty this bucket" is
+ * that same decision made of words.
  */
 function bucketReviewDetail(p: TriageRequestPayload): string {
   const bands = (p.newBands ?? [])
