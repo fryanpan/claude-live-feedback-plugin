@@ -211,9 +211,7 @@ export async function declareWorkspaceLead(
       text: q.text,
       ts: q.ts,
     })),
-    ...(a.pendingRetriage
-      ? { pendingRetriage: a.pendingRetriage }
-      : {}),
+    ...(a.pendingRetriage ? { pendingRetriage: a.pendingRetriage } : {}),
     ...(a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {}),
     ...(a.taskReviews !== undefined && a.taskReviews.length > 0
       ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL }
