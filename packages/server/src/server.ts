@@ -2606,13 +2606,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // meta (folder binds, diff reviews) or a hub board the doc is filed
           // under — resolved via hubBoardsForDoc so the answer is the same
           // set the event fan-out and coverage readout already use.
+          //
+          // `?setId=` scopes it to one REVIEW instead. It exists because the
+          // sidebar's legacy flat-set path had no way to ask: it fetched every
+          // doc on the server — 4,205,683 bytes for 4,062 rows, measured
+          // 2026-08-21 — and kept the 6 that shared its setId. Matching goes
+          // through `reviewIdOf` so this route cannot answer differently from
+          // the other set queries beside it (grouped diff, repo files, tree),
+          // which means a doc restored from an archive carrying only the
+          // deprecated `workspaceId` spelling is still found by its set.
           const workspaceId = url.searchParams.get('workspaceId');
+          const setId = url.searchParams.get('setId');
           const all = rooms.list();
-          const docs = workspaceId
+          const byWorkspace = workspaceId
             ? all.filter(
                 (m) => m.workspaceId === workspaceId || hubBoardsForDoc(m.docId).has(workspaceId),
               )
             : all;
+          const docs = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;
           return j(200, { docs: docs.map(withReviewUrl) });
         }
 

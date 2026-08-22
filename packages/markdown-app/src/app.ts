@@ -21,6 +21,7 @@ import {
   wireThreadRangeClicks,
 } from './review-chrome.ts';
 import { navigateTo, startRouter } from './router.ts';
+import { type SetDoc, selectSetSiblings, setDocsUrl } from './set-nav.ts';
 import {
   beginSidebarRender,
   isCurrentSidebarRender,
@@ -45,13 +46,7 @@ interface Selection {
 }
 
 interface LegacyDocs {
-  docs: Array<{
-    docId: string;
-    type: string;
-    sourceUrl?: string;
-    title?: string;
-    setId?: string;
-  }>;
+  docs: SetDoc[];
 }
 
 /**
@@ -657,7 +652,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // that froze a failed/partial snapshot for the whole mount.) `scope.disposed`
     // guards the superseded-navigation race after the await.
     try {
-      const res = await fetch('/api/docs');
+      const res = await fetch(setDocsUrl(setId));
       // Bail if the mount was torn down OR a newer sidebar render superseded us
       // (e.g. a later meta tick's fetch already resolved) — an earlier,
       // possibly smaller snapshot must not overwrite it.
@@ -665,13 +660,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       if (!res.ok) return;
       const data = (await res.json()) as LegacyDocs;
       if (scope.disposed || !isCurrentSidebarRender(token)) return;
-      const siblings = data.docs.filter((d) => d.setId === setId && d.type === 'markdown');
-      // Stable order: title (or sourceUrl basename) ASC, then docId.
-      siblings.sort((a, b) => {
-        const ka = (a.title ?? a.sourceUrl ?? a.docId).toLowerCase();
-        const kb = (b.title ?? b.sourceUrl ?? b.docId).toLowerCase();
-        return ka < kb ? -1 : ka > kb ? 1 : 0;
-      });
+      const siblings = selectSetSiblings(data.docs, setId);
       const sig = `set:${setId}:${siblings.map((d) => d.docId).join(',')}`;
       if (sidebarShowsSignature(sig)) {
         setActiveFile(navDocId);
