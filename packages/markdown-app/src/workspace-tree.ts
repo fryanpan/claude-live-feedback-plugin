@@ -15,7 +15,9 @@ import { setActiveFile } from './diff-nav.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import {
   beginSidebarRender,
+  commitSidebarColumn,
   isCurrentSidebarRender,
+  resetSidebarSignature,
   setSidebarSignature,
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
@@ -140,21 +142,29 @@ export async function renderWorkspaceTree(
   scope?: Disposable,
 ): Promise<void> {
   const token = beginSidebarRender();
-  const setPane = document.getElementById('set-pane');
   const setPaneList = document.getElementById('set-pane-list');
   const docMenu = document.getElementById('doc-menu');
-  document.body.classList.add('has-set');
-  setPane?.setAttribute('aria-hidden', 'false');
   try {
     // Re-fetch on every navigation; the shared signature below decides whether
     // the fetched tree actually needs a DOM rebuild (which resets scroll +
     // collapses folder state), or just an active-marker move.
     const res = await fetch(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
+    // A failed fetch commits nothing in EITHER direction: a first load that
+    // fails leaves the column unreserved (no empty panel), and a failed
+    // heartbeat refresh leaves the rows already on screen alone.
     if (!res.ok) return;
     const data = (await res.json()) as { tree: TreeDir };
     // Superseded while fetching (mount torn down, or a newer sidebar render
     // claimed the epoch) → don't overwrite the current sidebar.
     if (scope?.disposed || !isCurrentSidebarRender(token)) return;
+    // Now — and only now — is it known whether there is anything to show.
+    commitSidebarColumn(data.tree.children.length > 0);
+    if (data.tree.children.length === 0) {
+      if (setPaneList) setPaneList.innerHTML = '';
+      if (docMenu) docMenu.innerHTML = '';
+      resetSidebarSignature();
+      return;
+    }
     if (!force && sidebarShowsSignature(treeSignature(workspaceId, data.tree))) {
       setActiveFile(docId);
       return;
