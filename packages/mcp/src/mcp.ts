@@ -98,7 +98,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.96';
+const PLUGIN_VERSION = '0.1.98';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4310,8 +4310,9 @@ interface HubEventPayload {
   fromGoal?: string;
   toGoal?: string;
   answer?: string;
-  /** `decision.answered` only: the answered task's links, which decide
-   *  whether the line offers a propagation checklist. See decision-line.ts. */
+  /** `decision.answered` and `workspace.review_answered`: the answered task's
+   *  links, which decide whether the line offers a propagation checklist.
+   *  See decision-line.ts and nudge-line.ts. */
   links?: unknown[];
   newGoal?: string;
   kind?: string;
