@@ -14342,7 +14342,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.95";
+var PLUGIN_VERSION = "0.1.96";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -14639,11 +14639,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "create_review_doc",
-      description: "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. Note: the disk→doc sync races against the doc→disk write-back; if you Write/Edit a bound .md while LF has any pending state, your file edit can be silently clobbered by the next flush. Route programmatic edits through the LF tools once a doc is bound — `find_and_replace` / `rewrite_thread_region` for targeted edits, `set_doc_content` for a whole-doc rewrite — and call `reparse_from_disk(docId)` only to force-pull an edit that already happened externally. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the review URL plus the attach result.",
+      description: "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. Note: the disk→doc sync races against the doc→disk write-back; if you Write/Edit a bound .md while LF has any pending state, your file edit can be silently clobbered by the next flush. Route programmatic edits through the LF tools once a doc is bound — `find_and_replace` / `rewrite_thread_region` for targeted edits, `set_doc_content` for a whole-doc rewrite — and call `reparse_from_disk(docId)` only to force-pull an edit that already happened externally. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the MINTED docId (the doc's permanent address — store that, not the name you passed), the review URL, and the attach result.",
       inputSchema: {
         type: "object",
         properties: {
-          docId: { type: "string" },
+          docId: {
+            type: "string",
+            description: "A readable NAME for the doc, not its address. The server mints the doc's id and returns it; the name you pass becomes an alias that resolves to it, so both spellings work in URLs and in every tool that takes a docId. Use the RETURNED docId when you store or share the address — it never changes, while a name can be superseded. Passing a name that already resolves reuses that doc rather than making a second one. Names starting `task:`, `ws:` or `goal:` are refused: those namespaces are the server's."
+          },
           path: { type: "string" },
           title: { type: "string" },
           setId: { type: "string" },
@@ -14702,11 +14705,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "bind_mock",
-      description: "Bind an HTML mockup to a docId AND serve it. `sourceHtmlPath` is an absolute path to an HTML file (typically one the agent just wrote, embedding `<claude-feedback-widget doc-id=\"...\">`). The server reads the file at that path on each request and streams it as HTML at `/mockup/<docId>` — no symlinking into the plugin's `demos/` directory required. Returns `meta.reviewUrl` pointing at the served URL; hand that to a human. Also auto-subscribes the caller to thread events on the doc (same as `create_review_doc`). Pass `subscribe: false` to skip the auto-watch (rare). Idempotent — calling twice on the same docId is safe; just updates the bound source path. Single-file mockups only: HTML that references sibling CSS/JS via relative paths won't resolve through this route since we don't serve the source directory. For multi-file mockups, drop the directory into the plugin's `demos/` and use `/demos/<dirname>/` as before.",
+      description: "Bind an HTML mockup to a docId AND serve it. `sourceHtmlPath` is an absolute path to an HTML file (typically one the agent just wrote, embedding `<claude-feedback-widget doc-id=\"...\">`). The server reads the file at that path on each request and streams it as HTML at `/mockup/<docId>` — no symlinking into the plugin's `demos/` directory required. Returns `meta.reviewUrl` pointing at the served URL; hand that to a human. Also auto-subscribes the caller to thread events on the doc (same as `create_review_doc`). Pass `subscribe: false` to skip the auto-watch (rare). Idempotent — calling twice with the same docId is safe: the name resolves to the doc it already made and the bound source path is updated, rather than a second doc being minted. Single-file mockups only: HTML that references sibling CSS/JS via relative paths won't resolve through this route since we don't serve the source directory. For multi-file mockups, drop the directory into the plugin's `demos/` and use `/demos/<dirname>/` as before.",
       inputSchema: {
         type: "object",
         properties: {
-          docId: { type: "string" },
+          docId: {
+            type: "string",
+            description: "A readable NAME for the doc, not its address. The server mints the doc's id and returns it; the name you pass becomes an alias that resolves to it, so both spellings work in URLs and in every tool that takes a docId. Use the RETURNED docId when you store or share the address — it never changes, while a name can be superseded. Passing a name that already resolves reuses that doc rather than making a second one. Names starting `task:`, `ws:` or `goal:` are refused: those namespaces are the server's."
+          },
           sourceHtmlPath: { type: "string" },
           title: { type: "string" },
           subscribe: { type: "boolean" },
