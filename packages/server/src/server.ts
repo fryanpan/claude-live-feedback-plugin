@@ -1069,12 +1069,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *
    * "Ready" is the SAME computation `next_tasks` serves — `buildQueue` with
    * blocked rows filtered out — rather than a second reading of the same
-   * rules. Narrowed twice on top of it, and both narrowings are the point of
-   * the feature: `todo` only, because an in-progress row is claimed and
-   * somebody is already on it; agent-owned only, because a row waiting on a
-   * person is not work an agent wake unblocks. `ownerKind` comes from the
-   * projection's roster reader, so the answer here is the one the board
-   * draws.
+   * rules. Narrowed three times on top of it, and every narrowing is the
+   * point of the feature: `todo` only, because an in-progress row is claimed
+   * and somebody is already on it; agent-owned only, because a row waiting on
+   * a person is not work an agent wake unblocks; and NOT PARKED, because a
+   * row somebody deliberately deferred is not work anybody has failed to pick
+   * up. `ownerKind` comes from the projection's roster reader, so the answer
+   * here is the one the board draws.
+   *
+   * The park narrowing lives here rather than inside `buildQueue` on purpose:
+   * `next_tasks` keeps LISTING a parked row (with `parked` on it, so a lead
+   * reading the queue sees the deferral and can disagree with it), and it is
+   * only this wake — the surface that spends somebody's turn — that has to
+   * leave it alone. Filtering in the shared builder would have made "parked"
+   * mean "hidden" for every reader.
    */
   const readyWorkSnapshot = (workspace: HubWorkspace): ReadyWorkSnapshot => {
     const tasks = taskStore.listTasks(workspace.id);
@@ -1083,6 +1091,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const ready = buildQueue(tasks, workspace.goals)
       .filter((row) => {
         if (row.status !== 'todo') return false;
+        if (row.parked !== undefined) return false;
         const task = byId.get(row.id);
         return task !== undefined && ownerKindOf(task) === 'agent';
       })
@@ -4214,6 +4223,39 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(400, { error: 'dueAt must be an epoch-ms number, or null to clear' });
           }
           const res = taskStore.setDueAt(taskId, dueAt, { actor: author });
+          if (!res.ok) return j(404, res);
+          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
+          return j(200, res);
+        }
+        // Defer a row to a date, or un-park it (§3.6 task.parked). The row
+        // stays `todo` — parking is not a status, which is the point: an
+        // unblocked row somebody deliberately deferred had no honest spelling,
+        // so the ready-work nudger kept re-surfacing it.
+        const taskParkMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/park$/);
+        if (taskParkMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskParkMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          // Same refusal the /due route makes, for the same reason: an
+          // unparseable date read as "un-park" would answer 200 while deleting
+          // the deferral the caller meant to move.
+          const raw = body?.parkedUntil;
+          const parkedUntil =
+            raw === null || raw === undefined
+              ? null
+              : typeof raw === 'number' && Number.isFinite(raw)
+                ? raw
+                : undefined;
+          if (parkedUntil === undefined) {
+            return j(400, {
+              error: 'parkedUntil must be an epoch-ms number, or null to un-park',
+            });
+          }
+          const res = taskStore.parkTask(taskId, parkedUntil, {
+            actor: author,
+            ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
+          });
           if (!res.ok) return j(404, res);
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
