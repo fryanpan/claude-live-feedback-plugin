@@ -228,9 +228,11 @@ if (compare(current, parseSemver(baseVersion, baseRef)) <= 0) {
       `    ${PLUGIN_MANIFEST}\n` +
       `    ${MARKETPLACE_MANIFEST}\n` +
       '    PLUGIN_VERSION in packages/mcp/src/mcp.ts\n\n' +
-      'With several branches in flight, ask whoever owns the merges for your number\n' +
-      `rather than reading the next one off ${base}: two branches that independently\n` +
-      'pick the same number merge clean, because a conflict requires disagreement.',
+      'With several branches in flight, reading the next number off the tip is not\n' +
+      'enough on its own: two branches that independently pick the same number both\n' +
+      'clear THIS check and merge clean, because a conflict requires disagreement.\n' +
+      'That case is invariant 3 — it needs the open-PR list, so look for\n' +
+      '"concurrent-version check SKIPPED" in the log before trusting a green.',
   );
 }
 

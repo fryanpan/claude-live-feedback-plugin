@@ -48,3 +48,7 @@ docs/research/*.md
 demos/*
 !demos/dev-server/
 !demos/mockup/
+
+# CI scratch: what the other open PRs declare, written by
+# scripts/collect-open-pr-versions.ts and read by the version gate.
+open-pr-versions.json
