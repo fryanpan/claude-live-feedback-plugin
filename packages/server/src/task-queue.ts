@@ -33,7 +33,7 @@ import {
   bodyWrittenAtOf,
   decidePremiseDrift,
 } from './task-staleness.ts';
-import type { Task, TaskStatus, WorkspaceGoal } from './tasks.ts';
+import { type Task, type TaskStatus, type WorkspaceGoal, isParked } from './tasks.ts';
 
 export interface QueueBlocker {
   taskId: string;
@@ -79,6 +79,20 @@ export interface QueueRow {
    * are not.
    */
   premise?: PremiseDrift;
+  /**
+   * Present only while this row is deferred — "not now, and here is when".
+   *
+   * The row is still LISTED, deliberately. A parked row is not blocked (no
+   * open dependency) and not claimed (nobody is working it), so removing it
+   * from the queue would trade one invisibility for another: the point of
+   * parking is that a deliberate deferral becomes a thing a reader can see
+   * and disagree with. What changes is that the reader is told, on the row,
+   * instead of finding a row that looks exactly like work nobody got to.
+   *
+   * Omitted rather than falsey once the date passes — no sweeper clears the
+   * task's field, so this is computed against `now` on every read.
+   */
+  parked?: { until: number; reason?: string };
 }
 
 export interface QueueOpts {
@@ -94,6 +108,9 @@ export interface QueueOpts {
   discussion?: (taskId: string) => readonly PremiseNote[];
   /** Overridable for tests. */
   staleAfterMs?: number;
+  /** The instant the queue is being read AT — which is what decides whether a
+   *  park is still in force. Overridable for tests; nothing else needs it. */
+  now?: number;
 }
 
 /** Sort key for a goal id: `[band, sub]`. A goal is `[i, 0]`, its j-th
@@ -135,6 +152,7 @@ export function buildQueue(
   opts: QueueOpts = {},
 ): QueueRow[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const now = opts.now ?? Date.now();
 
   const open = tasks.filter((t) => t.status !== 'done');
   const selected =
@@ -190,6 +208,14 @@ export function buildQueue(
       ready: !blockedBy.some((b) => b.enforce),
       bodyWrittenAt,
       ...(premise ? { premise } : {}),
+      ...(isParked(task, now)
+        ? {
+            parked: {
+              until: task.parkedUntil as number,
+              ...(task.parkedReason !== undefined ? { reason: task.parkedReason } : {}),
+            },
+          }
+        : {}),
     };
   });
 

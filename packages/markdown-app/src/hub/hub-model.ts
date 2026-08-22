@@ -85,6 +85,14 @@ export interface HubTask {
   after: string[];
   afterEnforce?: string[];
   dueAt?: number;
+  /** Deferred until this instant — "not now, and here is when". NOT a status:
+   *  the row stays `todo` and unblocked, which is why the board has to draw
+   *  the deferral rather than let it be inferred from where the row sits.
+   *  Never cleared when the date passes, so every reader asks `isTaskParked`
+   *  rather than reading the field. */
+  parkedUntil?: number;
+  /** Why it is parked, in the parker's words. */
+  parkedReason?: string;
   links: unknown[];
   origin?: unknown;
   quote?: string;
@@ -287,6 +295,19 @@ export function assignedToHuman(task: HubTask): boolean {
  */
 export function ownedByPerson(task: HubTask): boolean {
   return ownerKind(task) === 'person';
+}
+
+/**
+ * Is this row deferred right now? The browser's copy of the server's
+ * `isParked`, and the ONE reader of `parkedUntil` on this side.
+ *
+ * A park is never cleared when its date arrives — no sweeper, deliberately —
+ * so "parked" is always a question about `now`, never a flag. Every surface
+ * asks it here so the chip, the panel and the board's own sense of the row
+ * cannot disagree about a date that just passed.
+ */
+export function isTaskParked(task: HubTask, now: number = Date.now()): boolean {
+  return task.parkedUntil !== undefined && task.parkedUntil > now;
 }
 
 export function taskVisible(task: HubTask, f: BoardFilters): boolean {
@@ -1532,6 +1553,7 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'task.assigned',
   'task.retitled',
   'task.due_set',
+  'task.parked',
   'task.evidence_amended',
   'task.regrouped',
   'decision.answered',
@@ -1566,6 +1588,19 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       if (!to) return `${actorName(ev)} cleared the due date on ${title()}`;
       if (from) return `${actorName(ev)} moved ${title()} from ${from} to ${to}`;
       return `${actorName(ev)} set ${title()} due ${to}`;
+    }
+    case 'task.parked': {
+      // The REASON is in the line, not just the date. A deferral is the kind
+      // of decision somebody reads back weeks later asking why the work never
+      // happened, and "parked until the 2nd" cannot be argued with.
+      const when = (v: unknown): string =>
+        typeof v === 'number' ? new Date(v).toLocaleDateString() : '';
+      const to = when(ev.to);
+      const from = when(ev.from);
+      const why = typeof ev.reason === 'string' && ev.reason ? ` — ${ev.reason}` : '';
+      if (!to) return `${actorName(ev)} un-parked ${title()}`;
+      if (from) return `${actorName(ev)} moved the park on ${title()} to ${to}${why}`;
+      return `${actorName(ev)} parked ${title()} until ${to}${why}`;
     }
     case 'task.body_edited': {
       // Typing in a task body is deliberately NOT activity (the snapshot
