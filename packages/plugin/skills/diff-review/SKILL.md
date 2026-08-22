@@ -100,12 +100,24 @@ navigates to every other changed file.
 - If the reviewer wants to comment on a **deleted** line: not supported yet —
   ask them to comment on an adjacent kept line instead.
 
-## Cleanup
+## Retiring a finished review
 
 A diff review is content in the workspace it was filed on. When the pass is
-over (threads resolved, change merged), call `delete_review(setId)` — the id
-`create_diff_review` returned, as `setId` or `reviewId`. It refuses while open
-threads remain unless `force:true`, and it cannot touch the workspace itself.
+over — the change merged — retire it yourself rather than leaving it to
+present its unresolved threads forever: `archive_review(setId, reason)`, with
+the id `create_diff_review` returned and a reason like `"merged in #301"`.
+
+Archiving takes the review off the home page and off its board row and stops
+its rooms syncing, and it **destroys nothing**: the docs stay on disk, every
+comment still feeds the activity analyses, and `unarchive_review(setId)` puts
+the whole thing back — threads, board links and all. Open threads do not block
+it; that is the point. `list_archived_reviews` shows what can come back.
+
+`delete_review(setId)` archives too (that is now what it means) but applies the
+old open-threads guardrail, so it refuses unless `force:true`. Only
+`purge:true` destroys anything, and reach for it essentially never — a purged
+doc cannot be restored and silently shortens the history the weekly analyses
+read.
 
 ## When NOT to use this
 
