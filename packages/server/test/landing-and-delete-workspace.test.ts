@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
@@ -13,7 +13,8 @@ import { type ServerHandle, createServer } from '../src/server.ts';
  *     nested under one expandable row
  *   - GET /api/workspaces lists the rolled-up summary
  *   - DELETE /api/workspaces/:id enforces the all-or-nothing open-thread
- *     guardrail and force-deletes the whole folder as a unit
+ *     guardrail and force-retires the whole folder as a unit — ARCHIVING it
+ *     by default, and purging only when ?purge=true asks for it
  */
 
 describe('landing + delete_workspace e2e (HTTP)', () => {
@@ -201,15 +202,45 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     expect(handle.rooms.get(files.get('src/index.ts')!.docId)).toBeTruthy();
   });
 
-  it('DELETE /api/workspaces/:id?force=true removes the whole folder', async () => {
+  it('DELETE /api/workspaces/:id?force=true ARCHIVES the whole folder', async () => {
+    // The old payload still means "retire this review" and still takes every
+    // member out of the live server — what changed is that the persisted
+    // state is parked in `_archive` instead of destroyed, so this is
+    // recoverable. `deleted` is gone from the response because nothing was.
     const r = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}?force=true`, {
       method: 'DELETE',
     });
-    const body = await j<{ ok: true; deleted: number }>(r);
-    expect(body.deleted).toBe(2);
+    const body = await j<{ ok: true; archived: number; docIds: string[] }>(r);
+    expect(body.archived).toBe(2);
     for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeUndefined();
+    for (const f of files.values()) {
+      expect(existsSync(join(dataDir, '_archive', `${f.docId}.ydoc`))).toBe(true);
+    }
     // Standalone doc is untouched.
     expect(handle.rooms.get('standalone-doc')).toBeTruthy();
+  });
+
+  it('DELETE ?purge=true is the destructive half, and it has to be asked for', async () => {
+    // Bring back what the previous test archived, which is the round trip
+    // that makes archiving safe to be the default.
+    const restored = await fetch(
+      `${base}/api/reviews/${encodeURIComponent(workspaceId)}/unarchive`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    );
+    expect((await j<{ ok: true; restored: number }>(restored)).restored).toBe(2);
+    for (const f of files.values()) expect(handle.rooms.get(f.docId)).toBeTruthy();
+
+    const r = await fetch(
+      `${base}/api/workspaces/${encodeURIComponent(workspaceId)}?force=true&purge=true`,
+      { method: 'DELETE' },
+    );
+    const body = await j<{ ok: true; deleted: number }>(r);
+    expect(body.deleted).toBe(2);
+    for (const f of files.values()) {
+      expect(handle.rooms.get(f.docId)).toBeUndefined();
+      expect(existsSync(join(dataDir, `${f.docId}.ydoc`))).toBe(false);
+      expect(existsSync(join(dataDir, '_archive', `${f.docId}.ydoc`))).toBe(false);
+    }
   });
 
   it('DELETE on an unknown workspace returns 404', async () => {

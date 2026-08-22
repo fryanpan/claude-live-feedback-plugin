@@ -97,7 +97,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.91';
+const PLUGIN_VERSION = '0.1.92';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -676,7 +676,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'delete_review',
       description:
-        "Permanently delete a REVIEW as ONE unit — a diff review from create_diff_review, or a folder bound with bind_folder. Drops every member review doc and cancels their sync; the SOURCE files on disk are left untouched. Use this when a review is finished instead of calling delete_doc once per file. The guardrail is ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing is deleted and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}] listing the offenders. Pass force:true to delete regardless. error:'not-found' means no review exists under that id — including a board id, which this tool deliberately cannot touch (use delete_workspace for a board). On success returns {ok:true, deleted:<docs>}.",
+        "Retire a REVIEW as ONE unit — a diff review from create_diff_review, or a folder bound with bind_folder. It now ARCHIVES by default rather than destroying: every member's persisted state moves to the server's archive, the live rooms stop syncing, the review leaves the home page and any board row, and the SOURCE files on disk are untouched. unarchive_review puts it all back. Pass purge:true — and only when you mean it — for the old destructive behaviour, which removes the .ydoc files the activity analyses are rebuilt from. The guardrail is unchanged and ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing happens and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}]. Prefer archive_review, which takes a reason and does not need force. error:'not-found' means no review exists under that id — including a board id, which this tool deliberately cannot touch (use delete_workspace for a board).",
       inputSchema: {
         type: 'object',
         properties: {
@@ -686,16 +686,58 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           force: {
             type: 'boolean',
-            description: 'Delete even if some member files have open threads. Default false.',
+            description: 'Proceed even if some member files have open threads. Default false.',
+          },
+          purge: {
+            type: 'boolean',
+            description:
+              'Destroy the persisted state instead of archiving it. Default false, and leaving it false is almost always right — a purged .ydoc cannot be restored and silently shortens the history the weekly analyses read.',
           },
         },
         required: ['setId'],
       },
     },
     {
+      name: 'archive_review',
+      description:
+        "RETIRE a finished review without deleting anything — the verb to reach for when the work a diff review covered has merged. Every member doc's persisted state moves into the server's archive: the review disappears from the home page and from any board it was linked to, its rooms stop syncing and stop costing a file poll, and it stops presenting its unresolved threads forever. Nothing is destroyed — the .ydoc files stay on disk, the activity analyses still read every comment in them, and unarchive_review restores the whole review (threads included) to exactly where it was, board links and all. Open threads do NOT block it; that is the point. Pass a `reason` — it is recorded with your agent name and replayed on list_archived_reviews, and it is usually the PR that merged. Returns {ok:true, archived:<docs>, docIds, manifest}. error:'not-found' means no review is bound under that id. error:'archive-collision' means an older snapshot of one of these docIds is already in the archive: nothing moved, and the colliding ids are listed — unarchive that one first rather than writing over it.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          setId: {
+            type: 'string',
+            description: 'reviewId from create_diff_review, or setId from bind_folder.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Why this review is finished — e.g. "merged in #301".',
+          },
+        },
+        required: ['setId'],
+      },
+    },
+    {
+      name: 'unarchive_review',
+      description:
+        "Bring an archived review back: every member doc returns to the live server with its comment threads intact, its file bindings re-armed, and its row back on whatever boards it was linked to when it was archived. This is what makes archive_review safe to call — nothing about retiring a review has to be right the first time. Returns {ok:true, restored:<docs>, docIds, manifest}. error:'not-found' means nothing is archived under that id (list_archived_reviews shows what is). error:'restore-collision' means one of the docIds has been re-minted live while the review was away: nothing moved, and restoring would have destroyed the newer doc.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          setId: { type: 'string', description: 'The archived review id.' },
+        },
+        required: ['setId'],
+      },
+    },
+    {
+      name: 'list_archived_reviews',
+      description:
+        'Every review currently archived on this server, newest first — setId, when it was archived, by whom, the reason given, its member docIds and the boards it will return to. Read-only. This is the answer to "what can I bring back", and the input to unarchive_review.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
       name: 'delete_workspace',
       description:
-        "Permanently delete a WORKSPACE — the board created by create_workspace — along with all of its tasks, its board room, every per-task body room, its event log and its persisted state, so a board minted for a short experiment doesn't become permanent. The guardrail counts OPEN TASKS: without force it refuses with error:'has-open-tasks' and openTasks:<count>, so finish or close them first, or pass force:true. Docs and reviews ATTACHED to the board are deliberately left alive at their own URLs — attaching is a link, not ownership. error:'not-found' means no board exists under that id. On success returns {ok:true, deletedTasks:<count>}. Passing a REVIEW id still deletes that review, because that is what this tool used to mean and older sessions still call it that way — new callers should use delete_review, which cannot touch a board.",
+        "Permanently delete a WORKSPACE — the board created by create_workspace — along with all of its tasks, its board room, every per-task body room, its event log and its persisted state, so a board minted for a short experiment doesn't become permanent. The guardrail counts OPEN TASKS: without force it refuses with error:'has-open-tasks' and openTasks:<count>, so finish or close them first, or pass force:true. Docs and reviews ATTACHED to the board are deliberately left alive at their own URLs — attaching is a link, not ownership. error:'not-found' means no board exists under that id. On success returns {ok:true, deletedTasks:<count>}. Passing a REVIEW id still retires that review, because that is what this tool used to mean and older sessions still call it that way — but it now ARCHIVES it rather than destroying it (add purge:true for the old behaviour, and see archive_review). New callers should use delete_review or archive_review, neither of which can touch a board.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -703,6 +745,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           force: {
             type: 'boolean',
             description: 'Delete even if the board has open tasks. Default false.',
+          },
+          purge: {
+            type: 'boolean',
+            description:
+              'Only meaningful when the id turns out to be a REVIEW: destroy its persisted state instead of archiving it. Default false.',
           },
         },
         required: ['workspaceId'],
@@ -2242,17 +2289,43 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'delete_review': {
-        const { setId, force } = a as { setId: string; force?: boolean };
-        const qs = force ? '?force=true' : '';
+        const { setId, force, purge } = a as { setId: string; force?: boolean; purge?: boolean };
+        const params = [force ? 'force=true' : '', purge ? 'purge=true' : ''].filter(Boolean);
+        const qs = params.length > 0 ? `?${params.join('&')}` : '';
         const res = await http('DELETE', `/api/reviews/${encodeURIComponent(setId)}${qs}`);
         return ok(res);
       }
+      case 'archive_review': {
+        const { setId, reason } = a as { setId: string; reason?: string };
+        const res = await http('POST', `/api/reviews/${encodeURIComponent(setId)}/archive`, {
+          author: AUTHOR,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+        return ok(res);
+      }
+      case 'unarchive_review': {
+        const { setId } = a as { setId: string };
+        const res = await http('POST', `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
+          author: AUTHOR,
+        });
+        return ok(res);
+      }
+      case 'list_archived_reviews': {
+        const res = await http('GET', '/api/reviews/archived');
+        return ok(res);
+      }
       case 'delete_workspace': {
-        const { workspaceId, force } = a as { workspaceId: string; force?: boolean };
-        const qs = force ? '?force=true' : '';
+        const { workspaceId, force, purge } = a as {
+          workspaceId: string;
+          force?: boolean;
+          purge?: boolean;
+        };
+        const params = [force ? 'force=true' : '', purge ? 'purge=true' : ''].filter(Boolean);
+        const qs = params.length > 0 ? `?${params.join('&')}` : '';
         // The one route that still fronts both stores, dispatching by id — a
         // board here, a review if that is what the id turns out to be. See
-        // the compat note on it in the server's route table.
+        // the compat note on it in the server's route table. `purge` only
+        // reaches the review branch; a board's delete is unchanged.
         const res = await http('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
         return ok(res);
       }

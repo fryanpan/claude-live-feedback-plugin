@@ -45,7 +45,7 @@ The full rule ships fleet-wide in the `claude-workspaces:working-in-a-workspace`
 
 **Dev servers / HTML mockups** — use the `claude-workspaces:embedding-widget` skill (it covers the `<script>` tags + `setContext` calls).
 
-**Git diffs** — `create_diff_review(repo, base)` → share the returned `entryUrl` (bare URL on its own line). Default diffs base against the LIVE working tree: keep editing and Bryan's view re-renders in ~1s, his comments riding along (orphaning into the outdated-comments flow if their line disappears). Pass `target` only to pin a finished range. One doc per changed file; comments arrive per file via the auto-watch; `delete_workspace(reviewId)` when done.
+**Git diffs** — `create_diff_review(repo, base)` → share the returned `entryUrl` (bare URL on its own line). Default diffs base against the LIVE working tree: keep editing and Bryan's view re-renders in ~1s, his comments riding along (orphaning into the outdated-comments flow if their line disappears). Pass `target` only to pin a finished range. One doc per changed file; comments arrive per file via the auto-watch; `archive_review(reviewId, reason)` when done — it retires the review without destroying it, and `unarchive_review` brings it back.
 
 **Apply Bryan's comments via the claude-workspaces edit tools** — once a doc is bound, NEVER edit the .md file directly with Write/Edit. Use `find_and_replace`, `rewrite_thread_region`, `insert_blocks_after_thread`, etc. The plugin serializes the live doc back to disk ~1s after every change; direct filesystem edits get silently clobbered by the next flush. See the `claude-workspaces:editing-review-docs` skill for the full pattern.
 

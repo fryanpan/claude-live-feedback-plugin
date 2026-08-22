@@ -35,6 +35,18 @@ function pathFor(dataDir: string, docId: string): string {
   return join(dataDir, `${docId}.private.json`);
 }
 
+/**
+ * Where a doc's sidecar lives, given the directory its `.ydoc` is in.
+ *
+ * Exported because two callers have to move or find the sidecar without going
+ * through `readPrivateMeta`: archiving carries it alongside the `.ydoc` into
+ * `_archive`, and the backfill looks for it next to whichever file it just
+ * read. Both need the naming rule, and neither should re-derive it.
+ */
+export function privateMetaPath(dir: string, docId: string): string {
+  return pathFor(dir, docId);
+}
+
 /** Pull the private fields out of a full DocMeta. Absent keys stay absent. */
 export function pickPrivateMeta(meta: Partial<DocMeta>): PrivateMeta {
   const out: Record<string, unknown> = {};
