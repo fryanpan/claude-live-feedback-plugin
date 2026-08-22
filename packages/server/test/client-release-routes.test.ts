@@ -33,6 +33,10 @@ function fakeBuild(marker: string): { dir: string; widget: string; markdownApp: 
   writeFileSync(join(widget, 'widget.esm.js'), `//${marker}\n`);
   writeFileSync(join(markdownApp, 'app.js'), `//${marker}\n`);
   writeFileSync(join(markdownApp, 'index.html'), `<!--${marker}-->\n`);
+  // Part of a complete build: a release without them publishes a page whose
+  // notifications silently never arrive.
+  writeFileSync(join(markdownApp, 'sw.js'), `/*${marker}*/\n`);
+  writeFileSync(join(markdownApp, 'manifest.webmanifest'), '{"name":"Claude Workspaces"}\n');
   return { dir, widget, markdownApp };
 }
 

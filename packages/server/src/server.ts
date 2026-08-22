@@ -444,7 +444,23 @@ const CT: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  // Without this the manifest ships as application/octet-stream and the
+  // browser declines to install it — which presents as "Add to Home Screen
+  // makes a bookmark, not an app", with nothing in the console about why.
+  '.webmanifest': 'application/manifest+json',
 };
+
+/** Files the markdown-app build emits that must ALSO answer at the root
+ *  path. See the route for why each one is here rather than under /app/. */
+const ROOT_ALIASED_ASSETS = new Set([
+  '/sw.js',
+  '/sw.js.map',
+  '/manifest.webmanifest',
+  '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/apple-touch-icon.png',
+]);
 
 /**
  * ── Watch coverage: the answer to "what am I MISSING?" ──────────────────────
@@ -5199,6 +5215,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (resp) return resp;
         }
 
+        // --- Web app files that must live at the ROOT path ---
+        //
+        // These are the same bytes served under /app/, aliased up a level
+        // because the path they are fetched from is load-bearing rather than
+        // cosmetic. A service worker's scope cannot exceed the directory it
+        // was served from, so a worker at /app/sw.js could never handle a
+        // notification click aimed at /workspaces/… . The manifest and icons
+        // ride along because a Home Screen install reads them by absolute
+        // path and one place for them is simpler than two.
+        //
+        // Deliberately NOT added to the share-host allowlist in
+        // host-guard.ts: enrolling a workspace visitor's phone for push is a
+        // scope decision nobody has made, and the allowlist is
+        // closed-by-default precisely so it stays a decision.
+        if (markdownAppDist && ROOT_ALIASED_ASSETS.has(pathname) && req.method === 'GET') {
+          const resp = serveStaticUnder(markdownAppDist, join(markdownAppDist, pathname.slice(1)));
+          if (resp) return resp;
+        }
+
         // --- Workspace hub (plan §3.9/§3.10: /workspaces/:workspaceId) ---
         // The shell is server-rendered (like the landing page) so the route
         // works — and 404s crisply — whether or not the app bundle has been
@@ -5721,6 +5756,13 @@ function renderHubShell(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
     <title>${safeName} · Workspaces</title>
+    <!-- Two shells, two copies. Kept in step with packages/markdown-app/index.html
+         on purpose: an install started from the board and one started from a
+         review doc have to produce the same web app, and on iOS the Home
+         Screen install is what makes push available at all. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#2e7dd7" />
     <link rel="stylesheet" href="/app/styles.css" />
   </head>
   <body class="hub-body">
@@ -6078,7 +6120,13 @@ footer{margin-top:28px;color:#8b95a1;font-size:11px}
 `;
 
 function landingShell(title: string, body: string): string {
+  // The manifest belongs here most of all: `/` is the manifest's own
+  // `start_url`, so this is the page a Home Screen install lands on and the
+  // most likely page somebody installs FROM.
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#2e7dd7">
 <style>${LANDING_CSS}</style>
 ${body}
 <footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
