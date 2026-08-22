@@ -13868,7 +13868,6 @@ function resolveAgentAuthor(env) {
 }
 
 // packages/mcp/src/triage-line.ts
-var RETRIAGE_SKILL = "claude-workspaces:handling-a-goal-change";
 var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
 var TASK_REVIEW_SKILL = "claude-workspaces:leading-a-workspace";
 function retriageDetail(p) {
@@ -13919,9 +13918,9 @@ function triageRequestLine(p, selfAgentId) {
   const detail = retriageDetail(p);
   const lead = p.leadAgentId;
   if (lead !== undefined && lead !== selfAgentId) {
-    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you (${RETRIAGE_SKILL}).${detail}`;
+    return `[triage.requested] FYI — goal changed; re-triaging ${count} open task(s) is addressed to lead agent ${lead}${batch}. Act only if that is you.${detail}`;
   }
-  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}. What you owe on a goal change: ${RETRIAGE_SKILL}${detail}`;
+  return `[triage.requested] goal changed — re-triage ${count} open task(s) with set_task_goal${batch}.${detail}`;
 }
 
 // packages/mcp/src/declare-lead.ts
@@ -13992,7 +13991,7 @@ async function declareWorkspaceLead(args, deps) {
       text: q.text,
       ts: q.ts
     })),
-    ...a.pendingRetriage ? { pendingRetriage: { ...a.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
+    ...a.pendingRetriage ? { pendingRetriage: a.pendingRetriage } : {},
     ...a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {},
     ...a.taskReviews !== undefined && a.taskReviews.length > 0 ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
   };
@@ -16564,7 +16563,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             text: q.text,
             ts: q.ts
           })),
-          ...res.pendingRetriage ? { pendingRetriage: { ...res.pendingRetriage, contract: RETRIAGE_SKILL } } : {},
+          ...res.pendingRetriage ? { pendingRetriage: res.pendingRetriage } : {},
           ...res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {},
           ...res.taskReviews !== undefined && res.taskReviews.length > 0 ? { taskReviews: res.taskReviews, taskReviewContract: TASK_REVIEW_SKILL } : {}
         });

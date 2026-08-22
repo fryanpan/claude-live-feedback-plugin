@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { RETRIAGE_SKILL, triageRequestLine } from '../src/triage-line.ts';
+import { TASK_REVIEW_SKILL, triageRequestLine } from '../src/triage-line.ts';
 
 const RETRIAGE = {
   kind: 'goal-retriage',
@@ -84,28 +84,25 @@ describe('triageRequestLine', () => {
     expect(line).toContain('re-triage ? open task(s)');
   });
 
-  // Delivery without instructions is what this request kept producing: the
-  // addressee learned that N tasks needed re-placing and had to invent the
-  // rest of the contract. The skill name travels in the line itself because
-  // that is the only thing the recipient is guaranteed to read.
-  it('names the contract skill in the imperative', () => {
+  // The line used to end by pointing at a `handling-a-goal-change` skill. The
+  // skill is gone — the operations do the task movement themselves — so the
+  // line has to be self-sufficient, and that is what this pins: the verb to
+  // call, the ids to call it on, and the text they were last judged against.
+  it('carries the verb, the ids and the old goal, with no skill to go read', () => {
     const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-lead');
-    expect(line).toContain(RETRIAGE_SKILL);
-    expect(RETRIAGE_SKILL).toBe('claude-workspaces:handling-a-goal-change');
+    expect(line).toContain('set_task_goal');
+    expect(line).toContain('t-a');
+    expect(line).toContain('previous goal');
+    expect(line).not.toContain('claude-workspaces:');
   });
 
   // Same reason the batchId rides along: a lead whose id moved reads the FYI,
-  // and if they conclude it IS theirs they need the contract too.
-  it('names the contract skill in the FYI as well', () => {
+  // and if they conclude it IS theirs they need everything the imperative had.
+  it('leaves the FYI equally self-sufficient', () => {
     const line = triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-bystander');
-    expect(line).toContain(RETRIAGE_SKILL);
-  });
-
-  // The single-task placement is a different, much smaller ask — the goal did
-  // not change — so the goal-change contract must NOT be attached to it.
-  it('does not name it on a single-task placement', () => {
-    const line = triageRequestLine({ kind: 'task', taskId: 't-z' }, 'agent-whoever');
-    expect(line).not.toContain(RETRIAGE_SKILL);
+    expect(line).toContain('t-a');
+    expect(line).toContain('previous goal');
+    expect(line).not.toContain('claude-workspaces:');
   });
 });
 
@@ -258,12 +255,13 @@ describe('a bucket re-look (kind: bucket-review)', () => {
     expect(line).not.toContain('Act only if');
   });
 
-  // It is not a north-star change, so the goal-change contract must not be
-  // attached to it — that skill asks for a re-triage of every OPEN task
-  // against a new north star, which is a much larger and different ask.
-  it('does not name the goal-change contract skill', () => {
+  // It is not a north-star change, so the goal-change wording must not be
+  // borrowed — that ask is a re-triage of every OPEN task against a new north
+  // star, which is much larger and different.
+  it('does not borrow the goal-change wording', () => {
     const line = triageRequestLine({ ...REVIEW, leadAgentId: 'agent-lead' }, 'agent-lead');
-    expect(line).not.toContain(RETRIAGE_SKILL);
+    expect(line).not.toContain('goal changed');
+    expect(line).not.toContain('previous goal');
   });
 
   it('never renders "undefined" when the payload is thin', () => {
@@ -272,15 +270,45 @@ describe('a bucket re-look (kind: bucket-review)', () => {
   });
 });
 
-describe('RETRIAGE_SKILL', () => {
-  // The name is a promise that a skill by that name SHIPS. A rename that
-  // moves the directory and leaves the constant pointing at nothing produces
-  // a message telling an agent to read something that does not exist.
-  it('resolves to a skill directory in the plugin', () => {
-    const dir = RETRIAGE_SKILL.split(':')[1] as string;
-    const path = join(import.meta.dirname, '..', '..', 'plugin', 'skills', dir, 'SKILL.md');
-    expect(existsSync(path)).toBe(true);
-    expect(readFileSync(path, 'utf8')).toContain(`name: ${dir}`);
+describe('every skill a triage line names actually ships', () => {
+  // A line naming a skill is a promise that a skill by that name SHIPS. A
+  // deletion that leaves a name behind produces a message telling an agent to
+  // go read something that does not exist — which reads as a broken install
+  // rather than as a skill that was retired on purpose.
+  const NAMED = [TASK_REVIEW_SKILL];
+
+  for (const ref of NAMED) {
+    it(`${ref} resolves to a skill directory in the plugin`, () => {
+      const dir = ref.split(':')[1] as string;
+      const path = join(import.meta.dirname, '..', '..', 'plugin', 'skills', dir, 'SKILL.md');
+      expect(existsSync(path)).toBe(true);
+      expect(readFileSync(path, 'utf8')).toContain(`name: ${dir}`);
+    });
+  }
+
+  // POSITIVE CONTROL: the loop above is vacuous if NAMED is empty, and the
+  // retired skills are exactly what would empty it. Prove it ran.
+  it('checks at least one name', () => {
+    expect(NAMED.length).toBeGreaterThan(0);
+  });
+
+  // The retired ones must not come back as a dangling reference.
+  it('names no retired skill anywhere in a rendered line', () => {
+    const lines = [
+      triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-lead'),
+      triageRequestLine({ ...RETRIAGE, leadAgentId: 'agent-lead' }, 'agent-other'),
+      triageRequestLine({ kind: 'task', taskId: 't-z' }, 'agent-whoever'),
+      triageRequestLine({ kind: 'bucket-review', taskIds: ['t-1'] }, 'agent-whoever'),
+    ];
+    for (const line of lines) {
+      for (const gone of [
+        'handling-a-goal-change',
+        'running-a-workspace-hub',
+        'reviewing-task-shape',
+      ]) {
+        expect(line).not.toContain(gone);
+      }
+    }
   });
 });
 
