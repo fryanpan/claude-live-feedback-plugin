@@ -11,6 +11,7 @@ import { discoveryCandidates, resolveDiscoveryFile } from '../../core/src/machin
 import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.ts';
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
+import { type PresenceRow, claimWarning } from './claim-warning.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
@@ -96,7 +97,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.90';
+const PLUGIN_VERSION = '0.1.91';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1364,7 +1365,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'next_tasks',
       description:
-        'The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.',
+        'The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.\n\nCHECK WHO IS ALREADY ON A ROW BEFORE YOU TAKE IT. Two fields, present only when a session can be named: `ownerSession` — the session behind the row\'s OWNER — and `claimedBy` — the session that last moved the row into in-progress, plus `at`, when it did. `claimedBy` is the one that exists on a row nobody assigned, because a transition never touches `assignee`: an owner-keyed read on an unassigned row names whoever FILED the ticket, not whoever is working it. Both carry `state` (active | unresponsive | away), `lastHeartbeat` and `lastToolCallAt`.\n\n`state: "active"` on a session that is not you means DO NOT START THAT ROW. Message that session over claude-hive, agree which of you has it, and take a different row if they do — starting it anyway is how two sessions each build a complete answer to one task and neither finds out until a PR. Nothing refuses a second taker, here or at task_transition, because two agents on one row is sometimes right; it just has to be a decision rather than a collision neither side can see. `away` is an owner in name only and `unresponsive` is a wedged session somebody probably SHOULD take over from — neither is a live claim. These are recency reads, never content identity: a session that thinks for an hour produces no commit and still holds the row, so absence of new work is not evidence the row is free.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2904,6 +2905,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           evidence?: { commit?: string; threadRef?: unknown };
           usage?: { inputTokens: number; outputTokens: number };
         };
+        // WHO IS ALREADY ON THIS ROW — read BEFORE the move, because after it
+        // the latest claim is this session's own. Only on a pickup: the
+        // question is meaningless on a move to done or back to todo, and a
+        // second GET on every transition would be a cost with no reader.
+        //
+        // Best-effort by construction. It is a warning, so a presence read
+        // that fails must never take the transition with it — an agent that
+        // cannot claim a task because the advisory read 500'd is strictly
+        // worse off than one that claims it uninformed.
+        const claimNotice = to === 'in-progress' ? await claimNoticeFor(taskId) : undefined;
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
           to,
           author: AUTHOR,
@@ -2916,6 +2927,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           status: res.task.status,
           blockers: res.blockers,
           unproven: res.unproven,
+          // Additive and advisory. The status code, the refusal semantics and
+          // every other field are untouched — an old bundle calling this from
+          // a session that cannot restart reads exactly what it always did,
+          // which is the compat question CLAUDE.md says to ask at a
+          // narrowing: there IS a caller that cannot be restarted, so nothing
+          // narrows.
+          ...(claimNotice !== undefined ? { warning: claimNotice } : {}),
         });
       }
       case 'amend_evidence': {
@@ -3524,6 +3542,46 @@ async function sendDueHeartbeats(): Promise<void> {
     }
   }
 }
+/**
+ * The presence line a pickup carries, or undefined when the row is free.
+ *
+ * READ FROM THE QUEUE, because the queue route is the only one that carries
+ * both halves — `ownerSession` (the session behind the OWNER) and `claimedBy`
+ * (the session that last moved the row into in-progress, which is the only
+ * one that exists on a row nobody assigned). `/api/tasks/:id` does not exist
+ * and this deliberately does not add it: the read already ships on a route
+ * every attached session can already call.
+ *
+ * The workspace comes from the boards this session holds an attachment on —
+ * `task_transition` takes a task id and nothing else, and requiring a
+ * workspace argument would change the tool's shape for every caller to serve
+ * an advisory. Usually one board, and the loop stops at the first row that
+ * matches.
+ *
+ * NEVER THROWS. Every failure here — unreachable server, an older server that
+ * returns rows without presence, a board this session never attached to —
+ * produces silence, which is the same answer as "nobody is on it". That is a
+ * miss, not a lie, and a warning that could fail a claim would be worse than
+ * the collision it prevents.
+ */
+async function claimNoticeFor(taskId: string): Promise<string | undefined> {
+  for (const workspaceId of keepalive.boards()) {
+    try {
+      const res = (await http(
+        'GET',
+        // includeBlocked so a row held by a dependency is still findable —
+        // its being blocked says nothing about whether somebody is on it.
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`,
+      )) as { tasks?: PresenceRow[] };
+      const row = res.tasks?.find((t) => t?.id === taskId);
+      if (row) return claimWarning(row, AUTHOR.id, Date.now());
+    } catch {
+      // Next board, then silence. See the contract above.
+    }
+  }
+  return undefined;
+}
+
 /**
  * The server's last answer to "what am I MISSING?", or undefined for "not
  * known" — an older server, the shared-identity refusal, an unreachable box.

@@ -13867,6 +13867,37 @@ function resolveAgentAuthor(env) {
   return { name, color: hashToColor(name), id: agentIdForName(name), kind: "known" };
 }
 
+// packages/mcp/src/claim-warning.ts
+function truncate(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function humanDuration(ms) {
+  const totalMinutes = Math.floor(ms / 60000);
+  if (totalMinutes < 1)
+    return `${Math.max(0, Math.floor(ms / 1000))}s`;
+  if (totalMinutes < 60)
+    return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+function heldByAnother(p, selfAgentId) {
+  return p !== undefined && p.state === "active" && p.agentId !== selfAgentId;
+}
+function namedRow(row) {
+  return row.title ? `${row.id} "${truncate(row.title, 60)}"` : row.id;
+}
+function claimWarning(row, selfAgentId, now) {
+  const claim = heldByAnother(row.claimedBy, selfAgentId) ? row.claimedBy : undefined;
+  const owner = claim ? undefined : row.ownerSession;
+  const holder = claim ?? (heldByAnother(owner, selfAgentId) ? owner : undefined);
+  if (!holder)
+    return;
+  const seen = `last seen ${humanDuration(Math.max(0, now - holder.lastToolCallAt))} ago`;
+  const held = claim ? `is already IN PROGRESS under session ${holder.agentId} (${seen}, claimed ${humanDuration(Math.max(0, now - claim.at))} ago)` : `is owned by session ${holder.agentId}, which is live (${seen})`;
+  return `[claim] ${namedRow(row)} ${held}. Do not start this row blind — message that session over claude-hive, agree who has it, and take a different row if they do. Nothing here refuses you: two sessions on one row is sometimes right, but it has to be a decision rather than a collision neither side can see.`;
+}
+
 // packages/mcp/src/triage-line.ts
 var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
 var TASK_REVIEW_SKILL = "claude-workspaces:leading-a-workspace";
@@ -14078,10 +14109,10 @@ function frameKey(event, payload) {
 }
 
 // packages/mcp/src/nudge-line.ts
-function truncate(s, n) {
+function truncate2(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
-function humanDuration(ms) {
+function humanDuration2(ms) {
   const totalMinutes = Math.floor(ms / 60000);
   if (totalMinutes < 1)
     return `${Math.max(0, Math.floor(ms / 1000))}s`;
@@ -14092,7 +14123,7 @@ function humanDuration(ms) {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 function namedTask(p) {
-  const title = p.title ? `"${truncate(p.title, 60)}"` : null;
+  const title = p.title ? `"${truncate2(p.title, 60)}"` : null;
   if (title && p.taskId)
     return `${title} (${p.taskId})`;
   return title ?? p.taskId ?? null;
@@ -14101,7 +14132,7 @@ function readyIdleLine(p) {
   const count = p.readyCount;
   const one = count === 1;
   const subject = count === undefined ? "ready work has" : `${count} ${one ? "task has" : "tasks have"}`;
-  const stood = p.idleMs === undefined ? "" : ` for ${humanDuration(p.idleMs)}`;
+  const stood = p.idleMs === undefined ? "" : ` for ${humanDuration2(p.idleMs)}`;
   const nobody = count !== undefined && !one ? "them" : "it";
   const top = namedTask(p);
   const start = top ? ` Start with ${top}.` : "";
@@ -14188,7 +14219,7 @@ function threadCreateRequest(input, author) {
 }
 
 // packages/mcp/src/voice-line.ts
-function truncate2(s, n) {
+function truncate3(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 function where(p) {
@@ -14202,7 +14233,7 @@ function voiceRequestLine(p) {
     return null;
   const by = p.actor?.name ? ` by ${p.actor.name}` : "";
   const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
-  const told = truncate2(p.ack ?? "", 120);
+  const told = truncate3(p.ack ?? "", 120);
   if (p.route === "fast-path-action") {
     return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
   }
@@ -14301,7 +14332,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.90";
+var PLUGIN_VERSION = "0.1.91";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -15384,7 +15415,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "next_tasks",
-      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.",
+      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.\n\nCHECK WHO IS ALREADY ON A ROW BEFORE YOU TAKE IT. Two fields, present only when a session can be named: `ownerSession` — the session behind the row's OWNER — and `claimedBy` — the session that last moved the row into in-progress, plus `at`, when it did. `claimedBy` is the one that exists on a row nobody assigned, because a transition never touches `assignee`: an owner-keyed read on an unassigned row names whoever FILED the ticket, not whoever is working it. Both carry `state` (active | unresponsive | away), `lastHeartbeat` and `lastToolCallAt`.\n\n`state: \"active\"` on a session that is not you means DO NOT START THAT ROW. Message that session over claude-hive, agree which of you has it, and take a different row if they do — starting it anyway is how two sessions each build a complete answer to one task and neither finds out until a PR. Nothing refuses a second taker, here or at task_transition, because two agents on one row is sometimes right; it just has to be a decision rather than a collision neither side can see. `away` is an owner in name only and `unresponsive` is a wedged session somebody probably SHOULD take over from — neither is a live claim. These are recency reads, never content identity: a session that thinks for an hour produces no commit and still holds the row, so absence of new work is not evidence the row is free.",
       inputSchema: {
         type: "object",
         properties: {
@@ -16425,6 +16456,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "task_transition": {
         const { taskId, to, note, evidence, usage } = a;
+        const claimNotice = to === "in-progress" ? await claimNoticeFor(taskId) : undefined;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
           to,
           author: AUTHOR,
@@ -16436,7 +16468,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           taskId,
           status: res.task.status,
           blockers: res.blockers,
-          unproven: res.unproven
+          unproven: res.unproven,
+          ...claimNotice !== undefined ? { warning: claimNotice } : {}
         });
       }
       case "amend_evidence": {
@@ -16714,6 +16747,17 @@ async function sendDueHeartbeats() {
       await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments/${encodeURIComponent(AUTHOR.id)}/heartbeat`, { toolCallAt: Date.now() });
     } catch {}
   }
+}
+async function claimNoticeFor(taskId) {
+  for (const workspaceId of keepalive.boards()) {
+    try {
+      const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next?includeBlocked=true`);
+      const row = res.tasks?.find((t) => t?.id === taskId);
+      if (row)
+        return claimWarning(row, AUTHOR.id, Date.now());
+    } catch {}
+  }
+  return;
 }
 var lastCoverage;
 async function refreshCoverage() {
@@ -17000,10 +17044,10 @@ async function emitHubChannelMessage(event, rawPayload) {
   let body;
   switch (event) {
     case "task.created":
-      body = `[task.created] "${truncate3(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
+      body = `[task.created] "${truncate4(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
       break;
     case "task.transitioned":
-      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate3(p.note, 80)}` : ""}`;
+      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate4(p.note, 80)}` : ""}`;
       break;
     case "task.assigned":
       body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
@@ -17012,16 +17056,16 @@ async function emitHubChannelMessage(event, rawPayload) {
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
       break;
     case "task.retitled":
-      body = `[task.retitled] "${truncate3(p.titleFrom ?? "", 60)}" → "${truncate3(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate3(p.reason, 80)}` : ""}`;
+      body = `[task.retitled] "${truncate4(p.titleFrom ?? "", 60)}" → "${truncate4(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate4(p.reason, 80)}` : ""}`;
       break;
     case "task.body_edited":
-      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate3(p.titleFrom, 60)}" → "${truncate3(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate3(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate3(p.reason, 80)}` : ""}`;
+      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate4(p.titleFrom, 60)}" → "${truncate4(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate4(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate4(p.reason, 80)}` : ""}`;
       break;
     case "task.gate_refused":
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;
     case "decision.answered":
-      body = `[decision.answered] ${p.taskId}${by}: "${truncate3(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
+      body = `[decision.answered] ${p.taskId}${by}: "${truncate4(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
       break;
     case "workspace.lead_changed":
       body = p.leadAgentId === AUTHOR.id ? `[workspace.lead_changed]${by}: you are now the lead agent — this board's asks are addressed to you` : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? "?"}`;
@@ -17106,7 +17150,7 @@ async function emitChannelMessage(event, rawPayload) {
     const author2 = p.suggestion?.author?.name ?? "";
     const snippet2 = p.suggestion?.snippet ?? "";
     const kind = p.suggestion?.kind ?? "";
-    const header2 = snippet2 ? `"${truncate3(snippet2, 60)}"` : sid;
+    const header2 = snippet2 ? `"${truncate4(snippet2, 60)}"` : sid;
     const body2 = `[suggestion ${action2}] ${author2 ? `${author2}: ` : ""}${kind} ${header2}`.trim();
     await server.notification({
       method: "notifications/claude/channel",
@@ -17132,7 +17176,7 @@ async function emitChannelMessage(event, rawPayload) {
   const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
-  const header = snippet ? `on "${truncate3(snippet, 60)}"` : "";
+  const header = snippet ? `on "${truncate4(snippet, 60)}"` : "";
   const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}]${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
@@ -17150,7 +17194,7 @@ async function emitChannelMessage(event, rawPayload) {
     }
   });
 }
-function truncate3(s, n) {
+function truncate4(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 async function setBoardRetired(workspaceId, retired, reason) {
