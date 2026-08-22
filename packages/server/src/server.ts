@@ -74,6 +74,7 @@ import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from '.
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
+import { READY_IDLE_DEFAULT_MS, ReadyWorkNudger, type ReadyWorkSnapshot } from './ready-nudge.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -351,6 +352,14 @@ export interface ServerOptions {
    * production surface whose only caller is a test.
    */
   premiseStaleAfterMs?: number;
+  /**
+   * How long ready, agent-owned work may sit untouched before the board
+   * wakes its lead agent (default `READY_IDLE_DEFAULT_MS`, fifteen minutes;
+   * `CW_READY_NUDGE_MINUTES` sets it on the box). A test seam for the same
+   * reason `observedWorkFreshMs` is one — the whole feature is a comparison
+   * against a wall-clock gap a test cannot wait out.
+   */
+  readyNudgeIdleMs?: number;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
   /** Absolute path to the built markdown-app dist dir. */
@@ -580,6 +589,9 @@ export interface ServerHandle {
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
   sweepDeadShares: () => void;
+  /** One pass of the ready-work wake (ready-nudge.ts). Runs on a 60s
+   *  interval; exposed so tests exercise the real pass. */
+  nudgeReadyWork: () => void;
   /** The external-access master switch — read/flip it without HTTP. */
   sharingGate: SharingGate;
   webhookLog: WebhookLogEntry[];
@@ -1000,6 +1012,77 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
+
+  /**
+   * One board as the nudger reads it: who to wake, whether to wake them at
+   * all, what is ready, and when the board last moved.
+   *
+   * "Ready" is the SAME computation `next_tasks` serves — `buildQueue` with
+   * blocked rows filtered out — rather than a second reading of the same
+   * rules. Narrowed twice on top of it, and both narrowings are the point of
+   * the feature: `todo` only, because an in-progress row is claimed and
+   * somebody is already on it; agent-owned only, because a row waiting on a
+   * person is not work an agent wake unblocks. `ownerKind` comes from the
+   * projection's roster reader, so the answer here is the one the board
+   * draws.
+   */
+  const readyWorkSnapshot = (workspace: HubWorkspace): ReadyWorkSnapshot => {
+    const tasks = taskStore.listTasks(workspace.id);
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
+    const ready = buildQueue(tasks, workspace.goals)
+      .filter((row) => {
+        if (row.status !== 'todo') return false;
+        const task = byId.get(row.id);
+        return task !== undefined && ownerKindOf(task) === 'agent';
+      })
+      .map((row) => ({ id: row.id, title: row.title }));
+    return {
+      workspaceId: workspace.id,
+      ...(workspace.leadAgentId !== undefined ? { leadAgentId: workspace.leadAgentId } : {}),
+      retired: workspace.retiredAt !== undefined,
+      ready,
+      // The store's durable half of the idle clock. Survives a restart, which
+      // the in-process observations cannot — see ready-nudge.ts.
+      lastActivityAt: tasks.reduce((max, t) => Math.max(max, t.updatedAt, t.createdAt), 0),
+    };
+  };
+  const readyNudger = new ReadyWorkNudger({
+    snapshot: () => taskStore.listWorkspaces().map(readyWorkSnapshot),
+    lookup: (workspaceId) => {
+      const ws = taskStore.getWorkspace(workspaceId);
+      return ws ? readyWorkSnapshot(ws) : undefined;
+    },
+    // Addressed, never broadcast: a board-wide wake fanned out to every peer
+    // is the cost `sendToAgent` exists to remove. `agentsOn` is the stronger
+    // probe — it can tell an agent from a browser tab, which `count` cannot.
+    canReach: (workspaceId, agentId) => sse.agentsOn(`ws~${workspaceId}`).has(agentId),
+    send: (workspaceId, agentId, frame) =>
+      sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
+    idleMs: opts.readyNudgeIdleMs ?? READY_IDLE_DEFAULT_MS,
+  });
+  // Its own subscription rather than a branch inside the SSE bridge above,
+  // and the ordering is the reason: the bridge is installed before this
+  // object exists, so reaching back at it from there would be a reference
+  // into a variable that is not initialized yet on any event the store
+  // manages to emit in between.
+  taskStore.onEvent((ev) => {
+    // The board moved, so its idle clock restarts. Read from the SAME choke
+    // point every other subscriber reads, rather than from a second list of
+    // "events that count as activity" — one that would silently fall behind
+    // the store the first time a mutator is added.
+    readyNudger.noteActivity(ev.workspaceId, ev.ts);
+    // …and an answer is not merely activity. The lead is the party who acts
+    // on answers, and making it wait out an idle window would deliver the
+    // point of the feature fifteen minutes late.
+    if (ev.type === 'decision.answered') {
+      readyNudger.reviewAnswered({
+        workspaceId: ev.workspaceId,
+        taskId: ev.taskId,
+        actorId: ev.actor?.id,
+      });
+    }
+  });
   // A task's discussion lives in its body room, but an agent working a board
   // watches the WORKSPACE channel, not each task's doc — so a comment that
   // only fans out on the doc's own stream reaches nobody who is working. The
@@ -4970,6 +5053,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!res.ok) {
                 return j(res.error === 'no-doc' ? 404 : 400, { error: res.error });
               }
+              // A review item on a COMMENT is the same ask as one on a
+              // ticket, and its answer is the same thing to act on — but it
+              // moves no task row, so `decision.answered` never fires for it
+              // and the store-event bridge cannot see it. Wired here, at the
+              // one route that records such an answer.
+              const answerHome = resolveWorkspaceForDoc(docId);
+              if (answerHome) {
+                readyNudger.reviewAnswered({ workspaceId: answerHome, actorId: user.id });
+              }
               return j(200, { thread: res.thread });
             }
             // Taking an answer back. The stamps move into the declaration's
@@ -5842,6 +5934,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // Never hold the process (or a test runner) open.
   shareSweep?.unref?.();
 
+  // Armed here rather than in bin.ts, because the wake is a property of a
+  // running board and not of the production deployment — a staging server
+  // or an embedded one should behave the same way. `start` unrefs its own
+  // timer, so this can never keep a process alive.
+  readyNudger.start();
+
   return {
     port: server.port ?? port,
     rooms,
@@ -5850,10 +5948,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     agentWatches,
     shares,
     sweepDeadShares,
+    // Exactly what the interval does, exposed for the same reason
+    // `sweepDeadShares` is: a test drives the real thing rather than a
+    // re-implementation of it.
+    nudgeReadyWork: () => readyNudger.tick(),
     sharingGate,
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
+      // Before anything else that tears state down: a tick mid-shutdown
+      // would read a store that is being flushed and wake a lead about a
+      // server that is going away.
+      readyNudger.stop();
       uptimeMonitor.stop();
       // Flush pending body snapshots into the store BEFORE the store's own
       // flush, so the last keystrokes in a task body reach the sidecar.
