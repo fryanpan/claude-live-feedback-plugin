@@ -32,6 +32,32 @@ export interface OwnerSession {
 }
 
 /**
+ * The session that TOOK a row, and when — the question `OwnerSession` cannot
+ * answer.
+ *
+ * `ownerSession` is keyed on the owner, and `task_transition` never touches
+ * `assignee`: a session that pulls a row off the queue and works it for hours
+ * leaves the owner field exactly as it found it. So on 2026-08-17 two sessions
+ * built two complete answers to `t-K69wxtRLCn2a` while every owner-keyed read
+ * of that row honestly answered "nobody". This reads the other half — the
+ * actor on the row's most recent move INTO `in-progress`, matched against the
+ * board's roster.
+ *
+ * Same shape as `OwnerSession` plus `at`, and named field by field for the
+ * same reason: `endpoint` is host-machine data that a spread would carry onto
+ * every queue row the moment somebody adds a field.
+ *
+ * What it does NOT claim: that the session is still working THIS row. It says
+ * a named session took it at a known moment and how recently the server has
+ * seen that session at all. The reader decides what to do about it — this is
+ * one-directional by construction and nothing here refuses a second taker.
+ */
+export interface ClaimSession extends OwnerSession {
+  /** When the claim was made — the row's latest transition into in-progress. */
+  at: number;
+}
+
+/**
  * Ydoc projection of the hub task store (plan §3.3).
  *
  * The sidecar-backed TaskStore is the source of truth for everything the
@@ -381,6 +407,44 @@ export class TaskProjection {
         lastToolCallAt: att.lastToolCallAt,
         state: att.state,
         stateLabel: att.stateLabel,
+        ...(att.pluginVersion !== undefined ? { pluginVersion: att.pluginVersion } : {}),
+      };
+    };
+  }
+
+  /**
+   * WHO TOOK this row, from the row's own history rather than from its owner.
+   *
+   * Built like its two siblings — one roster read per request, closed over —
+   * and keyed on the identity id directly, because a transition actor IS an
+   * agent id (the MCP child attaches and transitions under one identity).
+   * No display-name reconciliation is needed or wanted here: matching a
+   * transition actor loosely would attribute a claim to the wrong session,
+   * and a confident wrong name is worse than silence.
+   *
+   * Only `in-progress` rows, and only the LATEST claim: a row handed back and
+   * retaken belongs to whoever took it last. Returns undefined when no
+   * attachment vouches for the claimant — an actor the board has no record of
+   * is a name, not a session, and this may only ever report sessions.
+   */
+  claimSessionReader(workspaceId: string): (task: Task) => ClaimSession | undefined {
+    const roster = new Map(
+      this.tasks.listAttachments(workspaceId).map((att) => [att.agentId, att]),
+    );
+    return (task) => {
+      if (task.status !== 'in-progress') return undefined;
+      let claim: Task['transitions'][number] | undefined;
+      for (const t of task.transitions) if (t.to === 'in-progress') claim = t;
+      if (!claim) return undefined;
+      const att = roster.get(claim.by.id);
+      if (!att) return undefined;
+      return {
+        agentId: att.agentId,
+        lastHeartbeat: att.lastHeartbeat,
+        lastToolCallAt: att.lastToolCallAt,
+        state: att.state,
+        stateLabel: att.stateLabel,
+        at: claim.ts,
         ...(att.pluginVersion !== undefined ? { pluginVersion: att.pluginVersion } : {}),
       };
     };
