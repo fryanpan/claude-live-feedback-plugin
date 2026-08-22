@@ -12,6 +12,7 @@ import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.t
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
+import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { readyIdleLine, reviewAnsweredLine } from './nudge-line.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
@@ -95,7 +96,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.89';
+const PLUGIN_VERSION = '0.1.90';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1970,8 +1971,22 @@ async function maybeAutoWatch(name: string, args: unknown): Promise<void> {
   await watchDoc(a.docId);
 }
 
+/**
+ * Channel frames produced from inside a tool call, held until it has answered.
+ *
+ * The restore path is the one producer of those: `ensureWatchesRestored` is
+ * kicked off at `oninitialized`, and the first tool call awaits the same
+ * in-flight promise, so anything it emitted was written between a `tools/call`
+ * request and its response — the one window a session does not read. See
+ * deferred-emit.ts for the 2026-08-20 measurement.
+ */
+const deferredEmits = createDeferredEmitter();
+
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: a = {} } = req.params;
+  // Released in the `finally` below, so a throwing handler still lets the
+  // held frames out.
+  const endToolCall = deferredEmits.beginToolCall();
   try {
     // Restore before anything else: a respawned child's first tool call is
     // the moment its watch set has to be back, and if the server was down at
@@ -3389,6 +3404,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
   } catch (e) {
     return err(e instanceof Error ? e.message : String(e));
+  } finally {
+    endToolCall();
   }
 });
 
@@ -3614,20 +3631,28 @@ async function ensureWatchesRestored(): Promise<void> {
           // the channel notification its SSE frame would have been, acking a
           // comment row only after its emit succeeded — same order, same
           // reason as handleFrame.
-          await deliverAttachBacklog(workspaceId, attachRes, {
-            emit: async (ev, payload) => {
-              if (shouldForwardFrame.shouldForward(ev, payload)) {
-                await emitChannelMessage(ev, payload);
-              }
-            },
-            ackComment: async (rowId) => {
-              await http(
-                'POST',
-                `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
-                {},
-              );
-            },
-          });
+          //
+          // Deferred as ONE unit rather than emit-by-emit: the restore runs
+          // inside the first tool call's await (see deferredEmits), and these
+          // frames go unread there exactly like the notice below did. Keeping
+          // the whole delivery together preserves emit-then-ack — a receipt
+          // must still follow the frame it acknowledges, not precede it.
+          deferredEmits.emitOutsideToolCall(() =>
+            deliverAttachBacklog(workspaceId, attachRes, {
+              emit: async (ev, payload) => {
+                if (shouldForwardFrame.shouldForward(ev, payload)) {
+                  await emitChannelMessage(ev, payload);
+                }
+              },
+              ackComment: async (rowId) => {
+                await http(
+                  'POST',
+                  `/api/workspaces/${encodeURIComponent(workspaceId)}/comment-queue/${encodeURIComponent(rowId)}/ack`,
+                  {},
+                );
+              },
+            }),
+          );
         } catch {
           // Best effort, exactly like the watch restore: the notice below
           // reads the coverage AFTER this, so a failure shows up as a board
@@ -3638,7 +3663,7 @@ async function ensureWatchesRestored(): Promise<void> {
       // in rather than the one it woke up in — otherwise a successful
       // re-attach still prints an alarm about itself.
       if (reattached.length > 0) await refreshCoverage();
-      restoreState = {
+      const state: RestoreState = {
         status: 'restored',
         from: 'server',
         restored,
@@ -3647,13 +3672,20 @@ async function ensureWatchesRestored(): Promise<void> {
         at: new Date().toISOString(),
         attempts,
       };
+      restoreState = state;
       // Unconditional now — `emitRestoreNotice` decides whether there is
       // anything to say. It speaks on an EMPTY restore when a board is
       // waiting on this session, which is the incident's own shape: the
       // watches were wired by hand this run, so there was nothing to restore
       // and nothing was said, while four items sat queued for a seat nobody
       // held.
-      await emitRestoreNotice(restoreState).catch(() => {});
+      //
+      // Deferred, not awaited. This promise is what the first tool call awaits
+      // at the top of the CallTool handler, so emitting here wrote the notice
+      // into the window between that request and its response — measured
+      // 2026-08-20 as a respawn that read `restored` in a tool RESULT and
+      // never saw the frame. See deferred-emit.ts.
+      deferredEmits.emitOutsideToolCall(() => emitRestoreNotice(state));
     } catch (err) {
       restoreState = {
         ...restoreState,
