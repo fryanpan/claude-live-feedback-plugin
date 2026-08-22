@@ -255,7 +255,7 @@ describe('handle(): every added call site degrades to the agent route', () => {
   const mkStore = () => {
     const dir = mkdtempSync(join(tmpdir(), 'voice-hard-unit-'));
     const store = new TaskStore({ dataDir: dir, debounceMs: 1 });
-    const ws = store.createWorkspace('search-revamp', 'Ship the new search.');
+    const ws = store.createWorkspace('search-revamp');
     return { dir, store, wsId: ws.id };
   };
 
