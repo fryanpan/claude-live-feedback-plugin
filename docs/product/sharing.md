@@ -102,6 +102,58 @@ flowchart LR
    [feedback]   share:      base=tunnel.fryanpan.com account=abc12345…
    ```
 
+## A standing collaboration hostname (no share link needed)
+
+The two modes above mint a grant per audience: a share hostname, or a link to
+redeem. There is a third shape for the case where the audience is standing
+rather than per-review — a collaborator you have already admitted to
+Cloudflare Access, who should be able to open any board you send them the URL
+of, from outside the tailnet.
+
+Bryan set the boundary (2026-08-18): *"workspaces.fryanpan.com is meant to be
+the Cloudflare tunnel for collaboration that's reachable outside tailnet. But
+not used for the privileged access that inside-tailnet traffic gets."*
+
+```sh
+export CF_ACCESS_TUNNEL_HOSTS="workspaces.example.com"
+export CF_ACCESS_TEAM_DOMAIN="<team>.cloudflareaccess.com"
+export CF_ACCESS_AUD="<the AUD of the Access app over that hostname>"
+```
+
+…plus an ingress entry pointing the hostname at `http://localhost:8787`, and a
+Cloudflare Access application covering that exact hostname. Startup logs then
+carry `[feedback]   collab:     workspaces.example.com (via Cloudflare Access)`.
+
+**What it grants is the share surface, not the product.** Read the boards and
+the docs filed on them, comment, co-edit — scoped per request to whichever
+workspace the URL names. What it does not grant is anything an operator does:
+the doc list and the workspace list (so a visitor cannot enumerate what
+exists), share administration, folder binds, diff creation, delete, wholesale
+rewrite, the deploy verb, the plugin refresh, and the landing page. Those stay
+on the tailnet and on loopback.
+
+**All three variables travel together or none of them do.** The server ignores
+the host list unless the team domain *and* a static AUD are both set, and says
+so loudly at boot, because a listed hostname with no Access application in
+front of it would be the API exposed to anyone who can reach the tunnel — the
+exact hole the `cf-ray` veto in `middleware/host-guard.ts` was added to close.
+That veto is untouched: a hostname on this list classifies `collab`, never
+`local`, and a request that did not arrive through the edge is refused whatever
+Host it claims.
+
+Two things worth knowing before you turn it on:
+
+- **The AUD is the hostname's own.** Cloudflare issues one AUD per Access
+  application, and this hostname has its own application — it is not a share
+  hostname, so the per-share AUD resolver cannot answer for it. That is why
+  `CF_ACCESS_AUD` is required here even on a deployment where link or Access
+  sharing is already configured.
+- **The master switch covers it**, so `set_sharing_enabled(false)` shuts this
+  door with the others. One honest limit: a collaboration request carries no
+  shareId, so the hang-up sweep that runs on the switch cannot find its live
+  websockets. New requests are refused immediately; an already-open editing
+  socket survives until the server restarts.
+
 ## Per-repo team config
 
 Each repo that uses sharing should set a default allow-list in its
