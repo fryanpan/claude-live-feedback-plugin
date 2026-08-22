@@ -22,6 +22,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
@@ -66,6 +67,13 @@ class McpChild {
     childEnv.FEEDBACK_BASE_URL = baseUrl;
     for (const [k, v] of Object.entries(env)) if (v !== undefined) childEnv[k] = v;
     this.child = spawn('node', [BUNDLE], { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    // The child's own diagnostics, off by default. `stdio` already pipes
+    // stderr, so without this it is captured and thrown away — and everything
+    // this suite is about (a restore that could not connect, an SSE loop
+    // retrying) reports itself there and nowhere else. `MCP_CHILD_STDERR=1`
+    // when a case here fails for a reason the assertions cannot name.
+    if (process.env.MCP_CHILD_STDERR)
+      this.child.stderr?.on('data', (d: Buffer) => console.error('[child]', d.toString().trim()));
     let buf = '';
     this.child.stdout?.on('data', (d: Buffer) => {
       buf += d.toString();
@@ -613,4 +621,222 @@ describe('a declared lead comes back live after a respawn', () => {
     expect(board.workspace.leadAgentId).toBeUndefined();
     second.kill();
   }, 40_000);
+});
+
+/** Is a fresh TCP connect to `port` refused? Polls, because a stopped Bun
+ *  server closes its listener on its own schedule. Returns false on timeout,
+ *  so the caller asserts rather than hangs. */
+async function waitForPortRefused(port: number, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const refused = await new Promise<boolean>((done) => {
+      const sock = netConnect({ port, host: '127.0.0.1' });
+      sock.once('connect', () => {
+        sock.destroy();
+        done(false);
+      });
+      sock.once('error', () => {
+        sock.destroy();
+        done(true);
+      });
+    });
+    if (refused) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+/**
+ * A RESTORE THAT COULD NOT REACH THE SERVER SAYS SO — AND THE RETRY GETS IT BACK.
+ *
+ * `restore.status: 'failed'` and the capped backoff behind it shipped without
+ * a single case that drives them. Everything above starts from a server that
+ * answers, so the whole failure limb — the catch that records the error, the
+ * `Date.now() < restoreRetryAt` gate that stops a down server being hammered
+ * from every tool call, and the later call that actually re-wires the set —
+ * ran only in production. A permanently-failed session and a recovering one
+ * look identical from a green suite, which is the same "an empty list means
+ * two things" problem the durable-watch work exists to end, one level up: a
+ * `failed` that never becomes `restored` is silent deafness with a status
+ * field attached.
+ *
+ * So this drives it end to end through the shipped BUNDLE: watch under a live
+ * server, take that server away, respawn against the dead port, then bring the
+ * SAME origin and data dir back and require a later tool call to flip to
+ * `restored` and deliver a real event on the re-wired watch. Both halves are
+ * load-bearing — without the second, a build that never retries passes.
+ *
+ * Timing: the first failure backs off `min(30s, 1s * 2**1)` = 2s, so the
+ * recovery half waits just past that rather than the 30s cap. Fixtures are
+ * synthetic. The repo is public.
+ */
+describe('a restore that could not reach the server fails loudly, then recovers', () => {
+  const NAME = 'Restore Failure Tester';
+  const AGENT_ID = 'agent-restore-failure-tester';
+  const DOC_ID = 'rf-doc';
+  /** min(30_000, 1_000 * 2 ** 1) — the wait after the FIRST failed attempt. */
+  const FIRST_BACKOFF_MS = 2_000;
+  let handle: ServerHandle | undefined;
+  let dataDir: string;
+  let port: number;
+  /** What the MCP child is pointed at, and what phase one uses. */
+  let base: string;
+  /**
+   * The SAME server, addressed by a spelling this process has never used.
+   *
+   * Phase two must not reuse phase one's connection pool, and this is not
+   * hygiene — it is the whole fixture. Bun's `stop()` closes the LISTENER but
+   * keeps already-accepted sockets serving, so after the restart a keep-alive
+   * socket this process opened before the stop still answers 200 from the
+   * DEAD instance while the child (a new process, new pool) talks to the live
+   * one. Measured: the thread posted over the stale socket landed in the old
+   * server's rooms and broadcast to nobody, so the delivery assertion below
+   * failed while every other line passed. `127.0.0.1` keys a different pool,
+   * so phase two connects fresh — the port is identical, which is what the
+   * child requires.
+   */
+  let freshBase: string;
+  const live: McpChild[] = [];
+
+  const rest = (origin: string, path: string, method: string, body?: unknown) =>
+    fetch(`${origin}${path}`, {
+      method,
+      headers: {
+        host: `localhost:${port}`,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
+  const spawnChild = async (env: Record<string, string | undefined>): Promise<McpChild> => {
+    const c = new McpChild(base, env);
+    live.push(c);
+    await c.init();
+    return c;
+  };
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'mcp-restore-failure-'));
+    // Bind on 0 to be handed a free port, then keep that NUMBER: the second
+    // half needs the same origin to come back, because the child reads
+    // FEEDBACK_BASE_URL once at spawn and a re-spawn is not what is being
+    // measured here.
+    handle = createServer({ port: 0, dataDir });
+    port = handle.port;
+    base = `http://localhost:${port}`;
+    freshBase = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    for (const c of live) c.kill();
+    await handle?.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('reports the unreachable server, holds off, then re-wires the set on a later call', async () => {
+    const path = join(dataDir, `${DOC_ID}.md`);
+    writeFileSync(path, `# ${DOC_ID}\n\nA paragraph to anchor a thread on.\n`);
+    expect((await rest(base, '/api/docs', 'POST', { docId: DOC_ID, sourceUrl: path })).status).toBe(
+      200,
+    );
+
+    // A set worth restoring, persisted while the server is up.
+    const first = await spawnChild({ CW_AGENT_NAME: NAME });
+    const w = (await first.tool('watch_doc', { docId: DOC_ID })) as { persisted: boolean };
+    expect(w.persisted).toBe(true);
+    expect(handle?.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key)).toEqual([
+      DOC_ID,
+    ]);
+    first.kill();
+
+    // Take the server away. Killing the child first closes its SSE stream, so
+    // nothing of the child's holds the port.
+    await handle?.stop();
+    handle = undefined;
+    // The precondition, measured rather than assumed — and the positive
+    // control for the failure below, since a `failed` restore against a port
+    // that was quietly still answering would prove nothing. A fresh TCP
+    // connect rather than `fetch`, for the pooling reason on `freshBase`:
+    // this process's pooled socket answers on a listener that has stopped
+    // accepting, while the child about to spawn must dial in and cannot.
+    expect(await waitForPortRefused(port)).toBe(true);
+
+    // The respawn, against a dead port. `oninitialized` drives the first
+    // attempt, so the failure is already recorded by the time a tool runs.
+    const second = await spawnChild({ CW_AGENT_NAME: NAME });
+    const failedAt = Date.now();
+    const failed = (await second.tool('list_watched_docs')) as {
+      watching: string[];
+      coverage?: unknown;
+      restore: { status: string; error?: string; attempts: number; restored: string[] };
+    };
+    expect(failed.restore.status).toBe('failed');
+    // The error is CAPTURED, not swallowed. Pinned to what the field ACTUALLY
+    // carries rather than to what would be useful: `http()` throws before it
+    // has a status to report, so the message is whatever the runtime's fetch
+    // said — Node reduces a refused connection to the bare string "fetch
+    // failed", naming neither the port nor the cause. Recorded here so the
+    // day that improves, this line says where to look.
+    expect(failed.restore.error ?? '').not.toBe('');
+    expect(failed.restore.error).toMatch(/fetch failed|ECONNREFUSED|refused/i);
+    expect(failed.restore.attempts).toBe(1);
+    expect(failed.restore.restored).toEqual([]);
+    // Nothing is wired, and the session is not pretending otherwise.
+    expect(failed.watching).toEqual([]);
+    // `coverage` is ABSENT rather than empty when the server did not answer —
+    // an empty block would read as "nothing is missing".
+    expect(failed.coverage).toBeUndefined();
+
+    // The backoff is doing something: an immediate second call does not spend
+    // another attempt on a server that was unreachable milliseconds ago.
+    const again = (await second.tool('list_watched_docs')) as {
+      restore: { status: string; attempts: number };
+    };
+    expect(again.restore.status).toBe('failed');
+    expect(again.restore.attempts).toBe(1);
+    // Asserted about the WINDOW, so a machine slow enough to have left it
+    // fails loudly instead of passing the line above for the wrong reason.
+    expect(Date.now() - failedAt).toBeLessThan(FIRST_BACKOFF_MS);
+
+    // Bring the same origin back, over the same data dir — so the set the
+    // first child persisted is there to be restored.
+    handle = createServer({ port, dataDir });
+    expect(handle.port).toBe(port);
+    expect(handle.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key)).toEqual([
+      DOC_ID,
+    ]);
+
+    // Past the backoff window, then any ordinary tool call.
+    const remaining = failedAt + FIRST_BACKOFF_MS + 200 - Date.now();
+    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+
+    const recovered = (await second.tool('list_watched_docs')) as {
+      watching: string[];
+      restore: { status: string; from: string; restored: string[]; attempts: number; at?: string };
+    };
+    expect(recovered.restore.status).toBe('restored');
+    expect(recovered.restore.from).toBe('server');
+    // Exactly one more attempt than the failure — the gate let the retry
+    // through once, rather than the tool calls in between each spending one.
+    expect(recovered.restore.attempts).toBe(2);
+    expect(recovered.restore.restored).toEqual([DOC_ID]);
+    expect(recovered.watching).toEqual([DOC_ID]);
+    expect(recovered.restore.at).toBeTruthy();
+
+    // A listed watch that delivers nothing is the failure this whole area
+    // exists to prevent, so require a real event on the RE-WIRED stream.
+    const thread = await rest(freshBase, `/api/docs/${DOC_ID}/threads/by_find`, 'POST', {
+      find: 'paragraph to anchor',
+      text: 'Does the retried watch hear this?',
+      author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+    });
+    expect(thread.status).toBe(200);
+    const delivered = await second.waitForChannel(
+      (n) =>
+        n.params?.meta?.doc_id === DOC_ID &&
+        (n.params?.content ?? '').includes('Does the retried watch hear this?'),
+    );
+    expect(delivered.params?.meta?.event).toBe('thread.created');
+    second.kill();
+  }, 60_000);
 });
