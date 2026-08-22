@@ -852,6 +852,39 @@ body.hub-body {
   font-size: 13px;
   color: var(--fg-muted);
 }
+/* The notifications row puts its control at the far edge and lets the label
+   take the rest, so the tap target sits where a settings toggle is expected
+   rather than immediately after the words. `--push` rather than restyling
+   every row: the done-tasks row above is a label followed by a select, and
+   pushing THAT apart would strand its dropdown against the panel edge. */
+.hub-settings-row--push {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  cursor: pointer;
+}
+.hub-settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.hub-settings-note {
+  font-size: 12px;
+  color: var(--fg-subtle, var(--fg-muted));
+}
+/* 24px keeps the hit area honest on a phone without making the panel taller
+   on the iPad, where vertical room is the scarce axis. */
+.hub-check {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.hub-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .hub-btn {
   min-height: 36px;
   padding: 4px 12px;
