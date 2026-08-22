@@ -93,6 +93,15 @@ export interface HubTask {
   parkedUntil?: number;
   /** Why it is parked, in the parker's words. */
   parkedReason?: string;
+  /** Soft-deleted at this instant — off every lane, one tap from coming back.
+   *  The row is still PROJECTED while archived (that is what lets the Undo
+   *  toast and the restore list draw without a fetch); `taskVisible` is what
+   *  keeps it out of the board. `isTaskArchived` is the one reader. */
+  archivedAt?: number;
+  /** Who archived it, as a display name. */
+  archivedBy?: string;
+  /** Why, in their words — the line the restore list shows. */
+  archiveReason?: string;
   links: unknown[];
   origin?: unknown;
   quote?: string;
@@ -310,7 +319,31 @@ export function isTaskParked(task: HubTask, now: number = Date.now()): boolean {
   return task.parkedUntil !== undefined && task.parkedUntil > now;
 }
 
+/**
+ * Has this row been soft-deleted? The browser's copy of the server's
+ * `isArchived`, and the ONE reader of `archivedAt` on this side.
+ *
+ * Note what it is NOT a question about: `now`. A park expires on its own and
+ * so has to be asked about the clock; an archive is a decision that stands
+ * until somebody undoes it.
+ */
+export function isTaskArchived(task: HubTask): boolean {
+  return task.archivedAt !== undefined;
+}
+
+/** The archived rows, newest removal first — what the restore list draws.
+ *  Deliberately unfiltered by tab or done-window: a person looking for what
+ *  they archived is looking for a specific row, and the board's viewing
+ *  filters would hide it for reasons that have nothing to do with the search. */
+export function archivedTasks(tasks: HubTask[]): HubTask[] {
+  return tasks.filter(isTaskArchived).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+}
+
 export function taskVisible(task: HubTask, f: BoardFilters): boolean {
+  // First and unconditionally: an archived row is off the board. It is still
+  // projected — the Undo toast and the restore list read it from the same
+  // board state — so this filter is the whole of what "off the board" means.
+  if (isTaskArchived(task)) return false;
   if (f.tab === 'mine') {
     const mine =
       assignedToHuman(task) || task.assignee.toLowerCase() === f.userName.trim().toLowerCase();
@@ -1554,6 +1587,8 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'task.retitled',
   'task.due_set',
   'task.parked',
+  'task.archived',
+  'task.restored',
   'task.evidence_amended',
   'task.regrouped',
   'decision.answered',
@@ -1601,6 +1636,18 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       if (!to) return `${actorName(ev)} un-parked ${title()}`;
       if (from) return `${actorName(ev)} moved the park on ${title()} to ${to}${why}`;
       return `${actorName(ev)} parked ${title()} until ${to}${why}`;
+    }
+    case 'task.archived': {
+      // The title comes off the EVENT, not from `titleOf`: an archived row is
+      // one somebody may rename or restore later, and this line is the record
+      // of what left the board on that day.
+      const name = typeof ev.title === 'string' && ev.title ? `“${ev.title}”` : title();
+      const why = typeof ev.reason === 'string' && ev.reason ? ` — ${ev.reason}` : '';
+      return `${actorName(ev)} archived ${name}${why}`;
+    }
+    case 'task.restored': {
+      const name = typeof ev.title === 'string' && ev.title ? `“${ev.title}”` : title();
+      return `${actorName(ev)} restored ${name}`;
     }
     case 'task.body_edited': {
       // Typing in a task body is deliberately NOT activity (the snapshot

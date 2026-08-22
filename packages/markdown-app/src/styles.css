@@ -2161,6 +2161,22 @@ body.hub-body {
   text-decoration-color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
   color: var(--fg-muted);
 }
+/* --- the board's meta line: what is true of the LIST, above the first goal ---
+   One quiet line, drawn only when it has something to say. It is where the
+   archived count lives, and it is NOT a nav item: the phone rail has exactly
+   four seats and "what did I put down" is a thing people check, not a place
+   they go. Right-aligned so it never competes with the first goal title for
+   the reader's first fixation. --- */
+.hub-board-meta {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 6px;
+  min-height: 28px;
+}
+.hub-board-meta-archived {
+  min-height: 28px;
+  font-size: 12.5px;
+}
 /* --- board sections (goals ARE the sections) --- */
 .hub-section {
   margin-bottom: 18px;
@@ -2261,6 +2277,61 @@ body.hub-body {
 .hub-task-row:focus-visible {
   background: var(--bg-hover);
   outline: none;
+}
+/* --- archived tasks: the restore list ---
+   Deliberately not a board row. A board row is a working surface — handle,
+   status, owner, reorder keys — and none of that applies to something that is
+   off the board; offering it would invite edits whose only effect is to change
+   what comes back. So each row is a title, a why, and Restore.
+
+   Two columns and a wrap, rather than a three-column grid: the reason line is
+   free text of any length and the phone is 430px, so at the narrow end the
+   button drops under the text instead of squeezing the title to nothing. --- */
+.hub-archived-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+.hub-archived-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hub-archived-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 8px 4px;
+  min-height: 44px;
+  border-top: 1px solid var(--border);
+}
+.hub-archived-title {
+  /* Takes the slack so the Restore button sits at the right-hand end, and
+     `min-width: 0` is what lets a long title ellipsize rather than push it
+     off a 430px viewport. */
+  flex: 1 1 12ch;
+  min-width: 0;
+  text-align: left;
+  font-size: 14px;
+  color: var(--fg);
+}
+.hub-archived-why {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.hub-archived-restore {
+  /* 36px is design-mobile.md's thumb floor, and this is the one control on
+     the row — it must not be the thing that is hard to hit. */
+  min-height: 36px;
+  padding: 0 12px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 /* --- row anatomy: drag handle · status · title · badges · open caret · assignee --- */
 /* The handle is invisible until you go looking for it: a permanent column of
@@ -2914,6 +2985,27 @@ body.hub-body {
 }
 .hub-parked-until {
   margin: 8px 0 0;
+}
+/* The archived note: the panel's half of a soft delete, in the parked note's
+   shape and sharing its neutral wash for the same reason — this is the board
+   reporting a decision somebody made, not a warning. It exists because a deep
+   link or the restore list can open a task that is on no board, and a panel
+   that looked like any other's would make that absence read as a bug. */
+.hub-archived-note {
+  margin: 16px 0 0;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.hub-archived-note p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.hub-archived-note .hub-archived-restore {
+  margin: 10px 0 0;
 }
 /* All four values are controls, so they get one box shape and one height and
    the row scans as a row. 36px is the thumb floor; `max-width: 100%` and
@@ -3822,9 +3914,31 @@ a.hub-link-chip:hover {
   box-shadow: var(--shadow-lg);
   z-index: 80;
   max-width: min(90vw, 480px);
+  /* A row, because the toast can now carry an action button beside its text. */
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 .hub-toast.hidden {
   display: none;
+}
+/* The toast's Undo. Inverted against the toast's own dark ground, and 36px
+   tall because it is the ONLY thing standing in for a confirm dialog — an
+   action that has ten seconds to be tapped must not also be hard to hit. */
+.hub-toast-action {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--bg) 45%, transparent);
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.hub-toast-action:hover {
+  background: color-mix(in srgb, var(--bg) 20%, transparent);
 }
 
 /* --- ≥1660px: the task detail is a right-hand split pane, not a modal ---
