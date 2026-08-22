@@ -13962,6 +13962,8 @@ async function declareWorkspaceLead(args, deps) {
     ...res.declined === "lead-held" ? {
       note: `${settledLead} already leads this board and is live, so the seat was left alone — ` + "you are attached and subscribed, and everything on the board still reaches you. " + "Coordinate with them; pass takeover: true only if you mean to take the seat."
     } : {},
+    ...a.retired ? { retired: a.retired } : {},
+    ...a.leadNameConflicts ? { leadNameConflicts: a.leadNameConflicts } : {},
     gating: a.gating,
     untriaged: a.untriaged ?? [],
     queuedVoice: a.queuedVoice ?? [],
@@ -14207,7 +14209,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.85";
+var PLUGIN_VERSION = "0.1.87";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -15091,6 +15093,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           subscribe: { type: "boolean" }
         },
         required: ["name"]
+      }
+    },
+    {
+      name: "rename_workspace",
+      description: "Rename a hub board. The name was set once at creation and nothing could change it, which is how two live boards end up sharing one — and the name is how an agent picks which board to work. Nothing else moves: same id, same URL, same tasks, same docs; every link already in the field keeps working. Renaming INTO a name another live board already has is allowed (you may be halfway through a cleanup) and is never silent — the response carries `sameName` naming the other boards, so a collision you just made comes back to you instead of to whoever reads the board next week. Use retire_workspace instead when the right answer is that one of the two is over.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string", description: "Hub workspace id." },
+          name: { type: "string", description: "The new name. Trimmed; may not be empty." }
+        },
+        required: ["workspaceId", "name"]
+      }
+    },
+    {
+      name: "retire_workspace",
+      description: "Stand a hub board down — REVERSIBLY. This is what to call when a board is superseded, finished, or a duplicate: it stops ranking on the workspace list (it folds into a counted 'Retired' section rather than vanishing), it refuses new tasks, and it tells any agent that reads it or attaches to it that it is retired and why. It DESTROYS NOTHING — every task, goal, doc, thread and event survives, the board still opens at its URL, and in-flight tasks can still be transitioned so nothing gets stranded. unretire_workspace puts it back exactly as it was. This is deliberately NOT delete_workspace, which removes the tasks sidecar and the events log and is not reversible; reach for that essentially never. Pass a `reason` — it is replayed verbatim in every refusal and notice an agent sees, and it is usually the name of the board that replaced this one, which is the only thing that makes the refusal actionable.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string", description: "Hub workspace id." },
+          reason: {
+            type: "string",
+            description: "Why, in one line. Shown to every agent that hits the retired board — name the board that replaced it if there is one."
+          }
+        },
+        required: ["workspaceId"]
+      }
+    },
+    {
+      name: "unretire_workspace",
+      description: "Bring a retired hub board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.",
+      inputSchema: {
+        type: "object",
+        properties: { workspaceId: { type: "string", description: "Hub workspace id." } },
+        required: ["workspaceId"]
       }
     },
     {
@@ -16148,6 +16186,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           leadAgentId: res.workspace.leadAgentId
         });
       }
+      case "rename_workspace": {
+        const { workspaceId, name: nextName } = a;
+        const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`, { name: nextName, author: AUTHOR });
+        return ok({
+          workspaceId,
+          name: res.workspace.name,
+          changed: res.changed,
+          ...res.sameName ? { sameName: res.sameName } : {}
+        });
+      }
+      case "retire_workspace": {
+        const { workspaceId, reason } = a;
+        return ok(await setBoardRetired(workspaceId, true, reason));
+      }
+      case "unretire_workspace": {
+        const { workspaceId } = a;
+        return ok(await setBoardRetired(workspaceId, false));
+      }
       case "set_workspace_lead": {
         const { workspaceId, leadAgentId, takeover } = a;
         return ok(await declareWorkspaceLead({
@@ -16228,6 +16284,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           name: res.workspace.name,
           leadAgentId: res.workspace.leadAgentId,
           pendingBucketReview: res.pendingBucketReview,
+          ...res.retired ? { retired: res.retired } : {},
           goals: res.goalSummary
         });
       }
@@ -16242,7 +16299,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           qs.set("includeBlocked", "true");
         const query = qs.size > 0 ? `?${qs.toString()}` : "";
         const res = await http("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`);
-        return ok({ workspaceId, tasks: res.tasks });
+        return ok({
+          workspaceId,
+          ...res.retired ? { retired: res.retired } : {},
+          tasks: res.tasks
+        });
       }
       case "list_tasks": {
         const { workspaceId, goal, status, assignee, needs, fields } = a;
@@ -16494,6 +16555,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
+          ...res.retired ? { retired: res.retired } : {},
+          ...res.leadNameConflicts ? { leadNameConflicts: res.leadNameConflicts } : {},
           gating: res.gating,
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
@@ -16980,6 +17043,20 @@ async function emitChannelMessage(event, rawPayload) {
 }
 function truncate2(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+async function setBoardRetired(workspaceId, retired, reason) {
+  const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
+    retired,
+    ...retired && reason !== undefined ? { reason } : {},
+    author: AUTHOR
+  });
+  return {
+    workspaceId,
+    name: res.workspace.name,
+    retired,
+    changed: res.changed,
+    ...res.workspace.retiredAt !== undefined ? { retiredAt: res.workspace.retiredAt } : {}
+  };
 }
 async function http(method, path, body) {
   const baseUrl = resolveBaseUrl();

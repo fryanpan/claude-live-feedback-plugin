@@ -94,7 +94,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.85';
+const PLUGIN_VERSION = '0.1.87';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1119,6 +1119,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           subscribe: { type: 'boolean' },
         },
         required: ['name'],
+      },
+    },
+    {
+      name: 'rename_workspace',
+      description:
+        'Rename a hub board. The name was set once at creation and nothing could change it, which is how two live boards end up sharing one — and the name is how an agent picks which board to work. Nothing else moves: same id, same URL, same tasks, same docs; every link already in the field keeps working. Renaming INTO a name another live board already has is allowed (you may be halfway through a cleanup) and is never silent — the response carries `sameName` naming the other boards, so a collision you just made comes back to you instead of to whoever reads the board next week. Use retire_workspace instead when the right answer is that one of the two is over.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string', description: 'Hub workspace id.' },
+          name: { type: 'string', description: 'The new name. Trimmed; may not be empty.' },
+        },
+        required: ['workspaceId', 'name'],
+      },
+    },
+    {
+      name: 'retire_workspace',
+      description:
+        "Stand a hub board down — REVERSIBLY. This is what to call when a board is superseded, finished, or a duplicate: it stops ranking on the workspace list (it folds into a counted 'Retired' section rather than vanishing), it refuses new tasks, and it tells any agent that reads it or attaches to it that it is retired and why. It DESTROYS NOTHING — every task, goal, doc, thread and event survives, the board still opens at its URL, and in-flight tasks can still be transitioned so nothing gets stranded. unretire_workspace puts it back exactly as it was. This is deliberately NOT delete_workspace, which removes the tasks sidecar and the events log and is not reversible; reach for that essentially never. Pass a `reason` — it is replayed verbatim in every refusal and notice an agent sees, and it is usually the name of the board that replaced this one, which is the only thing that makes the refusal actionable.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string', description: 'Hub workspace id.' },
+          reason: {
+            type: 'string',
+            description:
+              'Why, in one line. Shown to every agent that hits the retired board — name the board that replaced it if there is one.',
+          },
+        },
+        required: ['workspaceId'],
+      },
+    },
+    {
+      name: 'unretire_workspace',
+      description:
+        'Bring a retired hub board back. It ranks again, takes new work again, and stops warning readers. Nothing has to be restored — retiring only ever wrote one field — so this is a plain reversal and not a recovery.',
+      inputSchema: {
+        type: 'object',
+        properties: { workspaceId: { type: 'string', description: 'Hub workspace id.' } },
+        required: ['workspaceId'],
       },
     },
     {
@@ -2576,6 +2616,40 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           leadAgentId: res.workspace.leadAgentId,
         });
       }
+      case 'rename_workspace': {
+        const { workspaceId, name: nextName } = a as { workspaceId: string; name: string };
+        const res = (await http(
+          'POST',
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/rename`,
+          { name: nextName, author: AUTHOR },
+        )) as {
+          changed: boolean;
+          workspace: { name: string };
+          sameName?: Array<{ workspaceId: string; name: string }>;
+        };
+        return ok({
+          workspaceId,
+          name: res.workspace.name,
+          changed: res.changed,
+          // Only present when the rename LANDED on a name another live board
+          // already had. Passed through rather than swallowed: a duplicate
+          // name is the failure this verb exists to prevent, and the caller
+          // is the only party still in a position to fix it cheaply.
+          ...(res.sameName ? { sameName: res.sameName } : {}),
+        });
+      }
+      // Two cases rather than one fall-through, because `tool-wiring.test.ts`
+      // reads this switch as SOURCE — `case 'x': {` is how it proves every
+      // advertised tool has a handler, and a shared block would hide one of
+      // these two from it.
+      case 'retire_workspace': {
+        const { workspaceId, reason } = a as { workspaceId: string; reason?: string };
+        return ok(await setBoardRetired(workspaceId, true, reason));
+      }
+      case 'unretire_workspace': {
+        const { workspaceId } = a as { workspaceId: string };
+        return ok(await setBoardRetired(workspaceId, false));
+      }
       case 'set_workspace_lead': {
         const { workspaceId, leadAgentId, takeover } = a as {
           workspaceId: string;
@@ -2721,6 +2795,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             newBands: Array<{ id: string; title: string }>;
             taskIds: string[];
           };
+          retired?: { since: number; reason?: string; notice: string };
         };
         return ok({
           workspaceId: res.workspace.id,
@@ -2731,6 +2806,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // A goal BAND that appeared and has not been re-looked at. Only
           // attach_agent drains it — reading it here does not.
           pendingBucketReview: res.pendingBucketReview,
+          // Present only when this board has been stood down. Carried FIRST
+          // in spirit even though it reads last: an agent that got this far
+          // is about to decide what to work on, and a retired board's goal
+          // list looks exactly like a live one's.
+          ...(res.retired ? { retired: res.retired } : {}),
           goals: res.goalSummary,
         });
       }
@@ -2749,8 +2829,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = (await http(
           'GET',
           `/api/workspaces/${encodeURIComponent(workspaceId)}/next${query}`,
-        )) as { tasks: unknown[] };
-        return ok({ workspaceId, tasks: res.tasks });
+        )) as { tasks: unknown[]; retired?: { since: number; reason?: string; notice: string } };
+        // This is the "what should I do next" call, so a retired board has to
+        // say so HERE — the queue still ranks (in-flight work is finishable)
+        // and would otherwise read exactly like a live board's.
+        return ok({
+          workspaceId,
+          ...(res.retired ? { retired: res.retired } : {}),
+          tasks: res.tasks,
+        });
       }
       case 'list_tasks': {
         const { workspaceId, goal, status, assignee, needs, fields } = a as {
@@ -3167,6 +3254,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             actor?: { id: string; name?: string; kind?: string };
             ts: number;
           }>;
+          retired?: { since: number; reason?: string; notice: string };
+          leadNameConflicts?: {
+            boards: Array<{ workspaceId: string; name: string }>;
+            notice: string;
+          };
         };
         // Only when this session attached as ITSELF: the keepalive proves
         // THIS process is alive, and refreshing somebody else's attachment
@@ -3193,6 +3285,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({
           workspaceId,
           agentId: res.attachment?.agentId ?? agentId ?? AUTHOR.id,
+          // THE BOARD YOU JUST ATTACHED TO HAS BEEN STOOD DOWN. It takes no
+          // new work and is not ranked; read the notice before you plan
+          // anything here. First in the payload because a retired board's
+          // gating, queues and untriaged list all read exactly like a live
+          // board's, and by the time you reach them you have already decided
+          // to work here.
+          ...(res.retired ? { retired: res.retired } : {}),
+          // YOU LEAD ANOTHER LIVE BOARD WITH THE SAME NAME. Two boards, one
+          // name, one lead is how a session works the stale one for a night
+          // and misses the goals on the live one — it happened, which is why
+          // this field exists. Read both goal lists, then rename or retire
+          // whichever is not the live board before doing anything else.
+          ...(res.leadNameConflicts ? { leadNameConflicts: res.leadNameConflicts } : {}),
           gating: res.gating,
           // Are you the board's LEAD agent? True if you already held the seat
           // or just claimed an empty one. The lead is where goal-edit
@@ -4156,6 +4261,34 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
 
 function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+/**
+ * The body of retire_workspace and unretire_workspace, which are one route
+ * call with the boolean flipped. Shared here rather than as a fall-through
+ * case so each tool keeps its own `case` block — that is the shape
+ * `tool-wiring.test.ts` reads to prove no advertised tool is unhandled.
+ */
+async function setBoardRetired(
+  workspaceId: string,
+  retired: boolean,
+  reason?: string,
+): Promise<Record<string, unknown>> {
+  const res = (await http('PUT', `/api/workspaces/${encodeURIComponent(workspaceId)}/retired`, {
+    retired,
+    ...(retired && reason !== undefined ? { reason } : {}),
+    author: AUTHOR,
+  })) as { changed: boolean; workspace: { name: string; retiredAt?: number } };
+  return {
+    workspaceId,
+    name: res.workspace.name,
+    retired,
+    // False means it was ALREADY in this state — worth reporting rather than
+    // flattening to success, because a caller re-running a cleanup wants to
+    // know it changed nothing this time.
+    changed: res.changed,
+    ...(res.workspace.retiredAt !== undefined ? { retiredAt: res.workspace.retiredAt } : {}),
+  };
 }
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
