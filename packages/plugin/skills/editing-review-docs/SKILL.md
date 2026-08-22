@@ -157,7 +157,10 @@ If a `.md` file isn't under review yet and you want to bring it into
 the editor, call `create_review_doc(docId, path, title?, setId?)`. The
 doc must not already exist server-side; pick a fresh `docId`. The
 server will read the file, parse it, attach the watcher, and return a
-`reviewUrl` you can hand to a human.
+`reviewUrl` you can hand to a human. How you spell that link depends on
+where you are putting it — inline and relative on a task or a thread,
+bare on its own line in terminal chat. See "Use Links Effectively" in
+`claude-workspaces:working-in-a-workspace`.
 
 **Reviewing multiple files together:** pass the same `setId` when
 creating each doc. Docs sharing a setId show up in each other's

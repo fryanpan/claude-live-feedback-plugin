@@ -147,6 +147,6 @@ If Vite / webpack strips `<script>` tags in HTML, add the widget to
   are keyed to `docId`, so changing it orphans every prior comment.
 - Don't hand the mockup URL over in chat. Post it as a reply on the task
   thread or doc comment the mockup answers (with a `review` payload when
-  you're asking someone to look), bare URL on its own line — see "Present
-  the work itself in context" in the
+  you're asking someone to look) — and there it goes in as an inline
+  relative link rather than a raw URL. See "Use Links Effectively" in the
   `claude-workspaces:working-in-a-workspace` skill.
