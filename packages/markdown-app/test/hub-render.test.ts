@@ -196,6 +196,44 @@ describe('renderBoard', () => {
     expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toContain('3');
   });
 
+  // The one badge ADDED back to the row, against a strip that has lost three.
+  // The others labelled the board's shape and so applied to nearly every row;
+  // this one marks the handful somebody deliberately deferred, on a list whose
+  // job is to answer what to work on next. Without it a parked row is
+  // indistinguishable from work nobody got to, which is the confusion the
+  // field exists to end.
+  it('marks a parked row with its date, and says nothing on a park that has expired', () => {
+    const h = handlers();
+    // Real wall-clock offsets: the row badge asks `Date.now()`, the same way
+    // the overdue tint next door does. `NOW` here is a fixed past constant, so
+    // building the fixture from it would test the expired branch twice.
+    const soon = Date.now() + 86_400_000;
+    const parked = task({
+      goal: 'g-pr',
+      parkedUntil: soon,
+      parkedReason: 'waiting on the index rebuild',
+    });
+    // No sweeper clears the field, so an expired park is a row that still
+    // CARRIES `parkedUntil` and must draw as ordinary work.
+    const expired = task({ goal: 'g-pr', parkedUntil: Date.now() - 1, dueAt: NOW + 86_400_000 });
+    renderBoard(root, boardSections(GOALS, [parked, expired], filters), h);
+
+    const row = root.querySelector(`.hub-task-row[data-task-id="${parked.id}"]`);
+    const chip = row?.querySelector('.hub-badge-parked') as HTMLElement | null;
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent ?? '').toContain('parked');
+    expect(chip?.textContent ?? '').toContain(
+      new Date(soon).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    );
+    // The reason is prose of any length and the row is one line, so it rides
+    // the title. It still has to be REACHABLE from the row.
+    expect(chip?.title).toBe('waiting on the index rebuild');
+
+    const stale = root.querySelector(`.hub-task-row[data-task-id="${expired.id}"]`);
+    expect(stale?.querySelector('.hub-badge-due')).not.toBeNull(); // control: badges render
+    expect(stale?.querySelector('.hub-badge-parked')).toBeNull();
+  });
+
   // Bryan, 2026-08-19, on being shown what it meant: *"That's not helpful.
   // Just don't show it any more."* The count was ambiguous by construction —
   // it counted all of `after`, while only the `afterEnforce` subset actually
@@ -3501,6 +3539,66 @@ describe('renderTaskDetail — the reorganised panel', () => {
     input.value = '';
     input.dispatchEvent(new Event('change'));
     expect(onDueSet).toHaveBeenLastCalledWith(expect.anything(), null);
+  });
+
+  /**
+   * The park's own block, and NOT a fifth cell in the fields row above — that
+   * row is a pinned four on a panel whose scarcest axis is height, and a park
+   * is true of almost no rows, so a permanent fifth control would cost every
+   * task a cell to say nothing.
+   *
+   * It still carries a control: a field an agent writes and a person cannot
+   * correct reads as broken, and deferring somebody else's work is exactly
+   * the call a reader wants to overturn in one tap.
+   */
+  it('shows a parked task its date and reason, with one gesture to move or un-park it', () => {
+    const onParkSet = vi.fn();
+    const NOW_MS = new Date(2026, 7, 1, 12).getTime();
+    renderTaskDetail(root, task(), handlers({ onParkSet, now: NOW_MS }));
+    // Control: the panel rendered, and carries no park block for a row that
+    // is not parked.
+    expect(root.querySelector('.hub-detail-fields')).not.toBeNull();
+    expect(root.querySelector('.hub-parked-note')).toBeNull();
+    expect(keys()).not.toContain('Parked');
+
+    root.replaceChildren();
+    const until = new Date(2026, 7, 20, 12).getTime();
+    renderTaskDetail(
+      root,
+      task({ parkedUntil: until, parkedReason: 'waiting on the index rebuild' }),
+      handlers({ onParkSet, now: NOW_MS }),
+    );
+    const note = root.querySelector('.hub-parked-note') as HTMLElement;
+    expect(note).not.toBeNull();
+    // The reason is read-only here, but it must be READABLE — a date with no
+    // stated cause is a decision nobody can argue with.
+    expect(note.textContent ?? '').toContain('waiting on the index rebuild');
+    expect(note.textContent ?? '').toContain(new Date(until).toLocaleDateString());
+
+    const input = note.querySelector('input') as HTMLInputElement;
+    expect(input.value).toBe('2026-08-20'); // local calendar day, both ways
+    input.value = '2026-09-02';
+    input.dispatchEvent(new Event('change'));
+    const [, ts] = onParkSet.mock.calls[0] ?? [];
+    const back = new Date(ts as number);
+    expect([back.getFullYear(), back.getMonth(), back.getDate()]).toEqual([2026, 8, 2]);
+
+    input.value = '';
+    input.dispatchEvent(new Event('change'));
+    expect(onParkSet).toHaveBeenLastCalledWith(expect.anything(), null);
+  });
+
+  it('drops the park block once the date has passed, without anything clearing it', () => {
+    const until = new Date(2026, 7, 20, 12).getTime();
+    // The task still CARRIES `parkedUntil` — no sweeper wipes it, which is
+    // what keeps "it comes back on its own" free of a second writer.
+    renderTaskDetail(
+      root,
+      task({ parkedUntil: until, parkedReason: 'waiting on the index rebuild' }),
+      handlers({ now: until + 1 }),
+    );
+    expect(root.querySelector('.hub-detail-fields')).not.toBeNull(); // control
+    expect(root.querySelector('.hub-parked-note')).toBeNull();
   });
 
   /**
