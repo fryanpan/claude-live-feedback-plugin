@@ -192,9 +192,9 @@ describe('positive controls — guidance that must survive the edit', () => {
     }
     // POSITIVE CONTROL: the same probe over the same haystack finds a skill
     // that DOES ship, so a green run above means "absent", not "nothing read".
-    expect(SHIPPED.some(([, raw]) => raw.includes('claude-workspaces:working-in-a-workspace'))).toBe(
-      true,
-    );
+    expect(
+      SHIPPED.some(([, raw]) => raw.includes('claude-workspaces:working-in-a-workspace')),
+    ).toBe(true);
   });
 
   it('every skill declares a frontmatter name, and it matches the directory', () => {

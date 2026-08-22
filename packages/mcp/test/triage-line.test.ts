@@ -301,7 +301,11 @@ describe('every skill a triage line names actually ships', () => {
       triageRequestLine({ kind: 'bucket-review', taskIds: ['t-1'] }, 'agent-whoever'),
     ];
     for (const line of lines) {
-      for (const gone of ['handling-a-goal-change', 'running-a-workspace-hub', 'reviewing-task-shape']) {
+      for (const gone of [
+        'handling-a-goal-change',
+        'running-a-workspace-hub',
+        'reviewing-task-shape',
+      ]) {
         expect(line).not.toContain(gone);
       }
     }

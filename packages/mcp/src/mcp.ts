@@ -3260,9 +3260,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // does: an away lead only ever sees THIS path, so leaving it off
           // here would tell half the fleet what to do and half of it only
           // that something happened.
-          ...(res.pendingRetriage
-            ? { pendingRetriage: res.pendingRetriage }
-            : {}),
+          ...(res.pendingRetriage ? { pendingRetriage: res.pendingRetriage } : {}),
           // A goal BAND appeared while you were away, so the unknown-goal
           // bucket is worth another look: place the ones that now have a
           // home with set_task_goal (echo the batchId), and leave the rest —
