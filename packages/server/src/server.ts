@@ -3134,13 +3134,47 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? { staleAfterMs: opts.premiseStaleAfterMs }
               : {}),
           });
+          // WHO IS ALREADY ON EACH ROW, on the surface where the pickup
+          // decision is actually made. `list_tasks` has carried
+          // `ownerSession` for a while and this route did not, so the read
+          // existed and was one call away from every dispatcher who needed
+          // it — which on 2026-08-17 is how two sessions each built a
+          // complete answer to `t-K69wxtRLCn2a` (#186 merged, #190 thrown
+          // away) with neither able to detect the other.
+          //
+          // Two fields because they answer two questions and the whole
+          // failure was one signal being read as an answer to the other:
+          // `ownerSession` is the session behind the row's OWNER, and
+          // `claimedBy` is the session that last moved it into in-progress —
+          // which is the only one that exists when nobody assigned it, since
+          // a transition never touches `assignee`.
+          //
+          // Both are recency reads (heartbeat + observed work), never content
+          // identity: a session that thinks for an hour produces no new
+          // commit and must still read as taken. Informational only — nothing
+          // here refuses anyone, because two agents on one row is sometimes
+          // right.
+          const ownerSessionOf = taskProjection.ownerSessionReader(workspaceId);
+          const claimSessionOf = taskProjection.claimSessionReader(workspaceId);
+          const byId = new Map(taskStore.listTasks(workspaceId).map((t) => [t.id, t]));
+          const withPresence = rows.map((row) => {
+            const task = byId.get(row.id);
+            if (!task) return row;
+            const owner = ownerSessionOf(task);
+            const claim = claimSessionOf(task);
+            return {
+              ...row,
+              ...(owner !== undefined ? { ownerSession: owner } : {}),
+              ...(claim !== undefined ? { claimedBy: claim } : {}),
+            };
+          });
           // The queue still ranks — a retired board's in-flight work is
           // finishable — but the caller is told what it is looking at BEFORE
           // it picks a row. This is the surface an agent hits when it asks
           // "what should I do next", so silence here is the lost night.
           return j(200, {
             workspaceId,
-            tasks: rows,
+            tasks: withPresence,
             ...(isRetired(workspace) ? { retired: retiredNotice(workspace) } : {}),
           });
         }
