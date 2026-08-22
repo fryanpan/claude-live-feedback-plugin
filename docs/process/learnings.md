@@ -2888,6 +2888,31 @@ Every count that went wrong had one.
   general statement is under "The thesis, stated once for the whole family" in
   "A probe that always answers 'yes'…".
 
+## A stopped Bun server keeps answering on sockets it already accepted, so a restart test can green against the dead instance
+
+- **`Bun.serve()`'s `stop()` (without force) stops the LISTENER, not the
+  connections.** Sockets already accepted keep serving requests — and `fetch`
+  keeps-alive and POOLS those sockets per host. So the sequence "stop server A,
+  start server B on the same port, fetch to confirm B is up" can route the
+  confirming fetch down a pooled keep-alive socket into **A**, which answers
+  200 with A's state. Measured 2026-08-22 while writing the durable-watch
+  restore-failure test: the "restarted" server was reachable before it existed,
+  because the probe never left the old connection.
+- **The 200 is real and the conclusion is wrong** — same family as a healthy
+  server serving a stale bundle. The socket is alive, the response well-formed;
+  what failed silently is the assumption that a fresh TCP connect happened.
+- Two workarounds, both used in `packages/server/test/mcp-durable-watches.test.ts`:
+  - **Change the host string to key a different pool** — `127.0.0.1` vs
+    `localhost` are different pool keys to `fetch`, so switching one for the
+    other forces a fresh connect even though they are the same interface.
+  - **Prove the port is dead with a raw TCP connect**, not an HTTP request —
+    `Bun.connect` refused ⇒ nothing is listening; only then does "the new
+    server answers" mean the NEW server answered.
+- General rule: a probe that reuses a connection can only tell you about the
+  process that accepted that connection. Any test of "the old instance is
+  gone" must defeat connection pooling first, or it is a probe that always
+  answers yes.
+
 ## A remedy is a claim like any other, and it travels further than the bug because it arrives as a correction
 
 - **Having correctly diagnosed a served-bundle freshness check as vacuous, I
