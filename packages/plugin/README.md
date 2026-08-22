@@ -140,7 +140,7 @@ tunnels, no certs. For a phone-simulator viewport on desktop append
   a branch / work in progress. Covers `create_diff_review` (repo +
   base → live working-tree review URL; optional `target` to pin),
   sharing the `entryUrl`, handling line-comment events per file,
-  `exclude`-ing vendored paths on big diffs, and `delete_workspace`
+  `exclude`-ing vendored paths on big diffs, and `delete_review`
   cleanup.
 - `editing-review-docs` — auto-invokes before Claude edits a `.md`
   file. Checks `list_docs` to see if the file is bound to a live

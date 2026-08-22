@@ -44,7 +44,7 @@ interface CoverageQueue {
 interface CoverageWorkspaceRow {
   key: string;
   workspaceId: string;
-  kind: 'board' | 'grouping';
+  kind: 'board' | 'review';
   name?: string;
   attached?: boolean;
   heartbeatFresh?: boolean;
@@ -309,7 +309,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     const row = coverage.workspaces[0] as CoverageWorkspaceRow;
     expect(row.key).toBe(`ws:${groupingId}`);
     expect(row.workspaceId).toBe(groupingId);
-    expect(row.kind).toBe('grouping');
+    expect(row.kind).toBe('review');
     // Attachment / lead / heartbeat are hub-board facts. Printing `false` for
     // a grouping would read as a gap that cannot exist.
     expect(row.attached).toBeUndefined();
