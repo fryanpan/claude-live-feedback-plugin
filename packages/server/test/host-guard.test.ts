@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import {
   type ShareTarget,
   classifyHost,
+  collabScope,
+  isAccessTunnelHost,
   isTrustedLocalHost,
   normalizeHost,
   shareScopeAllows,
@@ -829,5 +831,265 @@ describe('shareScopeAllows — resources under the workspace path', () => {
     for (const p of ['/workspaces/w-1', '/workspaces/w-1/home', '/workspaces/w-1/docs/d-in']) {
       expect(shareScopeAllows(p, 'GET', NO_WS, workspacesOf), p).toBe(false);
     }
+  });
+});
+
+/**
+ * The collaboration hostname — one stable public address, an Access
+ * application in front of it, the SHARE surface behind it.
+ *
+ * The predicate half. Every assertion here is about the three conditions that
+ * must ALL hold before a proxied hostname classifies as anything but `deny`,
+ * because each one on its own is the whole gate: drop the proxy requirement
+ * and a LAN client claims the name unauthenticated, drop the Access
+ * requirement and the tunnel does, drop exact matching and a lookalike does.
+ */
+describe('isAccessTunnelHost', () => {
+  const OPTED_IN = {
+    ...LOCAL,
+    proxiedAccessHosts: ['workspaces.example.com'],
+    accessFronted: true,
+  };
+
+  it('accepts a listed host that really arrived through the edge', () => {
+    expect(isAccessTunnelHost('workspaces.example.com', { ...OPTED_IN, viaProxy: true })).toBe(
+      true,
+    );
+    // …and the port is stripped like everywhere else.
+    expect(isAccessTunnelHost('workspaces.example.com:443', { ...OPTED_IN, viaProxy: true })).toBe(
+      true,
+    );
+  });
+
+  it('refuses the same host when the request did NOT come through the edge', () => {
+    // The inverse of the local veto, and the reason the two lists cannot leak
+    // into each other: a LAN client sending `Host: workspaces.example.com`
+    // has no Access token in front of it, so there is nothing to verify.
+    expect(isAccessTunnelHost('workspaces.example.com', OPTED_IN)).toBe(false);
+    expect(isAccessTunnelHost('workspaces.example.com', { ...OPTED_IN, viaProxy: false })).toBe(
+      false,
+    );
+  });
+
+  it('refuses everything when Access is not configured', () => {
+    // The load-bearing refusal: without an Access application the hostname
+    // would be the API exposed to anyone who can reach the tunnel.
+    expect(
+      isAccessTunnelHost('workspaces.example.com', {
+        ...OPTED_IN,
+        accessFronted: false,
+        viaProxy: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('refuses a host nobody opted in, and a lookalike of one who did', () => {
+    const proxied = { ...OPTED_IN, viaProxy: true };
+    expect(isAccessTunnelHost('attacker.example.com', proxied)).toBe(false);
+    expect(isAccessTunnelHost('workspaces.example.com.attacker.com', proxied)).toBe(false);
+    expect(isAccessTunnelHost('evil-workspaces.example.com', proxied)).toBe(false);
+    expect(isAccessTunnelHost(null, proxied)).toBe(false);
+    expect(isAccessTunnelHost('', proxied)).toBe(false);
+  });
+
+  it('never makes a listed host LOCAL — the cf-ray veto is untouched', () => {
+    // The narrowing has to be a new kind, not a hole in the old predicate.
+    // If this ever goes true, a tunnel visitor has the unauthenticated
+    // product and every assertion about scope below is moot.
+    const proxied = { ...OPTED_IN, viaProxy: true };
+    expect(isTrustedLocalHost('workspaces.example.com', proxied)).toBe(false);
+    expect(isTrustedLocalHost('localhost', proxied)).toBe(false);
+  });
+});
+
+describe('classifyHost — collaboration hosts', () => {
+  const lookupShare = (h: string) =>
+    h === 'share-abc.tunnel.example.com' ? { workspaceId: 'ws-shared' } : null;
+  const OPTED_IN = {
+    ...LOCAL,
+    lookupShare,
+    proxiedAccessHosts: ['workspaces.example.com'],
+    accessFronted: true,
+  };
+
+  it('a proxied opt-in host → collab', () => {
+    expect(classifyHost('workspaces.example.com', { ...OPTED_IN, viaProxy: true })).toEqual({
+      kind: 'collab',
+    });
+  });
+
+  it('WITHOUT the opt-in, behaviour is exactly what it was — deny', () => {
+    // A deployment that has not opted in must be bit-for-bit unchanged, so
+    // the same request against an empty list has to land where it always did.
+    expect(
+      classifyHost('workspaces.example.com', { ...LOCAL, lookupShare, viaProxy: true }),
+    ).toEqual({ kind: 'deny', reason: 'unknown_host' });
+    expect(
+      classifyHost('workspaces.example.com', {
+        ...OPTED_IN,
+        proxiedAccessHosts: [],
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'deny', reason: 'unknown_host' });
+  });
+
+  it('WITHOUT Access configured, an opt-in host is denied rather than served', () => {
+    expect(
+      classifyHost('workspaces.example.com', {
+        ...OPTED_IN,
+        accessFronted: false,
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'deny', reason: 'unknown_host' });
+  });
+
+  it('does not take a hostname away from the share or link rule', () => {
+    // Collab is checked last, so a name that is already a share hostname or
+    // the link hostname keeps the narrower meaning it had.
+    expect(
+      classifyHost('share-abc.tunnel.example.com', {
+        ...OPTED_IN,
+        proxiedAccessHosts: ['share-abc.tunnel.example.com'],
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'share', target: { workspaceId: 'ws-shared' } });
+    expect(
+      classifyHost('links.example.com', {
+        ...OPTED_IN,
+        proxiedAccessHosts: ['links.example.com'],
+        linkHost: 'links.example.com',
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'link' });
+  });
+});
+
+/**
+ * What a collaboration host may touch.
+ *
+ * The fixture is two boards, one doc each, and NEITHER is shared — which is
+ * the point of the surface: scope is decided per request from the path, so a
+ * visitor reaches the board they were sent a link to and the docs filed on
+ * it, and nothing that is not a workspace resource at all.
+ */
+describe('collabScope', () => {
+  const workspacesOf = (id: string): string[] => {
+    if (id === 'design-doc') return ['ws-a'];
+    if (id === 'other-doc') return ['ws-b'];
+    return [];
+  };
+  const allows = (p: string, m = 'GET') => collabScope(p, m, workspacesOf).allowed;
+
+  it('reaches a board, its tabs, and the docs filed on it', () => {
+    for (const p of [
+      '/workspaces/ws-a',
+      '/workspaces/ws-a/tasks',
+      '/workspaces/ws-a/docs/design-doc',
+      '/api/workspaces/ws-a',
+      '/api/workspaces/ws-a/attachments',
+      '/api/workspaces/ws-a/tree',
+      '/api/docs/design-doc',
+      '/api/docs/design-doc/threads',
+      '/review/design-doc',
+      '/y/design-doc',
+      '/y/ws:ws-a',
+      '/events/design-doc',
+      '/events/workspace/ws-a',
+    ]) {
+      expect(allows(p), p).toBe(true);
+    }
+    expect(allows('/api/workspaces/ws-a/editable-file', 'POST')).toBe(true);
+  });
+
+  it('reaches the app shell, which names no workspace at all', () => {
+    for (const p of ['/app/app.js', '/app/styles.css', '/widget.js', '/favicon.ico']) {
+      expect(allows(p), p).toBe(true);
+    }
+    // …and the target it produces names no workspace either, so nothing
+    // downstream can read a shell request as scoped to one.
+    expect(collabScope('/app/app.js', 'GET', workspacesOf)).toEqual({
+      allowed: true,
+      target: {},
+    });
+  });
+
+  it('names the workspace the path belongs to, so the visitor is scoped to it', () => {
+    expect(collabScope('/api/docs/design-doc', 'GET', workspacesOf)).toEqual({
+      allowed: true,
+      target: { workspaceId: 'ws-a' },
+    });
+    expect(collabScope('/workspaces/ws-b', 'GET', workspacesOf)).toEqual({
+      allowed: true,
+      target: { workspaceId: 'ws-b' },
+    });
+  });
+
+  it('refuses a doc filed on no workspace — reach is workspace membership', () => {
+    expect(allows('/api/docs/loose-doc')).toBe(false);
+    expect(allows('/review/loose-doc')).toBe(false);
+    expect(allows('/y/loose-doc')).toBe(false);
+  });
+
+  it('refuses the enumeration routes — the doc list and the workspace list', () => {
+    expect(allows('/api/docs')).toBe(false);
+    expect(allows('/api/workspaces')).toBe(false);
+    expect(allows('/api/activity')).toBe(false);
+  });
+
+  it('refuses the landing page and the demo surfaces', () => {
+    // The collaboration address is not "the product at a nicer name" — a
+    // visitor arrives at a board link, not at Bryan's home screen.
+    expect(allows('/')).toBe(false);
+    expect(allows('/demos/mockup')).toBe(false);
+    expect(allows('/mockup/anything')).toBe(false);
+  });
+
+  it('refuses share administration, deploy, and the plugin refresh', () => {
+    expect(allows('/api/share')).toBe(false);
+    expect(allows('/api/share/workspace', 'POST')).toBe(false);
+    expect(allows('/api/share/link', 'POST')).toBe(false);
+    expect(allows('/api/share/some-id', 'DELETE')).toBe(false);
+    expect(allows('/api/deploy', 'POST')).toBe(false);
+    expect(allows('/api/deploy')).toBe(false);
+    expect(allows('/api/plugin/refresh', 'POST')).toBe(false);
+  });
+
+  it('refuses the operator verbs on a doc it CAN read', () => {
+    // Paired deliberately: the read is allowed in the first test above, so
+    // these refusals are about the verb rather than about the doc.
+    expect(allows('/api/docs/design-doc', 'DELETE')).toBe(false);
+    expect(allows('/api/docs/design-doc/content', 'POST')).toBe(false);
+    expect(allows('/api/docs/design-doc/reparse_from_disk', 'POST')).toBe(false);
+    expect(allows('/api/docs/design-doc/threads/t-1/promote', 'POST')).toBe(false);
+    expect(allows('/api/docs/design-doc/threads/t-1/rewrite_region', 'POST')).toBe(false);
+    expect(allows('/api/workspaces/ws-a', 'DELETE')).toBe(false);
+    expect(allows('/api/workspaces/ws-a/refresh', 'POST')).toBe(false);
+    expect(allows('/api/workspaces/ws-a/groups', 'POST')).toBe(false);
+    expect(allows('/api/workspaces', 'POST')).toBe(false); // bind a folder
+    expect(allows('/api/diffs', 'POST')).toBe(false);
+  });
+
+  it('refuses a doc reached through a workspace it does not belong to', () => {
+    // Spelling your own workspace in front of someone else's doc is the
+    // widening this inherits from `shareScopeAllows`, so it is asserted here
+    // too: the workspace segment and the membership check are two conditions,
+    // not one.
+    expect(allows('/workspaces/ws-a/docs/other-doc')).toBe(false);
+    expect(allows('/workspaces/ws-b/docs/design-doc')).toBe(false);
+  });
+
+  it('gives a path that names no workspace the shell and nothing else', () => {
+    // `collabScope` falls back to an unspellable workspace id when a path
+    // names none, so the static allowances survive and every
+    // workspace-dependent rule refuses. A caller who guesses that id must
+    // gain nothing — it resolves through `workspacesOf`, which knows no such
+    // workspace, so no doc is ever inside it.
+    const sentinel = '\u0000collab-no-workspace';
+    expect(allows(`/api/docs/${encodeURIComponent(sentinel)}`)).toBe(false);
+    expect(allows(`/api/docs/${encodeURIComponent(sentinel)}/threads`)).toBe(false);
+    expect(allows(`/review/${encodeURIComponent(sentinel)}`)).toBe(false);
+    // Naming it as a WORKSPACE buys nothing either: it is exactly as reachable
+    // as any other id that names no workspace, and the routes behind it 404.
+    expect(allows(`/workspaces/${encodeURIComponent(sentinel)}/docs/design-doc`)).toBe(false);
   });
 });
