@@ -61,6 +61,32 @@ PUBLIC_BASE_URL="${CW_PUBLIC_BASE_URL:-${LF_PUBLIC_BASE_URL:-}}"
 # every time on a deployment that shares.
 SHARE_PUBLIC_HOSTNAME="${CF_SHARE_PUBLIC_HOSTNAME:-}"
 
+# Collaboration hostnames reachable from outside the tailnet: served through
+# the tunnel, gated by a Cloudflare Access application over each hostname, and
+# scoped to the share surface rather than the privileged one. Same contract as
+# the two above — baked into the plist, empty by default, and re-running the
+# installer without them reverts the setting.
+#
+#   CF_ACCESS_TUNNEL_HOSTS=workspaces.example.com \
+#   CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com \
+#   CF_ACCESS_AUD=<the Access application's AUD tag> \
+#     scripts/launchd/install.sh
+#
+# All three or none: the server IGNORES the host list unless the team domain
+# and the AUD are both set, because a listed hostname with no Access
+# application in front of it would be the API exposed to the tunnel. The
+# installer says so rather than leaving it to be discovered as a 403.
+ACCESS_TUNNEL_HOSTS="${CF_ACCESS_TUNNEL_HOSTS:-}"
+ACCESS_TEAM_DOMAIN="${CF_ACCESS_TEAM_DOMAIN:-}"
+ACCESS_AUD="${CF_ACCESS_AUD:-}"
+if [ -n "${ACCESS_TUNNEL_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "${ACCESS_AUD}" ]; }; then
+    echo "error: CF_ACCESS_TUNNEL_HOSTS needs CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD too." >&2
+    echo "       Without an Access application in front of those hostnames the server" >&2
+    echo "       would serve them to anyone who can reach the tunnel, so it refuses to" >&2
+    echo "       honour the list — they would answer 403. Set all three, or none." >&2
+    exit 1
+fi
+
 echo "[install] label:    ${LABEL}"
 echo "[install] repo:     ${REPO_DIR}"
 echo "[install] bun:      ${BUN_BIN}"
@@ -68,6 +94,7 @@ echo "[install] plist:    ${PLIST_DEST}"
 echo "[install] logs:     ${LOG_DIR}/${LABEL}.{out,err}.log"
 echo "[install] links:    ${PUBLIC_BASE_URL:-<discovered host>:<port> over http}"
 echo "[install] sharing:  ${SHARE_PUBLIC_HOSTNAME:-<link mode off>}"
+echo "[install] collab:   ${ACCESS_TUNNEL_HOSTS:-<off>}"
 
 DOMAIN="gui/$(id -u)"
 
@@ -119,6 +146,9 @@ sed \
     -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
     -e "s|{{PUBLIC_BASE_URL}}|${PUBLIC_BASE_URL}|g" \
     -e "s|{{SHARE_PUBLIC_HOSTNAME}}|${SHARE_PUBLIC_HOSTNAME}|g" \
+    -e "s|{{ACCESS_TUNNEL_HOSTS}}|${ACCESS_TUNNEL_HOSTS}|g" \
+    -e "s|{{ACCESS_TEAM_DOMAIN}}|${ACCESS_TEAM_DOMAIN}|g" \
+    -e "s|{{ACCESS_AUD}}|${ACCESS_AUD}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
 
 launchctl bootstrap "${DOMAIN}" "${PLIST_DEST}"
