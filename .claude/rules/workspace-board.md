@@ -84,12 +84,17 @@ board task that proposed it; what follows is the operating rule.
   acceptance criteria must include "review ticket body (and mocks, for UI)
   with Bryan before implementing", surfaced as a review item when the task
   comes up for dispatch. Small/obvious tasks run without the gate.
-- **Never go dark.** A turn that stands every agent down and posts "waiting
-  on you" has extinguished all three of a session's resume sources (human
-  chat, channel events, agent reports). When genuinely blocked with nothing
-  ready, arm a periodic self-wakeup (~20 min) that re-reads the board and the
-  agent roster — a wake that finds nothing changed is one cheap read and ends
-  there, no fan-out, no re-verifying proven state.
+- **Never go dark — but never poll.** *"No polling in the agent session
+  please"* (Bryan, 2026-08-22, superseding the ~20-min periodic self-wakeup
+  this bullet used to prescribe; six consecutive no-op wakes prompted the
+  correction). Every resume source already pushes on its own — board nudges
+  and channel events, agent reports, task notifications, Bryan typing — so
+  when genuinely blocked with nothing ready, end the turn plainly and wait
+  to be woken. A timed re-read re-loads the whole context to discover that
+  nothing changed. What "never go dark" still forbids is the original sin:
+  standing agents down with asks that exist only in chat. File the review
+  items naming the blockage first; a blocked session with its asks filed is
+  the correct state, not a stall.
 - **Watchdog every dispatch.** An idle notification without a report is the
   known harness bug that drops a subagent's final message (measured at 41% of
   one day's dispatches) — nudge immediately; recovery is ~30s. Probe every
