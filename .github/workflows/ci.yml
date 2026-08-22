@@ -51,8 +51,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
-          bun run scripts/collect-open-pr-versions.ts --exclude "$PR" > open-pr-versions.json \
+          bun run scripts/collect-open-pr-versions.ts --exclude "$PR" --base "$BASE" > open-pr-versions.json \
             || printf '%s\n' '{"status":"unavailable","reason":"collector exited non-zero"}' > open-pr-versions.json
           cat open-pr-versions.json
           echo "CONCURRENT_ARGS=--open-prs-file open-pr-versions.json --pr $PR" >> "$GITHUB_ENV"
