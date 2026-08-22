@@ -30,7 +30,10 @@ unrelated work for the duration of the meeting.
 4. **Prime.** Read every bound doc end-to-end AND the key source files
    they describe, before the meeting starts. Your answer speed during
    the meeting is decided here.
-5. Send Bryan the entry URL — bare, on its own line.
+5. Send Bryan the entry URL. Bare and on its own line if terminal chat is
+   where it has to land; if a task or thread already exists for the meeting,
+   it belongs there instead, as an inline relative link. ("Use Links
+   Effectively", `claude-workspaces:working-in-a-workspace`.)
 
 ## During the meeting
 
