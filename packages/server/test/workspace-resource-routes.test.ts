@@ -68,6 +68,10 @@ describe('resources under the workspace path', () => {
   });
 
   describe('a markdown doc', () => {
+    // `plan-doc` is the readable name the caller asked for; the server mints
+    // the id, and the canonical URL is built from that.
+    let planDocId: string;
+
     beforeAll(async () => {
       const r = await post('/api/docs', {
         docId: 'plan-doc',
@@ -76,6 +80,7 @@ describe('resources under the workspace path', () => {
         hubWorkspaceId: wsId,
       });
       expect(r.status).toBe(200);
+      planDocId = ((await r.json()) as { docId: string }).docId;
     });
 
     it('serves at /workspaces/<id>/docs/<docId>', async () => {
@@ -85,9 +90,11 @@ describe('resources under the workspace path', () => {
     });
 
     it('redirects the old /review/<docId> to the workspace path', async () => {
+      // Addressed by the readable name — the old link's spelling — and lands
+      // on the doc's own id.
       const r = await local('/review/plan-doc');
       expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/docs/plan-doc`);
+      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/docs/${planDocId}`);
     });
 
     it('carries the query string through the redirect', async () => {
@@ -95,7 +102,9 @@ describe('resources under the workspace path', () => {
       // redirect that drops it silently returns the desktop page.
       const r = await local('/review/plan-doc?mobile=iphone-16');
       expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/docs/plan-doc?mobile=iphone-16`);
+      expect(r.headers.get('location')).toBe(
+        `/workspaces/${wsId}/docs/${planDocId}?mobile=iphone-16`,
+      );
     });
 
     it('404s a docId that does not exist, under either path', async () => {
@@ -114,6 +123,8 @@ describe('resources under the workspace path', () => {
   });
 
   describe('a mockup', () => {
+    let mockDocId: string;
+
     beforeAll(async () => {
       const p = join(folder, 'mock.html');
       writeFileSync(p, '<!doctype html><title>Mock</title><p>hello mock');
@@ -124,6 +135,7 @@ describe('resources under the workspace path', () => {
         hubWorkspaceId: wsId,
       });
       expect(r.status).toBe(200);
+      mockDocId = ((await r.json()) as { docId: string }).docId;
     });
 
     it('serves its HTML at /workspaces/<id>/mockups/<docId>', async () => {
@@ -135,13 +147,13 @@ describe('resources under the workspace path', () => {
     it('redirects the old /mockup/<docId>', async () => {
       const r = await local('/mockup/mock-doc');
       expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/mockups/mock-doc`);
+      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/mockups/${mockDocId}`);
     });
 
     it('keeps tolerating the .html suffix the old route accepted', async () => {
       const r = await local('/mockup/mock-doc.html');
       expect(r.status).toBe(302);
-      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/mockups/mock-doc`);
+      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/mockups/${mockDocId}`);
     });
 
     it('does not serve a mockup through the docs path', async () => {

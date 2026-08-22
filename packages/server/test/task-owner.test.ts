@@ -191,10 +191,14 @@ describe('task creation records a real owner', () => {
   });
 
   describe('promote (thread → task)', () => {
-    async function seedThread(docId: string): Promise<string> {
-      const file = join(dataDir, `${docId}.md`);
+    /** `name` is the readable name asked for; the pair returned addresses the
+     *  doc by the id the server MINTED. */
+    async function seedThread(name: string): Promise<{ docId: string; threadId: string }> {
+      const file = join(dataDir, `${name}.md`);
       writeFileSync(file, '# Doc\n\nthe ranking clause\n');
-      await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
+      const { docId } = await jj<{ docId: string }>(
+        await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+      );
       const { thread } = await jj<{ thread: { id: string } }>(
         await post(`/api/docs/${docId}/threads`, {
           author: PERSON,
@@ -206,14 +210,14 @@ describe('task creation records a real owner', () => {
           },
         }),
       );
-      return thread.id;
+      return { docId, threadId: thread.id };
     }
 
     it('records the promoter as the owner', async () => {
       const wsId = await seedWorkspace();
-      const threadId = await seedThread('promote-owned');
+      const { docId, threadId } = await seedThread('promote-owned');
       const { task } = await jj<{ task: Task }>(
-        await post(`/api/docs/promote-owned/threads/${threadId}/promote`, {
+        await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
           workspaceId: wsId,
           author: AGENT,
         }),
@@ -223,8 +227,8 @@ describe('task creation records a real owner', () => {
 
     it('refuses a promote with no owner and no promoter', async () => {
       const wsId = await seedWorkspace();
-      const threadId = await seedThread('promote-unowned');
-      const r = await post(`/api/docs/promote-unowned/threads/${threadId}/promote`, {
+      const { docId, threadId } = await seedThread('promote-unowned');
+      const r = await post(`/api/docs/${docId}/threads/${threadId}/promote`, {
         workspaceId: wsId,
       });
       expect(r.status).toBe(400);

@@ -467,10 +467,12 @@ export class TaskProjection {
   ensureWorkspace(workspaceId: string): void {
     const ws = this.tasks.getWorkspace(workspaceId);
     if (!ws) return;
-    const room = this.rooms.getOrCreate(workspaceRoomId(workspaceId), {
-      type: 'workspace',
-      title: ws.name,
-    });
+    const room = this.rooms.getOrCreate(
+      workspaceRoomId(workspaceId),
+      { type: 'workspace', title: ws.name },
+      // The `ws:` namespace is the server's; the projection is the server.
+      { authority: 'server' },
+    );
     if (this.wired.get(workspaceId) !== room.ydoc) {
       this.wired.set(workspaceId, room.ydoc);
       const guard = (_events: Y.YEvent<Y.AbstractType<unknown>>[], tr: Y.Transaction) => {
@@ -574,10 +576,12 @@ export class TaskProjection {
   refresh(workspaceId: string): void {
     const ws = this.tasks.getWorkspace(workspaceId);
     if (!ws) return;
-    const room = this.rooms.getOrCreate(workspaceRoomId(workspaceId), {
-      type: 'workspace',
-      title: ws.name,
-    });
+    const room = this.rooms.getOrCreate(
+      workspaceRoomId(workspaceId),
+      { type: 'workspace', title: ws.name },
+      // The `ws:` namespace is the server's; the projection is the server.
+      { authority: 'server' },
+    );
     const tasksMap = room.ydoc.getMap('tasks');
     const wsMap = room.ydoc.getMap('workspace');
     // The workspace's own agent roster, read once per refresh. `onEvent`
@@ -654,7 +658,12 @@ export class TaskProjection {
    */
   ensureTaskBody(task: Task): void {
     const docId = taskBodyDocId(task.id);
-    const room = this.rooms.getOrCreate(docId, { type: 'markdown', title: task.title });
+    const room = this.rooms.getOrCreate(
+      docId,
+      { type: 'markdown', title: task.title },
+      // Likewise `task:` — a body room is minted here or nowhere.
+      { authority: 'server' },
+    );
     const fragment = prose.getProseFragment(room.ydoc);
     if (fragment.length === 0 && task.body?.trim()) {
       this.rooms.setDocContent(docId, task.body);

@@ -470,13 +470,18 @@ describe('sync-clobber HTTP surface', () => {
       body: JSON.stringify({ docId: 'h2', type: 'markdown', sourceUrl: path }),
     });
     expect(create.ok).toBe(true);
+    // `h2` was the NAME the caller chose; the server minted the id. The rooms
+    // handle keys on the canonical one, while the HTTP paths below stay
+    // addressed by the readable name — which is the alias contract holding in
+    // both directions on one doc.
+    const h2 = ((await create.json()) as { docId: string }).docId;
 
     // Force a genuine conflict through the rooms handle.
     expect(
-      handle.rooms.findAndReplace('h2', { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
+      handle.rooms.findAndReplace(h2, { find: 'Intro paragraph.', replace: 'Un-flushed.' }).ok,
     ).toBe(true);
     writeExternal(path, EXT_ONE);
-    expect(handle.rooms.reconcileNow('h2')).toBe('conflict');
+    expect(handle.rooms.reconcileNow(h2)).toBe('conflict');
 
     const res = await fetch(`${base}/api/docs/h2/find_and_replace`, {
       method: 'POST',
@@ -490,7 +495,7 @@ describe('sync-clobber HTTP surface', () => {
     // Thread-anchored edits are the other common agent path (codex P2) —
     // the recovery signal must ride those responses too.
     const created = await handle.rooms.createThreadByFind(
-      'h2',
+      h2,
       // The find_and_replace above already rewrote the original sentence.
       { find: 'Changed.' },
       { id: 'u1', kind: 'known', name: 'Reviewer', color: '#000' },

@@ -164,10 +164,15 @@ describe('decision routes', () => {
     it('holds promote_to_task to the same gate — the store is where it lives', async () => {
       const wsId = await seedWorkspace();
       // A doc + thread whose quote has no question in it.
-      const docId = 'decision-promote';
-      const file = join(dataDir, `${docId}.md`);
+      const name = 'decision-promote';
+      const file = join(dataDir, `${name}.md`);
       writeFileSync(file, '# Doc\n\nthe ranking clause\n');
-      await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
+      // The server mints the id; `name` was only ever the readable alias. The
+      // promote route reads its docId straight off the path, so the canonical
+      // one is what the paths below carry.
+      const { docId } = await jj<{ docId: string }>(
+        await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+      );
       const { thread } = await jj<{ thread: { id: string } }>(
         await post(`/api/docs/${docId}/threads`, {
           author: PERSON,
@@ -552,10 +557,12 @@ describe('decision routes', () => {
 
     it('through promote_to_task: the same keys on the other create door', async () => {
       const wsId = await seedWorkspace();
-      const docId = 'legacy-promote-decision';
-      const file = join(dataDir, `${docId}.md`);
+      const name = 'legacy-promote-decision';
+      const file = join(dataDir, `${name}.md`);
       writeFileSync(file, '# Doc\n\nthe rollout clause\n');
-      await jj(await post('/api/docs', { docId, type: 'markdown', sourceUrl: file }));
+      const { docId } = await jj<{ docId: string }>(
+        await post('/api/docs', { docId: name, type: 'markdown', sourceUrl: file }),
+      );
       const { thread } = await jj<{ thread: { id: string } }>(
         await post(`/api/docs/${docId}/threads`, {
           author: PERSON,
