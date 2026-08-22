@@ -17,6 +17,27 @@
  * signature and forces the rebuild, so the list stays fresh in place.
  */
 
+/**
+ * Reserve (or give back) the sidebar's grid column.
+ *
+ * Call this with a list you have ALREADY fetched, never with a set id you have
+ * merely read off doc meta. `has-set` used to go on the body synchronously
+ * from meta, before the fetch that would fill the column — and every failure
+ * mode of that fetch left the same artifact. Reported 2026-08-19 on an iPad
+ * over the tailnet: *"an empty 'In this review' left panel that still takes up
+ * space but has nothing in it"*, then *"in this review loaded in eventually"*.
+ * A slow fetch flashed the empty column, a failed one left it there
+ * permanently, and a set with no markdown members rendered it with zero rows.
+ *
+ * The retraction is for a KNOWN-empty list only. A failed refresh must not
+ * collapse the column under a reviewer who is reading the rows in it, and a
+ * failed FIRST load never committed, so it has nothing to give back.
+ */
+export function commitSidebarColumn(hasRows: boolean): void {
+  document.body.classList.toggle('has-set', hasRows);
+  document.getElementById('set-pane')?.setAttribute('aria-hidden', hasRows ? 'false' : 'true');
+}
+
 let renderedSig: string | null = null;
 
 /** True when the sidebar already shows exactly `sig` and still has content —
