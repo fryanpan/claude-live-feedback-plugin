@@ -31,6 +31,7 @@ import {
   isValidWatchKey,
 } from './agent-watches.ts';
 import { clientReleaseStatus } from './client-release.ts';
+import { maybeCompress } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { showFile } from './git-diff.ts';
 import {
@@ -2010,7 +2011,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     async fetch(req, server) {
       // `undefined` means the request became a websocket — nothing to decorate.
       const routed = await route(req, server);
-      return routed === undefined ? undefined : applyCors(req, routed);
+      // Compress BEFORE the CORS merge so the encoding headers ride out on the
+      // same response the wrapper copies; `maybeCompress` skips anything that
+      // isn't a buffered JSON body (see compress.ts for why that gate is
+      // narrow).
+      return routed === undefined ? undefined : applyCors(req, await maybeCompress(req, routed));
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
