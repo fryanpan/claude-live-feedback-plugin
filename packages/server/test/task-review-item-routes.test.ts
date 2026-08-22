@@ -185,6 +185,30 @@ describe('task review-item routes', () => {
       expect((await queueRows(wsId)).some((r) => r.reviewItemId === created.item.id)).toBe(true);
     });
 
+    // The second entry path for the same payload, and it has to agree with the
+    // comment-borne one: an over-long row field files here too. A four-word
+    // option label is the other half of the measured bounces.
+    it('200s an over-long why and a four-word option label, advising on both', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId);
+      const created = await jj<{ item: { id: string }; reviewAdvice?: string }>(
+        await post(`/api/tasks/${task.id}/review-items`, {
+          review: {
+            ...FULL_DECISION,
+            why: 'Blocks the nightly rebuild and the cache work behind it, and either size ships without further changes.',
+            options: [
+              { id: 'small', label: 'Keep the small cache' },
+              { id: 'big', label: 'Grow it' },
+            ],
+          },
+          author: AGENT,
+        }),
+      );
+      expect(created.reviewAdvice ?? '').toContain('review.why');
+      expect(created.reviewAdvice ?? '').toContain('option label');
+      expect((await queueRows(wsId)).some((r) => r.reviewItemId === created.item.id)).toBe(true);
+    });
+
     it('404s an unknown ticket and 400s a missing author or missing review', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);

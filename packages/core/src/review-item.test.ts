@@ -72,17 +72,19 @@ describe('checkReviewPayload — what refuses', () => {
     expect(checkReviewPayload(decision({ headline: '   ' })).ok).toBe(false);
   });
 
-  it('refuses an over-long headline rather than truncating it', () => {
-    const long = 'x'.repeat(REVIEW_LIMITS.headline + 1);
-    const c = checkReviewPayload(decision({ headline: long }));
-    expect(c.ok).toBe(false);
-    expect(c.errors.join(' ')).toContain(`the limit is ${REVIEW_LIMITS.headline}`);
+  it('refuses a one-line field past the sanity ceiling — that is a pasted paragraph', () => {
+    const absurd = 'x'.repeat(REVIEW_LIMITS.lineMaxChars + 1);
+    for (const key of ['headline', 'why', 'lookFor'] as const) {
+      const c = checkReviewPayload(decision({ [key]: absurd }));
+      expect(c.ok).toBe(false);
+      expect(c.errors.join(' ')).toContain(String(REVIEW_LIMITS.lineMaxChars));
+    }
   });
 
-  it('accepts a headline exactly at the limit — the boundary is inclusive', () => {
-    expect(checkReviewPayload(decision({ headline: 'x'.repeat(REVIEW_LIMITS.headline) })).ok).toBe(
-      true,
-    );
+  it('accepts a one-line field exactly at the ceiling — the boundary is inclusive', () => {
+    expect(
+      checkReviewPayload(decision({ headline: 'x'.repeat(REVIEW_LIMITS.lineMaxChars) })).ok,
+    ).toBe(true);
   });
 
   it('refuses a headline containing a line break', () => {
@@ -109,17 +111,17 @@ describe('checkReviewPayload — what refuses', () => {
     expect(c.errors.join(' ')).toContain("belong to a 'decision'");
   });
 
-  it('refuses an option label longer than three words', () => {
+  it('refuses an option label past the sanity ceiling', () => {
     const c = checkReviewPayload(
       decision({
         options: [
-          { id: 'a', label: 'Hide the resolved threads entirely' },
+          { id: 'a', label: 'x'.repeat(REVIEW_LIMITS.lineMaxChars + 1) },
           { id: 'b', label: 'Keep them' },
         ],
       }),
     );
     expect(c.ok).toBe(false);
-    expect(c.errors.join(' ')).toContain('is 5 words');
+    expect(c.errors.join(' ')).toContain(String(REVIEW_LIMITS.lineMaxChars));
   });
 
   it('refuses duplicate option ids', () => {
@@ -187,6 +189,96 @@ describe('checkReviewPayload — what only advises', () => {
   });
 });
 
+// The row budgets used to REFUSE, and in one measured 24-hour window that
+// bounced six honest filings whose `why` ran 92–102 characters against a
+// 90-character budget — each one at the moment an agent was routing an ask to
+// the queue instead of to chat, and each one costing a retry to shave two
+// words. A budget is a rendering fact, not a correctness one: the row wraps,
+// which is worse than a tight line and far better than the ask never being
+// filed. So they advise, exactly as the detail target has since #299.
+describe('checkReviewPayload — a length over a row budget advises, it does not refuse', () => {
+  it('files a why 60 characters past its budget and reports the gap', () => {
+    const long =
+      'The two callers already disagree about this and the branch behind it cannot land until somebody picks one.';
+    expect(long.length).toBeGreaterThan(REVIEW_LIMITS.why);
+    const c = checkReviewPayload(decision({ why: long }));
+    expect(c.errors).toEqual([]);
+    expect(c.ok).toBe(true);
+    expect(c.gaps).toContain('whyLength');
+  });
+
+  it('files an over-long headline and an over-long lookFor', () => {
+    const headline = checkReviewPayload(
+      decision({ headline: 'x'.repeat(REVIEW_LIMITS.headline + 1) }),
+    );
+    expect(headline.ok).toBe(true);
+    expect(headline.gaps).toContain('headlineLength');
+
+    const lookFor = checkReviewPayload(
+      decision({ lookFor: 'x'.repeat(REVIEW_LIMITS.lookFor + 1) }),
+    );
+    expect(lookFor.ok).toBe(true);
+    expect(lookFor.gaps).toContain('lookForLength');
+    // Over-long is not the same gap as absent, or the advice tells the author
+    // to write a field they already wrote.
+    expect(lookFor.gaps).not.toContain('lookFor');
+  });
+
+  it('files a four-word option label — the reported shape of the refusal', () => {
+    const c = checkReviewPayload(
+      decision({
+        options: [
+          { id: 'a', label: 'Hide the resolved threads' },
+          { id: 'b', label: 'Keep them' },
+        ],
+      }),
+    );
+    expect(c.errors).toEqual([]);
+    expect(c.ok).toBe(true);
+    expect(c.gaps).toContain('optionLabelLength');
+  });
+
+  it('files an option label over the button width', () => {
+    const c = checkReviewPayload(
+      decision({
+        options: [
+          { id: 'a', label: 'x'.repeat(REVIEW_LIMITS.optionLabelChars + 1) },
+          { id: 'b', label: 'Keep them' },
+        ],
+      }),
+    );
+    expect(c.ok).toBe(true);
+    expect(c.gaps).toContain('optionLabelLength');
+  });
+
+  it('files an option detail past its word budget', () => {
+    const long = Array.from(
+      { length: REVIEW_LIMITS.optionDetailWords + 10 },
+      (_, i) => `w${i}`,
+    ).join(' ');
+    const c = checkReviewPayload(
+      decision({
+        options: [
+          { id: 'a', label: 'Hide them', detail: long },
+          { id: 'b', label: 'Keep them' },
+        ],
+      }),
+    );
+    expect(c.ok).toBe(true);
+    expect(c.gaps).toContain('optionDetailLength');
+  });
+
+  it('still refuses the things that are not lengths at all', () => {
+    // The positive control for the block above: loosening the budgets must not
+    // have loosened the structural rules that share the same code path.
+    const c = checkReviewPayload(
+      decision({ headline: 'x'.repeat(REVIEW_LIMITS.headline + 1), why: undefined }),
+    );
+    expect(c.ok).toBe(false);
+    expect(c.errors.join(' ')).toContain('review.why is required');
+  });
+});
+
 describe('reviewPayloadMessage', () => {
   it('quotes every refusal so a retrying model can act on the text alone', () => {
     const c = checkReviewPayload(decision({ headline: undefined, why: undefined }));
@@ -227,6 +319,23 @@ describe('reviewGapAdvice — the advice half, which nothing used to read', () =
     expect(advice).toContain('review.detail');
   });
 
+  it('names an over-long field, and says it FILED', () => {
+    // The advice a length gap produces has one job the thin-field advice does
+    // not: an author who reads it as a refusal retries a write that already
+    // succeeded and files the ask twice.
+    const advice = reviewGapAdvice(['whyLength']) ?? '';
+    expect(advice).toContain('review.why');
+    expect(advice).toContain('Filed.');
+    expect(advice).not.toContain('cannot be filed');
+    expect(advice).not.toContain('review.headline');
+  });
+
+  it('says both halves when a payload is thin AND over-long', () => {
+    const advice = reviewGapAdvice(['detail', 'headlineLength']) ?? '';
+    expect(advice).toContain('review.detail');
+    expect(advice).toContain('review.headline');
+  });
+
   it('reads as filed-but-thin, never as a refusal', () => {
     // The distinction the whole two-tier design rests on. If this text reads
     // like reviewPayloadMessage, an author retries a write that already
@@ -247,9 +356,9 @@ describe('readReviewPayload — loose on the way out, so nothing already stored 
     // The gate guards the door; the reader must not re-litigate it, or
     // tightening a limit would make already-filed items disappear from the
     // queue rather than merely stop new ones being written.
-    const over = decision({ headline: 'x'.repeat(REVIEW_LIMITS.headline + 50) });
+    const over = decision({ headline: 'x'.repeat(REVIEW_LIMITS.lineMaxChars + 50) });
     expect(checkReviewPayload(over).ok).toBe(false);
-    expect(readReviewPayload(over)?.headline).toHaveLength(REVIEW_LIMITS.headline + 50);
+    expect(readReviewPayload(over)?.headline).toHaveLength(REVIEW_LIMITS.lineMaxChars + 50);
   });
 
   it('returns undefined for anything that is not a review payload', () => {

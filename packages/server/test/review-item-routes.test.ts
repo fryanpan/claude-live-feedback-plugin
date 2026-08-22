@@ -220,6 +220,28 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
     expect(payload.thread).toBeDefined();
   });
 
+  // The bug this pins: a `why` two words over budget used to 400 the whole
+  // filing, six times in one measured day, each at the moment an agent was
+  // routing an ask to the queue instead of to chat. It files now, and the 200
+  // carries the advice — asserted through the ROUTE because the core check
+  // passing proves nothing about what a caller receives.
+  it('files an over-long why and names it in reviewAdvice rather than 400ing', async () => {
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: AGENT,
+      text: 'Both screens are built.',
+      review: {
+        ...DECISION,
+        why: 'Blocks the onboarding rework and the pricing test behind it, and both screens are already built either way.',
+      },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).reviewAdvice).toContain('review.why');
+    const stored = await firstThread(docId);
+    expect(stored.comments[1]?.review?.why).toContain('pricing test');
+  });
+
   it('says nothing on an ordinary comment that declared nothing', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
@@ -235,7 +257,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
 describe('a malformed declaration is refused at the door, not truncated', () => {
   const bad: Array<[string, unknown]> = [
     ['no headline', { ...DECISION, headline: undefined }],
-    ['a headline over the two-line budget', { ...DECISION, headline: 'x'.repeat(200) }],
+    ['a headline past the sanity ceiling', { ...DECISION, headline: 'x'.repeat(900) }],
     ['a multi-line headline', { ...DECISION, headline: 'Two\nlines' }],
     ['no why', { ...DECISION, why: undefined }],
     ['a decision with one option', { ...DECISION, options: [{ id: 'a', label: 'Only' }] }],
