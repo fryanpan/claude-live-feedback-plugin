@@ -14021,6 +14021,42 @@ function frameKey(event, payload) {
   return `${event}#${p.docId}#${p.seq}`;
 }
 
+// packages/mcp/src/nudge-line.ts
+function truncate(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function humanDuration(ms) {
+  const totalMinutes = Math.floor(ms / 60000);
+  if (totalMinutes < 1)
+    return `${Math.max(0, Math.floor(ms / 1000))}s`;
+  if (totalMinutes < 60)
+    return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+function namedTask(p) {
+  const title = p.title ? `"${truncate(p.title, 60)}"` : null;
+  if (title && p.taskId)
+    return `${title} (${p.taskId})`;
+  return title ?? p.taskId ?? null;
+}
+function readyIdleLine(p) {
+  const count = p.readyCount;
+  const one = count === 1;
+  const subject = count === undefined ? "ready work has" : `${count} ${one ? "task has" : "tasks have"}`;
+  const stood = p.idleMs === undefined ? "" : ` for ${humanDuration(p.idleMs)}`;
+  const nobody = count !== undefined && !one ? "them" : "it";
+  const top = namedTask(p);
+  const start = top ? ` Start with ${top}.` : "";
+  return `[workspace.ready_idle] ${subject} been ready${stood} with nobody on ${nobody}.${start} Take the top of the queue with next_tasks / task_transition.`;
+}
+function reviewAnsweredLine(p) {
+  const about = namedTask(p);
+  const subject = about ? `your review item on ${about}` : "a review item you raised";
+  return `[workspace.review_answered] ${subject} has an answer — read it and act on it now; walk its links as the propagation checklist.`;
+}
+
 // packages/mcp/src/sse-cursor.ts
 function frameMeta(raw) {
   const meta2 = {};
@@ -14096,7 +14132,7 @@ function threadCreateRequest(input, author) {
 }
 
 // packages/mcp/src/voice-line.ts
-function truncate(s, n) {
+function truncate2(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 function where(p) {
@@ -14110,7 +14146,7 @@ function voiceRequestLine(p) {
     return null;
   const by = p.actor?.name ? ` by ${p.actor.name}` : "";
   const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
-  const told = truncate(p.ack ?? "", 120);
+  const told = truncate2(p.ack ?? "", 120);
   if (p.route === "fast-path-action") {
     return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
   }
@@ -14209,7 +14245,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.88";
+var PLUGIN_VERSION = "0.1.89";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -16903,10 +16939,10 @@ async function emitHubChannelMessage(event, rawPayload) {
   let body;
   switch (event) {
     case "task.created":
-      body = `[task.created] "${truncate2(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
+      body = `[task.created] "${truncate3(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
       break;
     case "task.transitioned":
-      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate2(p.note, 80)}` : ""}`;
+      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate3(p.note, 80)}` : ""}`;
       break;
     case "task.assigned":
       body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
@@ -16915,16 +16951,16 @@ async function emitHubChannelMessage(event, rawPayload) {
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
       break;
     case "task.retitled":
-      body = `[task.retitled] "${truncate2(p.titleFrom ?? "", 60)}" → "${truncate2(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate2(p.reason, 80)}` : ""}`;
+      body = `[task.retitled] "${truncate3(p.titleFrom ?? "", 60)}" → "${truncate3(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate3(p.reason, 80)}` : ""}`;
       break;
     case "task.body_edited":
-      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate2(p.titleFrom, 60)}" → "${truncate2(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate2(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate2(p.reason, 80)}` : ""}`;
+      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate3(p.titleFrom, 60)}" → "${truncate3(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate3(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate3(p.reason, 80)}` : ""}`;
       break;
     case "task.gate_refused":
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;
     case "decision.answered":
-      body = `[decision.answered] ${p.taskId}${by}: "${truncate2(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
+      body = `[decision.answered] ${p.taskId}${by}: "${truncate3(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
       break;
     case "workspace.lead_changed":
       body = p.leadAgentId === AUTHOR.id ? `[workspace.lead_changed]${by}: you are now the lead agent — this board's asks are addressed to you` : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? "?"}`;
@@ -16934,6 +16970,12 @@ async function emitHubChannelMessage(event, rawPayload) {
       body = `[workspace.goals_changed] ${p.kind ?? "edit"}${by}${moved > 0 ? ` — ${moved} task(s) moved to Backlog, re-place with set_task_goal` : ""}`;
       break;
     }
+    case "workspace.ready_idle":
+      body = readyIdleLine(p);
+      break;
+    case "workspace.review_answered":
+      body = reviewAnsweredLine(p);
+      break;
     case "triage.requested":
       body = triageRequestLine(p, AUTHOR.id);
       break;
@@ -17003,7 +17045,7 @@ async function emitChannelMessage(event, rawPayload) {
     const author2 = p.suggestion?.author?.name ?? "";
     const snippet2 = p.suggestion?.snippet ?? "";
     const kind = p.suggestion?.kind ?? "";
-    const header2 = snippet2 ? `"${truncate2(snippet2, 60)}"` : sid;
+    const header2 = snippet2 ? `"${truncate3(snippet2, 60)}"` : sid;
     const body2 = `[suggestion ${action2}] ${author2 ? `${author2}: ` : ""}${kind} ${header2}`.trim();
     await server.notification({
       method: "notifications/claude/channel",
@@ -17029,7 +17071,7 @@ async function emitChannelMessage(event, rawPayload) {
   const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
-  const header = snippet ? `on "${truncate2(snippet, 60)}"` : "";
+  const header = snippet ? `on "${truncate3(snippet, 60)}"` : "";
   const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}]${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
@@ -17047,7 +17089,7 @@ async function emitChannelMessage(event, rawPayload) {
     }
   });
 }
-function truncate2(s, n) {
+function truncate3(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 async function setBoardRetired(workspaceId, retired, reason) {
