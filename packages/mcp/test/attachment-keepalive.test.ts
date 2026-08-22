@@ -7,7 +7,7 @@
  * HEARTBEAT_FRESH_MS`, and nothing in the MCP ever refreshed that — only an
  * agent remembering the `heartbeat` tool. Six quiet minutes of implementing
  * and the board reads the lead as away, so a goal edit is stored as
- * `pendingRetriage` with no channel emit at all. Subscribed, and hearing
+ * `pendingBucketReview` with no channel emit at all. Subscribed, and hearing
  * silence.
  *
  * The decision is clocked rather than timed on purpose: liveness is claimed

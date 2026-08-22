@@ -57,7 +57,7 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
   });
 
   it('an entry with no id creates a band with an opaque id, reported in `created`', () => {
-    const ws = store.createWorkspace('board', 'Ship the review surface.');
+    const ws = store.createWorkspace('board');
     const res = store.setGoalList(ws.id, [{ title: 'Ship the launch post' }], { actor: PERSON });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -68,7 +68,7 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
   });
 
   it('two bands with the same title still get different ids', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const res = store.setGoalList(ws.id, [{ title: 'Docs' }, { title: 'Docs' }], { actor: PERSON });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -78,7 +78,7 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
   });
 
   it('a subgoal with no id is created too, keyed to its parent', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const res = store.setGoalList(ws.id, [{ title: 'Launch', subgoals: [{ title: 'QA pass' }] }], {
       actor: PERSON,
     });
@@ -91,7 +91,7 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
   });
 
   it('an id this board does not hold is REFUSED, and nothing is written', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const G = seedGoals(store, ws.id, [{ key: 'launch', title: 'Launch' }], PERSON);
     const before = store.getWorkspace(ws.id)?.goals;
 
@@ -125,7 +125,7 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
   });
 
   it('every unknown id is named at once, not one round trip at a time', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const res = store.setGoalList(
       ws.id,
       [{ id: 'g1' }, { id: 'g2' }].map((g, i) => ({
@@ -155,7 +155,7 @@ describe('no API path changes an existing goal’s id', () => {
   });
 
   it('the re-key gesture — same band, new id — is refused before it can strand anything', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const G = seedGoals(store, ws.id, [{ key: 'loop', title: '1. Close the loop' }], PERSON);
     const task = store.createTask(ws.id, { title: 'wire the widget', goal: G.loop });
     expect(task.ok).toBe(true);
@@ -175,7 +175,7 @@ describe('no API path changes an existing goal’s id', () => {
   });
 
   it('a retitle through the SAME id keeps the id and keeps the tasks', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const G = seedGoals(store, ws.id, [{ key: 'loop', title: '1. Close the loop' }], PERSON);
     const task = store.createTask(ws.id, { title: 'wire the widget', goal: G.loop });
     expect(task.ok).toBe(true);
@@ -194,7 +194,7 @@ describe('no API path changes an existing goal’s id', () => {
   });
 
   it('renameGoal still changes only the title', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const G = seedGoals(store, ws.id, [{ key: 'loop', title: '1. Close the loop' }], PERSON);
     const res = store.renameGoal(ws.id, G.loop as string, { title: 'The loop' }, { actor: PERSON });
     expect(res.ok).toBe(true);
@@ -225,7 +225,7 @@ describe('reserved goal ids are enumerated in one place and reachable by literal
   });
 
   it('a reserved id is still reachable by its literal from every placement path', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     const G = seedGoals(store, ws.id, [{ key: 'loop', title: 'Loop' }], PERSON);
 
     const chore = store.createTask(ws.id, { title: 'rotate the key', goal: CHORES_GOAL_ID });
@@ -242,7 +242,7 @@ describe('reserved goal ids are enumerated in one place and reachable by literal
   });
 
   it('but a reserved id can never be authored: create, rename and reorder all refuse it', () => {
-    const ws = store.createWorkspace('board', 'Ship it.');
+    const ws = store.createWorkspace('board');
     seedGoals(store, ws.id, [{ key: 'loop', title: 'Loop' }], PERSON);
 
     const created = store.setGoalList(ws.id, [{ id: CHORES_GOAL_ID, title: 'Backlog' }], {

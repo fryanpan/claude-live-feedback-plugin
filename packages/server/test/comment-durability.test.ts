@@ -3,7 +3,7 @@
  *
  * The measured gap this pins: a comment was ONE `sse.broadcast` on the board
  * channel — no queue, no ack, no replay. `attach_agent` drained queuedVoice /
- * pendingRetriage / pendingBucketReview / taskReviews; there was NO comment
+ * queuedVoice / pendingBucketReview / taskReviews; there was NO comment
  * queue to drain. And nothing reported the loss: an agent's 'active' label
  * derives from heartbeat + last-tool-call clocks, never from whether its
  * stream is open, so the label stayed green through a session hearing nothing.
@@ -47,7 +47,7 @@ describe('a comment for an agent is written down, addressed, and cleared only on
   }
 
   function ws(s: TaskStore, agentId = 'worker-a'): string {
-    const w = s.createWorkspace('durable-comments', 'Ship it.');
+    const w = s.createWorkspace('durable-comments');
     s.attachAgent(w.id, { agentId, runtime: 'claude-code-local' });
     return w.id;
   }
@@ -162,7 +162,7 @@ describe('a comment for an agent is written down, addressed, and cleared only on
     // through the attach response makes the agent read the same comment
     // twice. The per-process nonce is what tells the two apart.
     const { s } = store(10_000);
-    const w = s.createWorkspace('durable-comments', 'Ship it.').id;
+    const w = s.createWorkspace('durable-comments').id;
     s.attachAgent(w, { agentId: 'worker-a', runtime: 'claude-code-local', processId: 'proc-1' });
     const id = s.queueComment(w, row('worker-a')) as string;
     s.markCommentEmitted(w, id); // a frame in flight to proc-1
@@ -188,7 +188,7 @@ describe('a comment for an agent is written down, addressed, and cleared only on
 
   it('an old bundle attaching without a nonce keeps the bypass-always behavior it was built against', () => {
     const { s } = store(10_000);
-    const w = s.createWorkspace('durable-comments', 'Ship it.').id;
+    const w = s.createWorkspace('durable-comments').id;
     s.attachAgent(w, { agentId: 'worker-a', runtime: 'claude-code-local', processId: 'proc-1' });
     const id = s.queueComment(w, row('worker-a')) as string;
     s.markCommentEmitted(w, id);

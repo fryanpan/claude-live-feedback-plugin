@@ -67,7 +67,7 @@ describe('the activity view renders the rows the server really wrote', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'activity-lines-'));
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
-    const ws = await post('/api/workspaces', { name: 'search-revamp', goal: 'Ship the search.' });
+    const ws = await post('/api/workspaces', { name: 'search-revamp' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
     const d = await post(`/api/workspaces/${wsId}/tasks`, {
       title: 'Ship Thursday or Friday?',
@@ -343,32 +343,32 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(line).not.toContain('task.evidence_amended');
   });
 
-  it('emits one batched workspace.retriaged for a goal edit, with the regroups referencing it', async () => {
-    const before = rowsOf('workspace.retriaged').length;
-    const g = await local(`/api/workspaces/${wsId}/goal`, {
+  it('emits one batched workspace.goals_changed, with the regroups referencing it', async () => {
+    const before = rowsOf('workspace.goals_changed').length;
+    const g = await local(`/api/workspaces/${wsId}/goals`, {
       method: 'PUT',
-      body: JSON.stringify({ goal: 'Ship the search, then measure it.', author: PERSON }),
+      body: JSON.stringify({
+        goals: [{ title: 'Ship the search, then measure it' }],
+        author: PERSON,
+      }),
     });
     expect(g.status).toBe(200);
 
-    // Positive control: the same exercise put goal_updated in the log, so a
-    // missing retriaged row would not be "the log stopped receiving".
-    expect(rowsOf('workspace.goal_updated').length).toBeGreaterThan(0);
-    const retriaged = rowsOf('workspace.retriaged');
-    expect(retriaged.length).toBe(before + 1);
-    const batch = retriaged.at(-1) as ActivityEvent & {
+    const changed = rowsOf('workspace.goals_changed');
+    // Positive control: exactly one row appeared, so a wrong batchId below is
+    // about the field rather than about a log that stopped receiving.
+    expect(changed.length).toBe(before + 1);
+    const batch = changed.at(-1) as ActivityEvent & {
       batchId: string;
-      taskIds: string[];
-      oldGoal: string;
-      newGoal: string;
+      oldGoals: unknown[];
+      newGoals: Array<{ title: string }>;
     };
-    expect(batch.oldGoal).toBe('Ship the search.');
-    expect(batch.newGoal).toBe('Ship the search, then measure it.');
-    expect(batch.taskIds).toContain(decisionId);
+    expect(batch.oldGoals).toEqual([]);
+    expect(batch.newGoals.map((x) => x.title)).toEqual(['Ship the search, then measure it']);
     expect(batch.batchId).toBeTruthy();
 
-    // The agent's re-triage placements carry the batch key, so N regroupings
-    // read as one goal edit rather than N unexplained moves.
+    // The agent's placements carry the batch key, so N regroupings read as
+    // one goal-list edit rather than N unexplained moves.
     const placed = await post(`/api/tasks/${decisionId}/goal`, {
       goal: 'chores',
       author: AGENT,

@@ -294,7 +294,7 @@ describe('SseHub addressed-frame replay', () => {
     const hub = new SseHub();
     hub.broadcast(CH, { event: 'task.created', n: 1 } as never);
     const anchor = hub.lastIdOn(CH) as string;
-    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'goal-retriage' } as never);
+    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
     hub.broadcast(CH, { event: 'task.updated', n: 2 } as never);
 
     // The addressee catches up on both.
@@ -339,7 +339,7 @@ describe('SseHub addressed-frame replay', () => {
     const anchor = hub.lastIdOn(CH) as string;
     // The disconnect window: the lead holds no stream (or a dead one) while
     // the addressed request goes out.
-    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'goal-retriage' } as never);
+    hub.sendToAgent(CH, 'lead-1', { event: 'triage.requested', kind: 'bucket-review' } as never);
 
     const l = listenFrames(openSseStream(hub, CH, undefined, undefined, 'lead-1', anchor));
     await settle(150);

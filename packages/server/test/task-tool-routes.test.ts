@@ -400,7 +400,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(res.task.order).toBeGreaterThan(existing.order);
     });
 
-    it('placement IS triage: stamps triagedAgainst with the goal text and clears the pending marker', async () => {
+    it('placement IS triage: stamps triagedAgainst with the goal id and clears the pending marker', async () => {
       const { wsId, G } = await seedWorkspace();
       // A live attachment makes the triage request deliverable, which is the
       // only path that stamps triagePendingTs (grounded-pending rule).
@@ -428,7 +428,8 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         await post(`/api/tasks/${task.id}/goal`, { goal: G.g1, author: AGENT }),
       );
       expect(res.task.triagePendingTs).toBeUndefined();
-      expect(res.task.triagedAgainst).toMatchObject({ goalId: G.g1, goal: 'Ship search v2.' });
+      expect(res.task.triagedAgainst).toMatchObject({ goalId: G.g1 });
+      expect(res.task.triagedAgainst).not.toHaveProperty('goal');
       expect(res.task.triagedAgainst?.ts).toBeGreaterThan(0);
       await stream.close();
     });

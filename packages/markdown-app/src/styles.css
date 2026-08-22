@@ -995,89 +995,6 @@ body.hub-body {
   overflow-wrap: anywhere;
 }
 
-/* --- goal strip --- */
-.hub-goal {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: start;
-  padding: 12px 14px;
-  margin: 12px 0;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.hub-goal-body {
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.hub-goal-body p {
-  margin: 0 0 6px;
-}
-.hub-goal-body p:last-child {
-  margin-bottom: 0;
-}
-.hub-goal-empty {
-  color: var(--fg-muted);
-}
-.hub-goal-summary {
-  margin: 0;
-}
-.hub-goal-edit {
-  min-width: 36px;
-  min-height: 36px;
-  border: none;
-  background: none;
-  cursor: pointer;
-}
-/* "Show full goal" / "Show less". Its own grid row so it sits under the text
-   at full width — on a 430px phone this is a thumb target, not a hover
-   reveal, and there is no hover to reveal it with. */
-.hub-goal-more {
-  grid-column: 1 / -1;
-  justify-self: start;
-  min-height: 36px;
-  padding: 6px 10px;
-  margin-top: 4px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--accent, #2e7dd7);
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-decoration: underline;
-}
-.hub-goal-summary-label {
-  display: block;
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--fg-muted);
-}
-.hub-goal-summary-input {
-  display: block;
-  width: 100%;
-  margin-top: 4px;
-  font: inherit;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.hub-goal-editor {
-  grid-column: 1 / -1;
-}
-.hub-goal-editor textarea {
-  width: 100%;
-  font: inherit;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.hub-goal-editor-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
 /* --- main single-column layout ---
    Once the Docs and Open-threads rails came out (Bryan: "remove docs and live
    threads from the task list"), the board is the only content track at every
@@ -2984,21 +2901,6 @@ body.hub-body {
 .hub-detail-meta dd {
   margin: 0;
   overflow-wrap: anywhere;
-}
-/* A meta value that is prose rather than a fact — shown clipped, with the
-   rest a tap away. The More/Less control is inline with the text (the row is
-   short) but still carries a 36px touch height, because the panel is read on
-   a phone and there is no hover there. */
-.hub-meta-more {
-  min-height: 36px;
-  padding: 0 6px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--accent, #2e7dd7);
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-decoration: underline;
 }
 /* The assignee row is a control, not a label — a hand-off is a pick from
    everyone it could go to. Sized for a thumb (design-mobile.md's 44px
