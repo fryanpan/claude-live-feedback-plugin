@@ -203,13 +203,13 @@ export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
  *
  * A BOARD is the unit of sharing (Bryan, 2026-08-17: "Workspace only — a
  * review must be filed on a board before it can be shared"). A folder bind
- * and a diff review are groupings: they hold member docs, but they are not
+ * and a diff review are reviews: they hold member docs, but they are not
  * boards, and until this they could each be shared on their own.
  *
  * 410 rather than 404 because the id is real and the caller is not wrong
  * about it — the capability is what went away. Older peers keep calling the
  * shared server with the payload THEIR bundle sends long after this one
- * stopped sending it, and a grouping id arrives in the same `workspaceId`
+ * stopped sending it, and a review id arrives in the same `workspaceId`
  * field a board id does, so a bare 404 would read as "your review vanished".
  * The hint has to name the replacement or the reply is just a wall.
  */
@@ -738,7 +738,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
   // Every store event rides the existing SSE pipeline on the workspace
   // channel (`ws~<workspaceId>`, the same channel doc thread events use for
-  // legacy grouping workspaces) — no new transport (§3.6). The audit log
+  // reviews) — no new transport (§3.6). The audit log
   // append happens inside the store's emit, not here.
   taskStore.onEvent((ev) => {
     const { type, ...rest } = ev;
@@ -951,17 +951,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       taskProjection.refresh(workspaceId);
       return;
     }
-    // Exactly one hop from grouping to board — the same non-transitive rule
+    // Exactly one hop from review to board — the same non-transitive rule
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
-    const grouping = rooms.get(docId)?.meta.workspaceId;
+    const reviewId = reviewIdOf(rooms.get(docId)?.meta ?? {});
     for (const board of hubBoardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
-      // rooms.ts already broadcast on the grouping's own channel; a second
+      // rooms.ts already broadcast on the review's own channel; a second
       // send here would deliver the same comment twice to one listener. The
-      // grouping frames carried no row id, so those rows are acked off the
+      // review frames carried no row id, so those rows are acked off the
       // grace-window redelivery instead — late receipt beats double frame.
-      if (board !== grouping) {
+      if (board !== reviewId) {
         sse.broadcast(`ws~${board}`, payload, (who) => {
           const rowId = who.agentId ? rows.get(who.agentId) : undefined;
           return rowId ? { ...payload, workspaceId: board, commentQueueId: rowId } : undefined;
@@ -1284,34 +1284,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   /**
    * Which workspaces an id belongs to, for SHARE SCOPING (§3.12 commit 8).
-   * The id may be a doc room OR a grouping (folder bind / diff review), and
+   * The id may be a doc room OR a review (folder bind / diff review), and
    * the answer is a SET because those two senses of "workspace" nest:
    *
    *   1. a member doc's own GROUPING     (`meta.workspaceId`)
    *   2. the HUB board the id is filed on directly — docs linked via
-   *      attachDoc, each task's `task:<id>` body room, and a grouping id,
+   *      attachDoc, each task's `task:<id>` body room, and a review id,
    *      which is how a review goes on a board as one row
    *   3. the HUB board that member's GROUPING is filed on — the hop that
    *      makes a review row on a shared board actually open. Without it a
    *      hub-scoped share saw the row and 403'd on everything behind it,
-   *      because every member answers with the grouping id and the share
+   *      because every member answers with the review id and the share
    *      carries the hub id.
    *
    * ONE rule for both halves of the guard, on purpose: the same function
-   * tells the allowlist that a grouping belongs to a hub and tells it that
-   * the grouping's members do. Two rules would agree today and diverge
+   * tells the allowlist that a review belongs to a hub and tells it that
+   * the review's members do. Two rules would agree today and diverge
    * later, and the one that diverges open is the breach.
    *
-   * Exactly one hop from grouping to board — not a transitive closure.
+   * Exactly one hop from review to board — not a transitive closure.
    * Deliberately NOT the ws:<id> board room: its share allowance is spelled
    * out in host-guard, never a resolver side effect.
    */
   const shareWorkspacesOf = (id: string): string[] => {
     const out = new Set<string>();
-    const grouping = rooms.get(id)?.meta.workspaceId;
-    if (grouping) out.add(grouping);
+    const reviewId = reviewIdOf(rooms.get(id)?.meta ?? {});
+    if (reviewId) out.add(reviewId);
     for (const board of hubWorkspacesHolding(id)) out.add(board);
-    if (grouping) for (const board of hubWorkspacesHolding(grouping)) out.add(board);
+    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) out.add(board);
     return Array.from(out);
   };
 
@@ -1344,8 +1344,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   /**
    * Every hub board a DOC's discussion actually reaches — the boards holding
-   * the doc itself, plus the one grouping→board hop a diff review / folder
-   * bind needs (its members carry the grouping tag, and the grouping is what
+   * the doc itself, plus the one review→board hop a diff review / folder
+   * bind needs (its members carry the review tag, and the review is what
    * sits on the board as one row).
    *
    * Written once and used twice on purpose: `onDocRoomEvent` fans events out
@@ -1357,8 +1357,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   function hubBoardsForDoc(docId: string): Set<string> {
     const boards = new Set(hubWorkspacesHolding(docId));
-    const grouping = rooms.get(docId)?.meta.workspaceId;
-    if (grouping) for (const board of hubWorkspacesHolding(grouping)) boards.add(board);
+    const reviewId = reviewIdOf(rooms.get(docId)?.meta ?? {});
+    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) boards.add(board);
     return boards;
   }
 
@@ -1404,7 +1404,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *    made the one agent this branch teaches the fleet to be the one agent
    *    the probe could not see.
    *
-   * A `ws:<grouping>` key still raises nothing. It resolves to the board the
+   * A `ws:<setId>` key still raises nothing. It resolves to the board the
    * review sits on, but the agent asked about the review, not about somebody
    * else's seat — and an alarm that fires on the innocent case is how a real
    * one stops being read.
@@ -1583,20 +1583,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * than none, because "back to one of this doc's boards" beats "back to the
    * index of everything on the machine", which is what the arrow does today.
    */
-  const backTargetFor = (
-    docId: string,
-    groupingId?: string,
-  ): { id: string; name: string } | null => {
+  const backTargetFor = (docId: string, reviewId?: string): { id: string; name: string } | null => {
     const pick = (id: string | undefined): { id: string; name: string } | null => {
       if (!id) return null;
       const ws = taskStore.getWorkspace(id);
       return ws ? { id: ws.id, name: ws.name } : null;
     };
-    return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(groupingId ?? '')[0]);
+    return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(reviewId ?? '')[0]);
   };
 
   /**
-   * Put an attachment — a doc room id OR a grouping id — on a hub workspace and
+   * Put an attachment — a doc room id OR a review id — on a hub workspace and
    * answer which one. Idempotent: something already attached keeps the board it
    * has (moving it is `attach_doc`'s job, not a side effect of re-binding, and
    * re-running `create_diff_review` on a live review is documented as safe). A
@@ -2179,7 +2176,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!workspaceId) return j(400, { error: 'workspaceId required' });
 
           // Only a BOARD may be shared. A board is what `taskStore` answers
-          // for; a grouping is what only `rooms` knows about. They arrive in
+          // for; a review is what only `rooms` knows about. They arrive in
           // the SAME field — unlike the per-doc removal above, no shape of
           // the payload separates them — so the lookup IS the discriminator.
           if (!taskStore.getWorkspace(workspaceId)) {
@@ -2341,7 +2338,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsEventsMatch) {
           const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
           if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
-          // A workspace channel exists for legacy grouping workspaces (diff
+          // A workspace channel exists for reviews (diff
           // reviews / folder binds) AND for hub workspaces — task.* events
           // broadcast on the same `ws~<id>` channel (§3.6).
           const exists =
@@ -2451,7 +2448,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // `?workspaceId=` scopes the listing. Without honouring it here,
           // list_docs accepted the param and silently answered a board-scoped
           // question with every doc on the server. It matches either kind of
-          // id a caller holds under the name "workspace": the grouping tag in
+          // id a caller holds under the name "workspace": the review tag in
           // meta (folder binds, diff reviews) or a hub board the doc is filed
           // under — resolved via hubBoardsForDoc so the answer is the same
           // set the event fan-out and coverage readout already use.
@@ -2467,7 +2464,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
         // --- REST: workspaces (hub create OR folder bind) ---
         // One resource, two shapes: `folderPath` binds a folder of files
-        // (the legacy grouping workspace), `name` creates a hub Workspace —
+        // (the review), `name` creates a hub Workspace —
         // a NEW first-class entity with a crypto-random id that tasks and
         // goals hang off (plan §3.12 commit 1). Nothing is migrated between
         // the two; attach_doc LINKS existing docs/reviews to a hub workspace.
@@ -2525,7 +2522,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(res.error === 'not-found' ? 404 : 409, res);
           }
           // The GROUPING goes on the board, not its members: `res.workspaceId`
-          // is the grouping id, and one row for the whole bind is the unit a
+          // is the review id, and one row for the whole bind is the unit a
           // reader thinks in. See the vocabulary note above `fileUnderHubWorkspace`.
           const hubWorkspaceId = fileUnderHubWorkspace(
             res.workspaceId,
@@ -2634,7 +2631,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             workspaces: rooms.listWorkspaces(),
             // Hub workspaces (the boards) are a different thing from the
-            // grouping workspaces above and stay in their own key rather than
+            // reviews above and stay in their own key rather than
             // being mixed into one list. They belong on this route because a
             // workspace the SERVER materialized for an unfiled doc has no
             // other way to be found: nobody was told its id at creation time.
@@ -4082,7 +4079,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
           }
           // A key is live when the thing it names still exists: a doc room, or
-          // for `ws:<id>` a hub workspace / grouping workspace. Anything else
+          // for `ws:<id>` a hub workspace / review. Anything else
           // is a subscription the child would open against a 404 forever.
           const watchKeyExists = (key: string): boolean => {
             if (rooms.get(key)) return true;
@@ -4601,7 +4598,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // doc, rather than the machine-wide landing page. OWNER ONLY for
             // the same reason `hubWorkspaceId` is — a board id is an
             // unguessable URL capability, and a share visitor must not learn
-            // one from a member doc. Resolved through the grouping when the
+            // one from a member doc. Resolved through the review when the
             // doc is a member of a review, which is where `hubWorkspaceId`
             // deliberately stops.
             const backTo = visitor ? null : backTargetFor(docId, room.meta.workspaceId);
