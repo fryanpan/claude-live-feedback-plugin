@@ -41,6 +41,21 @@
              survive a template that never learned it. -->
         <key>CF_SHARE_PUBLIC_HOSTNAME</key>
         <string>{{SHARE_PUBLIC_HOSTNAME}}</string>
+        <!-- The COLLABORATION hostnames: served through the tunnel, gated by
+             a Cloudflare Access application over each one, and scoped to the
+             share surface — not the privileged surface a tailnet name gets.
+             All three of these travel together or none of them do: without
+             CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD the server ignores the
+             list and those hostnames answer 403 unknown_host, because a
+             hostname with no Access application in front of it would be the
+             API exposed to anyone who can reach the tunnel. Empty (the
+             default) leaves the feature off. -->
+        <key>CF_ACCESS_TUNNEL_HOSTS</key>
+        <string>{{ACCESS_TUNNEL_HOSTS}}</string>
+        <key>CF_ACCESS_TEAM_DOMAIN</key>
+        <string>{{ACCESS_TEAM_DOMAIN}}</string>
+        <key>CF_ACCESS_AUD</key>
+        <string>{{ACCESS_AUD}}</string>
     </dict>
 
     <key>RunAtLoad</key>
