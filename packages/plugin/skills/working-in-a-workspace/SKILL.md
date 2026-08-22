@@ -54,8 +54,6 @@ Someone who was not in the conversation should be able to see a task, know why i
 ## Use Links Effectively
 
 - Each resource (task, workspace, document, mockup, folder diff) has a unique identifier and URL.
-- **The destination decides the format, not the tool that returned the URL.** There are two destinations, and every other skill that hands a URL over points back here.
-- **In a workspace** — a task body, a task comment, a doc thread, a reply — use a relative URL, inline, behind appropriate link text. Never the raw URL.
+- When you share links in a workspace, use relative URLs and make them inline using appropriate link text instead of the Raw URL
   - e.g. `[this link](/review/board-skill-one-row-per-pass?thread=nsk4yl4m6sqn)`
-  - Build the relative form by dropping the scheme and host from what the tool returned and keeping the path and query. The reader stays on whichever host they arrived on, which is what keeps a shared link working for them.
-- **In terminal chat** — the fallback, for when there is no workspace surface to put it on yet — send the absolute URL the tool returned, bare, on its own line, with no markdown wrapped around it. Chat autolinkers swallow the trailing `)` of a markdown link and the `**` around one.
+- In terminal chat, send the absolute URL bare on its own line, with no markdown around it — autolinkers mangle a wrapped URL.
