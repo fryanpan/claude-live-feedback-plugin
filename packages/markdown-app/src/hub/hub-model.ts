@@ -5,7 +5,6 @@
  * without a browser.
  */
 import type { ReviewPayload } from '@feedback/core';
-import type { StoredGoalSummary } from '@feedback/core/goal-summary';
 import { tabTitle } from '../tab-title.ts';
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
@@ -96,7 +95,7 @@ export interface HubTask {
    *  so the decision stays open and the asker gets the question. */
   infoRequests?: HubInfoRequest[];
   answer?: { text: string; by: string; ts: number; optionId?: string };
-  triagedAgainst?: { goalId: string; goal: string; ts: number };
+  triagedAgainst?: { goalId: string; ts: number };
   triagePendingTs?: number;
   transitions: HubTransition[];
   bodyDocId: string;
@@ -131,20 +130,9 @@ export interface HubGoal extends HubSubgoal {
   subgoals?: HubSubgoal[];
 }
 
-/** The projected slice of a goal edit still waiting for its lead agent. */
-export interface PendingRetriageView {
-  batchId: string;
-  taskIds: string[];
-  ts: number;
-  byName: string;
-}
-
 /** A goal BAND that appeared while the lead was away, and the unplaced tasks
- *  worth re-looking at against it. Separate from PendingRetriageView because
- *  the two answer different questions — that one's baseline is the north-star
- *  TEXT, this one's is the goal LIST — and answering either does not answer
- *  the other, so a board that renders one and not the other is silent about
- *  half of what is waiting. */
+ *  worth re-looking at against it. Projected because an ask that only exists
+ *  in a sidecar leaves the board silent about work that is waiting. */
 export interface PendingBucketReviewView {
   batchId: string;
   taskIds: string[];
@@ -159,20 +147,12 @@ export interface PendingBucketReviewView {
 export interface HubWorkspaceInfo {
   id: string;
   name: string;
-  goal: string;
-  goalUpdatedAt: number;
-  /** The ≤20-word line the strip displays instead of the goal. Absent = show
-   *  the deterministic clip; the board never waits for one to arrive. */
-  goalSummary?: StoredGoalSummary;
   goals: HubGoal[];
   /** The agent responsible for this board. Absent = the seat is empty, and
    *  the strip says so rather than showing a stale or guessed name. */
   leadAgentId?: string;
-  /** A goal edit the lead agent has not picked up yet. Absent = none
-   *  waiting; the board never infers one. */
-  pendingRetriage?: PendingRetriageView;
   /** A goal band the lead agent has not re-looked at the bucket against yet.
-   *  Absent = none waiting. */
+   *  Absent = none waiting; the board never infers one. */
   pendingBucketReview?: PendingBucketReviewView;
   createdAt: number;
 }
@@ -1389,7 +1369,6 @@ const DECISION_EVENTS: ReadonlySet<string> = new Set([
   'task.created',
   'task.regrouped',
   'task.gate_refused',
-  'workspace.retriaged',
   'workspace.goals_changed',
 ]);
 
@@ -1539,8 +1518,8 @@ function taskTitle(ev: ActivityEvent, titleOf: (taskId: string) => string): stri
  *
  * Deliberately NOT every `describeEvent` case: `agent.*` refreshes the
  * presence strip through its own listeners, `server.started` and the retired
- * `task.gate_refused` have no live emitter to hear, and `task.body_edited` /
- * `workspace.retriaged` predate this list and are out of its scope.
+ * `task.gate_refused` have no live emitter to hear, and `task.body_edited`
+ * predates this list and is out of its scope.
  */
 export const ACTIVITY_REFRESH_EVENTS = [
   'task.created',
@@ -1553,7 +1532,6 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'decision.answered',
   'decision.answer_withdrawn',
   'decision.info_requested',
-  'workspace.goal_updated',
   'workspace.goals_changed',
 ] as const;
 
@@ -1651,12 +1629,6 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       const answer = typeof ev.answer === 'string' ? ev.answer : '';
       return `${actorName(ev)} took back the answer on ${title()}${answer ? `: “${answer}”` : ''} — it is open again`;
     }
-    case 'workspace.retriaged': {
-      const n = (ev.taskIds as string[] | undefined)?.length ?? 0;
-      return `${actorName(ev)} changed the goal — re-triaging ${n} open task${n === 1 ? '' : 's'}`;
-    }
-    case 'workspace.goal_updated':
-      return `${actorName(ev)} updated the workspace goal`;
     case 'workspace.goals_changed':
       return ev.kind === 'reorder'
         ? `${actorName(ev)} reordered the goals`

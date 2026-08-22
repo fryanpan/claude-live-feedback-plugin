@@ -141,7 +141,6 @@ describe('the landing page is a list of active workspaces', () => {
     expect(ws).toBeTruthy();
     if (ws) {
       ws.createdAt = Date.now() - ACTIVE_WINDOW_MS - 60_000;
-      ws.goalUpdatedAt = ws.createdAt;
     }
     const html = await landing();
     // Present, but under the fold — after the fold's summary line, while the
