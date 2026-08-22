@@ -16,6 +16,7 @@ import {
 import type { ReviewShape } from '@feedback/core';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
+import { MIC_ICON } from '../icons.ts';
 import {
   type ComposerSelection,
   attachMarkdownComposer,
@@ -1433,7 +1434,7 @@ export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandler
   // (the capture binds Space/Enter on this button) and nothing else on the
   // page would tell someone who never taps that it is.
   mic.setAttribute('aria-label', 'Hold to dictate a task — hold Space or Enter');
-  mic.textContent = '🎤';
+  mic.innerHTML = MIC_ICON;
   const indicator = document.createElement('span');
   // Hidden until there is something to say — it takes a flex line of its own
   // (`flex-basis: 100%`), so mounting it visible puts a row-gap under the form
