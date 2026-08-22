@@ -75,7 +75,12 @@ import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from '.
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
-import { READY_IDLE_DEFAULT_MS, ReadyWorkNudger, type ReadyWorkSnapshot } from './ready-nudge.ts';
+import {
+  READY_IDLE_DEFAULT_MS,
+  READY_NUDGE_STAMP_FILENAME,
+  ReadyWorkNudger,
+  type ReadyWorkSnapshot,
+} from './ready-nudge.ts';
 import { listArchivedDocs, listArchivedReviews } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
@@ -1105,6 +1110,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     send: (workspaceId, agentId, frame) =>
       sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
     idleMs: opts.readyNudgeIdleMs ?? READY_IDLE_DEFAULT_MS,
+    // Prod restarts at every merge, so without this each deploy re-fired one
+    // wake per idle board over facts their leads had already been told.
+    stampFile: join(dataDir, READY_NUDGE_STAMP_FILENAME),
   });
   // Its own subscription rather than a branch inside the SSE bridge above,
   // and the ordering is the reason: the bridge is installed before this
@@ -1116,7 +1124,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // point every other subscriber reads, rather than from a second list of
     // "events that count as activity" — one that would silently fall behind
     // the store the first time a mutator is added.
-    readyNudger.noteActivity(ev.workspaceId, ev.ts);
+    //
+    // ONE exclusion, stated as a PREFIX rather than as a list for the same
+    // reason: `agent.*` is liveness (attached / detached / heartbeat), and
+    // liveness is not the board moving. Counting it made the wake
+    // self-cancelling, because the only lead a nudge can be DELIVERED to is
+    // one holding a live stream — which is precisely the session attaching
+    // and heartbeating. So the pings that proved the lead was there also
+    // proved, to this clock, that the board did not need it.
+    if (!ev.type.startsWith('agent.')) readyNudger.noteActivity(ev.workspaceId, ev.ts);
     // …and an answer is not merely activity. The lead is the party who acts
     // on answers, and making it wait out an idle window would deliver the
     // point of the feature fifteen minutes late.

@@ -11,7 +11,10 @@
  * All fixtures are synthetic — invented names in the jordan@partner.example
  * register. The repo is public.
  */
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   type NudgeFrame,
   READY_IDLE_DEFAULT_MS,
@@ -42,8 +45,8 @@ function board(over: Partial<ReadyWorkSnapshot> = {}): ReadyWorkSnapshot {
 }
 
 /** A nudger over a mutable world, with everything reachable and nothing real. */
-function harness(opts: { idleMs?: number } = {}) {
-  const world = {
+function harness(opts: { idleMs?: number; stampFile?: string; world?: World } = {}) {
+  const world: World = opts.world ?? {
     now: 1_000_000,
     boards: [board()] as ReadyWorkSnapshot[],
     reachable: new Set<string>(['agent-cartographer']),
@@ -59,8 +62,15 @@ function harness(opts: { idleMs?: number } = {}) {
       return 1;
     },
     ...(opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {}),
+    ...(opts.stampFile !== undefined ? { stampFile: opts.stampFile } : {}),
   });
   return { world, sent, nudger };
+}
+
+interface World {
+  now: number;
+  boards: ReadyWorkSnapshot[];
+  reachable: Set<string>;
 }
 
 describe('ready work that has sat idle wakes the lead — once', () => {
@@ -336,5 +346,98 @@ describe('the timer', () => {
     });
     expect(() => nudger.tick()).not.toThrow();
     expect(sent).toHaveLength(0);
+  });
+});
+
+/**
+ * The armed map is the whole frugality mechanism, and until now it lived only
+ * in this process — so every deploy restart handed each idle board a clean
+ * slate and re-fired one nudge per board over facts the lead had already been
+ * told. The stamp is durable by construction (`<last activity>|<ready ids>`,
+ * both read off the store), so the only thing missing was somewhere to keep it.
+ */
+describe('an armed stamp survives a restart', () => {
+  let dir: string;
+  const stampPath = () => join(dir, 'ready-nudge-stamps.json');
+  const freshDir = () => {
+    dir = mkdtempSync(join(tmpdir(), 'nudge-stamps-'));
+    return stampPath();
+  };
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('does not re-fire the same nudge after the process restarts', () => {
+    const file = freshDir();
+    const first = harness({ stampFile: file });
+    first.world.boards[0]!.lastActivityAt = first.world.now - 20 * MIN;
+    first.nudger.tick();
+    expect(first.sent).toHaveLength(1);
+
+    // A deploy. Same data dir, same board, a brand-new nudger with an empty
+    // `observed` map — which is exactly the state a restart produces.
+    const second = harness({ stampFile: file, world: first.world });
+    second.nudger.tick();
+
+    expect(second.sent).toHaveLength(0);
+  });
+
+  it('still fires after a restart when the board has moved on', () => {
+    const file = freshDir();
+    const first = harness({ stampFile: file });
+    first.world.boards[0]!.lastActivityAt = first.world.now - 20 * MIN;
+    first.nudger.tick();
+    expect(first.sent).toHaveLength(1);
+
+    // A second row became ready while the server was down. The stamp on disk
+    // describes a board that no longer exists, so the wake is owed again.
+    first.world.boards[0]!.ready = [
+      { id: 't-1', title: 'Rank results by recency' },
+      { id: 't-2', title: 'Cache the facet counts' },
+    ];
+    const second = harness({ stampFile: file, world: first.world });
+    second.nudger.tick();
+
+    expect(second.sent).toHaveLength(1);
+    expect(second.sent[0]!.frame.readyCount).toBe(2);
+  });
+
+  it('starts empty — and still nudges — when the file on disk is corrupt', () => {
+    const file = freshDir();
+    writeFileSync(file, '{ this is not json');
+
+    const { world, sent, nudger } = harness({ stampFile: file });
+    world.boards[0]!.lastActivityAt = world.now - 20 * MIN;
+    nudger.tick();
+
+    // A stamp file that cannot be read must cost at most one duplicate wake,
+    // never the wake itself.
+    expect(sent).toHaveLength(1);
+    expect(nudger.armedCount()).toBe(1);
+  });
+
+  it('writes nothing anyone else has to clean up when a board disappears', () => {
+    const file = freshDir();
+    const first = harness({ stampFile: file });
+    first.world.boards[0]!.lastActivityAt = first.world.now - 20 * MIN;
+    first.nudger.tick();
+    expect(JSON.parse(readFileSync(file, 'utf8')).stamps['w-search']).toBeString();
+
+    // The board was deleted. The pruning that already keeps the in-memory map
+    // bounded has to reach the file too, or it grows for the life of the
+    // install.
+    first.world.boards = [];
+    first.nudger.tick();
+
+    expect(JSON.parse(readFileSync(file, 'utf8')).stamps['w-search']).toBeUndefined();
+  });
+
+  it('keeps working with no stamp file configured at all', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.lastActivityAt = world.now - 20 * MIN;
+    nudger.tick();
+    nudger.tick();
+    expect(sent).toHaveLength(1);
   });
 });
