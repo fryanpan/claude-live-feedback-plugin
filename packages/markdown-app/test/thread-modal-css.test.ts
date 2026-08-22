@@ -145,30 +145,37 @@ describe('the modal hides the way the rest of the app hides', () => {
 });
 
 /**
- * The stylesheet's half of "the mic yields to an open card".
+ * "The mic yields to an open card" is retired, and this is what replaced it.
  *
- * The chrome's half — which widths set the class, and when it is dropped — is
- * in `thread-modal-chrome.test.ts`. This is the half that can silently go
- * missing: the class would still be applied, and nothing anywhere would move.
+ * The mic used to stand down whenever a comment card opened at ≤1100px,
+ * because it was a `position: fixed` launcher in the bottom-left corner and a
+ * card at that width spans the screen — its reply box reached the same corner.
+ * The mic is docked in the topbar now, where no card can reach it, so the
+ * stand-down bought nothing and cost hold-to-talk while reading the comment
+ * you want to answer.
+ *
+ * Asserted rather than deleted: a mitigation coming back would be silent, and
+ * so would the dock quietly reverting to a float and leaving the reader with
+ * neither the hide nor a mic out of the way.
  */
-describe('the floating mic stands down under an open card', () => {
-  // Read off the raw stylesheet rather than through `rule()`: this one rule
-  // deliberately carries two selectors, and the helper matches a single one.
-  it('hides the mic, and the readout that rides above it', () => {
-    const block =
-      /body\.thread-card-open \.voice-mic,\s*body\.thread-card-open \.voice-indicator\s*\{([^}]*)\}/.exec(
-        declarationsOnly(CSS),
-      );
-    expect(block?.[1]).toMatch(/display:\s*none/);
+describe('the mic no longer stands down under an open card', () => {
+  it('has no thread-card-open hide left anywhere', () => {
+    expect(declarationsOnly(CSS)).not.toContain('thread-card-open');
+    // Positive control: the class name really would be findable if a rule
+    // still used it — this is the file the rule lived in.
+    expect(`${declarationsOnly(CSS)}\nbody.thread-card-open .voice-mic {}`).toContain(
+      'thread-card-open',
+    );
   });
 
-  // The 1100px band lives in review-chrome.ts and must not be copied here —
-  // a width constant that exists twice is one that drifts. The rule is
-  // unconditional precisely because the class already carries the test.
-  it('states no width of its own', () => {
-    const at = CSS.indexOf('body.thread-card-open');
-    expect(at).toBeGreaterThan(-1);
-    const region = CSS.slice(Math.max(0, at - 400), at);
-    expect(region).not.toMatch(/@media[^{]*max-width:\s*1100px[^{]*\{\s*$/);
+  it('docks the mic in the topbar instead, out of the flow of the page', () => {
+    // The reason the hide is safe to drop: the mic is no longer over the
+    // document at all. `.doc-nav-dock` un-fixes it the way `.hub-nav-dock`
+    // does on the board.
+    const docked = /\.doc-nav-dock \.voice-mic\s*\{([^}]*)\}/.exec(declarationsOnly(CSS))?.[1];
+    expect(docked, 'nothing styles the doc mic once it is docked').toBeDefined();
+    expect(docked).toMatch(/position:\s*static/);
+    expect(docked).toMatch(/left:\s*auto/);
+    expect(docked).toMatch(/bottom:\s*auto/);
   });
 });

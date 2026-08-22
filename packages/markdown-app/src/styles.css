@@ -4320,14 +4320,20 @@ a.hub-link-chip:hover {
    The mic button + streaming-dictation/ack indicator, shared by the hub and
    the /review/<docId> doc surface.
 
-   These base rules are the FLOATING form, and the doc surface is the only
-   thing still wearing it: `mountDocVoice` appends the mic to <body> on a page
-   with no nav to dock into, so a bottom-left launcher is what it has. The hub
-   docks the same element in its nav rail / bottom tab bar instead — see
-   `.hub-nav-dock` in the workspace-hub section, which un-fixes it. Bottom-LEFT
-   here, out of the deep-work path (the composer and comment pill live
-   bottom-right/center), rising with the keyboard via --kb-bottom like every
-   bottom-docked element on that surface. */
+   Two things live here. The SHARED LOOK — a 44px round bordered button, the
+   stroked glyph, the recording red, the dimmed insecure-origin state — belongs
+   to the mic wherever it is mounted. The positioning in the same rule is the
+   FLOATING form, and nothing ships wearing it any more: the hub docks the mic
+   in its nav rail / bottom tab bar (`.hub-nav-dock`, workspace-hub section) and
+   the doc surface docks it at the head of the topbar's toolbar
+   (`.doc-nav-dock`, below). Both un-fix it.
+
+   The float is kept as the fallback for a shell with no toolbar to dock into
+   (`mountDocVoice` appends to <body> then), and it stays bottom-LEFT, out of
+   the deep-work path — the composer and the comment pill live
+   bottom-right/center — rising with the keyboard via --kb-bottom like every
+   bottom-docked element on that surface. It is a fallback rather than a
+   surface: the doc shell has had a toolbar since it was written. */
 
 .voice-mic {
   position: fixed;
@@ -4384,22 +4390,14 @@ a.hub-link-chip:hover {
   outline: 2px solid var(--accent, #2e7dd7);
   outline-offset: 2px;
 }
-/* An open comment card wins the corner. Measured at 430px: a thread there
-   opens as a full-WIDTH inline card whose reply box reaches bottom-left too,
-   so the launcher sat on top of the composer. "Out of the deep-work path"
-   above is true of a 300px column on the right and stops being true when the
-   card is the width of the screen.
-
-   No media query here on purpose. `review-chrome.ts` only sets
-   `.thread-card-open` in the band where the two overlap, so the width test
-   lives in one place — a second copy of the 1100px constant is the drift this
-   project has been bitten by before. Nothing is lost while it is down: this
-   mic routes dictation to the workspace hub, it does not type into the
-   composer, and folding the card brings it straight back. */
-body.thread-card-open .voice-mic,
-body.thread-card-open .voice-indicator {
-  display: none;
-}
+/* The `body.thread-card-open` hide is GONE, with the float that needed it. It
+   stood the mic down whenever a comment card opened at ≤1100px, because a
+   thread there opens as a full-WIDTH inline card whose reply box reached the
+   bottom-left corner the launcher was fixed in. The mic is in the topbar now
+   and the card cannot reach it, so the rule bought nothing and cost the one
+   thing it was hiding: hold-to-talk while reading the comment you want to
+   answer. `review-chrome.ts` no longer sets the class either — it had exactly
+   this one consumer. */
 .voice-mic.voice-active {
   background: #c53030;
   border-color: #c53030;
@@ -4483,6 +4481,69 @@ body.thread-card-open .voice-indicator {
     border-top-color: var(--accent, #2e7dd7);
     opacity: 0.8;
   }
+}
+
+/* --- the mic docked in the review shell's topbar ---
+
+   The doc surface's answer to the same question the rail answered: the mic
+   needs a place that is not on top of the page. It has no nav rail and no tab
+   bar, so it takes the one strip of chrome it does have — `#topbar`, whose
+   height is a hard 48px from `#shell`'s `grid-template-rows: 48px 1fr`. A 44px
+   control fits that row whole, so docking here costs the reading area nothing:
+   the topbar does not grow, and the document gains a column no floating box
+   sits in.
+
+   Why this and not a reservation. As a `position: fixed` launcher the mic
+   covered prose at every width and every scroll position — a fixed box over a
+   scrolling document always covers something — and the fix for that is not a
+   gutter nothing may be laid out in (the promise the board spent two commits
+   renewing) but a home in the chrome. Same conclusion as `.hub-nav-dock`,
+   different chrome. */
+.doc-nav-dock {
+  /* Positioned, so the readout below hangs off the DOCK. A static wrapper
+     would silently re-anchor it: `#topbar` and `#shell` are both static, so an
+     absolute box inside them resolves against the viewport instead and the
+     readout lands wherever the page happens to be scrolled to. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+  /* *"slightly separate … so it's clear it's not a navbar item"*, in a
+     left-to-right toolbar: the rail's divider-below becomes a divider-after.
+     The 2px margin rides on top of `.toolbar`'s own 6px gap, so the mic has
+     8px of air either side of its rule. */
+  margin-right: 2px;
+  padding-right: 8px;
+  border-right: 1px solid var(--border);
+}
+.doc-nav-dock .voice-mic {
+  /* Out of the fixed layer entirely — the same undo the rail's dock does, and
+     for the same reason: the offsets and the z-index it needed as a FAB mean
+     nothing in flow, and leaving them set is how the next reader concludes it
+     is still floating. */
+  position: static;
+  left: auto;
+  bottom: auto;
+  z-index: auto;
+  flex: none;
+  /* A docked control casts no shadow — the shadow is what read as hovering
+     above the page. */
+  box-shadow: none;
+}
+/* The readout hangs BELOW the topbar, because the topbar is at the top: the
+   floating form's `bottom` would put a transcript above the window's edge.
+
+   Anchored RIGHT, unlike the rail's, and that is not symmetry for its own
+   sake. The box is `width: max-content` up to `min(92vw, 840px)`, and this
+   dock sits far along a wide screen — from `left: 0` a full sentence would
+   run off the right edge of the viewport. Growing leftwards into the page it
+   has the whole width to use at 1180px and still fits at 430px. */
+.doc-nav-dock .voice-indicator {
+  position: absolute;
+  top: calc(100% + 8px);
+  bottom: auto;
+  right: 0;
+  left: auto;
 }
 
 /* ================= FORMAT BAR ================= */

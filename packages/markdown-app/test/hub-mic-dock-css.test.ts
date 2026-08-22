@@ -107,11 +107,13 @@ describe('the mic lives in the nav, not on top of the page', () => {
     expect(docked).toMatch(/bottom:\s*auto/);
   });
 
-  it('keeps the doc surface — which has no nav rail — on the floating mic', () => {
-    // `.voice-mic` is shared by the hub and the /review/<docId> surface, and
-    // that surface mounts it on <body> with no rail to dock into (voice-dock.ts).
-    // Docking the base rule would strand it there, so the base stays the FAB
-    // and only the nav's copy is un-fixed.
+  it('keeps the float as a fallback, for a shell with nothing to dock into', () => {
+    // `.voice-mic` is shared by the hub and the /review/<docId> surface. Both
+    // dock it now — the hub in its rail/bar, the doc surface at the head of the
+    // topbar's toolbar (`.doc-nav-dock`) — so the base rule's positioning is
+    // what a shell with NEITHER falls back to, and the rest of the rule is the
+    // look both docks share. Docking the base would strand that fallback in
+    // flow at the end of <body>.
     const base = rule('.voice-mic');
     expect(base).toMatch(/position:\s*fixed/);
     expect(base).toMatch(/left:\s*16px/);
