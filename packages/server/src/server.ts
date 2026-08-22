@@ -14,6 +14,7 @@ import {
   contentKind,
   readReviewPayload,
   reviewGapAdvice,
+  reviewIdOf,
   reviewPayloadMessage,
   suggestOps,
   summaryHash,
@@ -72,6 +73,7 @@ import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from '.
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
+import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
@@ -204,13 +206,13 @@ export const HUB_FEEDBACK_DOC_ID = 'lf-hub-feedback';
  *
  * A BOARD is the unit of sharing (Bryan, 2026-08-17: "Workspace only — a
  * review must be filed on a board before it can be shared"). A folder bind
- * and a diff review are groupings: they hold member docs, but they are not
+ * and a diff review are reviews: they hold member docs, but they are not
  * boards, and until this they could each be shared on their own.
  *
  * 410 rather than 404 because the id is real and the caller is not wrong
  * about it — the capability is what went away. Older peers keep calling the
  * shared server with the payload THEIR bundle sends long after this one
- * stopped sending it, and a grouping id arrives in the same `workspaceId`
+ * stopped sending it, and a review id arrives in the same `workspaceId`
  * field a board id does, so a bare 404 would read as "your review vanished".
  * The hint has to name the replacement or the reply is just a wall.
  */
@@ -495,11 +497,11 @@ export interface CoverageQueue {
 export interface CoverageWorkspaceRow {
   key: string;
   workspaceId: string;
-  /** `board` — a hub workspace with tasks, a lead seat and attachments.
-   *  `grouping` — a diff review / folder bind, which has none of those. */
-  kind: 'board' | 'grouping';
-  /** Board only. Attachment / lead / heartbeat are hub-board facts; printing
-   *  `attached: false` for a grouping would read as a gap that cannot exist. */
+  /** `board` — a workspace: tasks, a lead seat, attachments.
+   *  `review` — a diff review / folder bind, which has none of those. */
+  kind: 'board' | 'review';
+  /** Board only. Attachment / lead / heartbeat are board facts; printing
+   *  `attached: false` for a review would read as a gap that cannot exist. */
   name?: string;
   attached?: boolean;
   /** The displayed active/away label: a heartbeat inside the heartbeat
@@ -578,6 +580,39 @@ export interface ServerHandle {
   webhookLog: WebhookLogEntry[];
   stop: () => Promise<void>;
 }
+
+/**
+ * ===== COMPAT: the review API answers at two prefixes =====
+ *
+ * A diff review and a bound folder are REVIEWS. They were built as a second
+ * thing called a "workspace" and their endpoints are still spelled
+ * `/api/workspaces/<id>/…`, which is the vocabulary this change removes: the
+ * canonical name is now `/api/reviews/<setId>/…`.
+ *
+ * Every one of these routes therefore matches BOTH prefixes. This is the whole
+ * of the alias — one helper, one comment — and it exists because the callers
+ * are plugin bundles running inside sessions nobody can restart, plus browser
+ * tabs that are already open. They keep calling the address they were built
+ * against and would get a 404 they could not explain from their own version.
+ *
+ * The bare `DELETE /api/workspaces/<id>` is deliberately NOT in here: that one
+ * route fronts two stores (a board or a review, dispatched by id) and is
+ * handled on its own.
+ */
+const reviewApi = (sub: string): RegExp =>
+  new RegExp(`^/api/(?:reviews|workspaces)/([^/]+)/${sub}$`);
+const REVIEW_API = {
+  refresh: reviewApi('refresh'),
+  groups: reviewApi('groups'),
+  grouped: reviewApi('grouped'),
+  threads: reviewApi('threads'),
+  files: reviewApi('files'),
+  tree: reviewApi('tree'),
+  contextFile: reviewApi('context-file'),
+  editableFile: reviewApi('editable-file'),
+} as const;
+/** Review-only delete. `DELETE /api/workspaces/<id>` still fronts both. */
+const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
 
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
@@ -864,7 +899,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
   // Every store event rides the existing SSE pipeline on the workspace
   // channel (`ws~<workspaceId>`, the same channel doc thread events use for
-  // legacy grouping workspaces) — no new transport (§3.6). The audit log
+  // reviews) — no new transport (§3.6). The audit log
   // append happens inside the store's emit, not here.
   taskStore.onEvent((ev) => {
     const { type, ...rest } = ev;
@@ -1071,17 +1106,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       taskProjection.refresh(workspaceId);
       return;
     }
-    // Exactly one hop from grouping to board — the same non-transitive rule
+    // Exactly one hop from review to board — the same non-transitive rule
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
-    const grouping = rooms.get(docId)?.meta.workspaceId;
+    const reviewId = reviewIdOf(rooms.get(docId)?.meta ?? {});
     for (const board of hubBoardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
-      // rooms.ts already broadcast on the grouping's own channel; a second
+      // rooms.ts already broadcast on the review's own channel; a second
       // send here would deliver the same comment twice to one listener. The
-      // grouping frames carried no row id, so those rows are acked off the
+      // review frames carried no row id, so those rows are acked off the
       // grace-window redelivery instead — late receipt beats double frame.
-      if (board !== grouping) {
+      if (board !== reviewId) {
         sse.broadcast(`ws~${board}`, payload, (who) => {
           const rowId = who.agentId ? rows.get(who.agentId) : undefined;
           return rowId ? { ...payload, workspaceId: board, commentQueueId: rowId } : undefined;
@@ -1404,34 +1439,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   /**
    * Which workspaces an id belongs to, for SHARE SCOPING (§3.12 commit 8).
-   * The id may be a doc room OR a grouping (folder bind / diff review), and
+   * The id may be a doc room OR a review (folder bind / diff review), and
    * the answer is a SET because those two senses of "workspace" nest:
    *
    *   1. a member doc's own GROUPING     (`meta.workspaceId`)
    *   2. the HUB board the id is filed on directly — docs linked via
-   *      attachDoc, each task's `task:<id>` body room, and a grouping id,
+   *      attachDoc, each task's `task:<id>` body room, and a review id,
    *      which is how a review goes on a board as one row
    *   3. the HUB board that member's GROUPING is filed on — the hop that
    *      makes a review row on a shared board actually open. Without it a
    *      hub-scoped share saw the row and 403'd on everything behind it,
-   *      because every member answers with the grouping id and the share
+   *      because every member answers with the review id and the share
    *      carries the hub id.
    *
    * ONE rule for both halves of the guard, on purpose: the same function
-   * tells the allowlist that a grouping belongs to a hub and tells it that
-   * the grouping's members do. Two rules would agree today and diverge
+   * tells the allowlist that a review belongs to a hub and tells it that
+   * the review's members do. Two rules would agree today and diverge
    * later, and the one that diverges open is the breach.
    *
-   * Exactly one hop from grouping to board — not a transitive closure.
+   * Exactly one hop from review to board — not a transitive closure.
    * Deliberately NOT the ws:<id> board room: its share allowance is spelled
    * out in host-guard, never a resolver side effect.
    */
   const shareWorkspacesOf = (id: string): string[] => {
     const out = new Set<string>();
-    const grouping = rooms.get(id)?.meta.workspaceId;
-    if (grouping) out.add(grouping);
+    const reviewId = reviewIdOf(rooms.get(id)?.meta ?? {});
+    if (reviewId) out.add(reviewId);
     for (const board of hubWorkspacesHolding(id)) out.add(board);
-    if (grouping) for (const board of hubWorkspacesHolding(grouping)) out.add(board);
+    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) out.add(board);
     return Array.from(out);
   };
 
@@ -1464,8 +1499,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   /**
    * Every hub board a DOC's discussion actually reaches — the boards holding
-   * the doc itself, plus the one grouping→board hop a diff review / folder
-   * bind needs (its members carry the grouping tag, and the grouping is what
+   * the doc itself, plus the one review→board hop a diff review / folder
+   * bind needs (its members carry the review tag, and the review is what
    * sits on the board as one row).
    *
    * Written once and used twice on purpose: `onDocRoomEvent` fans events out
@@ -1477,8 +1512,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   function hubBoardsForDoc(docId: string): Set<string> {
     const boards = new Set(hubWorkspacesHolding(docId));
-    const grouping = rooms.get(docId)?.meta.workspaceId;
-    if (grouping) for (const board of hubWorkspacesHolding(grouping)) boards.add(board);
+    const reviewId = reviewIdOf(rooms.get(docId)?.meta ?? {});
+    if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) boards.add(board);
     return boards;
   }
 
@@ -1523,7 +1558,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *    made the one agent this branch teaches the fleet to be the one agent
    *    the probe could not see.
    *
-   * A `ws:<grouping>` key still raises nothing. It resolves to the board the
+   * A `ws:<setId>` key still raises nothing. It resolves to the board the
    * review sits on, but the agent asked about the review, not about somebody
    * else's seat — and an alarm that fires on the innocent case is how a real
    * one stops being read.
@@ -1566,9 +1601,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const workspaceId = key.slice('ws:'.length);
       const board = taskStore.getWorkspace(workspaceId);
       if (!board) {
-        // Not a hub board. The key survived the liveness prune, so some doc
-        // room still carries this grouping tag.
-        workspaces.push({ key, workspaceId, kind: 'grouping' });
+        // Not a board. The key survived the liveness prune, so some doc room
+        // still carries this review id.
+        workspaces.push({ key, workspaceId, kind: 'review' });
         continue;
       }
       const { attached, heartbeatFresh, live } = liveness(workspaceId, agentId);
@@ -1633,34 +1668,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /**
-   * ── Two things wear the word "workspace". Read this before touching any
-   * helper below, because the names in this file are the only place the
-   * difference is written down. ──
+   * ── A WORKSPACE is a board. Everything else in it is content. ──
    *
-   * GROUPING workspace — `meta.workspaceId`, also spelled `reviewId`. The tag
-   *   that binds the member docs of one folder bind or diff review together.
-   *   It is what `rooms.listWorkspaces` / `listRepoFiles` / `bindDiff` mean,
-   *   and it has NO doc room of its own: `/review/<groupingId>` is a 404, its
-   *   content lives under `/api/workspaces/<id>/tree|threads`.
+   * A workspace (`taskStore`) has goals, tasks, a name, and a list of
+   * ATTACHMENT ids in `docIds`. An attachment is a doc room id or a REVIEW id
+   * — `POST /api/workspaces/:id/docs` has accepted both since it was written.
+   * So a review goes on its workspace as ONE row and its members stay off,
+   * because a hundred-file review is one unit of work, not a hundred.
    *
-   * HUB workspace — the board (`taskStore`): goals, tasks, a name, and a list
-   *   of ATTACHMENT ids in `docIds`. Helpers here say `hub` in their name when
-   *   they mean this one; a bare `workspaceId` in this file means a grouping.
+   * A REVIEW (`meta.setId`, returned as `reviewId` by `bindDiff`) is the tag
+   * binding the member docs of one folder bind or diff review together. It is
+   * content, not a container of tasks: it has no doc room of its own, and it
+   * is read through `/api/reviews/<setId>/tree|threads`. `reviewIdOf` in
+   * `@feedback/core` is the one place a member's review id is derived.
    *
-   * An ATTACHMENT is either a doc room id or a grouping id — `POST
-   * /api/workspaces/:id/docs` has accepted both since it was written. So a
-   * review goes on a board as ONE row; its members stay off, because a
-   * hundred-file review is one unit of work, not a hundred. Note the board
-   * page itself no longer LISTS attachments: the Docs and Open-threads rails
-   * came out (Bryan, 2026-08-18, "remove docs and live threads from the task
-   * list"), so `docIds` now feeds the review queue and voice lookup rather
-   * than a sidebar.
+   * Note the board page no longer LISTS attachments: the Docs and
+   * Open-threads rails came out (Bryan, 2026-08-18, "remove docs and live
+   * threads from the task list"), so `docIds` now feeds the review queue and
+   * voice lookup rather than a sidebar.
    *
-   * Every doc and every group bind belongs to a hub workspace (Bryan,
-   * 2026-08-13) — and requiring one must not add a step. "Bind it, send Bryan
-   * the URL" is ONE agent call, so a caller with no board in hand does not get
-   * an error telling them to go create one first: what arrives unfiled lands on
-   * the default board, and the id comes back in the same response so the caller
+   * Every doc and every review belongs to a workspace (Bryan, 2026-08-13) —
+   * and requiring one must not add a step. "Bind it, send Bryan the URL" is
+   * ONE agent call, so a caller with no board in hand does not get an error
+   * telling them to go create one first: what arrives unfiled lands on the
+   * default board, and the id comes back in the same response so the caller
    * learns where it went.
    */
   const DEFAULT_HUB_WORKSPACE_NAME = 'Unfiled';
@@ -1701,20 +1732,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * than none, because "back to one of this doc's boards" beats "back to the
    * index of everything on the machine", which is what the arrow does today.
    */
-  const backTargetFor = (
-    docId: string,
-    groupingId?: string,
-  ): { id: string; name: string } | null => {
+  const backTargetFor = (docId: string, reviewId?: string): { id: string; name: string } | null => {
     const pick = (id: string | undefined): { id: string; name: string } | null => {
       if (!id) return null;
       const ws = taskStore.getWorkspace(id);
       return ws ? { id: ws.id, name: ws.name } : null;
     };
-    return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(groupingId ?? '')[0]);
+    return pick(hubWorkspacesHolding(docId)[0]) ?? pick(hubWorkspacesHolding(reviewId ?? '')[0]);
   };
 
   /**
-   * Put an attachment — a doc room id OR a grouping id — on a hub workspace and
+   * Put an attachment — a doc room id OR a review id — on a hub workspace and
    * answer which one. Idempotent: something already attached keeps the board it
    * has (moving it is `attach_doc`'s job, not a side effect of re-binding, and
    * re-running `create_diff_review` on a live review is documented as safe). A
@@ -1764,6 +1792,134 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       if (res.ok && res.removed) taskProjection.ensureWorkspace(w.id);
     }
   };
+
+  /**
+   * ── Addressing: one prefix, and the compat layer that keeps the old ones
+   * answering. ──
+   *
+   * Every resource lives under the workspace it belongs to:
+   *
+   *   /workspaces/<workspaceId>                     the board
+   *   /workspaces/<workspaceId>/docs/<docId>        a doc, of any content kind
+   *   /workspaces/<workspaceId>/mockups/<docId>     a mockup's own HTML
+   *   /workspaces/<workspaceId>/reviews/<reviewId>  a review, → its entry doc
+   *
+   * `/review/<docId>` and `/mockup/<docId>` are the addresses these used to
+   * have. They still answer, and they always will: those URLs sit in comment
+   * threads, in bookmarks, and in `entryUrl` values returned by plugin bundles
+   * running in sessions nobody can restart. A 404 there reads, to the person
+   * holding the link, exactly like the review having been deleted.
+   */
+
+  /** 302 with the query string preserved. `?mobile=<preset>` rides on it. */
+  const redirectTo = (path: string, search: string): Response =>
+    new Response(null, { status: 302, headers: { location: `${path}${search}` } });
+
+  /**
+   * The workspace to address a doc under, or null when nothing holds it.
+   *
+   * Deliberately `backTargetFor`'s resolution rather than
+   * `taskStore.workspaceOfDoc`: a review is filed as ONE row under its review
+   * id, so a member doc is never in any `docIds` and the direct lookup answers
+   * null for every file in every review — which is most of the docs there are.
+   * Widening `workspaceOfDoc` itself would widen SHARE SCOPING with it, and
+   * that is a security decision rather than an addressing one.
+   */
+  const resolveWorkspaceForDoc = (docId: string): string | null =>
+    backTargetFor(docId, reviewIdOf(rooms.get(docId)?.meta ?? {}))?.id ?? null;
+
+  /**
+   * The workspace to send THIS caller to for a doc.
+   *
+   * For a share visitor it is always the workspace they were shared, never
+   * whichever workspace happens to hold the doc first. The guard has already
+   * established the doc is in their scope by the time they reach a redirect,
+   * and sending them anywhere else fails twice over: it names a workspace
+   * nobody shared with them, and the guard then refuses the very URL we just
+   * handed out — so an old `/review/<docId>` bookmark, which is the shape
+   * every link in every existing comment thread has, would 403 for exactly
+   * the people shares exist to serve.
+   */
+  const addressableWorkspaceFor = (docId: string, visitor: ShareTarget | null): string | null =>
+    visitor?.workspaceId ?? resolveWorkspaceForDoc(docId);
+
+  /**
+   * Which member a review opens on: the meatiest change, matching the entry
+   * `create_diff_review` returns. Alphabetical order would land the reviewer
+   * on dotfile and config noise on any large review.
+   */
+  const reviewEntryDocId = (reviewId: string): string | null => {
+    const members = rooms.list().filter((m) => reviewIdOf(m) === reviewId);
+    if (members.length === 0) return null;
+    const best = members.reduce((a, b) =>
+      (b.diffAdditions ?? 0) + (b.diffDeletions ?? 0) >
+      (a.diffAdditions ?? 0) + (a.diffDeletions ?? 0)
+        ? b
+        : a,
+    );
+    return best.docId;
+  };
+
+  /** The review app shell for a doc, or its 404. Null when no app is built. */
+  const serveDocShell = (docId: string, url: URL): Response | null => {
+    if (!markdownAppDist) return null;
+    // Docs are file-backed and created upfront via POST /api/docs. Arriving
+    // before an agent has done that gets a clean 404 — there is nothing the
+    // app could render for a doc that does not exist.
+    if (!rooms.get(docId)) {
+      return new Response(renderReviewNotFound(docId), {
+        status: 404,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }
+    // Device-frame simulation: `?mobile=<preset>` returns a shell hosting the
+    // real page in an iframe sized to the preset, so media queries inside it
+    // see the small width.
+    const mobilePreset = url.searchParams.get('mobile');
+    if (mobilePreset) {
+      return new Response(renderDeviceFrame(mobilePreset, url), {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }
+    return serveStatic(join(markdownAppDist, 'index.html'));
+  };
+
+  /** A mockup's own HTML, streamed from the file the room is bound to. */
+  const serveMockup = (docId: string): Response => {
+    const notFound = () =>
+      new Response(renderMockupNotFound(docId), {
+        status: 404,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    const room = rooms.get(docId);
+    if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) return notFound();
+    return serveStatic(room.meta.sourceUrl) ?? notFound();
+  };
+
+  /**
+   * File every review that predates `fileUnderHubWorkspace` onto a workspace,
+   * once per boot and never twice. See review-backfill.ts for why this is
+   * needed and why it is safe to re-run; the short version is that 20 of the
+   * 23 reviews in the live data dir were created before filing existed, and a
+   * review with no workspace has no address under `/workspaces/<id>/…`.
+   */
+  const runReviewBackfill = (): void => {
+    const res = backfillReviewFiling({
+      docs: () => rooms.list(),
+      isFiled: (reviewId) => taskStore.workspaceOfDoc(reviewId) !== null,
+      file: (reviewId) => fileUnderHubWorkspace(reviewId),
+    });
+    if (res.filed.length > 0) {
+      console.log(
+        `[reviews] filed ${res.filed.length} previously unfiled review(s) onto a workspace:`,
+        res.filed.map((r) => `${r.reviewId}→${r.workspaceId}`).join(', '),
+      );
+    }
+    if (res.failed.length > 0) {
+      console.error(`[reviews] could not file: ${res.failed.join(', ')} (will retry next boot)`);
+    }
+  };
+  runReviewBackfill();
 
   /**
    * CORS is decided once, here, for every response the handler produces,
@@ -1926,9 +2082,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...redactMetaForVisitor(decorated, {
               workspaceScoped: Boolean(visitor.workspaceId),
             }),
-            // Same path, no host — correct for every share mode.
-            ...(relativeReviewUrl(decorated.reviewUrl) !== undefined
-              ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl) }
+            // Same path, no host, and under the workspace THIS visitor was
+            // shared rather than whichever one holds the doc first.
+            ...(relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) !== undefined
+              ? { reviewUrl: relativeReviewUrl(decorated.reviewUrl, visitor.workspaceId) }
               : {}),
           };
         };
@@ -2168,7 +2325,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!workspaceId) return j(400, { error: 'workspaceId required' });
 
           // Only a BOARD may be shared. A board is what `taskStore` answers
-          // for; a grouping is what only `rooms` knows about. They arrive in
+          // for; a review is what only `rooms` knows about. They arrive in
           // the SAME field — unlike the per-doc removal above, no shape of
           // the payload separates them — so the lookup IS the discriminator.
           if (!taskStore.getWorkspace(workspaceId)) {
@@ -2330,7 +2487,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsEventsMatch) {
           const workspaceId = decodeURIComponent(wsEventsMatch[1] ?? '');
           if (!isValidDocId(workspaceId)) return j(400, { error: 'bad workspaceId' });
-          // A workspace channel exists for legacy grouping workspaces (diff
+          // A workspace channel exists for reviews (diff
           // reviews / folder binds) AND for hub workspaces — task.* events
           // broadcast on the same `ws~<id>` channel (§3.6).
           const exists =
@@ -2440,7 +2597,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // `?workspaceId=` scopes the listing. Without honouring it here,
           // list_docs accepted the param and silently answered a board-scoped
           // question with every doc on the server. It matches either kind of
-          // id a caller holds under the name "workspace": the grouping tag in
+          // id a caller holds under the name "workspace": the review tag in
           // meta (folder binds, diff reviews) or a hub board the doc is filed
           // under — resolved via hubBoardsForDoc so the answer is the same
           // set the event fan-out and coverage readout already use.
@@ -2456,7 +2613,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
         // --- REST: workspaces (hub create OR folder bind) ---
         // One resource, two shapes: `folderPath` binds a folder of files
-        // (the legacy grouping workspace), `name` creates a hub Workspace —
+        // (the review), `name` creates a hub Workspace —
         // a NEW first-class entity with a crypto-random id that tasks and
         // goals hang off (plan §3.12 commit 1). Nothing is migrated between
         // the two; attach_doc LINKS existing docs/reviews to a hub workspace.
@@ -2496,7 +2653,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = rooms.bindFolder({
             folderPath,
-            workspaceId: body?.workspaceId as string | undefined,
+            // `workspaceId` is what this body key was called before a review
+            // stopped being a workspace; both are read, neither is required.
+            setId: (body?.setId ?? body?.workspaceId) as string | undefined,
             title: body?.title as string | undefined,
             include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
             // Accepted by bindFolder and honoured by the scan since forever,
@@ -2515,7 +2674,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(res.error === 'not-found' ? 404 : 409, res);
           }
           // The GROUPING goes on the board, not its members: `res.workspaceId`
-          // is the grouping id, and one row for the whole bind is the unit a
+          // is the review id, and one row for the whole bind is the unit a
           // reader thinks in. See the vocabulary note above `fileUnderHubWorkspace`.
           const hubWorkspaceId = fileUnderHubWorkspace(
             res.workspaceId,
@@ -2523,6 +2682,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           );
           return j(200, {
             ...res,
+            // The review's id, under the name the CRDT already stores it as.
+            // `workspaceId` (from ...res) carries the SAME value and is
+            // deprecated for one release — a caller built before the rename
+            // reads it by that name, and a key must never change MEANING.
+            setId: res.workspaceId,
             hubWorkspaceId,
             files: res.files.map((f) => ({
               ...f,
@@ -2602,7 +2766,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             res.reviewId,
             body?.hubWorkspaceId as string | undefined,
           );
-          return j(200, { ...res, hubWorkspaceId, files, entryUrl: entry?.reviewUrl });
+          // `setId` is the same value as `reviewId`, under the name the CRDT
+          // stores it as — both stay, and neither changes meaning.
+          return j(200, {
+            ...res,
+            setId: res.reviewId,
+            hubWorkspaceId,
+            files,
+            entryUrl: entry?.reviewUrl,
+          });
         }
         // List bound workspaces with rolled-up triage signals (fileCount,
         // openThreads, allIdle, owner, lastActivityAt). The daily triage uses
@@ -2611,7 +2783,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             workspaces: rooms.listWorkspaces(),
             // Hub workspaces (the boards) are a different thing from the
-            // grouping workspaces above and stay in their own key rather than
+            // reviews above and stay in their own key rather than
             // being mixed into one list. They belong on this route because a
             // workspace the SERVER materialized for an unfiled doc has no
             // other way to be found: nobody was told its id at creation time.
@@ -2880,11 +3052,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const body = await safeJson(req);
           const docId = body?.docId as string | undefined;
           if (!docId || typeof docId !== 'string') return j(400, { error: 'docId required' });
-          // The link target must exist: either a doc room, or a legacy
-          // grouping workspace id (a diff review / folder bind, attached as
-          // one unit).
+          // The link target must exist: either a doc room, or a REVIEW id (a
+          // diff review / folder bind, attached as one unit).
           const exists =
-            rooms.get(docId) !== undefined || rooms.list().some((m) => m.workspaceId === docId);
+            rooms.get(docId) !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
           if (!exists) return j(404, { error: 'doc not found', docId });
           const res = taskStore.attachDoc(workspaceId, docId);
           if (!res.ok) return j(404, res);
@@ -4032,7 +4203,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
           }
           // A key is live when the thing it names still exists: a doc room, or
-          // for `ws:<id>` a hub workspace / grouping workspace. Anything else
+          // for `ws:<id>` a hub workspace / review. Anything else
           // is a subscription the child would open against a 404 forever.
           const watchKeyExists = (key: string): boolean => {
             if (rooms.get(key)) return true;
@@ -4397,19 +4568,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, { ok: true });
         }
-        // Delete a whole workspace as one unit (all-or-nothing open-thread
-        // guardrail; ?force=true to override). Member SOURCE files are left
-        // untouched, same as DELETE /api/docs/:id.
+        // Delete a REVIEW as one unit (all-or-nothing open-thread guardrail;
+        // ?force=true to override). Member SOURCE files are left untouched,
+        // same as DELETE /api/docs/:id.
+        const deleteReview = (setId: string, force: boolean): Response => {
+          const res = rooms.deleteWorkspace(setId, { force });
+          if (res.ok) {
+            // The review was one row on a board; deleting it must take the
+            // row with it, the same way a deleted doc does.
+            unlinkFromEveryHubWorkspace(setId);
+            return j(200, res);
+          }
+          return j(res.error === 'has-open-threads' ? 409 : 404, res);
+        };
+        const reviewDeleteMatch = pathname.match(REVIEW_DELETE);
+        if (reviewDeleteMatch && req.method === 'DELETE') {
+          // Review-only, and that is the point of the separate verb: a BOARD
+          // id here answers not-found rather than being destroyed by a call
+          // that meant to clean up a diff review.
+          return deleteReview(
+            decodeURIComponent(reviewDeleteMatch[1] ?? ''),
+            url.searchParams.get('force') === 'true',
+          );
+        }
         const wsDeleteMatch = pathname.match(/^\/api\/workspaces\/([^/]+)$/);
         if (wsDeleteMatch && req.method === 'DELETE') {
           const workspaceId = decodeURIComponent(wsDeleteMatch[1] ?? '');
           const force = url.searchParams.get('force') === 'true';
-          // Two different stores answer to the word "workspace", and this one
-          // route fronts both: `POST /api/workspaces` mints a hub board from
-          // `name` and a doc grouping from `folderPath`. `rooms.deleteWorkspace`
-          // enumerates DOC members, so a hub board — which has none — always
-          // came back not-found, and a board created for a five-minute
-          // experiment was permanent. Ask the task store first, by id.
+          // COMPAT — this ONE route fronts two stores, dispatching by id, and
+          // it is the last place that does. A board is what it deletes now;
+          // a review id still resolves because `delete_workspace(reviewId)` is
+          // what every shipped plugin bundle and skill has always called, from
+          // sessions nobody can restart. New callers use DELETE
+          // /api/reviews/<setId> above, which cannot touch a board at all.
+          // Ask the task store first: `rooms.deleteWorkspace` enumerates DOC
+          // members, so a board — which has none — always came back not-found,
+          // and a board created for a five-minute experiment was permanent.
           if (taskStore.getWorkspace(workspaceId)) {
             const openTasks = taskStore.openTaskCount(workspaceId) ?? 0;
             if (openTasks > 0 && !force) {
@@ -4445,14 +4639,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             taskProjection.dropWorkspaceRooms(workspaceId, hub.taskIds);
             return j(200, { ok: true, deletedTasks: hub.deletedTasks });
           }
-          const res = rooms.deleteWorkspace(workspaceId, { force });
-          if (res.ok) {
-            // The grouping was one row on a board; deleting it must take the
-            // row with it, the same way a deleted doc does.
-            unlinkFromEveryHubWorkspace(workspaceId);
-            return j(200, res);
-          }
-          return j(res.error === 'has-open-threads' ? 409 : 404, res);
+          return deleteReview(workspaceId, force);
         }
         // File-tree view for a bound workspace: nested directory tree with
         // per-file unresolved-comment counts + folder roll-ups. Files are
@@ -4460,51 +4647,53 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // All threads across a workspace (folder bind or diff review) in one
         // call — lets a watching agent poll a single endpoint per review
         // instead of one per member file. ?status=open|resolved filters.
-        const wsThreadsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/threads$/);
+        const wsThreadsMatch = pathname.match(REVIEW_API.threads);
         if (wsThreadsMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsThreadsMatch[1] ?? '');
-          if (!rooms.list().some((m) => m.workspaceId === workspaceId)) {
-            return j(404, { error: 'workspace not found', workspaceId });
+          const setId = decodeURIComponent(wsThreadsMatch[1] ?? '');
+          if (!rooms.list().some((m) => reviewIdOf(m) === setId)) {
+            return j(404, { error: 'review not found', setId, workspaceId: setId });
           }
           const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
           const threads = rooms
-            .listWorkspaceThreads(workspaceId, status ? { status } : undefined)
+            .listWorkspaceThreads(setId, status ? { status } : undefined)
             .map((t) => withTaskChips(t.docId, t));
-          return j(200, { workspaceId, threads });
+          // `workspaceId` carries the SAME value and is deprecated for one
+          // release: callers built before the rename read it by that name.
+          return j(200, { setId, workspaceId: setId, threads });
         }
         // Grouped-diff sidebar model: changed files organized into logical
         // groups (agent-supplied or heuristic). The default nav for diff
         // reviews.
-        const wsGroupedMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/grouped$/);
+        const wsGroupedMatch = pathname.match(REVIEW_API.grouped);
         if (wsGroupedMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsGroupedMatch[1] ?? '');
-          const grouped = rooms.listGroupedDiff(workspaceId);
+          const setId = decodeURIComponent(wsGroupedMatch[1] ?? '');
+          const grouped = rooms.listGroupedDiff(setId);
           if (grouped.groups.length === 0) {
-            return j(404, { error: 'no diff review found', workspaceId });
+            return j(404, { error: 'no diff review found', setId, workspaceId: setId });
           }
           return j(200, grouped);
         }
         // Re-reconcile a workspace against disk: pick up files that changed
         // since the bind, flag members whose file is gone. Never re-mints a
         // docId, so every comment thread survives.
-        const wsRefreshMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/refresh$/);
+        const wsRefreshMatch = pathname.match(REVIEW_API.refresh);
         if (wsRefreshMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsRefreshMatch[1] ?? '');
-          const res = rooms.refreshWorkspace(workspaceId);
+          const setId = decodeURIComponent(wsRefreshMatch[1] ?? '');
+          const res = rooms.refreshWorkspace(setId);
           if (res.ok) return j(200, res);
           return j(res.error === 'not-found' ? 404 : 400, res);
         }
         // Re-group a diff review's sidebar in place. An empty `groups` array
         // is meaningful (fall back to the heuristic); a MISSING one is a
         // caller mistake, so it 400s rather than silently regrouping.
-        const wsGroupsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/groups$/);
+        const wsGroupsMatch = pathname.match(REVIEW_API.groups);
         if (wsGroupsMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsGroupsMatch[1] ?? '');
+          const setId = decodeURIComponent(wsGroupsMatch[1] ?? '');
           const body = await safeJson(req);
           const groups = body?.groups;
           if (!Array.isArray(groups)) return j(400, { error: 'groups array required' });
           const res = rooms.setWorkspaceGroups(
-            workspaceId,
+            setId,
             groups as Array<{ title: string; paths: string[]; details?: string }>,
           );
           if (res.ok) return j(200, res);
@@ -4512,34 +4701,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         // Every file in the workspace's repo (changed ones marked) — the
         // "Show All Files" context view.
-        const wsFilesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/files$/);
+        const wsFilesMatch = pathname.match(REVIEW_API.files);
         if (wsFilesMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsFilesMatch[1] ?? '');
-          const res = rooms.listRepoFiles(workspaceId);
+          const setId = decodeURIComponent(wsFilesMatch[1] ?? '');
+          const res = rooms.listRepoFiles(setId);
           if (!res.ok) return j(404, res);
           // `root` is an absolute host path and every reviewUrl carries the
           // tailnet hostname — neither belongs in a visitor's copy.
-          return j(200, visitor ? redactWorkspaceFilesForVisitor(res) : res);
+          return j(200, visitor ? redactWorkspaceFilesForVisitor(res, visitor.workspaceId) : res);
         }
         // Lazily open an unchanged repo file for context (read-only code doc
         // in the same workspace).
-        const wsCtxMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/context-file$/);
+        const wsCtxMatch = pathname.match(REVIEW_API.contextFile);
         if (wsCtxMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsCtxMatch[1] ?? '');
+          const setId = decodeURIComponent(wsCtxMatch[1] ?? '');
           const body = await safeJson(req);
           const relPath = body?.relPath as string | undefined;
           if (!relPath) return j(400, { error: 'relPath required' });
-          const res = rooms.openContextFile(workspaceId, relPath);
+          const res = rooms.openContextFile(setId, relPath);
           if (!res.ok) return j(res.error === 'bad-path' ? 400 : 404, res);
           return j(200, { docId: res.docId, meta: metaFor(res.meta) });
         }
-        const wsEditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/editable-file$/);
+        const wsEditMatch = pathname.match(REVIEW_API.editableFile);
         if (wsEditMatch && req.method === 'POST') {
-          const workspaceId = decodeURIComponent(wsEditMatch[1] ?? '');
+          const setId = decodeURIComponent(wsEditMatch[1] ?? '');
           const body = await safeJson(req);
           const relPath = body?.relPath as string | undefined;
           if (!relPath) return j(400, { error: 'relPath required' });
-          const res = rooms.openEditableFile(workspaceId, relPath);
+          const res = rooms.openEditableFile(setId, relPath);
           if (!res.ok) {
             const status =
               res.error === 'bad-path' || res.error === 'not-markdown'
@@ -4551,15 +4740,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, { docId: res.docId, meta: metaFor(res.meta) });
         }
-        const wsTreeMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tree$/);
+        const wsTreeMatch = pathname.match(REVIEW_API.tree);
         if (wsTreeMatch && req.method === 'GET') {
-          const workspaceId = decodeURIComponent(wsTreeMatch[1] ?? '');
-          const tree = rooms.buildWorkspaceTree(workspaceId);
+          const setId = decodeURIComponent(wsTreeMatch[1] ?? '');
+          const tree = rooms.buildWorkspaceTree(setId);
           if (tree.tree.children.length === 0) {
-            return j(404, { error: 'workspace not found', workspaceId });
+            return j(404, { error: 'review not found', setId, workspaceId: setId });
           }
           // Same redaction as /files — see redactWorkspaceTreeForVisitor.
-          return j(200, visitor ? redactWorkspaceTreeForVisitor(tree) : tree);
+          return j(200, visitor ? redactWorkspaceTreeForVisitor(tree, visitor.workspaceId) : tree);
         }
         const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
         if (docMatch) {
@@ -4582,7 +4771,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // doc, rather than the machine-wide landing page. OWNER ONLY for
             // the same reason `hubWorkspaceId` is — a board id is an
             // unguessable URL capability, and a share visitor must not learn
-            // one from a member doc. Resolved through the grouping when the
+            // one from a member doc. Resolved through the review when the
             // doc is a member of a review, which is where `hubWorkspaceId`
             // deliberately stops.
             const backTo = visitor ? null : backTargetFor(docId, room.meta.workspaceId);
@@ -5239,33 +5428,77 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           );
         }
 
+        /**
+         * --- Resources under the workspace they belong to ---
+         *
+         * `/workspaces/<workspaceId>/docs/<docId>`,
+         * `/workspaces/<workspaceId>/mockups/<docId>`,
+         * `/workspaces/<workspaceId>/reviews/<reviewId>`.
+         *
+         * The workspace segment is CONTEXT, not authorization. It tells the
+         * page (and the reader) which workspace they are in, and it is what
+         * the back arrow and the sidebar build their links from. It is
+         * deliberately not checked against the doc's own filing: a doc moved
+         * between workspaces would otherwise 404 every link already handed
+         * out, and the check that does matter — is this visitor allowed to
+         * see this resource — belongs to the share guard, which checks the
+         * workspace AND the resource and is the only thing that should.
+         */
+        const wsResourceMatch = pathname.match(
+          /^\/workspaces\/([^/]+)\/(docs|mockups|reviews)\/([^/]+)$/,
+        );
+        if (wsResourceMatch && req.method === 'GET') {
+          const wsSeg = decodeURIComponent(wsResourceMatch[1] ?? '');
+          const kind = wsResourceMatch[2] ?? '';
+          const id = decodeURIComponent(wsResourceMatch[3] ?? '');
+          if (kind === 'reviews') {
+            // A review is a set of docs, not a page. Send the reader to the
+            // member worth opening first — the same entry `create_diff_review`
+            // picks, so the URL and the tool agree on where a review starts.
+            const entry = reviewEntryDocId(id);
+            if (!entry) {
+              return new Response(renderReviewNotFound(id), {
+                status: 404,
+                headers: { 'content-type': 'text/html; charset=utf-8' },
+              });
+            }
+            return redirectTo(
+              `/workspaces/${encodeURIComponent(wsSeg)}/docs/${encodeURIComponent(entry)}`,
+              url.search,
+            );
+          }
+          if (!isValidDocId(id)) return j(400, { error: 'bad docId' });
+          if (kind === 'mockups') return serveMockup(id);
+          const served = serveDocShell(id, url);
+          if (served) return served;
+        }
+
         // --- Markdown app (surface 1) ---
-        if (markdownAppDist && pathname.startsWith('/review/')) {
+        //
+        // COMPAT. `/review/<docId>` is where every doc used to live, and it
+        // still answers — it redirects to the workspace path when the doc's
+        // workspace can be resolved, and serves in place when it cannot. See
+        // the compat block note above `resolveWorkspaceForDoc`.
+        if (pathname.startsWith('/review/')) {
           const docId = decodeURIComponent(pathname.slice('/review/'.length));
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          // Markdown docs are file-backed and must be created upfront via
-          // POST /api/docs with sourceUrl. Navigating here before the
-          // agent has done that gets a clean 404 — the markdown app
-          // can't render anything useful for a doc that doesn't exist.
-          if (!rooms.get(docId)) {
-            return new Response(renderReviewNotFound(docId), {
-              status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
+          // The redirect is deliberately OUTSIDE the `markdownAppDist` guard
+          // that wraps the serve below. Where a doc lives is a fact about
+          // addressing; whether the browser app has been built is a fact
+          // about this deployment. Tying the two together would make an old
+          // URL 404 on a server that simply has no app bundle, which is a
+          // different failure wearing the same status code.
+          if (rooms.get(docId)) {
+            const home = addressableWorkspaceFor(docId, visitor);
+            if (home) {
+              return redirectTo(
+                `/workspaces/${encodeURIComponent(home)}/docs/${encodeURIComponent(docId)}`,
+                url.search,
+              );
+            }
           }
-          // Device-frame simulation: when ?mobile=<preset> is on the URL,
-          // return an HTML shell that hosts the real page in an iframe sized
-          // to the preset's viewport. Media queries inside the iframe see
-          // the small width correctly.
-          const mobilePreset = url.searchParams.get('mobile');
-          if (mobilePreset) {
-            return new Response(renderDeviceFrame(mobilePreset, url), {
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
-          }
-          const p = join(markdownAppDist, 'index.html');
-          const resp = serveStatic(p);
-          if (resp) return resp;
+          const served = serveDocShell(docId, url);
+          if (served) return served;
         }
         if (markdownAppDist && pathname.startsWith('/app/')) {
           const p = join(markdownAppDist, pathname.slice('/app/'.length));
@@ -5284,25 +5517,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         //     relative paths won't resolve since we don't serve the source
         //     directory. Use the existing /demos/ multi-page path for
         //     mockups that ship with sibling files.
+        //     COMPAT, same rule as `/review/`: redirect to the workspace path
+        //     when the mockup's workspace resolves, serve in place when it
+        //     does not.
         if (pathname.startsWith('/mockup/')) {
           const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
           // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
           // share whichever URL feels natural.
           const docId = slug.replace(/\.html?$/i, '');
           if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          const room = rooms.get(docId);
-          if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) {
-            return new Response(renderMockupNotFound(docId), {
-              status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
-            });
+          const home = rooms.get(docId) ? addressableWorkspaceFor(docId, visitor) : null;
+          if (home) {
+            return redirectTo(
+              `/workspaces/${encodeURIComponent(home)}/mockups/${encodeURIComponent(docId)}`,
+              url.search,
+            );
           }
-          const resp = serveStatic(room.meta.sourceUrl);
-          if (resp) return resp;
-          return new Response(renderMockupNotFound(docId), {
-            status: 404,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
-          });
+          return serveMockup(docId);
         }
 
         // --- Demos ---
@@ -5456,13 +5687,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     meta: T,
   ): T & { reviewUrl?: string } {
     const base = externalBaseUrl();
+    // The ONE place a resource URL is minted, which is why the whole fleet's
+    // addresses move with this function. A doc is addressed under the
+    // workspace holding it; a doc nothing holds keeps the old address, which
+    // still answers — better a working legacy URL than a link into a
+    // workspace that does not exist.
+    const home = resolveWorkspaceForDoc(meta.docId);
+    const ws = home ? `${base}/workspaces/${encodeURIComponent(home)}` : null;
+    const id = encodeURIComponent(meta.docId);
     if (contentKind(meta.type) !== 'none') {
-      // Every doc kind with LF-held content (markdown/code/diff) shares the
-      // SPA route; the app branches the editor on the doc's type at boot.
-      return { ...meta, reviewUrl: `${base}/review/${encodeURIComponent(meta.docId)}` };
+      // Every doc kind with server-held content (markdown/code/diff) shares
+      // the SPA route; the app branches the editor on the doc's type at boot.
+      return { ...meta, reviewUrl: ws ? `${ws}/docs/${id}` : `${base}/review/${id}` };
     }
     if (meta.type === 'mockup' && meta.sourceUrl) {
-      return { ...meta, reviewUrl: `${base}/mockup/${encodeURIComponent(meta.docId)}` };
+      return { ...meta, reviewUrl: ws ? `${ws}/mockups/${id}` : `${base}/mockup/${id}` };
     }
     return meta;
   }

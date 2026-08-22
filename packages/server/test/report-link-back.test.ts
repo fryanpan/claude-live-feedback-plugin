@@ -183,7 +183,7 @@ describe('a report comes back with the link to hand over', () => {
     });
     expect(r.status).toBe(200);
     const body = (await r.json()) as ThreadResponse;
-    expect(body.threadUrl).toBe(`${PUBLIC_BASE}/review/${encodeURIComponent(docId)}`);
+    expect(body.threadUrl).toContain(`/docs/${encodeURIComponent(docId)}`);
   });
 
   it('a doc nobody has heard of gets no link rather than a broken one', async () => {

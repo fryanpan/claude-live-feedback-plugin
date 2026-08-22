@@ -141,7 +141,7 @@ describe('landing + delete_workspace e2e (HTTP)', () => {
     // The standalone markdown artifact shows its source basename + a markdown
     // kind label, linking to its own review URL.
     expect(html).toContain('STANDALONE.md');
-    expect(html).toContain('review/standalone-doc');
+    expect(html).toContain('/docs/standalone-doc');
     expect(html).toContain('markdown');
     // Back to the index.
     expect(html).toContain('href="/"');

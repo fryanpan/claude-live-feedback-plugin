@@ -154,9 +154,15 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
    * the bundler rather than the guard. Comparing to the owner's own status
    * keeps the assertion on the one thing under test — the gate — and still
    * fails loudly if the gate refuses (403 never matches the owner's status).
+   *
+   * Both halves must handle redirects the SAME way. `/review/<id>` is now a
+   * compat alias that 302s to the doc's workspace-scoped path, and the
+   * visitor's fetch is `redirect: 'manual'` — so an owner fetch that followed
+   * the redirect would compare a followed status against an unfollowed one and
+   * report a difference that is entirely the test's own doing.
    */
   const sameAsOwner = async (path: string, cookie: string) => {
-    const owner = await local(path);
+    const owner = await local(path, { redirect: 'manual' });
     const seen = await pub(path, cookie);
     expect(owner.status, `owner ${path}`).not.toBe(403);
     expect(seen.status, `visitor ${path}`).toBe(owner.status);

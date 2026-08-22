@@ -52,7 +52,7 @@ describe('safeLinkHref', () => {
 });
 
 describe('resolveDocLink', () => {
-  const ctx = { workspaceId: 'rev-1', relPath: 'docs/main.md' };
+  const ctx = { reviewId: 'rev-1', relPath: 'docs/main.md' };
 
   it('resolves a same-dir relative link to the sibling docId URL', () => {
     expect(resolveDocLink({ href: './research.md', ...ctx })).toBe(
@@ -79,7 +79,7 @@ describe('resolveDocLink', () => {
   });
 
   it('returns null outside a workspace or for non-relative links', () => {
-    expect(resolveDocLink({ href: './x.md', workspaceId: '', relPath: '' })).toBeNull();
+    expect(resolveDocLink({ href: './x.md', reviewId: '', relPath: '' })).toBeNull();
     expect(resolveDocLink({ href: 'https://x.com/a.md', ...ctx })).toBeNull();
     expect(resolveDocLink({ href: '/abs/path.md', ...ctx })).toBeNull();
     expect(resolveDocLink({ href: '#anchor-only', ...ctx })).toBeNull();

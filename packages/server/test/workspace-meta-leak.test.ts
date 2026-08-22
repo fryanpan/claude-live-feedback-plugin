@@ -31,6 +31,7 @@ describe('workspace share does not leak host details', () => {
   let dataDir: string;
   let folder: string;
   let base: string;
+  let boardId: string;
   let workspaceId: string;
   let cookie: string;
 
@@ -77,7 +78,7 @@ describe('workspace share does not leak host details', () => {
       method: 'POST',
       body: JSON.stringify({ name: 'Meta board' }),
     }).then((r) => r.json());
-    const boardId = board.workspace.id as string;
+    boardId = board.workspace.id as string;
     expect(boardId).toBeTruthy();
 
     workspaceId = (
@@ -144,7 +145,17 @@ describe('workspace share does not leak host details', () => {
       const raw = await visitor(`/api/workspaces/${workspaceId}/${ep}`).then((r) => r.text());
       const urls = [...raw.matchAll(/"reviewUrl":"([^"]+)"/g)].map((m) => m[1] as string);
       expect(urls.length).toBeGreaterThan(0); // control: there ARE reviewUrls
-      for (const u of urls) expect(u.startsWith('/review/')).toBe(true);
+      // Relative, AND under the workspace this visitor was actually shared.
+      // The second half is the one with teeth: the server mints under the
+      // first workspace holding the doc, which can be a different board — and
+      // that URL would both name a workspace nobody shared and 403 at the
+      // guard, which checks the workspace segment against the share.
+      // NOTE the id: the SHARED board, not the review whose tree this is.
+      // A visitor's share is scoped to a board, so that is the segment their
+      // links must carry.
+      for (const u of urls) {
+        expect(u.startsWith(`/workspaces/${boardId}/`), u).toBe(true);
+      }
     });
   }
 

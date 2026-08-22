@@ -28,9 +28,9 @@
  *   `createShareLink` paths are gone, and `Shares.load` drops any legacy
  *   record carrying no `workspaceId`. A load-time drop works there because
  *   the record itself says which kind it is.
- * - **Per-grouping.** A folder bind and a diff review are not boards, and
+ * - **Per-review.** A folder bind and a diff review are not boards, and
  *   could each be shared alone. `Shares` cannot drop those at load: nothing
- *   on the record distinguishes a board id from a grouping id, and only
+ *   on the record distinguishes a board id from a review id, and only
  *   `taskStore` knows the difference. So it is enforced where the share is
  *   RESOLVED for serving (see `boardShareTarget` in server.ts) and the row
  *   stays on disk — a capability removed, not user content deleted.

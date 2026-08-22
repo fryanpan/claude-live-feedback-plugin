@@ -251,7 +251,9 @@ if (publicBaseUrlOverride) console.log(`[feedback]   links use:  ${publicBaseUrl
 for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
 if (trustedHosts.length) console.log(`[feedback]   trusted:    ${trustedHosts.join(', ')}`);
 if (allowedOrigins.length) console.log(`[feedback]   origins:    ${allowedOrigins.join(', ')}`);
-console.log('[feedback]   routes:     /  /review/<docId>  /widget.iife.js  /demos/mockup');
+console.log(
+  '[feedback]   routes:     /  /workspaces/<id>/docs/<docId>  /widget.iife.js  /demos/mockup',
+);
 if (cfAccess) {
   const audDisplay =
     typeof cfAccess.audience === 'string' ? cfAccess.audience.slice(0, 8) : 'auto-from-shares';
