@@ -55,16 +55,21 @@ The feedback widget that ships Linear tickets in `~/dev/health-tool` and `~/dev/
   analysis depends on, and no surface anywhere reports that it happened.
   `reopen` / `read_session` / `doc_open` are live-capture only and are not
   reconstructable at all, so that log must not be pruned per-doc either.
-  - The mechanism already exists and is half-built: `data/_archive/` works
-    because `hydrateFromDisk` reads only the top level of the data dir (so an
-    archived doc stops loading, and stops costing memory and a poll) while
-    `activity-backfill.ts` explicitly scans `_archive` (so it still feeds
-    analysis). What is missing is a writer — nothing moves anything there.
-    `stagePersisted` / `unstagePersisted` in `rooms.ts` is an existing
-    reversible-rename primitive of the same shape.
+  - The mechanism: `data/_archive/` works because `hydrateFromDisk` reads only
+    the top level of the data dir (so an archived doc stops loading, and stops
+    costing memory and a poll) while `activity-backfill.ts` explicitly scans
+    `_archive` (so it still feeds analysis). **The writer exists as of
+    0.1.92** — `Rooms.archiveReview` / `unarchiveReview`, reached from
+    `archive_review` / `unarchive_review` / `list_archived_reviews`, moves a
+    whole review's `.ydoc`s and sidecars there and back, recording who and why
+    in `_archive/<setId>.review.json`. Sidecars travel WITH their `.ydoc`, and
+    the backfill resolves a sidecar next to the file it just read (falling back
+    to the data dir, because the ~174 hand-moved ydocs left theirs behind).
   - `purgePersisted` (`rooms.ts`) is the hard path — `rmSync` on the `.ydoc`
-    plus the private-meta sidecar — and `delete_doc` / `delete_workspace` reach
-    it. Calling it is a decision, never a default.
+    plus the private-meta sidecar. **`delete_review` and `delete_workspace(reviewId)`
+    no longer reach it by default**: they archive, and only `purge:true` purges.
+    `delete_doc` and a BOARD delete still purge. Calling it is a decision,
+    never a default.
   - **The rule is about user content and history, not about transient files.**
     Pruning old client releases and cleaning up `.tmp`/staging paths are correct
     as hard deletes. Stated in this direction deliberately: a rule read too
