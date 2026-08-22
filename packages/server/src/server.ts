@@ -1120,9 +1120,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // on answers, and making it wait out an idle window would deliver the
     // point of the feature fifteen minutes late.
     if (ev.type === 'decision.answered') {
+      // Resolved HERE rather than inside the nudger: the nudger's snapshot
+      // carries the ready set, and an answered row is usually not in it —
+      // being blocked on that very answer is why it was asked. The title is
+      // what makes the wake readable without a lookup on the far end.
+      const answered = ev.taskId ? taskStore.getTask(ev.taskId) : undefined;
       readyNudger.reviewAnswered({
         workspaceId: ev.workspaceId,
         taskId: ev.taskId,
+        ...(answered?.title !== undefined ? { taskTitle: answered.title } : {}),
         actorId: ev.actor?.id,
       });
     }
