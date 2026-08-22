@@ -76,11 +76,14 @@ export async function maybeCompress(req: Request, res: Response): Promise<Respon
   headers.delete('content-length');
 
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const rewrap = (body: Uint8Array, extra?: [string, string]) => {
+  const rewrap = (body: Uint8Array<ArrayBuffer>, extra?: [string, string]) => {
     if (extra) headers.set(extra[0], extra[1]);
     return new Response(body, { status: res.status, statusText: res.statusText, headers });
   };
   if (!acceptsGzip(req.headers.get('accept-encoding'))) return rewrap(bytes);
   if (bytes.byteLength < COMPRESS_MIN_BYTES) return rewrap(bytes);
-  return rewrap(Bun.gzipSync(bytes), ['content-encoding', 'gzip']);
+  // Re-viewed rather than passed straight through: `gzipSync` types its result
+  // over `ArrayBufferLike`, which a Response body cannot be (it could be
+  // shared). The copy is of the COMPRESSED bytes, so it is the small one.
+  return rewrap(new Uint8Array(Bun.gzipSync(bytes)), ['content-encoding', 'gzip']);
 }
