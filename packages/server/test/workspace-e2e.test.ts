@@ -83,7 +83,7 @@ describe('workspace folder-review e2e (HTTP)', () => {
       );
       const opened = await j<{ docId: string; meta: { type: string; reviewUrl?: string } }>(cr);
       expect(opened.meta.type).toBe('code');
-      expect(opened.meta.reviewUrl).toContain('/review/');
+      expect(opened.meta.reviewUrl).toContain('/docs/');
       files.set(relPath, {
         relPath,
         docId: opened.docId,

@@ -71,7 +71,7 @@ export class Shares {
    * Share a BOARD by unguessable link. No Cloudflare Access app, no email
    * policy — possession of the slug is the credential until `expiresAt`.
    *
-   * There is no single-doc form and no single-grouping form: a board is the
+   * There is no single-doc form and no single-review form: a board is the
    * unit of sharing. Both of those grants minted a share scoped to something
    * smaller, which is exactly what went away, so an older caller still
    * asking for one is refused at the route rather than quietly re-scoped to

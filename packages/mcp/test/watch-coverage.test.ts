@@ -274,7 +274,7 @@ describe('boardsToReattach — what a respawn owes its own boards', () => {
           workspaces: [
             wsRow({ workspaceId: 'ws-stranger', lead: false, attached: false }),
             // …and a grouping key, which has no attachments at all.
-            { key: 'ws:review-1', workspaceId: 'review-1', kind: 'grouping' },
+            { key: 'ws:review-1', workspaceId: 'review-1', kind: 'review' },
           ],
         }),
       ),

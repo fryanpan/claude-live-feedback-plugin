@@ -22,10 +22,12 @@ import {
   contentKind,
   createThread,
   initDocMeta,
+  isReviewMember,
   listThreads,
   prose,
   readDocMeta,
   reviewAnswered,
+  reviewIdOf,
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
@@ -142,6 +144,9 @@ export interface WorkspaceDirNode {
 
 /** Result of `buildWorkspaceTree` — a nested directory tree plus totals. */
 export interface WorkspaceTree {
+  setId: string;
+  /** Same value as `setId`. Deprecated for one release — this shape goes to
+   *  clients built before a review stopped being called a workspace. */
   workspaceId: string;
   /** Absolute workspace root, when known (from member docs' workspaceRoot). */
   root?: string;
@@ -164,7 +169,7 @@ export interface RoomsConfig {
   /**
    * Called for every thread/comment event, alongside the room's own fan-out.
    * A doc can belong to something that wants to hear about its discussion
-   * without being a member of a `meta.workspaceId` grouping — a hub task's
+   * without being a member of a review — a task's
    * body room is one — and this is the seam for that, so Rooms stays
    * ignorant of what a `task:` docId means.
    */
@@ -1176,7 +1181,7 @@ export class Rooms {
 
   /**
    * Build the file-tree view for a workspace: every doc tagged with
-   * `workspaceId`, arranged into a nested directory tree by its `relPath`,
+   * review, arranged into a nested directory tree by its `relPath`,
    * with per-file unresolved-comment counts and folder roll-ups.
    *
    * Each FILE node carries `{docId, name, relPath, fileType, openCount,
@@ -1198,12 +1203,12 @@ export class Rooms {
    * where to go. Sorted most-recent-activity first.
    */
   listWorkspaceThreads(
-    workspaceId: string,
+    setId: string,
     opts?: { status?: 'open' | 'resolved' },
   ): Array<Thread & { docId: string; relPath?: string }> {
     const out: Array<Thread & { docId: string; relPath?: string }> = [];
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId) continue;
+      if (reviewIdOf(meta) !== setId) continue;
       for (const t of this.listThreads(meta.docId, opts)) {
         out.push({ ...t, docId: meta.docId, relPath: meta.relPath });
       }
@@ -1219,7 +1224,11 @@ export class Rooms {
    * all-files view (type 'code') are deliberately excluded — this view is
    * "what changed", not "what's open".
    */
-  listGroupedDiff(workspaceId: string): {
+  listGroupedDiff(setId: string): {
+    setId: string;
+    /** Same value as `setId`, deprecated for one release: this payload goes
+     *  over the wire to clients built before a review stopped being called a
+     *  workspace. A key must never change MEANING, so the old one stays. */
     workspaceId: string;
     totalOpen: number;
     groups: Array<{
@@ -1241,7 +1250,7 @@ export class Rooms {
     // short-circuits when one exists), so summing by relPath is safe.
     const companionThreads = new Map<string, { open: number; total: number }>();
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId || meta.type === 'diff' || !meta.relPath) continue;
+      if (reviewIdOf(meta) !== setId || meta.type === 'diff' || !meta.relPath) continue;
       const open = this.listThreads(meta.docId, { status: 'open' }).length;
       const total = this.listThreads(meta.docId).length;
       if (open === 0 && total === 0) continue;
@@ -1250,7 +1259,7 @@ export class Rooms {
     }
     let totalOpen = 0;
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId || meta.type !== 'diff') continue;
+      if (reviewIdOf(meta) !== setId || meta.type !== 'diff') continue;
       const relPath = meta.relPath ?? meta.docId;
       const extra = companionThreads.get(relPath) ?? { open: 0, total: 0 };
       const openCount = this.listThreads(meta.docId, { status: 'open' }).length + extra.open;
@@ -1296,7 +1305,7 @@ export class Rooms {
           files: g.files,
         };
       });
-    return { workspaceId, totalOpen, groups };
+    return { setId, workspaceId: setId, totalOpen, groups };
   }
 
   /**
@@ -1305,7 +1314,7 @@ export class Rooms {
    * view. Files that are already docs carry their reviewUrl; anything else
    * can be opened on demand via `openContextFile`.
    */
-  listRepoFiles(workspaceId: string): {
+  listRepoFiles(setId: string): {
     ok: boolean;
     root?: string;
     truncated?: boolean;
@@ -1319,7 +1328,7 @@ export class Rooms {
     }>;
     error?: 'not-found';
   } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root || !existsSync(root)) return { ok: false, error: 'not-found' };
     const decorate = this.cfg.decorateDocMeta;
@@ -1362,12 +1371,12 @@ export class Rooms {
    * relPath is validated against the workspace root — no traversal.
    */
   openContextFile(
-    workspaceId: string,
+    setId: string,
     relPath: string,
   ):
     | { ok: true; docId: string; meta: DocMeta }
     | { ok: false; error: 'not-found' | 'bad-path' | 'attach-failed' } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
     const clean = relPath.replace(/^\/+/, '');
@@ -1392,16 +1401,18 @@ export class Rooms {
     const existing = members.find((m) => m.relPath === clean);
     if (existing) return { ok: true, docId: existing.docId, meta: existing };
     const owner = members.find((m) => m.owner)?.owner;
-    const docId = memberDocId(workspaceId, clean);
+    const docId = memberDocId(setId, clean);
     // Markdown opens as the full WYSIWYG editable doc (same as bind_folder
     // always did); everything else is read-only highlighted source.
     const isMd = clean.toLowerCase().endsWith('.md');
     const room = this.getOrCreate(docId, {
       type: isMd ? 'markdown' : 'code',
       sourceUrl: abs,
-      setId: workspaceId,
+      setId,
       owner,
-      workspaceId,
+      // The persisted DocMeta field keeps its name: it is on disk in every
+      // .ydoc already, and `reviewIdOf` reads it as the fallback.
+      workspaceId: setId,
       workspaceRoot: root,
       relPath: clean,
       title: clean,
@@ -1422,7 +1433,7 @@ export class Rooms {
    * their content is a commit, not a file.
    */
   openEditableFile(
-    workspaceId: string,
+    setId: string,
     relPath: string,
   ):
     | { ok: true; docId: string; meta: DocMeta }
@@ -1430,7 +1441,7 @@ export class Rooms {
         ok: false;
         error: 'not-found' | 'bad-path' | 'pinned' | 'not-markdown' | 'attach-failed';
       } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === setId);
     const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
     if (!root) return { ok: false, error: 'not-found' };
     const clean = relPath.replace(/^\/+/, '');
@@ -1443,7 +1454,7 @@ export class Rooms {
     }
     if (!clean.toLowerCase().endsWith('.md')) return { ok: false, error: 'not-markdown' };
     const member = members.find((m) => m.relPath === clean);
-    if (!member) return this.openContextFile(workspaceId, clean);
+    if (!member) return this.openContextFile(setId, clean);
     if (member.type !== 'diff') return { ok: true, docId: member.docId, meta: member };
     if (member.diffTarget) return { ok: false, error: 'pinned' };
     if (!existsSync(abs)) return { ok: false, error: 'not-found' };
@@ -1452,13 +1463,15 @@ export class Rooms {
     // symlinks, so the member path is not self-evidently safe either.
     if (!isWithinRoot(root, abs)) return { ok: false, error: 'bad-path' };
     const owner = members.find((m) => m.owner)?.owner;
-    const companionId = memberDocId(`${workspaceId}:edit`, clean);
+    const companionId = memberDocId(`${setId}:edit`, clean);
     const room = this.getOrCreate(companionId, {
       type: 'markdown',
       sourceUrl: abs,
-      setId: workspaceId,
+      setId,
       owner,
-      workspaceId,
+      // The persisted DocMeta field keeps its name: it is on disk in every
+      // .ydoc already, and `reviewIdOf` reads it as the fallback.
+      workspaceId: setId,
       workspaceRoot: root,
       relPath: clean,
       title: clean,
@@ -1468,7 +1481,7 @@ export class Rooms {
     return { ok: true, docId: room.docId, meta: room.meta };
   }
 
-  buildWorkspaceTree(workspaceId: string): WorkspaceTree {
+  buildWorkspaceTree(setId: string): WorkspaceTree {
     const decorate = this.cfg.decorateDocMeta;
     const root: WorkspaceDirNode = { type: 'dir', name: '', openCount: 0, children: [] };
     let totalOpen = 0;
@@ -1481,7 +1494,7 @@ export class Rooms {
     // whichever doc the reviewer commented in, so badges merge across both.
     const byRel = new Map<string, { meta: DocMeta; openCount: number; threadCount: number }>();
     for (const meta of this.list()) {
-      if (meta.workspaceId !== workspaceId) continue;
+      if (reviewIdOf(meta) !== setId) continue;
       if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
       const key = meta.relPath ?? meta.docId;
       const open = this.listThreads(meta.docId, { status: 'open' }).length;
@@ -1535,13 +1548,13 @@ export class Rooms {
     }
 
     sortTreeChildren(root);
-    return { workspaceId, root: workspaceRoot, totalOpen, tree: root };
+    return { setId, workspaceId: setId, root: workspaceRoot, totalOpen, tree: root };
   }
 
   /**
    * Bind a whole folder/worktree for review. Scans the folder for
    * supported files, creates one review doc per file grouped under a
-   * single `workspaceId`, and returns the resulting file list plus a
+   * single review id, and returns the resulting file list plus a
    * record of anything skipped.
    *
    * Scan strategy: prefer `git ls-files` (respects .gitignore for free —
@@ -1558,7 +1571,7 @@ export class Rooms {
    * fileCount }` so a stray bind on a giant tree can't melt the server with
    * thousands of mtime polls.
    *
-   * Deterministic docIds (`${workspaceId}:${relPath}`) make re-binding
+   * Deterministic docIds (`${setId}:${relPath}`) make re-binding
    * idempotent: the same file maps to the same docId, so threads survive.
    */
   /** Bind a whole folder/worktree for review — see binds.ts. */
@@ -1617,22 +1630,22 @@ export class Rooms {
 
   /** Re-reconcile a workspace against disk, keeping docIds (and therefore
    *  threads) stable — see binds.ts. */
-  refreshWorkspace(workspaceId: string): RefreshWorkspaceResult {
-    return refreshWorkspaceImpl(this, workspaceId);
+  refreshWorkspace(setId: string): RefreshWorkspaceResult {
+    return refreshWorkspaceImpl(this, setId);
   }
 
   /** Re-group a diff review's sidebar in place — see binds.ts. */
   setWorkspaceGroups(
-    workspaceId: string,
+    setId: string,
     groups: Array<{ title: string; paths: string[]; details?: string }>,
   ): SetWorkspaceGroupsResult {
-    return setWorkspaceGroupsImpl(this, workspaceId, groups);
+    return setWorkspaceGroupsImpl(this, setId, groups);
   }
 
   /**
    * List the bound workspaces with rolled-up triage signals — so the daily
    * cleanup can treat a folder bind as ONE unit instead of nagging per file.
-   * Each entry aggregates its member docs (`meta.workspaceId === id`):
+   * Each entry aggregates its member docs (`reviewIdOf(meta) === id`):
    *   - `fileCount`     number of member docs
    *   - `openThreads`   sum of every member's open-thread count
    *   - `allIdle`       true iff EVERY member is idle (lastActivityAt older
@@ -1642,6 +1655,8 @@ export class Rooms {
    *   - `lastActivityAt` max member lastActivityAt (most recent touch)
    */
   listWorkspaces(now: number = Date.now()): Array<{
+    setId: string;
+    /** Same value as `setId`, deprecated for one release. */
     workspaceId: string;
     root?: string;
     title?: string;
@@ -1655,6 +1670,7 @@ export class Rooms {
     const byId = new Map<
       string,
       {
+        setId: string;
         workspaceId: string;
         root?: string;
         title?: string;
@@ -1666,11 +1682,16 @@ export class Rooms {
       }
     >();
     for (const meta of this.list()) {
-      const id = meta.workspaceId;
-      if (!id) continue;
+      // `isReviewMember`, not just "has a review id": `setId` predates binds
+      // as a batch-registration tag, so 129 docs in the live data dir share a
+      // set without belonging to any folder or diff. Listing those would
+      // invent reviews nobody made, each with no root and nothing to refresh.
+      if (!isReviewMember(meta)) continue;
+      const id = reviewIdOf(meta) as string;
       let entry = byId.get(id);
       if (!entry) {
         entry = {
+          setId: id,
           workspaceId: id,
           root: meta.workspaceRoot,
           title: meta.title,
@@ -1713,7 +1734,7 @@ export class Rooms {
    * The bound SOURCE files on disk are left untouched (same as deleteDoc).
    */
   deleteWorkspace(
-    workspaceId: string,
+    setId: string,
     opts?: { force?: boolean },
   ):
     | { ok: true; deleted: number }
@@ -1723,7 +1744,7 @@ export class Rooms {
         error: 'has-open-threads';
         files: Array<{ docId: string; openThreads: number }>;
       } {
-    const members = this.list().filter((m) => m.workspaceId === workspaceId);
+    const members = this.list().filter((m) => reviewIdOf(m) === setId);
     if (members.length === 0) return { ok: false, error: 'not-found' };
     if (!opts?.force) {
       // Pre-flight the guardrail across ALL members before deleting any, so a
@@ -3194,21 +3215,20 @@ export class Rooms {
     // See event-id.ts.
     payload.eid = newEventId();
     this.cfg.sse.broadcast(room.docId, payload);
-    // Double-broadcast on the GROUPING's channel — `meta.workspaceId` is the
-    // tag a diff review or folder bind sets — so an agent can watch ONE
-    // stream per review/folder instead of one per file.
+    // Double-broadcast on the REVIEW's channel — the `setId` a diff review or
+    // folder bind stamps on each member — so an agent can watch ONE stream per
+    // review instead of one per file.
     //
-    // GROUPING, and only the grouping. This comment used to say "workspace"
-    // flat, which reads as covering the other thing that wears that word: a
-    // hub BOARD, which holds docs through `workspace.docIds` and never
-    // through this tag. A doc filed on a board but carrying no grouping tag
-    // reached the board's channel from here NEVER, and an agent watching
-    // `ws:<board>` had no way to notice — silence from a subscription you
-    // never made is indistinguishable from nobody having commented. The
-    // board fan-out lives in server.ts's `onDocRoomEvent`, which resolves
-    // `workspace.docIds` at broadcast time; rooms.ts has no view of boards.
-    if (room.meta.workspaceId) {
-      this.cfg.sse.broadcast(`ws~${room.meta.workspaceId}`, payload);
+    // The REVIEW, and only the review. A doc filed on a workspace but
+    // belonging to no review reaches the workspace's channel from here NEVER,
+    // and an agent watching `ws:<workspaceId>` has no way to notice — silence
+    // from a subscription you never made is indistinguishable from nobody
+    // having commented. The workspace fan-out lives in server.ts's
+    // `onDocRoomEvent`, which resolves `workspace.docIds` at broadcast time;
+    // rooms.ts has no view of workspaces.
+    const reviewId = reviewIdOf(room.meta);
+    if (reviewId) {
+      this.cfg.sse.broadcast(`ws~${reviewId}`, payload);
     }
     if (room.webhookUrl) {
       void this.cfg.webhooks.send(room.webhookUrl, payload);

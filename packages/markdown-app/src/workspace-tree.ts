@@ -12,6 +12,7 @@
  */
 
 import { setActiveFile } from './diff-nav.ts';
+import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import {
   beginSidebarRender,
   isCurrentSidebarRender,
@@ -70,7 +71,7 @@ function renderTreeNode(
     const params = new URLSearchParams(location.search);
     const href = node.reviewUrl
       ? appendParams(node.reviewUrl, params)
-      : `/review/${encodeURIComponent(node.docId)}${params.toString() ? `?${params.toString()}` : ''}`;
+      : docHref(node.docId, workspaceIdFromPath(location.pathname), params.toString());
     const badge =
       node.openCount > 0 ? `<span class="tree-badge badge-open">${node.openCount}</span>` : '';
     // Diff-review files carry an A/M/D/R status letter + line-count badge.
@@ -148,7 +149,7 @@ export async function renderWorkspaceTree(
     // Re-fetch on every navigation; the shared signature below decides whether
     // the fetched tree actually needs a DOM rebuild (which resets scroll +
     // collapses folder state), or just an active-marker move.
-    const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/tree`);
+    const res = await fetch(`/api/reviews/${encodeURIComponent(workspaceId)}/tree`);
     if (!res.ok) return;
     const data = (await res.json()) as { tree: TreeDir };
     // Superseded while fetching (mount torn down, or a newer sidebar render

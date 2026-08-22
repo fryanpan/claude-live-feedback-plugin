@@ -3,6 +3,7 @@ import { mountCode } from './code/code-app.ts';
 import { saveStateView, settlePending, watchConnection } from './connection-state.ts';
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { fetchDocMeta } from './doc-meta.ts';
+import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
@@ -682,9 +683,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
           const label = d.title ?? basename(d.sourceUrl ?? d.docId);
           const sub = d.sourceUrl && d.title ? d.sourceUrl : '';
           const params = new URLSearchParams(location.search);
-          const href = `/review/${encodeURIComponent(d.docId)}${
-            params.toString() ? `?${params.toString()}` : ''
-          }`;
+          const href = docHref(d.docId, workspaceIdFromPath(location.pathname), params.toString());
           return `<li><a href="${href}" class="${isActive ? 'active' : ''}"${
             isActive ? ' aria-current="page"' : ''
           }>${escapeHtml(label)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</a></li>`;

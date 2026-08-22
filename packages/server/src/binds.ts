@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path';
-import type { DocMeta, DocType } from '@feedback/core';
+import { type DocMeta, type DocType, reviewIdOf } from '@feedback/core';
 import {
   MAX_GROUP_DETAILS,
   assignGroups,
@@ -63,7 +63,7 @@ export interface BindHost {
   attachReadonlyFile(docId: string, path: string): { ok: boolean };
   attachFlatFile(docId: string, path: string, opts?: { writeBack?: boolean }): { ok: boolean };
   openContextFile(
-    workspaceId: string,
+    setId: string,
     relPath: string,
   ): { ok: true; docId: string; meta: DocMeta } | { ok: false; error: string };
   list(): DocMeta[];
@@ -92,7 +92,8 @@ function isExcluded(relPath: string, excludes: string[]): boolean {
 
 export interface BindFolderOpts {
   folderPath: string;
-  workspaceId?: string;
+  /** Reuse an existing review's id instead of deriving one from the path. */
+  setId?: string;
   title?: string;
   /** Accepted for back-compat; lazy opening made the allowlist obsolete. */
   include?: string[];
@@ -106,6 +107,10 @@ export interface BindFolderOpts {
 export type BindFolderResult =
   | {
       ok: true;
+      setId: string;
+      /** Same value as `setId`, deprecated for one release — callers built
+       *  before a review stopped being called a workspace read it by this
+       *  name. A key must never change MEANING. */
       workspaceId: string;
       root: string;
       fileCount: number;
@@ -125,7 +130,7 @@ export type BindFolderResult =
 export function bindFolder(host: BindHost, opts: BindFolderOpts): BindFolderResult {
   const res = bindDiff(host, {
     repoPath: opts.folderPath,
-    reviewId: opts.workspaceId,
+    reviewId: opts.setId,
     title: opts.title,
     exclude: opts.exclude,
     owner: opts.owner,
@@ -136,9 +141,11 @@ export function bindFolder(host: BindHost, opts: BindFolderOpts): BindFolderResu
       // An empty (but existing) folder is a degenerate success, matching
       // the old eager bind's behavior for a folder with no supported files.
       const root = resolvePath(opts.folderPath);
+      const emptySetId = opts.setId ?? deriveWorkspaceId(root);
       return {
         ok: true,
-        workspaceId: opts.workspaceId ?? deriveWorkspaceId(root),
+        setId: emptySetId,
+        workspaceId: emptySetId,
         root,
         fileCount: 0,
         skipped: [],
@@ -149,6 +156,7 @@ export function bindFolder(host: BindHost, opts: BindFolderOpts): BindFolderResu
   }
   return {
     ok: true,
+    setId: res.reviewId,
     workspaceId: res.reviewId,
     root: res.root,
     fileCount: res.fileCount,
@@ -354,7 +362,7 @@ export function bindDiff(host: BindHost, opts: BindDiffOpts): BindDiffResult {
   // working-tree mode only the base is pinned — the target side is live
   // by design.)
   for (const meta of host.list()) {
-    if (meta.workspaceId !== reviewId || meta.type !== 'diff') continue;
+    if (reviewIdOf(meta) !== reviewId || meta.type !== 'diff') continue;
     if (meta.diffBase !== base || (meta.diffTarget ?? null) !== target) {
       return { ok: false, error: 'review-exists-different-range' };
     }
@@ -553,6 +561,8 @@ export interface WorkspaceMemberRef {
 export type RefreshWorkspaceResult =
   | {
       ok: true;
+      setId: string;
+      /** Same value as `setId`, deprecated for one release. */
       workspaceId: string;
       root: string;
       kind: 'diff' | 'browse';
@@ -598,17 +608,17 @@ export type RefreshWorkspaceResult =
  * `stale` is always reversible: the next refresh that finds the file clears
  * the flag and reports it under `restored`.
  */
-export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWorkspaceResult {
-  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+export function refreshWorkspace(host: BindHost, setId: string): RefreshWorkspaceResult {
+  const members = host.list().filter((m) => reviewIdOf(m) === setId);
   // No members means nothing is bound — which is also the state a folder
   // bound while EMPTY is left in (a documented degenerate success that
   // creates no docs). The root can't be recovered from the hashed
-  // workspaceId, so point the caller at the operation that can.
+  // setId, so point the caller at the operation that can.
   const noRoot = {
     ok: false,
     error: 'not-found',
     detail:
-      'no bound members for this workspace — re-run bind_folder / create_diff_review on the folder. It is idempotent and derives the same workspaceId, so shares and threads survive.',
+      'no bound members for this workspace — re-run bind_folder / create_diff_review on the folder. It is idempotent and derives the same setId, so shares and threads survive.',
   } as const;
   if (members.length === 0) return noRoot;
   const root = members.find((m) => m.workspaceRoot)?.workspaceRoot;
@@ -642,7 +652,7 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
     const res = bindDiff(host, {
       repoPath: root,
       base,
-      reviewId: workspaceId,
+      reviewId: setId,
       owner,
       ...(exclude ? { exclude } : {}),
       ...(groups ? { groups } : {}),
@@ -694,7 +704,7 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
   const stale: Array<WorkspaceMemberRef & { openThreads: number }> = [];
   const restored: WorkspaceMemberRef[] = [];
   for (const meta of host.list()) {
-    if (meta.workspaceId !== workspaceId) continue;
+    if (reviewIdOf(meta) !== setId) continue;
     const ref: WorkspaceMemberRef = {
       docId: meta.docId,
       ...(meta.relPath ? { relPath: meta.relPath } : {}),
@@ -728,7 +738,8 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
 
   return {
     ok: true,
-    workspaceId,
+    setId,
+    workspaceId: setId,
     root,
     kind: diffMember ? 'diff' : 'browse',
     added,
@@ -741,6 +752,8 @@ export function refreshWorkspace(host: BindHost, workspaceId: string): RefreshWo
 export type SetWorkspaceGroupsResult =
   | {
       ok: true;
+      setId: string;
+      /** Same value as `setId`, deprecated for one release. */
       workspaceId: string;
       groups: Array<{ title: string; fileCount: number }>;
       /** Files no supplied group claimed — they land in "Other". */
@@ -764,10 +777,10 @@ export type SetWorkspaceGroupsResult =
  */
 export function setWorkspaceGroups(
   host: BindHost,
-  workspaceId: string,
+  setId: string,
   groups: Array<{ title: string; paths: string[]; details?: string }>,
 ): SetWorkspaceGroupsResult {
-  const members = host.list().filter((m) => m.workspaceId === workspaceId);
+  const members = host.list().filter((m) => reviewIdOf(m) === setId);
   if (members.length === 0) return { ok: false, error: 'not-found' };
   const diffMembers = members.filter(
     (m): m is typeof m & { relPath: string } => m.type === 'diff' && !!m.relPath,
@@ -842,7 +855,8 @@ export function setWorkspaceGroups(
 
   return {
     ok: true,
-    workspaceId,
+    setId,
+    workspaceId: setId,
     groups: Array.from(summary.entries())
       .sort((a, b) => a[1].rank - b[1].rank || a[0].localeCompare(b[0]))
       .map(([title, g]) => ({ title, fileCount: g.fileCount })),
@@ -859,7 +873,7 @@ export function setWorkspaceGroups(
  */
 function rememberWorkspaceConfig(
   host: BindHost,
-  workspaceId: string,
+  setId: string,
   opts: { exclude?: string[]; groups?: BindDiffOpts['groups']; maxFiles?: number },
 ): void {
   const next: Array<[keyof DocMeta, unknown]> = [];
@@ -868,7 +882,7 @@ function rememberWorkspaceConfig(
   if (opts.maxFiles !== undefined) next.push(['workspaceMaxFiles', opts.maxFiles]);
   if (next.length === 0) return;
   for (const m of host.list()) {
-    if (m.workspaceId === workspaceId) writeMeta(host, m.docId, next);
+    if (reviewIdOf(m) === setId) writeMeta(host, m.docId, next);
   }
 }
 

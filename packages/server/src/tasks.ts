@@ -50,7 +50,7 @@ import { bodyHead } from './task-title.ts';
  * read-only mirror of it, never a source.
  *
  * A hub Workspace is a NEW first-class entity: today's `workspaceId` on
- * DocMeta is only a grouping tag minted by folder binds / diff reviews.
+ * DocMeta is only a review tag minted by folder binds / diff reviews.
  * `attachDoc` LINKS existing docs and reviews to a hub workspace — nothing
  * is migrated, and docs keep working at their current URLs.
  */
@@ -2500,8 +2500,8 @@ export class TaskStore {
    * room (`task:<taskId>`). Deliberately NOT the `ws:<id>` board room — its
    * share allowance is explicit in host-guard, so granting the board stays
    * a decision rather than a resolver side effect. Also deliberately not
-   * transitive: attachDoc can link a whole legacy grouping (diff review) by
-   * its grouping id, and this resolver does not widen to that grouping's
+   * transitive: attachDoc can link a whole review (diff review) by
+   * its review id, and this resolver does not widen to that review's
    * member docs.
    */
   workspaceOfDoc(docId: string): string | null {

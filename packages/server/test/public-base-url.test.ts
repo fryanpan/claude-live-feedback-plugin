@@ -117,7 +117,14 @@ describe('the override reaches the links the route table hands out', () => {
   };
 
   it('builds reviewUrl on the declared origin', async () => {
-    expect(await reviewUrlOf()).toBe(`${PUBLIC}/review/doc-1`);
+    // The ORIGIN is what this file is about; the path after it belongs to the
+    // addressing scheme and is pinned in workspace-resource-routes.test.ts. A
+    // doc is addressed under the workspace holding it, so asserting one exact
+    // string here would fail every time that scheme moves, for a reason that
+    // has nothing to do with the override.
+    const url = await reviewUrlOf();
+    expect(url.startsWith(`${PUBLIC}/`)).toBe(true);
+    expect(url.endsWith('/docs/doc-1')).toBe(true);
   });
 
   it('leaves no trace of the loopback origin it is actually served on', async () => {
@@ -164,6 +171,6 @@ describe('without an override the server still describes itself', () => {
     expect(typeof reviewUrl).toBe('string');
     expect((reviewUrl as string).startsWith('http://')).toBe(true);
     expect(reviewUrl).toContain(String(handle.port));
-    expect((reviewUrl as string).endsWith('/review/doc-1')).toBe(true);
+    expect((reviewUrl as string).endsWith('/docs/doc-1')).toBe(true);
   });
 });
