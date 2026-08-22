@@ -57,6 +57,18 @@ const publicBaseUrlOverride =
 // deploy state as their own. Same seam rule as the plugin refresher.
 const clientReleaseRootDir = arg('client-release-root') ?? null;
 
+// How long ready, agent-owned work may sit untouched before the board wakes
+// its lead (ready-nudge.ts). Minutes rather than ms because it is a number an
+// operator types; a non-numeric or non-positive value falls back to the
+// default rather than disabling the wake by accident — an idle window of 0
+// would nudge on every tick, which is the one behaviour the feature exists to
+// avoid.
+const readyNudgeMinutes = Number(readRenamedEnv(process.env, 'CW_READY_NUDGE_MINUTES') ?? '');
+const readyNudgeIdleMs =
+  Number.isFinite(readyNudgeMinutes) && readyNudgeMinutes > 0
+    ? readyNudgeMinutes * 60_000
+    : undefined;
+
 // Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
 // machine's LAN names, and private IPv4 ranges are detected automatically;
 // this covers anything we can't detect (a reverse proxy in front, a custom
@@ -222,6 +234,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       cfAccess,
       share,
       summarizer,
+      ...(readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),
