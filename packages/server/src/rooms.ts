@@ -301,6 +301,35 @@ export class Rooms {
    */
   private aliases = new Map<string, string>();
 
+  /**
+   * Docs whose file binding is known but has NOT been established yet — one
+   * thunk per doc, run the first time anything asks to read or write that
+   * doc's content.
+   *
+   * Boot used to bind every doc on disk that still pointed at a live file:
+   * read the file, parse the markdown, re-apply any external edit, and arm a
+   * 500ms mtime poll. Measured against a synthetic copy of the production
+   * census (3,741 docs, 1,672 of them still pointing at a file that exists),
+   * that is 336ms of boot and — the part that never ends — ~6,000 stat
+   * syscalls a second, forever, for documents nobody has open.
+   *
+   * Deferring is deliberately NOT a second implementation of binding: the
+   * thunk runs the same `attachFile` / `attachFlatFile` the eager path ran,
+   * just later. The external-edit re-apply still happens exactly once per
+   * doc, and it happens before any caller can observe the doc, because every
+   * path that reads or writes content goes through `room()`.
+   *
+   * What stays eager, and why it has to: the `.ydoc` itself. Every doc's Yjs
+   * state is still loaded at boot, so `list()` is complete, thread counts are
+   * right, and — the load-bearing one — the ALIAS TABLE is complete. An alias
+   * lives inside its own doc's DocMeta, and `getOrCreate` claims it off the
+   * restored meta, so a boot that skipped reading state could not answer
+   * "which doc does this name mean" without a second index to keep in step
+   * with the docs it describes. Loading state is bounded and one-time;
+   * binding is what costs a poll forever. That is where this change cuts.
+   */
+  private deferredBinds = new Map<string, () => void>();
+
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
     this.hydrateFromDisk();
@@ -308,6 +337,58 @@ export class Rooms {
 
   list(): DocMeta[] {
     return Array.from(this.rooms.values()).map((r) => this.withActivity(r.meta));
+  }
+
+  /**
+   * A room by id, with any deferred file binding established first.
+   *
+   * The seam for "somebody is about to read or write this doc's content".
+   * Sweeps that need only meta or threads — `list`, `listThreads`,
+   * `getThread`, `buildWorkspaceTree` — deliberately reach `this.rooms`
+   * directly: threads live in the `.ydoc`, not in the bound file, and a
+   * landing page that bound every doc it counted would undo the whole point.
+   *
+   * Anything that WRITES the `.ydoc` must come through here even if it never
+   * touches prose. `attachFile` arbitrates a doc against its file by
+   * comparing the two mtimes, so a write that bumped the `.ydoc` while the
+   * binding was still deferred would make the live doc look like the newer
+   * side and reassert stale prose over a real external edit.
+   */
+  private room(docId: string): DocRoom | undefined {
+    const room = this.rooms.get(docId);
+    if (room) this.establishDeferredBinding(docId);
+    return room;
+  }
+
+  /**
+   * Run a doc's pending bind, once.
+   *
+   * Deleting the entry BEFORE calling it is what makes this re-entrant:
+   * `attachFile` looks the same room up on its way through, and a thunk that
+   * were still registered at that moment would recurse.
+   */
+  private establishDeferredBinding(docId: string): void {
+    const bind = this.deferredBinds.get(docId);
+    if (!bind) return;
+    this.deferredBinds.delete(docId);
+    bind();
+  }
+
+  /**
+   * A doc's metadata — title, type, owner, relPath — WITHOUT establishing its
+   * file binding, and resolving an alias the same way `get` does.
+   *
+   * For callers that want a label rather than a document. A workspace payload
+   * naming its member docs, a nudge line quoting a title: none of that reads
+   * prose, so none of it should read and parse a file or leave a poll behind.
+   * `get(docId)?.meta` answers the same question and binds on the way, which
+   * over a list of docIds is how a page view quietly re-arms the archive.
+   */
+  metaOf(docId: string): DocMeta | undefined {
+    const direct = this.rooms.get(docId);
+    if (direct) return direct.meta;
+    const aliased = this.aliases.get(docId);
+    return aliased ? this.rooms.get(aliased)?.meta : undefined;
   }
 
   /**
@@ -341,6 +422,9 @@ export class Rooms {
     docId: string,
     opts?: { force?: boolean },
   ): { ok: boolean; error?: 'not-found' | 'has-open-threads'; openThreads?: number } {
+    // Not `room()`: the guard reads threads, which live in the `.ydoc`, and
+    // the file is about to stop mattering to this doc entirely. Binding it
+    // first would read and parse a file only to tear the binding down.
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const openThreads = listThreads(room.ydoc).filter((t) => t.status === 'open').length;
@@ -372,6 +456,10 @@ export class Rooms {
   private teardownRoom(room: DocRoom, closeReason: string): void {
     const docId = room.docId;
     this.releaseAliases(docId);
+    // A registered-but-unestablished bind is a binding too. Left behind, the
+    // next lookup under this id would attach the file this call just unbound
+    // — which for an archive means a poll running against a parked doc.
+    this.deferredBinds.delete(docId);
     const saveTimer = this.saveTimers.get(docId);
     if (saveTimer) clearTimeout(saveTimer);
     this.saveTimers.delete(docId);
@@ -469,24 +557,29 @@ export class Rooms {
   // last supervisor restart, which is misleading (every `bun --watch`
   // reload silently shrinks the result). Load every persisted doc into
   // memory at startup so discovery via list_docs is always accurate.
-  // File-bound markdown rooms re-attach automatically when their sourceUrl
-  // points at an existing file. Without this, every supervisor restart
-  // silently leaves bound docs with their Yjs state intact in memory but
-  // no observeDeep listener wired to write-back — reads work, writes never
-  // fire, disk drifts behind the live editor. Bug surfaced 2026-05-09:
-  // ~16 hours of edits sat unflushed before disk was inspected.
+  // File-bound rooms whose sourceUrl still points at an existing file get
+  // their binding REGISTERED here and established on first access. Without a
+  // binding at all, a supervisor restart leaves bound docs with their Yjs
+  // state intact in memory but no observeDeep listener wired to write-back —
+  // reads work, writes never fire, disk drifts behind the live editor. Bug
+  // surfaced 2026-05-09: ~16 hours of edits sat unflushed before disk was
+  // inspected. Deferring does not reopen it: the doc cannot be read or
+  // written without going through `room()`, which binds first.
   // Files that have moved (sourceUrl present, file missing) are left
   // unbound; callers can rebind via create_review_doc with the new path.
+  // The existence check is the one stat boot still pays per doc, and it is
+  // what keeps "moved file ⇒ no binding" true rather than deferring a bind
+  // that would silently create one against a path that isn't there.
   private hydrateFromDisk(): void {
     let count = 0;
-    let rebound = 0;
+    let deferred = 0;
     try {
       for (const file of readdirSync(this.cfg.dataDir)) {
         if (!file.endsWith('.ydoc')) continue;
         const docId = file.slice(0, -'.ydoc'.length);
         if (!docId) continue;
         count++;
-        if (this.hydrateDoc(docId)) rebound++;
+        if (this.hydrateDoc(docId)) deferred++;
       }
     } catch (err) {
       console.error('[rooms] hydrateFromDisk failed:', err);
@@ -494,20 +587,23 @@ export class Rooms {
     if (count > 0) {
       console.error(
         `[rooms] hydrated ${count} doc(s) from ${this.cfg.dataDir}` +
-          (rebound > 0 ? ` (${rebound} markdown docs auto-rebound)` : ''),
+          (deferred > 0 ? ` (${deferred} file bindings armed on first access)` : ''),
       );
     }
   }
 
   /**
-   * Load ONE persisted doc into memory and re-arm its file binding. Returns
-   * whether a binding was re-established.
+   * Load ONE persisted doc into memory and register its file binding for
+   * first access. Returns whether a binding was registered.
    *
    * Extracted from `hydrateFromDisk` so `unarchiveReview` restores a doc the
    * same way a restart would. A doc that came back into memory without its
    * binding would read fine and never write back — the exact 2026-05-09 bug
    * hydration exists to prevent — so a second, drifting copy of this logic is
-   * the thing most worth not having.
+   * the thing most worth not having. That is also why the deferral lives here
+   * rather than in the two attach methods: unarchive and restart get the same
+   * treatment for free, and the attach methods stay the one place that knows
+   * how binding actually works.
    */
   private hydrateDoc(docId: string): boolean {
     // Server authority: hydration re-admits ids that ALREADY EXIST on disk,
@@ -527,7 +623,10 @@ export class Rooms {
     }
     if (!src || !existsSync(src)) return false;
     if (contentKind(room.meta.type) === 'prose') {
-      return this.attachFile(docId, src).ok;
+      this.deferredBinds.set(docId, () => {
+        this.attachFile(docId, src);
+      });
+      return true;
     }
     if (contentKind(room.meta.type) === 'flat') {
       // Working-tree diff docs have a sourceUrl and re-arm their live
@@ -540,7 +639,10 @@ export class Rooms {
         room.meta.type === 'diff' &&
         !room.meta.diffTarget &&
         !(room.meta.relPath ?? '').toLowerCase().endsWith('.md');
-      return this.attachFlatFile(docId, src, { writeBack }).ok;
+      this.deferredBinds.set(docId, () => {
+        this.attachFlatFile(docId, src, { writeBack });
+      });
+      return true;
     }
     return false;
   }
@@ -584,7 +686,7 @@ export class Rooms {
     if ((opts?.authority ?? 'caller') === 'caller' && isReservedDocId(docId)) {
       throw new ReservedDocIdError(docId);
     }
-    const existing = this.rooms.get(docId);
+    const existing = this.room(docId);
     if (existing) {
       if (init?.webhookUrl !== undefined) existing.webhookUrl = init.webhookUrl;
       // Allow re-tagging an existing doc into a different set without a
@@ -698,10 +800,10 @@ export class Rooms {
    * space, so the two branches can never both match.
    */
   get(docId: string): DocRoom | undefined {
-    const direct = this.rooms.get(docId);
+    const direct = this.room(docId);
     if (direct) return direct;
     const aliased = this.aliases.get(docId);
-    return aliased ? this.rooms.get(aliased) : undefined;
+    return aliased ? this.room(aliased) : undefined;
   }
 
   /**
@@ -781,7 +883,7 @@ export class Rooms {
   /** Schedule a persistence pass for a doc whose in-memory meta changed with
    *  no accompanying CRDT update (the private sidecar keys). */
   persistMeta(docId: string): void {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (room) this.saveToDisk(room);
   }
 
@@ -815,7 +917,7 @@ export class Rooms {
       review?: ReviewPayload;
     },
   ): Promise<Thread | null> {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     if (threadId == null) {
       if (!anchor) return null;
@@ -910,7 +1012,7 @@ export class Rooms {
     optionId?: string,
     opts?: { generate?: boolean },
   ): Promise<{ ok: true; thread: Thread } | { ok: false; error: string }> {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
@@ -987,7 +1089,7 @@ export class Rooms {
     author: User,
     opts?: { generate?: boolean },
   ): { ok: true; thread: Thread } | { ok: false; error: string } {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
@@ -1059,7 +1161,7 @@ export class Rooms {
         candidates?: Array<{ docOffset: number; preview: string }>;
       }
   > {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     // Code/diff docs are flat text in the `content` Y.Text — the prose
     // resolver below would walk an empty fragment and always miss. Find the
@@ -1160,7 +1262,7 @@ export class Rooms {
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
     if (t) {
@@ -1182,7 +1284,7 @@ export class Rooms {
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'open');
     if (t) {
@@ -1196,7 +1298,7 @@ export class Rooms {
   }
 
   reanchor(docId: string, threadId: string, anchor: Anchor): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     return schemaReplaceAnchor(room.ydoc, threadId, anchor);
   }
@@ -1220,7 +1322,7 @@ export class Rooms {
     threads: Thread[];
     syncError?: { message: string; at: number };
   } | null {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     // Code and diff docs are flat read-only text in the `content` Y.Text,
     // not a prose fragment — surface the whole source as one block. (For a
@@ -1324,7 +1426,7 @@ export class Rooms {
     threads: { open: number; resolved: number };
     pendingSuggestions: number;
   } | null {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     const binding = this.fileBindings.get(docId);
     const meta = this.withActivity(room.meta);
@@ -2000,7 +2102,7 @@ export class Rooms {
 
     const moved: string[] = [];
     for (const m of members) {
-      const room = this.rooms.get(m.docId);
+      const room = this.room(m.docId);
       // Flush BEFORE tearing down: the pending debounced write is cancelled by
       // teardown, so without this the archived snapshot is up to 200ms stale —
       // and for a doc edited right up to the moment it was retired, that is
@@ -2017,7 +2119,7 @@ export class Rooms {
     }
     // Commit point passed: every file is parked. Now unbind the rooms.
     for (const m of members) {
-      const room = this.rooms.get(m.docId);
+      const room = this.room(m.docId);
       if (room) this.teardownRoom(room, 'review archived');
     }
 
@@ -2112,7 +2214,7 @@ export class Rooms {
     | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
     | { ok: false; error: 'review-member'; setId: string } {
     if (isHubOwnedRoom(docId)) return { ok: false, error: 'hub-owned' };
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const setId = reviewIdOf(room.meta);
     if (setId !== undefined) return { ok: false, error: 'review-member', setId };
@@ -2572,7 +2674,7 @@ export class Rooms {
    * unchanged.
    */
   reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     // PINNED diff docs have no file binding — their content is pinned to a
     // commit. Recover by re-reading the file at the target hash from the
@@ -2979,7 +3081,7 @@ export class Rooms {
   reconcileNow(
     docId: string,
   ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'no-binding' | 'missing' {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     const binding = this.fileBindings.get(docId);
     if (!room || !binding) return 'no-binding';
     if (!existsSync(binding.path)) return 'missing';
@@ -2995,8 +3097,12 @@ export class Rooms {
     return this.reconcileFromDisk(room, binding);
   }
 
-  /** The doc's pending sync trouble, if any — conflicts, parse failures. */
+  /** The doc's pending sync trouble, if any — conflicts, parse failures.
+   *  Binds first: the attach-time reconcile is itself one of the things that
+   *  records a sync error, so answering before it has run would report clean
+   *  on a doc whose very first look at disk is a conflict. */
   getSyncError(docId: string): { message: string; at: number } | undefined {
+    this.establishDeferredBinding(docId);
     return this.fileBindings.get(docId)?.lastSyncError;
   }
 
@@ -3045,7 +3151,7 @@ export class Rooms {
     docId: string,
     markdown: string,
   ): { ok: true } | { ok: false; error: 'not-found' | 'unsupported' | 'empty' | 'parse-failed' } {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     // Flat docs (code / diff) are read-only review surfaces; their content
     // comes from disk or a pinned commit, never from an agent payload.
@@ -3086,7 +3192,7 @@ export class Rooms {
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.findAndReplace(room.ydoc, opts);
   }
@@ -3104,7 +3210,7 @@ export class Rooms {
     replacement: string,
     opts?: { parseInlineMarks?: boolean },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -3131,7 +3237,7 @@ export class Rooms {
       label?: string;
     },
   ): prose.CreateAnchorResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.createAgentAnchor(room.ydoc, opts);
   }
@@ -3141,7 +3247,7 @@ export class Rooms {
     anchorId: string,
     op: { kind: 'replace'; text: string } | { kind: 'insert_after'; text: string },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-not-found' };
@@ -3156,7 +3262,7 @@ export class Rooms {
   }
 
   deleteAgentAnchor(docId: string, anchorId: string): boolean {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return false;
     return prose.deleteAgentAnchor(room.ydoc, anchorId);
   }
@@ -3174,7 +3280,7 @@ export class Rooms {
   /** All pending proposals on the doc, in doc order. Empty for unknown docs
    *  and for flat (code/diff) docs, whose prose fragment has no content. */
   listSuggestions(docId: string): suggestOps.SuggestionSummary[] {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return [];
     return suggestOps.listSuggestions(room.ydoc);
   }
@@ -3207,7 +3313,7 @@ export class Rooms {
         error: 'not-found' | 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
         candidates?: Array<{ docOffset: number; preview: string }>;
       } {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const res = suggestOps.suggestReplace(room.ydoc, opts);
     if (!res.ok) return res;
@@ -3240,7 +3346,7 @@ export class Rooms {
   ):
     | { ok: true; suggestionId: string }
     | { ok: false; error: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' } {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -3267,7 +3373,7 @@ export class Rooms {
    *  normal debounced write-back. Missing sid (or doc) → not-found — also
    *  the correct answer to the double-accept race. */
   acceptSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
     const res = suggestOps.acceptSuggestion(room.ydoc, sid);
@@ -3277,7 +3383,7 @@ export class Rooms {
 
   /** Reject a proposal: restores exactly the pre-suggestion text. */
   rejectSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
     const res = suggestOps.rejectSuggestion(room.ydoc, sid);
@@ -3290,7 +3396,7 @@ export class Rooms {
     docId: string,
     opts: { action: 'accept' | 'reject'; authorId?: string },
   ): { ok: true; resolved: number; sids: string[] } | { ok: false; error: 'not-found' } {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const before = new Map(suggestOps.listSuggestions(room.ydoc).map((s) => [s.sid, s]));
     const res = suggestOps.resolveAllSuggestions(room.ydoc, opts);
@@ -3315,7 +3421,7 @@ export class Rooms {
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-not-found' };
@@ -3328,7 +3434,7 @@ export class Rooms {
 
   /** Append text at the END position of a thread's anchored range. */
   insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -3348,7 +3454,7 @@ export class Rooms {
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -3367,7 +3473,7 @@ export class Rooms {
    * empty block element behind.
    */
   deleteBlockAtThread(docId: string, threadId: string): prose.DeleteBlockResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-orphaned' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-orphaned' };
@@ -3377,7 +3483,7 @@ export class Rooms {
 
   /** Same, keyed on an agent anchor. */
   deleteBlockAtAgentAnchor(docId: string, anchorId: string): prose.DeleteBlockResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'anchor-orphaned' };
     const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-orphaned' };
@@ -3397,7 +3503,7 @@ export class Rooms {
       endOccurrence?: number;
     },
   ): prose.DeleteBlocksInRangeResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.deleteBlocksInRange(room.ydoc, opts);
   }
@@ -3407,7 +3513,7 @@ export class Rooms {
     docId: string,
     opts: { heading: string; level?: number; occurrence?: number },
   ): prose.DeleteSectionResult {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.deleteSection(room.ydoc, opts);
   }
@@ -3418,11 +3524,16 @@ export class Rooms {
    * safe to call on every significant doc change.
    */
   autoReanchor(docId: string): { checked: number; reanchored: number; stillOrphan: number } | null {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     return prose.autoReanchorDoc(room.ydoc);
   }
 
+  // Threads live in the `.ydoc`, not in the bound file, so neither of these
+  // needs the binding — and neither may take it. The landing page calls
+  // `listThreads` once per doc to count open threads; binding there would
+  // re-attach the whole archive on the first page view and put every poll
+  // back. Same reasoning as `list()`.
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
     const room = this.rooms.get(docId);
     if (!room) return [];
@@ -3496,7 +3607,7 @@ export class Rooms {
     if (type !== 'read_session' && type !== 'doc_open') {
       return { ok: false, error: 'bad-type' };
     }
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     try {
       // Re-clamp the browser-supplied duration/scroll fields server-side so a
@@ -3660,7 +3771,7 @@ export class Rooms {
    * an on-demand summary cannot end up in the doc but not on disk.
    */
   applyThreadSummary(docId: string, threadId: string, summary: StoredSummary): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.room(docId);
     if (!room) return null;
     const t = setThreadSummary(room.ydoc, threadId, summary);
     if (t) this.saveToDisk(room);
@@ -3897,6 +4008,11 @@ export class Rooms {
     // A write-back can re-arm a timer while flushing (the reconcile guard's
     // conflict path re-schedules the flush it just consumed), so sweep until
     // quiescent — bounded, so a wedged binding cannot loop forever.
+    //
+    // Both lookups below stay off `room()` on purpose. This runs on the way
+    // down, over docs that already have a pending timer — which a doc whose
+    // binding was never established cannot have. Binding here would read and
+    // parse files during shutdown to no end.
     for (let pass = 0; pass < 3; pass++) {
       const saves = [...this.saveTimers.entries()];
       const writes = [...this.fileBindings.entries()].filter(([, b]) => b.writeTimer);

@@ -1328,7 +1328,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         reviews: taskStore.listReviewItems(t.id),
       })),
       docs: workspace.docIds.map((docId) => {
-        const meta = rooms.get(docId)?.meta;
+        // `metaOf`, not `get`: this wants a label, and running it over every
+        // member docId would bind each one's file just to read its title.
+        const meta = rooms.metaOf(docId);
         // Title, else the file's BASENAME — never `relPath` whole and
         // never `sourceUrl`. Those describe the host machine, and a
         // share visitor reads this route (§3.3): a label is workspace
