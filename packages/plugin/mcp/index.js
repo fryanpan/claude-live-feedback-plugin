@@ -14332,7 +14332,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.92";
+var PLUGIN_VERSION = "0.1.93";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -14677,7 +14677,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "delete_doc",
-      description: "Permanently delete a review doc you no longer need. Drops the live doc, cancels its sync, and removes the persisted state so it won't reload — but leaves the bound SOURCE .md file on disk untouched (only the review session is removed). Most review docs are short-lived: you bind one, get feedback for ~30 minutes, and then it's obsolete — call delete_doc to clean it up instead of letting it linger in list_docs forever. GUARDRAIL: refuses with ok:false, error:'has-open-threads' (+ openThreads count) if the doc still has OPEN comment threads, since that means someone is still waiting on that feedback — resolve_thread the threads first, or pass force:true to delete anyway. Also returns error:'not-found' for an unknown docId. Safe to call on a doc bound to a now-deleted file. Prefer this over leaving stale docs around.",
+      description: "PERMANENTLY delete a review doc — a purge, which removes the .ydoc the activity analyses are rebuilt from. Reach for archive_doc instead unless you specifically mean to destroy the record: it retires the doc the same way (off the home page, off any board, rooms stopped) while keeping the file, and unarchive_doc puts it back. This one drops the live doc, cancels its sync, and removes the persisted state so it won't reload — but leaves the bound SOURCE .md file on disk untouched (only the review session is removed). Most review docs are short-lived: you bind one, get feedback for ~30 minutes, and then it's obsolete — retire it rather than letting it linger in list_docs forever. GUARDRAIL: refuses with ok:false, error:'has-open-threads' (+ openThreads count) if the doc still has OPEN comment threads, since that means someone is still waiting on that feedback — resolve_thread the threads first, or pass force:true to delete anyway. Also returns error:'not-found' for an unknown docId. Safe to call on a doc bound to a now-deleted file.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14849,8 +14849,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "archive_doc",
+      description: "RETIRE ONE finished doc without deleting anything — a markdown doc you bound with create_review_doc, or a mockup from bind_mock, whose review is over. Its persisted state moves into the server's archive: the doc leaves the home page and any board row, its room stops syncing and stops costing a file poll, and the bound SOURCE file on disk is untouched. Nothing is destroyed — the .ydoc stays on disk, the activity analyses still read every comment in it, and unarchive_doc restores it (threads, board links and all). Prefer this over delete_doc, which purges. Open threads do NOT block it. Pass a `reason` — it is recorded with your agent name and replayed on list_archived_reviews. Returns {ok:true, docId, manifest}. error:'not-found' means no doc is bound under that id. error:'review-member' (with the setId) means the doc belongs to a review — use archive_review on that setId, which retires the whole thing. error:'hub-owned' means it is a task body or a board room, which the hub owns and nobody archives. error:'archive-collision' means an older snapshot of this docId is already in the archive: nothing moved — unarchive that one first rather than writing over it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string", description: "The doc to retire." },
+          reason: {
+            type: "string",
+            description: 'Why this doc is finished — e.g. "draft published".'
+          }
+        },
+        required: ["docId"]
+      }
+    },
+    {
+      name: "unarchive_doc",
+      description: "Bring an archived doc back: it returns to the live server with its comment threads intact, its file binding re-armed, and its row back on whatever boards it was linked to when it was archived. This is what makes archive_doc safe to call — retiring a doc does not have to be right the first time. Returns {ok:true, docId, manifest}. error:'not-found' means nothing is archived under that id (list_archived_reviews shows what is). error:'restore-collision' means the docId has been re-minted live while it was away: nothing moved, and restoring would have destroyed the newer doc.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string", description: "The archived doc id." }
+        },
+        required: ["docId"]
+      }
+    },
+    {
       name: "list_archived_reviews",
-      description: 'Every review currently archived on this server, newest first — setId, when it was archived, by whom, the reason given, its member docIds and the boards it will return to. Read-only. This is the answer to "what can I bring back", and the input to unarchive_review.',
+      description: 'Everything currently archived on this server, newest first, in TWO keys. `archived` is the reviews — setId, when it was archived, by whom, the reason given, its member docIds and the boards it will return to; the input to unarchive_review. `docs` is the single free-standing docs archived with archive_doc — docId, when, by whom, the reason, title and the boards it will return to; the input to unarchive_doc. Read-only. This is the answer to "what can I bring back".',
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -16117,6 +16143,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "unarchive_review": {
         const { setId } = a;
         const res = await http("POST", `/api/reviews/${encodeURIComponent(setId)}/unarchive`, {
+          author: AUTHOR
+        });
+        return ok(res);
+      }
+      case "archive_doc": {
+        const { docId, reason } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/archive`, {
+          author: AUTHOR,
+          ...reason !== undefined ? { reason } : {}
+        });
+        return ok(res);
+      }
+      case "unarchive_doc": {
+        const { docId } = a;
+        const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/unarchive`, {
           author: AUTHOR
         });
         return ok(res);
