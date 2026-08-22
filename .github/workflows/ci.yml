@@ -8,6 +8,11 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # pull-requests: read is what lets the concurrent-version check see the
+    # other open PRs. Everything unlisted is none — this job only reads.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,8 +40,27 @@ jobs:
         run: bun run check:widget-size
       - name: Client build id is reproducible
         run: bun run check:build-id
+      # What version does every OTHER open PR declare? The checkout cannot say —
+      # an unmerged sibling is not in it — so ask GitHub with the ambient token.
+      # The collector exits 0 even when it fails, writing {"status":"unavailable"},
+      # and the `||` covers the case where it does not run at all: a network
+      # flake must warn the gate, never take an unrelated PR red, and never look
+      # like an empty list, which is the answer that lets a collision merge.
+      - name: Collect open-PR plugin versions
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          bun run scripts/collect-open-pr-versions.ts --exclude "$PR" > open-pr-versions.json \
+            || printf '%s\n' '{"status":"unavailable","reason":"collector exited non-zero"}' > open-pr-versions.json
+          cat open-pr-versions.json
+          echo "CONCURRENT_ARGS=--open-prs-file open-pr-versions.json --pr $PR" >> "$GITHUB_ENV"
+      # $CONCURRENT_ARGS is empty on a push to main, where there is no PR to
+      # collide with — and the gate exits on its no-plugin-changes path there
+      # anyway, since HEAD and the base are the same commit.
       - name: Plugin version bumped
-        run: bun run check:plugin-version --base origin/${{ github.event.pull_request.base.ref || 'main' }}
+        run: bun run check:plugin-version --base origin/${{ github.event.pull_request.base.ref || 'main' }} $CONCURRENT_ARGS
       - name: MCP bundle matches source
         run: |
           bun run build:mcp
