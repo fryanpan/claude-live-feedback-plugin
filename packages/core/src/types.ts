@@ -46,7 +46,7 @@ export interface DocMeta {
   sourceUrl?: string;
   title?: string;
   /**
-   * Optional grouping tag. Docs that share a `setId` show up in each
+   * Optional review tag. Docs that share a `setId` show up in each
    * other's sidebar in the markdown editor — lets an agent register
    * a batch of related files for one review session.
    */
@@ -134,7 +134,7 @@ export interface DocMeta {
    * second time with `-w --ignore-blank-lines`.
    *
    * Persisted rather than recomputed on demand because `setWorkspaceGroups`
-   * re-runs the grouping heuristic from stored metadata alone, with no repo
+   * re-runs the review heuristic from stored metadata alone, with no repo
    * in hand; without this the file would silently climb back out of the
    * "Whitespace only" group the next time an agent set groups.
    */

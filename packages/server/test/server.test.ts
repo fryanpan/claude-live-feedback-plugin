@@ -87,7 +87,7 @@ describe('server REST', () => {
     );
     // The decorated meta should now carry a reviewUrl pointing at /mockup/.
     expect(created.meta.reviewUrl).toBeDefined();
-    expect(created.meta.reviewUrl).toContain(`/mockup/${encodeURIComponent('mock-served-1')}`);
+    expect(created.meta.reviewUrl).toContain(`/mockups/${encodeURIComponent('mock-served-1')}`);
 
     // GET the served URL — should be the HTML body the agent wrote.
     const served = await fetch(`${base}/mockup/mock-served-1`);
@@ -912,7 +912,7 @@ describe('read-only code docs', () => {
     });
     const body = (await r.json()) as { meta: { type: string; reviewUrl?: string } };
     expect(body.meta.type).toBe('code');
-    expect(body.meta.reviewUrl).toContain('/review/code-1');
+    expect(body.meta.reviewUrl).toContain('/docs/code-1');
     const c = await content('code-1');
     expect(c.plainText).toBe('const x: number = 1;\n');
     expect(c.blocks[0]?.type).toBe('code');

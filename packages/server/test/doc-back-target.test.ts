@@ -247,7 +247,28 @@ describe('the back target is not handed to a share visitor', () => {
     };
     expect(visitor.meta).toBeDefined(); // …and really got the payload
     expect(visitor.backTo).toBeUndefined();
-    // Belt and braces: the id must not appear ANYWHERE in what they got.
-    expect(JSON.stringify(visitor)).not.toContain(boardId);
+  });
+
+  it('never names a board the visitor was not shared', async () => {
+    // The sharper form of "no board ids for visitors", and the one that
+    // survives docs being addressed under a workspace. A visitor's own board
+    // id is not a secret from them — they are standing on `/workspaces/<it>`,
+    // having been redirected there by the share link they redeemed — so a
+    // reviewUrl carrying it discloses nothing. A SECOND board holding the
+    // same doc is a different matter: nobody shared it, its id is an
+    // unguessable capability, and it is exactly what a resolver that answers
+    // "the first workspace holding this doc" would hand over.
+    const other = await post('/api/workspaces', { name: 'other-board', goal: 'Not shared.' });
+    const otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
+    expect((await post(`/api/workspaces/${otherId}/docs`, { docId: 'shared-doc' })).status).toBe(
+      200,
+    );
+
+    const body = await (await pub('/api/docs/shared-doc')).text();
+    expect(body).not.toContain(otherId);
+    // Control, same payload: the resolver IS producing workspace-addressed
+    // URLs here, so the absence above is a refusal rather than a URL shape
+    // that happens to carry no workspace id at all.
+    expect(body).toContain(`/workspaces/${boardId}/docs/shared-doc`);
   });
 });

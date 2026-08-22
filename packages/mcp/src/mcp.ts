@@ -94,7 +94,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.84';
+const PLUGIN_VERSION = '0.1.85';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -186,7 +186,7 @@ const server = new Server(
       'unless you pass new ones). Share the returned entryUrl with the human',
       '(bare URL on its own line); the file tree navigates the rest. Thread',
       'events arrive per file via the auto-watch; resolve threads as you address',
-      'them; refresh_workspace(reviewId) to re-sync membership and groupings as files move (threads survive); delete_workspace(reviewId) when the review is done.',
+      'them; refresh_review(setId) to re-sync membership and reviews as files move (threads survive); delete_review(setId) when the review is done.',
       '',
       'SUGGEST: pass suggest: true on find_and_replace or rewrite_thread_region to',
       'PROPOSE a change instead of applying it — the match is marked pending and',
@@ -330,14 +330,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_docs',
       description:
-        'List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or grouping id) — omit it to list every doc on the server.',
+        'List review docs currently registered on the server. Pass workspaceId to scope the list to one workspace (hub board or review id) — omit it to list every doc on the server.',
       inputSchema: {
         type: 'object',
         properties: {
           workspaceId: {
             type: 'string',
             description:
-              'Only docs in this workspace. Matches hub-board membership and the grouping workspaceId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
+              'Only docs in this workspace. Matches hub-board membership and the reviewId folder binds / diff reviews stamp on their members. An unknown id returns an empty list.',
           },
         },
       },
@@ -483,7 +483,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.',
+              'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.',
           },
           producedBy: {
             type: 'object',
@@ -551,7 +551,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind grouping id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
+              'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
         },
         required: ['docId', 'sourceHtmlPath'],
@@ -560,7 +560,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bind_folder',
       description:
-        'Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id (the grouping), the hub workspace it was filed on (hubWorkspaceId — the board, so the bind is discoverable without the URL), root, scan fileCount, and the entry file.',
+        'Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id (the review), the hub workspace it was filed on (hubWorkspaceId — the board, so the bind is discoverable without the URL), root, scan fileCount, and the entry file.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -569,7 +569,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              "Path prefixes (relative to the folder) to keep out of the workspace, e.g. ['node_modules', 'vendor']. Persisted, so refresh_workspace replays it.",
+              "Path prefixes (relative to the folder) to keep out of the review, e.g. ['node_modules', 'vendor']. Persisted, so refresh_review replays it.",
           },
           workspaceId: { type: 'string' },
           hubWorkspaceId: {
@@ -597,7 +597,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_diff_review',
       description:
-        "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as a workspace — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Once the review EXISTS, prefer refresh_workspace(reviewId) over re-running this tool: it re-reads the diff from the stored base (no need to remember the ref), picks up files that changed since, and flags members whose change was reverted — all without re-minting a docId. Re-running this tool is still idempotent (same docIds, threads survive). PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId, hubWorkspaceId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — `hubWorkspaceId` is the board the whole review was filed on as ONE row, so a reviewer can find it without the URL — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_workspace(reviewId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
+        "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as one review — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Once the review EXISTS, prefer refresh_review(setId) over re-running this tool: it re-reads the diff from the stored base (no need to remember the ref), picks up files that changed since, and flags members whose change was reverted — all without re-minting a docId. Re-running this tool is still idempotent (same docIds, threads survive). PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId (also as setId), hubWorkspaceId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — `hubWorkspaceId` is the board the whole review was filed on as ONE row, so a reviewer can find it without the URL — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_review(setId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -658,44 +658,63 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'delete_review',
+      description:
+        "Permanently delete a REVIEW as ONE unit — a diff review from create_diff_review, or a folder bound with bind_folder. Drops every member review doc and cancels their sync; the SOURCE files on disk are left untouched. Use this when a review is finished instead of calling delete_doc once per file. The guardrail is ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing is deleted and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}] listing the offenders. Pass force:true to delete regardless. error:'not-found' means no review exists under that id — including a board id, which this tool deliberately cannot touch (use delete_workspace for a board). On success returns {ok:true, deleted:<docs>}.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          setId: {
+            type: 'string',
+            description: 'reviewId from create_diff_review, or setId from bind_folder.',
+          },
+          force: {
+            type: 'boolean',
+            description: 'Delete even if some member files have open threads. Default false.',
+          },
+        },
+        required: ['setId'],
+      },
+    },
+    {
       name: 'delete_workspace',
       description:
-        "Permanently delete a whole workspace as ONE unit. Handles BOTH things called a workspace, dispatching on the id you pass. (1) A DOC GROUPING (a folder bound via bind_folder, or a diff review): drops every member review doc and cancels their sync — the bound SOURCE files on disk are left untouched. Use this when a worktree/folder review is done instead of calling delete_doc once per file. Its guardrail is ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing is deleted and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}] listing the offenders. (2) A HUB BOARD (created by create_workspace): drops the board, all of its tasks, its board room, every per-task body room, its event log and its persisted state — so a board minted for a short experiment doesn't become permanent. Its guardrail counts OPEN TASKS, not threads: without force it refuses with error:'has-open-tasks' and openTasks:<count>, so finish or close them first, or pass force:true. Docs ATTACHED to a hub board are deliberately left alive at their own URLs — attaching is a link, not ownership. Either way pass force:true to delete regardless, and either way error:'not-found' means nothing exists under that id. On success returns {ok:true} plus deleted:<docs> for a grouping or deletedTasks:<count> for a board.",
+        "Permanently delete a WORKSPACE — the board created by create_workspace — along with all of its tasks, its board room, every per-task body room, its event log and its persisted state, so a board minted for a short experiment doesn't become permanent. The guardrail counts OPEN TASKS: without force it refuses with error:'has-open-tasks' and openTasks:<count>, so finish or close them first, or pass force:true. Docs and reviews ATTACHED to the board are deliberately left alive at their own URLs — attaching is a link, not ownership. error:'not-found' means no board exists under that id. On success returns {ok:true, deletedTasks:<count>}. Passing a REVIEW id still deletes that review, because that is what this tool used to mean and older sessions still call it that way — new callers should use delete_review, which cannot touch a board.",
       inputSchema: {
         type: 'object',
         properties: {
           workspaceId: { type: 'string' },
           force: {
             type: 'boolean',
-            description: 'Delete even if some member files have open threads. Default false.',
+            description: 'Delete even if the board has open tasks. Default false.',
           },
         },
         required: ['workspaceId'],
       },
     },
     {
-      name: 'refresh_workspace',
+      name: 'refresh_review',
       description:
-        "Re-reconcile a workspace or diff review against what's on disk RIGHT NOW, WITHOUT re-minting any docId — so every existing comment thread survives. Use this instead of re-running create_diff_review / bind_folder when the review already exists and the files have moved under it. For a DIFF REVIEW it re-runs the diff from the stored base, so files you changed after creating the review join it and per-file status/line counts refresh; a member whose change you reverted is marked stale rather than deleted (its comments are still someone's feedback, and the change may come back). For a BROWSE workspace members bind lazily, so what refresh adds is the reverse sweep: members whose file was deleted or renamed away get marked stale. Stale is always reversible — the next refresh that finds the file clears it and lists it under restored. PINNED diff reviews (created with a `target`) are refused with error:'pinned': their content is a commit, so there is nothing to re-read. The review's bind-time `exclude`, `groups` and `maxFiles` are replayed automatically, so a refresh never widens the scope you set or scatters new files into heuristic buckets. Returns {ok, kind:'diff'|'browse', added[], stale[{docId, relPath, openThreads}], restored[], fileCount}. Read `stale` after a rename: those threads are now stranded on a file nobody will open, so re-anchor or resolve them. Errors: 'too-many-files' (the review outgrew its cap — re-run the bind with a higher maxFiles, or narrow it with exclude), 'not-found' (nothing bound under that id — including a folder that was bound while EMPTY, which creates no docs; re-run bind_folder, it derives the same workspaceId so shares and threads survive), 'root-missing' (the folder itself is gone).",
+        "Re-reconcile a review against what's on disk RIGHT NOW, WITHOUT re-minting any docId — so every existing comment thread survives. Use this instead of re-running create_diff_review / bind_folder when the review already exists and the files have moved under it. For a DIFF review it re-runs the diff from the stored base, so files you changed after creating the review join it and per-file status/line counts refresh; a member whose change you reverted is marked stale rather than deleted (its comments are still someone's feedback, and the change may come back). For a BROWSE review members bind lazily, so what refresh adds is the reverse sweep: members whose file was deleted or renamed away get marked stale. Stale is always reversible — the next refresh that finds the file clears it and lists it under restored. PINNED diff reviews (created with a `target`) are refused with error:'pinned': their content is a commit, so there is nothing to re-read. The review's bind-time `exclude`, `groups` and `maxFiles` are replayed automatically, so a refresh never widens the scope you set or scatters new files into heuristic buckets. Returns {ok, kind:'diff'|'browse', added[], stale[{docId, relPath, openThreads}], restored[], fileCount}. Read `stale` after a rename: those threads are now stranded on a file nobody will open, so re-anchor or resolve them. Errors: 'too-many-files' (the review outgrew its cap — re-run the bind with a higher maxFiles, or narrow it with exclude), 'not-found' (nothing bound under that id — including a folder that was bound while EMPTY, which creates no docs; re-run bind_folder, it derives the same id so shares and threads survive), 'root-missing' (the folder itself is gone).",
       inputSchema: {
         type: 'object',
         properties: {
-          workspaceId: {
+          setId: {
             type: 'string',
-            description: 'Workspace id from bind_folder, or reviewId from create_diff_review.',
+            description: 'reviewId from create_diff_review, or setId from bind_folder.',
           },
         },
-        required: ['workspaceId'],
+        required: ['setId'],
       },
     },
     {
-      name: 'set_workspace_groups',
+      name: 'set_review_groups',
       description:
-        "Re-group an EXISTING diff review's sidebar in place — same grouping model as create_diff_review's `groups`, but applied to a review that already has comments on it, so you don't have to tear the review down (and lose every thread) just to organize it better. A group's `paths` claim a file exactly or as a directory prefix, first group in the array wins, and anything unclaimed lands in an \"Other\" group listed last (returned in `ungrouped` so you can see what you missed). Optional per-group `details` renders as a short intro under the group title; over 500 chars is REJECTED, not truncated — write a 1–2 sentence intro, don't paste a commit body. Re-setting a group WITHOUT details clears the old one. Pass an EMPTY groups array to fall back to the built-in Tests/Docs/Build + module heuristic. Returns {ok, groups:[{title, fileCount}], ungrouped:[relPath]}. Errors: 'bad-groups' (a group is missing a title or paths — nothing is written, the review is untouched), 'not-found' (no such workspace), 'no-diff-members' (a browse-only workspace has no changed files to group — groups organize a diff), 'group-details-too-long'.",
+        "Re-group an EXISTING diff review's sidebar in place — same grouping model as create_diff_review's `groups`, but applied to a review that already has comments on it, so you don't have to tear the review down (and lose every thread) just to organize it better. A group's `paths` claim a file exactly or as a directory prefix, first group in the array wins, and anything unclaimed lands in an \"Other\" group listed last (returned in `ungrouped` so you can see what you missed). Optional per-group `details` renders as a short intro under the group title; over 500 chars is REJECTED, not truncated — write a 1–2 sentence intro, don't paste a commit body. Re-setting a group WITHOUT details clears the old one. Pass an EMPTY groups array to fall back to the built-in Tests/Docs/Build + module heuristic. Returns {ok, groups:[{title, fileCount}], ungrouped:[relPath]}. Errors: 'bad-groups' (a group is missing a title or paths — nothing is written, the review is untouched), 'not-found' (no such review), 'no-diff-members' (a browse review has no changed files to group — groups organize a diff), 'group-details-too-long'.",
       inputSchema: {
         type: 'object',
         properties: {
-          workspaceId: {
+          setId: {
             type: 'string',
             description: 'reviewId from create_diff_review.',
           },
@@ -713,7 +732,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             },
           },
         },
-        required: ['workspaceId', 'groups'],
+        required: ['setId', 'groups'],
       },
     },
     {
@@ -1010,7 +1029,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: {
             type: 'string',
             description:
-              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a grouping/review id.',
+              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id.',
           },
           allowDomains: {
             type: 'array',
@@ -1033,7 +1052,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           workspaceId: {
             type: 'string',
             description:
-              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a grouping/review id.',
+              'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id.',
           },
           ttlSeconds: { type: 'number', description: 'Defaults to one week (604800).' },
           label: { type: 'string', description: 'Human label shown in list_shares.' },
@@ -1087,7 +1106,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_workspace',
       description:
-        "Create a hub WORKSPACE — a goal board + task board + linked docs, the unit Bryan reviews on the hub page (/workspaces/<id>). Distinct from a folder bind / diff review (those are doc groupings; link one to a hub workspace with attach_doc). A board starts with no goals; write them with set_goal_list, which is where a workspace's aims live — there is no separate north-star field. YOU become the workspace's LEAD AGENT — the addressee for anything the board needs a responsible party for — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
+        "Create a WORKSPACE — a goal board + task board + the docs and reviews filed on it, the unit a reviewer opens at /workspaces/<id>. A folder bind or diff review is CONTENT in one, not another workspace; file one with attach_doc. A board starts with no goals; write them with set_goal_list, which is where a workspace's aims live — there is no separate north-star field. YOU become the workspace's LEAD AGENT — the addressee for anything the board needs a responsible party for — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1447,7 +1466,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           batchId: {
             type: 'string',
             description:
-              'Echo the batchId from a goal-change re-triage request. It ties this placement to the goal edit that asked for it, so the activity view reads N moves as one edit instead of N unexplained regroupings.',
+              'Echo the batchId from a goal-change re-triage request. It ties this placement to the goal edit that asked for it, so the activity view reads N moves as one edit instead of N unexplained rereviews.',
           },
         },
         required: ['taskId', 'goal'],
@@ -2087,7 +2106,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           folderPath,
           owner: process.cwd(),
           ...(workspaceId ? { workspaceId } : {}),
-          // The BOARD, next to the grouping id above. Two ids, two meanings,
+          // The BOARD, next to the review id above. Two ids, two meanings,
           // one payload — which is why they are spelled apart.
           ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
           ...(title ? { title } : {}),
@@ -2135,7 +2154,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(target ? { target } : {}),
           owner: process.cwd(),
           ...(reviewId ? { reviewId } : {}),
-          // The BOARD, next to the grouping id above. Two ids, two meanings,
+          // The BOARD, next to the review id above. Two ids, two meanings,
           // one payload — which is why they are spelled apart.
           ...(hubWorkspaceId ? { hubWorkspaceId } : {}),
           ...(title ? { title } : {}),
@@ -2152,33 +2171,44 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         return ok(res);
       }
+      case 'delete_review': {
+        const { setId, force } = a as { setId: string; force?: boolean };
+        const qs = force ? '?force=true' : '';
+        const res = await http('DELETE', `/api/reviews/${encodeURIComponent(setId)}${qs}`);
+        return ok(res);
+      }
       case 'delete_workspace': {
         const { workspaceId, force } = a as { workspaceId: string; force?: boolean };
         const qs = force ? '?force=true' : '';
+        // The one route that still fronts both stores, dispatching by id — a
+        // board here, a review if that is what the id turns out to be. See
+        // the compat note on it in the server's route table.
         const res = await http('DELETE', `/api/workspaces/${encodeURIComponent(workspaceId)}${qs}`);
         return ok(res);
       }
-      case 'refresh_workspace': {
-        const { workspaceId } = a as { workspaceId: string };
-        const res = await http(
-          'POST',
-          `/api/workspaces/${encodeURIComponent(workspaceId)}/refresh`,
-          {},
-        );
+      // COMPAT: `refresh_workspace` and `set_workspace_groups` are the names
+      // these two had before a review stopped being called a workspace. An
+      // agent working from a stale skill or from memory reaches for the old
+      // name, and either key for the id; both are accepted here so it lands
+      // instead of erroring. The tool LIST advertises the new names only.
+      case 'refresh_workspace':
+      case 'refresh_review': {
+        const { setId, workspaceId } = a as { setId?: string; workspaceId?: string };
+        const id = setId ?? workspaceId ?? '';
+        const res = await http('POST', `/api/reviews/${encodeURIComponent(id)}/refresh`, {});
         return ok(res);
       }
-      case 'set_workspace_groups': {
-        const { workspaceId, groups } = a as {
-          workspaceId: string;
+      case 'set_workspace_groups':
+      case 'set_review_groups': {
+        const { setId, workspaceId, groups } = a as {
+          setId?: string;
+          workspaceId?: string;
           groups: Array<{ title: string; paths: string[]; details?: string }>;
         };
-        const res = await http(
-          'POST',
-          `/api/workspaces/${encodeURIComponent(workspaceId)}/groups`,
-          {
-            groups,
-          },
-        );
+        const id = setId ?? workspaceId ?? '';
+        const res = await http('POST', `/api/reviews/${encodeURIComponent(id)}/groups`, {
+          groups,
+        });
         return ok(res);
       }
       case 'find_and_replace': {
@@ -3574,7 +3604,7 @@ async function watchDoc(docId: string, persist = true): Promise<boolean> {
  * it meant.
  *
  *  - A GROUPING (a diff review / folder bind): its member docs carry the
- *    grouping tag and `rooms.ts` has always double-broadcast on it. True from
+ *    review tag and `rooms.ts` has always double-broadcast on it. True from
  *    the start.
  *  - A hub BOARD: it holds docs through `workspace.docIds`, which is NOT that
  *    tag. Until the board fan-out landed in server.ts's `onDocRoomEvent`, a
@@ -3754,7 +3784,7 @@ function startSseLoop(label: string, path: string, controller: AbortController):
 }
 
 /** Shared across every SSE loop in this process — the whole point is to catch
- *  a frame arriving on the board stream that the grouping stream already
+ *  a frame arriving on the board stream that the review stream already
  *  delivered, so a per-loop instance would see nothing. See frame-dedup.ts
  *  for what identifies an event (the server's `eid` first, `event#docId#seq`
  *  for an older one), why the fallback needs a window, and why anything it

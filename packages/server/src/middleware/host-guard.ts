@@ -202,9 +202,9 @@ export function shareScopeAllows(
    * because two rules that agree today drift apart later and the one that
    * drifts open is a breach.
    *
-   * The id may be a doc OR a grouping (folder bind / diff review), and a
-   * doc belongs to more than one workspace at once: its grouping, and the
-   * hub board that grouping is filed on. Membership is therefore a SET, not
+   * The id may be a doc OR a review (folder bind / diff review), and a
+   * doc belongs to more than one workspace at once: its review, and the
+   * hub board that review is filed on. Membership is therefore a SET, not
    * a single answer — an exact `=== workspaceOf(id)` was what refused a hub
    * visitor every review row on their own board.
    *
@@ -250,7 +250,7 @@ export function shareScopeAllows(
 
   /**
    * Does this `/api/workspaces/<seg>/…` segment name a workspace the share
-   * covers — the shared workspace itself, or a grouping filed on it?
+   * covers — the shared workspace itself, or a review filed on it?
    *
    * Deliberately NOT `inScope`: a workspace id and a doc id come from the
    * same string space, and letting the entry DOC of a workspace share match
@@ -270,10 +270,47 @@ export function shareScopeAllows(
   // here so granting it stays a decision, not a resolver side effect.
   if (target.workspaceId) {
     const wsId = target.workspaceId;
-    // The hub page itself: GET /workspaces/<id>, nothing nested.
+    /**
+     * The workspace's pages: `/workspaces/<id>` and the resources under it.
+     *
+     * This used to be `/workspaces/<id>` and NOTHING nested — the allowance
+     * read `if (!seg.includes('/'))`. That was correct while the workspace
+     * page was the only thing at this prefix, and it silently became a bug the
+     * moment the page grew tabs: a visitor landed on the share link, clicked
+     * Tasks, and was refused by the guard. Now that every doc, review and
+     * mockup also lives under this prefix, "one segment only" would refuse
+     * the entire product.
+     *
+     * Each nested shape is spelled out rather than admitted by depth. A rule
+     * like "anything under the shared workspace" grants routes that do not
+     * exist yet, which makes adding one an accidental publication rather than
+     * a decision.
+     *
+     * Two independent checks on the nested forms, and both are load-bearing:
+     * the WORKSPACE segment must be the shared one, and the resource must be
+     * in that workspace's scope. Dropping the second would let a visitor read
+     * any doc on the server by spelling their own workspace id in front of it.
+     */
     if (method === 'GET' && pathname.startsWith('/workspaces/')) {
-      const seg = pathname.slice('/workspaces/'.length);
-      if (!seg.includes('/') && safeDecode(seg) === wsId) return true;
+      const rest = pathname.slice('/workspaces/'.length);
+      const slash = rest.indexOf('/');
+      const wsSeg = slash === -1 ? rest : rest.slice(0, slash);
+      if (safeDecode(wsSeg) === wsId) {
+        const sub = slash === -1 ? '' : rest.slice(slash + 1);
+        // The workspace page itself and its nav tabs. A named list — a tab
+        // added later has to be added here too, on purpose.
+        if (sub === '' || ['home', 'tasks', 'mine', 'activity'].includes(sub)) return true;
+        // `<kind>/<id>` and nothing deeper. An id never contains a slash, so
+        // a third segment is a typo or a probe either way.
+        const cut = sub.indexOf('/');
+        if (cut !== -1) {
+          const kind = sub.slice(0, cut);
+          const id = sub.slice(cut + 1);
+          if (!id.includes('/') && ['docs', 'reviews', 'mockups'].includes(kind)) {
+            return insideSharedWorkspace(safeDecode(id));
+          }
+        }
+      }
     }
     // The server-owned board room socket (/y/ws:<id>). Reads are the §3.3
     // visitor-contract projection; foreign writes are reverted server-side.
@@ -355,7 +392,7 @@ export function shareScopeAllows(
   // fix for a shared BOARD: a group bind is filed on a hub workspace, so the
   // review row a visitor can see on the board is reached through the
   // GROUPING's id while the share is scoped to the HUB's. An exact `!==`
-  // refused every one of them. A grouping filed on a different board is not
+  // refused every one of them. A review filed on a different board is not
   // in the set `workspacesOf` returns, so it stays refused — that half is
   // the one under test, because widening is the direction that costs.
   //
@@ -370,11 +407,20 @@ export function shareScopeAllows(
   // `context-file` can open any of them for context — the same "Show All
   // Files" surface you see locally. Share a folder bind when you want the
   // visitor confined to a directory.
-  if (pathname.startsWith('/api/workspaces/')) {
+  //
+  // TWO PREFIXES, ONE RULE. `/api/reviews/<setId>/…` is what these endpoints
+  // are called now — a review is not a workspace, and the old name is the
+  // vocabulary this change exists to remove. `/api/workspaces/<id>/…` still
+  // answers because the callers are plugin bundles in sessions nobody can
+  // restart. Both spellings are judged here, by the same lines: a second rule
+  // for the alias would agree today and drift later, and the one that drifts
+  // open is a breach.
+  const navPrefix = ['/api/reviews/', '/api/workspaces/'].find((p) => pathname.startsWith(p));
+  if (navPrefix) {
     if (!target.workspaceId) return false;
-    const rest = pathname.slice('/api/workspaces/'.length);
+    const rest = pathname.slice(navPrefix.length);
     const slash = rest.indexOf('/');
-    if (slash < 0) return false; // bare /api/workspaces/<id> is DELETE-only
+    if (slash < 0) return false; // bare /api/<prefix>/<id> is DELETE-only
     if (!inWorkspaceScope(rest.slice(0, slash))) return false;
     const sub = rest.slice(slash + 1);
     if (method === 'GET')

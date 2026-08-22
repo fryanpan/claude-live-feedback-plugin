@@ -304,6 +304,42 @@ describe('shareScopeAllows (workspace share)', () => {
     );
   });
 
+  describe('the same rule judges /api/reviews/<setId>/…', () => {
+    // The endpoints are called this now. The alias exists for callers that
+    // cannot restart, so a visitor must be able to reach EITHER spelling —
+    // and must be refused on either one for the same reasons.
+    it('allows the navigation and lazy-open endpoints', () => {
+      expect(shareScopeAllows('/api/reviews/ws-1/tree', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/grouped', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/threads', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/files', 'GET', WS, workspaceOf)).toBe(true);
+      expect(shareScopeAllows('/api/reviews/ws-1/context-file', 'POST', WS, workspaceOf)).toBe(
+        true,
+      );
+      expect(shareScopeAllows('/api/reviews/ws-1/editable-file', 'POST', WS, workspaceOf)).toBe(
+        true,
+      );
+    });
+
+    it('BLOCKS a review the share does not cover', () => {
+      expect(shareScopeAllows('/api/reviews/ws-2/tree', 'GET', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-2/context-file', 'POST', WS, workspaceOf)).toBe(
+        false,
+      );
+    });
+
+    it('BLOCKS the mutating verbs and anything unlisted', () => {
+      // refresh and groups rewrite the review; delete destroys it. A visitor
+      // is a reviewer, and none of the three is a review action.
+      expect(shareScopeAllows('/api/reviews/ws-1/refresh', 'POST', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-1/groups', 'POST', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-1', 'DELETE', WS, workspaceOf)).toBe(false);
+      expect(shareScopeAllows('/api/reviews/ws-1/anything-new', 'GET', WS, workspaceOf)).toBe(
+        false,
+      );
+    });
+  });
+
   it('BLOCKS a method the endpoint does not offer', () => {
     expect(shareScopeAllows('/api/workspaces/ws-1/tree', 'POST', WS, workspaceOf)).toBe(false);
     expect(shareScopeAllows('/api/workspaces/ws-1/context-file', 'GET', WS, workspaceOf)).toBe(
@@ -694,5 +730,104 @@ describe('shareScopeAllows — a grouping filed on a shared board', () => {
         legacy as unknown as (id: string) => string[],
       ),
     ).toBe(false);
+  });
+});
+
+describe('shareScopeAllows — resources under the workspace path', () => {
+  // Everything a reviewer opens now hangs off `/workspaces/<id>/…`. The
+  // allowlist is closed-by-default, so each nested shape needs an allowance —
+  // and each allowance needs a matching refusal, or "it works" and "it is
+  // open" look the same from a passing test.
+  const HUB: ShareTarget = { workspaceId: 'w-1' };
+  // `d-in` is a doc on the shared workspace; `rev-1` is a review filed on it;
+  // `d-out` and `rev-out` belong to a DIFFERENT workspace.
+  const workspacesOf = (id: string): string[] => {
+    if (id === 'd-in' || id === 'rev-1' || id === 'rev-1:src~a.ts') return ['w-1'];
+    if (id === 'd-out' || id === 'rev-out') return ['w-2'];
+    return [];
+  };
+
+  it('serves the workspace’s own nav pages — the bug this fixes', () => {
+    // Before this, the allowance was `!seg.includes('/')`, so the bare hub
+    // page passed and every tab on it was refused. A visitor landing on the
+    // share link could not click Tasks.
+    for (const p of [
+      '/workspaces/w-1',
+      '/workspaces/w-1/home',
+      '/workspaces/w-1/tasks',
+      '/workspaces/w-1/mine',
+      '/workspaces/w-1/activity',
+    ]) {
+      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(true);
+    }
+  });
+
+  it('refuses another workspace’s nav pages', () => {
+    for (const p of ['/workspaces/w-2', '/workspaces/w-2/home', '/workspaces/w-2/tasks']) {
+      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(false);
+    }
+  });
+
+  it('refuses a nav suffix nobody defined, rather than anything after the id', () => {
+    // The allowance is a named list, not "one more segment". Otherwise a
+    // route added later is granted before anyone decides it should be.
+    for (const p of ['/workspaces/w-1/settings', '/workspaces/w-1/admin', '/workspaces/w-1/x/y']) {
+      expect(shareScopeAllows(p, 'GET', HUB, workspacesOf), p).toBe(false);
+    }
+  });
+
+  it('serves a doc on the shared workspace', () => {
+    expect(shareScopeAllows('/workspaces/w-1/docs/d-in', 'GET', HUB, workspacesOf)).toBe(true);
+    expect(
+      shareScopeAllows('/workspaces/w-1/docs/rev-1%3Asrc~a.ts', 'GET', HUB, workspacesOf),
+    ).toBe(true);
+  });
+
+  it('refuses a doc that is NOT on the shared workspace, however the URL is spelled', () => {
+    // Negative control for the line above: the workspace segment matching is
+    // not enough on its own — the doc has to be in scope too, or naming your
+    // own workspace would serve you every doc on the server.
+    expect(shareScopeAllows('/workspaces/w-1/docs/d-out', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/w-1/docs/unknown', 'GET', HUB, workspacesOf)).toBe(false);
+    // …and naming the doc correctly under the WRONG workspace is refused too.
+    expect(shareScopeAllows('/workspaces/w-2/docs/d-in', 'GET', HUB, workspacesOf)).toBe(false);
+  });
+
+  it('serves a review filed on the shared workspace, and refuses one that is not', () => {
+    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-1', 'GET', HUB, workspacesOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-out', 'GET', HUB, workspacesOf)).toBe(
+      false,
+    );
+  });
+
+  it('serves a mockup on the shared workspace, and refuses one that is not', () => {
+    expect(shareScopeAllows('/workspaces/w-1/mockups/d-in', 'GET', HUB, workspacesOf)).toBe(true);
+    expect(shareScopeAllows('/workspaces/w-1/mockups/d-out', 'GET', HUB, workspacesOf)).toBe(false);
+  });
+
+  it('refuses every write to a workspace path, however in-scope the ids are', () => {
+    for (const m of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+      for (const p of ['/workspaces/w-1', '/workspaces/w-1/home', '/workspaces/w-1/docs/d-in']) {
+        expect(shareScopeAllows(p, m, HUB, workspacesOf), `${m} ${p}`).toBe(false);
+      }
+    }
+  });
+
+  it('refuses a deeper path under an allowed prefix', () => {
+    // `/docs/<id>` and nothing below it: a doc id never contains a slash, so
+    // an extra segment is either a typo or someone probing.
+    expect(shareScopeAllows('/workspaces/w-1/docs/d-in/raw', 'GET', HUB, workspacesOf)).toBe(false);
+    expect(shareScopeAllows('/workspaces/w-1/reviews/rev-1/files', 'GET', HUB, workspacesOf)).toBe(
+      false,
+    );
+  });
+
+  it('refuses the old per-doc share target on every new path', () => {
+    // Same rule as everywhere else: a target naming no workspace grants
+    // nothing, including the shapes added here.
+    const NO_WS: ShareTarget = {};
+    for (const p of ['/workspaces/w-1', '/workspaces/w-1/home', '/workspaces/w-1/docs/d-in']) {
+      expect(shareScopeAllows(p, 'GET', NO_WS, workspacesOf), p).toBe(false);
+    }
   });
 });

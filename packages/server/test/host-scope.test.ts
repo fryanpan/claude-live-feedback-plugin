@@ -297,8 +297,23 @@ describe('host gate + share scoping over HTTP', () => {
     it('can reach its own review page and event stream route', async () => {
       // Not asserting 200 — the markdown-app dist isn't built in tests.
       // What matters is that the scope check doesn't refuse them.
+      //
+      // No `redirect: 'manual'`, deliberately: `/review/<docId>` now
+      // redirects to the workspace path, and following it is what a browser
+      // does. That makes this assertion cover the redirect TARGET too, which
+      // is where this broke — the target named whichever workspace held the
+      // doc first, and the guard refused a visitor at the URL the product had
+      // just handed them.
       expect((await asVisitor(`/review/${SHARED}`)).status).not.toBe(403);
       expect((await asVisitor(`/api/docs/${SHARED}/threads`)).status).not.toBe(403);
+    });
+
+    it('is redirected to the workspace it was shared, not to some other one', async () => {
+      const r = await asVisitor(`/review/${SHARED}`, { redirect: 'manual' });
+      expect(r.status).toBe(302);
+      expect(r.headers.get('location')).toBe(
+        `/workspaces/${boardShared}/docs/${encodeURIComponent(SHARED)}`,
+      );
     });
 
     it('CANNOT enumerate every doc on the server', async () => {

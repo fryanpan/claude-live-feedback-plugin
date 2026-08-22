@@ -32,7 +32,10 @@ export interface CoverageQueue {
 export interface CoverageWorkspaceRow {
   key: string;
   workspaceId: string;
-  kind: 'board' | 'grouping';
+  /** `'grouping'` is what a server older than the rename sends for a review.
+   *  Nothing here branches on it — only `=== 'board'` is ever asked — so the
+   *  old value is carried rather than matched, and both spellings are safe. */
+  kind: 'board' | 'review' | 'reviewId';
   name?: string;
   attached?: boolean;
   /** The displayed active/away label. NOT the delivery gate — see `live`. */
