@@ -33,6 +33,7 @@ import {
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress } from './compress.ts';
 import type { Deployer } from './deploy.ts';
+import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import { showFile } from './git-diff.ts';
 import {
   type BriefCoverage,
@@ -1630,7 +1631,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * Deliberately NOT the ws:<id> board room: its share allowance is spelled
    * out in host-guard, never a resolver side effect.
    */
-  const shareWorkspacesOf = (id: string): string[] => {
+  const shareWorkspacesOf = (rawId: string): string[] => {
+    // Canonicalize FIRST. Boards hold a doc's own id, so an alias asked here
+    // resolved to nothing and the share refused a document it covers — a
+    // readable URL handed to an outside reviewer would simply not open. This
+    // is the one resolver every share-scope predicate reads, which is why the
+    // fix belongs here and not in each of them.
+    const id = rooms.get(rawId)?.docId ?? rawId;
     const out = new Set<string>();
     const reviewId = reviewIdOf(rooms.get(id)?.meta ?? {});
     if (reviewId) out.add(reviewId);
@@ -1983,6 +1990,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   /** 302 with the query string preserved. `?mobile=<preset>` rides on it. */
   const redirectTo = (path: string, search: string): Response =>
     new Response(null, { status: 302, headers: { location: `${path}${search}` } });
+
+  /**
+   * The doc's own id, for a request that addressed it by a readable alias.
+   *
+   * The `/api/docs/<id>/…` block canonicalizes for the ~30 subroutes inside
+   * it. This is for the doc routes matched OUTSIDE that block — they exist
+   * because they must run before it or without a room, and each one is a
+   * place where "the alias works everywhere" quietly stopped being true.
+   * `doc-id-routes.test.ts` walks the whole surface by alias so the next one
+   * added without this goes red rather than out.
+   *
+   * Unknown ids pass through unchanged, so a 404 still reads as "no such
+   * doc" rather than becoming a different error on the way.
+   */
+  const canonicalDocId = (addressed: string): string => rooms.get(addressed)?.docId ?? addressed;
 
   /**
    * The workspace to address a doc under, or null when nothing holds it.
@@ -2667,8 +2689,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
             return j(403, { error: 'origin_not_allowed' });
           }
-          const docId = decodeURIComponent(pathname.slice(3));
-          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          const addressed = decodeURIComponent(pathname.slice(3));
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          // `ws.data.docId` is re-resolved on every frame, so it must be the
+          // canonical id — a socket opened by alias would otherwise sync a
+          // room of its own.
+          const docId = rooms.get(addressed)?.docId ?? addressed;
           const type = url.searchParams.get('type') as DocType | null;
           const sourceUrl = url.searchParams.get('sourceUrl') ?? undefined;
           // Mockup docs auto-create on WS — the widget connects first with a
@@ -2732,12 +2758,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         // --- SSE ---
         if (pathname.startsWith('/events/')) {
-          const docId = decodeURIComponent(pathname.slice('/events/'.length));
-          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+          const addressed = decodeURIComponent(pathname.slice('/events/'.length));
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const eventsRoom = rooms.get(addressed);
+          if (!eventsRoom) return j(404, { error: 'doc not found' });
+          // The CHANNEL is the doc's own id: a watcher that opened the stream
+          // by the readable name and a writer that fired on the canonical one
+          // have to meet, and they only do if both spellings collapse here.
           return openSseStream(
             sse,
-            docId,
+            eventsRoom.docId,
             visitorShareId ?? undefined,
             undefined,
             undefined,
@@ -2772,7 +2802,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
             });
           }
-          const room = rooms.getOrCreate(docId, {
+          // The caller NAMES the doc; the server decides its id. `docId` in
+          // the body is therefore a readable alias from here on — which is
+          // also what closes the write-anywhere hole this route was: a
+          // `task:<realTaskId>` body used to land on that task's live
+          // description and file-bind it, 200 and no audit row. A caller
+          // cannot address a server-owned namespace by a name it invents.
+          const created = rooms.createForCaller(docId, {
             type,
             sourceUrl,
             title: body?.title as string | undefined,
@@ -2784,20 +2820,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             workspaceRoot: body?.workspaceRoot as string | undefined,
             producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
           });
+          if (!created.ok) {
+            return j(400, {
+              error: created.error,
+              hint: `"${docId}" is in a namespace the server owns (${RESERVED_DOC_PREFIXES.join(', ')}). Pick a docId that isn't.`,
+            });
+          }
+          const room = created.room;
+          // Canonical from here down. Everything below keys on the doc's own
+          // id, never the name the request arrived under — two callers using
+          // the two spellings of one doc must not end up with two of anything.
+          const canonicalId = room.docId;
           // Before the file attach, not after: the room already exists at this
           // point, and the 409 below returns early — filing afterwards would
           // leave a failed bind as the one doc this route can still strand
           // outside a workspace.
           const hubWorkspaceId = fileUnderHubWorkspace(
-            docId,
+            canonicalId,
             body?.hubWorkspaceId as string | undefined,
           );
           let attached: ReturnType<typeof rooms.attachFile> | undefined;
           if (type === 'markdown' && sourceUrl) {
-            attached = rooms.attachFile(docId, sourceUrl);
+            attached = rooms.attachFile(canonicalId, sourceUrl);
             if (!attached.ok) return j(409, { error: 'attach_failed', attached });
           } else if (type === 'code' && sourceUrl) {
-            attached = rooms.attachReadonlyFile(docId, sourceUrl);
+            attached = rooms.attachReadonlyFile(canonicalId, sourceUrl);
             if (!attached.ok) return j(409, { error: 'attach_failed', attached });
           }
           return j(200, {
@@ -2896,9 +2943,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             producedBy: body?.producedBy as { agentId?: string; sessionId?: string } | undefined,
           });
           if (!res.ok) {
-            // not-found → 404; too-many-files → 409 (guardrail, caller must
-            // narrow the folder or raise maxFiles).
-            return j(res.error === 'not-found' ? 404 : 409, res);
+            // not-found → 404; reserved-namespace → 400 (the caller chose an
+            // id it may not have, and no amount of narrowing fixes that);
+            // too-many-files → 409 (guardrail, caller must narrow the folder
+            // or raise maxFiles).
+            const status =
+              res.error === 'not-found' ? 404 : res.error === 'reserved-namespace' ? 400 : 409;
+            return j(status, res);
           }
           // The GROUPING goes on the board, not its members: `res.workspaceId`
           // is the review id, and one row for the whole bind is the unit a
@@ -3376,12 +3427,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (wsAttachMatch && req.method === 'POST') {
           const workspaceId = decodeURIComponent(wsAttachMatch[1] ?? '');
           const body = await safeJson(req);
-          const docId = body?.docId as string | undefined;
-          if (!docId || typeof docId !== 'string') return j(400, { error: 'docId required' });
+          const addressed = body?.docId as string | undefined;
+          if (!addressed || typeof addressed !== 'string')
+            return j(400, { error: 'docId required' });
           // The link target must exist: either a doc room, or a REVIEW id (a
-          // diff review / folder bind, attached as one unit).
+          // diff review / folder bind, attached as one unit). Only the first
+          // kind canonicalizes — a review id names no room, so there is
+          // nothing to resolve it to.
+          const attachRoom = rooms.get(addressed);
+          const docId = attachRoom?.docId ?? addressed;
           const exists =
-            rooms.get(docId) !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
+            attachRoom !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
           if (!exists) return j(404, { error: 'doc not found', docId });
           const res = taskStore.attachDoc(workspaceId, docId);
           if (!res.ok) return j(404, res);
@@ -4465,7 +4521,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // the same one replies and transitions use.
         const promoteMatch = pathname.match(/^\/api\/docs\/([^/]+)\/threads\/([^/]+)\/promote$/);
         if (promoteMatch && req.method === 'POST') {
-          const docId = decodeURIComponent(promoteMatch[1] ?? '');
+          const docId = canonicalDocId(decodeURIComponent(promoteMatch[1] ?? ''));
           const threadId = decodeURIComponent(promoteMatch[2] ?? '');
           const body = await safeJson(req);
           const workspaceId = body?.workspaceId;
@@ -4613,9 +4669,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(400, { error: 'bad watch key', key: String(badKey) });
             }
             const name = typeof body?.name === 'string' ? body.name : undefined;
+            // Store the doc's own id, whichever spelling the caller watched
+            // by. A watch is DURABLE and its key is matched against board
+            // membership to answer "is this agent covering that board" — so a
+            // key stored as a readable alias would leave the board looking
+            // unwatched, which is the alarm going quiet rather than the alarm
+            // saying no. `ws:` keys resolve to themselves and pass through.
+            const canonicalKeys = (keys: unknown[]): string[] =>
+              (keys as string[]).map((k) => canonicalDocId(k));
             const res = agentWatches.update(agentId, {
-              add: rawAdd as string[],
-              remove: rawRemove as string[],
+              add: canonicalKeys(rawAdd),
+              // Removal accepts either spelling for the same reason a read
+              // does: the caller may only ever have held the readable one.
+              remove: canonicalKeys(rawRemove),
               ...(name ? { name } : {}),
             });
             return j(200, res);
@@ -5060,7 +5126,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const docArchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/archive$/);
         if (docArchiveMatch && req.method === 'POST') {
           if (visitor) return j(403, { error: 'not available to share visitors' });
-          const docId = decodeURIComponent(docArchiveMatch[1] ?? '');
+          const docId = canonicalDocId(decodeURIComponent(docArchiveMatch[1] ?? ''));
           const body = await safeJson(req);
           const author = body?.author as { name?: string } | undefined;
           const reason = typeof body?.reason === 'string' ? (body.reason as string) : undefined;
@@ -5079,6 +5145,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const docUnarchiveMatch = pathname.match(/^\/api\/docs\/([^/]+)\/unarchive$/);
         if (docUnarchiveMatch && req.method === 'POST') {
           if (visitor) return j(403, { error: 'not available to share visitors' });
+          // Deliberately NOT canonicalized: an archived doc has no room, so
+          // there is nothing for an alias to resolve against. The canonical
+          // id is what `list_archived_reviews` hands back, which is where a
+          // caller gets one. Asserted in doc-id-routes.test.ts so the
+          // asymmetry is a decision on the record rather than a surprise.
           const docId = decodeURIComponent(docUnarchiveMatch[1] ?? '');
           const body = await safeJson(req);
           const author = body?.author as { name?: string } | undefined;
@@ -5262,11 +5333,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
         if (docMatch) {
-          const docId = decodeURIComponent(docMatch[1] ?? '');
+          const addressed = decodeURIComponent(docMatch[1] ?? '');
           const rest = docMatch[2] ?? '';
-          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
-          const room = rooms.get(docId);
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const room = rooms.get(addressed);
           if (!room) return j(404, { error: 'doc not found' });
+          // Canonicalize ONCE, here, and the ~30 subroutes below inherit both
+          // halves of the alias contract: a readable name resolves, and
+          // everything they key on (SSE channels, activity rows, thread ids,
+          // filenames) uses the doc's own id. Rebinding the name `docId` is
+          // deliberate — it is what makes the subroutes correct by default
+          // rather than each one having to remember.
+          const docId = room.docId;
           if (rest === '' && req.method === 'GET') {
             // Doc→task surfacing (§3.12 commit 4): chips for the tasks that
             // reference this doc — directly or via one of its threads.
@@ -5987,8 +6065,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             );
           }
           if (!isValidDocId(id)) return j(400, { error: 'bad docId' });
-          if (kind === 'mockups') return serveMockup(id);
-          const served = serveDocShell(id, url);
+          const canonical = rooms.get(id)?.docId ?? id;
+          if (kind === 'mockups') return serveMockup(canonical);
+          const served = serveDocShell(canonical, url);
           if (served) return served;
         }
 
@@ -5999,8 +6078,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // workspace can be resolved, and serves in place when it cannot. See
         // the compat block note above `resolveWorkspaceForDoc`.
         if (pathname.startsWith('/review/')) {
-          const docId = decodeURIComponent(pathname.slice('/review/'.length));
-          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          const addressed = decodeURIComponent(pathname.slice('/review/'.length));
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          // A captured review URL carries whatever id it was copied with: a
+          // pre-migration doc's own id, or the readable alias of one minted
+          // since. Both land on the same doc, and the redirect below rewrites
+          // either into the canonical address.
+          const docId = rooms.get(addressed)?.docId ?? addressed;
           // The redirect is deliberately OUTSIDE the `markdownAppDist` guard
           // that wraps the serve below. Where a doc lives is a fact about
           // addressing; whether the browser app has been built is a fact
@@ -6043,8 +6127,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const slug = decodeURIComponent(pathname.slice('/mockup/'.length));
           // Tolerate `/mockup/<docId>.html` AND `/mockup/<docId>` — agents
           // share whichever URL feels natural.
-          const docId = slug.replace(/\.html?$/i, '');
-          if (!isValidDocId(docId)) return j(400, { error: 'bad docId' });
+          const addressed = slug.replace(/\.html?$/i, '');
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const docId = rooms.get(addressed)?.docId ?? addressed;
           const home = rooms.get(docId) ? addressableWorkspaceFor(docId, visitor) : null;
           if (home) {
             return redirectTo(
