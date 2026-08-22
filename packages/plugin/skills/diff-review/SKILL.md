@@ -99,9 +99,10 @@ other changed file.
 
 ## Cleanup
 
-A diff review is a workspace. When the pass is over (threads resolved, change
-merged), call `delete_workspace(reviewId)`. It refuses while open threads
-remain unless `force:true`.
+A diff review is content in the workspace it was filed on. When the pass is
+over (threads resolved, change merged), call `delete_review(setId)` — the id
+`create_diff_review` returned, as `setId` or `reviewId`. It refuses while open
+threads remain unless `force:true`, and it cannot touch the workspace itself.
 
 ## When NOT to use this
 

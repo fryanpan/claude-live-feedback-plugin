@@ -27,25 +27,26 @@ which, how the loop runs, and what a goal edit asks of the seat.
 agent owes an existing board — including the task standard every create and
 rewrite here answers to; the second is what the lead seat adds.
 
-## First: two different things are called "workspace"
+## First: a workspace is a board, and everything else lives IN one
 
-| | Hub workspace (this skill) | Grouping workspace |
-|---|---|---|
-| Made by | `create_workspace` | `bind_folder` / `create_diff_review` |
-| Id called | `workspaceId`, `hubWorkspaceId` | `workspaceId`, `reviewId` |
-| Is | a goal + task board + doc links | a set of review docs over files |
-| URL | `/workspaces/<id>` | the review's `entryUrl` |
+A **workspace** is what `create_workspace` makes: goals, tasks, a lead seat,
+and the docs and reviews filed on it. `/workspaces/<workspaceId>`.
 
-`delete_workspace`, `refresh_workspace` and `set_workspace_groups` take the
-**grouping** id — never a hub id. Link a grouping workspace onto a board with
-`attach_doc(workspaceId, docId)`; `docId` there accepts a doc id *or* a
-review/bind id, and the whole review attaches as one unit.
+A **review** is content inside one — `bind_folder` or `create_diff_review`
+over a set of files, identified by `setId` (returned as `reviewId` too, same
+value). It has no tasks and no lead; it is one row on the board it was filed
+on, reachable at `/workspaces/<workspaceId>/reviews/<setId>`.
 
-**`share_workspace` and `share_link` are the exception: they take the HUB id,
-and only the hub id.** A board is the unit of sharing — a review must be filed
-on a board before it can be shared — so a grouping id comes back
-`410 grouping_sharing_removed`. `bind_folder` and `create_diff_review` already
-report the board they filed onto as `hubWorkspaceId` — that is the id to share.
+`delete_review`, `refresh_review` and `set_review_groups` take the **review**
+id. Link a review onto a board with `attach_doc(workspaceId, docId)`; `docId`
+there accepts a doc id *or* a review id, and the whole review attaches as one
+unit.
+
+**`share_workspace` and `share_link` take the WORKSPACE id.** A workspace is
+the unit of sharing — a review must be filed on one before it can be shared —
+so a review id comes back `410 grouping_sharing_removed`. `bind_folder` and
+`create_diff_review` report the workspace they filed onto as `hubWorkspaceId`
+— that is the id to share.
 Everything filed on that board travels with the share, so when a review should
 not carry the rest of the board, give it its own: `create_workspace` makes an
 empty one in about a second.

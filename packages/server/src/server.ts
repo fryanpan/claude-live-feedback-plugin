@@ -471,11 +471,11 @@ export interface CoverageQueue {
 export interface CoverageWorkspaceRow {
   key: string;
   workspaceId: string;
-  /** `board` — a hub workspace with tasks, a lead seat and attachments.
-   *  `grouping` — a diff review / folder bind, which has none of those. */
-  kind: 'board' | 'grouping';
-  /** Board only. Attachment / lead / heartbeat are hub-board facts; printing
-   *  `attached: false` for a grouping would read as a gap that cannot exist. */
+  /** `board` — a workspace: tasks, a lead seat, attachments.
+   *  `review` — a diff review / folder bind, which has none of those. */
+  kind: 'board' | 'review';
+  /** Board only. Attachment / lead / heartbeat are board facts; printing
+   *  `attached: false` for a review would read as a gap that cannot exist. */
   name?: string;
   attached?: boolean;
   /** The displayed active/away label: a heartbeat inside the heartbeat
@@ -1447,9 +1447,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const workspaceId = key.slice('ws:'.length);
       const board = taskStore.getWorkspace(workspaceId);
       if (!board) {
-        // Not a hub board. The key survived the liveness prune, so some doc
-        // room still carries this grouping tag.
-        workspaces.push({ key, workspaceId, kind: 'grouping' });
+        // Not a board. The key survived the liveness prune, so some doc room
+        // still carries this review id.
+        workspaces.push({ key, workspaceId, kind: 'review' });
         continue;
       }
       const { attached, heartbeatFresh, live } = liveness(workspaceId, agentId);
@@ -1514,34 +1514,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /**
-   * ── Two things wear the word "workspace". Read this before touching any
-   * helper below, because the names in this file are the only place the
-   * difference is written down. ──
+   * ── A WORKSPACE is a board. Everything else in it is content. ──
    *
-   * GROUPING workspace — `meta.workspaceId`, also spelled `reviewId`. The tag
-   *   that binds the member docs of one folder bind or diff review together.
-   *   It is what `rooms.listWorkspaces` / `listRepoFiles` / `bindDiff` mean,
-   *   and it has NO doc room of its own: `/review/<groupingId>` is a 404, its
-   *   content lives under `/api/workspaces/<id>/tree|threads`.
+   * A workspace (`taskStore`) has goals, tasks, a name, and a list of
+   * ATTACHMENT ids in `docIds`. An attachment is a doc room id or a REVIEW id
+   * — `POST /api/workspaces/:id/docs` has accepted both since it was written.
+   * So a review goes on its workspace as ONE row and its members stay off,
+   * because a hundred-file review is one unit of work, not a hundred.
    *
-   * HUB workspace — the board (`taskStore`): goals, tasks, a name, and a list
-   *   of ATTACHMENT ids in `docIds`. Helpers here say `hub` in their name when
-   *   they mean this one; a bare `workspaceId` in this file means a grouping.
+   * A REVIEW (`meta.setId`, returned as `reviewId` by `bindDiff`) is the tag
+   * binding the member docs of one folder bind or diff review together. It is
+   * content, not a container of tasks: it has no doc room of its own, and it
+   * is read through `/api/reviews/<setId>/tree|threads`. `reviewIdOf` in
+   * `@feedback/core` is the one place a member's review id is derived.
    *
-   * An ATTACHMENT is either a doc room id or a grouping id — `POST
-   * /api/workspaces/:id/docs` has accepted both since it was written. So a
-   * review goes on a board as ONE row; its members stay off, because a
-   * hundred-file review is one unit of work, not a hundred. Note the board
-   * page itself no longer LISTS attachments: the Docs and Open-threads rails
-   * came out (Bryan, 2026-08-18, "remove docs and live threads from the task
-   * list"), so `docIds` now feeds the review queue and voice lookup rather
-   * than a sidebar.
+   * Note the board page no longer LISTS attachments: the Docs and
+   * Open-threads rails came out (Bryan, 2026-08-18, "remove docs and live
+   * threads from the task list"), so `docIds` now feeds the review queue and
+   * voice lookup rather than a sidebar.
    *
-   * Every doc and every group bind belongs to a hub workspace (Bryan,
-   * 2026-08-13) — and requiring one must not add a step. "Bind it, send Bryan
-   * the URL" is ONE agent call, so a caller with no board in hand does not get
-   * an error telling them to go create one first: what arrives unfiled lands on
-   * the default board, and the id comes back in the same response so the caller
+   * Every doc and every review belongs to a workspace (Bryan, 2026-08-13) —
+   * and requiring one must not add a step. "Bind it, send Bryan the URL" is
+   * ONE agent call, so a caller with no board in hand does not get an error
+   * telling them to go create one first: what arrives unfiled lands on the
+   * default board, and the id comes back in the same response so the caller
    * learns where it went.
    */
   const DEFAULT_HUB_WORKSPACE_NAME = 'Unfiled';
@@ -2508,7 +2504,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = rooms.bindFolder({
             folderPath,
-            workspaceId: body?.workspaceId as string | undefined,
+            // `workspaceId` is what this body key was called before a review
+            // stopped being a workspace; both are read, neither is required.
+            setId: (body?.setId ?? body?.workspaceId) as string | undefined,
             title: body?.title as string | undefined,
             include: Array.isArray(body?.include) ? (body.include as string[]) : undefined,
             // Accepted by bindFolder and honoured by the scan since forever,
@@ -2934,11 +2932,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const body = await safeJson(req);
           const docId = body?.docId as string | undefined;
           if (!docId || typeof docId !== 'string') return j(400, { error: 'docId required' });
-          // The link target must exist: either a doc room, or a legacy
-          // grouping workspace id (a diff review / folder bind, attached as
-          // one unit).
+          // The link target must exist: either a doc room, or a REVIEW id (a
+          // diff review / folder bind, attached as one unit).
           const exists =
-            rooms.get(docId) !== undefined || rooms.list().some((m) => m.workspaceId === docId);
+            rooms.get(docId) !== undefined || rooms.list().some((m) => reviewIdOf(m) === docId);
           if (!exists) return j(404, { error: 'doc not found', docId });
           const res = taskStore.attachDoc(workspaceId, docId);
           if (!res.ok) return j(404, res);
