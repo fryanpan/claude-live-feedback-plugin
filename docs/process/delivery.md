@@ -155,7 +155,21 @@ deploying.
 design.** A restart over an unpulled checkout rebuilds the same bundles and
 publishes the same client while printing a successful deploy — the failure the
 section above is about. Binding the pull and the restart into one operation
-makes that state unexpressible rather than merely discouraged.
+makes that state unexpressible rather than merely discouraged. The route can
+still *decide* to restart without pulling, and that is not the same thing: a
+caller cannot ask for it, and it happens only where the evidence says the served
+client is behind the checkout — see below.
+
+**"Up-to-date" means the served client, not the checkout.** Answering it from
+`behind === 0` alone reads the wrong artifact: a source somebody pulled by hand
+and did not restart is at origin's tip while the fleet still loads the bundle
+built from the older commit, and the route would report nothing to do. So the
+deploy compares `release.json`'s `sourceRef` — what the SERVED release was built
+from — against what the checkout is on now. Same and nothing to pull is
+`up-to-date` and restarts nothing. Different is `restarted`: no merge, no file
+rewritten, just the restart that rebuilds and republishes. A deployment that
+publishes no release at all (dev, staging) has no served bundle to be stale and
+keeps the git answer.
 
 Two limits worth knowing. The route answers only to a **loopback peer address**
 (not the `Host` header, which is client-controlled — a LAN and a tailnet client
@@ -164,8 +178,14 @@ from the box; dev and staging answer 501 by construction. And a bound document
 with un-flushed edits **refuses** the deploy, with `force` to accept the loss —
 see [learnings.md](learnings.md), "A git operation on a bound file is an editor
 save", for why a pull over a live doc is undone about a second after git reports
-success. The manual three steps remain the fallback for the one case the route
-cannot serve: a server that is already down.
+success. That refusal waits ~1.5s and re-reads first, because "busy" is an
+~800ms write-back debounce rather than a person: an edit that lands a heartbeat
+before the deploy arrives would otherwise refuse over a flush already on its way
+to disk. A doc that settles proceeds; one still being typed in still refuses and
+still names its files. The refusal is about the PULL, so a `restarted` deploy
+skips it — nothing is rewritten, and `Rooms.flush` saves every pending
+write-back on the way down. The manual three steps remain the fallback for the
+one case the route cannot serve: a server that is already down.
 
 Then check a feature literal in the served bundle, old bundle first — a literal
 only discriminates if it is absent from the previous release. `releases/` keeps
