@@ -12,6 +12,7 @@ import { type BacklogCommentRow, deliverAttachBacklog } from './attach-backlog.t
 import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { type PresenceRow, claimWarning } from './claim-warning.ts';
+import { decisionAnsweredLine } from './decision-line.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
@@ -97,7 +98,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.94';
+const PLUGIN_VERSION = '0.1.95';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4301,6 +4302,9 @@ interface HubEventPayload {
   fromGoal?: string;
   toGoal?: string;
   answer?: string;
+  /** `decision.answered` only: the answered task's links, which decide
+   *  whether the line offers a propagation checklist. See decision-line.ts. */
+  links?: unknown[];
   newGoal?: string;
   kind?: string;
   movedToChores?: string[];
@@ -4375,8 +4379,10 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     case 'task.gate_refused':
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;
+    // The propagation clause is conditional on the task having links, so the
+    // wording is a decision that has to be assertable — see decision-line.ts.
     case 'decision.answered':
-      body = `[decision.answered] ${p.taskId}${by}: "${truncate(p.answer ?? '', 120)}" — walk its links as the propagation checklist`;
+      body = decisionAnsweredLine(p);
       break;
     case 'workspace.lead_changed':
       // Worth forwarding even though it is not a task: it changes WHO the

@@ -13898,6 +13898,16 @@ function claimWarning(row, selfAgentId, now) {
   return `[claim] ${namedRow(row)} ${held}. Do not start this row blind — message that session over claude-hive, agree who has it, and take a different row if they do. Nothing here refuses you: two sessions on one row is sometimes right, but it has to be a decision rather than a collision neither side can see.`;
 }
 
+// packages/mcp/src/decision-line.ts
+function truncate2(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+function decisionAnsweredLine(p) {
+  const by = p.actor?.name ? ` by ${p.actor.name}` : "";
+  const walk = Array.isArray(p.links) && p.links.length > 0 ? " — walk its links as the propagation checklist" : "";
+  return `[decision.answered] ${p.taskId}${by}: "${truncate2(p.answer ?? "", 120)}"${walk}`;
+}
+
 // packages/mcp/src/triage-line.ts
 var SHAPE_THEN_PLACE = "read its own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each into a title and a story-shaped body with rewrite_task, then place with set_task_goal";
 var TASK_REVIEW_SKILL = "claude-workspaces:leading-a-workspace";
@@ -14109,7 +14119,7 @@ function frameKey(event, payload) {
 }
 
 // packages/mcp/src/nudge-line.ts
-function truncate2(s, n) {
+function truncate3(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 function humanDuration2(ms) {
@@ -14123,7 +14133,7 @@ function humanDuration2(ms) {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 function namedTask(p) {
-  const title = p.title ? `"${truncate2(p.title, 60)}"` : null;
+  const title = p.title ? `"${truncate3(p.title, 60)}"` : null;
   if (title && p.taskId)
     return `${title} (${p.taskId})`;
   return title ?? p.taskId ?? null;
@@ -14219,7 +14229,7 @@ function threadCreateRequest(input, author) {
 }
 
 // packages/mcp/src/voice-line.ts
-function truncate3(s, n) {
+function truncate4(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 function where(p) {
@@ -14233,7 +14243,7 @@ function voiceRequestLine(p) {
     return null;
   const by = p.actor?.name ? ` by ${p.actor.name}` : "";
   const said = `[voice.request]${by}${where(p)}: "${p.transcript ?? ""}"`;
-  const told = truncate3(p.ack ?? "", 120);
+  const told = truncate4(p.ack ?? "", 120);
   if (p.route === "fast-path-action") {
     return `${said} — the fast path ALREADY applied this to the board on the speaker's behalf; ` + `they were told: "${told}". Do NOT redo it — reconcile your own picture of the board ` + "with what changed, and pick up only whatever the utterance asked for beyond it.";
   }
@@ -14332,7 +14342,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.94";
+var PLUGIN_VERSION = "0.1.95";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -17196,10 +17206,10 @@ async function emitHubChannelMessage(event, rawPayload) {
   let body;
   switch (event) {
     case "task.created":
-      body = `[task.created] "${truncate4(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
+      body = `[task.created] "${truncate5(p.task?.title ?? p.taskId ?? "", 60)}" → ${p.goal ?? "?"}${p.assignee ? ` (assignee ${p.assignee})` : ""}`;
       break;
     case "task.transitioned":
-      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate4(p.note, 80)}` : ""}`;
+      body = `[task.transitioned] ${p.taskId}: ${p.from} → ${p.to}${by}${p.note ? ` — ${truncate5(p.note, 80)}` : ""}`;
       break;
     case "task.assigned":
       body = `[task.assigned] ${p.taskId}: ${p.from} → ${p.to}${by}`;
@@ -17208,16 +17218,16 @@ async function emitHubChannelMessage(event, rawPayload) {
       body = `[task.regrouped] ${p.taskId}: ${p.fromGoal} → ${p.toGoal}${by}`;
       break;
     case "task.retitled":
-      body = `[task.retitled] "${truncate4(p.titleFrom ?? "", 60)}" → "${truncate4(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate4(p.reason, 80)}` : ""}`;
+      body = `[task.retitled] "${truncate5(p.titleFrom ?? "", 60)}" → "${truncate5(p.titleTo ?? "", 60)}"${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}`;
       break;
     case "task.body_edited":
-      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate4(p.titleFrom, 60)}" → "${truncate4(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate4(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate4(p.reason, 80)}` : ""}`;
+      body = p.titleFrom && p.titleTo ? `[task.body_edited] reshaped "${truncate5(p.titleFrom, 60)}" → "${truncate5(p.titleTo, 60)}"${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}` : `[task.body_edited] ${p.taskId}${by}${p.reason ? ` — ${truncate5(p.reason, 80)}` : ""}`;
       break;
     case "task.gate_refused":
       body = `[task.gate_refused] ${p.taskId}: ${p.riskTier}-tier ${p.reason}${by} — → ${p.to} did NOT happen`;
       break;
     case "decision.answered":
-      body = `[decision.answered] ${p.taskId}${by}: "${truncate4(p.answer ?? "", 120)}" — walk its links as the propagation checklist`;
+      body = decisionAnsweredLine(p);
       break;
     case "workspace.lead_changed":
       body = p.leadAgentId === AUTHOR.id ? `[workspace.lead_changed]${by}: you are now the lead agent — this board's asks are addressed to you` : `[workspace.lead_changed]${by}: lead agent is now ${p.leadAgentId ?? "?"}`;
@@ -17302,7 +17312,7 @@ async function emitChannelMessage(event, rawPayload) {
     const author2 = p.suggestion?.author?.name ?? "";
     const snippet2 = p.suggestion?.snippet ?? "";
     const kind = p.suggestion?.kind ?? "";
-    const header2 = snippet2 ? `"${truncate4(snippet2, 60)}"` : sid;
+    const header2 = snippet2 ? `"${truncate5(snippet2, 60)}"` : sid;
     const body2 = `[suggestion ${action2}] ${author2 ? `${author2}: ` : ""}${kind} ${header2}`.trim();
     await server.notification({
       method: "notifications/claude/channel",
@@ -17328,7 +17338,7 @@ async function emitChannelMessage(event, rawPayload) {
   const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
-  const header = snippet ? `on "${truncate4(snippet, 60)}"` : "";
+  const header = snippet ? `on "${truncate5(snippet, 60)}"` : "";
   const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}]${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
@@ -17346,7 +17356,7 @@ async function emitChannelMessage(event, rawPayload) {
     }
   });
 }
-function truncate4(s, n) {
+function truncate5(s, n) {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 async function setBoardRetired(workspaceId, retired, reason) {
