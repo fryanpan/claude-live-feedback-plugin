@@ -14332,7 +14332,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.93";
+var PLUGIN_VERSION = "0.1.94";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -15483,7 +15483,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "next_tasks",
-      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.\n\nCHECK WHO IS ALREADY ON A ROW BEFORE YOU TAKE IT. Two fields, present only when a session can be named: `ownerSession` — the session behind the row's OWNER — and `claimedBy` — the session that last moved the row into in-progress, plus `at`, when it did. `claimedBy` is the one that exists on a row nobody assigned, because a transition never touches `assignee`: an owner-keyed read on an unassigned row names whoever FILED the ticket, not whoever is working it. Both carry `state` (active | unresponsive | away), `lastHeartbeat` and `lastToolCallAt`.\n\n`state: \"active\"` on a session that is not you means DO NOT START THAT ROW. Message that session over claude-hive, agree which of you has it, and take a different row if they do — starting it anyway is how two sessions each build a complete answer to one task and neither finds out until a PR. Nothing refuses a second taker, here or at task_transition, because two agents on one row is sometimes right; it just has to be a decision rather than a collision neither side can see. `away` is an owner in name only and `unresponsive` is a wedged session somebody probably SHOULD take over from — neither is a live claim. These are recency reads, never content identity: a session that thinks for an hour produces no commit and still holds the row, so absence of new work is not evidence the row is free.",
+      description: "The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue.\n\nSKIP A ROW CARRYING `parked`. It means somebody deliberately deferred this task to a date (`parked.until`, with `parked.reason` saying what it is waiting for) — it is listed rather than hidden so you can see the deferral and disagree with it, not so you can pick it up. Nothing else about the row says so: it is still `todo`, still unblocked, still owned, because parking is not a status. If the reason no longer holds, un-park it with park_task(taskId, until: null) and say why on the task; do not just start it. When the date passes the field disappears on its own and the row is ordinary work again. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.\n\nCHECK WHO IS ALREADY ON A ROW BEFORE YOU TAKE IT. Two fields, present only when a session can be named: `ownerSession` — the session behind the row's OWNER — and `claimedBy` — the session that last moved the row into in-progress, plus `at`, when it did. `claimedBy` is the one that exists on a row nobody assigned, because a transition never touches `assignee`: an owner-keyed read on an unassigned row names whoever FILED the ticket, not whoever is working it. Both carry `state` (active | unresponsive | away), `lastHeartbeat` and `lastToolCallAt`.\n\n`state: \"active\"` on a session that is not you means DO NOT START THAT ROW. Message that session over claude-hive, agree which of you has it, and take a different row if they do — starting it anyway is how two sessions each build a complete answer to one task and neither finds out until a PR. Nothing refuses a second taker, here or at task_transition, because two agents on one row is sometimes right; it just has to be a decision rather than a collision neither side can see. `away` is an owner in name only and `unresponsive` is a wedged session somebody probably SHOULD take over from — neither is a live claim. These are recency reads, never content identity: a session that thinks for an hour produces no commit and still holds the row, so absence of new work is not evidence the row is free.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15590,6 +15590,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["taskId", "assignee"]
+      }
+    },
+    {
+      name: "park_task",
+      description: "Defer a task to a date: \"not now, and here is when\". THIS IS THE VERB FOR WORK YOU HAVE DECIDED TO COME BACK TO — use it instead of the three things leads did before it existed, every one of which made the board say something untrue. Moving the row to in-progress claims work nobody is doing. Inventing an `after` edge asserts a dependency that does not exist. Assigning it to 'human' says a person is being asked for something when nobody is. All three were done to stop the ready-work nudger re-surfacing a row that had been deliberately put off, and one measured board fired four identical wakes at one deferred row, each costing a full-context turn.\n\nWhat parking does NOT do is move the task. The row stays `todo`, stays unblocked, stays owned by you, and keeps its place in its goal band — parking is not a status, which is the entire point. What changes is that the wake stops treating it as work nobody got to, and every surface that lists it says it is parked and why. It stays in next_tasks, carrying `parked: {until, reason}`: a deferral you can see and argue with is the thing being built here, so a row that vanished from the queue would be the same invisibility in a different place.\n\nNothing expires it and nothing has to. When the date passes the row simply counts as ready again on the next sweep — no second call, no event, no cleanup. Un-park early by passing `until: null`.\n\nWrite a `reason`. The date alone says a decision was made and not what it was waiting for, and the reason is the half whoever reads the board three weeks from now acts on.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          until: {
+            description: 'When the deferral ends. An epoch-ms number, or a date string ("2026-09-02", or a full ISO timestamp for a specific hour — a bare date is read as UTC midnight). Pass `null` to un-park now.',
+            type: ["number", "string", "null"]
+          },
+          reason: {
+            type: "string",
+            description: 'Why, in one line — e.g. "waiting on the index rebuild" or "revisit after the launch". Replaced, not merged, whenever the date moves: a reason written about the old date is not a claim about the new one, so restate it if it still holds.'
+          }
+        },
+        required: ["taskId", "until"]
       }
     },
     {
@@ -16605,6 +16624,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           assignee: res.task.assignee,
           changed: res.changed,
           ...res.ownerKind !== undefined ? { ownerKind: res.ownerKind } : {}
+        });
+      }
+      case "park_task": {
+        const { taskId, until, reason } = a;
+        let parkedUntil;
+        if (until === null || until === undefined) {
+          parkedUntil = null;
+        } else if (typeof until === "number") {
+          if (!Number.isFinite(until))
+            return err("until must be a date, or null to un-park");
+          parkedUntil = until;
+        } else {
+          const parsed = Date.parse(until);
+          if (Number.isNaN(parsed)) {
+            return err(`could not read "${until}" as a date — pass epoch ms, "YYYY-MM-DD", or a full ISO timestamp`);
+          }
+          parkedUntil = parsed;
+        }
+        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
+          parkedUntil,
+          ...reason !== undefined ? { reason } : {},
+          author: AUTHOR
+        });
+        return ok({
+          taskId,
+          parkedUntil: res.task.parkedUntil ?? null,
+          ...res.task.parkedReason !== undefined ? { parkedReason: res.task.parkedReason } : {},
+          status: res.task.status,
+          changed: res.changed
         });
       }
       case "rewrite_task": {
