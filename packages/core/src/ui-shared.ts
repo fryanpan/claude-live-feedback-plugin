@@ -23,6 +23,46 @@ export function escapeHtml(s: string): string {
   );
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+/**
+ * Undo an HTML escape a CALLER baked into a plain-text label.
+ *
+ * Titles are caller-supplied at bind/create time, and some callers hand over
+ * strings they already HTML-escaped ("LF Workspace &amp; Tasks"). Every surface
+ * that shows a title renders it via `textContent`, which is correct — so the
+ * baked entity survives to the screen as literal text. Decoding at each
+ * projection door fixes every row at once, including rows whose bad title is
+ * already stored, instead of chasing every writer.
+ *
+ * ONE pass by construction: `replace` scans left to right and never re-reads
+ * its own output, so `&amp;amp;` becomes the literal `&amp;` and stops — a
+ * caller's double-escape is shown, not silently collapsed. A bare `&`, or an
+ * unknown entity name, passes through untouched.
+ *
+ * LABELS ONLY. Prose — a comment, an ask — is the author's content, and a
+ * literal `&amp;` inside a code span there is what they meant to write.
+ */
+export function decodeEntities(s: string): string {
+  if (!s.includes('&')) return s;
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
+    if (body.startsWith('#')) {
+      const hex = body[1] === 'x' || body[1] === 'X';
+      const code = Number.parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
+  });
+}
+
 /**
  * A color that is safe to interpolate into a quoted HTML `style="…"`.
  *
