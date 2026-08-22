@@ -13,6 +13,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import {
+  type NudgeFrame,
   READY_IDLE_DEFAULT_MS,
   ReadyWorkNudger,
   type ReadyWorkSnapshot,
@@ -23,7 +24,10 @@ const MIN = 60_000;
 interface Sent {
   workspaceId: string;
   agentId: string;
-  frame: { event: string; reason?: string; taskId?: string; readyCount?: number };
+  /** The real wire type rather than a hand-copy of it. The copy that stood
+   *  here had already drifted — a `reason` field the frame never had, and
+   *  none of the fields the plugin's renderer reads. */
+  frame: NudgeFrame;
 }
 
 function board(over: Partial<ReadyWorkSnapshot> = {}): ReadyWorkSnapshot {
@@ -225,6 +229,30 @@ describe('an answered review item wakes the lead immediately', () => {
     expect(sent[0]!.frame.event).toBe('workspace.review_answered');
     expect(sent[0]!.frame.taskId).toBe('t-1');
     expect(sent[0]!.agentId).toBe('agent-cartographer');
+  });
+
+  // The plugin renders this frame as a sentence, and the id alone makes the
+  // recipient call `get_task` before it can tell whether the wake was worth
+  // the turn. The caller resolves the name; the nudger only carries it.
+  it('carries the row’s name when the caller resolved one', () => {
+    const { sent, nudger } = harness();
+
+    nudger.reviewAnswered({
+      workspaceId: 'w-search',
+      taskId: 't-1',
+      taskTitle: 'Ship the search revamp',
+      actorId: 'user-jordan',
+    });
+
+    expect(sent[0]!.frame.title).toBe('Ship the search revamp');
+  });
+
+  it('omits the name rather than inventing one when the caller had none', () => {
+    const { sent, nudger } = harness();
+
+    nudger.reviewAnswered({ workspaceId: 'w-search', taskId: 't-1', actorId: 'user-jordan' });
+
+    expect(sent[0]!.frame.title).toBeUndefined();
   });
 
   it('does not wake the lead for the lead’s own answer', () => {
