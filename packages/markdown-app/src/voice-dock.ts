@@ -9,12 +9,12 @@
  * answers): a local ack explaining there is nowhere to route to.
  */
 import { type User } from '@feedback/core';
+import { docIdFromPathOrNull } from './doc-path.ts';
 import { type VoiceAck, createVoiceCapture, visibleHeadingIn } from './voice-capture.ts';
 
-/** The current /review/<docId> docId, or null elsewhere. */
+/** The docId of the doc the page is showing, or null elsewhere. */
 function docIdFromPath(): string | null {
-  const m = location.pathname.match(/^\/review\/([^/?#]+)/);
-  return m?.[1] ? decodeURIComponent(m[1]) : null;
+  return docIdFromPathOrNull(location.pathname);
 }
 
 /**

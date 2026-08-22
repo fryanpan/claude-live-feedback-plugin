@@ -145,3 +145,56 @@ describe('relativeReviewUrl', () => {
     expect(relativeReviewUrl('not a url')).toBeUndefined();
   });
 });
+
+describe('a visitor’s review URL names the workspace they are actually in', () => {
+  // Now that a doc is addressed under a workspace, the URL carries a
+  // workspace id — and the id `withReviewUrl` picks is the FIRST workspace
+  // holding the doc, which need not be the one this visitor was shared. Two
+  // things go wrong if that reaches them: they learn the id of a workspace
+  // nobody shared with them (an unguessable capability, per the same rule
+  // that keeps `hubWorkspaceId` owner-only), and the link 403s at the host
+  // guard, which checks the workspace segment against their share.
+  const SHARED = 'w-shared';
+
+  it('rewrites the workspace segment to the shared workspace', () => {
+    expect(relativeReviewUrl('http://host:8787/workspaces/w-other/docs/d1', SHARED)).toBe(
+      '/workspaces/w-shared/docs/d1',
+    );
+  });
+
+  it('leaves a URL already under the shared workspace alone', () => {
+    expect(relativeReviewUrl('http://host:8787/workspaces/w-shared/docs/d1', SHARED)).toBe(
+      '/workspaces/w-shared/docs/d1',
+    );
+  });
+
+  it('rewrites mockups and reviews too, not just docs', () => {
+    expect(relativeReviewUrl('http://h/workspaces/w-other/mockups/m1', SHARED)).toBe(
+      '/workspaces/w-shared/mockups/m1',
+    );
+    expect(relativeReviewUrl('http://h/workspaces/w-other/reviews/r1', SHARED)).toBe(
+      '/workspaces/w-shared/reviews/r1',
+    );
+  });
+
+  it('keeps the query string', () => {
+    expect(relativeReviewUrl('http://h/workspaces/w-other/docs/d1?mobile=x', SHARED)).toBe(
+      '/workspaces/w-shared/docs/d1?mobile=x',
+    );
+  });
+
+  it('leaves a legacy /review/ URL alone — it names no workspace to rewrite', () => {
+    expect(relativeReviewUrl('http://h/review/d1', SHARED)).toBe('/review/d1');
+  });
+
+  it('still just relativizes when no workspace scope is given (the owner path)', () => {
+    expect(relativeReviewUrl('http://h/workspaces/w-other/docs/d1')).toBe(
+      '/workspaces/w-other/docs/d1',
+    );
+  });
+
+  it('does not invent a URL out of nothing', () => {
+    expect(relativeReviewUrl(undefined, SHARED)).toBeUndefined();
+    expect(relativeReviewUrl('not a url', SHARED)).toBeUndefined();
+  });
+});

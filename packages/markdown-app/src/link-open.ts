@@ -8,6 +8,8 @@
  * mailto/tel) should all open — EXCEPT script-bearing schemes, which must
  * never be handed to window.open.
  */
+import { docHref } from './doc-path.ts';
+
 const UNSAFE_SCHEME = /^(?:javascript|data|vbscript):/i;
 
 export function safeLinkHref(href: string | null | undefined): string | null {
@@ -41,11 +43,15 @@ export function safeLinkHref(href: string | null | undefined): string | null {
  */
 export function resolveDocLink(opts: {
   href: string | null | undefined;
-  workspaceId: string | null | undefined;
+  /** The REVIEW this doc belongs to — member docIds are built from it. */
+  reviewId: string | null | undefined;
   relPath: string | null | undefined;
+  /** The WORKSPACE the sibling should be addressed under, when one is known.
+   *  Passed in rather than read off `location` so this stays pure. */
+  workspaceId?: string | null;
 }): string | null {
-  const { href, workspaceId, relPath } = opts;
-  if (!href || !workspaceId || !relPath) return null;
+  const { href, reviewId, relPath, workspaceId } = opts;
+  if (!href || !reviewId || !relPath) return null;
   const trimmed = href.trim();
   if (!trimmed) return null;
   // Scheme-ful (`https:`, `mailto:`), protocol-relative, absolute, and
@@ -72,6 +78,6 @@ export function resolveDocLink(opts: {
     segs.push(seg);
   }
   if (segs.length === 0) return null;
-  const memberDocId = `${workspaceId}:${segs.join('~')}`;
-  return `/review/${encodeURIComponent(memberDocId)}`;
+  const memberDocId = `${reviewId}:${segs.join('~')}`;
+  return docHref(memberDocId, workspaceId ?? null);
 }

@@ -1,6 +1,7 @@
 import type { FeedbackClient, User } from '@feedback/core';
 import { applyBackLink } from './back-link.ts';
 import { setActiveFile } from './diff-nav.ts';
+import { docIdFromPath, docIdFromPathOrNull } from './doc-path.ts';
 import type { DocMeta, MountContext, MountFn } from './mount-context.ts';
 import { MountScope } from './mount-scope.ts';
 
@@ -32,11 +33,8 @@ let opts: RouterOpts | null = null;
  *  async step in swap() re-checks it: a superseded navigation abandons. */
 let currentScope: MountScope | null = null;
 
-/** Extract the docId from a `/review/<docId>[?…]` path or full URL. */
-function docIdOf(urlOrPath: string): string {
-  const m = urlOrPath.match(/\/review\/([^/?#]+)/);
-  return m ? decodeURIComponent(m[1]) : 'default';
-}
+/** Extract the docId from a doc path or full URL — both address shapes. */
+const docIdOf = docIdFromPath;
 
 /** Reduce an href to a same-origin path. Sidebar links can be ABSOLUTE
  *  reviewUrls whose host differs from the browsing host (e.g. the server
@@ -157,16 +155,16 @@ function isPlainClick(ev: MouseEvent): boolean {
 export function startRouter(routerOpts: RouterOpts): () => void {
   opts = routerOpts;
 
-  // Capturing document click: intercept a plain click on a /review/<id> link
-  // inside either sidebar container (#set-pane on desktop, #doc-menu on mobile)
-  // and swap in place instead of letting the browser navigate.
+  // Capturing document click: intercept a plain click on a doc link inside
+  // either sidebar container (#set-pane on desktop, #doc-menu on mobile) and
+  // swap in place instead of letting the browser navigate.
   const onClick = (ev: MouseEvent): void => {
     if (!isPlainClick(ev)) return;
     const a = (ev.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
     if (!a) return;
     if (!a.closest('#set-pane, #doc-menu')) return;
     const href = a.getAttribute('href') ?? '';
-    if (!/\/review\/[^/?#]+/.test(href)) return; // e.g. context-file links (href="#")
+    if (docIdFromPathOrNull(href) === null) return; // e.g. context-file links (href="#")
     ev.preventDefault();
     navigateTo(href);
   };

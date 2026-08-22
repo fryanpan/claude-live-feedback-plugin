@@ -85,21 +85,46 @@ export function redactMetaForVisitor(
   };
 }
 
+/** `/workspaces/<id>/<kind>/<rest>` — the addressable-resource shape. */
+const WORKSPACE_RESOURCE = /^\/workspaces\/[^/]+\/(docs|mockups|reviews)\/(.+)$/;
+
 /**
  * A review URL a visitor can actually use: same path, but rooted at the
  * host they arrived on rather than the tailnet name the server prefers.
  * Returns a relative URL, which is correct for every share mode and leaks
  * no hostname at all.
+ *
+ * `scopeWorkspaceId` additionally rewrites the WORKSPACE segment, and it is
+ * not cosmetic. A resource is addressed under a workspace, and the one the
+ * server picks when minting is the first workspace holding the doc — which
+ * need not be the workspace this visitor was shared. Handing that URL over
+ * would do two things at once: name a workspace nobody shared with them (an
+ * unguessable capability, the same reason `hubWorkspaceId` is owner-only),
+ * and give them a link the host guard then refuses, because it checks the
+ * workspace segment against their share. Every resource a visitor can see is
+ * by definition inside their workspace, so their workspace is the correct
+ * segment for all of them.
  */
-export function relativeReviewUrl(reviewUrl: string | undefined): string | undefined {
+export function relativeReviewUrl(
+  reviewUrl: string | undefined,
+  scopeWorkspaceId?: string,
+): string | undefined {
   if (!reviewUrl) return undefined;
+  let path: string;
   try {
     const u = new URL(reviewUrl);
-    return `${u.pathname}${u.search}`;
+    path = `${u.pathname}${u.search}`;
   } catch {
     // Already relative (or unparseable) — pass through only if it's a path.
-    return reviewUrl.startsWith('/') ? reviewUrl : undefined;
+    if (!reviewUrl.startsWith('/')) return undefined;
+    path = reviewUrl;
   }
+  if (!scopeWorkspaceId) return path;
+  // A legacy `/review/<docId>` names no workspace, so there is nothing to
+  // rewrite and nothing to leak — leave it as it is.
+  const m = path.match(WORKSPACE_RESOURCE);
+  if (!m) return path;
+  return `/workspaces/${encodeURIComponent(scopeWorkspaceId)}/${m[1]}/${m[2]}`;
 }
 
 /**
@@ -127,27 +152,30 @@ export function relativeReviewUrl(reviewUrl: string | undefined): string | undef
  */
 export function redactWorkspaceTreeForVisitor<T extends { root?: string; tree?: unknown }>(
   payload: T,
+  scopeWorkspaceId?: string,
 ): Omit<T, 'root'> {
   const { root: _dropped, ...rest } = payload;
-  return { ...rest, ...(payload.tree ? { tree: redactNode(payload.tree) } : {}) } as Omit<
-    T,
-    'root'
-  >;
+  return {
+    ...rest,
+    ...(payload.tree ? { tree: redactNode(payload.tree, scopeWorkspaceId) } : {}),
+  } as Omit<T, 'root'>;
 }
 
 /** Recursively relativize `reviewUrl` on every node of a workspace tree. */
-function redactNode(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(redactNode);
+function redactNode(node: unknown, scopeWorkspaceId?: string): unknown {
+  if (Array.isArray(node)) return node.map((n) => redactNode(n, scopeWorkspaceId));
   if (!node || typeof node !== 'object') return node;
   const { reviewUrl, ...base } = node as Record<string, unknown>;
   const out: Record<string, unknown> = { ...base };
   // Absent rather than absolute: an unparseable reviewUrl is dropped outright
   // instead of passed through, so a future URL shape can't leak by default.
   if (typeof reviewUrl === 'string') {
-    const rel = relativeReviewUrl(reviewUrl);
+    const rel = relativeReviewUrl(reviewUrl, scopeWorkspaceId);
     if (rel !== undefined) out.reviewUrl = rel;
   }
-  if (Array.isArray(out.children)) out.children = out.children.map(redactNode);
+  if (Array.isArray(out.children)) {
+    out.children = out.children.map((n) => redactNode(n, scopeWorkspaceId));
+  }
   return out;
 }
 
@@ -157,10 +185,11 @@ function redactNode(node: unknown): unknown {
  */
 export function redactWorkspaceFilesForVisitor<T extends { root?: string; files?: unknown[] }>(
   payload: T,
+  scopeWorkspaceId?: string,
 ): Omit<T, 'root'> {
   const { root: _dropped, ...rest } = payload;
   return {
     ...rest,
-    ...(payload.files ? { files: payload.files.map(redactNode) } : {}),
+    ...(payload.files ? { files: payload.files.map((n) => redactNode(n, scopeWorkspaceId)) } : {}),
   } as Omit<T, 'root'>;
 }

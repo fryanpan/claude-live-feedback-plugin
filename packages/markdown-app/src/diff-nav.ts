@@ -1,4 +1,5 @@
 import { escapeHtml } from '@feedback/core';
+import { docIdFromPathOrNull } from './doc-path.ts';
 import {
   beginSidebarRender,
   isCurrentSidebarRender,
@@ -559,11 +560,9 @@ export function wireDiffNavRefresh(
   };
 }
 
-/** Extract the docId from a `/review/<docId>[?…]` href (absolute or relative). */
+/** Extract the docId from a doc href (absolute or relative), or null. */
 function docIdOfHref(href: string | null): string | null {
-  if (!href) return null;
-  const m = href.match(/\/review\/([^/?#]+)/);
-  return m ? decodeURIComponent(m[1]) : null;
+  return href ? docIdFromPathOrNull(href) : null;
 }
 
 /**
