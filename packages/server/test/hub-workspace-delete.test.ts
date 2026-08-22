@@ -43,7 +43,7 @@ import {
   type Task,
   TaskStore,
   eventsLogPath,
-  pendingRetriagePath,
+  legacyRetriageSidecarPath,
   tasksSidecarPath,
   voiceQueuePath,
 } from '../src/tasks.ts';
@@ -223,14 +223,15 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
         actor: AGENT,
       }),
     ).toBeTypeOf('string');
-    const goal = await fetch(`${base}/api/workspaces/${wsId}/goal`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ goal: 'Try a second thing instead.', author: AGENT }),
-    });
-    expect(goal.status).toBe(200);
+    // The second is a file NOTHING writes any more: the removed north-star
+    // re-triage queued here, and a board created before that removal can
+    // still be carrying one. Written by hand because there is no longer a
+    // code path that produces it — and swept all the same, or a delete
+    // leaves behind a `.retriage.json` nothing on the box can explain.
+    const legacy = legacyRetriageSidecarPath(dataDir as string, wsId);
+    writeFileSync(legacy, `${JSON.stringify({ pending: { ts: 1_700_000_000_000 } }, null, 2)}\n`);
     expect(existsSync(voiceQueuePath(dataDir as string, wsId))).toBe(true);
-    expect(existsSync(pendingRetriagePath(dataDir as string, wsId))).toBe(true);
+    expect(existsSync(legacy)).toBe(true);
 
     const res = await del(`/api/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(200);
@@ -241,6 +242,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(await listWorkspaceIds()).not.toContain(wsId);
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(false);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(false);
+    expect(existsSync(legacy)).toBe(false);
     expect(handle?.rooms.get(boardRoom)).toBeUndefined();
     expect(handle?.rooms.get(openBody)).toBeUndefined();
     expect(handle?.rooms.get(doneBody)).toBeUndefined();
@@ -388,7 +390,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     const dir = mkdtempSync(join(tmpdir(), 'hub-ws-delete-store-'));
     const store = new TaskStore({ dataDir: dir, debounceMs: 5000 });
     try {
-      const ws = store.createWorkspace('scratch', 'Try one thing.');
+      const ws = store.createWorkspace('scratch');
       store.createTask(ws.id, { title: 'written' });
       store.flush();
       const sidecar = tasksSidecarPath(dir, ws.id);

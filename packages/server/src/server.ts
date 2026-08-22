@@ -460,9 +460,7 @@ const CT: Record<string, string> = {
  */
 export interface CoverageQueue {
   queuedVoice: number;
-  /** 0 or 1 — the pending re-triage is a single coalesced ask. */
-  pendingRetriage: number;
-  /** 0 or 1 — likewise. */
+  /** 0 or 1 — the pending bucket re-look is a single coalesced ask. */
   pendingBucketReview: number;
   taskReviews: number;
 }
@@ -752,12 +750,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // subscriber/audit contract and has no triage.requested row, so requests
   // never reach events.jsonl (they're a delivery, not a change).
   //
-  // A goal-retriage is addressed to the workspace's LEAD agent specifically:
-  // it asks someone to re-place the whole board against a new north star,
-  // and "whoever happened to be connected" is how that request reached
-  // nobody accountable. A bucket-review is addressed the same way for the
-  // same reason — deciding which band a pile of unplaced work belongs under
-  // is a board-wide ranking judgment, not first-come work. A task-review —
+  // A bucket-review is addressed to the workspace's LEAD agent specifically:
+  // deciding which band a pile of unplaced work belongs under is a
+  // board-wide ranking judgment, and "whoever happened to be connected" is
+  // how such a request reached nobody accountable. A task-review —
   // "this row's name or story falls short, judge it against the project" —
   // is lead-addressed for the same reason: the reviewer needs the project
   // context, and Bryan named the lead (or its subagent) as the reviewer
@@ -767,15 +763,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // persists each for the lead's next attach.
   taskStore.setTriageDelivery((req) => {
     const live =
-      req.kind === 'goal-retriage' || req.kind === 'bucket-review' || req.kind === 'task-review'
+      req.kind === 'bucket-review' || req.kind === 'task-review'
         ? taskStore.hasLiveLeadAttachment(req.workspaceId)
         : taskStore.hasLiveAttachment(req.workspaceId);
     if (!live) return false;
     // The WHOLE request goes on the wire, deliberately: the MCP renders its
     // channel line straight off this frame, so a field trimmed here cannot be
     // rendered no matter what the renderer does — and the lead who is HERE
-    // would get less than the one who was away and picks the same edit up as
-    // `pendingRetriage` on attach. Pinned by a test that reads this frame.
+    // would get less than the one who was away and picks the same ask up as
+    // `pendingBucketReview` on attach. Pinned by a test that reads this frame.
     const frame = { event: 'triage.requested', ...req } as const;
     // Addressed kinds go to ONE agent; only shape-and-place is open to
     // whoever is there. The addressing used to be done at the receiver, in
@@ -785,11 +781,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // something for him to review, which is what he saw (2026-08-21). And
     // every non-lead agent on the board paid a whole turn to read a message
     // and conclude it was not theirs.
-    if (
-      req.kind === 'goal-retriage' ||
-      req.kind === 'bucket-review' ||
-      req.kind === 'task-review'
-    ) {
+    if (req.kind === 'bucket-review' || req.kind === 'task-review') {
       // No addressee in the payload means the seat is empty, and an empty
       // seat cannot be delivered to — the liveness gate above already said
       // no in that case, so this is belt-and-braces rather than a path.
@@ -1375,12 +1367,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   const queuedForLead = (workspaceId: string): CoverageQueue => ({
     queuedVoice: taskStore.listQueuedVoice(workspaceId).length,
-    pendingRetriage: taskStore.getPendingRetriage(workspaceId) ? 1 : 0,
     pendingBucketReview: taskStore.getPendingBucketReview(workspaceId) ? 1 : 0,
     taskReviews: taskStore.getPendingTaskReviews(workspaceId)?.length ?? 0,
   });
   const queueTotal = (q: CoverageQueue): number =>
-    q.queuedVoice + q.pendingRetriage + q.pendingBucketReview + q.taskReviews;
+    q.queuedVoice + q.pendingBucketReview + q.taskReviews;
 
   /**
    * The coverage readout for one agent's watch set.
@@ -1541,8 +1532,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * learns where it went.
    */
   const DEFAULT_HUB_WORKSPACE_NAME = 'Unfiled';
-  const DEFAULT_HUB_WORKSPACE_GOAL =
-    'Docs that arrived without a workspace. Move one into a real workspace once its work has a home.';
 
   /**
    * The default hub workspace, created on first need.
@@ -1554,10 +1543,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const defaultHubWorkspaceId = (): string => {
     const existing = taskStore.listWorkspaces().find((w) => w.name === DEFAULT_HUB_WORKSPACE_NAME);
     if (existing) return existing.id;
-    const created = taskStore.createWorkspace(
-      DEFAULT_HUB_WORKSPACE_NAME,
-      DEFAULT_HUB_WORKSPACE_GOAL,
-    );
+    const created = taskStore.createWorkspace(DEFAULT_HUB_WORKSPACE_NAME);
     // createWorkspace emits no event (nothing subscribes to a workspace that
     // doesn't exist yet), so bring the board room up by hand — same as the
     // POST /api/workspaces route.
@@ -2472,7 +2458,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const body = await safeJson(req);
           const folderPath = body?.folderPath as string | undefined;
           if (!folderPath && typeof body?.name === 'string' && body.name.trim().length > 0) {
-            const goal = typeof body?.goal === 'string' ? (body.goal as string) : undefined;
+            // `body.goal` is the removed workspace-level text goal. Read
+            // deliberately nowhere: bundles built before the removal still
+            // send it, and refusing a field the server has stopped caring
+            // about would fail a caller for saying something harmless.
             // Who leads the board. Explicit `leadAgentId` wins; otherwise the
             // CREATING agent takes the seat — which is the whole point of
             // "every workspace has a lead, always": the common path is an
@@ -2487,7 +2476,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 : author && classifyActor(author) === 'agent'
                   ? author.id
                   : undefined;
-            const workspace = taskStore.createWorkspace(body.name.trim(), goal, {
+            const workspace = taskStore.createWorkspace(body.name.trim(), {
               ...(leadAgentId !== undefined ? { leadAgentId } : {}),
             });
             // createWorkspace emits no event (nothing subscribes to a
@@ -2638,7 +2627,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             hubWorkspaces: taskStore.listWorkspaces().map((w) => ({
               id: w.id,
               name: w.name,
-              goal: w.goal,
               docCount: w.docIds.length,
               createdAt: w.createdAt,
             })),
@@ -2661,14 +2649,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             workspace,
             goalSummary: summarizeGoals(taskStore.listTasks(workspaceId), workspace.goals),
-            // A goal edit waiting for the lead agent. Read-only here: only an
-            // attach drains it. Surfaced so "nobody has picked this up" is
-            // visible work on the board rather than a silent gap.
-            pendingRetriage: taskStore.getPendingRetriage(workspaceId),
             // A new goal band the lead has not re-looked at the bucket
-            // against. Read-only here too — only an attach drains it — and
-            // separate from the field above because answering one does not
-            // answer the other.
+            // against. Read-only here: only an attach drains it. Surfaced so
+            // "nobody has picked this up" is visible work on the board rather
+            // than a silent gap.
             pendingBucketReview: taskStore.getPendingBucketReview(workspaceId),
           });
         }
@@ -2824,50 +2808,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (events.length > 1000) events = events.slice(-1000);
           return j(200, { workspaceId, events, uptime });
         }
-        // set_workspace_goal: edit the north-star goal (§3.10). The store
-        // emits workspace.goal_updated and requests a re-triage of open
-        // tasks; the response reports whether that request reached a live
-        // attachment (with none, the re-triage honestly does not happen).
+        // The workspace-level TEXT goal is GONE — the ordered goal LIST is
+        // the one goal system now. This route stays because it is on the
+        // SHARED server: plugin bundles built before the removal still call
+        // it from sessions nobody can restart, and a 404 here is
+        // indistinguishable from a bad workspace id while a 500 reads as an
+        // outage. So it answers deliberately, and it answers 410 rather than
+        // a 200 no-op: the caller is an agent that would otherwise record
+        // "goal set" for a write that never happened, and the MCP client
+        // surfaces a non-2xx body verbatim, which is how the sentence below
+        // reaches whoever needs to read it.
         const wsGoalMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/goal$/);
         if (wsGoalMatch && req.method === 'PUT') {
-          const workspaceId = decodeURIComponent(wsGoalMatch[1] ?? '');
-          const body = await safeJson(req);
-          const goal = body?.goal;
-          // `summary` is the ≤20-word line the board DISPLAYS in place of the
-          // goal. It rides this route rather than getting one of its own so
-          // there is exactly one way in: two writers for one field is how a
-          // stale hash gets computed against the wrong goal.
-          const summary = body?.summary;
-          if (summary !== undefined && typeof summary !== 'string') {
-            return j(400, { error: 'summary must be a string' });
-          }
-          const author = authorFor(body?.author);
-          if (!author) return j(400, { error: 'author required' });
-          if (typeof goal !== 'string') {
-            // Summary-only: re-wording the display line must not require the
-            // caller to echo the goal back, which would let a stale read
-            // silently revert a north star somebody else just edited.
-            if (typeof summary !== 'string') {
-              return j(400, { error: 'goal or summary required' });
-            }
-            const only = taskStore.setGoalSummary(workspaceId, summary);
-            if (!only.ok) return j(404, only);
-            // The store emits nothing for a display-only change, so nothing
-            // would push it to the open boards. Reassert the projection here
-            // — otherwise the summary exists and no surface can show it.
-            taskProjection.ensureWorkspace(workspaceId);
-            return j(200, { ok: true, workspace: only.workspace, changed: false });
-          }
-          const res = taskStore.setWorkspaceGoal(workspaceId, goal, {
-            actor: author,
-            ...(typeof summary === 'string' ? { summary } : {}),
+          return j(410, {
+            deprecated: true,
+            error:
+              "the workspace-level text goal was removed — a workspace's goals are the ordered " +
+              'goal LIST now. Use set_goal_list to write the bands, rename_goal to retitle one, ' +
+              'reorder_goals to rank them, and set_task_goal to place work under one. Nothing ' +
+              'was written by this call.',
           });
-          if (!res.ok) return j(404, res);
-          // A no-op goal edit carrying a new summary emits no event either,
-          // so the same reassert applies. Idempotent, so doing it on the
-          // changed path too costs nothing and removes a branch to get wrong.
-          if (typeof summary === 'string') taskProjection.ensureWorkspace(workspaceId);
-          return j(200, res);
         }
         // set_workspace_lead: hand the board's lead-agent seat to someone
         // else. A standing assignment, not a session fact — the lead may be
@@ -5869,13 +5829,13 @@ function flattenWorkspaceFiles(node: WorkspaceDirNode | WorkspaceFileNode): Land
  * `lastActivity` is the newest REAL event on the board: a task mutation
  * (`task.updatedAt` — bumped by every transition, assignment, evidence and
  * body rewrite), a comment on a task's discussion (`thread.lastActivity` on
- * the `task:<id>` room), a goal edit, or the board's creation. Deliberately
+ * the `task:<id>` room), or the board's creation. Deliberately
  * NOT `meta.lastActivityAt`, which is the `.ydoc` mtime wearing an activity
  * label — see rule 1 in the header of `landing.ts`.
  */
 function collectLandingWorkspaces(rooms: Rooms, taskStore: TaskStore): LandingWorkspaceInput[] {
   return taskStore.listWorkspaces().map((ws) => {
-    let last = Math.max(ws.createdAt, ws.goalUpdatedAt ?? 0);
+    let last = ws.createdAt;
     for (const task of taskStore.listTasks(ws.id)) {
       if (task.updatedAt > last) last = task.updatedAt;
       for (const thread of rooms.listThreads(`task:${task.id}`)) {

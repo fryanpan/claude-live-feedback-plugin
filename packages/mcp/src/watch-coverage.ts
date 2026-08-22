@@ -23,9 +23,7 @@
 
 export interface CoverageQueue {
   queuedVoice: number;
-  /** 0 or 1 — the pending re-triage is a single coalesced ask. */
-  pendingRetriage: number;
-  /** 0 or 1 — likewise. */
+  /** 0 or 1 — the pending bucket re-look is a single coalesced ask. */
   pendingBucketReview: number;
   taskReviews: number;
 }
@@ -128,7 +126,6 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function describeQueue(q: CoverageQueue): string {
   const parts: string[] = [];
   if (q.queuedVoice > 0) parts.push(plural(q.queuedVoice, 'voice note'));
-  if (q.pendingRetriage > 0) parts.push(plural(q.pendingRetriage, 're-triage request'));
   if (q.pendingBucketReview > 0) parts.push(plural(q.pendingBucketReview, 'bucket review'));
   if (q.taskReviews > 0) parts.push(plural(q.taskReviews, 'task review'));
   return parts.join(', ');

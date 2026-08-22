@@ -176,7 +176,7 @@ describe('ydoc projection + workspace room', () => {
     local(path, { method: 'POST', body: JSON.stringify(body) });
 
   async function makeWorkspace(name: string): Promise<string> {
-    const r = await post('/api/workspaces', { name, goal: 'Ship the search revamp.' });
+    const r = await post('/api/workspaces', { name });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { workspace: { id: string } };
     return body.workspace.id;
@@ -205,8 +205,8 @@ describe('ydoc projection + workspace room', () => {
     const wsId = await makeWorkspace('search-revamp');
     const room = handle.rooms.get(workspaceRoomId(wsId));
     if (!room) throw new Error('ws room was not created');
-    // The workspace map carries the goal text (visitor-contract field).
-    expect(room.ydoc.getMap('workspace').get('goal')).toBe('Ship the search revamp.');
+    // The workspace map carries the board's name (visitor-contract field).
+    expect(room.ydoc.getMap('workspace').get('name')).toBe('search-revamp');
 
     const taskId = await makeTask(wsId, { title: 'Wire the index' });
     const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
@@ -223,13 +223,14 @@ describe('ydoc projection + workspace room', () => {
     expect(after.transitions).toHaveLength(1);
     expect(after.transitions[0]?.by).toEqual({ name: 'Search Revamp', kind: 'agent' });
 
-    // A goal edit through the route reaches the workspace map too.
-    const g = await local(`/api/workspaces/${wsId}/goal`, {
+    // A goal-list edit through the route reaches the workspace map too.
+    const g = await local(`/api/workspaces/${wsId}/goals`, {
       method: 'PUT',
-      body: JSON.stringify({ goal: 'Ship it faster.', author: PERSON }),
+      body: JSON.stringify({ goals: [{ title: 'Ship it faster' }], author: PERSON }),
     });
     expect(g.status).toBe(200);
-    expect(room.ydoc.getMap('workspace').get('goal')).toBe('Ship it faster.');
+    const goals = room.ydoc.getMap('workspace').get('goals') as Array<{ title: string }>;
+    expect(goals.map((x) => x.title)).toContain('Ship it faster');
   });
 
   it('an evidence amendment reaches the board room — the only thing the board reads', async () => {

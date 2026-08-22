@@ -36,7 +36,6 @@ import {
 
 const EMPTY: CoverageQueue = {
   queuedVoice: 0,
-  pendingRetriage: 0,
   pendingBucketReview: 0,
   taskReviews: 0,
 };
@@ -52,8 +51,7 @@ const board = (over: Partial<CoverageUnattachedBoard> = {}): CoverageUnattachedB
     leadLive: false,
     queued,
     queuedTotal:
-      over.queuedTotal ??
-      queued.queuedVoice + queued.pendingRetriage + queued.pendingBucketReview + queued.taskReviews,
+      over.queuedTotal ?? queued.queuedVoice + queued.pendingBucketReview + queued.taskReviews,
     ...over,
   };
 };
@@ -93,8 +91,7 @@ describe('coverageAlertLine — say what is waiting, and only when something is'
           board({
             queued: {
               queuedVoice: 1,
-              pendingRetriage: 1,
-              pendingBucketReview: 0,
+              pendingBucketReview: 1,
               taskReviews: 2,
             },
           }),
@@ -110,7 +107,7 @@ describe('coverageAlertLine — say what is waiting, and only when something is'
     expect(text).toContain('4');
     expect(text).toContain('2 docs');
     expect(text).toContain('voice');
-    expect(text).toContain('re-triage');
+    expect(text).toContain('bucket review');
     expect(text).toContain('task review');
     // And it names the one call that fixes it, so the reader is not left to
     // work out which of attach_agent / watch_doc / set_workspace_lead it was.
@@ -215,7 +212,7 @@ describe('coverageAlertLine — say what is waiting, and only when something is'
           unattachedBoards: [
             board({
               name: 'my-own-board',
-              queued: { ...EMPTY, pendingRetriage: 1 },
+              queued: { ...EMPTY, pendingBucketReview: 1 },
               attached: true,
               heartbeatFresh: false,
               leadAgentId: 'agent-self',
@@ -328,7 +325,7 @@ describe('restoreNoticeContent — the unprompted line a respawn gets', () => {
       pruned: [],
       agentName,
       coverage: coverage({
-        unattachedBoards: [board({ queued: { ...EMPTY, pendingRetriage: 1 } })],
+        unattachedBoards: [board({ queued: { ...EMPTY, pendingBucketReview: 1 } })],
       }),
     });
     expect(content).not.toBeNull();

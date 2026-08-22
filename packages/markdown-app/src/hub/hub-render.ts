@@ -14,12 +14,7 @@ import {
   transitionUnproven,
 } from '@feedback/core';
 import type { ReviewShape } from '@feedback/core';
-import {
-  GOAL_SUMMARY_MAX_WORDS,
-  type StoredGoalSummary,
-  clipGoal,
-  goalDisplay,
-} from '@feedback/core/goal-summary';
+import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
 import {
   type ComposerSelection,
@@ -44,7 +39,6 @@ import {
   type HubTask,
   type HubTransition,
   type PendingBucketReviewView,
-  type PendingRetriageView,
   type PresenceChip,
   type ReorderTarget,
   type ReviewItem,
@@ -364,119 +358,6 @@ function wireInPlaceTitle(
   return begin;
 }
 
-// ── Goal strip ─────────────────────────────────────────────────────────────
-
-export interface GoalStripHandlers {
-  /** `summary` is the ≤20-word display line. Empty string clears it, which
-   *  is how a reviewer goes back to the deterministic clip. */
-  onGoalCommit: (goal: string, summary: string) => void;
-}
-
-/**
- * Read-first, editable in place, markdown (§3.9). Empty goal → the §3.9
- * "start planning" lead-in instead of an empty strip.
- *
- * A goal longer than twenty words collapses to its summary with a "Show full
- * goal" toggle; a short one renders in full, markdown and all, with no toggle
- * — a control that reveals nothing is noise. The toggle is a `<button>` with
- * `aria-expanded`, never a hover reveal: this strip is read on a phone, where
- * there is no hover and the full-length card measured 517px tall.
- */
-export function renderGoalStrip(
-  container: HTMLElement,
-  goal: string,
-  handlers: GoalStripHandlers,
-  storedSummary?: StoredGoalSummary,
-  expanded = false,
-): void {
-  container.replaceChildren();
-  const display = goalDisplay(goal, storedSummary);
-  const body = document.createElement('div');
-  body.className = 'hub-goal-body';
-  if (!goal.trim()) {
-    body.innerHTML =
-      '<p class="hub-goal-empty">No goal yet — start planning: set the goal this workspace drives toward.</p>';
-  } else if (display.truncated && !expanded) {
-    // Plain text on purpose: a summary is one line, and markdown source in a
-    // clip would put `**` and `](http://…` on the most-viewed line of the
-    // board. The expanded view below renders the real markdown.
-    const p = document.createElement('p');
-    p.className = 'hub-goal-summary';
-    p.textContent = display.summary;
-    body.append(p);
-  } else {
-    body.innerHTML = renderCommentMarkdown(goal);
-  }
-  const edit = document.createElement('button');
-  edit.type = 'button';
-  edit.className = 'hub-goal-edit icon-btn';
-  edit.title = 'Edit the workspace goal';
-  edit.setAttribute('aria-label', 'Edit the workspace goal');
-  edit.textContent = '✏️';
-  edit.addEventListener('click', () => {
-    const editor = document.createElement('div');
-    editor.className = 'hub-goal-editor';
-    const ta = document.createElement('textarea');
-    ta.value = goal;
-    ta.rows = Math.min(10, Math.max(3, goal.split('\n').length + 1));
-    // The short line is editable right here, because whoever wrote the goal
-    // is the person best placed to say what its twenty words are — and a
-    // compression somebody else chose is a rewrite of their statement.
-    const summaryLabel = document.createElement('label');
-    summaryLabel.className = 'hub-goal-summary-label';
-    summaryLabel.textContent = `Short version (${GOAL_SUMMARY_MAX_WORDS} words or fewer, shown on the board)`;
-    const summaryInput = document.createElement('input');
-    summaryInput.type = 'text';
-    summaryInput.className = 'hub-goal-summary-input';
-    summaryInput.value = storedSummary?.text ?? '';
-    summaryInput.placeholder = clipGoal(goal);
-    summaryLabel.append(summaryInput);
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.textContent = 'Save goal';
-    save.className = 'hub-btn hub-btn-primary';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.textContent = 'Cancel';
-    cancel.className = 'hub-btn';
-    save.addEventListener('click', () => {
-      // The field is PRE-FILLED with the stored line, so an untouched one
-      // ships back with the save — and the server, which cannot tell a
-      // resubmission from a fresh answer, would hash it against the NEW goal
-      // and bless a sentence describing the old one. That is the exact
-      // failure the hash exists to prevent, laundered through the UI. So a
-      // line left exactly as it was, on a goal that moved, is dropped: the
-      // strip falls back to the clip of the new goal, and the cost is a line
-      // the reviewer can retype rather than a board asserting an abandoned
-      // aim. Retyping it is the reconfirmation.
-      const untouched = summaryInput.value.trim() === (storedSummary?.text ?? '').trim();
-      const stale = ta.value !== goal && untouched;
-      handlers.onGoalCommit(ta.value, stale ? '' : summaryInput.value);
-    });
-    cancel.addEventListener('click', () =>
-      renderGoalStrip(container, goal, handlers, storedSummary, expanded),
-    );
-    const row = document.createElement('div');
-    row.className = 'hub-goal-editor-actions';
-    row.append(save, cancel);
-    editor.append(ta, summaryLabel, row);
-    container.replaceChildren(editor);
-    ta.focus();
-  });
-  container.append(body, edit);
-  if (display.truncated) {
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'hub-goal-more';
-    more.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    more.textContent = expanded ? 'Show less' : 'Show full goal';
-    more.addEventListener('click', () =>
-      renderGoalStrip(container, goal, handlers, storedSummary, !expanded),
-    );
-    container.append(more);
-  }
-}
-
 // ── Lead-agent strip ───────────────────────────────────────────────────────
 
 export interface LeadStripHandlers {
@@ -486,7 +367,7 @@ export interface LeadStripHandlers {
 /**
  * Who is responsible for this board.
  *
- * A goal change with nobody responsible is a dead letter, so the vacancy is
+ * An ask with nobody responsible is a dead letter, so the vacancy is
  * rendered as loudly as the assignment — "no lead agent" is a state to fix,
  * not a blank. The picker lists every agent the board knows about (the
  * current lead plus everyone attached), so reassigning is one tap; with
@@ -498,36 +379,23 @@ export function renderLeadStrip(
   leadAgentId: string | undefined,
   knownAgentIds: string[],
   handlers: LeadStripHandlers,
-  pendingRetriage?: PendingRetriageView,
   pendingBucketReview?: PendingBucketReviewView,
 ): void {
   container.replaceChildren();
   container.classList.toggle('hub-lead-empty', !leadAgentId);
   const label = document.createElement('span');
   label.className = 'hub-lead-label';
-  label.textContent = leadAgentId ? 'Lead agent' : 'No lead agent — nobody owns goal changes here';
+  label.textContent = leadAgentId
+    ? 'Lead agent'
+    : 'No lead agent — nobody owns this board’s triage asks';
   container.append(label);
-  if (pendingRetriage && pendingRetriage.taskIds.length > 0) {
-    // A goal edit that has not been picked up. Counted, not vaguely
-    // announced: "3 tasks" is the size of the ask, and it is stated whether
-    // or not there is a lead — the case with no lead is exactly the one
-    // where this used to disappear.
-    const n = pendingRetriage.taskIds.length;
-    const waiting = document.createElement('span');
-    waiting.className = 'hub-lead-pending';
-    waiting.textContent = leadAgentId
-      ? `Goal edit waiting for the lead — ${n} task${n === 1 ? '' : 's'} to re-place`
-      : `Goal edit waiting — ${n} task${n === 1 ? '' : 's'} to re-place, and nobody to do it`;
-    waiting.title = `Edited by ${pendingRetriage.byName}`;
-    container.append(waiting);
-  }
   if (pendingBucketReview && pendingBucketReview.taskIds.length > 0) {
-    // A new goal band nobody has re-looked at the bucket against. Its own
-    // chip rather than a line folded into the one above: the two asks are
-    // answered by different moves, and a board that showed only the
-    // north-star one would report "nothing waiting" while this sat in a
-    // sidecar — the store-has-it/surface-can't-show-it failure, which is
-    // exactly what the projection next door exists to prevent.
+    // A new goal band nobody has re-looked at the bucket against. Counted,
+    // not vaguely announced: "3 tasks" is the size of the ask, and it is
+    // stated whether or not there is a lead — the case with no lead is
+    // exactly the one where this used to disappear. An ask that lives only
+    // in a sidecar is the store-has-it/surface-can't-show-it failure, which
+    // is what the projection next door exists to prevent.
     const n = pendingBucketReview.taskIds.length;
     const bands = pendingBucketReview.bandTitles;
     const named = bands.length === 1 ? `“${bands[0]}”` : `${bands.length} new bands`;
@@ -2681,39 +2549,6 @@ export function renderActivity(
 
 // ── Task detail (opens instantly, no transition — §3.9) ────────────────────
 
-/**
- * A meta row whose value is long prose: the clip inline, the whole thing
- * behind a tap. Nothing is dropped — `full` is in the DOM the moment the
- * reader asks for it, and the toggle is a `<button>` so a thumb can reach it.
- *
- * Re-renders in place rather than toggling a CSS class, so the collapsed row
- * is short in the DOM as well as on screen — a hidden 180-word paragraph is
- * still 180 words for anything reading the panel out loud.
- */
-function addCollapsibleMeta(meta: HTMLElement, key: string, full: string): void {
-  const dt = document.createElement('dt');
-  dt.textContent = key;
-  const dd = document.createElement('dd');
-  dd.className = 'hub-meta-collapsible';
-  const short = clipGoal(full);
-  const paint = (expanded: boolean): void => {
-    dd.replaceChildren();
-    const text = document.createElement('span');
-    text.textContent = expanded ? full : short;
-    dd.append(text);
-    if (short === full) return;
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'hub-meta-more';
-    more.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    more.textContent = expanded ? 'Less' : 'More';
-    more.addEventListener('click', () => paint(!expanded));
-    dd.append(more);
-  };
-  paint(false);
-  meta.append(dt, dd);
-}
-
 export interface DetailHandlers {
   onClose: () => void;
   onStatusSet: (task: HubTask, to: TaskStatus) => void;
@@ -4498,14 +4333,6 @@ export function renderTaskDetail(
      field with it, so a tier in the panel would describe machinery that no
      longer exists. */
   if (task.after.length > 0) addMeta('After', task.after.join(', '));
-  if (task.triagedAgainst) {
-    // The goal text this task was judged against, verbatim, on every task —
-    // identical across the whole board, so at full length it pushes the one
-    // thing that DOES differ (the description) off the screen while telling
-    // two tasks apart not at all. No stored summary applies: this is the
-    // goal as it stood at triage time, which may no longer be the goal.
-    addCollapsibleMeta(meta, 'Triaged against', task.triagedAgainst.goal);
-  }
 
   const linkChips = renderTaskLinks(task);
 

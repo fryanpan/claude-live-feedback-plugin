@@ -71,7 +71,7 @@ describe('TaskStore.addGoal', () => {
   });
 
   function seed(): { wsId: string; launch: string; perf: string; launchQa: string; task: string } {
-    const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
+    const ws = store.createWorkspace('search-revamp');
     const ids = seedGoals(store, ws.id, GOAL_SPEC, PERSON);
     const launch = ids.launch as string;
     const perf = ids.perf as string;

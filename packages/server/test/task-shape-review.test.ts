@@ -8,7 +8,7 @@
  * skill) decides fine-as-is / rewrite / ask the filer. Capture always wins —
  * nothing here can refuse or delay a write.
  *
- * Delivery contract mirrors `triage.requested` for goal-retriage: a request
+ * Delivery contract mirrors `triage.requested` for bucket-review: a request
  * is a DELIVERY, not a change, so it never reaches events.jsonl (§3.6's
  * table is exhaustive), it is addressed to the lead in the payload, and when
  * no lead is live it queues in a per-workspace sidecar drained on the lead's
