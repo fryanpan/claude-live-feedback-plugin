@@ -124,6 +124,15 @@ export interface NudgeFrame {
   readyCount?: number;
   /** How long the board had stood still. Idle nudges only. */
   idleMs?: number;
+  /** The answered row's own links — the propagation checklist the answered
+   *  line offers. Answer nudges only, and routinely EMPTY: most rows annotate
+   *  nothing. ABSENT is a third state and not the same as empty — the
+   *  comment-review route records an answer against no task row at all, so
+   *  there is nothing whose links these could be. The renderer must be able
+   *  to tell all three apart, which is why the field exists at all: without
+   *  it `reviewAnsweredLine` sent every reader off to walk a checklist it
+   *  could not check for. */
+  links?: readonly unknown[];
   ts: number;
 }
 
@@ -206,6 +215,12 @@ export class ReadyWorkNudger {
      *  typically not in it — it is blocked or in progress, which is why
      *  somebody was asked in the first place. */
     taskTitle?: string;
+    /** The row's links, resolved by the caller for exactly the reason the
+     *  title is — the snapshot this object holds carries the READY set, and
+     *  an answered row is usually not in it. Pass the array as it stands,
+     *  empty included: "no links" and "no row" are different frames and the
+     *  line reads differently for each. */
+    taskLinks?: readonly unknown[];
     actorId?: string;
   }): void {
     const ts = this.now();
@@ -231,6 +246,7 @@ export class ReadyWorkNudger {
       workspaceId: board.workspaceId,
       ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
       ...(input.taskTitle !== undefined ? { title: input.taskTitle } : {}),
+      ...(input.taskLinks !== undefined ? { links: input.taskLinks } : {}),
       ts,
     });
   }
