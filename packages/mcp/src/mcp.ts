@@ -13,6 +13,7 @@ import { createAttachmentKeepalive } from './attachment-keepalive.ts';
 import { resolveAgentAuthor } from './author.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createFrameDedup } from './frame-dedup.ts';
+import { readyIdleLine, reviewAnsweredLine } from './nudge-line.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { projectTaskRows } from './task-projection.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
@@ -94,7 +95,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.88';
+const PLUGIN_VERSION = '0.1.89';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4038,6 +4039,10 @@ interface HubEventPayload {
   titleFrom?: string;
   titleTo?: string;
   title?: string;
+  /** `workspace.ready_idle` only: how much was ready and how long the board
+   *  had stood still when the wake fired. See ready-nudge.ts. */
+  readyCount?: number;
+  idleMs?: number;
   trigger?: string;
   transcript?: string;
   ack?: string;
@@ -4115,6 +4120,16 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       }`;
       break;
     }
+    // The board waking its lead. Addressed rather than broadcast, and it costs
+    // the recipient a turn — so it must name what is waiting rather than fall
+    // through to the bare-slug default, which is where both of these landed
+    // until now. See nudge-line.ts.
+    case 'workspace.ready_idle':
+      body = readyIdleLine(p);
+      break;
+    case 'workspace.review_answered':
+      body = reviewAnsweredLine(p);
+      break;
     // The request reaches EVERY agent attached to the board, so who it is
     // addressed to has to survive into the wording — see triage-line.ts.
     case 'triage.requested':
