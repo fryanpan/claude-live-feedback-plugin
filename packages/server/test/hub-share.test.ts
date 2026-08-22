@@ -200,10 +200,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     }
 
     // The hub workspace, one attached doc, one task, one open decision.
-    const ws = await post('/api/workspaces', {
-      name: 'search-revamp',
-      goal: 'Ship the new search.',
-    });
+    const ws = await post('/api/workspaces', { name: 'search-revamp' });
     expect(ws.status).toBe(200);
     hubId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
 
@@ -242,10 +239,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     // A second workspace nobody here belongs to. It needs no docs of its own:
     // a hub workspace is shareable with zero bound members, and its only job
     // is to authorize a visitor who is legitimately in SOME workspace.
-    const other = await post('/api/workspaces', {
-      name: 'billing-cleanup',
-      goal: 'Unrelated work.',
-    });
+    const other = await post('/api/workspaces', { name: 'billing-cleanup' });
     expect(other.status).toBe(200);
     otherId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
@@ -422,7 +416,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
     // Voice landed AFTER the commit-8 share slice, and §3.3's enumeration of
     // what a visitor may see is exhaustive by construction — it lists goal
-    // text and verbatim quote/answer fields, never the transcript of
+    // titles and verbatim quote/answer fields, never the transcript of
     // whatever Bryan happens to say into his own board. The utterance is
     // unbounded free text about anything he is thinking; it does not get to
     // extend the contract by arriving later.
@@ -471,9 +465,8 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     it('serves the workspace record to its own visitor, refuses another workspace’s', async () => {
       const r = await pub(`/api/workspaces/${hubId}`, hubCookie);
       expect(r.status).toBe(200);
-      const { workspace } = (await r.json()) as { workspace: { name: string; goal: string } };
+      const { workspace } = (await r.json()) as { workspace: { name: string } };
       expect(workspace.name).toBe('search-revamp'); // the page title, not the id
-      expect(workspace.goal).toBe('Ship the new search.'); // goal text is in-contract
       // Positive control for the refusal: the other cookie reads ITS record.
       expect((await pub(`/api/workspaces/${otherId}`, otherCookie)).status).toBe(200);
       expect((await pub(`/api/workspaces/${hubId}`, otherCookie)).status).toBe(403);
@@ -550,10 +543,6 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
         [
           `/api/tasks/${taskId}/links`,
           { method: 'POST', body: JSON.stringify({ ref: { kind: 'doc', docId: ATTACHED } }) },
-        ],
-        [
-          `/api/workspaces/${hubId}/goal`,
-          { method: 'PUT', body: JSON.stringify({ goal: 'New goal.', author }) },
         ],
         [
           `/api/workspaces/${hubId}/goals`,

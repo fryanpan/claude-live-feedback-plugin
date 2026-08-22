@@ -127,7 +127,7 @@ describe('TaskStore.renameGoal', () => {
   /** A board with work under the band being renamed, at both statuses and
    *  both depths. Without tasks on it "nothing moved" is vacuously true. */
   function seed(): { wsId: string; G: Bands; open: string; done: string; sub: string } {
-    const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
+    const ws = store.createWorkspace('search-revamp');
     const G = bands(seedGoals(store, ws.id, GOAL_SPEC, PERSON));
     const mk = (title: string, goal: string): string => {
       const res = store.createTask(ws.id, { title, goal, actor: AGENT });
@@ -281,7 +281,7 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
   });
 
   function seed(): { wsId: string; G: Bands; open: string; done: string; sub: string } {
-    const ws = store.createWorkspace('search-revamp', 'Ship search v2.');
+    const ws = store.createWorkspace('search-revamp');
     const G = bands(seedGoals(store, ws.id, GOAL_SPEC, PERSON));
     const mk = (title: string, goal: string): string => {
       const res = store.createTask(ws.id, { title, goal, actor: AGENT });

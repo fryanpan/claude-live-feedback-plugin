@@ -197,6 +197,20 @@ describe('positive controls — guidance that must survive the edit', () => {
     ).toBe(true);
   });
 
+  it('no skill still teaches the removed workspace text goal', () => {
+    // `set_workspace_goal` wrote a single north-star paragraph on the
+    // workspace. It is gone: a board's goals are the ordered LIST now. A skill
+    // that still names the verb teaches a call whose route answers 410, and
+    // the agent reads that as its own install being broken.
+    for (const [name, raw] of SHIPPED) {
+      expect(`${name}: ${raw}`).not.toContain('set_workspace_goal');
+    }
+    // POSITIVE CONTROL: the surviving goal verbs ARE taught somewhere, so the
+    // absence above is a removal rather than a haystack that stopped loading.
+    expect(SHIPPED.some(([, raw]) => raw.includes('set_goal_list'))).toBe(true);
+    expect(SHIPPED.some(([, raw]) => raw.includes('set_task_goal'))).toBe(true);
+  });
+
   it('every skill declares a frontmatter name, and it matches the directory', () => {
     // `embedding-widget/` ships as `embedding-feedback-widget` and has since
     // it was written. Renaming either half changes the name peers invoke, so

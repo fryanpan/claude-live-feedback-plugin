@@ -224,7 +224,7 @@ describe('the store stamps a body clock the row clock cannot provide', () => {
   });
 
   const newTask = () => {
-    const ws = store.createWorkspace('clock', 'Ship it.');
+    const ws = store.createWorkspace('clock');
     const res = store.createTask(ws.id, {
       title: 'Row',
       body: 'first',

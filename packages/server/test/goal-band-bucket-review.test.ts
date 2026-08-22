@@ -9,18 +9,20 @@
  *
  *   set_goal_list adding a band → 0 requests
  *   reorder_goals               → 0 requests
- *   set_workspace_goal (control)→ 1 request, covering both bucket tasks
+ *   a non-lead rename (control) → 1 task-review request
  *
  * The positive control is load-bearing and it is asserted FIRST here: a
  * harness that cannot observe a delivery it SHOULD see proves nothing by
- * failing to observe one it should not.
+ * failing to observe one it should not. It has to be a LEAD-ADDRESSED
+ * request, because that is the arm of the bridge every "queued" case below
+ * depends on — a `kind: 'task'` request skips the live-lead gate entirely
+ * and would leave that gate unexercised.
  *
- * Why its own slot rather than the existing queued-retriage sidecar. That
- * one's `oldGoal`/`newGoal` are the north-star TEXT, which a goal-list edit
- * does not touch, and the drain path renders them to the agent as "what your
- * placements were last judged against". Reusing the slot would make both
- * fields lie. This request carries its own baseline — the goal LIST before
- * and after — in its own sidecar, with the same live-or-queue durability.
+ * Why its own sidecar rather than sharing one. The request carries its own
+ * baseline — the goal LIST before and after — and the lead's other waiting
+ * asks describe different edits, so one slot per kind is what keeps a
+ * replayed ask about the thing that actually happened. Same live-or-queue
+ * durability for each.
  *
  * And it never PLACES anything: it asks the lead to look. Auto-assigning
  * would stamp a ranking decision no human made, invisibly.
@@ -37,7 +39,7 @@ import {
   TaskStore,
   type TriageRequest,
   pendingBucketReviewPath,
-  pendingRetriagePath,
+  pendingTaskReviewsPath,
 } from '../src/tasks.ts';
 import type { GoalIds } from './goal-seed.ts';
 
@@ -78,7 +80,6 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
     const leadId = opts.lead === null ? undefined : (opts.lead ?? LEAD);
     const ws = store.createWorkspace(
       'review surface',
-      'Old north star.',
       leadId ? { leadAgentId: leadId } : undefined,
     );
     if (leadId) store.attachAgent(ws.id, { agentId: leadId, runtime: 'claude-code-local' });
@@ -142,15 +143,27 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
   const bucketReviews = () => requests.filter((r) => r.kind === 'bucket-review');
 
   describe('the harness can see a delivery (positive control)', () => {
-    it('a north-star edit still reaches the live lead — 1 request, both bucket tasks', () => {
-      const { ws, ids } = board();
-      const res = store.setWorkspaceGoal(ws.id, 'A different north star.', { actor: PERSON });
-      expect(res.ok).toBe(true);
-      const retriages = requests.filter((r) => r.kind === 'goal-retriage');
-      expect(retriages.length).toBe(1);
-      const first = retriages[0];
-      if (first?.kind !== 'goal-retriage') throw new Error('unreachable');
-      expect(first.taskIds.sort()).toEqual([...ids].sort());
+    it('a lead-addressed ask still reaches the live lead — 1 request, naming the row', () => {
+      const { ids } = board();
+      const [first] = ids;
+      if (!first) throw new Error('fixture');
+      // A non-lead rename routes a `task-review` to the seat, over the same
+      // bridge and through the same live-lead gate a bucket review rides.
+      const res = store.renameTask(first, 'Reviewer can see the empty state', { actor: PERSON });
+      expect(res.ok && res.changed).toBe(true);
+      const reviews = requests.filter((r) => r.kind === 'task-review');
+      expect(reviews.length).toBe(1);
+      const req = reviews[0];
+      if (req?.kind !== 'task-review') throw new Error('unreachable');
+      expect(req.taskId).toBe(first);
+      expect(req.leadAgentId).toBe(LEAD);
+      // And the gate is real: the same edit with no live lead delivers nothing.
+      const away = board({ lead: null });
+      const [other] = away.ids;
+      if (!other) throw new Error('fixture');
+      requests.length = 0;
+      store.renameTask(other, 'Reviewer can read the print stylesheet', { actor: PERSON });
+      expect(requests.filter((r) => r.kind === 'task-review').length).toBe(0);
     });
   });
 
@@ -192,7 +205,7 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
     });
 
     it('a task swept to Backlog by the same edit is in the bucket it asks about', () => {
-      const ws = store.createWorkspace('board', 'North star.', { leadAgentId: LEAD });
+      const ws = store.createWorkspace('board', { leadAgentId: LEAD });
       store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
       const { ids: G } = submit(ws.id, [{ key: 'old', title: 'Old band' }]);
       const t = store.createTask(ws.id, { title: 'ported from the old band', goal: G.old });
@@ -272,7 +285,7 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
     });
 
     it('a band appearing over an EMPTY bucket emits nothing', () => {
-      const ws = store.createWorkspace('board', 'North star.', { leadAgentId: LEAD });
+      const ws = store.createWorkspace('board', { leadAgentId: LEAD });
       store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
       store.createTask(ws.id, { title: 'a deliberate chore', goal: 'chores' });
       requests.length = 0;
@@ -293,7 +306,7 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       expect(res.bucketReview.requested).toBe(false);
       expect(res.bucketReview.queued).toBe(true);
       expect(existsSync(pendingBucketReviewPath(dataDir, ws.id))).toBe(true);
-      expect(existsSync(pendingRetriagePath(dataDir, ws.id))).toBe(false);
+      expect(existsSync(pendingTaskReviewsPath(dataDir, ws.id))).toBe(false);
 
       const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
       expect(attach.ok).toBe(true);
@@ -308,17 +321,19 @@ describe('a new goal band asks the bucket to be re-looked-at', () => {
       expect(existsSync(pendingBucketReviewPath(dataDir, ws.id))).toBe(false);
     });
 
-    it('a queued north-star retriage and a queued bucket review both survive, separately', () => {
-      const { ws } = board({ lead: null });
-      store.setWorkspaceGoal(ws.id, 'A different north star.', { actor: PERSON });
+    it('a queued task review and a queued bucket review both survive, separately', () => {
+      const { ws, ids } = board({ lead: null });
+      const [first] = ids;
+      if (!first) throw new Error('fixture');
+      store.renameTask(first, 'Reviewer can see the empty state', { actor: PERSON });
       const { ids: G } = submit(ws.id, [{ key: 'g1', title: 'Ship it' }]);
-      expect(existsSync(pendingRetriagePath(dataDir, ws.id))).toBe(true);
+      expect(existsSync(pendingTaskReviewsPath(dataDir, ws.id))).toBe(true);
       expect(existsSync(pendingBucketReviewPath(dataDir, ws.id))).toBe(true);
       const attach = store.attachAgent(ws.id, { agentId: LEAD, runtime: 'claude-code-local' });
       if (!attach.ok) throw new Error('attach failed');
-      // The north-star ask keeps its own TEXT baseline; the band ask keeps
-      // the goal LIST. Neither field describes the other's edit.
-      expect(attach.pendingRetriage?.oldGoal).toBe('Old north star.');
+      // Two asks about two different edits, each describing its own. One
+      // shared slot would make at least one of them describe the other's.
+      expect(attach.taskReviews?.map((r) => r.taskId)).toEqual([first]);
       expect(attach.pendingBucketReview?.newBands).toEqual([{ id: G.g1, title: 'Ship it' }]);
     });
 

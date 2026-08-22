@@ -7,7 +7,6 @@
  * which the server would revert.
  */
 import { type ReviewPayload, type User, connect, escapeHtml } from '@feedback/core';
-import type { StoredGoalSummary } from '@feedback/core/goal-summary';
 import {
   renderConnectionBanner,
   renderLiveStaleNotice,
@@ -35,7 +34,6 @@ import {
   type HubTask,
   type HubWorkspaceInfo,
   type PendingBucketReviewView,
-  type PendingRetriageView,
   type PluginRelease,
   type PresenceAgent,
   type PresenceChip,
@@ -76,7 +74,6 @@ import {
   discussionIsBusy,
   renderActivity,
   renderBoard,
-  renderGoalStrip,
   renderHomeBrief,
   renderHomeReview,
   renderLeadStrip,
@@ -280,7 +277,6 @@ function buildShell(root: HTMLElement, name: string): void {
       </div>
       <div id="hub-settings-panel" class="hub-settings-panel hidden" role="region" aria-label="Workspace settings">
         <div id="hub-drift" class="hub-presence hidden"></div>
-        <div id="hub-goal" class="hub-goal"></div>
         <div id="hub-lead" class="hub-lead"></div>
         <label class="hub-settings-row" for="hub-done-filter">Show done tasks from
           <select id="hub-done-filter" class="hub-select" aria-label="Done task visibility"></select>
@@ -438,16 +434,8 @@ async function main(): Promise<void> {
       state.info = {
         id: String(wsMap.get('id')),
         name: String(wsMap.get('name') ?? workspaceId),
-        goal: String(wsMap.get('goal') ?? ''),
-        goalUpdatedAt: Number(wsMap.get('goalUpdatedAt') ?? 0),
-        ...(wsMap.get('goalSummary')
-          ? { goalSummary: wsMap.get('goalSummary') as StoredGoalSummary }
-          : {}),
         goals: (wsMap.get('goals') as HubGoal[] | undefined) ?? [],
         ...(wsMap.get('leadAgentId') ? { leadAgentId: String(wsMap.get('leadAgentId')) } : {}),
-        ...(wsMap.get('pendingRetriage')
-          ? { pendingRetriage: wsMap.get('pendingRetriage') as PendingRetriageView }
-          : {}),
         ...(wsMap.get('pendingBucketReview')
           ? { pendingBucketReview: wsMap.get('pendingBucketReview') as PendingBucketReviewView }
           : {}),
@@ -541,22 +529,12 @@ async function main(): Promise<void> {
     return [...new Set([...state.agents.map((a) => a.agentId), ...(lead ? [lead] : [])])];
   }
 
-  function renderGoal(): void {
-    renderGoalStrip(
-      el('hub-goal'),
-      state.info?.goal ?? '',
-      { onGoalCommit: (goal, summary) => void saveGoal(goal, summary) },
-      state.info?.goalSummary,
-    );
-  }
-
   function renderLead(): void {
     renderLeadStrip(
       el('hub-lead'),
       state.info?.leadAgentId,
       state.agents.map((agent) => agent.agentId),
       { onLeadCommit: (leadAgentId) => void saveLead(leadAgentId) },
-      state.info?.pendingRetriage,
       state.info?.pendingBucketReview,
     );
   }
@@ -1187,7 +1165,6 @@ async function main(): Promise<void> {
   function renderSettingsAlarm(notices: Array<DriftNotice | null>): void {
     const armed =
       notices.some((n) => n !== null && n.kind !== 'coverage') ||
-      state.info?.pendingRetriage !== undefined ||
       state.info?.pendingBucketReview !== undefined;
     el('hub-settings-alarm').classList.toggle('hidden', !armed);
     // Both attributes, because the dot itself is `aria-hidden`: a reader who
@@ -1243,7 +1220,6 @@ async function main(): Promise<void> {
           },
         }),
     });
-    renderGoal();
     renderLead();
     renderMe();
     renderSettingsPanel();
@@ -1364,28 +1340,6 @@ async function main(): Promise<void> {
       author,
     });
     if (!res.ok) showToast('Could not add the goal');
-  }
-
-  async function saveGoal(goal: string, summary: string): Promise<void> {
-    const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/goal`, 'PUT', {
-      goal,
-      // Always sent, including empty — clearing the short line is how a
-      // reviewer goes back to the deterministic clip, and an omitted field
-      // would silently mean "keep whatever was there".
-      summary,
-      author,
-    });
-    if (!res.ok) {
-      showToast('Goal update failed');
-      return;
-    }
-    const retriage = res.data?.retriage as { requested?: boolean } | undefined;
-    showToast(
-      retriage?.requested
-        ? 'Goal updated — the attached agent will re-triage open tasks'
-        : 'Goal updated',
-    );
-    renderGoal();
   }
 
   async function saveLead(leadAgentId: string): Promise<void> {
@@ -1716,7 +1670,6 @@ async function main(): Promise<void> {
   });
   wsMap.observeDeep(() => {
     readProjection();
-    renderGoal();
     renderLead();
     renderBoardRegion();
     renderHomeRegion();

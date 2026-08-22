@@ -51,7 +51,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
   describe('stamped by what the caller SAID, not by where the task landed', () => {
     it('an omitted goal stamps unplacedSince', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const res = store.createTask(ws.id, { title: 'figure out og-images' });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -63,7 +63,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // This is the case the old `triagedAgainst`-based predicate got wrong,
       // and it is the one Bryan named: "versus if the caller explicitly meant
       // to set the goal to be a chore".
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const res = store.createTask(ws.id, { title: 'bump the deps', goal: CHORES_GOAL_ID });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
@@ -72,7 +72,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('an explicit real band stamps nothing', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'wire the widget', goal: G.ship });
       expect(res.ok).toBe(true);
@@ -85,7 +85,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // copy: delivery decides whether a request went out, never whether a
       // placement was named. With no attachment at all the create still
       // named no goal.
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       store.setTriageDelivery(() => false);
       const res = store.createTask(ws.id, { title: 'nobody is listening' });
       expect(res.ok).toBe(true);
@@ -97,7 +97,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
   describe('cleared when somebody actually places it', () => {
     it('set_task_goal clears unplacedSince', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'place me' });
       if (!res.ok) throw new Error('create failed');
@@ -111,7 +111,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // Confirm-in-place is a placement (`setTaskGoal` stamps triagedAgainst
       // for a no-move call too), so the review is answered and must not be
       // asked again.
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const res = store.createTask(ws.id, { title: 'genuinely a chore' });
       if (!res.ok) throw new Error('create failed');
       store.setTaskGoal(res.task.id, CHORES_GOAL_ID, { actor: AGENT });
@@ -121,7 +121,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
   describe('re-stamped when a band removal un-names a placement somebody DID make', () => {
     it('a task swept to Backlog by a goal-list removal gets unplacedSince', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(
         store,
         ws.id,
@@ -147,7 +147,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('a DONE task swept nowhere is left alone — its placement is history, not a claim', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(
         store,
         ws.id,
@@ -170,7 +170,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('a task whose band SURVIVES the edit is untouched', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(
         store,
         ws.id,
@@ -192,7 +192,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
   describe('listUntriaged keys on the field, in both directions', () => {
     it('sweeps the unplaced, skips the explicit chore, skips the done', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const unplaced = store.createTask(ws.id, { title: 'nobody said where' });
       const explicit = store.createTask(ws.id, { title: 'meant it', goal: CHORES_GOAL_ID });
       const finished = store.createTask(ws.id, { title: 'already done' });
@@ -206,7 +206,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('a placed task drops out of the sweep', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'place me' });
       if (!res.ok) throw new Error('create failed');
@@ -216,7 +216,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('surfaces a task the OLD predicate could not see: swept there by a band removal', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(
         store,
         ws.id,
@@ -242,7 +242,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
 
   describe('durability — the owed review outlives the process', () => {
     it('unplacedSince persists to the sidecar and SURVIVES hydrate, unlike triagePendingTs', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       store.setTriageDelivery(() => true);
       const res = store.createTask(ws.id, { title: 'still owed after a restart' });
       if (!res.ok) throw new Error('create failed');
@@ -275,7 +275,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // A task swept to Backlog by a band removal carries a `triagedAgainst`,
       // so the migration refuses it; if hydrate cleared the field, the marker
       // would be gone for good and the task would fall out of the bucket.
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(
         store,
         ws.id,
@@ -309,7 +309,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('a placed task stays placed across a restart', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'placed then restarted' });
       if (!res.ok) throw new Error('create failed');
@@ -333,7 +333,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // the same class of silent regression as the heading-level string.
       // Reproducing today's membership rule (Backlog + open + never placed) is
       // the best available answer, and `createdAt` is the honest timestamp.
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const res = store.createTask(ws.id, { title: 'filed before the field existed' });
       if (!res.ok) throw new Error('create failed');
       store.flush();
@@ -362,7 +362,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       // unplaced one — the distinction was never recorded, so the migration
       // over-includes and says so. But a task an agent PLACED into Backlog has
       // a triagedAgainst, and that must keep it out.
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const res = store.createTask(ws.id, { title: 'judged a chore long ago' });
       if (!res.ok) throw new Error('create failed');
       store.setTaskGoal(res.task.id, CHORES_GOAL_ID, { actor: AGENT });
@@ -386,7 +386,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('hydrate does not stamp a legacy task under a real band', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const G = seedGoals(store, ws.id, [{ key: 'ship', title: 'Ship v1' }], PERSON);
       const res = store.createTask(ws.id, { title: 'under a band', goal: G.ship });
       if (!res.ok) throw new Error('create failed');
@@ -401,7 +401,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
     });
 
     it('hydrate does not stamp a legacy DONE task in Backlog', () => {
-      const ws = store.createWorkspace('board', 'Ship the review surface.');
+      const ws = store.createWorkspace('board');
       const res = store.createTask(ws.id, { title: 'done in the bucket' });
       if (!res.ok) throw new Error('create failed');
       store.transition(res.task.id, 'done', { actor: AGENT });
