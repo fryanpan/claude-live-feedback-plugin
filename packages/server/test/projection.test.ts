@@ -229,8 +229,36 @@ describe('ydoc projection + workspace room', () => {
       body: JSON.stringify({ goals: [{ title: 'Ship it faster' }], author: PERSON }),
     });
     expect(g.status).toBe(200);
-    const goals = room.ydoc.getMap('workspace').get('goals') as Array<{ title: string }>;
+    type ProjectedGoal = {
+      id: string;
+      title: string;
+      status?: string;
+      doneAt?: number;
+      doneBy?: { name: string; kind: string };
+    };
+    const goals = room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[];
     expect(goals.map((x) => x.title)).toContain('Ship it faster');
+    // The band carries its goal ROW's status, so a board reader can tell a
+    // done band from an open one without a second fetch. Fresh band: open.
+    const band = goals.find((x) => x.title === 'Ship it faster');
+    if (!band) throw new Error('band missing from projection');
+    expect(band.status).toBe('todo');
+
+    // Declare the goal done through the one transition gate; the projection
+    // re-reads the row and the band arrives marked, with the §3.3 contract
+    // intact — attribution is a display name and kind, never an actor id.
+    const gt = await post(`/api/tasks/${band.id}/transition`, {
+      to: 'done',
+      author: PERSON,
+      note: 'shipped enough of it',
+    });
+    expect(gt.status).toBe(200);
+    const decorated = (room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[]).find(
+      (x) => x.id === band.id,
+    );
+    expect(decorated?.status).toBe('done');
+    expect(decorated?.doneBy).toEqual({ name: 'Bryan', kind: 'person' });
+    expect(typeof decorated?.doneAt).toBe('number');
   });
 
   it('an evidence amendment reaches the board room — the only thing the board reads', async () => {

@@ -9,7 +9,14 @@ import {
   resolveOwnerKind,
 } from './task-owner.ts';
 import type { PremiseNote } from './task-staleness.ts';
-import type { AttachmentState, Task, TaskStore, TaskStoreEvent } from './tasks.ts';
+import {
+  type AttachmentState,
+  type Task,
+  type TaskStore,
+  type TaskStoreEvent,
+  type WorkspaceSubgoal,
+  goalStatusMeta,
+} from './tasks.ts';
 
 /**
  * The session behind a task's owner: which one, when it was last heard from,
@@ -616,10 +623,24 @@ export class TaskProjection {
         .map((t) => [t.id, projectTask(t, this.commentCount(t.id), ownerKindOf(t))]),
     );
     const pendingBucket = this.tasks.getPendingBucketReview(workspaceId);
+    // Each band rides out decorated with its goal ROW's status (and done
+    // attribution), read through the store's public API. The board renders
+    // bands from this array and nothing else, so a status only the store can
+    // see would be the store-has-it/surface-can't-show-it bug for the very
+    // field goal rows exist to record. Additive: a client that predates the
+    // fields reads exactly the goals it read before.
+    const goalMeta = new Map(
+      this.tasks.listGoalRows(workspaceId).map((r) => [r.id, goalStatusMeta(r)]),
+    );
+    const decorateSubgoal = (s: WorkspaceSubgoal) => ({ ...s, ...(goalMeta.get(s.id) ?? {}) });
     const wsFields: Record<string, unknown> = {
       id: ws.id,
       name: ws.name,
-      goals: ws.goals,
+      goals: ws.goals.map((g) => ({
+        ...g,
+        ...(goalMeta.get(g.id) ?? {}),
+        ...(g.subgoals !== undefined ? { subgoals: g.subgoals.map(decorateSubgoal) } : {}),
+      })),
       docIds: ws.docIds,
       // Who is responsible for this board. Conditional, never `undefined`:
       // the refresh deletes projected keys that aren't in this object, so an

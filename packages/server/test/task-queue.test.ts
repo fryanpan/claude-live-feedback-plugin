@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { buildQueue, summarizeGoals } from '../src/task-queue.ts';
-import type { Task, WorkspaceGoal } from '../src/tasks.ts';
+import type { GoalRow, Task, WorkspaceGoal } from '../src/tasks.ts';
 
 const GOALS: WorkspaceGoal[] = [
   {
@@ -218,5 +218,53 @@ describe('summarizeGoals', () => {
   it('surfaces a goal id the list no longer has instead of hiding its tasks', () => {
     const rows = summarizeGoals([task({ goal: 'g-deleted', status: 'todo' })], GOALS);
     expect(rows.find((r) => r.id === 'g-deleted')).toMatchObject({ todo: 1 });
+  });
+
+  it("carries each goal row's status, with attribution on a declared done", () => {
+    function goalRow(over: Partial<GoalRow> & { id: string }): GoalRow {
+      return {
+        workspaceId: 'w-1',
+        kind: 'goal',
+        title: over.id,
+        order: 0,
+        status: 'todo',
+        transitions: [],
+        createdAt: 1,
+        updatedAt: 1,
+        ...over,
+      };
+    }
+    const rows = summarizeGoals([task({ goal: 'g-deleted', status: 'todo' })], GOALS, [
+      goalRow({
+        id: 'g-ship',
+        status: 'done',
+        transitions: [
+          {
+            ts: 1_700_000_000_000,
+            from: 'todo',
+            to: 'done',
+            by: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+          },
+        ],
+      }),
+      goalRow({ id: 'g-ship-blockers', status: 'in-progress' }),
+      goalRow({ id: 'g-reach' }),
+    ]);
+    // A done band is distinguishable from an open one, and says who declared it.
+    expect(rows.find((r) => r.id === 'g-ship')).toMatchObject({
+      status: 'done',
+      doneAt: 1_700_000_000_000,
+      doneBy: { name: 'Jordan', kind: 'person' },
+    });
+    // Subgoal rows are goal rows too — the flattening covers both depths.
+    expect(rows.find((r) => r.id === 'g-ship-blockers')).toMatchObject({ status: 'in-progress' });
+    // An open row claims no done attribution.
+    const reach = rows.find((r) => r.id === 'g-reach');
+    expect(reach).toMatchObject({ status: 'todo' });
+    expect(reach !== undefined && 'doneAt' in reach).toBe(false);
+    // Appended rows (an orphaned goal id, Backlog) have no goal row and claim
+    // no status at all — absent, never a fabricated 'todo'.
+    const orphan = rows.find((r) => r.id === 'g-deleted');
+    expect(orphan !== undefined && 'status' in orphan).toBe(false);
   });
 });

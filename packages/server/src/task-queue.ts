@@ -33,7 +33,15 @@ import {
   bodyWrittenAtOf,
   decidePremiseDrift,
 } from './task-staleness.ts';
-import { type Task, type TaskStatus, type WorkspaceGoal, isParked } from './tasks.ts';
+import {
+  type GoalRow,
+  type GoalStatusMeta,
+  type Task,
+  type TaskStatus,
+  type WorkspaceGoal,
+  goalStatusMeta,
+  isParked,
+} from './tasks.ts';
 
 export interface QueueBlocker {
   taskId: string;
@@ -245,6 +253,17 @@ export interface GoalSummaryRow {
    *  write; filter on it, don't infer from depth. */
   reorderable: boolean;
   dueAt?: number;
+  /**
+   * The goal ROW's own status — a band somebody declared done reads as done
+   * even while it still holds open tasks, which is exactly the case the
+   * counts alone cannot express. Absent on the appended rows (Backlog, an
+   * orphaned goal id): those are buckets, not goals, and have no row to ask.
+   */
+  status?: TaskStatus;
+  /** When the goal was declared done — the last transition to done. */
+  doneAt?: number;
+  /** Who declared it, display name and kind only. */
+  doneBy?: { name: string; kind: 'person' | 'agent' };
   todo: number;
   inProgress: number;
   done: number;
@@ -290,7 +309,17 @@ export function placeableGoals(goals: WorkspaceGoal[]): PlaceableGoal[] {
  * store — what was missing was any call that returned them together, which
  * is why "which goal is 1.1" had no answer an agent could look up.
  */
-export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSummaryRow[] {
+export function summarizeGoals(
+  tasks: Task[],
+  goals: WorkspaceGoal[],
+  /**
+   * The board's goal rows (`listGoalRows`), so each listed band carries its
+   * own status alongside its task counts. Optional because several callers
+   * summarize a bare goal LIST with no store at hand — their rows simply
+   * claim no status, the same reading an appended row always gets.
+   */
+  goalRows: GoalRow[] = [],
+): GoalSummaryRow[] {
   const counts = new Map<string, { todo: number; inProgress: number; done: number }>();
   for (const t of tasks) {
     const c = counts.get(t.goal) ?? { todo: 0, inProgress: 0, done: 0 };
@@ -299,6 +328,7 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
     else c.done++;
     counts.set(t.goal, c);
   }
+  const meta = new Map<string, GoalStatusMeta>(goalRows.map((r) => [r.id, goalStatusMeta(r)]));
   const row = (
     id: string,
     title: string,
@@ -313,6 +343,7 @@ export function summarizeGoals(tasks: Task[], goals: WorkspaceGoal[]): GoalSumma
     ...(parent !== undefined ? { parent } : {}),
     reorderable,
     ...(dueAt !== undefined ? { dueAt } : {}),
+    ...(meta.get(id) ?? {}),
     ...(counts.get(id) ?? { todo: 0, inProgress: 0, done: 0 }),
   });
 

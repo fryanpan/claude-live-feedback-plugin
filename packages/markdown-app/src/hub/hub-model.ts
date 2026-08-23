@@ -141,6 +141,14 @@ export interface HubSubgoal {
   id: string;
   title: string;
   dueAt?: number;
+  /** The goal ROW's status, decorated onto the band by the server projection.
+   *  Absent on a projection from an older server — a band that claims
+   *  nothing, not one that claims to be open. */
+  status?: TaskStatus;
+  /** When the goal was declared done — the last transition to done. */
+  doneAt?: number;
+  /** Who declared it. Display name and kind only (§3.3 visitor contract). */
+  doneBy?: HubActor;
 }
 
 export interface HubGoal extends HubSubgoal {
@@ -365,6 +373,11 @@ export interface BoardSection {
   /** 0 = goal, 1 = subgoal (one level max — §3.2). */
   depth: 0 | 1;
   dueAt?: number;
+  /** The band's own status, carried from the goal row (see `HubSubgoal`).
+   *  Absent on Backlog — a bucket, not a goal — and on undecorated bands. */
+  status?: TaskStatus;
+  doneAt?: number;
+  doneBy?: HubActor;
   isChores: boolean;
   tasks: HubTask[];
 }
@@ -382,12 +395,21 @@ function byBoardOrder(a: HubTask, b: HubTask): number {
  */
 export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilters): BoardSection[] {
   const sections: BoardSection[] = [];
+  // The status trio rides from the decorated goal onto its section verbatim
+  // — conditionally, so an undecorated band's section claims nothing rather
+  // than carrying three undefined keys.
+  const statusOf = (g: HubSubgoal) => ({
+    ...(g.status !== undefined ? { status: g.status } : {}),
+    ...(g.doneAt !== undefined ? { doneAt: g.doneAt } : {}),
+    ...(g.doneBy !== undefined ? { doneBy: g.doneBy } : {}),
+  });
   for (const g of goals) {
     sections.push({
       id: g.id,
       title: g.title,
       depth: 0,
       dueAt: g.dueAt,
+      ...statusOf(g),
       isChores: false,
       tasks: [],
     });
@@ -397,6 +419,7 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
         title: sg.title,
         depth: 1,
         dueAt: sg.dueAt,
+        ...statusOf(sg),
         isChores: false,
         tasks: [],
       });
