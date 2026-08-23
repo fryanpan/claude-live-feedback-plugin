@@ -467,6 +467,18 @@ export interface Task {
   /** `t-<crypto-random>`. */
   id: string;
   workspaceId: string;
+  /**
+   * Which kind of board row this is. OPTIONAL, and absent reads as `'task'` —
+   * every task ever persisted predates the field, so requiring it would mean
+   * rewriting every sidecar at the deploy to record something already true of
+   * all of them.
+   *
+   * Ask it through `isGoalRow`, never with a bare comparison: the failure mode
+   * of a discriminator whose absence is meaningful is a reader that treats an
+   * unset kind as the interesting case, and every task reader on this board
+   * must keep seeing exactly what it saw before.
+   */
+  kind?: 'task' | 'goal';
   title: string;
   /** Markdown snapshot of the description. The live CRDT body room
    *  (`task:<taskId>`) arrives with the projection commit; this snapshot is
@@ -727,6 +739,63 @@ export interface Task {
    * head-change trigger for that row and nothing else.
    */
   titleHead?: string;
+}
+
+/**
+ * A goal as a board ROW — the thing whose `done` somebody declares.
+ *
+ * Deliberately NOT a `Task`, and the two fields it drops are the reason.
+ *
+ *  - No `goal`. Only tasks carry containment (settled by Bryan, 2026-08-21:
+ *    *"Goals don't have parent goals. For now. Let's say only tasks have
+ *    goals."*), so goals are a flat set and a goal row is contained by
+ *    nothing. That needs no representation at all — a field holding a
+ *    reserved id or an empty string would be a containment claim nobody
+ *    made.
+ *  - `assignee` is OPTIONAL, because an owner cannot be invented. Every task
+ *    create resolves a real one and refuses the bare word "agent"
+ *    (`task-owner.ts`), but seeding goals with the lead agent would promise
+ *    an owner nobody asked for. The precedent is `leadAgentId`, optional for
+ *    exactly this reason — the absence has to be representable so the
+ *    surfaces can render a vacancy.
+ *
+ * Everything it KEEPS is what makes the ticket's audit trail free: the same
+ * `status`, and the same append-only `transitions` carrying the actor. A goal
+ * moves through the one gate every other status change goes through
+ * (`TaskStore.transition`), so there is no second status machine to keep
+ * honest.
+ */
+export interface GoalRow {
+  /** The goal's own id, never re-minted — `task.goal`, done-task history and
+   *  `triagedAgainst.goalId` all join on it. */
+  id: string;
+  workspaceId: string;
+  kind: 'goal';
+  title: string;
+  /** Markdown snapshot of the goal's prose, mirroring `Task.body`. */
+  body?: string;
+  /** Absent means nobody owns it — a vacancy, not a person. */
+  assignee?: string;
+  dueAt?: number;
+  /** Fractional sort key among the board's goal rows: priority order. */
+  order: number;
+  status: TaskStatus;
+  /** Append-only audit trail — who declared the goal done, and when. */
+  transitions: TaskTransition[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A row the transition gate can move: a task, or a goal. */
+export type BoardRow = Task | GoalRow;
+
+/**
+ * Whether a row is a goal. The ONE place the discriminator is read, so an
+ * absent `kind` resolves to "task" in exactly one spot rather than at every
+ * call site — see the field's note on Task.
+ */
+export function isGoalRow(row: { kind?: 'task' | 'goal' }): row is GoalRow & { kind: 'goal' } {
+  return row.kind === 'goal';
 }
 
 export interface CreateTaskOpts {
