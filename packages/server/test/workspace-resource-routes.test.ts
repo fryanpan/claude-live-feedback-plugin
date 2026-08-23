@@ -161,6 +161,32 @@ describe('resources under the workspace path', () => {
       // shell, and a mockup has no editor.
       expect((await local(`/workspaces/${wsId}/mockups/plan-doc`)).status).toBe(404);
     });
+
+    it('redirects the docs path to the mockups path', async () => {
+      // The trap this replaces: the docs path answered 200 with the editor
+      // shell, and the editor has nothing to render for a mockup — so the
+      // reviewer got a blank page and a success status. A doc link to a
+      // mockup is a real thing to hold; it must land on the mockup.
+      const r = await local(`/workspaces/${wsId}/docs/mock-doc`);
+      expect(r.status).toBe(302);
+      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/mockups/${mockDocId}`);
+    });
+
+    it('redirects the old /review/<docId> to the mockups path too', async () => {
+      // `/review/` used to hand a mockup to the docs path, which is the same
+      // blank page one hop later.
+      const r = await local('/review/mock-doc');
+      expect(r.status).toBe(302);
+      expect(r.headers.get('location')).toBe(`/workspaces/${wsId}/mockups/${mockDocId}`);
+    });
+
+    it('carries the query string through the docs-path redirect', async () => {
+      const r = await local(`/workspaces/${wsId}/docs/mock-doc?mobile=iphone-16`);
+      expect(r.status).toBe(302);
+      expect(r.headers.get('location')).toBe(
+        `/workspaces/${wsId}/mockups/${mockDocId}?mobile=iphone-16`,
+      );
+    });
   });
 
   describe('a review', () => {
@@ -229,6 +255,29 @@ describe('resources under the workspace path', () => {
       const r = await local('/review/orphan-doc');
       expect([200, 302]).toContain(r.status);
       if (r.status === 200) expect(r.headers.get('content-type')).toContain('text/html');
+    });
+
+    it('serves an unfiled mockup its own HTML from /review/, not an empty shell', async () => {
+      // Same fallback `/mockup/<id>` already answers with: no workspace to
+      // redirect to, so serve the thing in place.
+      const p = join(folder, 'orphan-mock.html');
+      writeFileSync(p, '<!doctype html><title>Orphan</title><p>orphan mock');
+      expect(
+        (await post('/api/docs', { docId: 'orphan-mock', type: 'mockup', sourceUrl: p })).status,
+      ).toBe(200);
+      const wsList = (await (await local('/api/workspaces')).json()) as {
+        hubWorkspaces?: Array<{ id: string }>;
+      };
+      for (const w of wsList.hubWorkspaces ?? []) {
+        await local(`/api/workspaces/${w.id}/docs?docId=orphan-mock`, { method: 'DELETE' });
+      }
+      const r = await local('/review/orphan-mock');
+      // Whether filing held or not, the one answer that must never come back
+      // is the editor shell — so accept the mockups redirect or the HTML
+      // itself, and nothing in between.
+      expect([200, 302]).toContain(r.status);
+      if (r.status === 302) expect(r.headers.get('location')).toContain('/mockups/');
+      else expect(await r.text()).toContain('orphan mock');
     });
   });
 });
