@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { type ServerHandle, createServer } from '../src/server.ts';
 import { buildQueue, summarizeGoals } from '../src/task-queue.ts';
 import { CHORES_GOAL_ID, TaskStore } from '../src/tasks.ts';
 
@@ -86,6 +87,67 @@ describe('triage status', () => {
       if (!res.ok) return;
       const goalId = res.created[0]?.id as string;
       expect(store.getGoalRow(goalId)?.status).toBe('todo');
+    });
+  });
+
+  /**
+   * The create half of "a goal is never in triage" is above; this is the other
+   * half, and it is the one that was actually reachable.
+   *
+   * The transition gate resolves a goal row as readily as a task (`findRow` —
+   * that is what let a goal move through the existing route without a new
+   * one), and it validates the target against the SHARED status set. So
+   * nothing stopped `POST /api/tasks/:goalId/transition` with `to: 'triage'`,
+   * and the invariant the tests above assert held only until somebody used the
+   * verb the product already ships. Caught by an independent review pass, not
+   * by these tests, because they only ever looked at creation.
+   */
+  describe('a goal row cannot be moved INTO triage', () => {
+    function goal(wsId: string): string {
+      const res = store.setGoalList(wsId, [{ title: 'Ship the ranker' }], { actor: AGENT });
+      if (!res.ok) throw new Error('goal list refused');
+      return res.created[0]?.id as string;
+    }
+
+    it('refuses the move and says why, without touching the row', () => {
+      const wsId = ws();
+      const goalId = goal(wsId);
+      const res = store.transition(goalId, 'triage', { actor: PERSON });
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toBe('goal-not-triageable');
+      // A gate that only blocks is a dead end: the message has to name the
+      // reason, the way every other refusal on this gate does.
+      expect(res.message ?? '').toContain('Ship the ranker');
+      expect(res.message ?? '').toMatch(/triage/i);
+      // Nothing moved, and nothing was written to the trail.
+      expect(store.getGoalRow(goalId)?.status).toBe('todo');
+      expect(store.getGoalRow(goalId)?.transitions).toEqual([]);
+    });
+
+    it('still lets the goal move everywhere else — the refusal is narrow', () => {
+      const wsId = ws();
+      const goalId = goal(wsId);
+      // POSITIVE CONTROL. Without it, "the move was refused" would also be
+      // satisfied by a gate that had stopped moving goals at all.
+      const moved = store.transition(goalId, 'in-progress', { actor: PERSON });
+      expect(moved.ok).toBe(true);
+      expect(store.getGoalRow(goalId)?.status).toBe('in-progress');
+      const done = store.transition(goalId, 'done', { actor: PERSON });
+      expect(done.ok).toBe(true);
+    });
+
+    it('leaves a TASK free to be sent back to triage', () => {
+      // The other half of the same control: the refusal is about goal rows,
+      // not about the value, so a task must still reach it.
+      const wsId = ws();
+      const created = store.createTask(wsId, {
+        title: 'Rebuild the ranker',
+        assignee: PERSON.name,
+        actor: PERSON,
+      });
+      if (!created.ok) throw new Error('create failed');
+      expect(store.transition(created.task.id, 'triage', { actor: PERSON }).ok).toBe(true);
     });
   });
 
@@ -209,5 +271,59 @@ describe('triage status', () => {
       expect(backlog?.done).toBe(0);
       expect(backlog?.inProgress).toBe(0);
     });
+  });
+});
+
+/**
+ * Over the route, because the route is where this was reachable from.
+ *
+ * The store cases above pin the gate; this pins that the gate is what the
+ * shipped verb actually reaches. `POST /api/tasks/:id/transition` resolves a
+ * goal id — that is by design and is why declaring a goal done needed no new
+ * route — so it is also the door an old MCP bundle and a browser both come
+ * through, and neither of them can be restarted to fix a hole here.
+ */
+describe('over the route a goal is already moved through', () => {
+  let dir: string;
+  let handle: ServerHandle;
+  let base: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'triage-http-'));
+    handle = createServer({ dataDir: dir, port: 0 });
+    base = `http://localhost:${handle.port}`;
+  });
+
+  afterEach(async () => {
+    await handle.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const transition = (id: string, to: string) =>
+    fetch(`${base}/api/tasks/${encodeURIComponent(id)}/transition`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to, author: PERSON }),
+    });
+
+  it('400s a goal sent to triage, and 200s the same goal sent anywhere else', async () => {
+    const store = handle.tasks;
+    const wsId = store.createWorkspace('Board').id;
+    const listed = store.setGoalList(wsId, [{ title: 'Ship the ranker' }], { actor: AGENT });
+    if (!listed.ok) throw new Error('goal list refused');
+    const goalId = listed.created[0]?.id as string;
+
+    const refused = await transition(goalId, 'triage');
+    // 400 rather than 409: a 409 is the gate saying "not yet" about something
+    // that could become true, and this never becomes true for a goal.
+    expect(refused.status).toBe(400);
+    const body = (await refused.json()) as { error: string; message?: string };
+    expect(body.error).toBe('goal-not-triageable');
+    expect(body.message ?? '').toContain('Ship the ranker');
+    expect(store.getGoalRow(goalId)?.status).toBe('todo');
+
+    // POSITIVE CONTROL: the same route, the same goal, a status it may hold.
+    expect((await transition(goalId, 'done')).status).toBe(200);
+    expect(store.getGoalRow(goalId)?.status).toBe('done');
   });
 });
