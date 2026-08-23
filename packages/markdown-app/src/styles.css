@@ -2185,6 +2185,8 @@ body.hub-body {
    2026-08-18) — `boardSections` still reports an honest `depth` and the goal
    tree in the store is untouched, but nothing indents any more, so a section
    is a section wherever it came from. */
+/* Still worn by the archived list's header; the BOARD's sections stopped
+   using it when the goal row replaced the h3 header (below). */
 .hub-section-title {
   display: flex;
   align-items: baseline;
@@ -2192,16 +2194,189 @@ body.hub-body {
   font-size: 15px;
   margin: 0 0 4px;
 }
-.hub-section.hub-chores .hub-section-title {
-  color: var(--fg-muted);
-}
-.hub-section-title-text:not(:has(input)) {
-  cursor: text;
-}
 .hub-section-empty {
   color: var(--fg-muted);
   font-size: 13px;
   margin: 2px 0 0;
+}
+/* --- the goal band: the goal IS a row, and the row carries its tasks ---
+   (Bryan's approved mock, 2026-08-23.) The bracket makes "the goal contains
+   these" visible without an indent deep enough to make the tasks read as
+   smaller work. The row carries NO working chrome — no counts, no drag
+   handle, no status circle, no chips (all struck in his review); due date is
+   plain muted text, the owner avatar shares the task rows' column. */
+.hub-band {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+}
+/* One child per grid track, consecutively filled — same contract as
+   `.hub-task-row`, pinned by the same kind of test (`goal-band-css` and the
+   renderer's track test read this declaration rather than restating it).
+   Right padding 14px = the tasks' rail padding (8px) + task-row padding
+   (6px), so the goal's owner avatar sits in the task avatars' column. */
+.hub-goal-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 4px 14px 4px 8px;
+  background: var(--bg-panel);
+  border-left: 3px solid var(--accent);
+  cursor: pointer;
+}
+.hub-goal-row:hover {
+  background: var(--bg-hover);
+}
+.hub-band:not(.is-collapsed) .hub-goal-row {
+  border-bottom: 1px solid var(--border);
+}
+/* The fold: the one control a goal row has that a task row does not, so it
+   is ALWAYS visible — a hover-only twisty is no affordance on the iPad this
+   board is read from. */
+.hub-twisty {
+  width: 28px;
+  min-height: 36px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.hub-twisty:hover {
+  color: var(--fg);
+}
+.hub-twisty span {
+  display: block;
+  transition: transform 120ms ease;
+}
+.hub-band.is-collapsed .hub-twisty span {
+  transform: rotate(-90deg);
+}
+.hub-twisty:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+.hub-goal-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+/* The words carry the task title's editable tell — the hover rectangle as a
+   space-free outline — scoped to the pointer that can rename at all. No
+   padding/margin trick here: the span clips its own text, and its outline is
+   only clipped by the band's border-box, far away. */
+.hub-goal-title-text {
+  font-size: 15.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 3px;
+  outline: 1px solid transparent;
+  outline-offset: 2px;
+}
+/* The fine-pointer cursor and hover rectangle ride the row-anatomy block
+   below, beside `.hub-task-title-text`'s — one media block, so the two tells
+   cannot drift apart (and the affordance test reads that block whole). */
+/* Editing in place: the rectangle goes, the words wrap instead of lying
+   under an ellipsis. */
+.hub-goal-title-text[contenteditable] {
+  outline-color: transparent;
+  white-space: normal;
+}
+.hub-goal-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* Due date as plain muted text right of the title — deliberately NOT a
+   `.hub-badge` chip (struck in review). Red only on an OPEN band past it.
+   `.hub-done-note` is the word a done band spends that same slot on, and it
+   shares this rule outright so the two can never drift into different
+   treatments — no chip may grow on either. */
+.hub-due,
+.hub-done-note {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.hub-due-overdue {
+  color: var(--red);
+  font-weight: 600;
+}
+/* The goal's open caret: the task row's hover affordance, same size, same
+   opacity reveal. Hidden on mobile (the whole row opens there) — see the
+   ≤1100 block. */
+.hub-goal-open {
+  width: 16px;
+  min-height: 34px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.hub-goal-row:hover .hub-goal-open,
+.hub-goal-row:focus-visible .hub-goal-open {
+  opacity: 0.7;
+}
+/* The band's tasks, on the rail that says they belong to the row above. */
+.hub-band-tasks {
+  padding: 2px 8px 6px 34px;
+  position: relative;
+}
+.hub-band-tasks::before {
+  content: "";
+  position: absolute;
+  left: 20px;
+  top: 2px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+/* A collapsed band is the goal row and NOTHING else (decision: no hidden-N
+   line, no summary) — the renderer emits nothing extra and this hides the
+   tasks. */
+.hub-band.is-collapsed .hub-band-tasks {
+  display: none;
+}
+/* A done band: muted title, and that is all — the mock draws no further
+   chrome for a done goal; status and history live in the detail panel. */
+.hub-band-done .hub-goal-title-text {
+  color: var(--fg-muted);
+}
+/* Backlog: reserved, and drawn as NOT a goal — neutral accent, page
+   background, no rename cursor, no open caret, a grey rail. */
+.hub-band-reserved .hub-goal-row {
+  border-left-color: var(--border);
+  background: var(--bg);
+  cursor: default;
+}
+.hub-band-reserved .hub-goal-title-text {
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.hub-band-reserved .hub-goal-open {
+  visibility: hidden;
+}
+.hub-band-reserved .hub-band-tasks::before {
+  background: var(--border);
 }
 /* --- adding a goal from the list itself ---
    The free-text goals block above the board is gone; goals live only as the
@@ -2238,6 +2413,45 @@ body.hub-body {
   font: inherit;
   font-size: 15px;
   font-weight: 600;
+}
+/* --- the goal DETAIL panel ---
+   What a goal row's tap opens (decision 4). It reuses the task panel's
+   chrome classes wholesale — panel, head, fields — so only what a goal
+   panel has and a task panel does not is declared here. */
+.hub-detail-kind-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.hub-detail-kind {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.hub-detail-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+/* The open-children advisory, from the approved mock: a quiet amber note,
+   never a blocker — the server reports open children and does not enforce
+   them. */
+.hub-goal-advisory {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn, #b58900) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn, #b58900) 10%, transparent);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.hub-goal-done-note {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
 }
 /* A task list is read by SKIMMING down a column, not by reading each row.
    So the row is a grid with fixed tracks — handle, open caret, status,
@@ -2593,6 +2807,14 @@ body.hub-body {
   .hub-task-title-text:hover {
     outline-color: var(--border);
   }
+  /* The goal row's words carry the same tell (its base rule lives with the
+     band, above) — Backlog excepted, whose label is not a name. */
+  .hub-band:not(.hub-band-reserved) .hub-goal-title-text {
+    cursor: text;
+  }
+  .hub-band:not(.hub-band-reserved) .hub-goal-title-text:hover {
+    outline-color: var(--border);
+  }
 }
 /* Editing: the rectangle goes away and leaves nothing but a caret in the words
    (Bryan: *"on click the rectangle goes away — you're left with just the text
@@ -2631,7 +2853,11 @@ body.hub-body {
     width: 32px;
     min-height: 36px;
   }
-  .hub-task-open {
+  /* The goal's caret rides the same rule: on a touch iPad above 1100px the
+     row keeps its desktop layout, and this is the only thing that SAYS it
+     opens. Below 1100 the ≤1100 block removes it outright. */
+  .hub-task-open,
+  .hub-goal-open {
     opacity: 0.55;
     width: 14px;
     min-height: 36px;
@@ -4196,6 +4422,37 @@ a.hub-link-chip:hover {
   .hub-home {
     padding-top: 4px;
   }
+  /* --- the goal band on mobile ---
+     A goal row is a HEADER, so here it is allowed the second line a task row
+     is not: the title wraps to two clamped lines rather than crushing to
+     "Ag…" — the words are the one thing on the row that cannot be recovered
+     without opening it. The caret goes (a tap anywhere already opens the
+     goal, and 16px of glyph is 16px the title needs); with its child
+     display:none the grid narrows to four tracks. Right-hand paddings are
+     not touched HERE — but the ≤900 block tightens the task row's, so the
+     goal row's right padding is re-derived there to keep the avatar
+     column. */
+  .hub-goal-row {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 4px 6px;
+    padding-left: 4px;
+  }
+  .hub-goal-open {
+    display: none;
+  }
+  .hub-goal-title-text {
+    font-size: 15px;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .hub-band-tasks {
+    padding-left: 24px;
+  }
+  .hub-band-tasks::before {
+    left: 12px;
+  }
 }
 
 /* --- mobile (≤720px per design-mobile.md) --- */
@@ -4277,6 +4534,14 @@ a.hub-link-chip:hover {
   .hub-task-row {
     gap: 6px;
     padding: 2px 2px;
+  }
+  /* The avatar-column arithmetic (decision 8), re-taken with THIS block's
+     task-row padding: goal right pad = rail right pad (8) + task-row right
+     pad (2, just above). The base 14px assumed the task row's 6px and drifts
+     4px to the left of the avatars the moment the override lands —
+     `goal-band-css.test.ts` pins the sum at this breakpoint too. */
+  .hub-goal-row {
+    padding-right: 10px;
   }
   /* The phone-only hide for `.hub-badge-action` / `.hub-badge-after` is gone
      with the badges themselves (2026-08-18 and 2026-08-19) — nothing emits
@@ -4390,10 +4655,12 @@ a.hub-link-chip:hover {
    phone next, because getting it wrong is silent. What was given up here
    before and is still given up: the overdue mark, one tap away in the panel. */
 @media (hover: none) and (max-width: 560px), (pointer: coarse) and (max-width: 560px) {
-  /* Scoped to the strip, NOT to `.hub-badge`. The same class also draws a
-     goal SECTION's due date in `.hub-section-title` (`renderBoard`), which is
-     one badge per section rather than per row and costs the title nothing —
-     a bare `.hub-badge { display: none }` took that with it. */
+  /* Scoped to the strip, NOT to `.hub-badge`. A bare `.hub-badge
+     { display: none }` once took a goal section's due badge with it; the goal
+     row draws its due date as plain `.hub-due` text now (Bryan's mockup
+     review, 2026-08-23), which this block must go on leaving alone — a
+     band's date is one line per BAND, not per row, and it costs the title
+     nothing. */
   .hub-task-badges .hub-badge {
     display: none;
   }

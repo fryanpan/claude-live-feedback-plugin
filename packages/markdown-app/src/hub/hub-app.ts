@@ -21,6 +21,7 @@ import {
   ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
   type ActivityFilter,
+  type BoardSection,
   type BoardTab,
   CLOSED_WALK,
   type ClientRelease,
@@ -78,6 +79,7 @@ import {
   renderActivity,
   renderArchivedList,
   renderBoardForPane,
+  renderGoalDetail,
   renderHomeBrief,
   renderHomeReview,
   renderLeadStrip,
@@ -144,6 +146,12 @@ interface HubState {
    *  (dev, staging) — those must not report the prod machine's deploy. */
   clientRelease: ClientRelease | null;
   detailTaskId: string | null;
+  /** The open GOAL, when the detail container is showing a goal band rather
+   *  than a task. The two panels share the container, so at most one of this
+   *  and `detailTaskId` is set — each opener clears the other, and
+   *  `renderDetail` enforces task-wins for the paths (deep link, voice) that
+   *  set a task id without knowing a goal was open. */
+  detailGoalId: string | null;
   /** The thread the review queue aimed at, when the panel was opened from it.
    *  Null every other way in. */
   detailThreadId: string | null;
@@ -430,6 +438,7 @@ async function main(): Promise<void> {
     pluginRelease: null,
     clientRelease: null,
     detailTaskId: null,
+    detailGoalId: null,
     detailThreadId: null,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
@@ -543,8 +552,18 @@ async function main(): Promise<void> {
     onStatusSet: (task: HubTask, to: HubTask['status']) => void transitionTask(task, to),
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
     onGoalAdd: (title: string, after?: string) => void addGoal(title, after),
+    // The goal row's one gesture on a coarse pointer, and the desktop click
+    // anywhere off the title's words (decision 4). The two panels share the
+    // detail container, so opening a goal closes any task.
+    onOpenGoal: (section: BoardSection) => {
+      state.detailGoalId = section.id;
+      state.detailTaskId = null;
+      state.detailThreadId = null;
+      renderDetail();
+    },
     onOpenTask: (task: HubTask) => {
       state.detailTaskId = task.id;
+      state.detailGoalId = null;
       // Opening the task any other way clears the queue's aim, so a mark left
       // over from the last walkthrough item can't point at the wrong thread.
       state.detailThreadId = null;
@@ -912,8 +931,56 @@ async function main(): Promise<void> {
   /** Which task the panel has already fetched audit rows for — one fetch per
    *  open, and the guard that keeps the fetch's own re-render from looping. */
   let detailEventsFor: string | null = null;
+  /** Which GOAL the shared container is currently showing, so open, repaint
+   *  and close are distinguishable — the goal panel's `renderedDetailId`. */
+  let renderedGoalId: string | null = null;
 
   function renderDetail(): void {
+    // Task wins when both ids are somehow set: the deep-link and voice paths
+    // set a task id without knowing a goal panel was open, and what they mean
+    // is "show me this task".
+    if (state.detailTaskId) state.detailGoalId = null;
+    if (state.detailGoalId) {
+      // Unfiltered on purpose: the panel's counts and advisory are facts
+      // about the GOAL ("what would a done declaration leave open"), not
+      // about whatever tab or done-window the board happens to be on.
+      const section = boardSections(state.info?.goals ?? [], taskList(), {
+        tab: 'all',
+        userName: user.name,
+        doneWindow: 'all',
+        now: Date.now(),
+      }).find((s) => s.id === state.detailGoalId);
+      if (section && !section.isChores) {
+        if (renderedGoalId === null && renderedDetailId === null) {
+          const active = document.activeElement;
+          detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
+        }
+        const freshOpen = renderedGoalId !== section.id;
+        renderGoalDetail(el('hub-detail'), section, {
+          onClose: () => {
+            state.detailGoalId = null;
+            renderDetail();
+          },
+          onTitleCommit: (goalId, title) => void retitleGoal(goalId, title),
+          onStatusSet: (goalId, to) => void transitionGoal(goalId, to),
+        });
+        // A body editor left mounted by the last open TASK must not keep its
+        // websocket while a goal is on screen.
+        bodyEditor.sync(null, null);
+        renderedGoalId = section.id;
+        renderedDetailId = null;
+        detailEventsFor = null;
+        syncTaskParam(null);
+        // Fresh opens take focus like the task panel does (that is what puts
+        // Escape and hold-Space inside the dialog); repaints leave the
+        // keyboard where the reader has it.
+        if (freshOpen) el('hub-detail').querySelector<HTMLElement>('.hub-detail-panel')?.focus();
+        return;
+      }
+      // The goal left the board under us (removed from the list, or the
+      // projection has not caught up) — fall through to an empty panel.
+      state.detailGoalId = null;
+    }
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
     if (task && renderedDetailId === null) {
       const active = document.activeElement;
@@ -998,12 +1065,13 @@ async function main(): Promise<void> {
       task ? { id: task.id, bodyDocId: task.bodyDocId } : null,
       el('hub-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
     );
-    if (!task && renderedDetailId !== null) {
+    if (!task && (renderedDetailId !== null || renderedGoalId !== null)) {
       if (detailOpener?.isConnected) detailOpener.focus();
       detailOpener = null;
     }
     syncTaskParam(task?.id ?? null);
     renderedDetailId = task?.id ?? null;
+    renderedGoalId = null;
   }
 
   /**
@@ -1505,6 +1573,21 @@ async function main(): Promise<void> {
     if (!res.ok) showToast('Goal rename failed');
   }
 
+  /**
+   * Declare a goal's status — the same one-gate transition route a task
+   * uses (`tasks.ts` resolves goal rows through it too; that is the whole
+   * point of a goal being a row). Open children are ADVISORY on the server
+   * (enforce:false), so a done declaration over open tasks succeeds — the
+   * panel says so before the reader picks it.
+   */
+  async function transitionGoal(goalId: string, to: HubTask['status']): Promise<void> {
+    const res = await send(`/api/tasks/${encodeURIComponent(goalId)}/transition`, 'POST', {
+      to,
+      author,
+    });
+    if (!res.ok) showToast('Goal status change failed');
+  }
+
   /** Add one band, for the same reason the rename above is its own route: a
    *  client-built full list can only add by re-asserting everything it last
    *  read, and what it did not read is what gets removed. */
@@ -1830,7 +1913,7 @@ async function main(): Promise<void> {
     // The ticket's own Activity tab reads the same rows, so a refresh that
     // repainted only the workspace view left an open panel showing the
     // history as it stood when it opened.
-    if (state.detailTaskId) renderDetail();
+    if (state.detailTaskId || state.detailGoalId) renderDetail();
   }
 
   // ── Wiring ──────────────────────────────────────────────────────────────
@@ -1848,6 +1931,10 @@ async function main(): Promise<void> {
     renderLead();
     renderBoardRegion();
     renderHomeRegion();
+    // Goal facts (title, status, owner, due) travel on the WORKSPACE map,
+    // not the tasks map — an open goal panel repaints here or shows a peer's
+    // rename never.
+    if (state.detailGoalId) renderDetail();
   });
 
   client.awareness.setLocalState({
