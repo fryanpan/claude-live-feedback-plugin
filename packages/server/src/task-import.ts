@@ -24,6 +24,7 @@ import {
   type TaskStatus,
   type TaskStore,
   type WorkspaceGoal,
+  isGoalRow,
 } from './tasks.ts';
 
 // ── Banner + marker ────────────────────────────────────────────────────────
@@ -432,8 +433,11 @@ export function applyImport(
         actor: opts.actor,
         note: `status imported from markdown tracker (${row.rawStatus ?? row.status})`,
       });
-      if (moved.ok) task = moved.task;
-      else failures.push({ title: row.title, error: `transition: ${moved.error}` });
+      // The gate can move a goal row too, so its result is a BoardRow. The id
+      // here came from a task this loop just created, so the guard states that
+      // to the type system rather than asserting it with a cast.
+      if (moved.ok && !isGoalRow(moved.task)) task = moved.task;
+      else if (!moved.ok) failures.push({ title: row.title, error: `transition: ${moved.error}` });
     }
     tasksCreated.push({ id: task.id, title: task.title, goal: task.goal, status: task.status });
   }

@@ -836,7 +836,7 @@ export interface TransitionBlocker {
 }
 
 export type TransitionResult =
-  | { ok: true; task: Task; blockers: TransitionBlocker[]; unproven: boolean }
+  | { ok: true; task: BoardRow; blockers: TransitionBlocker[]; unproven: boolean }
   | {
       ok: false;
       error: 'not-found' | 'bad-status' | 'same-status' | 'blocked';
@@ -1415,6 +1415,20 @@ export interface TaskTransitionedEvent {
   type: 'task.transitioned';
   workspaceId: string;
   taskId: string;
+  /**
+   * `'goal'` when the row that moved was a goal. Absent reads as a task, the
+   * same default the row's own `kind` carries, so every event already written
+   * keeps its meaning.
+   *
+   * On the wire rather than in the consumers deliberately: a goal moves
+   * through the one status gate, so it must appear in the audit log like any
+   * other status change — suppressing the event would make the activity feed
+   * silently miss goal closures, which is worse than labelling one. The
+   * browser surfaces do not read this yet, so a goal closure currently renders
+   * with a task's deep link; that is cosmetic, and fixing it belongs with the
+   * board work that gives a goal row somewhere to link TO.
+   */
+  kind?: 'task' | 'goal';
   from: TaskStatus;
   to: TaskStatus;
   actor: TaskActor;
@@ -3417,7 +3431,11 @@ export class TaskStore {
       confirmed?: boolean;
     },
   ): TransitionResult {
-    const task = this.getTask(taskId);
+    // Resolves a goal row as readily as a task, which is the whole of what
+    // this feature needed on the wire: a goal moves through THIS gate, so
+    // `POST /api/tasks/:id/transition` already reaches one and no new
+    // shared-server route had to be added for old bundles to miss.
+    const task = this.findRow(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (!TASK_STATUSES.has(to)) return { ok: false, error: 'bad-status' };
     if (task.status === to) {
@@ -3434,7 +3452,14 @@ export class TaskStore {
     }
 
     const forward = to === 'in-progress' || to === 'done';
-    const blockers = forward ? this.openBlockers(task) : [];
+    // A task's open dependencies; a goal's open children. Different question,
+    // same answer shape, and deliberately the same advisory/enforcing split
+    // rather than a second notion of blocked.
+    const blockers = forward
+      ? isGoalRow(task)
+        ? this.openChildren(task)
+        : this.openBlockers(task)
+      : [];
     const enforced = blockers.filter((b) => b.enforce);
     if (enforced.length > 0) {
       return { ok: false, error: 'blocked', blockers };
@@ -3471,6 +3496,7 @@ export class TaskStore {
       type: 'task.transitioned',
       workspaceId: task.workspaceId,
       taskId: task.id,
+      ...(isGoalRow(task) ? { kind: 'goal' as const } : {}),
       from: entry.from,
       to,
       actor: by,
@@ -5674,6 +5700,51 @@ export class TaskStore {
   /** Open (not-done) dependencies of a task, described so the message can
    *  land verbatim in an agent's context: "blocked by open decision t-x:
    *  'your go'". A dangling id (dep task deleted) can't gate — skipped. */
+  /**
+   * A row by id, task or goal — the lookup the transition gate uses.
+   *
+   * Deliberately NOT `getTask`, which stays tasks-only. `getTask` has dozens
+   * of callers and every one of them is a task verb; widening it would put
+   * goal rows in reach of `assign_task`, `set_task_goal` and the rest by id
+   * alone. Only the gate needs to see both, so only the gate gets a lookup
+   * that does.
+   */
+  private findRow(id: string): BoardRow | undefined {
+    return this.getTask(id) ?? this.getGoalRow(id);
+  }
+
+  /**
+   * A goal's open children, reported so a declaration can be made with them
+   * in view — never to refuse it.
+   *
+   * `enforce: false` on every row, unconditionally, and that is the feature
+   * rather than a default: a goal is done because somebody says so, and the
+   * children are reported, not enforced. There is deliberately no opt-in to
+   * make one of these enforcing, because an enforcing child edge would make
+   * `done` derived again through the back door — the goal could only be
+   * closed once its children were, which is exactly the roll-up rule Bryan
+   * ruled out.
+   */
+  private openChildren(goal: GoalRow): TransitionBlocker[] {
+    const state = this.workspaces.get(goal.workspaceId);
+    if (!state) return [];
+    const out: TransitionBlocker[] = [];
+    for (const task of state.tasks.values()) {
+      if (task.goal !== goal.id || task.status === 'done') continue;
+      if (isArchived(task)) continue;
+      const noun = task.needs === 'decision' ? 'decision' : 'task';
+      out.push({
+        taskId: task.id,
+        title: task.title,
+        status: task.status,
+        ...(task.needs !== undefined ? { needs: task.needs } : {}),
+        enforce: false,
+        message: `still open in this goal — ${noun} ${task.id}: '${task.title}'`,
+      });
+    }
+    return out;
+  }
+
   private openBlockers(task: Task): TransitionBlocker[] {
     const enforce = new Set(task.afterEnforce ?? []);
     const out: TransitionBlocker[] = [];
