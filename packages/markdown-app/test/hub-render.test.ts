@@ -457,7 +457,9 @@ describe('renderBoard', () => {
     for (const [assignee, expected, reads] of rows) {
       root.replaceChildren();
       renderBoard(root, boardSections(GOALS, [task({ goal: 'g-pr', assignee })], filters), h);
-      const avatar = root.querySelector('.hub-owner-avatar') as HTMLElement;
+      // Scoped to the task row: the goal band above it draws its own owner
+      // slot with the same avatar class.
+      const avatar = root.querySelector('.hub-task-row .hub-owner-avatar') as HTMLElement;
       expect(avatar.textContent).toBe(expected);
       const picker = root.querySelector('.hub-row-assignee') as HTMLSelectElement;
       expect(picker.title).toContain(reads);
@@ -493,7 +495,7 @@ describe('renderBoard', () => {
       boardSections(GOALS, [task({ goal: 'g-pr', assignee: 'agent' })], filters),
       h,
     );
-    const avatar = root.querySelector('.hub-owner-avatar') as HTMLElement;
+    const avatar = root.querySelector('.hub-task-row .hub-owner-avatar') as HTMLElement;
     expect(avatar.textContent).toBe('?');
     expect(avatar.className).toContain('hub-owner-none');
   });
@@ -610,22 +612,250 @@ describe('renderBoard', () => {
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: t.id }));
   });
 
+  // Decision 4's desktop half, spelled the way the TASK rows spell it: the
+  // words themselves become editable in place (`wireWordsInPlace`), never an
+  // input swap. Backlog is a bucket, not a goal, and has no name to change.
   it('goal titles are editable in place too; Backlog is not', () => {
     const h = handlers();
     renderBoard(root, boardSections(GOALS, [], filters), h);
     const goalTitle = root.querySelector(
-      '.hub-section[data-goal-id="g-pr"] .hub-section-title-text',
+      '.hub-section[data-goal-id="g-pr"] .hub-goal-title-text',
     ) as HTMLElement;
     goalTitle.click();
-    const input = goalTitle.querySelector('input') as HTMLInputElement;
-    input.value = '1. Ship the PR';
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(goalTitle.hasAttribute('contenteditable')).toBe(true);
+    goalTitle.textContent = '1. Ship the PR';
+    goalTitle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(h.onGoalTitleCommit).toHaveBeenCalledWith('g-pr', '1. Ship the PR');
     const choresTitle = root.querySelector(
-      `.hub-section[data-goal-id="${CHORES_ID}"] .hub-section-title-text`,
+      `.hub-section[data-goal-id="${CHORES_ID}"] .hub-goal-title-text`,
     ) as HTMLElement;
     choresTitle.click();
-    expect(choresTitle.querySelector('input')).toBeNull();
+    expect(choresTitle.hasAttribute('contenteditable')).toBe(false);
+  });
+});
+
+// ── The goal band (Bryan's live mockup review, 2026-08-23) ──────────────────
+// The band header IS the goal's row. What Bryan struck from the mock is
+// pinned as absences below — counts, drag handle, status circle, chips —
+// each beside a positive control on the task row underneath, which keeps all
+// of that chrome.
+describe('the goal band row', () => {
+  const DAY = 86_400_000;
+  const goalsWith = (over: Partial<HubGoal> = {}): HubGoal[] => [
+    { id: 'g-pr', title: '1. Get the PR out', ...over },
+  ];
+  const goalRow = () =>
+    root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-goal-row') as HTMLElement;
+
+  it('renders the header as a row — title, plain due text, owner slot, and none of the struck chrome', () => {
+    const h = handlers();
+    renderBoard(
+      root,
+      boardSections(goalsWith({ dueAt: Date.now() + DAY }), [task({ goal: 'g-pr' })], filters),
+      h,
+    );
+    const row = goalRow();
+    expect(row).not.toBeNull();
+    expect(row.querySelector('.hub-goal-title-text')?.textContent).toBe('1. Get the PR out');
+    // Decision 6: the due date is plain muted text right of the title — not a
+    // chip — and only an OVERDUE open band goes red, which this one is not.
+    const due = row.querySelector('.hub-due') as HTMLElement;
+    expect(due).not.toBeNull();
+    expect(due.textContent).toContain('due');
+    expect(due.className).not.toContain('hub-badge');
+    expect(due.className).not.toContain('hub-due-overdue');
+    // Decisions 1, 2, 6: no counts, no drag handle, no status circle, no chips.
+    expect(row.querySelector('.hub-drag-handle')).toBeNull();
+    expect(row.querySelector('.hub-status-ctl')).toBeNull();
+    expect(row.querySelector('.hub-status-mark')).toBeNull();
+    expect(row.querySelector('.hub-badge')).toBeNull();
+    expect(row.querySelector('.hub-goal-counts')).toBeNull();
+    expect(row.textContent ?? '').not.toMatch(/\d+ (open|doing|done)/);
+    // Positive control: the task row inside the same band still carries its
+    // chrome, so the absences above are the goal row's own.
+    const trow = root.querySelector('.hub-task-row') as HTMLElement;
+    expect(trow.querySelector('.hub-drag-handle')).not.toBeNull();
+    expect(trow.querySelector('.hub-status-ctl')).not.toBeNull();
+    // Decision 8's slot: the owner cell is always there (it is what keeps the
+    // avatar column aligned with the task rows'), drawn as a vacancy while
+    // nothing owns the goal.
+    expect(row.querySelector('.hub-owner-ctl .hub-owner-avatar')?.className).toContain(
+      'hub-owner-none',
+    );
+  });
+
+  // Same contract as the task row's track test: the stylesheet's declaration
+  // is read rather than restated, and the child count must match it.
+  it('emits one child per declared grid track, with the title on the flexible one', () => {
+    renderBoard(
+      root,
+      boardSections(goalsWith({ dueAt: Date.now() + DAY }), [], filters),
+      handlers(),
+    );
+    const shape = [...goalRow().children].map((c) => (c as HTMLElement).className.split(' ')[0]);
+    expect(shape).toEqual([
+      'hub-twisty',
+      'hub-goal-title',
+      'hub-goal-meta',
+      'hub-goal-open',
+      'hub-owner-ctl',
+    ]);
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    const decl = /\.hub-goal-row\s*\{[^}]*grid-template-columns:\s*([^;]+);/.exec(css)?.[1];
+    expect(decl).toBeDefined();
+    const tracks = (decl as string).trim().split(/\s+(?![^(]*\))/);
+    expect(shape).toHaveLength(tracks.length);
+    expect(tracks[shape.indexOf('hub-goal-title')]).toContain('1fr');
+    expect(tracks.filter((t) => t.includes('fr'))).toHaveLength(1);
+  });
+
+  it('reads overdue in red on an open band, and not on a done one', () => {
+    renderBoard(
+      root,
+      boardSections(goalsWith({ dueAt: Date.now() - DAY }), [], filters),
+      handlers(),
+    );
+    expect(goalRow().querySelector('.hub-due')?.className).toContain('hub-due-overdue');
+    root.replaceChildren();
+    renderBoard(
+      root,
+      boardSections(goalsWith({ dueAt: Date.now() - DAY, status: 'done' }), [], filters),
+      handlers(),
+    );
+    expect(goalRow().querySelector('.hub-due')?.className).not.toContain('hub-due-overdue');
+  });
+
+  // The avatar draws from the projected owner the way a task row's does —
+  // same class family, same initials scheme — so the two columns read as one.
+  it('draws a projected owner as the same initials avatar a task row gets', () => {
+    renderBoard(
+      root,
+      boardSections(goalsWith({ assignee: 'team-lead-fleet', ownerKind: 'agent' }), [], filters),
+      handlers(),
+    );
+    const avatar = goalRow().querySelector('.hub-owner-avatar') as HTMLElement;
+    expect(avatar.textContent).toBe('TL');
+    expect(avatar.className).toContain('hub-owner-agent');
+    expect(avatar.title).toContain('team-lead-fleet');
+  });
+
+  it('desktop: the words rename in place; anywhere else on the row opens the goal', () => {
+    const onOpenGoal = vi.fn();
+    const h = handlers({ onOpenGoal });
+    renderBoard(root, boardSections(goalsWith(), [], filters), h);
+    const words = goalRow().querySelector('.hub-goal-title-text') as HTMLElement;
+    words.click();
+    expect(words.hasAttribute('contenteditable')).toBe(true);
+    expect(onOpenGoal).not.toHaveBeenCalled();
+    words.textContent = '1. Ship the PR';
+    words.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(h.onGoalTitleCommit).toHaveBeenCalledWith('g-pr', '1. Ship the PR');
+    goalRow().click();
+    expect(onOpenGoal).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
+  });
+
+  // Decision 4's mobile half: a tap — the title's words included — opens the
+  // goal, and never starts an edit. Renaming lives in the detail panel there.
+  it('mobile: a tap anywhere opens the goal and never edits the title', () => {
+    const onOpenGoal = vi.fn();
+    const h = handlers({ inlineTitleEdit: () => false, onOpenGoal });
+    renderBoard(root, boardSections(goalsWith(), [], filters), h);
+    const words = goalRow().querySelector('.hub-goal-title-text') as HTMLElement;
+    words.click();
+    expect(words.hasAttribute('contenteditable')).toBe(false);
+    expect(onOpenGoal).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
+    expect(h.onGoalTitleCommit).not.toHaveBeenCalled();
+  });
+
+  // Decision 3: a collapsed band shows nothing extra — the goal row alone, no
+  // "N hidden" line, no summary. The fold is the viewer's own (localStorage,
+  // never the shared ydoc), so it survives the re-renders the live board
+  // makes constantly.
+  it('collapses to the goal row alone, per viewer, surviving a re-render', () => {
+    try {
+      localStorage.removeItem('hub:collapsed-bands');
+    } catch {
+      /* private mode */
+    }
+    const h = handlers();
+    const sections = boardSections(goalsWith(), [task({ goal: 'g-pr' })], filters);
+    renderBoard(root, sections, h);
+    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
+    const twisty = band.querySelector('.hub-twisty') as HTMLButtonElement;
+    expect(twisty.getAttribute('aria-expanded')).toBe('true');
+    twisty.click();
+    expect(band.classList.contains('is-collapsed')).toBe(true);
+    expect(twisty.getAttribute('aria-expanded')).toBe('false');
+    // Nothing extra rendered for the folded state — the CSS hides the tasks,
+    // and no summary element takes their place.
+    expect(band.querySelector('.hub-band-hidden')).toBeNull();
+    expect(band.querySelector('.hub-section-more')).toBeNull();
+    // Per viewer, across renders: the repaint keeps the fold.
+    root.replaceChildren();
+    renderBoard(root, sections, h);
+    const again = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
+    expect(again.classList.contains('is-collapsed')).toBe(true);
+    // Reopen and leave no state behind for the other tests.
+    (again.querySelector('.hub-twisty') as HTMLButtonElement).click();
+    expect(again.classList.contains('is-collapsed')).toBe(false);
+    try {
+      localStorage.removeItem('hub:collapsed-bands');
+    } catch {
+      /* private mode */
+    }
+  });
+
+  it('the twisty folds without opening the goal', () => {
+    const onOpenGoal = vi.fn();
+    renderBoard(root, boardSections(goalsWith(), [], filters), handlers({ onOpenGoal }));
+    (goalRow().querySelector('.hub-twisty') as HTMLButtonElement).click();
+    expect(onOpenGoal).not.toHaveBeenCalled();
+    // Fold it back so the persisted state nets to zero for the other tests.
+    (goalRow().querySelector('.hub-twisty') as HTMLButtonElement).click();
+  });
+
+  it('Backlog is a bucket, not a goal: reserved styling, no rename, no open, an empty owner slot', () => {
+    const onOpenGoal = vi.fn();
+    const h = handlers({ onOpenGoal });
+    renderBoard(root, boardSections(goalsWith(), [], filters), h);
+    const band = root.querySelector(
+      `.hub-section[data-goal-id="${CHORES_ID}"] .hub-band`,
+    ) as HTMLElement;
+    expect(band.className).toContain('hub-band-reserved');
+    const row = band.querySelector('.hub-goal-row') as HTMLElement;
+    const words = row.querySelector('.hub-goal-title-text') as HTMLElement;
+    words.click();
+    expect(words.hasAttribute('contenteditable')).toBe(false);
+    row.click();
+    expect(onOpenGoal).not.toHaveBeenCalled();
+    // No vacancy mark either — Backlog cannot be owned, so drawing a hole
+    // would invite filling it. The slot itself stays for column alignment.
+    expect(row.querySelector('.hub-owner-ctl')).not.toBeNull();
+    expect(row.querySelector('.hub-owner-avatar')).toBeNull();
+    expect(row.querySelector('.hub-due')).toBeNull();
+  });
+
+  // A done band's treatment is a muted title by CLASS (the mock draws no
+  // chrome of its own for done goals — the status lives in the detail panel),
+  // plus the attribution commit A shipped, surfaced as the row's tooltip.
+  it('marks a done band by class and names who declared it; an undecorated band claims nothing', () => {
+    renderBoard(
+      root,
+      boardSections(
+        goalsWith({ status: 'done', doneAt: NOW, doneBy: { name: 'Jordan', kind: 'person' } }),
+        [],
+        filters,
+      ),
+      handlers(),
+    );
+    const band = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
+    expect(band.className).toContain('hub-band-done');
+    expect(goalRow().title).toContain('Jordan');
+    root.replaceChildren();
+    renderBoard(root, boardSections(goalsWith(), [], filters), handlers());
+    const bare = root.querySelector('.hub-section[data-goal-id="g-pr"] .hub-band') as HTMLElement;
+    expect(bare.className).not.toContain('hub-band-done');
+    expect(goalRow().title).toBe('');
   });
 });
 

@@ -485,6 +485,12 @@ export interface BoardHandlers {
    *  band it should follow, omitted to append. Absent → no add affordance,
    *  which is what every existing caller (and every test) gets. */
   onGoalAdd?: (title: string, after?: string) => void;
+  /** The goal row was opened: the only gesture the row has on a coarse
+   *  pointer, and the desktop click anywhere off the title's words — the same
+   *  interaction model as a task row (Bryan's mockup review, 2026-08-23).
+   *  Absent → the tap does nothing yet; the goal detail panel it should open
+   *  is the caller's surface, not this renderer's. */
+  onOpenGoal?: (section: BoardSection) => void;
   onOpenTask: (task: HubTask) => void;
   /** A drag or an arrow-key move resolved to a `set_task_goal` call. */
   onReorder: (task: HubTask, target: ReorderTarget) => void;
@@ -1246,6 +1252,245 @@ export function renderBoardForPane(
   renderBoard(container, sections, handlers);
 }
 
+// ── The goal band: the goal IS a row, and the row carries its tasks ────────
+
+/**
+ * Which bands this viewer has folded — localStorage, never the shared ydoc,
+ * because a fold is a reading preference: collapsing a band you have finished
+ * scanning must not collapse it for everyone else on the board.
+ *
+ * Guarded reads/writes: private mode throws on both, and a board that cannot
+ * remember a fold is still a board (the class toggle keeps working for the
+ * life of the render).
+ */
+const COLLAPSED_BANDS_KEY = 'hub:collapsed-bands';
+function collapsedBands(): Record<string, 1> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(COLLAPSED_BANDS_KEY) ?? '{}');
+    return parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, 1>) : {};
+  } catch {
+    return {};
+  }
+}
+function setBandCollapsed(goalId: string, folded: boolean): void {
+  try {
+    const map = collapsedBands();
+    if (folded) map[goalId] = 1;
+    else delete map[goalId];
+    localStorage.setItem(COLLAPSED_BANDS_KEY, JSON.stringify(map));
+  } catch {
+    /* private mode — the fold still applies until the next render */
+  }
+}
+
+/**
+ * One board band: the goal's own ROW on top, its tasks on a rail below it
+ * (Bryan's approved mock, 2026-08-23). The row deliberately carries NONE of a
+ * task row's working chrome — his review struck, by name: open/doing/done
+ * counts, the drag handle, the status circle, decision chips, and any 'legacy
+ * band' marker. Reordering, status and counts live in the goal's detail
+ * panel. What the row keeps is what identifies the band at a glance: the
+ * title, the due date as plain muted text (overdue = red), and the owner
+ * avatar in the same column as the task rows' — that alignment is the CSS's
+ * half of the contract (see `goal-band-css.test.ts`).
+ *
+ * Interaction model is the TASK row's, by decision: on a fine pointer the
+ * words rename in place (`wireWordsInPlace`, zero layout shift) and anywhere
+ * else opens the goal; on a coarse pointer any tap opens and never edits —
+ * renaming lives in the detail panel there. The one control a goal row has
+ * that a task row does not is the fold, so the twisty is ALWAYS visible: a
+ * hover-only affordance is no affordance on the iPad this board is read from.
+ *
+ * A done band is a muted title plus the attribution commit A shipped, riding
+ * the row's tooltip. The mock draws no further chrome for done goals, so
+ * neither does this — the status select lives in the panel.
+ */
+function renderGoalBand(section: BoardSection, handlers: BoardHandlers): HTMLElement {
+  const folded = collapsedBands()[section.id] === 1;
+  const band = document.createElement('div');
+  band.className = [
+    'hub-band',
+    section.isChores ? 'hub-band-reserved' : '',
+    section.status === 'done' ? 'hub-band-done' : '',
+    folded ? 'is-collapsed' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  const row = document.createElement('div');
+  row.className = 'hub-goal-row';
+
+  // The fold. Toggles classes in place rather than re-rendering: the live
+  // board repaints often enough on its own, and the persisted map is what a
+  // repaint reads.
+  const twisty = document.createElement('button');
+  twisty.type = 'button';
+  twisty.className = 'hub-twisty';
+  const glyph = document.createElement('span');
+  glyph.textContent = '▾';
+  twisty.append(glyph);
+  const sayFold = (isFolded: boolean): void => {
+    twisty.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
+    twisty.setAttribute('aria-label', `${isFolded ? 'Expand' : 'Collapse'} “${section.title}”`);
+  };
+  sayFold(folded);
+  twisty.title = 'Collapse this goal — just for you';
+  twisty.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const now = !band.classList.contains('is-collapsed');
+    band.classList.toggle('is-collapsed', now);
+    sayFold(now);
+    setBandCollapsed(section.id, now);
+  });
+
+  // The title cell. Same structural split as the task row: the WORDS live in
+  // an inline child, so the browser's own hit-testing separates "rename the
+  // words" from "open the goal" — a click on the cell's empty width never
+  // reaches the child and bubbles to the row's open handler.
+  const title = document.createElement('span');
+  title.className = 'hub-goal-title';
+  const words = document.createElement('span');
+  words.className = 'hub-goal-title-text';
+  words.textContent = section.title;
+  title.append(words);
+
+  const editable = !section.isChores && (handlers.inlineTitleEdit ?? finePointer)();
+
+  // The drag-select guard, same as the task row's: a click that just made a
+  // selection is somebody copying a title, and neither gesture may act on it.
+  let selAtDown = selectionInside(row);
+  const selectedByThisClick = (): boolean => {
+    const now = selectionInside(row);
+    return now !== null && !sameSelection(now, selAtDown);
+  };
+  row.addEventListener('mousedown', () => {
+    selAtDown = selectionInside(row);
+  });
+
+  let beginRename: ((caret?: number) => void) | null = null;
+  if (editable) {
+    title.title = 'Click the words to rename · anywhere else opens the goal';
+    beginRename = wireWordsInPlace(
+      words,
+      () => section.title,
+      (v) => handlers.onGoalTitleCommit(section.id, v),
+      (on) => title.classList.toggle('hub-title-editing', on),
+    );
+    words.addEventListener('click', (ev) => {
+      // The one click on this row that does not open the goal.
+      ev.stopPropagation();
+      if (selectedByThisClick()) return;
+      beginRename?.(caretOffsetIn(words, ev.clientX, ev.clientY));
+    });
+  } else if (!section.isChores) {
+    title.title = 'Tap to open';
+  }
+
+  // The due date: plain muted text right of the title, red only when an OPEN
+  // band is past it (decision 6 — explicitly not a chip, and no chip may
+  // return beside it).
+  const meta = document.createElement('span');
+  meta.className = 'hub-goal-meta';
+  if (!section.isChores && section.dueAt !== undefined) {
+    const due = document.createElement('span');
+    const overdue = section.dueAt < Date.now() && section.status !== 'done';
+    due.className = overdue ? 'hub-due hub-due-overdue' : 'hub-due';
+    due.textContent = `due ${new Date(section.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+    meta.append(due);
+  }
+
+  // The open caret — the task row's, one size up the tree. Same contract:
+  // no behaviour of its own (the row's click opens, this one bubbles), not a
+  // tab stop, never keeps focus from a click.
+  const openCaret = document.createElement('button');
+  openCaret.type = 'button';
+  openCaret.className = 'hub-goal-open';
+  openCaret.textContent = '›';
+  openCaret.tabIndex = -1;
+  openCaret.setAttribute('aria-hidden', 'true');
+  openCaret.title = 'Open this goal';
+  openCaret.addEventListener('mousedown', (ev) => ev.preventDefault());
+
+  // The owner slot is ALWAYS emitted — it is the grid track that keeps the
+  // avatar column aligned with the task rows' (decision 8) — but Backlog gets
+  // no avatar in it: a bucket cannot be owned, and drawing a vacancy would
+  // invite filling it. A goal without a projected owner IS a vacancy, drawn
+  // as one, exactly like an unowned task.
+  const ownerCtl = document.createElement('span');
+  ownerCtl.className = 'hub-owner-ctl';
+  if (!section.isChores) {
+    const avatar = document.createElement('span');
+    if (section.assignee !== undefined) {
+      const kindClass =
+        section.ownerKind === 'person'
+          ? 'hub-owner-human'
+          : section.ownerKind === 'agent'
+            ? 'hub-owner-agent'
+            : 'hub-owner-unknown';
+      avatar.className = `hub-owner-avatar ${kindClass}`;
+      avatar.textContent = ownerInitials(section.assignee);
+      avatar.title = `Owner: ${assigneeLabel(section.assignee)}`;
+    } else {
+      avatar.className = 'hub-owner-avatar hub-owner-none';
+      avatar.textContent = '—';
+      avatar.title = 'Nobody owns this goal yet';
+    }
+    ownerCtl.append(avatar);
+  }
+
+  row.append(twisty, title, meta, openCaret, ownerCtl);
+
+  // Done attribution, where a one-line row can carry it: the tooltip. The
+  // band's visible treatment is the muted title class alone — the mock shows
+  // no further chrome for a done goal, and none is invented here.
+  if (section.status === 'done') {
+    const when =
+      section.doneAt !== undefined
+        ? `, ${new Date(section.doneAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+        : '';
+    row.title = section.doneBy ? `Done — declared by ${section.doneBy.name}${when}` : 'Done';
+  }
+
+  if (!section.isChores) {
+    row.addEventListener('click', () => {
+      if (selectedByThisClick()) return;
+      handlers.onOpenGoal?.(section);
+    });
+    // The keyboard's copy of the same two gestures, mirroring the task row:
+    // Enter on the focused row opens, `r`/F2 renames where renaming exists.
+    row.tabIndex = 0;
+    row.addEventListener('keydown', (ev) => {
+      if ((ev.target as HTMLElement).closest('input, button, select, textarea, [contenteditable]'))
+        return;
+      if (ev.key === 'Enter') {
+        handlers.onOpenGoal?.(section);
+      } else if (editable && (ev.key === 'r' || ev.key === 'F2')) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        beginRename?.();
+      }
+    });
+  }
+
+  band.append(row);
+
+  // The band's tasks, on the rail that says "these belong to the row above".
+  // A folded band hides this container in CSS and renders NOTHING in its
+  // place — a collapsed band shows nothing extra, by decision.
+  const tasksWrap = document.createElement('div');
+  tasksWrap.className = 'hub-band-tasks';
+  if (section.tasks.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'hub-section-empty';
+    empty.textContent = section.isChores ? 'Nothing in the backlog.' : 'No tasks yet.';
+    tasksWrap.append(empty);
+  } else {
+    for (const task of section.tasks) tasksWrap.append(renderTaskRow(task, handlers));
+  }
+  band.append(tasksWrap);
+  return band;
+}
+
 /** Goals-as-sections, Backlog last (already ordered by the model); done rows
  *  stay in place, drawn done — finishing a task doesn't move it (§3.9). */
 export function renderBoard(
@@ -1281,35 +1526,7 @@ export function renderBoard(
     // board order, and the data migration is a separate, deliberate step.
     sec.className = `hub-section${section.isChores ? ' hub-chores' : ''}`;
     sec.dataset.goalId = section.id;
-    const head = document.createElement('h3');
-    head.className = 'hub-section-title';
-    const titleSpan = document.createElement('span');
-    titleSpan.className = 'hub-section-title-text';
-    titleSpan.textContent = section.title;
-    if (!section.isChores) {
-      titleSpan.title = 'Tap to edit the goal title';
-      wireInPlaceTitle(
-        titleSpan,
-        () => section.title,
-        (v) => handlers.onGoalTitleCommit(section.id, v),
-      );
-    }
-    head.append(titleSpan);
-    if (section.dueAt !== undefined) {
-      const due = document.createElement('span');
-      due.className = 'hub-badge hub-badge-due';
-      due.textContent = `due ${new Date(section.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-      head.append(due);
-    }
-    sec.append(head);
-    if (section.tasks.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'hub-section-empty';
-      empty.textContent = section.isChores ? 'Nothing in the backlog.' : 'No tasks yet.';
-      sec.append(empty);
-    } else {
-      for (const task of section.tasks) sec.append(renderTaskRow(task, handlers));
-    }
+    sec.append(renderGoalBand(section, handlers));
     container.append(sec);
   }
   if (handlers.onGoalAdd) container.append(goalAddRow(sections, handlers.onGoalAdd));
