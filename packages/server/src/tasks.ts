@@ -467,6 +467,18 @@ export interface Task {
   /** `t-<crypto-random>`. */
   id: string;
   workspaceId: string;
+  /**
+   * Which kind of board row this is. OPTIONAL, and absent reads as `'task'` —
+   * every task ever persisted predates the field, so requiring it would mean
+   * rewriting every sidecar at the deploy to record something already true of
+   * all of them.
+   *
+   * Ask it through `isGoalRow`, never with a bare comparison: the failure mode
+   * of a discriminator whose absence is meaningful is a reader that treats an
+   * unset kind as the interesting case, and every task reader on this board
+   * must keep seeing exactly what it saw before.
+   */
+  kind?: 'task' | 'goal';
   title: string;
   /** Markdown snapshot of the description. The live CRDT body room
    *  (`task:<taskId>`) arrives with the projection commit; this snapshot is
@@ -729,6 +741,63 @@ export interface Task {
   titleHead?: string;
 }
 
+/**
+ * A goal as a board ROW — the thing whose `done` somebody declares.
+ *
+ * Deliberately NOT a `Task`, and the two fields it drops are the reason.
+ *
+ *  - No `goal`. Only tasks carry containment (settled by Bryan, 2026-08-21:
+ *    *"Goals don't have parent goals. For now. Let's say only tasks have
+ *    goals."*), so goals are a flat set and a goal row is contained by
+ *    nothing. That needs no representation at all — a field holding a
+ *    reserved id or an empty string would be a containment claim nobody
+ *    made.
+ *  - `assignee` is OPTIONAL, because an owner cannot be invented. Every task
+ *    create resolves a real one and refuses the bare word "agent"
+ *    (`task-owner.ts`), but seeding goals with the lead agent would promise
+ *    an owner nobody asked for. The precedent is `leadAgentId`, optional for
+ *    exactly this reason — the absence has to be representable so the
+ *    surfaces can render a vacancy.
+ *
+ * Everything it KEEPS is what makes the ticket's audit trail free: the same
+ * `status`, and the same append-only `transitions` carrying the actor. A goal
+ * moves through the one gate every other status change goes through
+ * (`TaskStore.transition`), so there is no second status machine to keep
+ * honest.
+ */
+export interface GoalRow {
+  /** The goal's own id, never re-minted — `task.goal`, done-task history and
+   *  `triagedAgainst.goalId` all join on it. */
+  id: string;
+  workspaceId: string;
+  kind: 'goal';
+  title: string;
+  /** Markdown snapshot of the goal's prose, mirroring `Task.body`. */
+  body?: string;
+  /** Absent means nobody owns it — a vacancy, not a person. */
+  assignee?: string;
+  dueAt?: number;
+  /** Fractional sort key among the board's goal rows: priority order. */
+  order: number;
+  status: TaskStatus;
+  /** Append-only audit trail — who declared the goal done, and when. */
+  transitions: TaskTransition[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A row the transition gate can move: a task, or a goal. */
+export type BoardRow = Task | GoalRow;
+
+/**
+ * Whether a row is a goal. The ONE place the discriminator is read, so an
+ * absent `kind` resolves to "task" in exactly one spot rather than at every
+ * call site — see the field's note on Task.
+ */
+export function isGoalRow(row: { kind?: 'task' | 'goal' }): row is GoalRow & { kind: 'goal' } {
+  return row.kind === 'goal';
+}
+
 export interface CreateTaskOpts {
   title: string;
   body?: string;
@@ -767,7 +836,7 @@ export interface TransitionBlocker {
 }
 
 export type TransitionResult =
-  | { ok: true; task: Task; blockers: TransitionBlocker[]; unproven: boolean }
+  | { ok: true; task: BoardRow; blockers: TransitionBlocker[]; unproven: boolean }
   | {
       ok: false;
       error: 'not-found' | 'bad-status' | 'same-status' | 'blocked';
@@ -779,7 +848,10 @@ export type TransitionResult =
 export type AmendEvidenceResult =
   | {
       ok: true;
-      task: Task;
+      /** A BoardRow for the same reason `TransitionResult` carries one: a goal
+       *  moves through the same gate, so its declaration can need the same
+       *  correction. */
+      task: BoardRow;
       /** The row the correction landed on, amendments included. */
       transition: TaskTransition;
       amendment: TaskEvidenceAmendment;
@@ -1346,6 +1418,20 @@ export interface TaskTransitionedEvent {
   type: 'task.transitioned';
   workspaceId: string;
   taskId: string;
+  /**
+   * `'goal'` when the row that moved was a goal. Absent reads as a task, the
+   * same default the row's own `kind` carries, so every event already written
+   * keeps its meaning.
+   *
+   * On the wire rather than in the consumers deliberately: a goal moves
+   * through the one status gate, so it must appear in the audit log like any
+   * other status change — suppressing the event would make the activity feed
+   * silently miss goal closures, which is worse than labelling one. The
+   * browser surfaces do not read this yet, so a goal closure currently renders
+   * with a task's deep link; that is cosmetic, and fixing it belongs with the
+   * board work that gives a goal row somewhere to link TO.
+   */
+  kind?: 'task' | 'goal';
   from: TaskStatus;
   to: TaskStatus;
   actor: TaskActor;
@@ -2288,6 +2374,20 @@ export interface ListTasksFilter {
 interface WorkspaceState {
   workspace: HubWorkspace;
   tasks: Map<string, Task>;
+  /**
+   * Goal rows, keyed by goal id — SEPARATE from `tasks`, and that separation
+   * is the safety property rather than a filing preference.
+   *
+   * Goals must not appear in `list_tasks`, `next_tasks` or My Tasks (Bryan,
+   * 2026-08-23, reversing the earlier try-it-and-see: *"No don't do this. The
+   * tasks need more room to focus on the most important part — the title."*).
+   * Enforcing that with a `kind` filter on each reader would be one forgotten
+   * call site away from handing an agent a band to implement — and the
+   * readers that iterate this store's tasks number in the dozens. A separate
+   * map cannot leak, because those readers walk a collection the goal rows
+   * are not in.
+   */
+  goalRows: Map<string, GoalRow>;
   /** agentId → attachment (§4). Keyed per workspace, so the same agentId in
    *  two workspaces is two independent records. */
   attachments: Map<string, AgentAttachment>;
@@ -2353,6 +2453,10 @@ export function newGoalId(): string {
 export class TaskStore {
   private workspaces = new Map<string, WorkspaceState>();
   private taskIndex = new Map<string, string>(); // taskId → workspaceId
+  /** goalId → workspaceId. Deliberately NOT merged into `taskIndex`: that one
+   *  is what `getTask` resolves through, and a goal id resolving there would
+   *  put goal rows within reach of every task verb by id. */
+  private goalIndex = new Map<string, string>();
   private saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private attachmentSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private dataDir: string;
@@ -2531,7 +2635,12 @@ export class TaskStore {
       ...(lead ? { leadAgentId: lead, leadAgentSince: now } : {}),
       createdAt: now,
     };
-    this.workspaces.set(workspace.id, { workspace, tasks: new Map(), attachments: new Map() });
+    this.workspaces.set(workspace.id, {
+      workspace,
+      tasks: new Map(),
+      goalRows: new Map(),
+      attachments: new Map(),
+    });
     this.scheduleSave(workspace.id);
     return workspace;
   }
@@ -2621,6 +2730,13 @@ export class TaskStore {
     }
 
     for (const taskId of taskIds) this.taskIndex.delete(taskId);
+    // Leak hygiene, and deliberately NOT load-bearing: `getGoalRow` re-reads
+    // the workspace map, so a stale entry here already resolves to undefined
+    // and no caller can observe the difference. What it prevents is the index
+    // growing without bound across a server's lifetime of board deletes. Said
+    // plainly because a test cannot tell this line from its absence — the one
+    // below pins the lookup CONTRACT, not this sweep.
+    for (const goalId of state.goalRows.keys()) this.goalIndex.delete(goalId);
     this.workspaces.delete(workspaceId);
 
     // None of these can resurrect the board, so a failure here is litter
@@ -3205,6 +3321,96 @@ export class TaskStore {
     return this.workspaces.get(wsId)?.tasks.get(taskId);
   }
 
+  /** A goal's row. Separate from `getTask` on purpose — see `goalIndex`. */
+  getGoalRow(goalId: string): GoalRow | undefined {
+    const wsId = this.goalIndex.get(goalId);
+    if (!wsId) return undefined;
+    return this.workspaces.get(wsId)?.goalRows.get(goalId);
+  }
+
+  /**
+   * The board's CURRENT goal rows, in the goal list's priority order.
+   *
+   * Filtered against `workspace.goals[]` rather than returning the whole map,
+   * because retaining a removed goal's row (see `syncGoalRows`) is a promise
+   * about history and not about the board. A retained row keeps whatever
+   * `order` it had when it left, so an unfiltered list would interleave bands
+   * nobody is working with bands they are — and a caller has no way to tell
+   * the two apart from a row alone. Reach a retained row by id with
+   * `getGoalRow`, which is deliberately not filtered.
+   */
+  listGoalRows(workspaceId: string): GoalRow[] {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return [];
+    const live = new Set(flattenGoals(state.workspace.goals).map((g) => g.id));
+    return Array.from(state.goalRows.values())
+      .filter((row) => live.has(row.id))
+      .sort((a, b) => a.order - b.order);
+  }
+
+  /**
+   * Bring `goalRows` into agreement with `workspace.goals[]`.
+   *
+   * Reconciliation, not a one-shot migration, and it runs on hydrate and after
+   * every goal-list write. That shape is what makes it safe to re-run: it
+   * mints what is missing and refreshes the fields the LIST owns (title,
+   * dueAt, priority order), and it never touches the fields the ROW owns —
+   * `status` and `transitions`. A reconcile that rebuilt rows wholesale would
+   * clear a declared `done` every time somebody renamed a band, destroying
+   * exactly the claim goal status exists to record.
+   *
+   * It also never REMOVES a row for a goal that left the list. The goal list
+   * is an ordinary edit surface and a removal there is not a decision to
+   * destroy the record of what somebody declared about that goal; per the
+   * project's soft-delete rule the row stays, unreferenced, reachable by id
+   * through `getGoalRow` and absent from `listGoalRows`.
+   *
+   * What retention does NOT give you, stated because the obvious guess is
+   * wrong: an undelete. `setGoalList` refuses an id that is not in the current
+   * list, so a removed band cannot be re-submitted by id — retyping it mints a
+   * fresh id and a fresh open row, and the retained one stays where it is.
+   * Measured in `goal-rows.test.ts`. A real restore verb would go through
+   * `setGoalList`'s id check and does not exist yet.
+   *
+   * Subgoals flatten into rows of their own, in the position the board already
+   * draws them — it has rendered one flat level all along.
+   */
+  private syncGoalRows(state: WorkspaceState): void {
+    const now = Date.now();
+    flattenGoals(state.workspace.goals).forEach((g, index) => {
+      const existing = state.goalRows.get(g.id);
+      if (existing) {
+        // The list owns these three; the row owns status and transitions.
+        const changed =
+          existing.title !== g.title || existing.order !== index || existing.dueAt !== g.dueAt;
+        if (changed) {
+          existing.title = g.title;
+          existing.order = index;
+          // Assigned rather than deleted: `JSON.stringify` drops an undefined
+          // value, so a cleared due date leaves no key on disk either way.
+          existing.dueAt = g.dueAt;
+          existing.updatedAt = now;
+        }
+      } else {
+        state.goalRows.set(g.id, {
+          id: g.id,
+          workspaceId: state.workspace.id,
+          kind: 'goal',
+          title: g.title,
+          ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
+          order: index,
+          // A migrated goal is open, with an empty trail: the record starts
+          // here rather than fabricating a history nobody wrote.
+          status: 'todo',
+          transitions: [],
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      this.goalIndex.set(g.id, state.workspace.id);
+    });
+  }
+
   listTasks(workspaceId: string, filter?: ListTasksFilter): Task[] {
     const state = this.workspaces.get(workspaceId);
     if (!state) return [];
@@ -3255,7 +3461,11 @@ export class TaskStore {
       confirmed?: boolean;
     },
   ): TransitionResult {
-    const task = this.getTask(taskId);
+    // Resolves a goal row as readily as a task, which is the whole of what
+    // this feature needed on the wire: a goal moves through THIS gate, so
+    // `POST /api/tasks/:id/transition` already reaches one and no new
+    // shared-server route had to be added for old bundles to miss.
+    const task = this.findRow(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (!TASK_STATUSES.has(to)) return { ok: false, error: 'bad-status' };
     if (task.status === to) {
@@ -3272,7 +3482,14 @@ export class TaskStore {
     }
 
     const forward = to === 'in-progress' || to === 'done';
-    const blockers = forward ? this.openBlockers(task) : [];
+    // A task's open dependencies; a goal's open children. Different question,
+    // same answer shape, and deliberately the same advisory/enforcing split
+    // rather than a second notion of blocked.
+    const blockers = forward
+      ? isGoalRow(task)
+        ? this.openChildren(task)
+        : this.openBlockers(task)
+      : [];
     const enforced = blockers.filter((b) => b.enforce);
     if (enforced.length > 0) {
       return { ok: false, error: 'blocked', blockers };
@@ -3309,6 +3526,7 @@ export class TaskStore {
       type: 'task.transitioned',
       workspaceId: task.workspaceId,
       taskId: task.id,
+      ...(isGoalRow(task) ? { kind: 'goal' as const } : {}),
       from: entry.from,
       to,
       actor: by,
@@ -3367,7 +3585,13 @@ export class TaskStore {
       transitionTs?: number;
     },
   ): AmendEvidenceResult {
-    const task = this.getTask(taskId);
+    // `findRow`, not `getTask`, and it is the transition gate that decides
+    // this: the gate resolves the same way, so a goal CAN be declared done
+    // unproven, and its refusal message names this endpoint as the remedy. An
+    // amend that resolved only tasks would answer that instruction with
+    // `not-found` — a promise the same object makes and cannot keep. Nothing
+    // below touches a field a `GoalRow` lacks.
+    const task = this.findRow(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (task.transitions.length === 0) {
       return {
@@ -4730,6 +4954,7 @@ export class TaskStore {
       kind: classifyActor(opts.actor),
     };
     workspace.goals = goals;
+    this.syncGoalRows(state);
 
     // Open tasks whose goal id disappeared land at the bottom of Backlog.
     // Done tasks stay put — same rule as re-triage (§3.4), their placement
@@ -5151,6 +5376,7 @@ export class TaskStore {
       };
     });
     workspace.goals = newGoals;
+    this.syncGoalRows(state);
     this.scheduleSave(workspaceId);
 
     this.emit({
@@ -5353,6 +5579,7 @@ export class TaskStore {
       newGoals = order.map((id) => byId.get(id) as WorkspaceGoal);
     }
     workspace.goals = newGoals;
+    this.syncGoalRows(state);
     this.scheduleSave(workspaceId);
 
     this.emit({
@@ -5509,6 +5736,51 @@ export class TaskStore {
   /** Open (not-done) dependencies of a task, described so the message can
    *  land verbatim in an agent's context: "blocked by open decision t-x:
    *  'your go'". A dangling id (dep task deleted) can't gate — skipped. */
+  /**
+   * A row by id, task or goal — the lookup the transition gate uses.
+   *
+   * Deliberately NOT `getTask`, which stays tasks-only. `getTask` has dozens
+   * of callers and every one of them is a task verb; widening it would put
+   * goal rows in reach of `assign_task`, `set_task_goal` and the rest by id
+   * alone. Only the gate needs to see both, so only the gate gets a lookup
+   * that does.
+   */
+  private findRow(id: string): BoardRow | undefined {
+    return this.getTask(id) ?? this.getGoalRow(id);
+  }
+
+  /**
+   * A goal's open children, reported so a declaration can be made with them
+   * in view — never to refuse it.
+   *
+   * `enforce: false` on every row, unconditionally, and that is the feature
+   * rather than a default: a goal is done because somebody says so, and the
+   * children are reported, not enforced. There is deliberately no opt-in to
+   * make one of these enforcing, because an enforcing child edge would make
+   * `done` derived again through the back door — the goal could only be
+   * closed once its children were, which is exactly the roll-up rule Bryan
+   * ruled out.
+   */
+  private openChildren(goal: GoalRow): TransitionBlocker[] {
+    const state = this.workspaces.get(goal.workspaceId);
+    if (!state) return [];
+    const out: TransitionBlocker[] = [];
+    for (const task of state.tasks.values()) {
+      if (task.goal !== goal.id || task.status === 'done') continue;
+      if (isArchived(task)) continue;
+      const noun = task.needs === 'decision' ? 'decision' : 'task';
+      out.push({
+        taskId: task.id,
+        title: task.title,
+        status: task.status,
+        ...(task.needs !== undefined ? { needs: task.needs } : {}),
+        enforce: false,
+        message: `still open in this goal — ${noun} ${task.id}: '${task.title}'`,
+      });
+    }
+    return out;
+  }
+
   private openBlockers(task: Task): TransitionBlocker[] {
     const enforce = new Set(task.afterEnforce ?? []);
     const out: TransitionBlocker[] = [];
@@ -6416,6 +6688,10 @@ export class TaskStore {
       const payload = {
         workspace: state.workspace,
         tasks: Array.from(state.tasks.values()),
+        // A key of its own rather than rows mixed into `tasks`: a reader that
+        // has not heard of goal rows gets exactly the task list it expects,
+        // and `workspace.goals[]` above stays on disk as the rollback path.
+        goalRows: Array.from(state.goalRows.values()),
       };
       // Write-then-rename so a crash mid-write can't leave a torn sidecar —
       // the sidecar is authoritative on hydrate, so a torn one loses the
@@ -6446,6 +6722,7 @@ export class TaskStore {
         const parsed = JSON.parse(readFileSync(join(dir, entry), 'utf8')) as {
           workspace?: HubWorkspace;
           tasks?: Task[];
+          goalRows?: GoalRow[];
         };
         const workspace = parsed.workspace;
         if (!workspace || typeof workspace.id !== 'string') {
@@ -6481,11 +6758,18 @@ export class TaskStore {
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);
         }
+        const goalRows = new Map<string, GoalRow>();
+        for (const row of parsed.goalRows ?? []) {
+          if (typeof row?.id !== 'string') continue;
+          goalRows.set(row.id, row);
+          this.goalIndex.set(row.id, workspace.id);
+        }
         const pendingBucketReview = this.loadPendingBucketReview(workspace.id);
         const pendingTaskReviews = this.loadPendingTaskReviews(workspace.id);
         this.workspaces.set(workspace.id, {
           workspace,
           tasks,
+          goalRows,
           attachments: this.loadAttachments(workspace.id),
           // Unlike a task's triage marker above, a queued bucket re-look
           // SURVIVES the restart: the marker promised in-flight work that the
@@ -6495,6 +6779,12 @@ export class TaskStore {
           // review pass — a restart does not perform it.
           ...(pendingTaskReviews ? { pendingTaskReviews } : {}),
         });
+        // The migration, and it is lazy on purpose: every board on disk today
+        // has `goals` and no `goalRows`, so the rows are minted the first time
+        // that board is read back. Re-running it is safe by construction — the
+        // reconcile refreshes only what the goal LIST owns.
+        const state = this.workspaces.get(workspace.id);
+        if (state) this.syncGoalRows(state);
       } catch (err) {
         // A corrupt sidecar loses that one workspace, never the server.
         console.error(`[tasks] unreadable sidecar ${entry} — skipped:`, err);
