@@ -117,6 +117,47 @@ describe('boardSections', () => {
     expect(sections.flatMap((s) => s.tasks).map((t) => t.id)).toContain(orphan.id);
     expect(sections.find((s) => s.isChores)?.tasks.map((t) => t.id)).toContain(orphan.id);
   });
+
+  it("carries a goal's status onto its section, so a done band reads differently from an open one", () => {
+    const goals: HubGoal[] = [
+      {
+        id: 'g-pr',
+        title: '1. Get the PR out',
+        status: 'done',
+        doneAt: NOW - HOUR,
+        doneBy: { name: 'Jordan', kind: 'person' },
+        subgoals: [{ id: 'g-pr-tickets', title: '1.1 Post-PR tickets', status: 'todo' }],
+      },
+      { id: 'g-blog', title: '2. Blog post' },
+    ];
+    const sections = boardSections(goals, [], filters);
+    expect(sections[0]).toMatchObject({
+      id: 'g-pr',
+      status: 'done',
+      doneAt: NOW - HOUR,
+      doneBy: { name: 'Jordan', kind: 'person' },
+    });
+    expect(sections[1]).toMatchObject({ id: 'g-pr-tickets', status: 'todo' });
+    // A goal the projection has not decorated (an older server) claims
+    // nothing, and Backlog is a bucket rather than a goal — never a status.
+    expect(sections[2]?.status).toBeUndefined();
+    expect(sections.find((s) => s.isChores)?.status).toBeUndefined();
+  });
+
+  // The owner rides the same way the status trio does: verbatim when the
+  // projection decorated the band, absent — not fabricated — when it did not.
+  // Backlog is a bucket and can never carry one.
+  it("carries a goal's projected owner onto its section, absent when unclaimed", () => {
+    const goals: HubGoal[] = [
+      { id: 'g-pr', title: '1. Get the PR out', assignee: 'team-lead-fleet', ownerKind: 'agent' },
+      { id: 'g-blog', title: '2. Blog post' },
+    ];
+    const sections = boardSections(goals, [], filters);
+    expect(sections[0]).toMatchObject({ assignee: 'team-lead-fleet', ownerKind: 'agent' });
+    expect(sections[1] !== undefined && 'assignee' in sections[1]).toBe(false);
+    const chores = sections.find((s) => s.isChores);
+    expect(chores !== undefined && 'assignee' in chores).toBe(false);
+  });
 });
 
 describe('goalLabel', () => {
