@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHORES_ID, DEFAULT_DONE_WINDOW, type HubTask, boardSections } from '../src/hub/hub-model.ts';
+import {
+  CHORES_ID,
+  DEFAULT_DONE_WINDOW,
+  type HubTask,
+  boardSections,
+} from '../src/hub/hub-model.ts';
 import { type GoalDetailHandlers, renderGoalDetail } from '../src/hub/hub-render.ts';
 
 /**
@@ -45,7 +50,12 @@ function handlers(over: Partial<GoalDetailHandlers> = {}): GoalDetailHandlers {
   };
 }
 
-const filters = { tab: 'all', userName: 'Jordan', doneWindow: DEFAULT_DONE_WINDOW, now: NOW } as const;
+const filters = {
+  tab: 'all',
+  userName: 'Jordan',
+  doneWindow: DEFAULT_DONE_WINDOW,
+  now: NOW,
+} as const;
 
 function sectionWith(
   goalOver: Record<string, unknown> = {},
