@@ -7,7 +7,11 @@
 import type { ReviewPayload } from '@feedback/core';
 import { tabTitle } from '../tab-title.ts';
 
-export type TaskStatus = 'todo' | 'in-progress' | 'done';
+/** `triage` is what a row is before `todo`: an agent filed it and nobody has
+ *  vetted it. It keeps its band and its order — the only thing it changes is
+ *  that no dispatch read returns it. Goals never carry it (see
+ *  `GOAL_STATUS_ORDER`). */
+export type TaskStatus = 'triage' | 'todo' | 'in-progress' | 'done';
 
 export interface HubActor {
   name: string;
@@ -1442,7 +1446,21 @@ export function quoteForCapture(spoken: string | undefined): string | undefined 
  * work moves backwards and skips steps, so the control is a dropdown over all
  * statuses and this array only decides what sits above what.
  */
-export const TASK_STATUS_ORDER: readonly TaskStatus[] = ['todo', 'in-progress', 'done'];
+export const TASK_STATUS_ORDER: readonly TaskStatus[] = ['triage', 'todo', 'in-progress', 'done'];
+
+/**
+ * The statuses a GOAL may be declared to hold — the same list minus `triage`.
+ *
+ * A goal is created by a person, from the goal list, and there is no path that
+ * files one unvetted; the store never mints a goal row in triage. Offering it
+ * in the goal's own picker would therefore be a control whose only reachable
+ * use is putting a band into a state nothing else in the product produces.
+ *
+ * A goal's TASKS can of course be in triage, and the goal detail's task counts
+ * still say so — that read is over `TASK_STATUS_ORDER`, which is the right
+ * list for it.
+ */
+export const GOAL_STATUS_ORDER: readonly TaskStatus[] = ['todo', 'in-progress', 'done'];
 
 // ── Activity view (exactly two filters — §3.9) ─────────────────────────────
 

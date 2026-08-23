@@ -113,7 +113,9 @@ describe('POST /api/refs/backlinks', () => {
     expect(chip).toBeDefined();
     expect(chip?.id).toBe(citesOtherPr.id);
     expect(chip?.title).toBe('bump the client');
-    expect(chip?.status).toBe('todo');
+    // The agent that filed it has not been vetted yet, and the chip reports
+    // the row's real status rather than a flattened one.
+    expect(chip?.status).toBe('triage');
     // The body is real on this task (positive control lives in the create),
     // so its absence here is the chip shape holding, not an empty task.
     expect(Object.keys(chip as object).sort()).toEqual(['assignee', 'id', 'status', 'title']);

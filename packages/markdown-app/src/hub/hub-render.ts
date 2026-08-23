@@ -33,6 +33,7 @@ import {
   type BlockerRow,
   type BoardSection,
   type DriftNotice,
+  GOAL_STATUS_ORDER,
   type HomePayload,
   type HubDecisionOption,
   type HubEvidence,
@@ -82,10 +83,40 @@ import {
 } from './hub-model.ts';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
+  triage: 'Triage',
   todo: 'To do',
   'in-progress': 'In progress',
   done: 'Done',
 };
+
+/**
+ * A status's label, falling back to the raw string.
+ *
+ * The board and the server are two artifacts that ship separately: a browser
+ * tab open across a deploy is running a bundle whose status enum predates the
+ * one the server is now sending. Indexing the record directly returned
+ * `undefined` for such a value, which reached the reader as the words
+ * "Status: undefined" and left the picker showing a blank option. The raw
+ * string is not a nice label, but it is TRUE, and it is what tells whoever
+ * reports it what their tab is actually holding.
+ */
+function statusLabel(status: TaskStatus): string {
+  return STATUS_LABEL[status] ?? String(status);
+}
+
+/**
+ * The options a status picker offers: the known list, plus the row's CURRENT
+ * status when that is not in it.
+ *
+ * Without the second half a `<select>` handed an unknown value silently
+ * resolves to `''` — so the control shows blank, and the first interaction
+ * with it writes some other status the reader never chose. Appending the
+ * value keeps the picker honest about what the row holds, and keeps every
+ * other option one tap away, which is the whole point of the control.
+ */
+function statusOptions(current: TaskStatus, known: readonly TaskStatus[]): TaskStatus[] {
+  return known.includes(current) ? [...known] : [...known, current];
+}
 
 /**
  * Which character of `el`'s text the pointer landed on, or `undefined` when
@@ -900,17 +931,17 @@ export function renderTaskRow(task: HubTask, handlers: BoardHandlers): HTMLEleme
   // picker and keyboard support for free, which a custom popup would owe.
   const chip = document.createElement('select');
   chip.className = `hub-status-select hub-chip-${task.status}`;
-  for (const s of TASK_STATUS_ORDER) {
+  for (const s of statusOptions(task.status, TASK_STATUS_ORDER)) {
     const opt = document.createElement('option');
     opt.value = s;
-    opt.textContent = STATUS_LABEL[s];
+    opt.textContent = statusLabel(s);
     chip.append(opt);
   }
   // After the options are in the tree, not via `option.selected` before it —
   // a detached option's selected flag doesn't survive being appended.
   chip.value = task.status;
-  chip.setAttribute('aria-label', `Status: ${STATUS_LABEL[task.status]}`);
-  chip.title = `Status: ${STATUS_LABEL[task.status]}`;
+  chip.setAttribute('aria-label', `Status: ${statusLabel(task.status)}`);
+  chip.title = `Status: ${statusLabel(task.status)}`;
   // A select swallows its own clicks in a real browser, but the row's open
   // handler must not fire from the picker either way.
   chip.addEventListener('click', (ev) => ev.stopPropagation());
@@ -1607,9 +1638,14 @@ export function renderGoalDetail(
   actions.append(close);
   head.append(identity, actions);
 
-  const counts = { todo: 0, 'in-progress': 0, done: 0 } as Record<TaskStatus, number>;
-  for (const t of section.tasks) counts[t.status] += 1;
-  const open = counts.todo + counts['in-progress'];
+  const counts = { triage: 0, todo: 0, 'in-progress': 0, done: 0 } as Record<TaskStatus, number>;
+  // `?? 0` because a status this bundle predates is a real key here, and
+  // `undefined + 1` would render the band's whole task line as NaN.
+  for (const t of section.tasks) counts[t.status] = (counts[t.status] ?? 0) + 1;
+  // What is left to do in this band. Triage counts as open — the work exists,
+  // it just has not been agreed to yet, and calling it closed is the reading
+  // that lets a band look finished while nobody has looked at half of it.
+  const open = counts.triage + counts.todo + counts['in-progress'];
 
   const dl = document.createElement('dl');
   dl.className = 'hub-detail-fields';
@@ -1631,10 +1667,12 @@ export function renderGoalDetail(
   statusCtl.className = 'hub-detail-statusctl';
   const status = document.createElement('select');
   status.className = 'hub-detail-select hub-detail-status hub-goal-detail-status';
-  for (const s of TASK_STATUS_ORDER) {
+  // GOAL_STATUS_ORDER, not TASK_STATUS_ORDER: a goal is never filed unvetted,
+  // so triage is not one of the states this control may declare.
+  for (const s of statusOptions(section.status ?? 'todo', GOAL_STATUS_ORDER)) {
     const opt = document.createElement('option');
     opt.value = s;
-    opt.textContent = STATUS_LABEL[s];
+    opt.textContent = statusLabel(s);
     // An undecorated section (an older server's projection) claims nothing;
     // the select then shows "To do" — the value a fresh row starts on.
     opt.selected = s === (section.status ?? 'todo');
@@ -1657,7 +1695,7 @@ export function renderGoalDetail(
   }
   cell(
     'Tasks',
-    TASK_STATUS_ORDER.map((s) => `${counts[s]} ${STATUS_LABEL[s].toLowerCase()}`).join(' · '),
+    TASK_STATUS_ORDER.map((s) => `${counts[s]} ${statusLabel(s).toLowerCase()}`).join(' · '),
   );
 
   const body = document.createElement('div');
@@ -3965,14 +4003,14 @@ function detailFields(task: HubTask, handlers: DetailHandlers): HTMLElement {
   // so borrowing them would fight `.hub-detail-select` for every property and
   // leave a dropdown with no caret.
   status.className = 'hub-detail-select hub-detail-status';
-  for (const s of TASK_STATUS_ORDER) {
+  for (const s of statusOptions(task.status, TASK_STATUS_ORDER)) {
     const opt = document.createElement('option');
     opt.value = s;
-    opt.textContent = STATUS_LABEL[s];
+    opt.textContent = statusLabel(s);
     status.append(opt);
   }
   status.value = task.status;
-  status.setAttribute('aria-label', `Status: ${STATUS_LABEL[task.status]} — pick a new status`);
+  status.setAttribute('aria-label', `Status: ${statusLabel(task.status)} — pick a new status`);
   status.addEventListener('change', () => {
     const to = status.value as TaskStatus;
     if (to !== task.status) handlers.onStatusSet(task, to);

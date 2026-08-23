@@ -10,6 +10,7 @@ import {
   CHORES_ID,
   type ClientRelease,
   DEFAULT_DONE_WINDOW,
+  GOAL_STATUS_ORDER,
   type HubGoal,
   type HubTask,
   type ReviewItem,
@@ -237,7 +238,15 @@ describe('decisionRows', () => {
 
 describe('TASK_STATUS_ORDER', () => {
   it('offers every status, so no transition is two moves away', () => {
-    expect([...TASK_STATUS_ORDER].sort()).toEqual(['done', 'in-progress', 'todo']);
+    expect([...TASK_STATUS_ORDER].sort()).toEqual(['done', 'in-progress', 'todo', 'triage']);
+  });
+
+  it('leaves triage out of the GOAL list — a goal is never filed unvetted', () => {
+    expect([...GOAL_STATUS_ORDER]).toEqual(['todo', 'in-progress', 'done']);
+    expect(GOAL_STATUS_ORDER).not.toContain('triage');
+    // Same members otherwise, so the two lists cannot drift into disagreeing
+    // about what a status IS — only about which of them a goal may hold.
+    expect(TASK_STATUS_ORDER.filter((s) => s !== 'triage')).toEqual([...GOAL_STATUS_ORDER]);
   });
 });
 
