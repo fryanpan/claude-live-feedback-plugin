@@ -941,10 +941,13 @@ async function main(): Promise<void> {
     // is "show me this task".
     if (state.detailTaskId) state.detailGoalId = null;
     if (state.detailGoalId) {
+      // Unfiltered on purpose: the panel's counts and advisory are facts
+      // about the GOAL ("what would a done declaration leave open"), not
+      // about whatever tab or done-window the board happens to be on.
       const section = boardSections(state.info?.goals ?? [], taskList(), {
-        tab: state.tab,
+        tab: 'all',
         userName: user.name,
-        doneWindow: state.doneWindow,
+        doneWindow: 'all',
         now: Date.now(),
       }).find((s) => s.id === state.detailGoalId);
       if (section && !section.isChores) {
