@@ -2727,6 +2727,13 @@ export class TaskStore {
     }
 
     for (const taskId of taskIds) this.taskIndex.delete(taskId);
+    // Leak hygiene, and deliberately NOT load-bearing: `getGoalRow` re-reads
+    // the workspace map, so a stale entry here already resolves to undefined
+    // and no caller can observe the difference. What it prevents is the index
+    // growing without bound across a server's lifetime of board deletes. Said
+    // plainly because a test cannot tell this line from its absence — the one
+    // below pins the lookup CONTRACT, not this sweep.
+    for (const goalId of state.goalRows.keys()) this.goalIndex.delete(goalId);
     this.workspaces.delete(workspaceId);
 
     // None of these can resurrect the board, so a failure here is litter

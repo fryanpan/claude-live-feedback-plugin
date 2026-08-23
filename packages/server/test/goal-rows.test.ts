@@ -141,6 +141,25 @@ describe('goal rows', () => {
       expect(store.getGoalRow(G.fast)).toBeDefined();
     });
 
+    it('stops resolving once its board is deleted', () => {
+      const ws = store.createWorkspace('Board');
+      const G = seedGoals(store, ws.id, [{ key: 'fast', title: 'Make review fast' }], AGENT);
+      // Positive control first: the id resolves while the board is alive, so
+      // the assertion below is a removal rather than a lookup that never
+      // worked.
+      expect(store.getGoalRow(G.fast)).toBeDefined();
+
+      const gone = store.deleteWorkspace(ws.id);
+      if (!gone.ok) throw new Error(`delete refused: ${gone.error}`);
+      expect(store.getGoalRow(G.fast)).toBeUndefined();
+      // Stated because it would otherwise be assumed: this pins the LOOKUP
+      // contract and not the goalIndex sweep that `deleteWorkspace` also does.
+      // `getGoalRow` re-reads the workspace map, so it answers undefined with
+      // or without that sweep — measured, by removing the line and watching
+      // this test still pass. The sweep is leak hygiene with no observable
+      // behaviour, and no test here can prove it ran.
+    });
+
     it('is not counted as open work when a board is deleted', () => {
       const ws = store.createWorkspace('Board');
       seedGoals(store, ws.id, [{ key: 'fast', title: 'Make review fast' }], AGENT);
