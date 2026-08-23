@@ -93,14 +93,27 @@ describe('the queue says who is already on a row', () => {
     return workspace.id;
   };
 
-  const mkTask = async (workspaceId: string, title: string, assignee?: string) =>
-    jj<{ task: { id: string } }>(
+  /**
+   * A row on the queue. The dispatcher FILES it and a person vets it in the
+   * next breath, because an agent's own create lands in `triage` and the queue
+   * never returns a triage row — without the second call every case below
+   * would be asserting over an empty queue. The vetting move touches neither
+   * `assignee` nor any claim, which is what these cases actually read.
+   */
+  const mkTask = async (workspaceId: string, title: string, assignee?: string) => {
+    const created = await jj<{ task: { id: string } }>(
       await post(`/api/workspaces/${workspaceId}/tasks`, {
         title,
         ...(assignee !== undefined ? { assignee } : {}),
         author: { id: 'agent-dispatcher', name: 'Dispatcher', kind: 'agent' },
       }),
     );
+    await post(`/api/tasks/${created.task.id}/transition`, {
+      to: 'todo',
+      author: { id: 'known-bryan', name: 'Bryan', kind: 'person' },
+    });
+    return created;
+  };
 
   afterEach(async () => {
     await handle.stop();

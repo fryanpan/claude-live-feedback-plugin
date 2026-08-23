@@ -231,8 +231,12 @@ describe('archive + restore routes', () => {
       body: JSON.stringify(body),
     });
 
+  // PERSON, so the row lands in `todo` and is real queue work. `nextIds`
+  // below is a QUEUE read and the queue never returns a triage row — filing
+  // as an agent would make every "gone from the queue" assertion pass whether
+  // archiving worked or not, which is the vacuous-probe failure.
   const makeTask = async (title: string): Promise<Task> => {
-    const r = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title });
+    const r = await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title });
     return ((await r.json()) as { task: Task }).task;
   };
 

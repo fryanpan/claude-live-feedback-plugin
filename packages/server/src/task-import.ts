@@ -428,7 +428,14 @@ export function applyImport(
       continue;
     }
     let task: Task = created.task;
-    if (row.status !== 'todo') {
+    // Compared against what the row ACTUALLY landed on, not against the
+    // literal `'todo'`. An agent running the import files every row through
+    // the ordinary create, which means every row lands in `triage` — so a
+    // tracker's `todo` rows would have stayed unvetted and out of every
+    // dispatch read, silently, while the import reported them created. An
+    // import is not a proposal: the person who maintained the tracker already
+    // decided this work exists, and adoption must not re-ask.
+    if (task.status !== row.status) {
       const moved = store.transition(task.id, row.status, {
         actor: opts.actor,
         note: `status imported from markdown tracker (${row.rawStatus ?? row.status})`,

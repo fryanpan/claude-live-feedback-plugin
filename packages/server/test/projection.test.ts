@@ -212,7 +212,11 @@ describe('ydoc projection + workspace room', () => {
     const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask | undefined;
     if (!projected) throw new Error('task missing from projection');
     expect(projected.title).toBe('Wire the index');
-    expect(projected.status).toBe('todo');
+    // `triage` — an agent filed it. Asserted as the literal rather than
+    // relaxed to "some string", because the ydoc IS what a browser reads: a
+    // status the projection silently dropped or normalized on the way through
+    // would leave every board disagreeing with the store about this row.
+    expect(projected.status).toBe('triage');
     expect(projected.bodyDocId).toBe(taskBodyDocId(taskId));
 
     const t = await post(`/api/tasks/${taskId}/transition`, { to: 'in-progress', author: AGENT });
@@ -352,14 +356,14 @@ describe('ydoc projection + workspace room', () => {
       const room = handle.rooms.get(workspaceRoomId(wsId));
       if (!room) throw new Error('ws room missing');
       const serverTask = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
-      expect(serverTask.status).toBe('todo');
+      expect(serverTask.status).toBe('triage');
       expect(room.ydoc.getMap('tasks').get('t-forged')).toBeUndefined();
       // …and the revert propagated BACK to the writer.
       const clientTask = client.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
-      expect(clientTask.status).toBe('todo');
+      expect(clientTask.status).toBe('triage');
       expect(client.ydoc.getMap('tasks').get('t-forged')).toBeUndefined();
       // The store never saw it either.
-      expect(handle.tasks.getTask(taskId)?.status).toBe('todo');
+      expect(handle.tasks.getTask(taskId)?.status).toBe('triage');
 
       // No task.* event fired for the reverted write — neither on the SSE
       // stream nor in the audit log.
@@ -513,7 +517,7 @@ describe('ydoc projection + workspace room', () => {
     const forged = new Y.Doc();
     Y.applyUpdate(forged, new Uint8Array(readFileSync(ydocPath)));
     const before = forged.getMap('tasks').get(taskId) as ProjectedTask;
-    expect(before.status).toBe('todo');
+    expect(before.status).toBe('triage');
     forged.getMap('tasks').set(taskId, { ...before, status: 'done', title: 'Forged while down' });
     writeFileSync(ydocPath, Y.encodeStateAsUpdate(forged));
     // POSITIVE CONTROL: the forgery really is in the persisted bytes.
@@ -527,7 +531,7 @@ describe('ydoc projection + workspace room', () => {
     const room = handle.rooms.get(workspaceRoomId(wsId));
     if (!room) throw new Error('ws room missing after restart');
     const projected = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
-    expect(projected.status).toBe('todo');
+    expect(projected.status).toBe('triage');
     expect(projected.title).toBe('Honest task');
   });
 });

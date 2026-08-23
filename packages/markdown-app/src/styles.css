@@ -2690,6 +2690,15 @@ body.hub-body {
   border: 1.5px solid var(--fg-muted);
   border-radius: 50%;
 }
+/* Triage: an agent filed this and nobody has vetted it. A DASHED ring, in the
+   same yellow the board already spends on "needs a person" — the dash is the
+   part that reads at a glance, because it says the outline of this row is not
+   settled yet. Deliberately not the done treatment (solid + tick) and not the
+   in-progress one (filled dot): both of those claim something happened. */
+.hub-status-mark-triage {
+  border-style: dashed;
+  border-color: var(--yellow);
+}
 .hub-status-mark-in-progress {
   border-color: var(--accent);
 }
@@ -2897,6 +2906,21 @@ body.hub-body {
      delete the padding and the rectangle loses three sides again. */
   padding: 4px;
   margin: -4px;
+}
+/* The two muted states on this list, and they must not read alike. A done row
+   is finished, so it fades and strikes through. A triage row is UNSTARTED and
+   is still work somebody has to look at, so it keeps full opacity and takes a
+   yellow edge down its left — the thing that makes a band's unvetted rows
+   findable by scrolling rather than by counting. `box-shadow` rather than a
+   border because the grid's track widths and the row's 40px height are pinned
+   by tests; an inset shadow paints inside the box and moves nothing.
+   Only the TITLE mutes: the status ring beside it is the affordance for
+   clearing this state and must stay the most legible thing in the row. */
+.hub-status-triage {
+  box-shadow: inset 2px 0 0 var(--yellow);
+}
+.hub-status-triage .hub-task-title {
+  color: var(--fg-muted);
 }
 .hub-done {
   opacity: 0.55;
