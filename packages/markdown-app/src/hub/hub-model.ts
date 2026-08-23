@@ -141,6 +141,20 @@ export interface HubSubgoal {
   id: string;
   title: string;
   dueAt?: number;
+  /** The goal ROW's status, decorated onto the band by the server projection.
+   *  Absent on a projection from an older server — a band that claims
+   *  nothing, not one that claims to be open. */
+  status?: TaskStatus;
+  /** When the goal was declared done — the last transition to done. */
+  doneAt?: number;
+  /** Who declared it. Display name and kind only (§3.3 visitor contract). */
+  doneBy?: HubActor;
+  /** The goal ROW's owner, when the projection decorates one. Absent means
+   *  the band is a vacancy (no verb sets a goal's owner yet, so today that is
+   *  every band) — or an older server that decorates nothing. Either way the
+   *  row draws no name it was not given. */
+  assignee?: string;
+  ownerKind?: HubOwnerKind;
 }
 
 export interface HubGoal extends HubSubgoal {
@@ -365,6 +379,14 @@ export interface BoardSection {
   /** 0 = goal, 1 = subgoal (one level max — §3.2). */
   depth: 0 | 1;
   dueAt?: number;
+  /** The band's own status, carried from the goal row (see `HubSubgoal`).
+   *  Absent on Backlog — a bucket, not a goal — and on undecorated bands. */
+  status?: TaskStatus;
+  doneAt?: number;
+  doneBy?: HubActor;
+  /** The goal row's owner, carried the same way (see `HubSubgoal`). */
+  assignee?: string;
+  ownerKind?: HubOwnerKind;
   isChores: boolean;
   tasks: HubTask[];
 }
@@ -382,12 +404,23 @@ function byBoardOrder(a: HubTask, b: HubTask): number {
  */
 export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilters): BoardSection[] {
   const sections: BoardSection[] = [];
+  // The status trio and the owner ride from the decorated goal onto its
+  // section verbatim — conditionally, so an undecorated band's section claims
+  // nothing rather than carrying a fistful of undefined keys.
+  const carriedOf = (g: HubSubgoal) => ({
+    ...(g.status !== undefined ? { status: g.status } : {}),
+    ...(g.doneAt !== undefined ? { doneAt: g.doneAt } : {}),
+    ...(g.doneBy !== undefined ? { doneBy: g.doneBy } : {}),
+    ...(g.assignee !== undefined ? { assignee: g.assignee } : {}),
+    ...(g.ownerKind !== undefined ? { ownerKind: g.ownerKind } : {}),
+  });
   for (const g of goals) {
     sections.push({
       id: g.id,
       title: g.title,
       depth: 0,
       dueAt: g.dueAt,
+      ...carriedOf(g),
       isChores: false,
       tasks: [],
     });
@@ -397,6 +430,7 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
         title: sg.title,
         depth: 1,
         dueAt: sg.dueAt,
+        ...carriedOf(sg),
         isChores: false,
         tasks: [],
       });

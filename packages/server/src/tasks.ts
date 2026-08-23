@@ -790,6 +790,38 @@ export interface GoalRow {
 export type BoardRow = Task | GoalRow;
 
 /**
+ * The slice of a goal row that every band-describing READ carries: the
+ * status, and — on a declared done — who said so and when. One derivation,
+ * shared by the ydoc projection and `summarizeGoals`, so the two payloads
+ * cannot disagree about what "this band is done" means.
+ *
+ * Attribution is a display name and kind, never an actor id — the projection
+ * ships to share visitors under the §3.3 contract, and a REST reader needs
+ * nothing more either. Sourced from the LAST transition to done (the trail is
+ * append-only, so scan from the tail): a goal reopened and re-declared done
+ * is attributed to the person who declared it the time that stuck.
+ */
+export interface GoalStatusMeta {
+  status: TaskStatus;
+  doneAt?: number;
+  doneBy?: { name: string; kind: 'person' | 'agent' };
+}
+
+export function goalStatusMeta(row: GoalRow): GoalStatusMeta {
+  if (row.status !== 'done') return { status: row.status };
+  for (let i = row.transitions.length - 1; i >= 0; i--) {
+    const t = row.transitions[i];
+    if (t && t.to === 'done') {
+      return { status: 'done', doneAt: t.ts, doneBy: { name: t.by.name, kind: t.by.kind } };
+    }
+  }
+  // A done row with no done transition should not exist — the one status
+  // gate always appends — but a hydrated file is not a promise, so say
+  // "done, attribution unknown" rather than inventing an actor.
+  return { status: 'done' };
+}
+
+/**
  * Whether a row is a goal. The ONE place the discriminator is read, so an
  * absent `kind` resolves to "task" in exactly one spot rather than at every
  * call site — see the field's note on Task.

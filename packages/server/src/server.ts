@@ -3113,7 +3113,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // "where is the open work" without a second call per goal.
           return j(200, {
             workspace,
-            goalSummary: summarizeGoals(taskStore.listTasks(workspaceId), workspace.goals),
+            // The rows argument is what lets each band carry its own status
+            // (and done attribution) — the counts say where the open work is,
+            // the status says what somebody declared about the band itself.
+            goalSummary: summarizeGoals(
+              taskStore.listTasks(workspaceId),
+              workspace.goals,
+              taskStore.listGoalRows(workspaceId),
+            ),
             // A new goal band the lead has not re-looked at the bucket
             // against. Read-only here: only an attach drains it. Surfaced so
             // "nobody has picked this up" is visible work on the board rather
