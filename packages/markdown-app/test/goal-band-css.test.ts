@@ -33,6 +33,60 @@ function rightPadding(selector: string): number {
   return right as number;
 }
 
+/** Every `@media <query> { … }` block's inner text, brace-matched — the
+ *  stylesheet has several blocks per breakpoint and a rule may sit in any
+ *  of them. */
+function mediaBlocks(query: string): string {
+  const out: string[] = [];
+  let idx = 0;
+  for (;;) {
+    const at = CSS.indexOf(`@media ${query}`, idx);
+    if (at === -1) break;
+    const open = CSS.indexOf('{', at);
+    let depth = 1;
+    let i = open + 1;
+    while (i < CSS.length && depth > 0) {
+      if (CSS[i] === '{') depth += 1;
+      else if (CSS[i] === '}') depth -= 1;
+      i += 1;
+    }
+    out.push(CSS.slice(open + 1, i - 1));
+    idx = i;
+  }
+  expect(out, `no @media ${query} block found`).not.toHaveLength(0);
+  return out.join('\n');
+}
+
+/** The right padding a rule body declares — `padding-right` first, then the
+ *  `padding` shorthand — or null when it declares neither. */
+function declaredRight(body: string): number | null {
+  const pr = /(?:^|;)\s*padding-right:\s*([^;]+)/.exec(body)?.[1];
+  if (pr !== undefined) return Number.parseFloat(pr);
+  const p = /(?:^|;)\s*padding:\s*([^;]+)/.exec(body)?.[1]?.trim();
+  if (p === undefined) return null;
+  const parts = p.split(/\s+/).map((x) => Number.parseFloat(x));
+  const right = parts.length === 1 ? parts[0] : parts[1];
+  return right === undefined || Number.isNaN(right) ? null : right;
+}
+
+/** The EFFECTIVE right padding of `selector` inside the given media blocks:
+ *  the cascade's answer — an override in the block if one declares padding,
+ *  else the base value. */
+function effectiveRight(blocks: string, selector: string): number {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // A rule can be preceded by a close-brace, a comma, a comment, or sit at
+  // the start of its line — `^…m` covers the last two without letting the
+  // selector match as the TAIL of a compound like `.hub-band .hub-task-row`
+  // (`\s*` cannot consume the compound's head).
+  const re = new RegExp(`(?:^|[},])\\s*${esc}\\s*\\{([^}]*)\\}`, 'gm');
+  let effective = rightPadding(selector);
+  for (let m = re.exec(blocks); m !== null; m = re.exec(blocks)) {
+    const declared = declaredRight(m[1] ?? '');
+    if (declared !== null) effective = declared;
+  }
+  return effective;
+}
+
 describe('the goal band stylesheet', () => {
   it('hides a folded band’s tasks — the goal row is all a collapsed band shows', () => {
     // Positive control: the tasks container has a rule at all.
@@ -49,6 +103,22 @@ describe('the goal band stylesheet', () => {
     const railRight = rightPadding('.hub-band-tasks');
     const taskRight = rightPadding('.hub-task-row');
     expect(goalRight).toBe(railRight + taskRight);
+  });
+
+  // The same arithmetic holds where the ≤900 block tightens the task row's
+  // padding: the sum must be re-taken from the values the cascade actually
+  // applies there, because the base sum stays true while the phone breaks.
+  // (Shipped broken once: the ≤900 block shrank .hub-task-row to 2px and left
+  // the goal row at 14px — a 4px drift at the 430px check CLAUDE.md mandates.)
+  it('keeps the avatar columns aligned at ≤900px, where the task row tightens', () => {
+    const blocks = mediaBlocks('(max-width: 900px)');
+    const taskRight = effectiveRight(blocks, '.hub-task-row');
+    // Positive control: the block really does move the task row's padding —
+    // otherwise this test re-checks the base sum and proves nothing new.
+    expect(taskRight).not.toBe(rightPadding('.hub-task-row'));
+    expect(effectiveRight(blocks, '.hub-goal-row')).toBe(
+      effectiveRight(blocks, '.hub-band-tasks') + taskRight,
+    );
   });
 
   it('hides the goal caret on mobile, where the whole row already opens', () => {

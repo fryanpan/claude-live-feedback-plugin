@@ -4386,8 +4386,9 @@ a.hub-link-chip:hover {
      without opening it. The caret goes (a tap anywhere already opens the
      goal, and 16px of glyph is 16px the title needs); with its child
      display:none the grid narrows to four tracks. Right-hand paddings are
-     NOT touched, so the goal avatar keeps the task avatars' column at every
-     width. */
+     not touched HERE — but the ≤900 block tightens the task row's, so the
+     goal row's right padding is re-derived there to keep the avatar
+     column. */
   .hub-goal-row {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
     gap: 4px 6px;
@@ -4490,6 +4491,14 @@ a.hub-link-chip:hover {
   .hub-task-row {
     gap: 6px;
     padding: 2px 2px;
+  }
+  /* The avatar-column arithmetic (decision 8), re-taken with THIS block's
+     task-row padding: goal right pad = rail right pad (8) + task-row right
+     pad (2, just above). The base 14px assumed the task row's 6px and drifts
+     4px to the left of the avatars the moment the override lands —
+     `goal-band-css.test.ts` pins the sum at this breakpoint too. */
+  .hub-goal-row {
+    padding-right: 10px;
   }
   /* The phone-only hide for `.hub-badge-action` / `.hub-badge-after` is gone
      with the badges themselves (2026-08-18 and 2026-08-19) — nothing emits
