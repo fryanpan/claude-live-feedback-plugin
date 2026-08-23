@@ -2357,6 +2357,20 @@ export interface ListTasksFilter {
 interface WorkspaceState {
   workspace: HubWorkspace;
   tasks: Map<string, Task>;
+  /**
+   * Goal rows, keyed by goal id — SEPARATE from `tasks`, and that separation
+   * is the safety property rather than a filing preference.
+   *
+   * Goals must not appear in `list_tasks`, `next_tasks` or My Tasks (Bryan,
+   * 2026-08-23, reversing the earlier try-it-and-see: *"No don't do this. The
+   * tasks need more room to focus on the most important part — the title."*).
+   * Enforcing that with a `kind` filter on each reader would be one forgotten
+   * call site away from handing an agent a band to implement — and the
+   * readers that iterate this store's tasks number in the dozens. A separate
+   * map cannot leak, because those readers walk a collection the goal rows
+   * are not in.
+   */
+  goalRows: Map<string, GoalRow>;
   /** agentId → attachment (§4). Keyed per workspace, so the same agentId in
    *  two workspaces is two independent records. */
   attachments: Map<string, AgentAttachment>;
@@ -2422,6 +2436,10 @@ export function newGoalId(): string {
 export class TaskStore {
   private workspaces = new Map<string, WorkspaceState>();
   private taskIndex = new Map<string, string>(); // taskId → workspaceId
+  /** goalId → workspaceId. Deliberately NOT merged into `taskIndex`: that one
+   *  is what `getTask` resolves through, and a goal id resolving there would
+   *  put goal rows within reach of every task verb by id. */
+  private goalIndex = new Map<string, string>();
   private saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private attachmentSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private dataDir: string;
@@ -2600,7 +2618,12 @@ export class TaskStore {
       ...(lead ? { leadAgentId: lead, leadAgentSince: now } : {}),
       createdAt: now,
     };
-    this.workspaces.set(workspace.id, { workspace, tasks: new Map(), attachments: new Map() });
+    this.workspaces.set(workspace.id, {
+      workspace,
+      tasks: new Map(),
+      goalRows: new Map(),
+      attachments: new Map(),
+    });
     this.scheduleSave(workspace.id);
     return workspace;
   }
@@ -3272,6 +3295,76 @@ export class TaskStore {
     const wsId = this.taskIndex.get(taskId);
     if (!wsId) return undefined;
     return this.workspaces.get(wsId)?.tasks.get(taskId);
+  }
+
+  /** A goal's row. Separate from `getTask` on purpose — see `goalIndex`. */
+  getGoalRow(goalId: string): GoalRow | undefined {
+    const wsId = this.goalIndex.get(goalId);
+    if (!wsId) return undefined;
+    return this.workspaces.get(wsId)?.goalRows.get(goalId);
+  }
+
+  /** Every goal row on a board, in the goal list's priority order. */
+  listGoalRows(workspaceId: string): GoalRow[] {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return [];
+    return Array.from(state.goalRows.values()).sort((a, b) => a.order - b.order);
+  }
+
+  /**
+   * Bring `goalRows` into agreement with `workspace.goals[]`.
+   *
+   * Reconciliation, not a one-shot migration, and it runs on hydrate and after
+   * every goal-list write. That shape is what makes it safe to re-run: it
+   * mints what is missing and refreshes the fields the LIST owns (title,
+   * dueAt, priority order), and it never touches the fields the ROW owns —
+   * `status` and `transitions`. A reconcile that rebuilt rows wholesale would
+   * clear a declared `done` every time somebody renamed a band, destroying
+   * exactly the claim goal status exists to record.
+   *
+   * It also never REMOVES a row for a goal that left the list. The goal list
+   * is an ordinary edit surface and a removal there is not a decision to
+   * destroy the record of what somebody declared about that goal; per the
+   * project's soft-delete rule the row stays, unreferenced, and comes back
+   * with its history if the band is restored.
+   *
+   * Subgoals flatten into rows of their own, in the position the board already
+   * draws them — it has rendered one flat level all along.
+   */
+  private syncGoalRows(state: WorkspaceState): void {
+    const now = Date.now();
+    flattenGoals(state.workspace.goals).forEach((g, index) => {
+      const existing = state.goalRows.get(g.id);
+      if (existing) {
+        // The list owns these three; the row owns status and transitions.
+        const changed =
+          existing.title !== g.title || existing.order !== index || existing.dueAt !== g.dueAt;
+        if (changed) {
+          existing.title = g.title;
+          existing.order = index;
+          // Assigned rather than deleted: `JSON.stringify` drops an undefined
+          // value, so a cleared due date leaves no key on disk either way.
+          existing.dueAt = g.dueAt;
+          existing.updatedAt = now;
+        }
+      } else {
+        state.goalRows.set(g.id, {
+          id: g.id,
+          workspaceId: state.workspace.id,
+          kind: 'goal',
+          title: g.title,
+          ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
+          order: index,
+          // A migrated goal is open, with an empty trail: the record starts
+          // here rather than fabricating a history nobody wrote.
+          status: 'todo',
+          transitions: [],
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      this.goalIndex.set(g.id, state.workspace.id);
+    });
   }
 
   listTasks(workspaceId: string, filter?: ListTasksFilter): Task[] {
@@ -4799,6 +4892,7 @@ export class TaskStore {
       kind: classifyActor(opts.actor),
     };
     workspace.goals = goals;
+    this.syncGoalRows(state);
 
     // Open tasks whose goal id disappeared land at the bottom of Backlog.
     // Done tasks stay put — same rule as re-triage (§3.4), their placement
@@ -5220,6 +5314,7 @@ export class TaskStore {
       };
     });
     workspace.goals = newGoals;
+    this.syncGoalRows(state);
     this.scheduleSave(workspaceId);
 
     this.emit({
@@ -5422,6 +5517,7 @@ export class TaskStore {
       newGoals = order.map((id) => byId.get(id) as WorkspaceGoal);
     }
     workspace.goals = newGoals;
+    this.syncGoalRows(state);
     this.scheduleSave(workspaceId);
 
     this.emit({
@@ -6485,6 +6581,10 @@ export class TaskStore {
       const payload = {
         workspace: state.workspace,
         tasks: Array.from(state.tasks.values()),
+        // A key of its own rather than rows mixed into `tasks`: a reader that
+        // has not heard of goal rows gets exactly the task list it expects,
+        // and `workspace.goals[]` above stays on disk as the rollback path.
+        goalRows: Array.from(state.goalRows.values()),
       };
       // Write-then-rename so a crash mid-write can't leave a torn sidecar —
       // the sidecar is authoritative on hydrate, so a torn one loses the
@@ -6515,6 +6615,7 @@ export class TaskStore {
         const parsed = JSON.parse(readFileSync(join(dir, entry), 'utf8')) as {
           workspace?: HubWorkspace;
           tasks?: Task[];
+          goalRows?: GoalRow[];
         };
         const workspace = parsed.workspace;
         if (!workspace || typeof workspace.id !== 'string') {
@@ -6550,11 +6651,18 @@ export class TaskStore {
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);
         }
+        const goalRows = new Map<string, GoalRow>();
+        for (const row of parsed.goalRows ?? []) {
+          if (typeof row?.id !== 'string') continue;
+          goalRows.set(row.id, row);
+          this.goalIndex.set(row.id, workspace.id);
+        }
         const pendingBucketReview = this.loadPendingBucketReview(workspace.id);
         const pendingTaskReviews = this.loadPendingTaskReviews(workspace.id);
         this.workspaces.set(workspace.id, {
           workspace,
           tasks,
+          goalRows,
           attachments: this.loadAttachments(workspace.id),
           // Unlike a task's triage marker above, a queued bucket re-look
           // SURVIVES the restart: the marker promised in-flight work that the
@@ -6564,6 +6672,12 @@ export class TaskStore {
           // review pass — a restart does not perform it.
           ...(pendingTaskReviews ? { pendingTaskReviews } : {}),
         });
+        // The migration, and it is lazy on purpose: every board on disk today
+        // has `goals` and no `goalRows`, so the rows are minted the first time
+        // that board is read back. Re-running it is safe by construction — the
+        // reconcile refreshes only what the goal LIST owns.
+        const state = this.workspaces.get(workspace.id);
+        if (state) this.syncGoalRows(state);
       } catch (err) {
         // A corrupt sidecar loses that one workspace, never the server.
         console.error(`[tasks] unreadable sidecar ${entry} — skipped:`, err);
