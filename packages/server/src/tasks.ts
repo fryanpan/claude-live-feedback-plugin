@@ -848,7 +848,10 @@ export type TransitionResult =
 export type AmendEvidenceResult =
   | {
       ok: true;
-      task: Task;
+      /** A BoardRow for the same reason `TransitionResult` carries one: a goal
+       *  moves through the same gate, so its declaration can need the same
+       *  correction. */
+      task: BoardRow;
       /** The row the correction landed on, amendments included. */
       transition: TaskTransition;
       amendment: TaskEvidenceAmendment;
@@ -3325,11 +3328,24 @@ export class TaskStore {
     return this.workspaces.get(wsId)?.goalRows.get(goalId);
   }
 
-  /** Every goal row on a board, in the goal list's priority order. */
+  /**
+   * The board's CURRENT goal rows, in the goal list's priority order.
+   *
+   * Filtered against `workspace.goals[]` rather than returning the whole map,
+   * because retaining a removed goal's row (see `syncGoalRows`) is a promise
+   * about history and not about the board. A retained row keeps whatever
+   * `order` it had when it left, so an unfiltered list would interleave bands
+   * nobody is working with bands they are — and a caller has no way to tell
+   * the two apart from a row alone. Reach a retained row by id with
+   * `getGoalRow`, which is deliberately not filtered.
+   */
   listGoalRows(workspaceId: string): GoalRow[] {
     const state = this.workspaces.get(workspaceId);
     if (!state) return [];
-    return Array.from(state.goalRows.values()).sort((a, b) => a.order - b.order);
+    const live = new Set(flattenGoals(state.workspace.goals).map((g) => g.id));
+    return Array.from(state.goalRows.values())
+      .filter((row) => live.has(row.id))
+      .sort((a, b) => a.order - b.order);
   }
 
   /**
@@ -3346,8 +3362,15 @@ export class TaskStore {
    * It also never REMOVES a row for a goal that left the list. The goal list
    * is an ordinary edit surface and a removal there is not a decision to
    * destroy the record of what somebody declared about that goal; per the
-   * project's soft-delete rule the row stays, unreferenced, and comes back
-   * with its history if the band is restored.
+   * project's soft-delete rule the row stays, unreferenced, reachable by id
+   * through `getGoalRow` and absent from `listGoalRows`.
+   *
+   * What retention does NOT give you, stated because the obvious guess is
+   * wrong: an undelete. `setGoalList` refuses an id that is not in the current
+   * list, so a removed band cannot be re-submitted by id — retyping it mints a
+   * fresh id and a fresh open row, and the retained one stays where it is.
+   * Measured in `goal-rows.test.ts`. A real restore verb would go through
+   * `setGoalList`'s id check and does not exist yet.
    *
    * Subgoals flatten into rows of their own, in the position the board already
    * draws them — it has rendered one flat level all along.
@@ -3562,7 +3585,13 @@ export class TaskStore {
       transitionTs?: number;
     },
   ): AmendEvidenceResult {
-    const task = this.getTask(taskId);
+    // `findRow`, not `getTask`, and it is the transition gate that decides
+    // this: the gate resolves the same way, so a goal CAN be declared done
+    // unproven, and its refusal message names this endpoint as the remedy. An
+    // amend that resolved only tasks would answer that instruction with
+    // `not-found` — a promise the same object makes and cannot keep. Nothing
+    // below touches a field a `GoalRow` lacks.
+    const task = this.findRow(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (task.transitions.length === 0) {
       return {

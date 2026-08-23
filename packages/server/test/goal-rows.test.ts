@@ -243,4 +243,101 @@ describe('goal rows', () => {
       expect(after?.transitions).toEqual([]);
     });
   });
+
+  /**
+   * Retained is not the same as listed. `syncGoalRows` keeps the row of a goal
+   * that left the list — soft delete, so a restored band comes back with its
+   * declaration — but a retained row is history, and a list API that returns it
+   * hands a caller a band the board is not working as if it were current.
+   *
+   * Unlike the `goalIndex`-sweep test in the delete suite, this one can see its
+   * own fix: measured with the filter removed, `listGoalRows` returns both ids
+   * and the first assertion fails.
+   */
+  describe('a goal removed from the list', () => {
+    it('leaves listGoalRows but stays reachable by id, declaration intact', () => {
+      const ws = store.createWorkspace('Board');
+      const G = seedGoals(
+        store,
+        ws.id,
+        [
+          { key: 'keep', title: 'Make review fast' },
+          { key: 'retired', title: 'Retire the old importer' },
+        ],
+        PERSON,
+      );
+
+      const declared = store.transition(G.retired, 'done', { actor: PERSON, note: 'shipped it' });
+      expect(declared.ok).toBe(true);
+
+      const removed = store.setGoalList(ws.id, [{ id: G.keep, title: 'Make review fast' }], {
+        actor: PERSON,
+      });
+      if (!removed.ok) throw new Error(`setGoalList refused with ${removed.error}`);
+
+      expect(store.listGoalRows(ws.id).map((r) => r.id)).toEqual([G.keep]);
+
+      const kept = store.getGoalRow(G.retired);
+      expect(kept?.status).toBe('done');
+      expect(kept?.transitions).toHaveLength(1);
+    });
+
+    /**
+     * What "restoring the band" actually does today, pinned because it is not
+     * what you would guess. `setGoalList` refuses an id that is not in the
+     * CURRENT list, so a removed goal cannot be re-submitted by id — retyping
+     * the band mints a fresh id and therefore a fresh, open row. The retained
+     * row keeps its declaration and stays reachable by its old id; it does not
+     * come back to the list.
+     *
+     * That is the soft-delete guarantee holding (nothing was destroyed) and no
+     * more than it: an undelete verb for a band does not exist yet, and this
+     * test is here so the next person reads that from a measurement rather
+     * than from a comment claiming otherwise.
+     */
+    it('cannot be re-listed by its old id; retyping the band mints a new row', () => {
+      const ws = store.createWorkspace('Board');
+      const G = seedGoals(
+        store,
+        ws.id,
+        [
+          { key: 'keep', title: 'Make review fast' },
+          { key: 'retired', title: 'Retire the old importer' },
+        ],
+        PERSON,
+      );
+      store.transition(G.retired, 'done', { actor: PERSON });
+
+      const away = store.setGoalList(ws.id, [{ id: G.keep, title: 'Make review fast' }], {
+        actor: PERSON,
+      });
+      if (!away.ok) throw new Error('removal refused');
+
+      const byId = store.setGoalList(
+        ws.id,
+        [
+          { id: G.keep, title: 'Make review fast' },
+          { id: G.retired, title: 'Retire the old importer' },
+        ],
+        { actor: PERSON },
+      );
+      expect(byId.ok).toBe(false);
+      if (byId.ok) throw new Error('expected the removed id to be refused');
+      expect(byId.error).toBe('unknown-goal-id');
+
+      const retyped = store.setGoalList(
+        ws.id,
+        [{ id: G.keep, title: 'Make review fast' }, { title: 'Retire the old importer' }],
+        { actor: PERSON },
+      );
+      if (!retyped.ok) throw new Error(`retype refused with ${retyped.error}`);
+      const fresh = retyped.created[0]?.id as string;
+      expect(fresh).not.toBe(G.retired);
+
+      expect(store.listGoalRows(ws.id).map((r) => r.id)).toEqual([G.keep, fresh]);
+      expect(store.getGoalRow(fresh)?.status).toBe('todo');
+      // Nothing was destroyed: the old row still holds what was declared.
+      expect(store.getGoalRow(G.retired)?.status).toBe('done');
+    });
+  });
 });

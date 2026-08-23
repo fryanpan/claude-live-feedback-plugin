@@ -316,4 +316,41 @@ describe('over the route that already exists', () => {
     expect(body.blockers[0]?.enforce).toBe(false);
     expect(store.getGoalRow(G.fast)?.status).toBe('done');
   });
+
+  /**
+   * The gate refuses a re-run of a move that already happened and tells the
+   * caller to amend the evidence instead, naming this endpoint. For a goal
+   * that instruction has to be true — an unproven declaration whose only
+   * offered remedy 404s is worse than no remedy, because the caller reads the
+   * refusal as its own mistake.
+   */
+  it('amends a goal declaration through POST /api/tasks/:id/evidence', async () => {
+    const store = handle.tasks;
+    const ws = store.createWorkspace('Board');
+    const G = seedGoals(store, ws.id, [{ key: 'fast', title: 'Make review fast' }], AGENT);
+
+    const declared = store.transition(G.fast, 'done', { actor: PERSON });
+    if (!declared.ok) throw new Error('declaration refused');
+    expect(declared.unproven).toBe(true);
+
+    const res = await fetch(`${base}/api/tasks/${encodeURIComponent(G.fast)}/evidence`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        author: PERSON,
+        evidence: { commit: 'a1b2c3d' },
+        note: 'the proof was left off the declaration',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { unproven: boolean; task: { id: string } };
+    expect(body.task.id).toBe(G.fast);
+    expect(body.unproven).toBe(false);
+
+    const row = store.getGoalRow(G.fast);
+    expect(row?.transitions.at(-1)?.amendments).toHaveLength(1);
+    expect(row?.transitions.at(-1)?.amendments?.[0]?.evidence).toEqual({ commit: 'a1b2c3d' });
+    // Status is untouched: amending is not a transition.
+    expect(row?.status).toBe('done');
+  });
 });
