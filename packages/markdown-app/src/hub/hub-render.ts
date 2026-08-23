@@ -1677,6 +1677,10 @@ export function renderGoalDetail(
     if (ev.target === container) handlers.onClose();
   });
   container.replaceChildren(panel);
+  // A rename in flight when the repaint hit: reopen the editor, then let
+  // `restoreFields` put the draft and the caret back — the task panel's own
+  // two-step, for the same reason.
+  if (kept.has(`goal-title:${section.id}`)) title.click();
   restoreFields(container, kept);
 }
 

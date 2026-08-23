@@ -179,6 +179,21 @@ describe('renderGoalDetail', () => {
     expect(text).toContain('search-revamp');
   });
 
+  // The live board repaints the panel on every projection change, and a
+  // repaint must not eat a rename mid-thought — the task panel's guarantee,
+  // via the same keepFields/restoreFields pair.
+  it('a repaint keeps a rename in flight', () => {
+    const h = handlers();
+    renderGoalDetail(root, sectionWith(), h);
+    (root.querySelector('.hub-detail-title') as HTMLElement).click();
+    const input = root.querySelector('.hub-detail-title input') as HTMLInputElement;
+    input.value = '1. Ship';
+    renderGoalDetail(root, sectionWith(), h);
+    const again = root.querySelector('.hub-detail-title input') as HTMLInputElement;
+    expect(again).not.toBeNull();
+    expect(again.value).toBe('1. Ship');
+  });
+
   it('Escape closes the panel', () => {
     const h = handlers();
     renderGoalDetail(root, sectionWith(), h);
