@@ -705,8 +705,9 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         expect(parked.task.parkedUntil).toBe(UNTIL);
         expect(parked.task.parkedReason).toBe('waiting on the index rebuild');
         // Parking is NOT a status. The row stays exactly where it was — that
-        // is the whole point of the field existing.
-        expect(parked.task.status).toBe('todo');
+        // is the whole point of the field existing. `triage` here because an
+        // agent filed it, and parking left even that untouched.
+        expect(parked.task.status).toBe('triage');
 
         // The STORED effect, read back over HTTP: the route hand-copies body
         // fields and nothing type-checks that it forwarded these two.

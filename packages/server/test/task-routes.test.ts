@@ -212,7 +212,15 @@ describe('hub workspace + task routes', () => {
       expect(typeof payload.task.id).toBe('string');
       expect(payload.task.goal).toBe('chores');
       expect(payload.task.order).toBe(3);
-      expect(payload.task.status).toBe('todo');
+      // `triage`, not `todo`: this payload is signed by an AGENT, and an
+      // agent's own create is a proposal. The compatibility promise here is
+      // about SHAPE, and it holds — the key is present and is still a
+      // non-empty string, which is all the 0.1.20 handler does with it (it
+      // renders the value; it does not switch on it). A peer that never
+      // restarts therefore shows the word "triage" in a status cell rather
+      // than failing, which is the degradation this route owes it.
+      expect(typeof payload.task.status).toBe('string');
+      expect(payload.task.status).toBe('triage');
       expect(payload.task.assignee).toBe('human');
       // `triagePendingTs` is read as a presence test, so undefined is a valid
       // answer — what must hold is that the KEY is not repurposed into
@@ -926,8 +934,12 @@ describe('hub workspace + task routes', () => {
         ],
         PERSON,
       );
+      // PERSON, not AGENT: these cases are about the queue's ORDER and its
+      // filters, and an agent's own create lands in `triage`, which the queue
+      // never returns. Filing as a person is the shortest way to put real
+      // queueable work on the board without a vetting round-trip per row.
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
-        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
+        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, ...opts });
         expect(res.status).toBe(200);
         return ((await res.json()) as { task: { id: string } }).task.id;
       };
@@ -961,8 +973,9 @@ describe('hub workspace + task routes', () => {
     it('forwards assignee, limit and includeBlocked', async () => {
       const r = await post('/api/workspaces', { name: 'filter-ws', goal: 'Ship it.' });
       const wsId = ((await r.json()) as { workspace: { id: string } }).workspace.id;
+      // PERSON for the same reason as `seed` above: queueable work, no triage.
       const mk = async (opts: Record<string, unknown>): Promise<string> => {
-        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, ...opts });
+        const res = await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, ...opts });
         return ((await res.json()) as { task: { id: string } }).task.id;
       };
       const dep = await mk({ title: 'dep', assignee: 'human' });
@@ -1006,13 +1019,16 @@ describe('hub workspace + task routes', () => {
           [{ key: 'one', title: '1. One', subgoals: [{ key: 'oneA', title: '1.1 One A' }] }],
           PERSON,
         );
+        // PERSON, so these land in `todo` and the assertion below is about
+        // the counts' PLACEMENT rather than about triage. The triage count is
+        // covered on its own in task-triage-status.test.ts.
         await post(`/api/workspaces/${id}/tasks`, {
-          author: AGENT,
+          author: PERSON,
           title: 'in a subgoal',
           goal: goals.oneA,
         });
         await post(`/api/workspaces/${id}/tasks`, {
-          author: AGENT,
+          author: PERSON,
           title: 'a chore',
           goal: 'chores',
         });

@@ -279,7 +279,16 @@ export function normalizeWorkspaceName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-export type TaskStatus = 'todo' | 'in-progress' | 'done';
+/**
+ * `triage` is ordered first because it is what a row is BEFORE `todo`: an
+ * agent filed it and nobody has vetted it yet. It is a status rather than a
+ * bucket deliberately — the row keeps its goal, its order and its band
+ * position, so a lead reads it where the work is instead of in a holding pen
+ * that has to be remembered separately. What it changes is one thing: no
+ * dispatch read returns it (`buildQueue`), so nothing picks it up until a
+ * person or an agent moves it out through the ordinary gate.
+ */
+export type TaskStatus = 'triage' | 'todo' | 'in-progress' | 'done';
 
 /**
  * Is this row deferred right now?
@@ -321,7 +330,33 @@ function normalizeReason(raw: unknown): string | undefined {
   return text === '' ? undefined : text;
 }
 
-const TASK_STATUSES: ReadonlySet<string> = new Set(['todo', 'in-progress', 'done']);
+const TASK_STATUSES: ReadonlySet<string> = new Set(['triage', 'todo', 'in-progress', 'done']);
+
+/**
+ * The status a create lands on: `triage` when an AGENT filed it, `todo` when
+ * a person did.
+ *
+ * `classifyActor` is the same line the transition trail and `assigneeKind`
+ * already draw, reused rather than reinvented — a second predicate for
+ * person-or-agent is a second thing that can disagree with the first.
+ *
+ * The one place this deliberately departs from it is the ABSENT actor.
+ * `classifyActor` resolves "declares nothing" to `agent`, and that direction
+ * is right where it lives (it keeps a person out of a strip built to stay
+ * short). Here the same direction would take a row OUT of every dispatch read
+ * on the strength of an absence — work silently missing, with nothing
+ * anywhere saying so. Every creation ROUTE resolves an author before it gets
+ * here (task-owner.ts), so the only caller this covers is a direct in-process
+ * create that named nobody, and leaving that visible is the safe half.
+ *
+ * A GOAL row never comes through here. Goals are created by people, from the
+ * goal list, and `syncGoalRows` mints them `todo`.
+ */
+export function initialTaskStatus(
+  actor: { id: string; name: string; kind?: string } | undefined,
+): TaskStatus {
+  return actor !== undefined && classifyActor(actor) === 'agent' ? 'triage' : 'todo';
+}
 
 /** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
 export const CHORES_GOAL_ID = 'chores';
@@ -3246,7 +3281,7 @@ export class TaskStore {
       ...(options.length > 0 ? { options } : {}),
       goal,
       order,
-      status: 'todo',
+      status: initialTaskStatus(opts.actor),
       after,
       ...(afterEnforce.length > 0 ? { afterEnforce } : {}),
       ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
@@ -3469,6 +3504,13 @@ export class TaskStore {
    *    dependencies come back as `blockers` in the result; an edge marked
    *    enforce refuses outright. Moving back to todo never consults the gate
    *    (undoing work must not be blockable).
+   *  - moving OUT of triage is not a special case and gets no special verb:
+   *    it is an ordinary move, attributed like any other, and the trail entry
+   *    the gate already writes (`from: 'triage'`, plus who and when) IS the
+   *    record that somebody vetted the row. `to: 'todo'` is a backward move
+   *    and therefore unblockable; `to: 'in-progress'` is forward and consults
+   *    `after` like any other forward move, which is correct — starting work
+   *    a dependency holds back is the thing that gate exists to stop.
    *  - `unproven` marks a forward move that attached no evidence: allowed,
    *    flagged, never refused (§7.1 — the worst this can do is draw attention
    *    to something that turned out to be fine).

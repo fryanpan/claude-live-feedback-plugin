@@ -148,6 +148,15 @@ describe('the board wakes its lead over the wire', () => {
         author: LEAD,
       }),
     );
+    // Vetted, because the lead FILED it and an agent's own row starts in
+    // `triage` — which no dispatch read returns, so an unvetted row is not
+    // ready work and correctly produces no wake. This is the real flow in two
+    // lines: the agent proposes, a person agrees, and only then is it queued.
+    await post(`/api/tasks/${task.id}/transition`, {
+      to: 'todo',
+      author: PERSON,
+      workspaceId,
+    });
     await settle();
     return { workspaceId, taskId: task.id, lead, tab };
   }

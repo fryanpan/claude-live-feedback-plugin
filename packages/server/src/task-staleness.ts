@@ -107,7 +107,10 @@ function span(ms: number): string {
  *    discussed this afternoon" is a conversation.
  */
 export function decidePremiseDrift(input: {
-  status: 'todo' | 'in-progress' | 'done';
+  /** Spelled out rather than imported, so this module stays free of
+   *  `tasks.ts`. `triage` is listed for completeness and is unreachable in
+   *  practice — `buildQueue` drops those rows before it computes a premise. */
+  status: 'triage' | 'todo' | 'in-progress' | 'done';
   bodyWrittenAt: number;
   notes: readonly PremiseNote[];
   staleAfterMs?: number;
