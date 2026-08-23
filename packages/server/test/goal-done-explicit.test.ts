@@ -162,7 +162,10 @@ describe('a goal is done only when declared', () => {
       const blocker = moved.blockers[0];
       expect(blocker?.taskId).toBe(childIds[0] as string);
       expect(blocker?.title).toBe('Child 1');
-      expect(blocker?.status).toBe('todo');
+      // `triage`, because the children were filed by an agent — and an
+      // unvetted child still BLOCKS the band, which is the point: a goal
+      // cannot be declared done over work nobody has even agreed to yet.
+      expect(blocker?.status).toBe('triage');
       expect(blocker?.message).toContain('Child 1');
     });
 

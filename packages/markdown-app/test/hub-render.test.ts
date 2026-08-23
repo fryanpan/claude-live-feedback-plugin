@@ -165,7 +165,12 @@ describe('renderBoard', () => {
     const t = task({ goal: 'g-pr', status: 'done' });
     renderBoard(root, boardSections(GOALS, [t], { ...filters, doneWindow: 'all' }), h);
     const select = root.querySelector('.hub-status-select') as HTMLSelectElement;
-    expect([...select.options].map((o) => o.value).sort()).toEqual(['done', 'in-progress', 'todo']);
+    expect([...select.options].map((o) => o.value).sort()).toEqual([
+      'done',
+      'in-progress',
+      'todo',
+      'triage',
+    ]);
     expect(select.value).toBe('done');
     select.value = 'todo';
     select.dispatchEvent(new Event('change', { bubbles: true }));

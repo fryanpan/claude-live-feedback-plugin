@@ -511,7 +511,7 @@ export function buildVoicePrompt(
 /** Longest assignee name the fast path will carry. */
 const ASSIGNEE_MAX = 100;
 
-/** The three words the store knows, and nothing else. Spoken status names
+/** The four words the store knows, and nothing else. Spoken status names
  *  arrive spelled however the model felt like spelling them, so "In Progress"
  *  and "in_progress" normalize — but an invented status is undefined, and an
  *  undefined status is what makes `set-status` fail to resolve. */
@@ -521,7 +521,7 @@ function parseTaskStatus(raw: unknown): TaskStatus | undefined {
     .trim()
     .toLowerCase()
     .replace(/[\s_]+/g, '-');
-  return v === 'todo' || v === 'in-progress' || v === 'done' ? v : undefined;
+  return v === 'triage' || v === 'todo' || v === 'in-progress' || v === 'done' ? v : undefined;
 }
 
 /** Tolerant reply parser: the model may fence or preface the JSON. Anything
@@ -660,6 +660,12 @@ function isQuestion(transcript: string): boolean {
  *  words; this is the other direction — what the speaker has to have uttered
  *  for the store's word to be traceable to them. */
 const STATUS_WORDS: Record<TaskStatus, readonly string[]> = {
+  // Deliberately narrow. Every other status here collects the synonyms a
+  // person actually says; this one takes only the word itself, because the
+  // near-misses ("park it", "not yet", "hold off") mean defer or reject and
+  // routing any of them to a status that removes the row from every dispatch
+  // read is a write the speaker did not ask for.
+  triage: ['triage'],
   todo: ['todo', 'to do', 'to-do', 'backlog', 'not started', 'unstarted', 'undo', 'reopen'],
   'in-progress': [
     'in progress',

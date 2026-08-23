@@ -162,7 +162,18 @@ export function buildQueue(
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const now = opts.now ?? Date.now();
 
-  const open = tasks.filter((t) => t.status !== 'done');
+  // Finished work, and work nobody has vetted. `triage` is excluded HERE
+  // rather than at the `includeBlocked` filter below, because those are two
+  // different questions: `includeBlocked` widens the queue to rows a
+  // dependency holds back, and a triage row is not blocked — it is not yet
+  // agreed to be work at all. Answering both with one flag is how a triage
+  // row reaches a dispatcher that only asked to see its blocked rows.
+  //
+  // Note this is the ONE selection `next_tasks` and the ready-work nudge
+  // share, so excluding it here excludes it from both — which is the point.
+  // Every other list (the board, `list_tasks`) reads the store directly and
+  // still shows triage rows in their band.
+  const open = tasks.filter((t) => t.status !== 'done' && t.status !== 'triage');
   const selected =
     opts.assignee === undefined ? open : open.filter((t) => t.assignee === opts.assignee);
 
@@ -264,6 +275,11 @@ export interface GoalSummaryRow {
   doneAt?: number;
   /** Who declared it, display name and kind only. */
   doneBy?: { name: string; kind: 'person' | 'agent' };
+  /** Rows an agent filed that nobody has vetted yet. Counted separately, and
+   *  never folded into `todo`: these are the only rows in the band that no
+   *  dispatch read will return, so a band whose whole count is triage looks
+   *  full and is not being worked. */
+  triage: number;
   todo: number;
   inProgress: number;
   done: number;
@@ -320,12 +336,21 @@ export function summarizeGoals(
    */
   goalRows: GoalRow[] = [],
 ): GoalSummaryRow[] {
-  const counts = new Map<string, { todo: number; inProgress: number; done: number }>();
+  const counts = new Map<
+    string,
+    { triage: number; todo: number; inProgress: number; done: number }
+  >();
   for (const t of tasks) {
-    const c = counts.get(t.goal) ?? { todo: 0, inProgress: 0, done: 0 };
-    if (t.status === 'todo') c.todo++;
+    const c = counts.get(t.goal) ?? { triage: 0, todo: 0, inProgress: 0, done: 0 };
+    // Every arm names its status, and the fallthrough is `todo` rather than
+    // `done`. The chain used to end `else c.done++`, which counted anything
+    // it did not recognize as FINISHED — so the first status added after it
+    // was written would have inflated every band's done count silently. A
+    // status this build has never heard of is at worst unstarted.
+    if (t.status === 'triage') c.triage++;
     else if (t.status === 'in-progress') c.inProgress++;
-    else c.done++;
+    else if (t.status === 'done') c.done++;
+    else c.todo++;
     counts.set(t.goal, c);
   }
   const meta = new Map<string, GoalStatusMeta>(goalRows.map((r) => [r.id, goalStatusMeta(r)]));
@@ -344,7 +369,7 @@ export function summarizeGoals(
     reorderable,
     ...(dueAt !== undefined ? { dueAt } : {}),
     ...(meta.get(id) ?? {}),
-    ...(counts.get(id) ?? { todo: 0, inProgress: 0, done: 0 }),
+    ...(counts.get(id) ?? { triage: 0, todo: 0, inProgress: 0, done: 0 }),
   });
 
   const out: GoalSummaryRow[] = [];

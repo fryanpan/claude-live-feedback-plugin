@@ -84,7 +84,12 @@ describe('premise drift over the work-queue route', () => {
       title,
       body,
       assignee: 'Reviewer',
-      author: { id: 'known-reviewer', name: 'Reviewer' },
+      // `kind` stated, and it is load-bearing rather than decoration: an
+      // author that DECLARES nothing classifies as an agent (classifyActor),
+      // and an agent's create lands in `triage`, which the work queue these
+      // cases read never returns. Every real caller sends a kind; the fixture
+      // now does too.
+      author: { id: 'known-reviewer', name: 'Reviewer', kind: 'person' },
     });
     expect(r.status).toBe(200);
     return ((await r.json()) as { task: { id: string } }).task.id;
