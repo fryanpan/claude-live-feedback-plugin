@@ -1491,6 +1491,195 @@ function renderGoalBand(section: BoardSection, handlers: BoardHandlers): HTMLEle
   return band;
 }
 
+// ── The goal DETAIL panel: what a goal row's tap opens ─────────────────────
+
+export interface GoalDetailHandlers {
+  onClose: () => void;
+  /** Rename from the panel — unconditional, like the task panel's title:
+   *  this is where renaming lives on the devices whose ROWS never edit. */
+  onTitleCommit: (goalId: string, title: string) => void;
+  /** A status pick — the same one-gate transition every task goes through
+   *  (the server's transition route accepts a goal row's id), which is how
+   *  "somebody declares the goal done" happens from the board. */
+  onStatusSet: (goalId: string, to: TaskStatus) => void;
+}
+
+/**
+ * The goal band's detail panel (decision 4: a coarse-pointer tap on the row
+ * "opens the detail panel and never edits the title" — so the panel is not
+ * optional chrome; without it a tap on Bryan's iPad does nothing at all).
+ *
+ * The first slice of the approved mock's panel: the identity line, the
+ * renameable title, the status select with the open-children advisory, and
+ * the facts the row deliberately does not carry — owner, due date, task
+ * counts ("counts live in the detail panel", struck from the row by name).
+ * The mock's description doc, refs and comment thread need server surfaces
+ * a goal does not have yet (`GoalRow.body` is not projected, and no thread
+ * container exists for a goal) and follow with them.
+ *
+ * Reuses the task panel's chrome classes wholesale — `.hub-detail-panel`,
+ * head, fields — so the two panels read as one surface and the mobile
+ * full-bleed layout comes free.
+ */
+export function renderGoalDetail(
+  container: HTMLElement,
+  section: BoardSection | null,
+  handlers: GoalDetailHandlers,
+): void {
+  // Snapshot any in-flight rename before the repaint destroys the input —
+  // the same guarantee the task panel gives, via the same two helpers.
+  const kept = keepFields(container);
+  // Backlog is a bucket, not a goal: nothing to declare, nothing to rename,
+  // so there is deliberately no panel for it — same refusal as its row's.
+  if (!section || section.isChores) {
+    container.replaceChildren();
+    container.classList.add('hidden');
+    document.body.classList.remove('hub-detail-open');
+    return;
+  }
+  container.classList.remove('hidden');
+  document.body.classList.add('hub-detail-open');
+
+  const panel = document.createElement('div');
+  panel.className = 'hub-detail-panel';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-modal', 'true');
+  // Focusable as a container, same as the task panel and for the same
+  // reasons: the keyboard follows the dialog, and Escape has somewhere to
+  // land without a global listener.
+  panel.tabIndex = -1;
+  panel.dataset.goalId = section.id;
+  panel.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') handlers.onClose();
+  });
+
+  const head = document.createElement('div');
+  head.className = 'hub-detail-head';
+  const identity = document.createElement('div');
+  const kindTag = document.createElement('span');
+  kindTag.className = 'hub-detail-kind';
+  kindTag.textContent = 'Goal';
+  const idTag = document.createElement('span');
+  idTag.className = 'hub-detail-id';
+  idTag.textContent = section.id;
+  const idLine = document.createElement('div');
+  idLine.className = 'hub-detail-kind-line';
+  idLine.append(kindTag, idTag);
+  const title = document.createElement('h2');
+  title.className = 'hub-detail-title';
+  title.textContent = section.title;
+  title.tabIndex = 0;
+  title.title = 'Click or press Enter to rename';
+  wireInPlaceTitle(
+    title,
+    () => section.title,
+    (v) => handlers.onTitleCommit(section.id, v),
+    `goal-title:${section.id}`,
+  );
+  identity.append(idLine, title);
+  const actions = document.createElement('div');
+  actions.className = 'hub-detail-head-actions';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'hub-btn hub-icon-btn hub-detail-close';
+  close.textContent = '✕';
+  close.title = 'Close goal detail';
+  close.setAttribute('aria-label', 'Close goal detail');
+  close.addEventListener('click', () => handlers.onClose());
+  actions.append(close);
+  head.append(identity, actions);
+
+  const counts = { todo: 0, 'in-progress': 0, done: 0 } as Record<TaskStatus, number>;
+  for (const t of section.tasks) counts[t.status] += 1;
+  const open = counts.todo + counts['in-progress'];
+
+  const dl = document.createElement('dl');
+  dl.className = 'hub-detail-fields';
+  const cell = (key: string, value: Node | string): void => {
+    const wrap = document.createElement('div');
+    wrap.className = 'hub-detail-field';
+    const dt = document.createElement('dt');
+    dt.className = 'hub-detail-field-k';
+    dt.textContent = key;
+    const dd = document.createElement('dd');
+    dd.className = 'hub-detail-field-v';
+    if (typeof value === 'string') dd.textContent = value;
+    else dd.append(value);
+    wrap.append(dt, dd);
+    dl.append(wrap);
+  };
+
+  const statusCtl = document.createElement('span');
+  statusCtl.className = 'hub-detail-statusctl';
+  const status = document.createElement('select');
+  status.className = 'hub-detail-select hub-detail-status hub-goal-detail-status';
+  for (const s of TASK_STATUS_ORDER) {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = STATUS_LABEL[s];
+    // An undecorated section (an older server's projection) claims nothing;
+    // the select then shows "To do" — the value a fresh row starts on.
+    opt.selected = s === (section.status ?? 'todo');
+    status.append(opt);
+  }
+  status.setAttribute('aria-label', 'Goal status — pick to declare a new one');
+  status.addEventListener('change', () => {
+    handlers.onStatusSet(section.id, status.value as TaskStatus);
+  });
+  statusCtl.append(status);
+  cell('Status', statusCtl);
+  // The vacancy is stated rather than hidden — an unowned goal is a fact a
+  // reader acts on. No picker yet: no verb sets a goal's owner.
+  cell('Owner', section.assignee ?? 'Nobody yet');
+  if (section.dueAt !== undefined) {
+    cell(
+      'Due',
+      `due ${new Date(section.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
+    );
+  }
+  cell(
+    'Tasks',
+    TASK_STATUS_ORDER.map((s) => `${counts[s]} ${STATUS_LABEL[s].toLowerCase()}`).join(' · '),
+  );
+
+  const body = document.createElement('div');
+  body.className = 'hub-detail-body';
+  body.append(dl);
+
+  if (section.status === 'done') {
+    // The attribution the row can only whisper (its tooltip), said plainly
+    // where there is room: a done goal is somebody's claim, and the claim
+    // names its author.
+    const note = document.createElement('p');
+    note.className = 'hub-goal-done-note';
+    const when =
+      section.doneAt !== undefined
+        ? `, ${new Date(section.doneAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+        : '';
+    note.textContent = section.doneBy
+      ? `Declared by ${section.doneBy.name}${when}`
+      : 'Declared done';
+    body.append(note);
+  } else if (open > 0) {
+    // The advisory from the mock, verbatim in spirit: the server reports open
+    // children on a done declaration and never enforces them, so the panel
+    // says up front what a declaration would leave open.
+    const advisory = document.createElement('p');
+    advisory.className = 'hub-goal-advisory';
+    advisory.textContent =
+      `Marking this goal done leaves ${open} open task${open === 1 ? '' : 's'} in it. ` +
+      'A goal is done because you say so — its tasks are reported, never enforced.';
+    body.append(advisory);
+  }
+
+  panel.append(head, body);
+  container.addEventListener('click', (ev) => {
+    if (ev.target === container) handlers.onClose();
+  });
+  container.replaceChildren(panel);
+  restoreFields(container, kept);
+}
+
 /** Goals-as-sections, Backlog last (already ordered by the model); done rows
  *  stay in place, drawn done — finishing a task doesn't move it (§3.9). */
 export function renderBoard(

@@ -2410,6 +2410,45 @@ body.hub-body {
   font-size: 15px;
   font-weight: 600;
 }
+/* --- the goal DETAIL panel ---
+   What a goal row's tap opens (decision 4). It reuses the task panel's
+   chrome classes wholesale — panel, head, fields — so only what a goal
+   panel has and a task panel does not is declared here. */
+.hub-detail-kind-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.hub-detail-kind {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.hub-detail-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+/* The open-children advisory, from the approved mock: a quiet amber note,
+   never a blocker — the server reports open children and does not enforce
+   them. */
+.hub-goal-advisory {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn, #b58900) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn, #b58900) 10%, transparent);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.hub-goal-done-note {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
 /* A task list is read by SKIMMING down a column, not by reading each row.
    So the row is a grid with fixed tracks — handle, open caret, status,
    title, badges, assignee — and every cell in a column lines up with the one
