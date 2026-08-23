@@ -2079,6 +2079,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     return serveStatic(join(markdownAppDist, 'index.html'));
   };
 
+  /**
+   * Whether a doc is a mockup, and so must never be sent to the doc route.
+   *
+   * The editor shell renders from LF-held content, and a mockup has none —
+   * its surface is a host page. Asked for one anyway, the shell loads, finds
+   * nothing to show, and paints an empty page under a 200. That is the worst
+   * failure shape available: the status says it worked, so nothing upstream
+   * reports it and the reviewer is left assuming the mockup itself is broken.
+   * Both doc routes therefore check this and redirect instead.
+   *
+   * Deliberately keyed on the doc's own type rather than `contentKind`: a
+   * `workspace` room also holds no content surface, but its route is the
+   * board, not a mockup.
+   */
+  const isMockupDoc = (docId: string): boolean => rooms.get(docId)?.meta.type === 'mockup';
+
   /** A mockup's own HTML, streamed from the file the room is bound to. */
   const serveMockup = (docId: string): Response => {
     const notFound = () =>
@@ -6134,6 +6150,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!isValidDocId(id)) return j(400, { error: 'bad docId' });
           const canonical = rooms.get(id)?.docId ?? id;
           if (kind === 'mockups') return serveMockup(canonical);
+          if (isMockupDoc(canonical)) {
+            return redirectTo(
+              `/workspaces/${encodeURIComponent(wsSeg)}/mockups/${encodeURIComponent(canonical)}`,
+              url.search,
+            );
+          }
           const served = serveDocShell(canonical, url);
           if (served) return served;
         }
@@ -6152,6 +6174,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // since. Both land on the same doc, and the redirect below rewrites
           // either into the canonical address.
           const docId = rooms.get(addressed)?.docId ?? addressed;
+          // A mockup has no editor, so the doc route is the wrong destination
+          // for one — see `isMockupDoc`. Hand it to the mockup route's own
+          // resolution, which is the behaviour `/mockup/<docId>` already has.
+          if (isMockupDoc(docId)) {
+            const mockHome = addressableWorkspaceFor(docId, visitor);
+            if (mockHome) {
+              return redirectTo(
+                `/workspaces/${encodeURIComponent(mockHome)}/mockups/${encodeURIComponent(docId)}`,
+                url.search,
+              );
+            }
+            return serveMockup(docId);
+          }
           // The redirect is deliberately OUTSIDE the `markdownAppDist` guard
           // that wraps the serve below. Where a doc lives is a fact about
           // addressing; whether the browser app has been built is a fact
