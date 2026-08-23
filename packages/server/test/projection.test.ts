@@ -235,6 +235,8 @@ describe('ydoc projection + workspace room', () => {
       status?: string;
       doneAt?: number;
       doneBy?: { name: string; kind: string };
+      assignee?: string;
+      ownerKind?: string;
     };
     const goals = room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[];
     expect(goals.map((x) => x.title)).toContain('Ship it faster');
@@ -259,6 +261,26 @@ describe('ydoc projection + workspace room', () => {
     expect(decorated?.status).toBe('done');
     expect(decorated?.doneBy).toEqual({ name: 'Bryan', kind: 'person' });
     expect(typeof decorated?.doneAt).toBe('number');
+    // An undecorated band claims no owner — the vacancy the client draws.
+    expect(decorated?.assignee).toBeUndefined();
+    expect(decorated?.ownerKind).toBeUndefined();
+
+    // The row's OWNER rides the same decoration. No verb sets a goal's
+    // assignee yet, so plant one directly on the store's row — the hydrated
+    // state a future verb (or a hand-edited data file) produces — and the
+    // projection must carry it rather than silently dropping the one field
+    // the client already renders an avatar for. `ownerKind` resolves through
+    // the same roster rules a task's does; an unattached display name with
+    // no declared kind reads as `unknown`, stated rather than omitted.
+    const row = handle.tasks.getGoalRow(band.id);
+    if (!row) throw new Error('goal row missing from the store');
+    row.assignee = 'Search Revamp';
+    handle.projection.refresh(wsId);
+    const owned = (room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[]).find(
+      (x) => x.id === band.id,
+    );
+    expect(owned?.assignee).toBe('Search Revamp');
+    expect(owned?.ownerKind).toBe('unknown');
   });
 
   it('an evidence amendment reaches the board room — the only thing the board reads', async () => {

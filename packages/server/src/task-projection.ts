@@ -629,8 +629,31 @@ export class TaskProjection {
     // see would be the store-has-it/surface-can't-show-it bug for the very
     // field goal rows exist to record. Additive: a client that predates the
     // fields reads exactly the goals it read before.
+    //
+    // The row's OWNER rides the same way. No verb sets `GoalRow.assignee`
+    // yet, so today every band goes out unowned — but the schema carries the
+    // field ("the absence has to be representable so the surfaces can render
+    // a vacancy"), the client draws an avatar for it, and a projection that
+    // dropped it would break silently the day the first verb lands: the
+    // store would say who owns the goal while the board kept saying nobody.
+    // `ownerKind` resolves through the same roster rules a task's does; a
+    // goal row declares no kind, so the roster and the reserved words decide.
+    const isAttachedAgent = attachedAgentTest(
+      this.tasks.listAttachments(workspaceId).map((a) => a.agentId),
+    );
     const goalMeta = new Map(
-      this.tasks.listGoalRows(workspaceId).map((r) => [r.id, goalStatusMeta(r)]),
+      this.tasks.listGoalRows(workspaceId).map((r) => [
+        r.id,
+        {
+          ...goalStatusMeta(r),
+          ...(r.assignee !== undefined
+            ? {
+                assignee: r.assignee,
+                ownerKind: resolveOwnerKind(r.assignee, undefined, isAttachedAgent),
+              }
+            : {}),
+        },
+      ]),
     );
     const decorateSubgoal = (s: WorkspaceSubgoal) => ({ ...s, ...(goalMeta.get(s.id) ?? {}) });
     const wsFields: Record<string, unknown> = {
