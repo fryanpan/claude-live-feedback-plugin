@@ -2302,8 +2302,12 @@ body.hub-body {
   min-width: 0;
 }
 /* Due date as plain muted text right of the title — deliberately NOT a
-   `.hub-badge` chip (struck in review). Red only on an OPEN band past it. */
-.hub-due {
+   `.hub-badge` chip (struck in review). Red only on an OPEN band past it.
+   `.hub-done-note` is the word a done band spends that same slot on, and it
+   shares this rule outright so the two can never drift into different
+   treatments — no chip may grow on either. */
+.hub-due,
+.hub-done-note {
   font-size: 12px;
   color: var(--fg-muted);
   white-space: nowrap;

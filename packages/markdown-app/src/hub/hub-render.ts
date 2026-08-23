@@ -1301,9 +1301,11 @@ function setBandCollapsed(goalId: string, folded: boolean): void {
  * that a task row does not is the fold, so the twisty is ALWAYS visible: a
  * hover-only affordance is no affordance on the iPad this board is read from.
  *
- * A done band is a muted title plus the attribution commit A shipped, riding
- * the row's tooltip. The mock draws no further chrome for done goals, so
- * neither does this — the status select lives in the panel.
+ * A done band is a muted title, the plain word `done` in the due date's slot,
+ * and the attribution riding the row's tooltip. The word is there because the
+ * other two are hover-only tells on a touch device — but it stays plain text
+ * in an existing slot, since the mock draws no chrome of its own for a done
+ * goal and the status select lives in the panel.
  */
 function renderGoalBand(section: BoardSection, handlers: BoardHandlers): HTMLElement {
   const folded = collapsedBands()[section.id] === 1;
@@ -1329,12 +1331,16 @@ function renderGoalBand(section: BoardSection, handlers: BoardHandlers): HTMLEle
   const glyph = document.createElement('span');
   glyph.textContent = '▾';
   twisty.append(glyph);
+  // Everything the twisty says names the gesture the NEXT click will do, so
+  // all three live here together. The tooltip used to be set once outside
+  // this function and never followed the fold, which left a collapsed band
+  // offering to collapse itself while its aria-label said the opposite.
   const sayFold = (isFolded: boolean): void => {
     twisty.setAttribute('aria-expanded', isFolded ? 'false' : 'true');
     twisty.setAttribute('aria-label', `${isFolded ? 'Expand' : 'Collapse'} “${section.title}”`);
+    twisty.title = `${isFolded ? 'Expand' : 'Collapse'} this goal — just for you`;
   };
   sayFold(folded);
-  twisty.title = 'Collapse this goal — just for you';
   twisty.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const now = !band.classList.contains('is-collapsed');
@@ -1386,15 +1392,27 @@ function renderGoalBand(section: BoardSection, handlers: BoardHandlers): HTMLEle
     title.title = 'Tap to open';
   }
 
-  // The due date: plain muted text right of the title, red only when an OPEN
-  // band is past it (decision 6 — explicitly not a chip, and no chip may
-  // return beside it).
+  // What sits right of the title, as plain muted text (decision 6 —
+  // explicitly not a chip, and no chip may return beside it):
+  //
+  //   done band → the word `done`. The muted title alone is a difference
+  //     nobody can name, and the attribution tooltip that carries the rest
+  //     never appears on the iPad this board is read from. It takes the due
+  //     date's slot rather than sitting beside it, because a date a finished
+  //     goal ran past is noise (and its red is already suppressed).
+  //   open band → the due date, red once it is past.
   const meta = document.createElement('span');
   meta.className = 'hub-goal-meta';
-  if (!section.isChores && section.dueAt !== undefined) {
+  if (!section.isChores && section.status === 'done') {
+    const note = document.createElement('span');
+    note.className = 'hub-done-note';
+    note.textContent = 'done';
+    meta.append(note);
+  } else if (!section.isChores && section.dueAt !== undefined) {
     const due = document.createElement('span');
-    const overdue = section.dueAt < Date.now() && section.status !== 'done';
-    due.className = overdue ? 'hub-due hub-due-overdue' : 'hub-due';
+    // A done band never reaches here, so being past the date is all overdue
+    // can mean by this point.
+    due.className = section.dueAt < Date.now() ? 'hub-due hub-due-overdue' : 'hub-due';
     due.textContent = `due ${new Date(section.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
     meta.append(due);
   }

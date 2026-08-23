@@ -709,7 +709,7 @@ describe('the goal band row', () => {
     expect(tracks.filter((t) => t.includes('fr'))).toHaveLength(1);
   });
 
-  it('reads overdue in red on an open band, and not on a done one', () => {
+  it('reads overdue in red on an open band; a done one draws no due date at all', () => {
     renderBoard(
       root,
       boardSections(goalsWith({ dueAt: Date.now() - DAY }), [], filters),
@@ -722,7 +722,45 @@ describe('the goal band row', () => {
       boardSections(goalsWith({ dueAt: Date.now() - DAY, status: 'done' }), [], filters),
       handlers(),
     );
-    expect(goalRow().querySelector('.hub-due')?.className).not.toContain('hub-due-overdue');
+    // Not merely un-reddened: a date the goal finished past is noise, and the
+    // slot is spent on the word `done` instead (below).
+    expect(goalRow().querySelector('.hub-due')).toBeNull();
+  });
+
+  // A done goal has to READ as done with no hover. The muted title is a
+  // difference nobody can name, and the attribution tooltip beside it never
+  // appears on the iPad this board is read from — so the word itself is
+  // drawn, in the due date's slot and the due date's plain-text treatment.
+  // Everything the mock review struck stays struck: no count, no status
+  // circle, no chip or badge.
+  it('says “done” in plain text where a done goal’s due date would go', () => {
+    renderBoard(
+      root,
+      boardSections(
+        goalsWith({ status: 'done', doneAt: NOW, dueAt: Date.now() - DAY }),
+        [],
+        filters,
+      ),
+      handlers(),
+    );
+    const meta = goalRow().querySelector('.hub-goal-meta') as HTMLElement;
+    const note = meta.querySelector('.hub-done-note') as HTMLElement;
+    expect(note).not.toBeNull();
+    expect(note.textContent).toBe('done');
+    expect(note.className).not.toContain('hub-badge');
+    expect(meta.querySelector('.hub-due')).toBeNull();
+    expect(goalRow().querySelector('.hub-status-mark')).toBeNull();
+    expect(goalRow().querySelector('.hub-badge')).toBeNull();
+    // Positive control: an open band with that same past due date still draws
+    // the date, and claims nothing about being done.
+    root.replaceChildren();
+    renderBoard(
+      root,
+      boardSections(goalsWith({ dueAt: Date.now() - DAY }), [], filters),
+      handlers(),
+    );
+    expect(goalRow().querySelector('.hub-due')?.textContent).toContain('due');
+    expect(goalRow().querySelector('.hub-done-note')).toBeNull();
   });
 
   // The avatar draws from the projected owner the way a task row's does —
@@ -803,6 +841,34 @@ describe('the goal band row', () => {
     } catch {
       /* private mode */
     }
+  });
+
+  // The tooltip has to name the gesture the NEXT click will do. It was set
+  // once at build time and never followed the state, so a collapsed band's
+  // twisty offered to collapse it again — the aria-label flipped underneath
+  // and the visible text disagreed with it.
+  it('the twisty’s tooltip flips with the fold, matching its aria-label', () => {
+    try {
+      localStorage.removeItem('hub:collapsed-bands');
+    } catch {
+      /* private mode */
+    }
+    renderBoard(root, boardSections(goalsWith(), [], filters), handlers());
+    const twisty = goalRow().querySelector('.hub-twisty') as HTMLButtonElement;
+    expect(twisty.title).toMatch(/^Collapse/);
+    expect(twisty.getAttribute('aria-label')).toMatch(/^Collapse/);
+    twisty.click();
+    expect(twisty.title).toMatch(/^Expand/);
+    expect(twisty.getAttribute('aria-label')).toMatch(/^Expand/);
+    // A repaint reads the persisted fold, so a fresh twisty must come up
+    // saying the same thing rather than the build-time default.
+    root.replaceChildren();
+    renderBoard(root, boardSections(goalsWith(), [], filters), handlers());
+    const again = goalRow().querySelector('.hub-twisty') as HTMLButtonElement;
+    expect(again.title).toMatch(/^Expand/);
+    // Unfold, so the persisted state nets to zero for the other tests.
+    again.click();
+    expect(again.title).toMatch(/^Collapse/);
   });
 
   it('the twisty folds without opening the goal', () => {

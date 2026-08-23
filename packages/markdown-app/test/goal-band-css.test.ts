@@ -133,6 +133,16 @@ describe('the goal band stylesheet', () => {
     expect(CSS).toMatch(/\.hub-goal-title-text\s*\{[^}]*-webkit-line-clamp:\s*2/);
   });
 
+  // The done note is the hover-free half of a done band's treatment, and it
+  // must not become a chip: it shares the due date's rule outright, so the
+  // two can only ever be styled alike.
+  it('draws the done note as the due date’s own plain muted text — one rule, no chip', () => {
+    const shared = /\.hub-due,\s*\.hub-done-note\s*\{([^}]*)\}/.exec(CSS)?.[1];
+    expect(shared, 'the done note does not share the due date’s rule').toBeDefined();
+    expect(shared as string).toMatch(/color:\s*var\(--fg-muted\)/);
+    expect(shared as string).not.toMatch(/background|border-radius|border:/);
+  });
+
   it('mutes a done band’s title, and neutralises the reserved band’s accent', () => {
     expect(ruleBody('.hub-band-done .hub-goal-title-text')).toMatch(/color:\s*var\(--fg-muted\)/);
     expect(ruleBody('.hub-band-reserved .hub-goal-row')).toMatch(
