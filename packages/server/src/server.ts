@@ -1265,9 +1265,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   onDocRoomEvent = (docId, payload) => {
-    const taskId = taskIdOfBodyDoc(docId);
-    if (taskId) {
-      const workspaceId = taskStore.getTask(taskId)?.workspaceId;
+    const rowId = taskIdOfBodyDoc(docId);
+    if (rowId) {
+      // A `task:` room belongs to a task OR to a goal — one prefix, two kinds
+      // of row (see `ensureGoalBody`). Asking only `getTask` returned
+      // undefined for every goal and took the early return, so a comment on a
+      // goal reached nobody: no board broadcast, no agent watching the
+      // workspace, no projection refresh to update the count.
+      const workspaceId =
+        taskStore.getTask(rowId)?.workspaceId ?? taskStore.getGoalRow(rowId)?.workspaceId;
       if (!workspaceId) return;
       const rows = queueCommentRows(workspaceId, docId, payload);
       sse.broadcast(`ws~${workspaceId}`, payload, (who) => {
@@ -1326,6 +1332,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // one route that answers "what is waiting on me"; before it, a board of
         // nothing but open decisions answered with an empty list.
         reviews: taskStore.listReviewItems(t.id),
+      })),
+      // Goals queue their discussions the same way. Without this a review
+      // item declared on a goal — "does 'ten teams' mean ten that renew?" —
+      // sits in a thread nothing tells the reader about, which is the whole
+      // failure the queue exists to prevent, on the row that matters most.
+      // No `reviews`: that array is a task field and a goal row has none.
+      goals: taskStore.listGoalRows(workspace.id).map((g) => ({
+        id: g.id,
+        title: g.title,
+        bodyDocId: taskBodyDocId(g.id),
+        done: g.status === 'done',
       })),
       docs: workspace.docIds.map((docId) => {
         const meta = rooms.get(docId)?.meta;

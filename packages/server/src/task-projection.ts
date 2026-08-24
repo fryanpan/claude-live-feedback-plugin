@@ -11,6 +11,7 @@ import {
 import type { PremiseNote } from './task-staleness.ts';
 import {
   type AttachmentState,
+  type GoalRow,
   type Task,
   type TaskStore,
   type TaskStoreEvent,
@@ -641,19 +642,41 @@ export class TaskProjection {
     const isAttachedAgent = attachedAgentTest(
       this.tasks.listAttachments(workspaceId).map((a) => a.agentId),
     );
+    const goalRows = this.tasks.listGoalRows(workspaceId);
+    // A goal's DESCRIPTION and its discussion, projected the way a task's are.
+    //
+    // The room is brought into existence here rather than on a store event,
+    // because there is no `goal.created` event to hang it on the way
+    // `task.created` carries `ensureTaskBody` — and every goal write (the four
+    // goals routes, the transition gate, hydrate) reaches this refresh, so
+    // this is the one place that sees every goal that has ever existed.
+    // Idempotent and cheap on the repeat: an existing room is a map hit and
+    // an already-wired observer is a reference compare.
+    //
+    // `bodyDocId` is projected even when the body is empty, because it is the
+    // ADDRESS — the panel mounts its editor on it and the discussion is
+    // fetched from it, both of which have to work on a goal nobody has
+    // described yet. That is the difference between a body and a body room.
+    for (const r of goalRows) this.ensureGoalBody(r);
     const goalMeta = new Map(
-      this.tasks.listGoalRows(workspaceId).map((r) => [
-        r.id,
-        {
-          ...goalStatusMeta(r),
-          ...(r.assignee !== undefined
-            ? {
-                assignee: r.assignee,
-                ownerKind: resolveOwnerKind(r.assignee, undefined, isAttachedAgent),
-              }
-            : {}),
-        },
-      ]),
+      goalRows.map((r) => {
+        const comments = this.commentCount(r.id);
+        return [
+          r.id,
+          {
+            ...goalStatusMeta(r),
+            bodyDocId: taskBodyDocId(r.id),
+            ...projectBody(r.body),
+            ...(comments > 0 ? { commentCount: comments } : {}),
+            ...(r.assignee !== undefined
+              ? {
+                  assignee: r.assignee,
+                  ownerKind: resolveOwnerKind(r.assignee, undefined, isAttachedAgent),
+                }
+              : {}),
+          },
+        ];
+      }),
     );
     const decorateSubgoal = (s: WorkspaceSubgoal) => ({ ...s, ...(goalMeta.get(s.id) ?? {}) });
     const wsFields: Record<string, unknown> = {
@@ -739,6 +762,38 @@ export class TaskProjection {
   }
 
   /**
+   * The same, for a GOAL row — `task:<goalId>`, deliberately the same prefix.
+   *
+   * Settled in the approved design against the ticket's `goal:<goalId>`
+   * proposal: goal ids are `g-…` and task ids are `t-…`, so one namespace
+   * holds both without collision, and reusing the prefix is what makes every
+   * piece of body machinery apply unchanged — `isHubOwnedRoom`, the prose edit
+   * tools, the thread store, the SSE redactors, the doc routes. A second
+   * prefix would have been an edit to each of them buying nothing a reader
+   * could see.
+   *
+   * Shares `bodyWired`, and correctly: that map is keyed on docId, which is
+   * the room's identity rather than the row's kind. Two rows cannot claim one
+   * docId, so there is nothing for the two kinds to collide over.
+   */
+  ensureGoalBody(goal: GoalRow): void {
+    const docId = taskBodyDocId(goal.id);
+    const room = this.rooms.getOrCreate(
+      docId,
+      { type: 'markdown', title: goal.title },
+      { authority: 'server' },
+    );
+    const fragment = prose.getProseFragment(room.ydoc);
+    if (fragment.length === 0 && goal.body?.trim()) {
+      this.rooms.setDocContent(docId, goal.body);
+    }
+    if (this.bodyWired.get(docId) !== room.ydoc) {
+      this.bodyWired.set(docId, room.ydoc);
+      fragment.observeDeep(() => this.scheduleSnapshot(docId));
+    }
+  }
+
+  /**
    * Make a task's body room exist and hand back its docId — the entry point
    * for anything that wants to WRITE a body rather than react to one.
    *
@@ -772,8 +827,8 @@ export class TaskProjection {
    * common case, since a room is created lazily and an empty one has no
    * threads either way.
    */
-  private commentCount(taskId: string): number {
-    const room = this.rooms.get(taskBodyDocId(taskId));
+  private commentCount(rowId: string): number {
+    const room = this.rooms.get(taskBodyDocId(rowId));
     if (!room) return 0;
     return listThreads(room.ydoc).reduce((n, t) => n + t.comments.length, 0);
   }
@@ -819,18 +874,28 @@ export class TaskProjection {
   private snapshotNow(docId: string): void {
     const room = this.rooms.get(docId);
     if (!room) return;
-    const taskId = taskIdOfBodyDoc(docId);
-    if (!taskId) return;
+    const rowId = taskIdOfBodyDoc(docId);
+    if (!rowId) return;
     try {
       const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
-      if (!this.tasks.updateBodySnapshot(taskId, md)) return;
+      // A GOAL's body lands in its own row. Tried task-first and goal-second
+      // rather than branching on a `kind` lookup because that is the order the
+      // ids make true: the two `updateBody*` calls are each a miss on the
+      // other kind, so whichever answers is the row that exists.
+      const goal = this.tasks.getGoalRow(rowId);
+      if (goal) {
+        if (!this.tasks.updateGoalBodySnapshot(rowId, md)) return;
+        this.refresh(goal.workspaceId);
+        return;
+      }
+      if (!this.tasks.updateBodySnapshot(rowId, md)) return;
       // The board renders the description from the projection, and
       // `updateBodySnapshot` deliberately fires no task.* event (body typing
       // is not board activity) — so without this push nothing would ever
       // refresh it and every board would show the description as of task
       // creation, forever. `refresh` is diff-aware, so an unchanged body
       // costs an empty transaction.
-      const workspaceId = this.tasks.getTask(taskId)?.workspaceId;
+      const workspaceId = this.tasks.getTask(rowId)?.workspaceId;
       if (workspaceId) this.refresh(workspaceId);
     } catch (err) {
       console.error(`[projection] body snapshot failed for ${docId}:`, err);
