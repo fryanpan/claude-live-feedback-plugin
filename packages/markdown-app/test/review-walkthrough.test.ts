@@ -926,6 +926,27 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     expect(ta.value).toBe('');
   });
 
+  it('a repaint during the write does not resurrect the submitted text as a draft', async () => {
+    let release: (ok: boolean) => void = () => {};
+    const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
+    const q = reviewQueue([decision()], [], NOW);
+    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    const ta = form.querySelector('textarea') as HTMLTextAreaElement;
+    ta.value = 'Blue.';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    // The board repaints while the write is in flight. The rebuilt form's
+    // in-flight lock is gone with the old DOM, so restoring the submitted
+    // text here would hand the reader an enabled duplicate-submit path — and
+    // the eventual success would clear only the detached old box.
+    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    expect(rebuilt.value).toBe('');
+    release(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(rebuilt.value).toBe('');
+  });
+
   it('keeps the words when the write is refused', async () => {
     const onAnswer = vi.fn(() => Promise.resolve(false));
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));

@@ -2519,13 +2519,20 @@ function promptForm(
     busy = true;
     ta.disabled = true;
     submit.disabled = true;
+    // Cleared HERE rather than on the acknowledgement, same as `commentForm`:
+    // a repaint inside this await snapshots the box through `keepFields`, and
+    // a restored copy of in-flight text is an enabled duplicate-submit path
+    // whose eventual success would clear only the detached old box. Put back
+    // verbatim if the write is refused.
+    ta.value = '';
+    refreshComposer();
     void Promise.resolve(onSubmit(text))
       .then((ok) => {
-        // Cleared only on an acknowledged write. A handler that answers
-        // nothing at all keeps the text, which is the safe direction: the
-        // usual outcome there is that the card is replaced anyway.
-        if (ok === true) {
-          ta.value = '';
+        // Anything short of an acknowledged write puts the words back — into
+        // THIS box, which after a mid-flight repaint is the detached one, so
+        // a restore can never hand the rebuilt form a duplicate to send.
+        if (ok !== true) {
+          ta.value = text;
           refreshComposer();
         }
       })
