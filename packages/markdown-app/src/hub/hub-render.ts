@@ -2530,7 +2530,12 @@ function promptForm(
     // mid-flight repaint replaces this form, so the words go to the LIVE box
     // carrying the same keep key — but never over something typed there
     // since; the detached original is the fallback, which keeps a
-    // never-repainted form behaving exactly as before.
+    // never-repainted form behaving exactly as before. In the corner where
+    // all three collide — repaint, a new draft already begun, and a failed
+    // write — the new draft wins and the failed one is dropped, deliberately:
+    // rewriting a box while somebody is typing in it is the bug this whole
+    // mechanism exists to remove, and a failed send is the one case of the
+    // three the reader was just told about.
     const putBack = () => {
       const live = keepKey
         ? ta.ownerDocument.querySelector<HTMLTextAreaElement>(`textarea[data-keep="${keepKey}"]`)
