@@ -947,6 +947,56 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     expect(rebuilt.value).toBe('');
   });
 
+  it('a refusal that lands after a repaint puts the words back in the LIVE box', async () => {
+    let release: (ok: boolean) => void = () => {};
+    const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
+    const q = reviewQueue([decision()], [], NOW);
+    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    ta.value = 'Blue.';
+    (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    release(false);
+    await new Promise((r) => setTimeout(r, 0));
+    // Restoring only the detached old textarea leaves the reader looking at
+    // an empty card with their refused answer nowhere.
+    const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    expect(rebuilt).not.toBe(ta);
+    expect(rebuilt.value).toBe('Blue.');
+  });
+
+  it('a refusal never clobbers words typed after the repaint', async () => {
+    let release: (ok: boolean) => void = () => {};
+    const onAnswer = vi.fn(() => new Promise<boolean>((r) => (release = r)));
+    const q = reviewQueue([decision()], [], NOW);
+    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    (root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value = 'Blue.';
+    (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    rebuilt.value = 'Actually, green';
+    release(false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(rebuilt.value).toBe('Actually, green');
+  });
+
+  it('keeps the words when the write REJECTS, not only when it is refused', async () => {
+    const onAnswer = vi.fn(() => Promise.reject(new Error('network')));
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));
+    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    ta.value = 'Green, because the tunnel is up.';
+    (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ta.value).toBe('Green, because the tunnel is up.');
+    expect(ta.disabled).toBe(false);
+  });
+
   it('keeps the words when the write is refused', async () => {
     const onAnswer = vi.fn(() => Promise.resolve(false));
     renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk({ onAnswer }));

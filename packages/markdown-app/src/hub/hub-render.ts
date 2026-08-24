@@ -2526,17 +2526,27 @@ function promptForm(
     // verbatim if the write is refused.
     ta.value = '';
     refreshComposer();
+    // Anything short of an acknowledged write puts the words back. A
+    // mid-flight repaint replaces this form, so the words go to the LIVE box
+    // carrying the same keep key — but never over something typed there
+    // since; the detached original is the fallback, which keeps a
+    // never-repainted form behaving exactly as before.
+    const putBack = () => {
+      const live = keepKey
+        ? ta.ownerDocument.querySelector<HTMLTextAreaElement>(`textarea[data-keep="${keepKey}"]`)
+        : null;
+      const target = live && live !== ta && live.value.trim() === '' ? live : ta;
+      target.value = text;
+      if (target === ta) refreshComposer();
+      else refreshMarkdownComposer(target);
+    };
     void Promise.resolve(onSubmit(text))
       .then((ok) => {
-        // Anything short of an acknowledged write puts the words back — into
-        // THIS box, which after a mid-flight repaint is the detached one, so
-        // a restore can never hand the rebuilt form a duplicate to send.
-        if (ok !== true) {
-          ta.value = text;
-          refreshComposer();
-        }
+        if (ok !== true) putBack();
       })
-      .catch(() => {})
+      .catch(() => {
+        putBack();
+      })
       .finally(() => {
         busy = false;
         ta.disabled = false;
