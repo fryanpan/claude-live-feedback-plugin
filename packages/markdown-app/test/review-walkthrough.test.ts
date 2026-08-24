@@ -508,6 +508,63 @@ describe('renderReviewWalkthrough — decisions', () => {
     expect(h.onMoreInfo).not.toHaveBeenCalled();
   });
 
+  // The board repaints the walkthrough on every SSE event — a task moving, a
+  // presence change — and each repaint rebuilds the card from scratch. The
+  // reader in the middle of a sentence must not lose it (measured: Bryan lost
+  // a decision answer repeatedly, 2026-08-24).
+  describe('a repaint under the typist keeps the draft', () => {
+    it('a decision answer survives a re-render', () => {
+      const { q } = queueOfThree();
+      renderReviewWalkthrough(root, q, 0, walk());
+      const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+      ta.value = 'Neither — half-typed thought';
+      renderReviewWalkthrough(root, q, 0, walk());
+      const after = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+      expect(after).not.toBe(ta);
+      expect(after.value).toBe('Neither — half-typed thought');
+    });
+
+    it('a thread reply survives a re-render', () => {
+      const q = reviewQueue([], [threadItem()], NOW);
+      renderReviewWalkthrough(root, q, 0, walk());
+      const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+      ta.value = 'Green, because';
+      renderReviewWalkthrough(root, q, 0, walk());
+      expect((root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
+        'Green, because',
+      );
+    });
+
+    it('the more-info box keeps its draft AND stays open', () => {
+      const { q } = queueOfThree();
+      renderReviewWalkthrough(root, q, 0, walk());
+      (root.querySelector('.hub-walk-more') as HTMLElement).click();
+      const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
+      expect(info.classList.contains('hidden')).toBe(false);
+      (info.querySelector('textarea') as HTMLTextAreaElement).value = 'What does green cost';
+      renderReviewWalkthrough(root, q, 0, walk());
+      const rebuilt = root.querySelector('.hub-walk-info') as HTMLFormElement;
+      expect((rebuilt.querySelector('textarea') as HTMLTextAreaElement).value).toBe(
+        'What does green cost',
+      );
+      // A restored draft inside a re-hidden panel is still a lost draft.
+      expect(rebuilt.classList.contains('hidden')).toBe(false);
+      expect(
+        (root.querySelector('.hub-walk-more') as HTMLElement).getAttribute('aria-expanded'),
+      ).toBe('true');
+    });
+
+    it('a draft never follows the reader onto a different card', () => {
+      const { q } = queueOfThree();
+      renderReviewWalkthrough(root, q, 0, walk());
+      (root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value = 'For card A';
+      renderReviewWalkthrough(root, q, 1, walk());
+      expect((root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
+        '',
+      );
+    });
+  });
+
   it('steps forward and back, and cannot step before the first', () => {
     const onStep = vi.fn();
     const { q } = queueOfThree();

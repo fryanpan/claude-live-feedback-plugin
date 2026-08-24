@@ -2489,12 +2489,17 @@ function promptForm(
   // accent-blue — the two blue buttons stacked under a decision card are what
   // got the old layout called weird. Secondary prompts pass a plain button.
   submitClass = 'hub-btn hub-btn-ink',
+  // Key for `keepFields` — scoped to the item the box belongs to, so a draft
+  // survives the repaint that rebuilt it but never follows the reader onto a
+  // different card.
+  keepKey?: string,
 ): HTMLFormElement {
   const form = document.createElement('form');
   form.className = className;
   const ta = document.createElement('textarea');
   ta.placeholder = placeholder;
   ta.rows = 3;
+  if (keepKey) ta.dataset.keep = keepKey;
   const submit = document.createElement('button');
   submit.type = 'submit';
   submit.className = submitClass;
@@ -2770,6 +2775,11 @@ export function renderReviewWalkthrough(
   progress: WalkProgress = { cleared: 0, last: null },
   now: number = Date.now(),
 ): void {
+  // The board repaints this surface on every SSE event — a task moving, a
+  // presence change — and a repaint rebuilds the card the reader may be
+  // typing an answer into. Same guarantee the detail panel gives: read the
+  // drafts out before the swap, put them back after.
+  const kept = keepFields(container);
   container.replaceChildren();
   if (index < 0) {
     container.classList.add('hidden');
@@ -2928,11 +2938,14 @@ export function renderReviewWalkthrough(
         review?.options?.length ? '…or answer in your own words' : 'Reply…',
         'Send',
         (text) => handlers.onReply(item, text),
+        undefined,
+        `walk-answer:${item.key}`,
       ),
     );
     card.append(walkActions(index, handlers));
     panel.append(card);
     container.append(panel);
+    restoreFields(container, kept);
     return;
   }
 
@@ -2986,6 +2999,8 @@ export function renderReviewWalkthrough(
       '…or answer in your own words — the agent gets your text verbatim',
       'Send',
       (text) => handlers.onAnswer(task, text),
+      undefined,
+      `walk-answer:${task.id}`,
     ),
   );
 
@@ -3001,6 +3016,7 @@ export function renderReviewWalkthrough(
     'Send question',
     (text) => handlers.onMoreInfo(task, text),
     'hub-btn',
+    `walk-info:${task.id}`,
   );
   const more = document.createElement('button');
   more.type = 'button';
@@ -3018,6 +3034,15 @@ export function renderReviewWalkthrough(
   panel.append(card);
 
   container.append(panel);
+  restoreFields(container, kept);
+  // A restored draft inside a re-hidden panel is still a lost draft: the
+  // open/closed state lives in the DOM the repaint just threw away, so reopen
+  // the ask box when the reader was mid-question.
+  const infoSnap = kept.get(`walk-info:${task.id}`);
+  if (infoSnap && (infoSnap.value.trim() !== '' || infoSnap.focused)) {
+    info.classList.remove('hidden');
+    more.setAttribute('aria-expanded', 'true');
+  }
 }
 
 // ── Presence strip (§2.7) ──────────────────────────────────────────────────
