@@ -2489,12 +2489,17 @@ function promptForm(
   // accent-blue — the two blue buttons stacked under a decision card are what
   // got the old layout called weird. Secondary prompts pass a plain button.
   submitClass = 'hub-btn hub-btn-ink',
+  // Key for `keepFields` — scoped to the item the box belongs to, so a draft
+  // survives the repaint that rebuilt it but never follows the reader onto a
+  // different card.
+  keepKey?: string,
 ): HTMLFormElement {
   const form = document.createElement('form');
   form.className = className;
   const ta = document.createElement('textarea');
   ta.placeholder = placeholder;
   ta.rows = 3;
+  if (keepKey) ta.dataset.keep = keepKey;
   const submit = document.createElement('button');
   submit.type = 'submit';
   submit.className = submitClass;
@@ -2514,17 +2519,39 @@ function promptForm(
     busy = true;
     ta.disabled = true;
     submit.disabled = true;
+    // Cleared HERE rather than on the acknowledgement, same as `commentForm`:
+    // a repaint inside this await snapshots the box through `keepFields`, and
+    // a restored copy of in-flight text is an enabled duplicate-submit path
+    // whose eventual success would clear only the detached old box. Put back
+    // verbatim if the write is refused.
+    ta.value = '';
+    refreshComposer();
+    // Anything short of an acknowledged write puts the words back. A
+    // mid-flight repaint replaces this form, so the words go to the LIVE box
+    // carrying the same keep key — but never over something typed there
+    // since; the detached original is the fallback, which keeps a
+    // never-repainted form behaving exactly as before. In the corner where
+    // all three collide — repaint, a new draft already begun, and a failed
+    // write — the new draft wins and the failed one is dropped, deliberately:
+    // rewriting a box while somebody is typing in it is the bug this whole
+    // mechanism exists to remove, and a failed send is the one case of the
+    // three the reader was just told about.
+    const putBack = () => {
+      const live = keepKey
+        ? ta.ownerDocument.querySelector<HTMLTextAreaElement>(`textarea[data-keep="${keepKey}"]`)
+        : null;
+      const target = live && live !== ta && live.value.trim() === '' ? live : ta;
+      target.value = text;
+      if (target === ta) refreshComposer();
+      else refreshMarkdownComposer(target);
+    };
     void Promise.resolve(onSubmit(text))
       .then((ok) => {
-        // Cleared only on an acknowledged write. A handler that answers
-        // nothing at all keeps the text, which is the safe direction: the
-        // usual outcome there is that the card is replaced anyway.
-        if (ok === true) {
-          ta.value = '';
-          refreshComposer();
-        }
+        if (ok !== true) putBack();
       })
-      .catch(() => {})
+      .catch(() => {
+        putBack();
+      })
       .finally(() => {
         busy = false;
         ta.disabled = false;
@@ -2770,6 +2797,11 @@ export function renderReviewWalkthrough(
   progress: WalkProgress = { cleared: 0, last: null },
   now: number = Date.now(),
 ): void {
+  // The board repaints this surface on every SSE event — a task moving, a
+  // presence change — and a repaint rebuilds the card the reader may be
+  // typing an answer into. Same guarantee the detail panel gives: read the
+  // drafts out before the swap, put them back after.
+  const kept = keepFields(container);
   container.replaceChildren();
   if (index < 0) {
     container.classList.add('hidden');
@@ -2928,11 +2960,14 @@ export function renderReviewWalkthrough(
         review?.options?.length ? '…or answer in your own words' : 'Reply…',
         'Send',
         (text) => handlers.onReply(item, text),
+        undefined,
+        `walk-answer:${item.key}`,
       ),
     );
     card.append(walkActions(index, handlers));
     panel.append(card);
     container.append(panel);
+    restoreFields(container, kept);
     return;
   }
 
@@ -2986,6 +3021,8 @@ export function renderReviewWalkthrough(
       '…or answer in your own words — the agent gets your text verbatim',
       'Send',
       (text) => handlers.onAnswer(task, text),
+      undefined,
+      `walk-answer:${task.id}`,
     ),
   );
 
@@ -3001,6 +3038,7 @@ export function renderReviewWalkthrough(
     'Send question',
     (text) => handlers.onMoreInfo(task, text),
     'hub-btn',
+    `walk-info:${task.id}`,
   );
   const more = document.createElement('button');
   more.type = 'button';
@@ -3018,6 +3056,15 @@ export function renderReviewWalkthrough(
   panel.append(card);
 
   container.append(panel);
+  restoreFields(container, kept);
+  // A restored draft inside a re-hidden panel is still a lost draft: the
+  // open/closed state lives in the DOM the repaint just threw away, so reopen
+  // the ask box when the reader was mid-question.
+  const infoSnap = kept.get(`walk-info:${task.id}`);
+  if (infoSnap && (infoSnap.value.trim() !== '' || infoSnap.focused)) {
+    info.classList.remove('hidden');
+    more.setAttribute('aria-expanded', 'true');
+  }
 }
 
 // ── Presence strip (§2.7) ──────────────────────────────────────────────────
