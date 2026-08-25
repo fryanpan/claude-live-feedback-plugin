@@ -648,11 +648,12 @@ body.has-set .doc-switcher-caret {
   border-right: 1px solid var(--border);
 }
 
-/* ================= WORKSPACE HUB (plan §3.9) =================
-   The /workspaces/:id page: goal strip, board with goals as sections,
-   decisions strip, docs + open-threads sidebars, presence strip, activity
-   view. Mobile per design-mobile.md: minmax(0,1fr) columns, 16px body text,
-   ≥36px tap targets, single-column stack at ≤720px. */
+/* ================= WORKSPACE HUB =================
+   The /workspaces/:id page: a left nav over two panes — Home (brief, review
+   queue, walkthrough) and the board (goals as bands, quick add, review
+   banner), with Activity as a board-pane view; presence and lead live in the
+   settings panel. Mobile per design-mobile.md: minmax(0,1fr) columns, 16px
+   body text, ≥36px tap targets, single-column stack at ≤720px. */
 
 body.hub-body {
   overflow: auto;

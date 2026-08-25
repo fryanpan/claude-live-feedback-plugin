@@ -1,7 +1,9 @@
 /**
- * The workspace hub page (plan §3.9): goal strip → board with goals as
- * sections → decisions strip → docs + open-threads sidebars → presence strip
- * → activity view. The board renders in realtime from the ws:<workspaceId>
+ * The workspace hub page: a left nav over two panes — Home (the "What's New?"
+ * brief, the "For Your Review" queue, and the walkthrough that answers it)
+ * and the board (goals as bands, quick add, review banner), with Activity as
+ * a view of the board pane. Presence, lead and drift notices live in the
+ * settings panel. The board renders in realtime from the ws:<workspaceId>
  * ydoc projection (server-owned `tasks` / `workspace` Y.Maps); every
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
