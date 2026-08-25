@@ -1602,6 +1602,123 @@ export const TASK_STATUS_ORDER: readonly TaskStatus[] = ['triage', 'todo', 'in-p
  */
 export const GOAL_STATUS_ORDER: readonly TaskStatus[] = ['todo', 'in-progress', 'done'];
 
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  triage: 'Triage',
+  todo: 'To do',
+  'in-progress': 'In progress',
+  done: 'Done',
+};
+
+/**
+ * A status's label, falling back to the raw string.
+ *
+ * The board and the server are two artifacts that ship separately: a browser
+ * tab open across a deploy is running a bundle whose status enum predates the
+ * one the server is now sending. Indexing the record directly returned
+ * `undefined` for such a value, which reached the reader as the words
+ * "Status: undefined" and left the picker showing a blank option. The raw
+ * string is not a nice label, but it is TRUE, and it is what tells whoever
+ * reports it what their tab is actually holding.
+ */
+export function statusLabel(status: TaskStatus): string {
+  return STATUS_LABEL[status] ?? String(status);
+}
+
+/**
+ * The options a status picker offers: the known list, plus the row's CURRENT
+ * status when that is not in it.
+ *
+ * Without the second half a `<select>` handed an unknown value silently
+ * resolves to `''` — so the control shows blank, and the first interaction
+ * with it writes some other status the reader never chose. Appending the
+ * value keeps the picker honest about what the row holds, and keeps every
+ * other option one tap away, which is the whole point of the control.
+ */
+export function statusOptions(current: TaskStatus, known: readonly TaskStatus[]): TaskStatus[] {
+  return known.includes(current) ? [...known] : [...known, current];
+}
+
+/** The bare word the store used to default to. It names a category rather
+ *  than somebody, so a task still carrying it is UNOWNED, not assigned —
+ *  and the API refuses to hand a task to it. */
+export const GENERIC_ASSIGNEE = 'agent';
+
+/** The four states the owner mark can be in. `human` keeps its name because
+ *  it is the class the person styling has always carried; it now covers every
+ *  person, not only the reserved literal. */
+export type OwnerMarkKind = 'none' | 'human' | 'agent' | 'unknown';
+
+/**
+ * Which mark to draw for this owner.
+ *
+ * `none` is "nobody has this" and is answered from the assignee alone — a
+ * hole in the board, and a different question from person-or-agent. For
+ * everyone else the answer is the server's `ownerKind`, never the name: a
+ * rule that pattern-matched names would be wrong for somebody, silently, and
+ * the board would keep drawing a plausible mark over it. An owner nobody has
+ * declared gets its own mark rather than being folded into `agent`, which is
+ * what the board did before and is why a person named Bryan was drawn
+ * identically to an agent.
+ */
+export function ownerMarkKind(task: HubTask, owner: string): OwnerMarkKind {
+  if (owner === '') return 'none';
+  switch (ownerKind(task)) {
+    case 'person':
+      return 'human';
+    case 'agent':
+      return 'agent';
+    default:
+      return 'unknown';
+  }
+}
+
+/**
+ * The words that carry the distinction for anyone not reading the colour.
+ *
+ * The mark is a coloured circle of initials, and colour alone is not a
+ * distinction — it is invisible to a screen reader and unreliable for a
+ * colour-blind reader. So the kind rides the picker's accessible name and
+ * its tooltip, which is where the owner's full name already lives.
+ */
+export function ownerKindSuffix(kind: OwnerMarkKind): string {
+  switch (kind) {
+    case 'human':
+      return ' (person)';
+    case 'agent':
+      return ' (agent)';
+    case 'unknown':
+      return ' (person or agent not recorded)';
+    default:
+      return '';
+  }
+}
+
+/**
+ * One or two letters for the circle that stands in for an owner.
+ *
+ * A board row is read for its TITLE, and the two controls flanking it were
+ * spending ~200px on the words "In progress" and a full agent id — on the
+ * surface whose entire job is letting someone scan what the work is. The name
+ * does not disappear: it stays on the picker's `title`/`aria-label` and in the
+ * detail panel, where there is room for it.
+ *
+ * `agent-` / `agent_` leads are dropped before the initials are taken, because
+ * every agent id starts with it and a column of "A"s distinguishes nobody.
+ * A single word yields ONE letter rather than its first two — "HU" for `human`
+ * reads as a name fragment, "H" reads as a mark.
+ */
+export function ownerInitials(owner: string): string {
+  const trimmed = owner.trim();
+  if (trimmed === '' || trimmed.toLowerCase() === GENERIC_ASSIGNEE) return '?';
+  const words = trimmed
+    .replace(/^agent[-_\s]+/i, '')
+    .split(/[-_\s.]+/)
+    .filter((w) => /[a-z0-9]/i.test(w));
+  if (words.length === 0) return '?';
+  if (words.length === 1) return (words[0][0] ?? '?').toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
 // ── Activity view (exactly two filters — §3.9) ─────────────────────────────
 
 export interface ActivityEvent {
