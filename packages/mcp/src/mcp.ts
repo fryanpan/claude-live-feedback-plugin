@@ -130,7 +130,7 @@ const PROCESS_ID = randomUUID();
  * counted as proof today and dead the moment its branch lands.
  */
 const COMMIT_EVIDENCE_DESCRIPTION =
-  'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
+  'A commit sha that will still resolve after this work merges — the one on the default branch, not the branch commit you are on now. A squash-merge discards branch commits, so a branch sha resolves for you and for nobody afterwards while the row still reads as proven. Not merged yet? Record what you have and call `amend_evidence` later. A PR number is not a commit; put it in `note`.';
 
 const server = new Server(
   {
@@ -261,39 +261,35 @@ const server = new Server(
 const REVIEW_ITEM_SCHEMA = {
   type: 'object',
   description:
-    "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) only if headline/why are missing or multi-line. A field over its character budget FILES and comes back with advice — send the ask you have rather than a retry that shaves two words off it.",
+    "Declares this a Review Item, putting it on the reviewer's Home queue. Omit it for ordinary comments — status notes and closing remarks are not review items. headline and why are the two lines of the row; missing or multi-line is refused, over-long files anyway with advice.",
   properties: {
     review_type: {
       type: 'string',
       enum: ['decision', 'question'],
       description:
-        "'decision' offers named options to pick between (2-6 required). 'question' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask.",
+        "'decision' offers named options to pick between (2-6 required). 'question' asks someone to read or look at something and answer in their own words.",
     },
     shape: {
       type: 'string',
       enum: ['decision', 'review'],
-      description:
-        "Legacy spelling of `review_type` ('review' = 'question'). Accepted forever so old callers keep working; new calls should send `review_type`.",
     },
     headline: {
       type: 'string',
       description:
-        'Line 1: WHAT needs review, as a ticket title. One line; aim for ≤70 chars so it holds its line on a phone. Longer files and is reported back as a gap.',
+        'Name what needs deciding, in words someone who has not seen this work would use. One line.',
     },
     why: {
       type: 'string',
-      description:
-        'Line 2: why it matters / what is blocked on it. One line; aim for ≤90 chars. Longer files and is reported back as a gap — never trim a real reason to fit.',
+      description: 'What is blocked, or what is at stake, plainly. One line.',
     },
     lookFor: {
       type: 'string',
-      description:
-        'What to look for — shown on the opened card, not on the row. Aim for ≤90 chars. Omitting it, or running long, files and is reported back as a gap.',
+      description: 'What you want them to look at or weigh up. One line.',
     },
     detail: {
       type: 'string',
       description:
-        'The body, markdown, inline links welcome. Send the context you actually have — the card renders ALL of it, so never park the real ask in the thread and a compressed copy here. Aim for ~50 words on a decision, ~150 on a question; only an absurd length (>2000 words — a pasted document) is refused.',
+        'The context the reader does not have. Write it for someone reading on a phone, away from the work: spell out names and acronyms the first time, and prefer a plain sentence to a compressed one. Markdown and inline links welcome.',
     },
     options: {
       type: 'array',
@@ -308,11 +304,11 @@ const REVIEW_ITEM_SCHEMA = {
           label: {
             type: 'string',
             description:
-              'This is the button. Aim for 1-3 words and ≤28 chars; a fourth word files and is reported back as a gap.',
+              'The button the reader taps, in their words rather than yours — one to three words, ≤28 chars.',
           },
           detail: {
             type: 'string',
-            description: 'What choosing it costs or buys. Aim for ≤50 words; longer still files.',
+            description: 'What choosing it costs or buys, in a plain sentence. Aim for ≤50 words.',
           },
         },
         required: ['id', 'label'],
@@ -338,7 +334,20 @@ const REVIEW_ITEM_SCHEMA = {
 const TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
   description:
-    'A review item ON THIS TICKET — the question, with its own blurb above its own options. A ticket can carry SEVERAL, and more than one can be open at a time, so the blurb lives on the item and NOT the ticket title: the title names the work, `headline`/`why` name what is being asked. Same limits and the same refusals as a comment-borne declaration, because it is the same payload.',
+    'A review item on this ticket — the question, with its own blurb above its own options. A ticket can carry several open at once, so the title keeps naming the work while headline and why name what is being asked. Same payload and same refusals as a comment-borne declaration.',
+} as const;
+
+/**
+ * The same payload again, on a row this call is CREATING. It differs only in
+ * saying where a question belongs: filed with the work when both arrive
+ * together, hung on the existing ticket with add_review_item when the question
+ * came up mid-work. Nothing anywhere used to say that, and the ask arriving
+ * severed from the work that raised it is the failure it exists to prevent.
+ */
+const NEW_TASK_REVIEW_ITEM_SCHEMA = {
+  ...REVIEW_ITEM_SCHEMA,
+  description:
+    'A question about the work this row creates — for when you are filing the work and the question together. If the question came up while working a task that already exists, hang it there with add_review_item instead, so the ask keeps the context of the work that raised it. The ticket title names the work; headline/why name the ask.',
 } as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -494,7 +503,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docId: {
             type: 'string',
             description:
-              "A readable NAME for the doc, not its address. The server mints the doc's id and returns it; the name you pass becomes an alias that resolves to it, so both spellings work in URLs and in every tool that takes a docId. Use the RETURNED docId when you store or share the address — it never changes, while a name can be superseded. Passing a name that already resolves reuses that doc rather than making a second one. Names starting `task:`, `ws:` or `goal:` are refused: those namespaces are the server's.",
+              "A readable name for the doc, not its address — the server mints the real id and returns it, and the name becomes an alias that also works. Store the returned id. Reusing a name reuses that doc. `task:`, `ws:` and `goal:` are the server's namespaces and are refused.",
           },
           path: { type: 'string' },
           title: { type: 'string' },
@@ -503,7 +512,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
           producedBy: {
             type: 'object',
@@ -567,7 +576,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           docId: {
             type: 'string',
             description:
-              "A readable NAME for the doc, not its address. The server mints the doc's id and returns it; the name you pass becomes an alias that resolves to it, so both spellings work in URLs and in every tool that takes a docId. Use the RETURNED docId when you store or share the address — it never changes, while a name can be superseded. Passing a name that already resolves reuses that doc rather than making a second one. Names starting `task:`, `ws:` or `goal:` are refused: those namespaces are the server's.",
+              "A readable name for the doc, not its address — the server mints the real id and returns it, and the name becomes an alias that also works. Store the returned id. Reusing a name reuses that doc. `task:`, `ws:` and `goal:` are the server's namespaces and are refused.",
           },
           sourceHtmlPath: { type: 'string' },
           title: { type: 'string' },
@@ -575,7 +584,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
         },
         required: ['docId', 'sourceHtmlPath'],
@@ -599,7 +608,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this bind under — the id `create_workspace` returned, and deliberately NOT `workspaceId` above, which is the GROUPING id this bind creates for its own member files. Omit it and the bind still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. The whole bind is ONE row on the board, never one per file.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
           title: { type: 'string' },
           include: { type: 'array', items: { type: 'string' } },
@@ -644,7 +653,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this review under — the id `create_workspace` returned, and deliberately NOT `reviewId` above, which is the GROUPING id holding the review\'s member files. Omit it and the review still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. The whole review is ONE row on the board, never one per changed file. Filing is sticky — re-running this tool without `hubWorkspaceId` leaves a review on the board it is already on.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
           title: { type: 'string' },
           exclude: {
@@ -655,7 +664,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           groups: {
             type: 'array',
             description:
-              'Logical file groups for the sidebar — organize the changed files by INTENT, the way you would split a branch into reviewable commits. First group is read first. Each path matches a changed file EXACTLY or as a DIRECTORY PREFIX (e.g. "src/foo" claims every file under src/foo/), so you need not enumerate every file. First group (in array order) to claim a file wins; unlisted files fall into an "Other" group ranked last. Array order is the sidebar order. Optional per-group `details` is a short "chapter intro" rendered under the group title. It is capped at 500 characters and a longer value is REJECTED, not truncated — this is deliberate: write a curated 1–2 sentence summary of what the group does, do NOT paste the commit body or a diff summary. If a call is rejected for over-long details, shorten the intro and retry. Omit `groups` to fall back to the Tests/Docs/Build + top-level-module heuristic.',
+              'Split the changed files by intent, the way you would split a branch into commits; first group is read first. A path matches a file exactly or as a directory prefix, first group wins, unlisted files land in "Other". Optional `details` is a 1–2 sentence intro under the group title, capped at 500 characters — a longer one is rejected, not truncated. Omit `groups` for the built-in heuristic.',
             items: {
               type: 'object',
               properties: {
@@ -731,7 +740,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: 'object',
         properties: {
-          setId: { type: 'string', description: 'The archived review id.' },
+          setId: { type: 'string' },
         },
         required: ['setId'],
       },
@@ -743,7 +752,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: 'object',
         properties: {
-          docId: { type: 'string', description: 'The doc to retire.' },
+          docId: { type: 'string' },
           reason: {
             type: 'string',
             description: 'Why this doc is finished — e.g. "draft published".',
@@ -759,7 +768,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: 'object',
         properties: {
-          docId: { type: 'string', description: 'The archived doc id.' },
+          docId: { type: 'string' },
         },
         required: ['docId'],
       },
@@ -850,7 +859,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           replaceAll: {
             type: 'boolean',
             description:
-              'Replace every occurrence in one call — one Yjs transaction, marks carried per site. Use for mechanical sweeps (the same stale SHA in 44 places) instead of looping occurrence-by-occurrence or, worse, editing the bound file on disk. Returns { replaced } (and skippedCrossNode when a match straddled formatting boundaries and was left alone). Mutually exclusive with occurrence and with suggest.',
+              'Replace every occurrence in one call, marks carried per site — for a mechanical sweep, instead of looping occurrence by occurrence. Mutually exclusive with `occurrence` and with `suggest`.',
           },
           parseInlineMarks: { type: 'boolean' },
           suggest: {
@@ -962,7 +971,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['after-block', 'top-level'],
             description:
-              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table.",
           },
         },
         required: ['docId', 'threadId', 'markdown'],
@@ -1020,7 +1029,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['after-block', 'top-level'],
             description:
-              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table.",
           },
         },
         required: ['docId', 'anchorId', 'markdown'],
@@ -1271,12 +1280,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           leadAgentId: {
             type: 'string',
             description:
-              'The agent id taking responsibility. OMIT IT to declare yourself — that is the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else; naming your own id is the same as omitting it, so callers built against the older required-field form keep their exact meaning.',
+              'The agent id taking responsibility. Omit it to declare yourself — the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else.',
           },
           takeover: {
             type: 'boolean',
             description:
-              'Take the seat even though a DIFFERENT agent holds it and is live. Default false, and the default is the point: declaring yourself on a board a working peer leads would evict them silently, and every lead-addressed delivery would start routing to you while they keep working. Without this you get `declined: "lead-held"` and `previousLeadAgentId` naming the incumbent — you are still attached and subscribed, so nothing on the board is hidden from you; only the seat stays put. Coordinate with them first, and pass this when you mean it.',
+              'Take the seat from a different agent that currently holds it and is live — it evicts them silently and reroutes every lead-addressed delivery, so coordinate first. Default false: without it you get `declined: "lead-held"` naming the incumbent, and you stay attached either way.',
           },
         },
         required: ['workspaceId'],
@@ -1306,7 +1315,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tasks: {
             type: 'array',
             description:
-              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, review?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
+              'The rows, at most 100 — an oversized batch is refused whole; a tracker that big belongs in import_tasks_markdown. `title` is the only required field. `key` labels a row so a later row in the same batch can reference it: unique in the batch, not all digits, no leading "#". Rows are created in order, so a row can only depend on one above it; a forward reference is refused.',
             // The row contract used to live on the single-row create verb's
             // declaration, and `tasks` merely pointed at it. Removing that
             // tool would have removed every field description with it — the
@@ -1322,12 +1331,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 title: {
                   type: 'string',
                   description:
-                    'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. The standard: `<persona> can <do x> so that <goal y>` — ONE persona (Agent, Bryan, Collaborator), 20 words or less so it fits every screen. e.g. "Bryan can review across tasks faster so that review sessions stay short", "Agent can reorder goals so that the board\'s priority stays current". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (§2 of the `claude-workspaces:leading-a-workspace` skill), so file what you have.',
+                    "One line naming the work, in the form `<persona> can <do x> so that <goal y>` — one persona (Agent, Bryan, Collaborator), 20 words or less. A title that states an observation rather than an outcome gives a column of rows nothing to prioritise by. Never refused; the lead's shape review is where a rough one gets rewritten.",
                 },
                 body: {
                   type: 'string',
                   description:
-                    "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create. A thin or story-less description is never REFUSED either — the lead's shape review pass is where it gets rewritten or questioned, not the write path.",
+                    'What the row is for, as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent, Bryan, Collaborator) — plus "done when" criteria for anything you hand over or park. Markdown; it comes back whole from next_tasks. On a `needs:\'decision\'` row this is required and must contain the actual question, the stakes, and what each option costs; a body with no question in it is refused.',
                 },
                 key: {
                   type: 'string',
@@ -1337,27 +1346,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 assignee: {
                   type: 'string',
                   description:
-                    "Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without CW_AGENT_NAME.",
+                    "Who owns this row: 'human', or a named person or agent. Omit it and you own it. The bare word 'agent' is refused — it names a category rather than somebody; that refusal means your session was launched without CW_AGENT_NAME.",
                 },
                 assigneeKind: {
                   type: 'string',
                   enum: ['person', 'agent'],
                   description:
-                    'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+                    "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
                 },
                 needs: {
                   type: 'string',
                   enum: ['action', 'decision'],
                   description:
-                    "Only meaningful when assignee is a human. 'decision' makes the ticket ITSELF one decision (answer_decision records the verbatim answer), which is the older model: the title doubles as the question and a second open question has nowhere to go. A decision REQUIRES a decision-shaped `body` — see that field. Pass `review` instead when you can: a ticket carries 0..n review items, several of them possibly open at once, each with its own blurb.",
+                    "Only meaningful when assignee is a human. 'decision' makes the ticket itself one decision, answered verbatim through answer_decision; it requires a decision-shaped `body`. The `review` field lets the ticket carry several separately-answered questions alongside the work.",
                 },
                 options: {
                   type: 'array',
                   description:
-                    "Candidate answers for the row's ONE embedded decision: [{label, detail?}]. `label` is the text recorded VERBATIM as the answer if it is picked; `detail` is what picking it costs. They are a SHORTCUT, never a closed set: writing a different answer and asking for more information stay available next to them, so do not pad the list to look exhaustive. Two or more, or don't bother.\n\nPREFER `review` when you have a choice. This field hangs the question off the ticket itself, so the TITLE has to double as the question and a second open question has nowhere to go — a ticket can carry SEVERAL review items, and several of them can be open at once. It is kept because callers already send it and it still works exactly as it did.",
+                    "Candidate answers for this row's one decision: [{label, detail?}]. `label` is recorded verbatim as the answer if picked; `detail` is what picking it costs. Two or more. They are a shortcut, not a closed set — writing a different answer stays available, so do not pad the list.",
                   items: { type: 'object' },
                 },
-                review: TASK_REVIEW_ITEM_SCHEMA,
+                review: NEW_TASK_REVIEW_ITEM_SCHEMA,
                 goal: {
                   type: 'string',
                   description:
@@ -1374,7 +1383,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   type: 'array',
                   items: { type: 'string' },
                   description:
-                    'Subset of `after` that hard-blocks transitions while open. Every entry here MUST also appear in `after` — the gate walks `after` and reads this as a lookup set, so an entry in this array alone would gate nothing; the row is refused rather than silently widening `after`.',
+                    'Subset of `after` that hard-blocks transitions while open. Every entry must also appear in `after`, or the row is refused rather than silently widening the gate.',
                 },
                 dueAt: {
                   type: 'number',
@@ -1383,7 +1392,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 links: {
                   type: 'array',
                   description:
-                    "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Backlinks are computed. Use `url` for anything outside this server — a pull request, a decision page, a dashboard; http(s) only, since a ref is rendered as a clickable chip. Refs are NOT existence-checked, so a link that points nowhere is accepted and harmless. A malformed ref does not fail the row: it is dropped and returned in `ignoredLinks`, and the task is still created.",
+                    "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Use `url` for anything outside this server; http(s) only. A malformed ref is dropped into `ignoredLinks` rather than failing the row.",
                   items: { type: 'object' },
                 },
                 quote: {
@@ -1413,7 +1422,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: {
             type: 'string',
             description:
-              'Override the drafted title. Worth sending: the drafted one is a clip of somebody\u2019s comment, so it names what was SAID rather than what will be done. The standard is `<persona> can <do x> so that <goal y>`, one persona, 20 words or less.',
+              'Override the drafted title \u2014 worth sending, since the draft is a clip of a comment and names what was said rather than what will be done. `<persona> can <do x> so that <goal y>`, 20 words or less.',
           },
           body: { type: 'string', description: 'Override the drafted body.' },
           assignee: {
@@ -1425,7 +1434,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['person', 'agent'],
             description:
-              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+              "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
@@ -1481,7 +1490,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['triage', 'todo', 'in-progress', 'done'],
             description:
-              'status:"triage" is the sweep for rows an agent filed that nobody has vetted. Those rows are in their goal band like any other, but next_tasks never returns them, so this filter is the only way to enumerate what is waiting on a look.',
+              'status:"triage" is the sweep for rows an agent filed that nobody has vetted. next_tasks never returns them, so this filter is the only way to enumerate what is waiting on a look.',
           },
           assignee: { type: 'string' },
           needs: { type: 'string', enum: ['action', 'decision'] },
@@ -1489,7 +1498,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              "Project each row to just these keys (`id` always included; keys a row lacks are omitted). Use for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB. 'transitionCount' is computable here without hauling transitions. Omit (or pass []) for the historical default trim.",
+              "Project each row to just these keys (`id` always included). Use it for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB.",
           },
           includeArchived: {
             type: 'boolean',
@@ -1574,7 +1583,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['person', 'agent'],
             description:
-              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+              "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
           },
         },
         required: ['taskId', 'assignee'],
@@ -1596,7 +1605,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           reason: {
             type: 'string',
             description:
-              'Why, in one line — e.g. "waiting on the index rebuild" or "revisit after the launch". Replaced, not merged, whenever the date moves: a reason written about the old date is not a claim about the new one, so restate it if it still holds.',
+              'Why, in one line — e.g. "waiting on the index rebuild". Replaced rather than merged whenever the date moves, so restate it if it still holds.',
           },
         },
         required: ['taskId', 'until'],
@@ -1718,7 +1727,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              'Goal/subgoal ids you INTEND to remove even though they still hold tasks — the acknowledgement that turns the refusal into the removal. Send it only after reading what the refusal said each band holds; a caller working from a stale list cannot name a band it never saw, which is exactly the accident this gate exists to catch. Ids that are not actually being removed are ignored, so it can never widen the replace.',
+              'Goal/subgoal ids you intend to remove even though they still hold tasks — the acknowledgement that turns the refusal into the removal. Read what the refusal said each band holds first. Ids that are not actually being removed are ignored.',
           },
         },
         required: ['workspaceId', 'goals'],
@@ -1736,7 +1745,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'The goal or subgoal id to retitle. Get it from get_workspace.',
           },
-          title: { type: 'string', description: 'The new title.' },
+          title: { type: 'string' },
           dueAt: {
             type: ['number', 'null'],
             description: 'Epoch ms to set, null to clear, omit to leave unchanged.',
@@ -1792,13 +1801,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           reviewItemId: {
             type: 'string',
             description:
-              "Which item is being answered (from list_tasks / the ticket's `reviews`). OMIT it on a ticket that is itself an old-style decision (needs:'decision' with embedded `options` and no review items of its own) — the answer then lands on that decision, which is the same place the one derived item points.",
+              "Which item is being answered (from list_tasks / the ticket's `reviews`). Omit it on a ticket that is itself a decision — the answer then lands on that decision.",
           },
           text: { type: 'string', description: "The human's verbatim answer." },
           answeredWith: {
             type: 'string',
             description:
-              "The id of the option they picked, when they picked one. The answer is STILL `text` — pass the option's label as the text; this only records which candidate the words came from. Omit when they answered in their own words.",
+              "The id of the option they picked, if they picked one. The answer is still `text` — pass the option's label as the text. Omit when they answered in their own words.",
           },
         },
         required: ['taskId', 'text'],
@@ -1834,7 +1843,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           optionId: {
             type: 'string',
             description:
-              "The id of the option they picked, when they picked one (from list_tasks / the task's `options`). The answer is STILL `text` — pass the option's label as the text; this only records which candidate the words came from. Omit when they answered in their own words.",
+              "The id of the option they picked, if they picked one. The answer is still `text` — pass the option's label as the text. Omit when they answered in their own words.",
           },
           reviewItemId: {
             type: 'string',
@@ -1894,7 +1903,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           taskId: { type: 'string' },
-          ref: { type: 'object', description: 'The ref to link.' },
+          ref: { type: 'object' },
         },
         required: ['taskId', 'ref'],
       },
