@@ -186,6 +186,103 @@ export function agentIdForName(name: string): string {
 }
 
 /**
+ * The canonical form of an email address for identity purposes.
+ *
+ * Trimmed, lowercased, and with the angle brackets a mail client pastes
+ * (`<alice@example.com>`) removed. Deliberately NOT clever: gmail's dot and
+ * plus folding are provider-specific, and folding `a.b@` into `ab@` here
+ * would silently merge two people on a provider that treats them as two.
+ * What this does fold is the set of spellings that address the same mailbox
+ * on EVERY provider, which is exactly case and whitespace.
+ */
+export function normalizeEmail(email: string): string {
+  return email.trim().replace(/^<|>$/g, '').trim().toLowerCase();
+}
+
+/**
+ * Whether this is something a login code could be delivered to.
+ *
+ * Deliberately loose — the real proof is that a code sent to the address
+ * comes back, so this only has to reject what cannot be a mailbox at all. A
+ * tight RFC 5322 regex refuses valid addresses, and the cost of that is a
+ * person who cannot log in with their own email.
+ */
+export function isEmailLike(value: string): boolean {
+  const email = normalizeEmail(value);
+  if (email.length === 0 || email.length > 254) return false;
+  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email);
+}
+
+/**
+ * The identity id for a verified email address: `user-<hash>`.
+ *
+ * ONE derivation, two callers — the code-challenge route mints it after a
+ * code comes back, and the Cloudflare Access path mints it from a JWT claim
+ * without a code. Spelled separately they drift, and the drift is silent in
+ * exactly the way `agentIdForName`'s docs describe: the same person becomes
+ * two identities and nothing anywhere reports it.
+ *
+ * HASHED rather than the address itself, because this id is written onto
+ * every comment and broadcast to whoever can read the doc — a share visitor
+ * included. `user-alice-example-com` would make every review a mailing list.
+ *
+ * It is an IDENTIFIER, not a secret: anyone who guesses an address can hash
+ * it themselves, and the roster stores the address in the clear anyway. What
+ * the hash buys is that reading a doc does not hand out addresses nobody
+ * typed. Collision resistance is the real requirement (two people must never
+ * share an identity), which is why this is 64 bits and not the 32-bit
+ * `shortHash` the guest namespace uses.
+ */
+export function emailIdentityId(email: string): string {
+  return `user-${hash64(normalizeEmail(email))}`;
+}
+
+/**
+ * A first-guess display name from an address — `alice.smith@…` → "Alice
+ * Smith". Only ever a DEFAULT: the roster stores a `displayName` the person
+ * can change, and this fills it in so nobody's first comment is signed with
+ * their email address.
+ */
+export function emailDisplayName(email: string): string {
+  const normalized = normalizeEmail(email);
+  const at = normalized.indexOf('@');
+  const local = (at > 0 ? normalized.slice(0, at) : '').split('+')[0] ?? '';
+  const words = local
+    .split(/[._\-]+/)
+    .filter((w) => w !== '')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+  return words.length > 0 ? words.join(' ') : normalized;
+}
+
+/**
+ * A 64-bit content hash as 14 base-36 characters.
+ *
+ * Two independent FNV-1a passes with different primes, each finished with an
+ * avalanche mix so that addresses differing in one character do not produce
+ * neighbouring ids. Pure JS on purpose: this module runs in the browser as
+ * well as on the server, and `node:crypto` is not available in both.
+ */
+function hash64(input: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b) >>> 0;
+  }
+  h1 = avalanche(h1 ^ input.length);
+  h2 = avalanche(h2 ^ h1);
+  return `${h1.toString(36).padStart(7, '0')}${h2.toString(36).padStart(7, '0')}`;
+}
+
+function avalanche(x: number): number {
+  let h = x >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/**
  * Every id a roster could plausibly hold for this display name, lowercased.
  *
  * A roster entry is whatever the attaching session passed — its derived

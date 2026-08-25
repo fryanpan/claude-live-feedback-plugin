@@ -30,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { emailIdentityId } from '@feedback/core';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
@@ -439,5 +440,143 @@ describe('the opt-in fails closed', () => {
       headers: { host: `localhost:${h.port}` },
     });
     expect(local.status).toBe(200);
+  });
+});
+
+/**
+ * Identity on the collaboration surface.
+ *
+ * A collaborator arrives with an Access-verified email and, until now, wrote
+ * as `guest-<hash>` regardless — the surface knew exactly who they were and
+ * threw it away. With email identity in effect the claim becomes the author.
+ * The half that matters more is the ABSENCE: a token with no email claim must
+ * leave them a guest, never unattributed and never whatever their body said,
+ * because a visitor's body is precisely what the guest namespace distrusts.
+ */
+describe('the collaboration hostname, with email identity in effect', () => {
+  const dirs: string[] = [];
+  const handles: ServerHandle[] = [];
+
+  afterAll(async () => {
+    for (const h of handles) await h.stop();
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  interface Surface {
+    port: number;
+    docId: string;
+    sign: (email?: string) => Promise<string>;
+  }
+
+  /** A collab-reachable server with one doc filed on a board, plus a signer
+   *  whose email claim the caller chooses. */
+  async function surface(): Promise<Surface> {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const jwk = (await exportJWK(publicKey)) as JWK;
+    jwk.kid = 'collab-identity-kid';
+    jwk.alg = 'RS256';
+    jwk.use = 'sig';
+    const dataDir = mkdtempSync(join(tmpdir(), 'collab-identity-'));
+    dirs.push(dataDir);
+    const h = createServer({
+      port: 0,
+      dataDir,
+      requireEmailAuth: true,
+      cfAccess: { teamDomain: TEAM_DOMAIN, audience: COLLAB_AUD, jwks: { keys: [jwk] } },
+      // Link sharing configured too, for the reason spelled out in the first
+      // fixture: without it the whole server falls into legacy Access mode
+      // and even the local setup calls need a token.
+      share: { config: { publicHostname: LINK_HOST } },
+      accessTunnelHosts: [TUNNEL_HOST],
+    });
+    handles.push(h);
+
+    const sign = async (email?: string) =>
+      await new SignJWT(email ? { email } : {})
+        .setProtectedHeader({ alg: 'RS256', kid: 'collab-identity-kid' })
+        .setIssuer(`https://${TEAM_DOMAIN}`)
+        .setAudience(COLLAB_AUD)
+        .setIssuedAt()
+        .setExpirationTime(Math.floor(Date.now() / 1000) + 600)
+        .setSubject('cf-access-collab-identity')
+        .sign(privateKey);
+
+    const local = (path: string, init: RequestInit = {}) =>
+      fetch(`http://localhost:${h.port}${path}`, {
+        ...init,
+        headers: {
+          host: `localhost:${h.port}`,
+          ...((init.headers as Record<string, string>) ?? {}),
+        },
+      });
+    const board = await local('/api/workspaces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Collab identity' }),
+    });
+    expect(board.status, await board.clone().text()).toBe(200);
+    const boardId = ((await board.json()) as { workspace: { id: string } }).workspace.id;
+    const name = 'collab-identity-doc';
+    const path = join(dataDir, `${name}.md`);
+    writeFileSync(path, '# Doc\n\nBody to comment on.\n');
+    const doc = await local('/api/docs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: name, type: 'markdown', sourceUrl: path }),
+    });
+    expect(doc.status).toBe(200);
+    const docId = ((await doc.json()) as { docId: string }).docId;
+    const filed = await local(`/api/workspaces/${encodeURIComponent(boardId)}/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: name }),
+    });
+    expect(filed.status).toBe(200);
+    return { port: h.port, docId, sign };
+  }
+
+  /** Comment as a collaborator claiming to be the owner; answer with the
+   *  author the server actually recorded. */
+  async function authorOfWrite(s: Surface, jwt: string): Promise<{ id: string; name: string }> {
+    const res = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads/by_find`, {
+      method: 'POST',
+      headers: {
+        host: TUNNEL_HOST,
+        ...CF_RAY,
+        'cf-access-jwt-assertion': jwt,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+        text: 'a collaborator note',
+        find: 'Body',
+      }),
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const listed = await fetch(`http://localhost:${s.port}/api/docs/${s.docId}/threads`, {
+      headers: { host: `localhost:${s.port}` },
+    });
+    const { threads } = (await listed.json()) as {
+      threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
+    };
+    const authors = threads.flatMap((t) => t.comments.map((c) => c.author));
+    expect(authors.length).toBeGreaterThan(0);
+    return authors[0] as { id: string; name: string };
+  }
+
+  it('a verified email claim becomes the author, outranking the claimed body', async () => {
+    const s = await surface();
+    const author = await authorOfWrite(s, await s.sign('collaborator@example.com'));
+    expect(author.id).toBe(emailIdentityId('collaborator@example.com'));
+    expect(author.id).not.toBe('known-bryan');
+  });
+
+  it('a token with NO email claim leaves them a guest, not unattributed', async () => {
+    const s = await surface();
+    const author = await authorOfWrite(s, await s.sign());
+    expect(author.id.startsWith('guest-')).toBe(true);
+    // Never the claimed body, and never the anonymous fallback.
+    expect(author.id).not.toBe('known-bryan');
+    expect(author.id).not.toBe('anon-unattributed');
   });
 });

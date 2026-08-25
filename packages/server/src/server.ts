@@ -12,6 +12,8 @@ import {
   anchors,
   checkReviewPayload,
   contentKind,
+  emailIdentityId,
+  isEmailLike,
   readReviewPayload,
   reviewGapAdvice,
   reviewIdOf,
@@ -21,7 +23,7 @@ import {
 } from '@feedback/core';
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
-import { classifyActor } from './activity.ts';
+import { classifyActor, registerOwnerIdentity } from './activity.ts';
 import {
   AgentWatches,
   SHARED_AGENT_IDS,
@@ -30,6 +32,17 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from './agent-watches.ts';
+import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
+import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
+import {
+  SESSION_COOKIE,
+  clearedSessionCookieHeader,
+  sessionKey as deriveSessionKey,
+  sessionCookieHeader as emailSessionCookieHeader,
+  mintSession,
+  sessionNeedsRefresh,
+  verifySession as verifyEmailSession,
+} from './auth/session.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress } from './compress.ts';
@@ -51,6 +64,7 @@ import {
   readerKey,
   taskDeepLink,
 } from './home-brief.ts';
+import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
 import {
   type LandingModel,
   type LandingProjectLink,
@@ -320,6 +334,43 @@ export interface ServerOptions {
   sharingEnvLocked?: boolean;
   port?: number;
   dataDir?: string;
+  /**
+   * Email-keyed identity is IN EFFECT (`CW_REQUIRE_EMAIL_AUTH`). Default off,
+   * and off means byte-for-byte today's behaviour.
+   *
+   * What the flag gates is the EFFECT of a session on authorship: with it
+   * off, a request carrying a verified session cookie is attributed exactly
+   * as it is attributed today — from the body, or through the guest
+   * sanitizer. With it on, the server's own verdict outranks the claimed
+   * body.
+   *
+   * What the flag deliberately does NOT gate is the `/api/auth/*` routes
+   * themselves. They are additive — nothing today calls them, so a request
+   * that never calls them is unchanged either way — and leaving them mounted
+   * is what lets the login flow be exercised on a real deployment before the
+   * switch is thrown. Minting a session changes nothing by itself.
+   *
+   * A request with NO session cookie behaves exactly as it does today,
+   * whichever way the flag is set.
+   */
+  requireEmailAuth?: boolean;
+  /**
+   * The address whose email identity is the fleet OWNER (`CW_OWNER_EMAIL`).
+   *
+   * `isOwnerActor` is otherwise hardcoded to the two spellings that predate
+   * email identity, and the moment the owner's identity becomes `user-<hash>`
+   * that check stops matching and fails SILENTLY — no error, just an
+   * owner-activity view that quietly reads empty. This is the input that
+   * keeps it matching. See activity.ts.
+   */
+  ownerEmail?: string;
+  /**
+   * Delivers login codes. Defaults to the log sender — the code prints to the
+   * server log, which is what makes the flow exercisable end to end before a
+   * provider is picked. A sender that rejects becomes a 502, never a silent
+   * 200. See auth/code-sender.ts.
+   */
+  codeSender?: CodeSender;
   /**
    * How long an attachment stays `live` without a heartbeat (default five
    * minutes, `HEARTBEAT_FRESH_MS`). A test seam: the whole away-lead half of
@@ -2173,6 +2224,97 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     };
   };
 
+  // --- Email-keyed identity ---------------------------------------------
+  // The roster and the challenge store. Both are cheap to construct and
+  // neither reads anything at boot beyond `identities.json`, so they exist
+  // whether or not `CW_REQUIRE_EMAIL_AUTH` is set — the flag governs what a
+  // session MEANS, not whether a person can create one. See ServerOptions.
+  const identities = new Identities({ dataDir });
+  if (identities.loadError) {
+    console.error(`[identities] ${identities.loadError}`);
+  }
+  const emailCodes = new EmailCodes();
+  const codeSender = opts.codeSender ?? createLogCodeSender();
+  const requireEmailAuth = opts.requireEmailAuth ?? false;
+  // Teach the owner check the owner's email identity. Without this the check
+  // keeps matching only `known-bryan` / "Bryan", and the day the owner's
+  // identity becomes `user-<hash>` the owner-activity view quietly reads
+  // empty with nothing anywhere reporting it. See activity.ts.
+  if (opts.ownerEmail && isEmailLike(opts.ownerEmail)) {
+    registerOwnerIdentity(emailIdentityId(opts.ownerEmail));
+    // Named so the identity exists in the roster before its first write,
+    // rather than appearing the first time the owner happens to log in.
+    identities.upsertByEmail(opts.ownerEmail);
+  } else if (opts.ownerEmail) {
+    console.error(`[identities] CW_OWNER_EMAIL is not an address: ${opts.ownerEmail}`);
+  }
+  let emailSessionKeyCache: string | null = null;
+  const emailSessionKey = (): string => {
+    emailSessionKeyCache ??= deriveSessionKey(cookieKey());
+    return emailSessionKeyCache;
+  };
+
+  /**
+   * Whether this request really reached us over https.
+   *
+   * Read off `policyFor`, which is the ONE place that derives a scheme from
+   * an allowlisted `x-forwarded-proto` — the server's own socket is always
+   * plain http, so `new URL(req.url).protocol` would answer "http" for every
+   * https visitor and strip `Secure` from every cookie they get. Reusing that
+   * derivation also inherits its defence against header injection.
+   */
+  const isSecureRequest = (req: Request): boolean =>
+    policyFor(req).requestOrigin.startsWith('https://');
+
+  /**
+   * The identity a request's session cookie attests to, or null.
+   *
+   * Four ways to be null and they are deliberately indistinguishable to the
+   * caller: no cookie, a cookie that does not verify or has expired, an
+   * identity the roster does not hold, and an identity whose sessions have
+   * been revoked or archived. Every one of them means "not signed in".
+   */
+  const sessionIdentityFor = (req: Request): IdentityRecord | null => {
+    const claims = verifyEmailSession(
+      readCookie(req.headers.get('cookie'), SESSION_COOKIE),
+      emailSessionKey(),
+    );
+    if (!claims) return null;
+    const rec = identities.get(claims.identityId);
+    if (!rec || rec.status !== 'active') return null;
+    // Server-side revocation: a cookie minted before the watermark is dead
+    // however long it says it lives.
+    if (claims.issuedAt < rec.sessionsValidFrom) return null;
+    return rec;
+  };
+
+  /**
+   * Extend a live session in place — the "sliding" half of 90 days sliding.
+   *
+   * Done in the response wrapper rather than per route because "on use" means
+   * every request, and a session that lapsed while somebody was reviewing
+   * daily would be the one failure this design exists to avoid. Skipped when
+   * the response already sets the cookie (login and logout own it), and
+   * cheap: the refresh only fires once a day of the session has been spent.
+   */
+  const refreshSession = (req: Request, res: Response): Response => {
+    const raw = readCookie(req.headers.get('cookie'), SESSION_COOKIE);
+    if (!raw) return res;
+    const claims = verifyEmailSession(raw, emailSessionKey());
+    if (!claims || !sessionNeedsRefresh(claims)) return res;
+    if (res.headers.get('set-cookie')?.includes(`${SESSION_COOKIE}=`)) return res;
+    const rec = sessionIdentityFor(req);
+    if (!rec) return res;
+    const headers = new Headers(res.headers);
+    headers.append(
+      'set-cookie',
+      emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
+        secure: isSecureRequest(req),
+      }),
+    );
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  };
+
   const applyCors = (req: Request, res: Response): Response => {
     const headers = corsHeadersFor(req.headers.get('origin'), policyFor(req));
     if (!headers) return res;
@@ -2205,7 +2347,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // same response the wrapper copies; `maybeCompress` skips anything that
       // isn't a buffered JSON body (see compress.ts for why that gate is
       // narrow).
-      return routed === undefined ? undefined : applyCors(req, await maybeCompress(req, routed));
+      return routed === undefined
+        ? undefined
+        : applyCors(req, refreshSession(req, await maybeCompress(req, routed)));
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
@@ -2286,12 +2430,63 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         };
 
         /**
-         * The author to attribute a write to. On the tailnet the body is
-         * trusted (it's Bryan's browser or his own agents). From a share
-         * visitor it is NOT: their claimed identity is rewritten into the
-         * `guest-` namespace so nobody can post as a member of the fleet.
+         * The identity this request has PROVEN, resolved at most once.
+         *
+         * Lazy because most requests never ask, and memoized because a write
+         * route can call `authorFor` more than once and each call would
+         * otherwise re-verify an HMAC.
+         */
+        let provenIdentity: IdentityRecord | null | undefined;
+        const provenIdentityFor = (): IdentityRecord | null => {
+          if (provenIdentity !== undefined) return provenIdentity;
+          // Cloudflare Access first. It has already verified a signed claim
+          // from an identity provider, which is a STRONGER proof than a code
+          // we mailed — so an Access visitor skips the code entirely and
+          // mints the same `user-<hash>` the code path would have. Composing
+          // here rather than building a second verifier is the whole point:
+          // the email was already being extracted (cf-access.ts) and thrown
+          // away after authorizing, so the person stayed anonymous on a
+          // surface that knew exactly who they were.
+          if (accessEmail && isEmailLike(accessEmail)) {
+            const rec = identities.upsertByEmail(accessEmail);
+            provenIdentity = rec.status === 'active' ? rec : null;
+            return provenIdentity;
+          }
+          provenIdentity = sessionIdentityFor(req);
+          return provenIdentity;
+        };
+
+        /**
+         * The author to attribute a write to.
+         *
+         * Until this commit the tailnet body was simply trusted — the comment
+         * here said so — which meant `?as=bryan` on any URL minted
+         * `known-bryan`, and `kind: 'known'` only ever meant "typed a name".
+         * Now, when a request carries a VERIFIED session, the server's own
+         * verdict outranks whatever the body claims. A caller may still say
+         * who they are; they no longer get to say it about someone else.
+         *
+         * Order matters and each rung has a reason:
+         *
+         *  1. A proven identity, when email identity is in effect. It
+         *     outranks the body precisely because the body is the thing it
+         *     exists to stop being authoritative.
+         *  2. A share visitor with nothing proven stays a `guest-` — that
+         *     path is the template this work copies, not a thing it replaces,
+         *     and link mode keeps minting guests.
+         *  3. Otherwise the claimed body, exactly as today. This is the rung
+         *     every agent, every MCP call and every un-authenticated browser
+         *     lands on, so a request with no session behaves identically
+         *     whichever way the flag is set.
+         *
+         * Rung 1 is behind `CW_REQUIRE_EMAIL_AUTH` (default off), so with the
+         * flag off this function is byte-for-byte what it was.
          */
         const authorFor = (claimed: unknown): User | undefined => {
+          if (requireEmailAuth) {
+            const proven = provenIdentityFor();
+            if (proven) return userForIdentity(proven);
+          }
           if (visitor) {
             return sanitizeVisitorAuthor(claimed, {
               // The SHARE, not the doc: two links to the same doc are two
@@ -2327,6 +2522,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         /** The share that authorized this request, stamped onto any websocket
          *  it upgrades so revocation can find and close it later. */
         let visitorShareId: string | null = null;
+        /**
+         * The email Cloudflare Access verified for this request, if any.
+         *
+         * Every branch below that runs a verifier fills this in, and nothing
+         * reads it unless `CW_REQUIRE_EMAIL_AUTH` is on. A verified claim is
+         * an identity; ABSENT it, the visitor stays a `guest-` exactly as
+         * before — never unattributed, and never a fallback to whatever the
+         * body claimed, because a share visitor's body is the thing the guest
+         * namespace exists to distrust.
+         */
+        let accessEmail: string | null = null;
         {
           const decision = classifyHost(req.headers.get('host'), {
             // Cached (60s TTL) — this used to spawn `tailscale status` on
@@ -2387,6 +2593,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             const result = await cfAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
+            accessEmail = result.email ?? null;
             // Authenticated for THIS share — but Access only proves the
             // visitor's email domain, not what they may touch. Scope them to
             // the shared board: no doc enumeration, no workspace/diff
@@ -2427,6 +2634,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             const result = await collabAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
+            accessEmail = result.email ?? null;
             // Access proves an identity Bryan admitted, not what they may
             // touch. `collabScope` is `shareScopeAllows` with the path's own
             // workspace as the target, so every operator verb a share visitor
@@ -2447,7 +2655,130 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // and stays unauthenticated.)
             const result = await cfAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
+            accessEmail = result.email ?? null;
           }
+        }
+
+        // --- REST: email login ---
+        // Reachability (the host gate, Access, a share session) and identity
+        // (who you are) stay orthogonal: a local host still bypasses the host
+        // guard — it may REACH the server — and still has to say who it is.
+        // These routes are what "saying who you are" means.
+        //
+        // They sit AFTER the host decision on purpose, so a share visitor
+        // reaches them only if `shareScopeAllows` lets them, and it does not:
+        // link mode keeps minting `guest-` identities and this is not a way
+        // around that.
+        if (pathname === '/api/auth/start' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const email = typeof body?.email === 'string' ? body.email : '';
+          const peer = server.requestIP(req)?.address ?? 'unknown';
+          const started = emailCodes.start(email, peer);
+          if (!started.ok) {
+            if (started.error === 'rate_limited') {
+              return new Response(
+                JSON.stringify({
+                  error: 'rate_limited',
+                  retryAfterSeconds: started.retryAfterSeconds,
+                }),
+                {
+                  status: 429,
+                  headers: {
+                    'content-type': 'application/json',
+                    'retry-after': String(started.retryAfterSeconds),
+                  },
+                },
+              );
+            }
+            return j(400, { error: 'invalid_email' });
+          }
+          try {
+            await codeSender.send({
+              to: started.email,
+              code: started.code,
+              expiresInMinutes: Math.round(CODE_TTL_MS / 60_000),
+            });
+          } catch (err) {
+            // 502 and NOT a silent 200. Answering ok here would put the
+            // reviewer in front of a code box for a code that does not exist,
+            // and the only evidence anywhere would be a log line nobody
+            // reads. The challenge stays live — a retry re-sends rather than
+            // stranding them — and the rate limit still counted this attempt,
+            // which is what stops a broken provider becoming a retry loop.
+            console.error(
+              `[auth] could not send a login code via "${codeSender.name}": ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return j(502, { error: 'code_send_failed' });
+          }
+          // NEVER the code. The response is read by whoever made the request,
+          // and the whole point of mailing a code is that those are different
+          // people until one proves otherwise.
+          return j(200, {
+            ok: true,
+            email: started.email,
+            expiresInSeconds: Math.max(0, Math.floor((started.expiresAt - Date.now()) / 1000)),
+          });
+        }
+
+        if (pathname === '/api/auth/verify' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const email = typeof body?.email === 'string' ? body.email : '';
+          const code = typeof body?.code === 'string' ? body.code : '';
+          const peer = server.requestIP(req)?.address ?? 'unknown';
+          const result = emailCodes.verify(email, code, peer);
+          if (!result.ok) {
+            if (result.error === 'rate_limited') {
+              return j(429, {
+                error: 'rate_limited',
+                retryAfterSeconds: result.retryAfterSeconds,
+              });
+            }
+            if (result.error === 'too_many_attempts') {
+              return j(429, { error: 'too_many_attempts' });
+            }
+            if (result.error === 'invalid_email') return j(400, { error: 'invalid_email' });
+            return j(401, { error: result.error });
+          }
+          const rec = identities.upsertByEmail(result.email);
+          if (rec.status !== 'active') {
+            // An archived identity proved control of its mailbox and still
+            // may not sign in. Un-archiving is somebody's decision.
+            return j(403, { error: 'identity_archived' });
+          }
+          return new Response(JSON.stringify({ ok: true, user: userForIdentity(rec) }), {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'set-cookie': emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
+                secure: isSecureRequest(req),
+              }),
+            },
+          });
+        }
+
+        if (pathname === '/api/auth/session' && req.method === 'GET') {
+          const rec = sessionIdentityFor(req);
+          return j(200, {
+            // Whether email identity is IN EFFECT, so a client can tell "not
+            // signed in" from "signing in does not matter here yet".
+            required: requireEmailAuth,
+            authenticated: rec !== null,
+            ...(rec ? { user: userForIdentity(rec) } : {}),
+          });
+        }
+
+        if (pathname === '/api/auth/logout' && req.method === 'POST') {
+          // This browser only. Ending a person's sessions everywhere is a
+          // roster operation (`revokeSessions`), not a cookie one.
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'set-cookie': clearedSessionCookieHeader({ secure: isSecureRequest(req) }),
+            },
+          });
         }
 
         // --- REST: shares ---
