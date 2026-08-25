@@ -1,7 +1,9 @@
 /**
- * The workspace hub page (plan §3.9): goal strip → board with goals as
- * sections → decisions strip → docs + open-threads sidebars → presence strip
- * → activity view. The board renders in realtime from the ws:<workspaceId>
+ * The workspace hub page: a left nav over two panes — Home (the "What's New?"
+ * brief, the "For Your Review" queue, and the walkthrough that answers it)
+ * and the board (goals as bands, quick add, review banner), with Activity as
+ * a view of the board pane. Presence, lead and drift notices live in the
+ * settings panel. The board renders in realtime from the ws:<workspaceId>
  * ydoc projection (server-owned `tasks` / `workspace` Y.Maps); every
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
@@ -17,6 +19,7 @@ import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
+import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
   ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
@@ -81,7 +84,6 @@ import {
   renderBoardForPane,
   renderGoalDetail,
   renderHomeBrief,
-  renderHomeReview,
   renderLeadStrip,
   renderPresence,
   renderQuickAdd,
@@ -468,6 +470,19 @@ async function main(): Promise<void> {
 
   const el = (id: string) => document.getElementById(id) as HTMLElement;
 
+  // The "For Your Review" pane — the first real Preact island (contract per
+  // island-probe: it owns a wrapper inside #hub-home-review, and no vanilla
+  // code may wipe that container while the island lives in it). Mounted once,
+  // here, because buildShell above was the last vanilla write of this subtree;
+  // from now on the pane repaints itself from `homeReviewData` writes in
+  // renderHomeRegion. The handlers are hoisted function declarations below —
+  // the same stable closures the vanilla renderer received.
+  mountHomeReviewIsland(el('hub-home-review'), {
+    onReview: (item, index) => openInQueue(item, index),
+    onOpen: (item) => openReviewItem(item),
+    onWalkthrough: () => startWalkthrough(),
+  });
+
   // ── The description, edited in place ────────────────────────────────────
   //
   // A second room, opened per task rather than per board: the task's body is
@@ -802,12 +817,16 @@ async function main(): Promise<void> {
         renderHomeRegion();
       },
     });
-    renderHomeReview(
-      el('hub-home-review'),
-      currentQueue(),
-      { onReview: openInQueue, onOpen: openReviewItem, onWalkthrough: startWalkthrough },
-      [...state.homeSettled.values()],
-    );
+    // The island's one input. A plain signal write, not a render call: the
+    // pane re-renders itself, keyed on `ReviewItem.key`, so unchanged rows
+    // keep their DOM nodes. Background events still reach this line through
+    // `repaintGuard.schedule(...)` exactly as they reached the old renderer —
+    // the guard's parked/flush path is upstream of the write, not bypassed.
+    homeReviewData.value = {
+      queue: currentQueue(),
+      settled: [...state.homeSettled.values()],
+      now: Date.now(),
+    };
   }
 
   /**
