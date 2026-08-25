@@ -50,6 +50,14 @@ function handlers(over: Partial<GoalDetailHandlers> = {}): GoalDetailHandlers {
   };
 }
 
+/** The commentForm submits on its own form element; find whichever node the
+ *  helper actually built so the test does not encode its internals. */
+function submitComposer(panel: HTMLElement): void {
+  const form = panel.querySelector('.hub-comment-form');
+  const target = form instanceof HTMLFormElement ? form : panel.querySelector('form');
+  target?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+}
+
 const filters = {
   tab: 'all',
   userName: 'Jordan',
@@ -200,6 +208,85 @@ describe('renderGoalDetail', () => {
     const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
     panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(h.onClose).toHaveBeenCalled();
+  });
+
+  /**
+   * Description and discussion — the parity Bryan reopened the ticket for:
+   * *"Goals are missing a bunch of the usual ticket behaviour -- no
+   * description? no comments?"*
+   *
+   * Both are the TASK panel's own machinery pointed at the goal's body room,
+   * which is `task:<goalId>` by the approved design's naming decision. So
+   * these assert the seams the app wires into — the slot the live editor
+   * mounts on, and the stream/composer the discussion renders — rather than
+   * re-testing the editor or the comment renderer, which the task panel's
+   * suites already cover.
+   */
+  it('shows the goal description, and offers a slot for the live editor', () => {
+    renderGoalDetail(
+      root,
+      sectionWith({ bodyDocId: 'task:g-pr', body: 'Ten teams using it weekly, unprompted.' }),
+      handlers(),
+    );
+    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    expect(panel.textContent).toContain('Description');
+    const slot = panel.querySelector('.hub-detail-body-slot') as HTMLElement;
+    expect(slot).not.toBeNull();
+    // The app keys `bodyEditor.sync` on this, and it is what `keptBodySlot`
+    // matches to keep a mounted editor alive through a repaint.
+    expect(slot.dataset.taskId).toBe('g-pr');
+    expect(slot.textContent).toContain('Ten teams using it weekly');
+  });
+
+  it('says so plainly when nobody has described the goal yet', () => {
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    expect(slot.textContent).toContain('No description yet.');
+  });
+
+  it('renders the goal discussion and posts a comment to it', async () => {
+    const onComment = vi.fn(async (_goalId: string, _text: string, _threadId?: string) => true);
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers({ onComment }), {
+      loading: false,
+      threads: [
+        {
+          id: 'th-1',
+          comments: [{ author: 'Search Revamp', text: 'Ten teams, or ten that renew?', ts: NOW }],
+        },
+      ],
+    });
+    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    expect(panel.querySelector('.hub-discussion')).not.toBeNull();
+    expect(panel.textContent).toContain('Ten teams, or ten that renew?');
+    const box = panel.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    expect(box).not.toBeNull();
+    box.value = 'Ten that renew.';
+    submitComposer(panel);
+    await Promise.resolve();
+    expect(onComment).toHaveBeenCalled();
+    // The reply lands in the thread that is already there rather than opening
+    // a second one — `composerTarget`'s derivation, same as a task's.
+    expect(onComment.mock.calls[0]?.[2]).toBe('th-1');
+  });
+
+  it('carries no discussion at all when the app has not fetched one', () => {
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    expect(root.querySelector('.hub-discussion')).toBeNull();
+  });
+
+  // A description is a live editor over a websocket. The repaint guarantee
+  // that protects a task's — keep the SLOT node itself, never re-create it —
+  // has to hold here too, or the board's own projection updates would tear
+  // the editor down under whoever is typing in it.
+  it('a repaint keeps a mounted description editor in place', () => {
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    slot.classList.add('hub-detail-body-live');
+    slot.dataset.marker = 'mounted';
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    const after = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    expect(after.dataset.marker).toBe('mounted');
+    expect(after).toBe(slot);
   });
 
   it('refuses the reserved bucket — Backlog has no detail to open', () => {
