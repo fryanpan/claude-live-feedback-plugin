@@ -222,10 +222,10 @@ describe('hub workspace + task routes', () => {
       expect(typeof payload.task.status).toBe('string');
       expect(payload.task.status).toBe('triage');
       expect(payload.task.assignee).toBe('human');
-      // `triagePendingTs` is read as a presence test, so undefined is a valid
+      // `unplacedSince` is read as a presence test, so undefined is a valid
       // answer — what must hold is that the KEY is not repurposed into
       // something truthy for a row that was explicitly placed.
-      expect(payload.task.triagePendingTs).toBeUndefined();
+      expect(payload.task.unplacedSince).toBeUndefined();
 
       // And every param it sent actually landed — read back through the list
       // route rather than trusting the create response.

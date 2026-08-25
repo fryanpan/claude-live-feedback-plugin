@@ -22,7 +22,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import { declareWorkspaceLead } from '../src/declare-lead.ts';
-import { TASK_REVIEW_SKILL } from '../src/triage-line.ts';
 
 const SELF = { id: 'agent-self', name: 'Self Agent', kind: 'agent' };
 const WS = 'ws-1';
@@ -98,7 +97,7 @@ describe('declareWorkspaceLead — declaring yourself', () => {
     expect(lead?.body).toMatchObject({ leadAgentId: SELF.id, author: SELF });
   });
 
-  it('hands back the drained backlog on the same response, with the skill contracts', async () => {
+  it('hands back the drained backlog on the same response', async () => {
     const { deps } = harness({
       attach: {
         attachment: { agentId: SELF.id },
@@ -106,12 +105,6 @@ describe('declareWorkspaceLead — declaring yourself', () => {
         gating: { summary: 'no open gating decisions' },
         untriaged: ['t-7'],
         queuedVoice: [{ transcript: 'make the second goal the top one', ts: 11 }],
-        pendingBucketReview: {
-          batchId: 'b-2',
-          newBands: [{ id: 'g-9', title: 'Reliability' }],
-          taskIds: ['t-3'],
-        },
-        taskReviews: [{ taskId: 't-4', trigger: 'created', ts: 12 }],
       },
     });
     const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
@@ -121,13 +114,10 @@ describe('declareWorkspaceLead — declaring yourself', () => {
     expect(res.lead).toBe(true);
     expect(res.untriaged).toEqual(['t-7']);
     expect(res.gating).toEqual({ summary: 'no open gating decisions' });
+    // Same field names attach_agent hands over — an away lead that arrives
+    // through this door must not be told half of what one arriving through
+    // the other door is told.
     expect(res.queuedVoice).toEqual([{ transcript: 'make the second goal the top one', ts: 11 }]);
-    // Same field names AND the same contracts attach_agent hands over — an
-    // away lead that arrives through this door must not be told half of what
-    // one arriving through the other door is told.
-    expect(res.pendingBucketReview).toMatchObject({ batchId: 'b-2' });
-    expect(res.taskReviews).toEqual([{ taskId: 't-4', trigger: 'created', ts: 12 }]);
-    expect(res.taskReviewContract).toBe(TASK_REVIEW_SKILL);
   });
 
   it('says it is subscribed, so the agent can tell from the inside', async () => {

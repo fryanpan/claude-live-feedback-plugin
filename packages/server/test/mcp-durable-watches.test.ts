@@ -394,17 +394,14 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     expect(created.status).toBe(200);
     const docId = ((await created.json()) as { docId: string }).docId;
     expect(docId).toBeTruthy();
-    // `goal` on create is what routes a new row to the lead for a shape
-    // review; with no live lead it queues instead.
-    expect(
-      (
-        await rest(`/api/workspaces/${workspaceId}/tasks`, 'POST', {
-          author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
-          title: 'An open row',
-          goal: 'chores',
-        })
-      ).status,
-    ).toBe(200);
+    // A spoken change is what queues for a board's lead; with no live lead it
+    // waits instead of being routed to anybody.
+    const voice = await rest(`/api/workspaces/${workspaceId}/voice`, 'POST', {
+      author: { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' },
+      transcript: 'make cutting token usage the top goal',
+    });
+    expect(voice.status).toBe(200);
+    expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
     return { workspaceId, docId };
   };
 
@@ -426,7 +423,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
           name: string;
           watchedDocs: string[];
           queuedTotal: number;
-          queued: { taskReviews: number };
+          queued: { queuedVoice: number };
         }>;
       };
     };
@@ -436,7 +433,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
     expect(row).toBeDefined();
     expect(row?.name).toBe('cov-board');
     expect(row?.watchedDocs).toEqual([covDoc]);
-    expect(row?.queued.taskReviews).toBe(1);
+    expect(row?.queued.queuedVoice).toBe(1);
     expect(row?.queuedTotal).toBeGreaterThan(0);
 
     // And the unprompted half: an agent that does not know the gap exists
@@ -556,18 +553,14 @@ describe('a declared lead comes back live after a respawn', () => {
   it('is re-ATTACHED, not merely re-subscribed, and its lead-addressed asks arrive', async () => {
     const w = await rest('/api/workspaces', 'POST', { name: 'declared-board' });
     const workspaceId = ((await w.json()) as { workspace: { id: string } }).workspace.id;
-    // A new goal band asks about the board's UNPLACED ROWS, so an empty board
-    // has nothing to ask about and reports `requested: false` for a reason
-    // that has nothing to do with attachment. One row makes the later
-    // assertion about liveness rather than about emptiness.
-    expect(
-      (
-        await rest(`/api/workspaces/${workspaceId}/tasks`, 'POST', {
-          author: PERSON,
-          title: 'An open row',
-        })
-      ).status,
-    ).toBe(200);
+    /** A spoken change is the lead-addressed ask that goes live or queues. */
+    const speak = async (transcript: string): Promise<string> => {
+      const res = await rest(`/api/workspaces/${workspaceId}/voice`, 'POST', {
+        transcript,
+        author: PERSON,
+      });
+      return ((await res.json()) as { route: string }).route;
+    };
 
     const first = await spawnChild({ CW_AGENT_NAME: NAME });
     const declared = (await first.tool('set_workspace_lead', { workspaceId })) as {
@@ -582,6 +575,10 @@ describe('a declared lead comes back live after a respawn', () => {
     // The precondition, asserted rather than assumed: the session really is
     // away here, so what follows is a repair and not a no-op.
     expect(await stateOf(workspaceId)).toBe('away');
+    // …and the ask below really can come back queued, so the delivered answer
+    // after the respawn is about liveness rather than about a route that
+    // always says the same thing.
+    expect(await speak('park the export work until next week')).toBe('agent-queued');
 
     const second = await spawnChild({ CW_AGENT_NAME: NAME });
     // Any tool call drives the restore; this is one an agent would run.
@@ -590,16 +587,8 @@ describe('a declared lead comes back live after a respawn', () => {
 
     // The end-to-end consequence, and the only assertion that would have
     // caught this: a lead-addressed ask is DELIVERED rather than stored for a
-    // lead the server cannot see. `queued: true` here is the incident.
-    const goal = await rest(`/api/workspaces/${workspaceId}/goals`, 'PUT', {
-      goals: [{ title: 'Cut token usage per session in half' }],
-      author: PERSON,
-    });
-    const bucketReview = (
-      (await goal.json()) as { bucketReview: { requested: boolean; queued: boolean } }
-    ).bucketReview;
-    expect(bucketReview.requested).toBe(true);
-    expect(bucketReview.queued).toBe(false);
+    // lead the server cannot see. `agent-queued` here is the incident.
+    expect(await speak('make cutting token usage the top goal')).toBe('agent');
     second.kill();
   }, 40_000);
 

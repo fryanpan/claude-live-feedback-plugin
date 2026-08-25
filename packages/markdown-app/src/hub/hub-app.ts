@@ -35,7 +35,6 @@ import {
   type HubPane,
   type HubTask,
   type HubWorkspaceInfo,
-  type PendingBucketReviewView,
   type PluginRelease,
   type PresenceAgent,
   type PresenceChip,
@@ -503,9 +502,6 @@ async function main(): Promise<void> {
         name: String(wsMap.get('name') ?? workspaceId),
         goals: (wsMap.get('goals') as HubGoal[] | undefined) ?? [],
         ...(wsMap.get('leadAgentId') ? { leadAgentId: String(wsMap.get('leadAgentId')) } : {}),
-        ...(wsMap.get('pendingBucketReview')
-          ? { pendingBucketReview: wsMap.get('pendingBucketReview') as PendingBucketReviewView }
-          : {}),
         ...(wsMap.get('retiredAt') ? { retiredAt: Number(wsMap.get('retiredAt')) } : {}),
         ...(wsMap.get('retiredReason')
           ? { retiredReason: String(wsMap.get('retiredReason')) }
@@ -632,7 +628,6 @@ async function main(): Promise<void> {
       state.info?.leadAgentId,
       state.agents.map((agent) => agent.agentId),
       { onLeadCommit: (leadAgentId) => void saveLead(leadAgentId) },
-      state.info?.pendingBucketReview,
     );
   }
 
@@ -1354,9 +1349,7 @@ async function main(): Promise<void> {
 
   /** What in the settings panel is asking to be looked at. */
   function renderSettingsAlarm(notices: Array<DriftNotice | null>): void {
-    const armed =
-      notices.some((n) => n !== null && n.kind !== 'coverage') ||
-      state.info?.pendingBucketReview !== undefined;
+    const armed = notices.some((n) => n !== null && n.kind !== 'coverage');
     el('hub-settings-alarm').classList.toggle('hidden', !armed);
     // Both attributes, because the dot itself is `aria-hidden`: a reader who
     // never sees it would otherwise be told "Workspace settings" while the

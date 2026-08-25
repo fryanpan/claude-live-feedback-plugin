@@ -41,7 +41,6 @@ import {
   type HubPane,
   type HubTask,
   type HubTransition,
-  type PendingBucketReviewView,
   type PresenceChip,
   type ReorderTarget,
   type ReviewItem,
@@ -449,34 +448,13 @@ export function renderLeadStrip(
   leadAgentId: string | undefined,
   knownAgentIds: string[],
   handlers: LeadStripHandlers,
-  pendingBucketReview?: PendingBucketReviewView,
 ): void {
   container.replaceChildren();
   container.classList.toggle('hub-lead-empty', !leadAgentId);
   const label = document.createElement('span');
   label.className = 'hub-lead-label';
-  label.textContent = leadAgentId
-    ? 'Lead agent'
-    : 'No lead agent — nobody owns this board’s triage asks';
+  label.textContent = leadAgentId ? 'Lead agent' : 'No lead agent — nobody owns this board’s asks';
   container.append(label);
-  if (pendingBucketReview && pendingBucketReview.taskIds.length > 0) {
-    // A new goal band nobody has re-looked at the bucket against. Counted,
-    // not vaguely announced: "3 tasks" is the size of the ask, and it is
-    // stated whether or not there is a lead — the case with no lead is
-    // exactly the one where this used to disappear. An ask that lives only
-    // in a sidecar is the store-has-it/surface-can't-show-it failure, which
-    // is what the projection next door exists to prevent.
-    const n = pendingBucketReview.taskIds.length;
-    const bands = pendingBucketReview.bandTitles;
-    const named = bands.length === 1 ? `“${bands[0]}”` : `${bands.length} new bands`;
-    const waiting = document.createElement('span');
-    waiting.className = 'hub-lead-pending';
-    waiting.textContent = leadAgentId
-      ? `New goal band waiting for the lead — ${n} unplaced task${n === 1 ? '' : 's'} to re-look at`
-      : `New goal band waiting — ${n} unplaced task${n === 1 ? '' : 's'} to re-look at, and nobody to do it`;
-    waiting.title = `${named}, added by ${pendingBucketReview.byName}. Nothing has been placed.`;
-    container.append(waiting);
-  }
 
   const options = [...new Set([...(leadAgentId ? [leadAgentId] : []), ...knownAgentIds])].sort(
     (a, b) => a.localeCompare(b),
@@ -809,7 +787,6 @@ function taskBadges(task: HubTask): HTMLElement {
       task.parkedReason,
     );
   }
-  if (task.triagePendingTs !== undefined) add('hub-badge-triage', 'triaging…');
   return badges;
 }
 

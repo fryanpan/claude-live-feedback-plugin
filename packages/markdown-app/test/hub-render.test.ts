@@ -2066,57 +2066,6 @@ describe('renderLeadStrip', () => {
     expect(root.textContent).toContain('No lead agent');
     expect(root.querySelector('select')).toBeNull();
   });
-
-  // A NEW goal band nobody has re-looked at the bucket against. Rendered
-  // because a board that left it in a sidecar would say "nothing waiting"
-  // while an ask sat unanswered — the store-has-it/surface-can't-show-it
-  // failure the projection next to it exists to prevent.
-  const bucket = (taskIds: string[], bandTitles = ['Reviewer trust']) => ({
-    batchId: 'b-2',
-    taskIds,
-    bandTitles,
-    ts: 1_700_000_000_000,
-    byName: 'Jordan',
-  });
-
-  it('says nothing when nothing is waiting', () => {
-    // The absence assertion is only worth anything because the tests below
-    // show the strip CAN render a pending line.
-    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() });
-    expect(root.querySelector('.hub-lead-pending')).toBeNull();
-  });
-
-  it('a new goal band waiting on the lead is counted and named', () => {
-    renderLeadStrip(
-      root,
-      'agent-relay',
-      ['agent-relay'],
-      { onLeadCommit: vi.fn() },
-      bucket(['t-1', 't-2']),
-    );
-    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
-    expect(waiting.textContent).toContain('2 unplaced tasks');
-    expect(waiting.textContent).toContain('New goal band waiting for the lead');
-    expect(waiting.title).toContain('Reviewer trust');
-    // It asks for a LOOK. A reader who takes this as "the bucket got emptied"
-    // has been told the opposite of what happened.
-    expect(waiting.title).toContain('Nothing has been placed');
-  });
-
-  it('with no lead at all the waiting band says nobody is going to do it', () => {
-    renderLeadStrip(root, undefined, [], { onLeadCommit: vi.fn() }, bucket(['t-1']));
-    const waiting = root.querySelector('.hub-lead-pending') as HTMLElement;
-    expect(waiting.textContent).toContain('1 unplaced task');
-    expect(waiting.textContent).toContain('nobody to do it');
-  });
-
-  it('says nothing about a band when none is waiting', () => {
-    // Non-vacuous because the two tests above render this same chip.
-    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() });
-    expect(root.textContent).not.toContain('re-look at');
-    renderLeadStrip(root, 'agent-relay', ['agent-relay'], { onLeadCommit: vi.fn() }, bucket([]));
-    expect(root.textContent).not.toContain('re-look at');
-  });
 });
 
 describe('renderActivity', () => {
