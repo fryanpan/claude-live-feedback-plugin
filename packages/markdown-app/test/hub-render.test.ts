@@ -7,14 +7,11 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
-  type PresenceChip,
   type ReviewThreadItem,
   type UptimeReport,
   boardSections,
-  clientDriftNotice,
   goalLabel,
   humanBlockerRows,
-  pluginDriftNotice,
   reviewQueue,
   unplacedNotice,
 } from '../src/hub/hub-model.ts';
@@ -31,7 +28,6 @@ import {
   renderBoard,
   renderHomeBrief,
   renderLeadStrip,
-  renderPresence,
   renderQuickAdd,
   renderReviewBanner,
   renderTaskDetail,
@@ -5036,143 +5032,6 @@ describe('the walkthrough card head keeps a readable title on a phone', () => {
   });
 });
 
-describe('renderPresence — plugin drift', () => {
-  const drift = () =>
-    pluginDriftNotice({
-      version: '0.1.26',
-      behind: [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }],
-    });
-
-  it('shows the notice even when nobody is present to draw a chip for', () => {
-    // An away session draws no chip, and an away session is exactly the one
-    // most likely to be stranded on an old bundle. Hiding the region on
-    // "no chips" would hide the drift with it.
-    const host = document.createElement('div');
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [drift()]);
-    expect(host.classList.contains('hidden')).toBe(false);
-    const note = host.querySelector('.hub-drift');
-    expect(note?.textContent).toContain('older plugin than 0.1.26');
-    expect(note?.textContent).toContain('agent-quill 0.1.12');
-    expect(note?.textContent).toContain(
-      'command claude plugin update claude-workspaces@claude-workspaces',
-    );
-  });
-
-  it('renders nothing when there is no notice at all', () => {
-    const host = document.createElement('div');
-    // Positive control: the same call WITH a notice puts a .hub-drift in, so
-    // this absence means the notice is what drives it.
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [drift()]);
-    expect(host.querySelector('.hub-drift')).not.toBeNull();
-
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [null]);
-    expect(host.querySelector('.hub-drift')).toBeNull();
-    expect(host.classList.contains('hidden')).toBe(true);
-  });
-
-  it('renders the clear reading quietly, and the alarm loudly', () => {
-    // A coverage line is on the board permanently. If it wore the alarm's
-    // styling it would teach everyone to skim past the alarm — so the class
-    // has to differ, and both halves are asserted in the same pass so
-    // neither is a claim about a world the other does not inhabit.
-    const host = document.createElement('div');
-    const clear = pluginDriftNotice({ version: '0.1.40', behind: [], checked: 1 });
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [clear]);
-    const quiet = host.querySelector('.hub-drift');
-    expect(quiet).not.toBeNull();
-    expect(quiet?.classList.contains('hub-drift-quiet')).toBe(true);
-    expect(quiet?.textContent).toContain('No attached session is behind 0.1.40 (1 checked)');
-    expect(quiet?.textContent).toContain('a peer that never attached is absent here');
-
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [drift()]);
-    const loud = host.querySelector('.hub-drift');
-    expect(loud?.classList.contains('hub-drift-quiet')).toBe(false);
-  });
-
-  it('a board nobody has attached to does not render as all-clear', () => {
-    // The defect, in the surface: an empty `behind` list used to render as
-    // nothing, and nothing reads exactly like clearance.
-    const host = document.createElement('div');
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [
-      pluginDriftNotice({ version: '0.1.40', behind: [], checked: 0 }),
-    ]);
-    expect(host.classList.contains('hidden')).toBe(false);
-    expect(host.querySelector('.hub-drift')?.textContent).toContain(
-      'no session has attached to this board',
-    );
-  });
-});
-
-describe('renderPresence — compact circle mode (the top-right cluster)', () => {
-  const person = (name: string, key = `p-${name}`): PresenceChip => ({
-    key,
-    label: name,
-    kind: 'person',
-    where: 'hub',
-    title: `${name} · in hub · just now`,
-    docId: 'doc-1',
-  });
-  const agent = (id: string): PresenceChip => ({
-    key: `a-${id}`,
-    label: id,
-    kind: 'agent',
-    where: 'active',
-    title: `${id} · active · last tool call just now`,
-    state: 'active',
-  });
-  const noop = { onTap: () => {}, onLongPress: () => {} };
-
-  it('renders circles with initials, keeping the full detail in title and aria-label', () => {
-    const host = document.createElement('div');
-    renderPresence(host, [person('Ana Reyes'), agent('task-list-ux')], null, noop, [], true);
-    const circles = host.querySelectorAll('.hub-presence-circle');
-    expect(circles.length).toBe(2);
-    // No long-form chip anywhere in compact mode…
-    expect(host.querySelector('.hub-presence-chip')).toBeNull();
-    const [p, a] = [...circles];
-    expect(p?.querySelector('.hub-presence-initials')?.textContent).toBe('AR');
-    expect(p?.getAttribute('title')).toBe('Ana Reyes · in hub · just now');
-    expect(p?.getAttribute('aria-label')).toBe('Ana Reyes · in hub · just now');
-    // …and the agent circle keeps the kind class the styling keys off.
-    expect(a?.classList.contains('hub-presence-agent')).toBe(true);
-    expect(a?.querySelector('.hub-presence-initials')?.textContent).toBe('TL');
-    // Positive control: the same chips long-form still render as chips.
-    renderPresence(host, [person('Ana Reyes')], null, noop, []);
-    expect(host.querySelector('.hub-presence-chip')?.textContent).toContain('Ana Reyes');
-  });
-
-  it('keeps tap, liveness state, and following on a circle', () => {
-    const host = document.createElement('div');
-    const tapped: PresenceChip[] = [];
-    const chip: PresenceChip = { ...agent('quill'), state: 'unresponsive' };
-    renderPresence(host, [chip], chip.key, { ...noop, onTap: (c) => tapped.push(c) }, [], true);
-    const el = host.querySelector<HTMLButtonElement>('.hub-presence-circle');
-    expect(el?.classList.contains('hub-presence-unresponsive')).toBe(true);
-    expect(el?.classList.contains('hub-following')).toBe(true);
-    el?.click();
-    expect(tapped.map((c) => c.key)).toEqual([chip.key]);
-  });
-
-  it('clamps at four: five people render as three circles plus a "+2" that names the rest', () => {
-    const host = document.createElement('div');
-    const chips = ['Ana', 'Ben', 'Cam', 'Dee', 'Eli'].map((n) => person(n));
-    const overflowed: PresenceChip[][] = [];
-    renderPresence(host, chips, null, { ...noop, onOverflow: (h) => overflowed.push(h) }, [], true);
-    const circles = host.querySelectorAll('.hub-presence-circle');
-    expect(circles.length).toBe(4); // 3 people + the overflow slot
-    const more = host.querySelector<HTMLButtonElement>('.hub-presence-more');
-    expect(more?.textContent).toBe('+2');
-    expect(more?.getAttribute('title')).toBe('Dee, Eli');
-    more?.click();
-    expect(overflowed).toEqual([[chips[3], chips[4]]]);
-    // Positive control for the boundary: exactly four renders four circles
-    // and NO overflow slot — the cap is a footprint, not a count.
-    renderPresence(host, chips.slice(0, 4), null, noop, [], true);
-    expect(host.querySelectorAll('.hub-presence-circle').length).toBe(4);
-    expect(host.querySelector('.hub-presence-more')).toBeNull();
-  });
-});
-
 /**
  * happy-dom does no layout, so the popover and the 430px fit are pinned at
  * the rule level, the same way the walkthrough title floor is above: assert
@@ -5199,67 +5058,6 @@ describe('settings popover + presence visibility (CSS contract)', () => {
     for (const [, body] of peopleRules) {
       expect(body).not.toMatch(/display:\s*none/);
     }
-  });
-});
-
-describe('renderPresence — client release drift', () => {
-  const now = Date.UTC(2026, 7, 16, 12, 0, 0);
-  const stale = () =>
-    clientDriftNotice(
-      {
-        releaseId: '20260813T014455123Z-000003',
-        publishedAt: now - 72 * 60 * 60 * 1000,
-        ageMs: 72 * 60 * 60 * 1000,
-        sourceRef: 'a1b2c3d',
-        consecutiveFailures: 2,
-        failingSince: now - 10 * 60 * 60 * 1000,
-        lastError: 'client release: markdownApp bundle is incomplete — app.js missing',
-        stale: true,
-      },
-      now,
-    );
-  const pluginDrift = () =>
-    pluginDriftNotice({
-      version: '0.1.26',
-      behind: [{ agentId: 'agent-quill', pluginVersion: '0.1.12' }],
-    });
-
-  it('shows the stale-client notice on a board with nobody present', () => {
-    // Nobody being present is not a reason to hide it — it is about every
-    // browser that loads this board, including the one reading it now.
-    const host = document.createElement('div');
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [stale()]);
-    expect(host.classList.contains('hidden')).toBe(false);
-    const note = host.querySelector('.hub-drift');
-    expect(note?.textContent).toContain('3d ago');
-    expect(note?.textContent).toContain('app.js missing');
-    expect(note?.textContent).toContain('restart');
-  });
-
-  it('shows both drifts at once — they are different problems', () => {
-    // The agents being behind on the plugin and the browser being behind on
-    // the client are independent failures with different fixes; one must not
-    // hide the other.
-    const host = document.createElement('div');
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [
-      pluginDrift(),
-      stale(),
-    ]);
-    const notes = [...host.querySelectorAll('.hub-drift')];
-    expect(notes.length).toBe(2);
-    expect(notes[0]?.textContent).toContain('older plugin than 0.1.26');
-    expect(notes[1]?.textContent).toContain('published 3d ago');
-  });
-
-  it('draws nothing when neither drift is real', () => {
-    const host = document.createElement('div');
-    // Positive control first, so the absence below means something.
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [stale()]);
-    expect(host.querySelector('.hub-drift')).not.toBeNull();
-
-    renderPresence(host, [], null, { onTap: () => {}, onLongPress: () => {} }, [null, null]);
-    expect(host.querySelector('.hub-drift')).toBeNull();
-    expect(host.classList.contains('hidden')).toBe(true);
   });
 });
 
