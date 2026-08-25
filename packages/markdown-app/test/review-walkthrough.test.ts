@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type ReviewStripHandlers,
   homeReviewData,
@@ -14,11 +14,14 @@ import {
   reviewQueue,
   walkPosition,
 } from '../src/hub/hub-model.ts';
+import { renderTaskDetail } from '../src/hub/hub-render.ts';
 import {
+  type WalkProgress,
   type WalkthroughHandlers,
-  renderReviewWalkthrough,
-  renderTaskDetail,
-} from '../src/hub/hub-render.ts';
+  type WalkthroughView,
+  mountWalkthroughIsland,
+  walkthroughData,
+} from '../src/hub/walkthrough-island.tsx';
 import { refreshMarkdownComposer } from '../src/md-composer.ts';
 import { renderedHtml, surfaceOf } from './support/composer.ts';
 
@@ -131,12 +134,74 @@ function walk(over: Partial<WalkthroughHandlers> = {}): WalkthroughHandlers {
   };
 }
 
+/**
+ * The walkthrough card is a Preact island too, and the old call shape over it.
+ *
+ * The card's state reaches the island through `walkthroughData` — including
+ * the handlers, which close over the item each paint drew and so cannot be
+ * bound at mount. That is the right shape for the app and the wrong shape for
+ * the cases here that only want a card on screen, so this puts the old call
+ * back: dispose whatever was mounted, write the signal, mount fresh. A remount
+ * is exactly what the renderer this replaces did on every call.
+ *
+ * Cases that are ABOUT a repaint — a draft, an expansion, node identity — must
+ * drive the signal through `repaint()` below instead. A remount rebuilds
+ * everything, which is the property those cases exist to disprove.
+ */
+let disposeWalk: (() => void) | null = null;
+function renderReviewWalkthrough(
+  container: HTMLElement,
+  queue: ReturnType<typeof reviewQueue>,
+  index: number,
+  handlers: WalkthroughHandlers,
+  progress: WalkProgress = { cleared: 0, last: null },
+  now: number = NOW,
+): void {
+  disposeWalk?.();
+  walkthroughData.value = { queue, index, progress, now, handlers };
+  disposeWalk = mountWalkthroughIsland(container);
+}
+
+/**
+ * Component re-renders are SCHEDULED, not synchronous — a signal write or a
+ * `useState` from a tap lands on the following microtask. It is invisible to
+ * a reader (it is still before the next paint) and it is visible to a test
+ * asserting on the very next line, which is why the cases below that tap an
+ * expansion open await this first.
+ */
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+/**
+ * A repaint with the island left mounted — what a board event causes: the
+ * loader writes the signal and nothing is torn down.
+ *
+ * The clock advances on every call, because `renderWalkthrough` writes
+ * `Date.now()` on every paint and a repaint that renders a byte-identical
+ * tree is not the repaint these cases are about — it would pass against a
+ * card keyed on nothing at all. Pass `now` to pin it.
+ */
+let repaintClock = NOW;
+async function repaint(patch: Partial<WalkthroughView> = {}): Promise<void> {
+  repaintClock += 30_000;
+  walkthroughData.value = { ...walkthroughData.value, now: repaintClock, ...patch };
+  await tick();
+}
+
 let root: HTMLElement;
 beforeEach(() => {
   disposeIsland = null;
+  repaintClock = NOW;
   document.body.replaceChildren();
   root = document.createElement('div');
   document.body.append(root);
+});
+afterEach(() => {
+  // An island left alive keeps a subscription to the module-level signal, so
+  // the next file's first write would repaint a card into a detached node.
+  disposeWalk?.();
+  disposeWalk = null;
+  disposeIsland?.();
+  disposeIsland = null;
 });
 
 describe('renderHomeReview — the ranked list (mockup anatomy)', () => {
@@ -535,36 +600,41 @@ describe('renderReviewWalkthrough — decisions', () => {
   // reader in the middle of a sentence must not lose it (measured: Bryan lost
   // a decision answer repeatedly, 2026-08-24).
   describe('a repaint under the typist keeps the draft', () => {
-    it('a decision answer survives a re-render', () => {
+    it('a decision answer survives a re-render', async () => {
       const { q } = queueOfThree();
       renderReviewWalkthrough(root, q, 0, walk());
       const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
       ta.value = 'Neither — half-typed thought';
-      renderReviewWalkthrough(root, q, 0, walk());
+      await repaint();
       const after = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
-      expect(after).not.toBe(ta);
+      // The island's whole point, and the reason no `restoreFields` pass is
+      // left on this surface: the box KEEPS ITS NODE, so the draft is not put
+      // back — it was never taken away. Under the vanilla renderer this
+      // assertion read `not.toBe`, with the value copied across by hand.
+      expect(after).toBe(ta);
       expect(after.value).toBe('Neither — half-typed thought');
     });
 
-    it('a thread reply survives a re-render', () => {
+    it('a thread reply survives a re-render', async () => {
       const q = reviewQueue([], [threadItem()], NOW);
       renderReviewWalkthrough(root, q, 0, walk());
       const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
       ta.value = 'Green, because';
-      renderReviewWalkthrough(root, q, 0, walk());
+      await repaint();
       expect((root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
         'Green, because',
       );
     });
 
-    it('the more-info box keeps its draft AND stays open', () => {
+    it('the more-info box keeps its draft AND stays open', async () => {
       const { q } = queueOfThree();
       renderReviewWalkthrough(root, q, 0, walk());
       (root.querySelector('.hub-walk-more') as HTMLElement).click();
+      await tick();
       const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
       expect(info.classList.contains('hidden')).toBe(false);
       (info.querySelector('textarea') as HTMLTextAreaElement).value = 'What does green cost';
-      renderReviewWalkthrough(root, q, 0, walk());
+      await repaint();
       const rebuilt = root.querySelector('.hub-walk-info') as HTMLFormElement;
       expect((rebuilt.querySelector('textarea') as HTMLTextAreaElement).value).toBe(
         'What does green cost',
@@ -576,11 +646,13 @@ describe('renderReviewWalkthrough — decisions', () => {
       ).toBe('true');
     });
 
-    it('a draft never follows the reader onto a different card', () => {
+    it('a draft never follows the reader onto a different card', async () => {
       const { q } = queueOfThree();
       renderReviewWalkthrough(root, q, 0, walk());
       (root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value = 'For card A';
-      renderReviewWalkthrough(root, q, 1, walk());
+      // Stepping on is a repaint like any other — what stops the draft
+      // following is the card's KEY changing, which unmounts it.
+      await repaint({ index: 1 });
       expect((root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
         '',
       );
@@ -636,7 +708,11 @@ describe('renderReviewWalkthrough — decisions', () => {
     expect(root.classList.contains('hidden')).toBe(false);
     renderReviewWalkthrough(root, q, -1, walk());
     expect(root.classList.contains('hidden')).toBe(true);
-    expect(root.children).toHaveLength(0);
+    // Not `root.children`: the island owns a wrapper inside the container and
+    // the container is the shell's, so "nothing rendered" is read off what the
+    // island drew rather than off the host's child count.
+    expect(root.querySelector('.hub-walk-panel')).toBeNull();
+    expect(root.textContent).toBe('');
   });
 
   it('the walkthrough opens on the highest-priority ask, not the most-blocked one', () => {
@@ -957,11 +1033,11 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     const ta = form.querySelector('textarea') as HTMLTextAreaElement;
     ta.value = 'Blue.';
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    // The board repaints while the write is in flight. The rebuilt form's
-    // in-flight lock is gone with the old DOM, so restoring the submitted
-    // text here would hand the reader an enabled duplicate-submit path — and
-    // the eventual success would clear only the detached old box.
-    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    // The board repaints while the write is in flight. The box keeps its node
+    // now, so the in-flight lock survives with it — but the submitted text
+    // must still not reappear as a draft, because a box holding words the
+    // reader can send again is a duplicate-answer path whichever node it is.
+    await repaint();
     const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
     expect(rebuilt.value).toBe('');
     release(true);
@@ -979,13 +1055,15 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
     );
-    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    await repaint();
     release(false);
     await new Promise((r) => setTimeout(r, 0));
-    // Restoring only the detached old textarea leaves the reader looking at
-    // an empty card with their refused answer nowhere.
+    // The refused words land in the box that is ON SCREEN. Since the island
+    // keeps the node, that is this same element — the assertion read
+    // `not.toBe` while a repaint replaced it, and the guarantee it pins (the
+    // reader can see and resend what was refused) is unchanged.
     const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
-    expect(rebuilt).not.toBe(ta);
+    expect(rebuilt).toBe(ta);
     expect(rebuilt.value).toBe('Blue.');
   });
 
@@ -998,7 +1076,7 @@ describe('the walkthrough composer — one answer per tap, and no lost words', (
     (root.querySelector('.hub-walk-answer') as HTMLFormElement).dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
     );
-    renderReviewWalkthrough(root, q, 0, walk({ onAnswer }));
+    await repaint();
     const rebuilt = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
     rebuilt.value = 'Actually, green';
     release(false);
@@ -1067,6 +1145,31 @@ describe('the walkthrough composers are markdown editors', () => {
     const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
     const ta = info.querySelector('textarea') as HTMLTextAreaElement;
     expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
+  });
+
+  /**
+   * The riskiest thing in the island: `attachMarkdownComposer` REPLACES the
+   * textarea with a wrapper and re-parents it, which is a DOM mutation inside
+   * a tree Preact owns. It survives because the `<form>` is Preact's and its
+   * children are not — a vnode with no children is diffed against nothing. If
+   * that ever stops being true, Preact finds its own child somewhere it did
+   * not put it and moves it back out of the editor on the next repaint, and
+   * the composer silently becomes a bare textarea.
+   */
+  it('keeps the live editor across a repaint', async () => {
+    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
+    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    const wrap = ta.parentElement;
+    expect(wrap?.classList.contains('md-composer')).toBe(true);
+    await repaint();
+    const after = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    expect(after).toBe(ta);
+    expect(after.parentElement).toBe(wrap);
+    expect(surfaceOf(after)?.querySelector('.ProseMirror')).not.toBeNull();
+    // And it still edits: the box is a live editor, not a leftover node.
+    after.value = '**still here**';
+    refreshMarkdownComposer(after);
+    expect(renderedHtml(after)).toContain('<strong>still here</strong>');
   });
 
   it('a declared item card gets the same composer', () => {
@@ -1350,13 +1453,17 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
     expect(body.textContent).toContain('word299');
   });
 
-  it('clamps a long body and expands it on the affordance, which then leaves', () => {
+  it('clamps a long body and expands it on the affordance, which then leaves', async () => {
     renderReviewWalkthrough(root, queueOf(longItem()), 0, walk());
     const body = root.querySelector('.hub-walk-body') as HTMLElement;
     expect(body.classList.contains('hub-walk-body-clamp')).toBe(true);
     const expand = root.querySelector('.hub-walk-body-expand') as HTMLButtonElement;
     expect(expand).not.toBeNull();
     expand.click();
+    await tick();
+    // The SAME node, unclamped in place — the expansion is state on a keyed
+    // card, so opening it does not rebuild the body it opens.
+    expect(root.querySelector('.hub-walk-body')).toBe(body);
     expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
     expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
   });
@@ -1379,12 +1486,13 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
    * it. `keepFields`/`restoreFields` already carry the drafts across that
    * swap; the reader's decision to open something has to travel the same way.
    */
-  it('stays expanded across the repaint a background event fires', () => {
+  it('stays expanded across the repaint a background event fires', async () => {
     const q = queueOf(longItem());
     renderReviewWalkthrough(root, q, 0, walk());
     (root.querySelector('.hub-walk-body-expand') as HTMLButtonElement).click();
-    // The board event lands: same queue, same position, a fresh card.
-    renderReviewWalkthrough(root, q, 0, walk());
+    // The board event lands: same queue, same position, a repaint.
+    await tick();
+    await repaint();
     const body = root.querySelector('.hub-walk-body') as HTMLElement;
     expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
     expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
@@ -1392,7 +1500,7 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
 
   // The clamp is per-item, so moving on must not carry the last card's
   // expansion onto the next one — that would unclamp a body nobody opened.
-  it('does not carry one card’s expansion onto the next item', () => {
+  it('does not carry one card’s expansion onto the next item', async () => {
     const first = longItem();
     const second = threadItem({
       threadId: 'th-2',
@@ -1402,10 +1510,65 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
     const q = queueOf(first, second);
     renderReviewWalkthrough(root, q, 0, walk());
     (root.querySelector('.hub-walk-body-expand') as HTMLButtonElement).click();
-    renderReviewWalkthrough(root, q, 1, walk());
+    await tick();
+    await repaint({ index: 1 });
     const body = root.querySelector('.hub-walk-body') as HTMLElement;
     expect(body.classList.contains('hub-walk-body-clamp')).toBe(true);
     expect(root.querySelector('.hub-walk-body-expand')).not.toBeNull();
+  });
+});
+
+/**
+ * The island contract, on the surface it was adopted for.
+ *
+ * Every case here FAILS against the vanilla `renderReviewWalkthrough` this
+ * replaces, and for one reason: that renderer opened with
+ * `container.replaceChildren()`, so the card the reader was working was a
+ * fresh set of nodes after every board event. What it held had to be rescued
+ * by hand — `keepFields`/`restoreFields` for the drafts, a DOM snapshot for
+ * the expansions — and each rescue could only put back what it had thought to
+ * read out. Keying the card on `ReviewItem.key` removes the loss instead of
+ * compensating for it.
+ */
+describe('the walkthrough island contract', () => {
+  const oneDecision = () => q0([decision({ title: 'Blue or green?' })]);
+
+  it('keeps the card as the IDENTICAL node across a repaint of the same item', async () => {
+    renderReviewWalkthrough(root, oneDecision(), 0, walk());
+    const card = root.querySelector('.hub-walk-card');
+    expect(card).not.toBeNull();
+    await repaint();
+    // Same item, same card. The clock in the head moved, which is what makes
+    // this a repaint that really re-rendered rather than a no-op.
+    expect(root.querySelector('.hub-walk-card')).toBe(card);
+  });
+
+  it('replaces the card when the reader moves to another item', async () => {
+    const a = decision({ title: 'Blue or green?' });
+    const b = decision({ title: 'Ship Friday?' });
+    renderReviewWalkthrough(root, q0([a, b]), 0, walk());
+    const first = root.querySelector('.hub-walk-card');
+    await repaint({ index: 1 });
+    // The other half of the guarantee: a different key is a different card, so
+    // nothing the last one was holding can follow the reader onto this one.
+    expect(root.querySelector('.hub-walk-card')).not.toBe(first);
+    expect(root.querySelector('.hub-walk-title')?.textContent).toBe('Ship Friday?');
+  });
+
+  it('leaves the caret where the reader left it across a repaint', async () => {
+    renderReviewWalkthrough(root, oneDecision(), 0, walk());
+    const ta = root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement;
+    ta.value = 'Blue, because';
+    ta.focus();
+    ta.setSelectionRange(4, 4);
+    expect(document.activeElement).toBe(ta);
+    await repaint();
+    // Not restored — never taken away. `restoreFields` used to put the focus
+    // and the caret back onto a rebuilt box, which is a best-effort copy: on
+    // iOS a programmatic focus is not guaranteed, so reading the card for a
+    // second was enough to lose the keyboard.
+    expect(document.activeElement).toBe(ta);
+    expect(ta.selectionStart).toBe(4);
   });
 });
 
@@ -1418,15 +1581,16 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
  * and reading the question for a second was enough to lose it.
  */
 describe('renderReviewWalkthrough — "Tell me more" survives a repaint', () => {
-  it('stays open across a repaint with nothing typed and no focus', () => {
+  it('stays open across a repaint with nothing typed and no focus', async () => {
     const q = q0([decision({ title: 'Ship now or wait?' })]);
     renderReviewWalkthrough(root, q, 0, walk());
     const more = root.querySelector('.hub-walk-more') as HTMLButtonElement;
     more.click();
+    await tick();
     expect((root.querySelector('.hub-walk-info') as HTMLElement).classList).not.toContain('hidden');
     // Nothing typed, and the focus is elsewhere — the reader is reading.
     (document.activeElement as HTMLElement | null)?.blur();
-    renderReviewWalkthrough(root, q, 0, walk());
+    await repaint();
     const info = root.querySelector('.hub-walk-info') as HTMLElement;
     expect(info.classList.contains('hidden')).toBe(false);
     expect(root.querySelector('.hub-walk-more')?.getAttribute('aria-expanded')).toBe('true');

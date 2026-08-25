@@ -78,7 +78,6 @@ import {
   type PanelReviewItem,
   type TaskDiscussion,
   type TaskThread,
-  type WalkProgress,
   discussionIsBusy,
   renderActivity,
   renderArchivedList,
@@ -87,7 +86,6 @@ import {
   renderLeadStrip,
   renderQuickAdd,
   renderReviewBanner,
-  renderReviewWalkthrough,
   renderTaskDetail,
   renderUnplacedStrip,
   renderWorkspaceIdentity,
@@ -103,6 +101,11 @@ import {
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
+import {
+  type WalkProgress,
+  mountWalkthroughIsland,
+  walkthroughData,
+} from './walkthrough-island.tsx';
 
 interface HubState {
   info: HubWorkspaceInfo | null;
@@ -488,6 +491,13 @@ async function main(): Promise<void> {
     onOpen: (item) => openReviewItem(item),
     onWalkthrough: () => startWalkthrough(),
   });
+
+  // The card that pane opens on — the walkthrough. Mounted once for the
+  // reason the board island is: this surface is repainted by every board
+  // event, and everything the card holds (a half-typed answer, an expansion
+  // the reader opened) used to die with the nodes each repaint replaced.
+  // It takes no handlers here; they change per paint and ride the signal.
+  mountWalkthroughIsland(el('hub-walkthrough'));
 
   // The presence strip, in both places it renders: who is here in the
   // top-right cluster, and the drift notices in the settings panel. Same
@@ -1326,11 +1336,21 @@ async function main(): Promise<void> {
     // class on each region: a region added to Home later is covered by it
     // without anyone remembering this line exists.
     el('hub-home-page').classList.toggle('hidden', index >= 0);
-    renderReviewWalkthrough(
-      el('hub-walkthrough'),
+    // The island's one input. A plain signal write, not a render call: the
+    // card re-renders itself, keyed on `ReviewItem.key`, so a repaint of the
+    // item the reader is working keeps its DOM — which is what carries the
+    // half-typed answer and the expansions they opened across it.
+    //
+    // The handlers ride along because they are NOT stable: each one closes
+    // over `current` / `next`, the item this paint drew and the one after it.
+    // A set bound once at mount would be answering about a queue several
+    // answers old.
+    walkthroughData.value = {
       queue,
       index,
-      {
+      progress: state.walkProgress,
+      now: Date.now(),
+      handlers: {
         // `current` rather than a lookup by task id: it is the item this
         // render drew, so the key that gets advanced past cannot be a
         // different row that happens to share a task.
@@ -1362,8 +1382,7 @@ async function main(): Promise<void> {
         },
         contextLabel: walkContextLabel,
       },
-      state.walkProgress,
-    );
+    };
   }
 
   /**
