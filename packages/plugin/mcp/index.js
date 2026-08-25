@@ -14115,6 +14115,44 @@ function reviewAnsweredLine(p) {
   return `[workspace.review_answered] ${subject} has an answer — read it and act on it now${walk}.`;
 }
 
+// packages/mcp/src/self-authored.ts
+var COMMENT_EVENTS = new Set(["thread.created", "thread.replied"]);
+var STATUS_EVENTS = new Set(["thread.resolved", "thread.reopened"]);
+function identifiesOneSession(selfId) {
+  const id = selfId.trim();
+  return id.length > 0 && !id.startsWith("known-");
+}
+function idOf(who) {
+  if (!who || typeof who !== "object")
+    return;
+  const id = who.id;
+  return typeof id === "string" && id.trim() !== "" ? id.trim() : undefined;
+}
+function frameAuthorId(event, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return;
+  const p = payload;
+  if (STATUS_EVENTS.has(event))
+    return idOf(p.actor);
+  if (!COMMENT_EVENTS.has(event))
+    return;
+  const direct = idOf(p.comment?.author);
+  if (direct)
+    return direct;
+  if (event !== "thread.created")
+    return;
+  const comments = p.thread?.comments;
+  if (!Array.isArray(comments) || comments.length === 0)
+    return;
+  return idOf(comments[comments.length - 1]?.author);
+}
+function isSelfAuthoredEvent(event, payload, selfId) {
+  if (!identifiesOneSession(selfId))
+    return false;
+  const author = frameAuthorId(event, payload);
+  return author !== undefined && author.toLowerCase() === selfId.trim().toLowerCase();
+}
+
 // packages/mcp/src/sse-cursor.ts
 function frameMeta(raw) {
   const meta2 = {};
@@ -14299,7 +14337,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.107";
+var PLUGIN_VERSION = "0.1.108";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -17305,6 +17343,8 @@ async function emitChannelMessage(event, rawPayload) {
     await emitHubChannelMessage(event, rawPayload);
     return;
   }
+  if (isSelfAuthoredEvent(event, rawPayload, AUTHOR.id))
+    return;
   const p = rawPayload ?? {};
   const docId = p.docId ?? "unknown";
   if (event === "doc.sync_error") {
