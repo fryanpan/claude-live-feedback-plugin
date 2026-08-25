@@ -8,7 +8,6 @@ import {
   type HubGoal,
   type HubTask,
   type PresenceChip,
-  type ReviewItem,
   type ReviewThreadItem,
   type UptimeReport,
   boardSections,
@@ -31,7 +30,6 @@ import {
   renderActivity,
   renderBoard,
   renderHomeBrief,
-  renderHomeReview,
   renderLeadStrip,
   renderPresence,
   renderQuickAdd,
@@ -1702,177 +1700,6 @@ describe('keyboard reordering', () => {
     const row = root.querySelector('[data-task-id="k-b"]') as HTMLElement;
     row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-b' }));
-  });
-});
-
-describe('renderHomeReview', () => {
-  const strip = () => ({ onReview: vi.fn(), onOpen: vi.fn(), onWalkthrough: vi.fn() });
-
-  /** A thread an agent DECLARED as a review item — one of the two shapes the
-   *  server ships (the other is a surviving direct ask; membership is decided
-   *  there since 2026-08-21). `note()` below is the undeclared twin. */
-  const threadItem = (over: Record<string, unknown> = {}) => ({
-    kind: 'task-thread' as const,
-    docId: 'task:t-x',
-    threadId: `th-${Math.random().toString(36).slice(2, 8)}`,
-    taskId: 't-x',
-    title: 'Some task',
-    ask: 'Which repo does this land in?',
-    askedBy: 'Helper',
-    since: NOW - 2 * 86_400_000,
-    direct: false,
-    band: 'declared' as const,
-    commentId: 'c-1',
-    review: {
-      shape: 'review' as const,
-      headline: 'Which repo does this land in?',
-      why: 'The next commit goes to one of them and both are open.',
-    },
-    ...over,
-  });
-
-  /** An ordinary agent comment nobody declared anything on. */
-  const note = (over: Record<string, unknown> = {}) => {
-    const { band, commentId, review, ...rest } = threadItem(over);
-    return rest;
-  };
-
-  it('heads the section "For Your Review" with the dark Review All button that starts the walkthrough', () => {
-    const h = strip();
-    const d = task({ needs: 'decision', assignee: 'human' });
-    renderHomeReview(root, reviewQueue([d], [], NOW), h);
-    expect(root.querySelector('.hub-home-heading')?.textContent).toBe('For Your Review');
-    const go = root.querySelector('.hub-review-go') as HTMLButtonElement;
-    expect(go.textContent).toBe('Review All');
-    expect(go.className).toContain('hub-btn-ink');
-    go.click();
-    expect(h.onWalkthrough).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders each item as a ranked row: the question as the title, the wait as the subline', () => {
-    const h = strip();
-    const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
-    renderHomeReview(root, reviewQueue([d], [threadItem()], NOW), h, [], NOW);
-    const rows = [...root.querySelectorAll('.hub-review-row')];
-    expect(rows).toHaveLength(2);
-    // The decision title IS the question; the thread row shows its ask, not
-    // its task title — the row is the question itself (mockup anatomy).
-    expect(rows[0]?.querySelector('.hub-review-row-title')?.textContent).toBe('Ship now or wait?');
-    expect(rows[1]?.querySelector('.hub-review-row-title')?.textContent).toBe(
-      'Which repo does this land in?',
-    );
-    // The subline is the asked-by meta now — one spelling with the card head.
-    expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
-      'Asked by Helper 2 days ago',
-    );
-    expect(rows[0]?.querySelector('.hub-review-row-sub')?.textContent).toBe('Asked moments ago');
-    (rows[1] as HTMLElement).click();
-    expect(h.onReview).toHaveBeenCalledTimes(1);
-  });
-
-  it('highlights the top live row — the one the walkthrough would open on', () => {
-    const d = task({ needs: 'decision', assignee: 'human' });
-    renderHomeReview(root, reviewQueue([d], [threadItem()], NOW), strip());
-    const rows = [...root.querySelectorAll('.hub-review-row')];
-    expect(rows[0]?.className).toContain('hub-review-row-current');
-    expect(rows[1]?.className).not.toContain('hub-review-row-current');
-  });
-
-  it('empty queue says so plainly and offers no Review All', () => {
-    renderHomeReview(root, reviewQueue([], [], NOW), strip());
-    expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
-      'Nothing is waiting for your review',
-    );
-    expect(root.querySelector('.hub-review-go')).toBeNull();
-  });
-
-  it('keeps settled items in the stack struck through, and only ones the queue really dropped', () => {
-    const d = task({ needs: 'decision', assignee: 'human', title: 'Still open?' });
-    const queue = reviewQueue([d], [], NOW);
-    const stillLive = queue.items[0] as ReviewItem;
-    const settledGone: ReviewItem = {
-      key: 'decision:t-gone',
-      kind: 'decision',
-      title: 'Already answered one',
-      ask: '',
-      why: '',
-      since: NOW - 3_600_000,
-    };
-    const h = strip();
-    renderHomeReview(root, queue, h, [stillLive, settledGone]);
-    // The still-open item renders once, as a live row — not twice.
-    const titles = [...root.querySelectorAll('.hub-review-row-title')].map((n) => n.textContent);
-    expect(titles.filter((t) => t === 'Still open?')).toHaveLength(1);
-    const done = root.querySelector('.hub-review-row-done') as HTMLElement;
-    expect(done.textContent).toContain('Already answered one');
-    expect(done.querySelector('.hub-review-row-sub')?.textContent).toContain('answered');
-    // A done row is still the way back to the thing just answered.
-    done.click();
-    expect(h.onOpen).toHaveBeenCalledWith(settledGone);
-  });
-
-  // The band that used to render here ("N unanswered comments") is gone
-  // outright — Bryan, 2026-08-18: "Remove the unanswered comments from home.
-  // I don't need to know." Since 2026-08-21 membership is decided
-  // server-side (only declared items and surviving direct asks are shipped),
-  // so every row that arrives is an ask and renders as an ordinary queue
-  // row — never under band furniture of its own.
-  it('renders an undeclared ask as an ordinary row, with no unreplied band', () => {
-    const h = strip();
-    const d = task({ needs: 'decision', assignee: 'human', title: 'Ship now or wait?' });
-    renderHomeReview(
-      root,
-      reviewQueue([d], [threadItem(), note({ direct: true })], NOW),
-      h,
-      [],
-      NOW,
-    );
-    expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
-    expect(root.querySelector('.hub-review-unreplied-title')).toBeNull();
-    const rows = [...root.querySelectorAll('.hub-review-row')];
-    // Positive control: the decision, the declared item AND the undeclared
-    // ask all rendered — the absences above are not a page that rendered
-    // nothing, and the ask is not a row that vanished.
-    expect(rows).toHaveLength(3);
-    expect(rows.some((r) => r.className.includes('hub-review-row-unreplied'))).toBe(false);
-  });
-
-  it('shows only the quiet line when the server ships nothing', () => {
-    renderHomeReview(root, reviewQueue([], [], NOW), strip(), [], NOW);
-    expect(root.querySelector('.hub-home-quiet')?.textContent).toContain(
-      'Nothing is waiting for your review',
-    );
-    expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(0);
-    expect(root.querySelector('.hub-review-go')).toBeNull();
-  });
-
-  it('renders no band when every thread was declared', () => {
-    renderHomeReview(root, reviewQueue([], [threadItem()], NOW), strip(), [], NOW);
-    expect(root.querySelector('.hub-review-unreplied-head')).toBeNull();
-    // Positive control: the declared one really did render, so the absence
-    // above is not a page that rendered nothing.
-    expect(root.querySelectorAll('.hub-review-row')).toHaveLength(1);
-  });
-
-  // ONE anatomy (approved design): the row is title + asked-by meta, and the
-  // why lives in the card's markdown body rather than as a third row line.
-  // Membership is still the SERVER's call, so the undeclared note renders a
-  // row too; it waited less, so the declared item is the one at the top.
-  it('sublines the row with the asked-by meta and renders no separate why line', () => {
-    renderHomeReview(
-      root,
-      reviewQueue([], [threadItem(), note({ since: NOW - 3_600_000 })], NOW),
-      strip(),
-      [],
-      NOW,
-    );
-    const rows = [...root.querySelectorAll('.hub-review-row')];
-    expect(rows).toHaveLength(2);
-    expect(rows[0]?.querySelector('.hub-review-row-why')).toBeNull();
-    expect(rows[0]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
-      'Asked by Helper 2 days ago',
-    );
   });
 });
 
