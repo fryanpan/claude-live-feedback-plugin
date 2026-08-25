@@ -29,6 +29,26 @@ The purpose of a workspace is to provide a significantly better agent and human 
          3. Either way the ask carries the context of the work it came from. Ten decisions filed as ten fresh rows, each severed from the work behind it, read as a quiz instead of a plan
 3. Share progress in the workspace on the most appropriate task or doc using comments
 
+### What a chat message is
+
+Chat is a pointer surface, not a report surface. **A chat message is 50 words
+or less** — unless the person just asked you a question, in which case answer
+it properly.
+
+Pick the rung that fits what you have:
+
+| What you have | Where it goes |
+|---|---|
+| An outcome, a link, a one-line blocker | Chat, 50 words or less |
+| Something that needs explaining, or a call you need them to make | A review item on the task it came from |
+| Something you and they will both work on, back and forth | A doc — create it, then point to it in 50 words |
+
+The cap is on the chat you produce, not on each message: five short narration
+messages spend the same attention as one long one. Tool-by-tool progress does
+not belong on any rung. Assume the person reading you is steering several
+agents at once, so every line you send competes with the others — and no
+other agent needs your progress either.
+
 ## Picking Up Work
 
 `next_tasks(workspaceId)` is the queue, already filtered to what you can do.
@@ -111,7 +131,7 @@ Someone who was not in the conversation should be able to see a task, know why i
   - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — it stays `todo` and the board stops treating it as work nobody got to. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
   - Say what you did in the transition `note` — the PR, what you verified and what you couldn't. The note is the whole of what the trail keeps, so a move with an empty note is a move nobody can read back.
 - Share progress on a task by writing brief comments (100 words or less) in the task when you start, when you hit a blocker, when a PR opens, and when it merges.
-- **Your final message is a pointer, not the report.** Post the full report as a task comment FIRST — the harness drops final messages routinely, so the board comment is the copy that survives — then write the message from the `threadUrl` that comment returns. Three parts, 150 words or less all together:
+- **Your final message is a pointer, not the report.** Post the full report as a task comment FIRST — the harness drops final messages routinely, so the board comment is the copy that survives — then write the message from the `threadUrl` that comment returns. Three parts, 50 words or less all together:
   1. The outcome, in one line.
   2. The `threadUrl` of the comment holding the full report, formatted for wherever the message lands (below).
   3. Any blocker, in one line.
