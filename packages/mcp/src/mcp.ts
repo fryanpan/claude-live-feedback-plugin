@@ -97,7 +97,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.106';
+const PLUGIN_VERSION = '0.1.107';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -109,28 +109,6 @@ const PLUGIN_VERSION = '0.1.106';
  * attach response). See AgentAttachment.processId on the server side.
  */
 const PROCESS_ID = randomUUID();
-
-/**
- * What a good `evidence.commit` looks like, said at the one layer that reaches
- * the caller BEFORE the bad value exists.
- *
- * The server cannot check this: evidence is a bare sha with no repo attached,
- * and this server has no checkout — nor any way to know which of a machine's
- * repos a given board's shas belong to. So a tool description is the only
- * available guard, and both tools that accept a commit share this one spelling
- * of it rather than two that drift.
- *
- * The failure it is aimed at is not carelessness, it is the OBVIOUS action
- * being wrong: `git rev-parse HEAD` on the branch you just finished is the
- * natural thing to record, resolves perfectly when you record it, and is
- * discarded by the squash-merge an hour later. Measured on this project's own
- * board 2026-08-17: of 67 commit values on closed rows, two were `PR #131` /
- * `PR #132`, one was a sha that no longer resolves anywhere, and one more was a
- * still-live branch commit on an unmerged branch — the same defect in flight,
- * counted as proof today and dead the moment its branch lands.
- */
-const COMMIT_EVIDENCE_DESCRIPTION =
-  'A commit sha that will still resolve after this work merges — the one on the default branch, not the branch commit you are on now. A squash-merge discards branch commits, so a branch sha resolves for you and for nobody afterwards while the row still reads as proven. Not merged yet? Record what you have and call `amend_evidence` later. A PR number is not a commit; put it in `note`.';
 
 const server = new Server(
   {
@@ -226,8 +204,7 @@ const server = new Server(
       'Backlog awaiting triage — the create says so and hands you the goal',
       'bands, and placing it with set_task_goal IS the triage:',
       'pick the goal AND the exact position). task_transition is the',
-      'single gate for status changes — blockers come back in the result, and',
-      'attach evidence ({commit} or {threadRef}) or the move is flagged unproven.',
+      'single gate for status changes — blockers come back in the result.',
       'attach_agent registers you as the workspace agent (heartbeat every few',
       'minutes to stay live; lead-addressed deliveries only reach live agents).',
       'Workspace events (task.*, decision.answered, workspace.goals_changed)',
@@ -1496,7 +1473,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              "Project each row to just these keys (`id` always included). Use it for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB.",
+              "Project each row to just these keys (`id` always included). Use it for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB.",
           },
           includeArchived: {
             type: 'boolean',
@@ -1510,20 +1487,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Attach evidence on forward moves or the move is flagged unproven — and the commit must be one that still resolves after a squash-merge, not the branch sha you are sitting on. Wrong or missing evidence is fixed with amend_evidence; re-sending this call refuses.",
+        "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Say what you did in `note` — the commit, the PR, what you verified — because the note is the whole of what the trail keeps. Re-sending the same status refuses; there is nothing to change.",
       inputSchema: {
         type: 'object',
         properties: {
           taskId: { type: 'string' },
           to: { type: 'string', enum: ['triage', 'todo', 'in-progress', 'done'] },
           note: { type: 'string' },
-          evidence: {
-            type: 'object',
-            properties: {
-              commit: { type: 'string', description: COMMIT_EVIDENCE_DESCRIPTION },
-              threadRef: { type: 'object' },
-            },
-          },
           usage: {
             type: 'object',
             properties: {
@@ -1533,35 +1503,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['taskId', 'to'],
-      },
-    },
-    {
-      name: 'amend_evidence',
-      description:
-        'Attach or correct evidence on a transition that already happened — for when the move was right and the proof was missing or false. Re-sending task_transition refuses, so this is the only route. It appends rather than overwrites: the original stays, struck through, with your correction beside it. Defaults to the most recent transition.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          taskId: { type: 'string' },
-          evidence: {
-            type: 'object',
-            description: 'The proof the move should have carried. At least one of these.',
-            properties: {
-              commit: { type: 'string', description: COMMIT_EVIDENCE_DESCRIPTION },
-              threadRef: { type: 'object' },
-            },
-          },
-          note: {
-            type: 'string',
-            description: 'Why the correction was needed — it lands in the audit trail.',
-          },
-          transitionTs: {
-            type: 'number',
-            description:
-              'Which transition to correct. Omit for the latest — the move you just made.',
-          },
-        },
-        required: ['taskId', 'evidence'],
       },
     },
     {
@@ -3147,11 +3088,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'task_transition': {
-        const { taskId, to, note, evidence, usage } = a as {
+        const { taskId, to, note, usage } = a as {
           taskId: string;
           to: string;
           note?: string;
-          evidence?: { commit?: string; threadRef?: unknown };
           usage?: { inputTokens: number; outputTokens: number };
         };
         // WHO IS ALREADY ON THIS ROW — read BEFORE the move, because after it
@@ -3168,14 +3108,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           to,
           author: AUTHOR,
           ...(note !== undefined ? { note } : {}),
-          ...(evidence !== undefined ? { evidence } : {}),
           ...(usage !== undefined ? { usage } : {}),
-        })) as { task: TaskPayload; blockers: unknown[]; unproven: boolean };
+        })) as { task: TaskPayload; blockers: unknown[] };
         return ok({
           taskId,
           status: res.task.status,
           blockers: res.blockers,
-          unproven: res.unproven,
           // Additive and advisory. The status code, the refusal semantics and
           // every other field are untouched — an old bundle calling this from
           // a session that cannot restart reads exactly what it always did,
@@ -3183,36 +3121,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // narrowing: there IS a caller that cannot be restarted, so nothing
           // narrows.
           ...(claimNotice !== undefined ? { warning: claimNotice } : {}),
-        });
-      }
-      case 'amend_evidence': {
-        const { taskId, evidence, note, transitionTs } = a as {
-          taskId: string;
-          evidence: { commit?: string; threadRef?: unknown };
-          note?: string;
-          transitionTs?: number;
-        };
-        const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/evidence`, {
-          author: AUTHOR,
-          evidence,
-          ...(note !== undefined ? { note } : {}),
-          ...(transitionTs !== undefined ? { transitionTs } : {}),
-        })) as {
-          transition: { ts: number; to: string };
-          amendment: { evidence: unknown; supersedes?: unknown };
-          unproven: boolean;
-        };
-        return ok({
-          taskId,
-          // What the caller needs to see is the EFFECT: which row now carries
-          // what, and whether the shading cleared.
-          transitionTs: res.transition.ts,
-          to: res.transition.to,
-          evidence: res.amendment.evidence,
-          ...(res.amendment.supersedes !== undefined
-            ? { superseded: res.amendment.supersedes }
-            : {}),
-          unproven: res.unproven,
         });
       }
       case 'assign_task': {

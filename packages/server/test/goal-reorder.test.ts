@@ -395,7 +395,7 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
       // Only a DONE task survives a removal in place; an open one is swept
       // into Backlog, which is the other synthetic row.
       s.transition(t.task.id, 'in-progress', { actor: PERSON });
-      s.transition(t.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
+      s.transition(t.task.id, 'done', { actor: PERSON, note: 'shipped' });
       const board = boardFor(ids);
       s.setGoalList(wsId, [board[0], board[2]] as WorkspaceGoal[], {
         actor: PERSON,
@@ -458,7 +458,7 @@ describe('TaskStore.reorderGoals names a RESERVED id as reserved', () => {
     const t = store.createTask(wsId, { title: 'Trim the bundle', goal: G.perf });
     if (!t.ok) throw new Error('create failed');
     store.transition(t.task.id, 'in-progress', { actor: PERSON });
-    store.transition(t.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
+    store.transition(t.task.id, 'done', { actor: PERSON, note: 'shipped' });
     const board = boardFor(G);
     store.setGoalList(wsId, [board[0], board[2]] as WorkspaceGoal[], {
       actor: PERSON,
@@ -707,7 +707,6 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
           await post(`/api/tasks/${task.id}/transition`, {
             author: AGENT,
             to,
-            evidence: { commit: 'abc1234' },
           }),
         );
       }

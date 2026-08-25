@@ -152,7 +152,6 @@ import {
   type GoalListEntry,
   type HubWorkspace,
   LEGACY_REVIEW_ITEM_ID,
-  type Ref,
   type Task,
   type TaskStatus,
   TaskStore,
@@ -4213,7 +4212,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(visibility.length > 0 ? { visibility } : {}),
           });
         }
-        // The single gate for status changes: attributed, evidence-stamped,
+        // The single gate for status changes: attributed and
         // dependency-checked. 409 on an enforce-marked open dependency.
         const taskTransitionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transition$/);
         if (taskTransitionMatch && req.method === 'POST') {
@@ -4225,14 +4224,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const res = taskStore.transition(taskId, to, {
             actor: author,
             note: body?.note as string | undefined,
-            evidence: body?.evidence as { commit?: string; threadRef?: Ref } | undefined,
             usage: body?.usage as { inputTokens: number; outputTokens: number } | undefined,
           });
-          // `body.confirmed` is read by nothing now (the risk gate was removed
-          // 2026-08-18) and is deliberately NOT validated: peers on older
-          // bundles keep sending it until they restart, and a request that
-          // starts failing over a field the server no longer cares about is
-          // exactly how a removal breaks a caller it never meant to touch.
+          // `body.confirmed` (risk gate, removed 2026-08-18) and
+          // `body.evidence` (removed 2026-08-25) are read by nothing now and
+          // are deliberately NOT validated: peers on older bundles keep
+          // sending them until they restart, and a request that starts
+          // failing over a field the server no longer cares about is exactly
+          // how a removal breaks a caller it never meant to touch.
           if (!res.ok) {
             // A gate refusal is a refusal, not a malformed request: same 409
             // an enforce-marked blocker returns, so callers have one shape
@@ -4243,27 +4242,31 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(200, res);
         }
-        // Evidence for a move that already happened. Not a second status
-        // door — it never touches `status` — but the answer to the one case
-        // the gate above has to refuse: the move was right and the proof was
-        // wrong or missing. Appends; the original row is never rewritten.
+        // Retired 2026-08-25 with the rest of evidence support, and kept as a
+        // NO-OP rather than deleted. An old bundle reaches this route from a
+        // session nobody here can restart, and the two failure modes a
+        // deletion would hand it — a 404 from the fall-through, or a refusal
+        // over a field the server stopped caring about — are both unreadable
+        // from the caller's own version. So it answers the way it always did
+        // for the two cases that were never about evidence (unknown task,
+        // missing author) and records nothing for the rest. `ignored` is on
+        // the response so a reader of a log can tell an accepted no-op from a
+        // correction that landed.
         const taskEvidenceMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/evidence$/);
         if (taskEvidenceMatch && req.method === 'POST') {
           const taskId = decodeURIComponent(taskEvidenceMatch[1] ?? '');
           const body = await safeJson(req);
           const author = authorFor(body?.author);
-          const evidence = body?.evidence as { commit?: string; threadRef?: Ref } | undefined;
-          if (!author || evidence === undefined) {
-            return j(400, { error: 'author + evidence required' });
-          }
-          const res = taskStore.amendEvidence(taskId, {
-            actor: author,
-            evidence,
-            note: body?.note as string | undefined,
-            transitionTs: body?.transitionTs as number | undefined,
+          if (!author) return j(400, { error: 'author required' });
+          const task = taskStore.getTask(taskId) ?? taskStore.getGoalRow(taskId);
+          if (!task) return j(404, { ok: false, error: 'not-found' });
+          return j(200, {
+            ok: true,
+            ignored: true,
+            task,
+            message:
+              'Evidence is no longer recorded on transitions. This call was accepted and nothing was written; evidence already stored on older transitions is untouched.',
           });
-          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
-          return j(200, res);
         }
         // Cross-references (§3.10 `.../links`): links are STORED on the
         // task; backlinks are COMPUTED per read, never stored, so the two

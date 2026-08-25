@@ -1,7 +1,7 @@
 /**
  * Unit tests for the hub task store (tasks.ts): workspace creation, doc
  * attachment, task creation defaults, the transition gate (dependency
- * blockers, per-edge enforce, evidence flagging), actor attribution via
+ * blockers, per-edge enforce), actor attribution via
  * classifyActor, and the debounced sidecar persistence at
  * `<dataDir>/workspaces/<id>.tasks.json`.
  *
@@ -233,48 +233,28 @@ describe('TaskStore', () => {
       expect(r.task.transitions[1]?.ts).toBeGreaterThan(0);
     });
 
-    it('stamps evidence and usage on the transition that carried them', () => {
+    it('stamps the note and usage on the transition that carried them', () => {
       const ws = store.createWorkspace('ws');
       const a = store.createTask(ws.id, { title: 'a' });
       if (!a.ok) throw new Error('create failed');
       const r = store.transition(a.task.id, 'done', {
         actor: AGENT,
-        evidence: {
-          commit: 'abc1234',
-          threadRef: { kind: 'thread', docId: 'plan-doc', threadId: 'th-9' },
-        },
+        note: 'merged as #402',
         usage: { inputTokens: 1200, outputTokens: 300 },
       });
       if (!r.ok) throw new Error('transition failed');
-      expect(r.task.transitions[0]?.evidence?.commit).toBe('abc1234');
-      expect(r.task.transitions[0]?.evidence?.threadRef).toEqual({
-        kind: 'thread',
-        docId: 'plan-doc',
-        threadId: 'th-9',
-      });
+      expect(r.task.transitions[0]?.note).toBe('merged as #402');
       expect(r.task.transitions[0]?.usage).toEqual({ inputTokens: 1200, outputTokens: 300 });
-      expect(r.unproven).toBe(false);
     });
 
-    it('allows an evidence-less move to done but flags it (never blocks)', () => {
+    it('applies a move to done with nothing attached to it at all', () => {
       const ws = store.createWorkspace('ws');
       const a = store.createTask(ws.id, { title: 'a' });
       if (!a.ok) throw new Error('create failed');
       const r = store.transition(a.task.id, 'done', { actor: AGENT });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      expect(r.unproven).toBe(true);
       expect(r.task.status).toBe('done');
-    });
-
-    it('a move back to todo is never flagged as unproven', () => {
-      const ws = store.createWorkspace('ws');
-      const a = store.createTask(ws.id, { title: 'a' });
-      if (!a.ok) throw new Error('create failed');
-      store.transition(a.task.id, 'in-progress', { actor: AGENT });
-      const r = store.transition(a.task.id, 'todo', { actor: AGENT });
-      if (!r.ok) throw new Error('transition failed');
-      expect(r.unproven).toBe(false);
     });
 
     it('returns open after-dependencies as blockers WITHOUT blocking (warn edge)', () => {
@@ -402,7 +382,7 @@ describe('TaskStore', () => {
       const ws = store.createWorkspace('search-revamp');
       const a = store.createTask(ws.id, { title: 'a', quote: 'do the thing' });
       if (!a.ok) throw new Error('create failed');
-      store.transition(a.task.id, 'done', { actor: PERSON, evidence: { commit: 'abc1234' } });
+      store.transition(a.task.id, 'done', { actor: PERSON, note: 'shipped' });
       store.attachDoc(ws.id, 'plan-doc');
       store.flush();
       store.stop();
@@ -416,7 +396,7 @@ describe('TaskStore', () => {
         expect(t?.status).toBe('done');
         expect(t?.quote).toBe('do the thing');
         expect(t?.transitions[0]?.by.kind).toBe('person');
-        expect(t?.transitions[0]?.evidence?.commit).toBe('abc1234');
+        expect(t?.transitions[0]?.note).toBe('shipped');
       } finally {
         reborn.stop();
       }

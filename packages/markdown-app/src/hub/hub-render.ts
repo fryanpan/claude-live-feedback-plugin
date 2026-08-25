@@ -7,10 +7,8 @@
 import {
   REVIEW_LIMITS,
   type ReviewPayload,
-  evidenceSuperseded,
   reviewAnswered,
   reviewItemBodyMarkdown,
-  transitionUnproven,
 } from '@feedback/core';
 import type { ReviewShape } from '@feedback/core';
 import {} from '@feedback/core/goal-summary';
@@ -35,7 +33,6 @@ import {
   GOAL_STATUS_ORDER,
   type HomePayload,
   type HubDecisionOption,
-  type HubEvidence,
   type HubGoal,
   type HubTask,
   type HubTransition,
@@ -67,7 +64,6 @@ import {
   reviewHeadline,
   reviewItemBadge,
   reviewRowTitle,
-  shortCommit,
   statusLabel,
   statusOptions,
   taskActivity,
@@ -2397,28 +2393,6 @@ function renderDiscussion(
   return section;
 }
 
-/** How a piece of evidence reads in the history: the commit if there is one,
- *  else the fact that a thread was cited. */
-function evidenceLabel(evidence: HubEvidence | undefined): string {
-  const commit = shortCommit(evidence?.commit);
-  if (commit) return `commit ${commit}`;
-  return evidence?.threadRef !== undefined ? 'thread ref' : '';
-}
-
-/**
- * One row of a task's audit trail, and the only surface that tells the whole
- * truth about how well proven a move is.
- *
- * Three states, and the middle one is the reason this exists:
- *
- *  - no proof at all → marked `unproven`, which is the board's shading;
- *  - proof that was later CORRECTED → never unproven, before or after, so
- *    the shading is silent about it. The superseded commit is struck here
- *    instead, because a sha that resolves to nothing reads as evidence and
- *    nothing looks wrong until someone tries to follow it;
- *  - proof attached after the fact → the mark clears (there IS proof now),
- *    and the row keeps the narrower fact that it arrived late.
- */
 /** One audit row in a ticket's history, in the same sentence the workspace
  *  Activity view would read it in — one `describeEvent`, two surfaces. */
 function activityRow(ev: ActivityEvent, title: string): HTMLLIElement {
@@ -2439,36 +2413,6 @@ function renderTransitionRow(t: HubTransition): HTMLLIElement {
   if (t.note) bits.push(t.note);
   head.textContent = bits.join(' — ');
   li.append(head);
-
-  const original = evidenceLabel(t.evidence);
-  if (original) {
-    const span = document.createElement('span');
-    span.className = evidenceSuperseded(t) ? 'hub-evidence-superseded' : 'hub-evidence';
-    span.textContent = ` — ${original}`;
-    if (evidenceSuperseded(t)) span.title = 'Superseded by a later correction — do not follow this';
-    li.append(span);
-  }
-
-  if (transitionUnproven(t)) {
-    li.classList.add('unproven');
-    const mark = document.createElement('span');
-    mark.className = 'hub-unproven-mark';
-    mark.textContent = ' — no evidence';
-    li.append(mark);
-  }
-
-  for (const a of t.amendments ?? []) {
-    const line = document.createElement('div');
-    line.className = 'hub-evidence-amendment';
-    const label = evidenceLabel(a.evidence) || 'evidence';
-    const parts = [
-      `${label} added by ${a.by.name}${a.supersedes !== undefined ? ', replacing the entry above' : ''}`,
-    ];
-    if (a.note) parts.push(a.note);
-    line.textContent = parts.join(' — ');
-    line.title = new Date(a.ts).toLocaleString();
-    li.append(line);
-  }
   return li;
 }
 
@@ -3855,9 +3799,8 @@ export function renderTaskDetail(
   const activity = document.createElement('div');
   activity.className = 'hub-detail-tabpanel hub-detail-tabpanel-activity';
   activity.setAttribute('role', 'tabpanel');
-  // ONE history, newest first: the stored transitions (which carry evidence
-  // and the unproven mark) merged with the task's own rows from the workspace
-  // audit log. The tab used to render transitions and nothing else, so a
+  // ONE history, newest first: the stored transitions merged with the task's
+  // own rows from the workspace audit log. The tab used to render transitions and nothing else, so a
   // rename, a description rewrite, a reassignment and a due-date change all
   // left no trace on the ticket they changed — every one of them was in the
   // log the whole time, on a surface nobody opens a ticket to read.

@@ -2,7 +2,7 @@
  * Oversized tool results, both halves of the fix:
  *
  *  - `list_tasks` returned 122KB on a real board — every row still carried
- *    reviews (quotes/answers), infoRequests, options, evidence. `fields`
+ *    reviews (quotes/answers), infoRequests, options. `fields`
  *    lets a caller pick the keys it needs. Handler-side ONLY: the REST
  *    route is untouched, so no old bundle's call changes shape.
  *  - `doc_status` is the new cheap read for a doc (`get_doc` hit 320KB);
@@ -47,7 +47,7 @@ const rows = [
     transitions: [{ to: 'todo' }, { to: 'in-progress' }],
     reviews: [{ quote: 'heavy' }],
     infoRequests: [{ q: 'heavy' }],
-    evidence: { commit: 'abc' },
+    options: [{ id: 'o-1', label: 'heavy' }],
   },
   {
     id: 't-2',
@@ -68,7 +68,7 @@ describe('projectTaskRows — the default is byte-for-byte the old trim', () => 
       status: 'todo',
       reviews: [{ quote: 'heavy' }],
       infoRequests: [{ q: 'heavy' }],
-      evidence: { commit: 'abc' },
+      options: [{ id: 'o-1', label: 'heavy' }],
       transitionCount: 2,
     });
     expect(out[1]).toEqual({

@@ -1546,11 +1546,6 @@ async function main(): Promise<void> {
       showToast(`Blocked by open dependency: ${names || 'an enforced dependency'}`);
     } else if (!res.ok) {
       showToast('Status change failed');
-    } else {
-      const unproven = res.data?.unproven;
-      // Not a dead end any more: the mark clears when evidence is attached
-      // afterwards, so the toast says the move is still open to proof.
-      if (unproven) showToast('Marked without evidence — a commit or thread can still be attached');
     }
   }
 
