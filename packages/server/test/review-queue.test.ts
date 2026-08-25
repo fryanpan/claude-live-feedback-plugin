@@ -572,7 +572,6 @@ describe('reviewThreadItems — declared review items vs the inferred band', () 
   const declaration = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
     shape: 'decision',
     headline: 'Should a resolved thread stay visible inline?',
-    why: 'Blocks the inline-comments branch.',
     options: [
       { id: 'hide', label: 'Hide them' },
       { id: 'dim', label: 'Keep dimmed' },
@@ -828,7 +827,6 @@ describe('reviewThreadItems — a row is an ask, not a reply', () => {
   const declaration = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
     shape: 'decision',
     headline: 'Ship now or wait?',
-    why: 'Blocks the release.',
     options: [
       { id: 'now', label: 'Now' },
       { id: 'wait', label: 'Wait' },
@@ -1009,7 +1007,6 @@ describe('taskReviewItems — a ticket contributes one row per OPEN review item'
   const payload = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
     shape: 'decision',
     headline: 'Which cache do we keep?',
-    why: 'Blocks the storage cleanup.',
     options: [
       { id: 'o-7f3a', label: 'Keep disk' },
       { id: 'o-4b2e', label: 'Keep memory' },
@@ -1142,7 +1139,7 @@ describe('row titles decode HTML entities', () => {
         reviews: [
           {
             id: 'ri-1',
-            review: { shape: 'review', headline: 'Ready to look?', why: 'Blocks the launch.' },
+            review: { shape: 'review', headline: 'Ready to look?' },
             createdAt: T0 + 5,
             createdBy: 'Helper',
           },
@@ -1185,7 +1182,6 @@ describe('reviewItemRows — one queue, one order', () => {
   const review: ReviewPayload = {
     shape: 'decision',
     headline: 'Which cache do we keep?',
-    why: 'Blocks the storage cleanup.',
     options: [
       { id: 'o-7f3a', label: 'Keep disk' },
       { id: 'o-4b2e', label: 'Keep memory' },

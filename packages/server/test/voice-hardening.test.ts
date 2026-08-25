@@ -389,8 +389,6 @@ describe('voice actions, hardened: end to end', () => {
       review: {
         shape: 'review',
         headline,
-        why: 'Blocks the rollout; the wording is yours.',
-        lookFor: 'Whether the shorter clause still reads as a rule.',
       },
     });
     const payload = (await r.json()) as { thread?: { id: string }; error?: string };

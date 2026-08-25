@@ -486,7 +486,6 @@ describe('the queue count matches what Home places — thread rows', () => {
       review: {
         shape: 'review',
         headline: 'Pick the sweep schedule',
-        why: 'The cron line ships with this change.',
       },
     });
     expect(declared.status).toBe(200);
