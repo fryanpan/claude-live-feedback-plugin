@@ -178,7 +178,10 @@ function HomeReview(props: { handlers: ReviewStripHandlers }) {
  * container holding the live island. Handlers are bound once at mount — they
  * are stable closures over app state, same as the vanilla call site's.
  */
-export function mountHomeReviewIsland(host: HTMLElement, handlers: ReviewStripHandlers): () => void {
+export function mountHomeReviewIsland(
+  host: HTMLElement,
+  handlers: ReviewStripHandlers,
+): () => void {
   const el = document.createElement('div');
   el.setAttribute('data-preact-island', 'home-review');
   host.appendChild(el);
