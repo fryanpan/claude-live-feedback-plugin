@@ -191,8 +191,8 @@ describe('triage status', () => {
       expect(back.ok).toBe(true);
       if (!back.ok) return;
       expect(back.task.status).toBe('triage');
-      // Never a forward move, so it is never blockable and never `unproven`.
-      expect(back.unproven).toBe(false);
+      // Never a forward move, so it is never blockable.
+      expect(back.blockers).toEqual([]);
     });
 
     it('refuses a no-op move to the status the row already holds', () => {

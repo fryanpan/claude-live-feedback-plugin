@@ -103,7 +103,7 @@ export interface ClaimSession extends OwnerSession {
  *
  * What the ws room syncs is otherwise the §3.3 visitor-contract list:
  * titles, status, order, transitions with actor DISPLAY names (no ids),
- * evidence commit hashes, token usage, goal text, and verbatim quote/answer
+ * token usage, goal text, and verbatim quote/answer
  * fields. AgentAttachment records never enter any ydoc.
  */
 
@@ -279,23 +279,9 @@ export function projectTask(
       to: t.to,
       by: { name: t.by.name, kind: t.by.kind },
       ...(t.note !== undefined ? { note: t.note } : {}),
-      ...(t.evidence !== undefined ? { evidence: t.evidence } : {}),
-      // Corrections attached after the fact. The board renders from this
-      // projection and nothing else, so an amendment dropped here is one no
-      // reviewer can ever see — the store-has-it/surface-can't-show-it
-      // failure, in the layer that has produced it before. Actors are
-      // display-only, the same §3.3 contract the transition row itself keeps.
-      ...(t.amendments !== undefined
-        ? {
-            amendments: t.amendments.map((a) => ({
-              ts: a.ts,
-              by: { name: a.by.name, kind: a.by.kind },
-              evidence: a.evidence,
-              ...(a.note !== undefined ? { note: a.note } : {}),
-              ...(a.supersedes !== undefined ? { supersedes: a.supersedes } : {}),
-            })),
-          }
-        : {}),
+      // `evidence` and `amendments` are deliberately NOT projected. Evidence
+      // support was removed 2026-08-25: the store still holds what older
+      // transitions recorded, and no surface reads it.
       ...(t.usage !== undefined ? { usage: t.usage } : {}),
     })),
     bodyDocId: taskBodyDocId(task.id),

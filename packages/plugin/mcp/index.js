@@ -14299,9 +14299,8 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.106";
+var PLUGIN_VERSION = "0.1.107";
 var PROCESS_ID = randomUUID();
-var COMMIT_EVIDENCE_DESCRIPTION = "A commit sha that will still resolve after this work merges — the one on the default branch, not the branch commit you are on now. A squash-merge discards branch commits, so a branch sha resolves for you and for nobody afterwards while the row still reads as proven. Not merged yet? Record what you have and call `amend_evidence` later. A PR number is not a commit; put it in `note`.";
 var server = new Server({
   name: "claude-workspaces",
   version: PLUGIN_VERSION
@@ -14391,8 +14390,7 @@ var server = new Server({
     "Backlog awaiting triage — the create says so and hands you the goal",
     "bands, and placing it with set_task_goal IS the triage:",
     "pick the goal AND the exact position). task_transition is the",
-    "single gate for status changes — blockers come back in the result, and",
-    "attach evidence ({commit} or {threadRef}) or the move is flagged unproven.",
+    "single gate for status changes — blockers come back in the result.",
     "attach_agent registers you as the workspace agent (heartbeat every few",
     "minutes to stay live; lead-addressed deliveries only reach live agents).",
     "Workspace events (task.*, decision.answered, workspace.goals_changed)",
@@ -15488,7 +15486,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           fields: {
             type: "array",
             items: { type: "string" },
-            description: "Project each row to just these keys (`id` always included). Use it for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB."
+            description: "Project each row to just these keys (`id` always included). Use it for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB."
           },
           includeArchived: {
             type: "boolean",
@@ -15500,20 +15498,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "task_transition",
-      description: "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Attach evidence on forward moves or the move is flagged unproven — and the commit must be one that still resolves after a squash-merge, not the branch sha you are sitting on. Wrong or missing evidence is fixed with amend_evidence; re-sending this call refuses.",
+      description: "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Say what you did in `note` — the commit, the PR, what you verified — because the note is the whole of what the trail keeps. Re-sending the same status refuses; there is nothing to change.",
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
           to: { type: "string", enum: ["triage", "todo", "in-progress", "done"] },
           note: { type: "string" },
-          evidence: {
-            type: "object",
-            properties: {
-              commit: { type: "string", description: COMMIT_EVIDENCE_DESCRIPTION },
-              threadRef: { type: "object" }
-            }
-          },
           usage: {
             type: "object",
             properties: {
@@ -15523,33 +15514,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           }
         },
         required: ["taskId", "to"]
-      }
-    },
-    {
-      name: "amend_evidence",
-      description: "Attach or correct evidence on a transition that already happened — for when the move was right and the proof was missing or false. Re-sending task_transition refuses, so this is the only route. It appends rather than overwrites: the original stays, struck through, with your correction beside it. Defaults to the most recent transition.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          taskId: { type: "string" },
-          evidence: {
-            type: "object",
-            description: "The proof the move should have carried. At least one of these.",
-            properties: {
-              commit: { type: "string", description: COMMIT_EVIDENCE_DESCRIPTION },
-              threadRef: { type: "object" }
-            }
-          },
-          note: {
-            type: "string",
-            description: "Why the correction was needed — it lands in the audit trail."
-          },
-          transitionTs: {
-            type: "number",
-            description: "Which transition to correct. Omit for the latest — the move you just made."
-          }
-        },
-        required: ["taskId", "evidence"]
       }
     },
     {
@@ -16630,38 +16594,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case "task_transition": {
-        const { taskId, to, note, evidence, usage } = a;
+        const { taskId, to, note, usage } = a;
         const claimNotice = to === "in-progress" ? await claimNoticeFor(taskId) : undefined;
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/transition`, {
           to,
           author: AUTHOR,
           ...note !== undefined ? { note } : {},
-          ...evidence !== undefined ? { evidence } : {},
           ...usage !== undefined ? { usage } : {}
         });
         return ok({
           taskId,
           status: res.task.status,
           blockers: res.blockers,
-          unproven: res.unproven,
           ...claimNotice !== undefined ? { warning: claimNotice } : {}
-        });
-      }
-      case "amend_evidence": {
-        const { taskId, evidence, note, transitionTs } = a;
-        const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/evidence`, {
-          author: AUTHOR,
-          evidence,
-          ...note !== undefined ? { note } : {},
-          ...transitionTs !== undefined ? { transitionTs } : {}
-        });
-        return ok({
-          taskId,
-          transitionTs: res.transition.ts,
-          to: res.transition.to,
-          evidence: res.amendment.evidence,
-          ...res.amendment.supersedes !== undefined ? { superseded: res.amendment.supersedes } : {},
-          unproven: res.unproven
         });
       }
       case "assign_task": {

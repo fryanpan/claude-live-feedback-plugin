@@ -20,7 +20,6 @@ import {
   reviewFromDecisionTask,
   reviewGapAdvice,
   reviewPayloadMessage,
-  transitionUnproven,
 } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 import {
@@ -37,11 +36,9 @@ import { bodyHead } from './task-title.ts';
  *
  * Words people write together live in CRDTs; facts the system is accountable
  * for — status, placement, who owns it — go through THIS gate. Every status
- * change lands here (`transition`), gets an append-only audit entry with the
- * actor's identity and kind, and carries whatever evidence the caller
- * attached. An evidence-less move to done/in-progress is allowed but flagged
- * (`unproven`) — flagging is easier to live with than blocking (§7.1); the
- * only hard stop is an `after` edge explicitly marked enforce.
+ * change lands here (`transition`) and gets an append-only audit entry with
+ * the actor's identity and kind. The only hard stop is an `after` edge
+ * explicitly marked enforce.
  *
  * Persistence is a per-workspace JSON sidecar at
  * `<dataDir>/workspaces/<id>.tasks.json`, written on a short debounce after
@@ -113,27 +110,6 @@ export function isValidRef(ref: unknown): ref is Ref {
     default:
       return false;
   }
-}
-
-/**
- * The evidence an object actually claims, or undefined if it claims nothing.
- *
- * Trims the commit and drops a malformed `threadRef` outright, so a caller
- * cannot satisfy "this amendment carries proof" with whitespace or with a
- * ref that points at no shape the rest of the system recognises. Returning
- * `undefined` — one spelling of "nothing here" — keeps every caller from
- * inventing its own second spelling.
- */
-export function normalizeEvidence(evidence: unknown): TaskEvidence | undefined {
-  if (typeof evidence !== 'object' || evidence === null) return undefined;
-  const e = evidence as { commit?: unknown; threadRef?: unknown };
-  const commit = typeof e.commit === 'string' ? e.commit.trim() : '';
-  const threadRef = isValidRef(e.threadRef) ? e.threadRef : undefined;
-  if (commit.length === 0 && threadRef === undefined) return undefined;
-  return {
-    ...(commit.length > 0 ? { commit } : {}),
-    ...(threadRef !== undefined ? { threadRef } : {}),
-  };
 }
 
 /** Canonical identity of a Ref — two refs are the same link iff their keys
@@ -413,42 +389,26 @@ export interface TaskActor {
   kind: 'person' | 'agent';
 }
 
+/**
+ * Proof a transition once carried. NOTHING WRITES OR READS THIS ANY MORE —
+ * evidence support was removed 2026-08-25 — and the type stays for the same
+ * reason `confirmed` below does: sidecars already on disk hold these objects,
+ * the persist path rewrites the whole file from memory, and a field the type
+ * has forgotten is a field the next save DESTROYS rather than merely hides.
+ * The record is kept; only the product surface went away.
+ */
 export interface TaskEvidence {
   commit?: string;
   threadRef?: Ref;
 }
 
-/**
- * Evidence attached to a transition AFTER it was recorded.
- *
- * Append, never rewrite. The transition's own `evidence` field is left
- * exactly as it was — the row keeps saying it went in with no proof, or with
- * the wrong proof — and this is a new attributed, timestamped fact layered on
- * it, in the same shape as the rest of the audit trail. The two failures it
- * repairs both happened in the field: an `evidence` object dropped before it
- * reached the server (the move landed `unproven` and there was no way back),
- * and a commit sha written from memory that resolved to nothing (which reads
- * as proof, so nothing looked wrong until someone tried to follow it).
- */
+/** A correction appended to a transition after the fact. Retired alongside
+ *  `TaskEvidence`, and kept on the type for the same reason. */
 export interface TaskEvidenceAmendment {
   ts: number;
   by: TaskActor;
-  /** The evidence the transition should have carried. Never empty — an
-   *  amendment that claims nothing is refused, because "the caller sent an
-   *  evidence object" is a check satisfied by `{}`, and a correction must
-   *  not be able to delete the thing it was sent to fix. */
   evidence: TaskEvidence;
-  /** Why the correction was needed, in the amender's words. */
   note?: string;
-  /**
-   * What stood before this amendment — the row's own evidence for the first
-   * correction, the previous amendment's for later ones. Absent when there
-   * was nothing to supersede.
-   *
-   * This is the difference between filling a gap and marking a false claim,
-   * and a reader of the trail has to be able to tell them apart: the second
-   * one means the sha printed next to the row is one nobody should follow.
-   */
   supersedes?: TaskEvidence;
 }
 
@@ -458,10 +418,9 @@ export interface TaskTransition {
   to: TaskStatus;
   by: TaskActor;
   note?: string;
+  /** No longer written or read (see `TaskEvidence`); persisted rows carry it. */
   evidence?: TaskEvidence;
-  /** Corrections attached after the fact, oldest first. Absent — rather than
-   *  an empty array — while there have been none, so a row that was right the
-   *  first time carries nothing extra. */
+  /** No longer written or read (see `TaskEvidence`); persisted rows carry it. */
   amendments?: TaskEvidenceAmendment[];
   /** Agent-reported cost at done. */
   usage?: { inputTokens: number; outputTokens: number };
@@ -893,40 +852,12 @@ export interface TransitionBlocker {
 }
 
 export type TransitionResult =
-  | { ok: true; task: BoardRow; blockers: TransitionBlocker[]; unproven: boolean }
+  | { ok: true; task: BoardRow; blockers: TransitionBlocker[] }
   | {
       ok: false;
       error: 'not-found' | 'bad-status' | 'same-status' | 'blocked' | 'goal-not-triageable';
       blockers?: TransitionBlocker[];
       /** Refusal text shaped to land verbatim in an agent's context. */
-      message?: string;
-    };
-
-export type AmendEvidenceResult =
-  | {
-      ok: true;
-      /** A BoardRow for the same reason `TransitionResult` carries one: a goal
-       *  moves through the same gate, so its declaration can need the same
-       *  correction. */
-      task: BoardRow;
-      /** The row the correction landed on, amendments included. */
-      transition: TaskTransition;
-      amendment: TaskEvidenceAmendment;
-      /** The row's shading AFTER the amend — false whenever real evidence
-       *  landed on a forward move. Returned so the caller can confirm the
-       *  effect rather than infer it from a 200. */
-      unproven: boolean;
-    }
-  | {
-      ok: false;
-      error:
-        | 'not-found'
-        /** The task exists but has never moved, so there is no row to amend. */
-        | 'no-transitions'
-        /** No transition at the `transitionTs` given. */
-        | 'transition-not-found'
-        /** The evidence claims nothing — see `TaskEvidenceAmendment.evidence`. */
-        | 'empty-evidence';
       message?: string;
     };
 
@@ -1352,37 +1283,12 @@ export interface TaskTransitionedEvent {
   to: TaskStatus;
   actor: TaskActor;
   note?: string;
-  evidence?: TaskEvidence;
   /** What the task cost in tokens (agent-reported at done). */
   usage?: { inputTokens: number; outputTokens: number };
   /** Was the human's live confirmation on a yellow-tier agent move (§3.4).
    *  Never emitted since the risk gate was removed 2026-08-18; kept so a
    *  reader of an older `events.jsonl` row still types. */
   confirmed?: boolean;
-  /** A forward move with no evidence attached — allowed, flagged (§7.1). */
-  unproven: boolean;
-  ts: number;
-}
-
-/**
- * A correction attached to a transition that already happened.
- *
- * Carries no nested actor record: `actor` is the amender, and it is the one
- * field visitor redaction knows how to strip ids from, so a second copy
- * inside an amendment payload would ride the SSE feed unredacted.
- */
-export interface TaskEvidenceAmendedEvent {
-  type: 'task.evidence_amended';
-  workspaceId: string;
-  taskId: string;
-  /** Which row was corrected — the transition's own timestamp. */
-  transitionTs: number;
-  /** What that row recorded, for a reader who has only the event. */
-  to: TaskStatus;
-  evidence: TaskEvidence;
-  supersedes?: TaskEvidence;
-  note?: string;
-  actor: TaskActor;
   ts: number;
 }
 
@@ -1776,7 +1682,6 @@ export interface VoiceRequestEvent {
 export type TaskStoreEvent =
   | TaskCreatedEvent
   | TaskTransitionedEvent
-  | TaskEvidenceAmendedEvent
   | TaskGateRefusedEvent
   | TaskAssignedEvent
   | TaskBodyEditedEvent
@@ -3255,7 +3160,7 @@ export class TaskStore {
    * The single gate for status changes (§3.10). Every change is attributed
    * (`classifyActor` decides person vs agent — the same line the reply-reopens
    * rule draws, reused rather than reinvented) and appended to the task's
-   * audit trail with whatever evidence was supplied.
+   * audit trail.
    *
    * Gate semantics, in order:
    *  - unknown task / unknown status / no-op same-status → validation errors.
@@ -3274,9 +3179,6 @@ export class TaskStore {
    *    and therefore unblockable; `to: 'in-progress'` is forward and consults
    *    `after` like any other forward move, which is correct — starting work
    *    a dependency holds back is the thing that gate exists to stop.
-   *  - `unproven` marks a forward move that attached no evidence: allowed,
-   *    flagged, never refused (§7.1 — the worst this can do is draw attention
-   *    to something that turned out to be fine).
    *  - there is no longer a risk arm. `riskTier` gated an agent's forward
    *    move (red refused, yellow needed `confirmed: true`) until 2026-08-18;
    *    the reasoning for removing it, and what is deliberately still accepted
@@ -3288,7 +3190,6 @@ export class TaskStore {
     opts: {
       actor: { id: string; name: string; kind?: string };
       note?: string;
-      evidence?: TaskEvidence;
       usage?: { inputTokens: number; outputTokens: number };
       /** Accepted and IGNORED since 2026-08-18. It carried the human's live
        *  confirmation for a yellow-tier forward move; the risk gate is gone,
@@ -3296,6 +3197,11 @@ export class TaskStore {
        *  a payload that suddenly fails validation is how a removal breaks
        *  them. Do not turn this into a rejection. */
       confirmed?: boolean;
+      /** Accepted and IGNORED since 2026-08-25, on the same terms as
+       *  `confirmed` and for the same reason — an older bundle attaches proof
+       *  to every forward move and cannot be restarted from here. It is not
+       *  recorded, and the transition it lands on carries nothing from it. */
+      evidence?: unknown;
     },
   ): TransitionResult {
     // Resolves a goal row as readily as a task, which is the whole of what
@@ -3326,15 +3232,10 @@ export class TaskStore {
       };
     }
     if (task.status === to) {
-      // Historically the whole answer, and for the commonest reason to
-      // re-send a transition — "the move is right, the metadata was wrong" —
-      // it was a dead end: the row kept whatever evidence it had (none, or a
-      // sha that resolves to nothing) and no verb could change it. The
-      // refusal now names the door instead of ending the conversation.
       return {
         ok: false,
         error: 'same-status',
-        message: `${task.title} is already ${to}. If the move was right and the EVIDENCE was wrong or missing, amend it: POST /api/tasks/${task.id}/evidence (MCP: amend_evidence) appends a correction to the transition that already happened.`,
+        message: `${task.title} is already ${to}. Nothing to do — a status change is the only thing this gate records, and the row is already there.`,
       };
     }
 
@@ -3366,7 +3267,6 @@ export class TaskStore {
       to,
       by,
       ...(opts.note !== undefined ? { note: opts.note } : {}),
-      ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
     };
     task.transitions.push(entry);
@@ -3374,11 +3274,6 @@ export class TaskStore {
     task.updatedAt = entry.ts;
     this.scheduleSave(task.workspaceId);
 
-    // One spelling of the shading predicate, shared with the board (`@feedback
-    // /core/evidence`). Note it asks whether the evidence CLAIMS anything, so
-    // a caller that sends `evidence: {}` is flagged the same as one that sent
-    // nothing — which is what an empty object honestly means.
-    const unproven = transitionUnproven(entry);
     this.emit({
       type: 'task.transitioned',
       workspaceId: task.workspaceId,
@@ -3388,143 +3283,10 @@ export class TaskStore {
       to,
       actor: by,
       ...(opts.note !== undefined ? { note: opts.note } : {}),
-      ...(opts.evidence !== undefined ? { evidence: opts.evidence } : {}),
       ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
-      unproven,
       ts: entry.ts,
     });
-    return { ok: true, task, blockers, unproven };
-  }
-
-  /**
-   * Attach evidence to a transition that has already been recorded.
-   *
-   * The gate above is the single door for STATUS, and it refuses a move that
-   * would change nothing — correctly, because re-running a transition is not
-   * how you fix its metadata. That left one real case with no answer at all:
-   * the move was right and the proof was wrong. It happened twice in a week,
-   * with different causes — an `evidence` object dropped before it reached
-   * the server, and a commit sha written from memory that resolves to
-   * nothing — and both left a finished task permanently mis-marked, the
-   * second one in the worse direction, since a bad sha reads as proof.
-   *
-   * So this appends rather than rewrites. The transition keeps its own
-   * `evidence` untouched, and the correction lands beside it carrying who,
-   * when, and what it supersedes. Consequences worth stating:
-   *
-   *  - the `unproven` shading clears, because the row now HAS proof and a
-   *    permanent alarm about a metadata slip is the harm being removed. The
-   *    narrower fact — that the proof arrived late — stays visible in the
-   *    row itself rather than on the board;
-   *  - an amendment can only ever ADD a claim. Empty evidence is refused, so
-   *    no correction can blank the proof it was sent to repair;
-   *  - status is untouched. Amending is not a transition and never gates.
-   *
-   * Which row: `transitionTs` names one exactly, and the default is the most
-   * recent — the move you just made, which is when this is nearly always
-   * needed. Two transitions in the same millisecond would share a ts; the
-   * later one wins, deterministically.
-   *
-   * NOT validated: whether a commit sha resolves. See the tool description —
-   * `TaskEvidence` carries a bare sha with no repo coordinate, and a hub
-   * workspace has no repo either, so this server genuinely cannot look one
-   * up. A guess would refuse legitimate corrections (an unpushed commit is
-   * unreachable to anyone but its author), and a check that blocks the fix
-   * is worse than no check.
-   */
-  amendEvidence(
-    taskId: string,
-    opts: {
-      actor: { id: string; name: string; kind?: string };
-      evidence: TaskEvidence;
-      note?: string;
-      /** Which transition — defaults to the most recent. */
-      transitionTs?: number;
-    },
-  ): AmendEvidenceResult {
-    // `findRow`, not `getTask`, and it is the transition gate that decides
-    // this: the gate resolves the same way, so a goal CAN be declared done
-    // unproven, and its refusal message names this endpoint as the remedy. An
-    // amend that resolved only tasks would answer that instruction with
-    // `not-found` — a promise the same object makes and cannot keep. Nothing
-    // below touches a field a `GoalRow` lacks.
-    const task = this.findRow(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    if (task.transitions.length === 0) {
-      return {
-        ok: false,
-        error: 'no-transitions',
-        message: `${task.title} has never moved, so there is no transition to attach evidence to.`,
-      };
-    }
-    const evidence = normalizeEvidence(opts.evidence);
-    if (!evidence) {
-      return {
-        ok: false,
-        error: 'empty-evidence',
-        message:
-          'An amendment must carry a commit or a threadRef. An empty evidence object claims nothing, and accepting one would let a correction erase the proof it was sent to fix.',
-      };
-    }
-
-    let target: TaskTransition | undefined;
-    if (opts.transitionTs === undefined) {
-      target = task.transitions[task.transitions.length - 1];
-    } else {
-      // Last match wins: the trail is append-only, so a shared ts means two
-      // moves inside one millisecond and the later one is the live claim.
-      for (let i = task.transitions.length - 1; i >= 0; i--) {
-        const t = task.transitions[i];
-        if (t && t.ts === opts.transitionTs) {
-          target = t;
-          break;
-        }
-      }
-      if (!target) {
-        return {
-          ok: false,
-          error: 'transition-not-found',
-          message: `No transition at ts ${opts.transitionTs} on ${task.title}. Read the task's transitions and use one of their ts values, or omit transitionTs to amend the most recent move.`,
-        };
-      }
-    }
-    if (!target) return { ok: false, error: 'no-transitions' };
-
-    // What this correction replaces: the newest claim standing on the row,
-    // which is the previous amendment's if there is one. Saying it supersedes
-    // the ORIGINAL evidence after a second correction would assert that the
-    // first bad sha was still live, which it was not.
-    const standing = target.amendments?.at(-1)?.evidence ?? target.evidence;
-    const supersedes = normalizeEvidence(standing);
-
-    const amendment: TaskEvidenceAmendment = {
-      ts: Date.now(),
-      by: {
-        id: opts.actor.id,
-        name: opts.actor.name,
-        kind: classifyActor(opts.actor),
-      },
-      evidence,
-      ...(opts.note !== undefined ? { note: opts.note } : {}),
-      ...(supersedes !== undefined ? { supersedes } : {}),
-    };
-    target.amendments = [...(target.amendments ?? []), amendment];
-    task.updatedAt = amendment.ts;
-    this.scheduleSave(task.workspaceId);
-
-    this.emit({
-      type: 'task.evidence_amended',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      transitionTs: target.ts,
-      to: target.to,
-      evidence,
-      ...(supersedes !== undefined ? { supersedes } : {}),
-      ...(opts.note !== undefined ? { note: opts.note } : {}),
-      actor: amendment.by,
-      ts: amendment.ts,
-    });
-    return { ok: true, task, transition: target, amendment, unproven: transitionUnproven(target) };
+    return { ok: true, task, blockers };
   }
 
   /**
