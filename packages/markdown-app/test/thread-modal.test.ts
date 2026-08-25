@@ -1,5 +1,5 @@
 import type { Comment, ReviewPayload, Thread, User } from '@feedback/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MountScope } from '../src/mount-scope.ts';
 import { type ThreadModalHandle, mountThreadModal } from '../src/thread-modal.ts';
 import { ThreadPanel } from '../src/threads.ts';
@@ -399,5 +399,116 @@ describe('focus stays inside the dialog', () => {
     stray.focus();
     expect(tab()).toBe(false);
     expect(document.activeElement).toBe(stray);
+  });
+});
+
+describe('the dialog keeps its slots sized to their faces', () => {
+  /*
+   * A slot's height is a number WE write against a measured face, and
+   * `overflow: hidden` clips whatever a stale number cuts off — which, in
+   * this dialog, was the Reply button: the foot sits outside the slots, so
+   * the card looked whole while its one send control was unreachable
+   * (measured live 2026-08-24: face 1691px at measure, 1740px after the body
+   * gained its scrollbar and the text rewrapped; the missing 49px was the
+   * actions row, and no scroll can reach inside an overflow clip).
+   *
+   * happy-dom lays nothing out, so faces get offsetHeight getters that model
+   * the browser: 0 while unrendered (`display: none`), a real number once the
+   * dialog is up, and a bigger number when the fixture grows the face.
+   */
+
+  /** A harness whose card faces measure `h()` while the dialog is visible. */
+  function mountMeasured(h: () => number): Harness & { faces: () => HTMLElement[] } {
+    const scope = new MountScope();
+    cleanups.push(() => scope.dispose());
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    cleanups.push(() => container.remove());
+    const panel = new ThreadPanel({
+      container,
+      currentUser: alice,
+      onThreadClick: () => {},
+      onReply: () => {},
+      onResolve: () => {},
+      onReopen: () => {},
+      onReanchor: () => {},
+    });
+    const harness: Harness & { faces: () => HTMLElement[] } = {
+      panel,
+      closed: 0,
+      modal: mountThreadModal({
+        scope,
+        renderCard: (t, pendingReply) => {
+          const card = panel.renderThread(t, pendingReply);
+          for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
+            Object.defineProperty(face, 'offsetHeight', {
+              get: () => {
+                const root = document.querySelector('.thread-modal');
+                // display:none reads 0, exactly as a browser would report it.
+                return root && !root.classList.contains('hidden') ? h() : 0;
+              },
+              configurable: true,
+            });
+          }
+          return card;
+        },
+        onClose: () => {
+          harness.closed += 1;
+        },
+      }),
+      root: () => document.querySelector('.thread-modal') as HTMLElement,
+      scrim: () => document.querySelector('.thread-modal-scrim') as HTMLElement,
+      card: () => document.querySelector('.thread-modal-body .thread'),
+      faces: () =>
+        Array.from(document.querySelectorAll<HTMLElement>('.thread-modal-body .thread-face')),
+    };
+    return harness;
+  }
+
+  const slotOf = (h: Harness): HTMLElement => h.root().querySelector('.thread-slot') as HTMLElement;
+
+  it('open() sizes the slots itself — no composer mount required to rescue it', () => {
+    // A card whose thread is resolved, or whose composer chunk never lands,
+    // announces nothing after paint — the open must not depend on that
+    // announcement having a reason to fire.
+    const h = mountMeasured(() => 40);
+    h.modal.open(thread('t1', [comment('hello')]));
+    expect(slotOf(h).style.height).toBe('40px');
+  });
+
+  it('a face that grows while the dialog is up gets its slot re-sized', () => {
+    // The growth path with no event anywhere: typing a reply that wraps onto
+    // more lines, an image landing in a comment body — the face is taller,
+    // nothing announces it, and the stale slot clips the reply controls.
+    class FakeResizeObserver {
+      static instances: FakeResizeObserver[] = [];
+      observed: Element[] = [];
+      constructor(public cb: () => void) {
+        FakeResizeObserver.instances.push(this);
+      }
+      observe(el: Element): void {
+        this.observed.push(el);
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.observed = [];
+      }
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    cleanups.push(() => vi.unstubAllGlobals());
+
+    let faceH = 40;
+    const h = mountMeasured(() => faceH);
+    h.modal.open(thread('t1', [comment('hello')]));
+    expect(slotOf(h).style.height).toBe('40px');
+
+    const watching = FakeResizeObserver.instances.filter((o) =>
+      o.observed.some((el) => el.classList.contains('thread-face')),
+    );
+    expect(watching.length).toBeGreaterThan(0);
+
+    faceH = 90;
+    for (const o of watching) o.cb();
+    expect(slotOf(h).style.height).toBe('90px');
   });
 });
