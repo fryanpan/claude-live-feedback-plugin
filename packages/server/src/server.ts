@@ -45,7 +45,7 @@ import {
 } from './auth/session.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
-import { maybeCompress } from './compress.ts';
+import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import { showFile } from './git-diff.ts';
@@ -2494,12 +2494,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // `undefined` means the request became a websocket — nothing to decorate.
       const routed = await route(req, server);
       // Compress BEFORE the CORS merge so the encoding headers ride out on the
-      // same response the wrapper copies; `maybeCompress` skips anything that
-      // isn't a buffered JSON body (see compress.ts for why that gate is
-      // narrow).
+      // same response the wrapper copies; `maybeCompress` skips anything whose
+      // content-type isn't on its allowlist (see compress.ts for why that gate
+      // is narrow — a live stream must never be buffered to compress it).
+      //
+      // `maybeNotModified` runs first: when the client already holds the body,
+      // gzipping it is the one case where the CPU buys nothing, and a 304 has
+      // no body for `maybeCompress` to act on anyway.
       return routed === undefined
         ? undefined
-        : applyCors(req, refreshSession(req, await maybeCompress(req, routed)));
+        : applyCors(
+            req,
+            refreshSession(req, await maybeCompress(req, maybeNotModified(req, routed))),
+          );
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
@@ -7163,7 +7170,27 @@ function serveStatic(p: string): Response | null {
   if (!existsSync(p)) return null;
   const buf = readFileSync(p);
   const ct = CT[extname(p).toLowerCase()] ?? 'application/octet-stream';
-  return new Response(buf, { headers: { 'content-type': ct, 'cache-control': 'no-cache' } });
+  return new Response(buf, {
+    headers: {
+      'content-type': ct,
+      // `no-cache` is kept: this fleet redeploys often and a browser quietly
+      // running last week's bundle is the worse failure. What it means is
+      // "revalidate before use", NOT "do not store" — but a revalidation needs
+      // a validator, and there was none here, so the only answer the server
+      // could give was the whole file again. Every board load re-sent every
+      // byte of its CSS, its app bundle and the widget. The etag below is what
+      // turns that into a 304.
+      'cache-control': 'no-cache',
+      // Hashed from the CONTENT rather than from mtime+size. A redeploy writes
+      // these files fresh, so mtime moves on every deploy whether or not the
+      // bytes did — which would throw away the cache precisely when nothing
+      // changed. Content-derived, an unchanged bundle keeps its tag across
+      // deploys and a changed one cannot keep it. Bun's hash is not
+      // cryptographic and does not need to be: this answers "same bytes?",
+      // and nothing downstream trusts it for anything else.
+      etag: `"${Bun.hash(buf).toString(16)}"`,
+    },
+  });
 }
 
 function renderMockupNotFound(docId: string): string {
