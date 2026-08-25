@@ -25,7 +25,7 @@ const HUB_EVENT = /^(task|decision|workspace|agent|triage|voice)\./;
  * Fields dropped outright from a visitor's copy of a `voice.*` event.
  *
  * §3.3's visitor enumeration is exhaustive by construction — task
- * titles/status/order, transitions with display names, evidence hashes,
+ * titles/status/order, transitions with display names,
  * token usage, goal text, verbatim quote/answer fields — and voice arrived
  * after it. A transcript is unbounded free speech about whatever the
  * speaker is thinking ("hold the release until legal clears the

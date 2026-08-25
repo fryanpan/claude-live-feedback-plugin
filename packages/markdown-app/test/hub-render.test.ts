@@ -465,11 +465,7 @@ describe('renderTaskDetail', () => {
     expect(metaValue('Goal')).toBe('g-pr');
   });
 
-  // The server accepted, keyed and backlinked `url` refs before anything
-  // drew them — stored and unreachable, which is the same failure this
-  // codebase already hit with resolved threads. So this asserts the SURFACE,
-  // not the model: a stored ref nothing renders is not a feature.
-  describe('the history rows say how well proven each move is', () => {
+  describe('the history rows say who moved the task and what they said', () => {
     const moved = (t: Partial<HubTask['transitions'][number]>) =>
       task({
         status: 'done',
@@ -486,98 +482,27 @@ describe('renderTaskDetail', () => {
 
     const rows = () => [...root.querySelectorAll('.hub-detail-transitions > li')];
 
-    it('marks a forward move that carries no proof', () => {
+    it('names the actor and the move', () => {
       renderTaskDetail(root, moved({}), detailHandlers());
       const row = rows()[0];
-      expect(row?.classList.contains('unproven')).toBe(true);
-      expect(row?.textContent).toContain('no evidence');
+      expect(row?.textContent).toContain('Search Revamp');
+      expect(row?.textContent).toContain('in-progress → done');
     });
 
-    it('does not mark a move that came with a commit — the positive control', () => {
-      renderTaskDetail(root, moved({ evidence: { commit: '621f371abc' } }), detailHandlers());
+    it('carries the note, which is the whole of what the trail keeps', () => {
+      renderTaskDetail(root, moved({ note: 'merged as #402' }), detailHandlers());
+      expect(rows()[0]?.textContent).toContain('merged as #402');
+    });
+
+    // Evidence support was removed on 2026-08-25. Rows recorded before that
+    // still hold `evidence` and `amendments` in the store; the panel is built
+    // from the projection, which no longer carries either, so nothing here can
+    // print a commit at all.
+    it('says nothing about proof, for or against', () => {
+      renderTaskDetail(root, moved({}), detailHandlers());
       const row = rows()[0];
       expect(row?.classList.contains('unproven')).toBe(false);
-      expect(row?.textContent).toContain('621f371');
-    });
-
-    it('clears the mark when an amendment supplied the missing evidence', () => {
-      renderTaskDetail(
-        root,
-        moved({
-          amendments: [
-            {
-              ts: NOW,
-              by: { name: 'Search Revamp', kind: 'agent' },
-              evidence: { commit: '621f371abc' },
-            },
-          ],
-        }),
-        detailHandlers(),
-      );
-      const row = rows()[0];
-      expect(row?.classList.contains('unproven')).toBe(false);
-      // …and the row still says the proof arrived late. The shading answers
-      // "is there proof"; the row keeps the narrower fact the board drops.
-      expect(row?.textContent).toContain('621f371');
-      expect(row?.textContent?.toLowerCase()).toContain('added');
-    });
-
-    it('marks the ORIGINAL commit as superseded when a correction replaced it', () => {
-      renderTaskDetail(
-        root,
-        moved({
-          evidence: { commit: 'b2ba21edef' },
-          amendments: [
-            {
-              ts: NOW,
-              by: { name: 'Search Revamp', kind: 'agent' },
-              evidence: { commit: '621f371abc' },
-              supersedes: { commit: 'b2ba21edef' },
-              note: 'wrote it from memory',
-            },
-          ],
-        }),
-        detailHandlers(),
-      );
-      const row = rows()[0];
-      // Never unproven, before or after — so if the surface only reacted to
-      // the shading, a sha that resolves to nothing would still read as live
-      // proof here. It has to be struck at the row.
-      expect(row?.classList.contains('unproven')).toBe(false);
-      expect(row?.querySelector('.hub-evidence-superseded')?.textContent).toContain('b2ba21e');
-      expect(row?.textContent).toContain('621f371');
-      expect(row?.textContent).toContain('wrote it from memory');
-    });
-
-    it('does not strike a commit that nothing superseded', () => {
-      renderTaskDetail(root, moved({ evidence: { commit: '621f371abc' } }), detailHandlers());
-      expect(root.querySelector('.hub-evidence-superseded')).toBeNull();
-      // Positive control that the probe can see one when it IS there.
-      root.replaceChildren();
-      renderTaskDetail(
-        root,
-        moved({
-          evidence: { commit: 'b2ba21edef' },
-          amendments: [
-            { ts: NOW, by: { name: 'Bryan', kind: 'person' }, evidence: { commit: '621f371abc' } },
-          ],
-        }),
-        detailHandlers(),
-      );
-      expect(root.querySelector('.hub-evidence-superseded')).not.toBeNull();
-    });
-
-    it('never marks a move back to todo — undoing work owes no proof', () => {
-      renderTaskDetail(
-        root,
-        task({
-          transitions: [
-            { ts: NOW, from: 'done', to: 'todo', by: { name: 'Bryan', kind: 'person' } },
-          ],
-        }),
-        detailHandlers(),
-      );
-      expect(rows()[0]?.classList.contains('unproven')).toBe(false);
+      expect(row?.textContent?.toLowerCase()).not.toContain('evidence');
     });
   });
 

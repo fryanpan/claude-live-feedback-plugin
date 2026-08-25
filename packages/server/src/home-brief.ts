@@ -124,7 +124,6 @@ export const BRIEF_EVENT_TYPES: ReadonlySet<string> = new Set([
   'task.assigned',
   'task.regrouped',
   'task.body_edited',
-  'task.evidence_amended',
   'decision.answered',
   'decision.info_requested',
   'workspace.goals_changed',

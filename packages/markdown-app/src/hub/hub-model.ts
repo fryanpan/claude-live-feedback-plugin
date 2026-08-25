@@ -24,28 +24,12 @@ export interface HubActor {
  * `unknown` is a third real state, not a placeholder: an owner nobody has
  * declared and no agent attachment vouches for genuinely is unknown, and the
  * board says so rather than picking the friendlier of the two answers. The
- * server owns the judgement (`resolveOwnerKind`) because half its evidence —
- * the workspace's agent roster — never enters the ydoc, so a browser deriving
- * it would give a share visitor a different answer from the owner's.
+ * server owns the judgement (`resolveOwnerKind`) because half of what it
+ * rests on — the workspace's agent roster — never enters the ydoc, so a
+ * browser deriving it would give a share visitor a different answer from the
+ * owner's.
  */
 export type HubOwnerKind = 'person' | 'agent' | 'unknown';
-
-export interface HubEvidence {
-  commit?: string;
-  threadRef?: unknown;
-}
-
-/** Evidence attached to a move AFTER it was recorded — see
- *  `@feedback/core/evidence` for why this appends instead of rewriting. */
-export interface HubTransitionAmendment {
-  ts: number;
-  by: HubActor;
-  evidence: HubEvidence;
-  note?: string;
-  /** The claim this replaced. Present only for a CORRECTION; absent when the
-   *  amendment filled a gap. */
-  supersedes?: HubEvidence;
-}
 
 export interface HubTransition {
   ts: number;
@@ -53,8 +37,6 @@ export interface HubTransition {
   to: string;
   by: HubActor;
   note?: string;
-  evidence?: HubEvidence;
-  amendments?: HubTransitionAmendment[];
   usage?: { inputTokens: number; outputTokens: number };
 }
 
@@ -1759,8 +1741,9 @@ export function activityRows(events: ActivityEvent[], filter: ActivityFilter): A
  * beside the stored transition list.
  *
  * `task.transitioned` is dropped because the panel renders those from
- * `task.transitions`, which carries the evidence and the unproven mark that
- * the log row does not. Everything else a task can have done TO it —
+ * `task.transitions` — the stored trail, which is on the row itself rather
+ * than in a log that has to be fetched. Everything else a task can have done
+ * TO it —
  * renamed, rewritten, reassigned, re-dated, answered, taken back — reached
  * the workspace feed and no surface on the ticket. Measured 2026-08-18: the
  * tab logged status changes and nothing else, so a rename left no trace on
@@ -1886,8 +1869,8 @@ function taskTitle(ev: ActivityEvent, titleOf: (taskId: string) => string): stri
  *
  * Deliberately NOT every `describeEvent` case: `agent.*` refreshes the
  * presence strip through its own listeners, `server.started` and the retired
- * `task.gate_refused` have no live emitter to hear, and `task.body_edited`
- * predates this list and is out of its scope.
+ * `task.gate_refused` / `task.evidence_amended` have no live emitter to hear,
+ * and `task.body_edited` predates this list and is out of its scope.
  */
 export const ACTIVITY_REFRESH_EVENTS = [
   'task.created',
@@ -1898,7 +1881,6 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'task.parked',
   'task.archived',
   'task.restored',
-  'task.evidence_amended',
   'task.regrouped',
   'decision.answered',
   'decision.answer_withdrawn',
@@ -1985,12 +1967,13 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       if (from && to) return `${actorName(ev)} renamed “${from}” to “${to}”${why}`;
       return `${actorName(ev)} renamed ${title()}${why}`;
     }
+    // Evidence support was removed on 2026-08-25, so nothing emits this
+    // again. The case STAYS for the same reason `task.gate_refused` below
+    // does: rows are already in `events.jsonl`, and a type this switch has no
+    // case for renders as the bare slug in a feed written for people. What
+    // was retired is the ability to WRITE evidence, not the history of when
+    // somebody did.
     case 'task.evidence_amended': {
-      // Two different sentences, because the two cases mean different things
-      // to a reader of the trail. Filling a gap says the work was proven all
-      // along and the metadata slipped. A correction says the sha printed
-      // against that move is one nobody should follow — and someone may have
-      // followed it already.
       const commit = shortCommit((ev.evidence as { commit?: string } | undefined)?.commit);
       const old = shortCommit((ev.supersedes as { commit?: string } | undefined)?.commit);
       const what = commit ? `commit ${commit}` : 'evidence';

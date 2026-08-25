@@ -104,14 +104,14 @@ describe('task store events + audit log', () => {
   });
 
   describe('task.transitioned', () => {
-    it('a transition emits the from/to, classified actor, evidence, and usage', () => {
+    it('a transition emits the from/to, classified actor, note, and usage', () => {
       const ws = store.createWorkspace('search-revamp');
       const created = store.createTask(ws.id, { title: 'Wire the index' });
       if (!created.ok) throw new Error('create failed');
       events.length = 0;
       const res = store.transition(created.task.id, 'done', {
         actor: AGENT,
-        evidence: { commit: 'abc1234' },
+        note: 'merged as #402',
         usage: { inputTokens: 1200, outputTokens: 300 },
       });
       expect(res.ok).toBe(true);
@@ -123,9 +123,8 @@ describe('task store events + audit log', () => {
       expect(e.from).toBe('todo');
       expect(e.to).toBe('done');
       expect(e.actor.kind).toBe('agent');
-      expect(e.evidence?.commit).toBe('abc1234');
+      expect(e.note).toBe('merged as #402');
       expect(e.usage?.inputTokens).toBe(1200);
-      expect(e.unproven).toBe(false);
     });
 
     it('a refused transition emits nothing (with a positive control)', () => {
@@ -268,7 +267,7 @@ describe('task store events + audit log', () => {
       const open = store.createTask(ws.id, { title: 'Trim the bundle', goal: G.perf });
       const closed = store.createTask(ws.id, { title: 'Old perf audit', goal: G.perf });
       if (!open.ok || !closed.ok) throw new Error('create failed');
-      store.transition(closed.task.id, 'done', { actor: AGENT, evidence: { commit: 'fff0000' } });
+      store.transition(closed.task.id, 'done', { actor: AGENT, note: 'shipped' });
       events.length = 0;
       const res = store.setGoalList(ws.id, [goals[0] as WorkspaceGoal], {
         actor: PERSON,

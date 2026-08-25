@@ -3902,32 +3902,6 @@ a.hub-link-chip:hover {
   font-size: 13px;
   color: var(--fg-muted);
 }
-/* A forward move with no proof attached. Deliberately a quiet mark and not an
-   error colour: it says "unverified", not "wrong", and it clears the moment
-   evidence lands — including evidence attached after the fact. */
-.hub-detail-transitions > li.unproven {
-  border-left: 2px solid var(--warn, #b8860b);
-  margin-left: -18px;
-  padding-left: 16px;
-  list-style-position: inside;
-}
-.hub-unproven-mark {
-  font-style: italic;
-  opacity: 0.85;
-}
-/* Evidence a later correction replaced. Struck rather than removed — the
-   record keeps what it said — but a sha that resolves to nothing must not go
-   on reading like something to follow. */
-.hub-evidence-superseded {
-  text-decoration: line-through;
-  opacity: 0.7;
-}
-.hub-evidence-amendment {
-  margin-top: 2px;
-  font-size: 12px;
-  font-style: italic;
-  opacity: 0.9;
-}
 
 /* --- Comments | Activity: the two tabs below the description ---
    The record (history, original words, the leftover fields, the link chips)
