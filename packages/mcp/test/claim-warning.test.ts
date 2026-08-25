@@ -221,11 +221,7 @@ describe('claiming a row says who was already on it', () => {
 
   it('adds the warning to the result without changing anything already there', () => {
     expect(handler).toContain('warning: claimNotice');
-    for (const kept of [
-      'status: res.task.status',
-      'blockers: res.blockers',
-      'unproven: res.unproven',
-    ])
+    for (const kept of ['status: res.task.status', 'blockers: res.blockers'])
       expect(handler).toContain(kept);
   });
 

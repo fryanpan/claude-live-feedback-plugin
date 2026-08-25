@@ -451,7 +451,7 @@ describe('shareScopeAllows — a visitor is a reviewer, not an operator', () => 
     expect(shareScopeAllows('/api/docs/auth-rfc/rename', 'POST', WS_A, workspaceOf)).toBe(false);
   });
 
-  it('BLOCKS writing the audit trail — moves and their evidence alike', () => {
+  it('BLOCKS writing the audit trail, including the retired evidence route', () => {
     // The allowlist above is the positive control: these same predicates say
     // yes to the review verbs, so a `false` here is a decision and not a
     // probe that can never see anything.

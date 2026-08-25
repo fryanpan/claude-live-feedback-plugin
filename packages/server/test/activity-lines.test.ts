@@ -309,40 +309,6 @@ describe('the activity view renders the rows the server really wrote', () => {
     expect(rowsOf('task.retitled').length).toBe(before);
   });
 
-  it('renders an evidence correction from the row the route wrote, naming the sha it replaced', async () => {
-    // Same gap as the rewrite row above: a hand-written fixture proves the
-    // switch has a case, not that the EMITTED keys are the ones it reads. The
-    // superseded sha is the load-bearing half here — it is the thing someone
-    // may already have tried to follow.
-    const created = await post(`/api/workspaces/${wsId}/tasks`, {
-      title: 'Fix the ranking',
-      author: AGENT,
-    });
-    const taskId = ((await created.json()) as { task: Task }).task.id;
-    await post(`/api/tasks/${taskId}/transition`, {
-      to: 'done',
-      author: AGENT,
-      evidence: { commit: 'b2ba21edef' },
-    });
-    const r = await post(`/api/tasks/${taskId}/evidence`, {
-      author: AGENT,
-      evidence: { commit: '621f371abc' },
-      note: 'wrote the sha from memory',
-    });
-    expect(r.status).toBe(200);
-
-    const row = rowsOf('task.evidence_amended').at(-1);
-    expect(row).toBeDefined();
-    const line = describeEvent(row as ActivityEvent, (id) =>
-      id === taskId ? 'Fix the ranking' : id,
-    );
-    expect(line).toContain('Search Revamp');
-    expect(line).toContain('Fix the ranking');
-    expect(line).toContain('621f371');
-    expect(line).toContain('b2ba21e');
-    expect(line).not.toContain('task.evidence_amended');
-  });
-
   it('emits one batched workspace.goals_changed, with the regroups referencing it', async () => {
     const before = rowsOf('workspace.goals_changed').length;
     const g = await local(`/api/workspaces/${wsId}/goals`, {

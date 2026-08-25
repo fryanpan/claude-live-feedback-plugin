@@ -481,7 +481,6 @@ describe('the goal routes', () => {
         await post(`/api/tasks/${done}/transition`, {
           author: AGENT,
           to,
-          evidence: { commit: 'abc1234' },
         }),
       );
     }

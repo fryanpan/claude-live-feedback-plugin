@@ -147,13 +147,11 @@ type ProjectedTask = {
     by: Record<string, unknown>;
     from: string;
     to: string;
+    note?: string;
+    /** Removed from the projection on 2026-08-25 with the rest of evidence
+     *  support. Declared so the test below can assert it is ABSENT. */
     evidence?: { commit?: string };
-    amendments?: Array<{
-      by: Record<string, unknown>;
-      evidence: { commit?: string };
-      supersedes?: { commit?: string };
-      note?: string;
-    }>;
+    amendments?: unknown[];
   }>;
 };
 
@@ -287,11 +285,12 @@ describe('ydoc projection + workspace room', () => {
     expect(owned?.ownerKind).toBe('unknown');
   });
 
-  it('an evidence amendment reaches the board room — the only thing the board reads', async () => {
-    // The hub renders from ws:<id> and nothing else. A correction the
-    // projection never refreshes for is one no reviewer can ever see, and
-    // nothing goes red — the store, the route and the REST read are all
-    // correct while the board keeps showing the sha that resolves to nothing.
+  it('projects a transition without the evidence the caller still sends', async () => {
+    // The hub renders from ws:<id> and nothing else, so this is where a
+    // "removed" field would go on being visible if the projection still
+    // carried it. Positive control: the row IS in the room, with its actor
+    // and note, so an absent `evidence` below is a decision and not an empty
+    // room.
     const wsId = await makeWorkspace('evidence-room');
     const room = handle.rooms.get(workspaceRoomId(wsId));
     if (!room) throw new Error('ws room was not created');
@@ -299,29 +298,16 @@ describe('ydoc projection + workspace room', () => {
     await post(`/api/tasks/${taskId}/transition`, {
       to: 'done',
       author: AGENT,
+      note: 'merged as #402',
       evidence: { commit: 'b2ba21edef' },
     });
-    // Positive control: the room already carries the (wrong) evidence, so a
-    // missing amendment below is a dropped refresh, not an empty room.
-    const before = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
-    expect(before.transitions.at(-1)?.evidence?.commit).toBe('b2ba21edef');
-    expect(before.transitions.at(-1)?.amendments).toBeUndefined();
 
-    const r = await post(`/api/tasks/${taskId}/evidence`, {
-      author: AGENT,
-      evidence: { commit: '621f371abc' },
-      note: 'wrote the sha from memory',
-    });
-    expect(r.status).toBe(200);
-
-    const after = room.ydoc.getMap('tasks').get(taskId) as ProjectedTask;
-    const row = after.transitions.at(-1);
-    expect(row?.evidence?.commit).toBe('b2ba21edef'); // appended, not rewritten
-    expect(row?.amendments?.[0]?.evidence.commit).toBe('621f371abc');
-    expect(row?.amendments?.[0]?.supersedes?.commit).toBe('b2ba21edef');
-    expect(row?.amendments?.[0]?.note).toBe('wrote the sha from memory');
-    // §3.3: actors in the room are display names only, amendments included.
-    expect(row?.amendments?.[0]?.by).toEqual({ name: 'Search Revamp', kind: 'agent' });
+    const row = (room.ydoc.getMap('tasks').get(taskId) as ProjectedTask).transitions.at(-1);
+    expect(row?.to).toBe('done');
+    expect(row?.note).toBe('merged as #402');
+    expect(row?.by).toEqual({ name: 'Search Revamp', kind: 'agent' });
+    expect(row?.evidence).toBeUndefined();
+    expect(row?.amendments).toBeUndefined();
   });
 
   it('reverts a foreign Yjs client write into the tasks map and fires no task.* event', async () => {
