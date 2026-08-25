@@ -1,3 +1,9 @@
+/* ===== DESIGN TOKENS =====
+   The single home for app-wide custom properties. Component-scoped variables
+   (--threads-w, --hub-bottom-bar, --lf-suggest-*) stay with their component —
+   only tokens that mean the same thing everywhere live here. New shared
+   colors / spacing / radii get defined here, not as literals at the use
+   site. */
 :root {
   --fg: #1b1f23;
   --fg-muted: #6e7781;
@@ -11,7 +17,16 @@
   --red: #d73a49;
   --green: #2da44e;
   --yellow: #bf8700;
+  /* Stronger fg-on-light variants (GitHub-palette): used by the redline /
+     diff surfaces and status text. --warn-fg existed only as scattered
+     var(--warn-fg, #b25e09) fallbacks before; now it is actually defined. */
+  --green-strong: #1a7f37;
+  --red-strong: #cf222e;
+  --warn-fg: #b25e09;
   --radius: 6px;
+  --radius-sm: 4px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
   --shadow: 0 1px 2px rgba(27, 31, 35, 0.06), 0 0 1px rgba(27, 31, 35, 0.12);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(27, 31, 35, 0.08);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -150,7 +165,7 @@ button {
   font-size: 16px;
   line-height: 1;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   align-self: center;
 }
 .back-link:hover {
@@ -174,7 +189,7 @@ button {
   flex: 0 0 auto;
   font-size: 11.5px;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--fg-muted);
   transition: color 160ms ease, background 160ms ease;
@@ -205,7 +220,7 @@ button {
   padding: 6px 10px;
   border: 1px solid var(--border);
   background: var(--bg);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 14px;
   line-height: 1;
   color: var(--fg);
@@ -238,7 +253,7 @@ body.view-mode #toggle-format {
   font-size: 10px;
   font-weight: 700;
   padding: 1px 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   min-width: 16px;
   line-height: 1.2;
   border: 1px solid var(--bg);
@@ -384,7 +399,7 @@ body.view-mode #toggle-format {
 .doc-menu a {
   display: block;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--fg);
   text-decoration: none;
   line-height: 1.35;
@@ -429,7 +444,7 @@ body.view-mode #toggle-format {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   cursor: pointer;
   color: var(--fg);
   list-style: none;
@@ -456,7 +471,7 @@ body.view-mode #toggle-format {
   align-items: center;
   gap: 6px;
   padding: 6px 10px 6px 25px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--fg);
   text-decoration: none;
   line-height: 1.35;
@@ -523,7 +538,7 @@ body.view-mode #toggle-format {
   border: 0;
   background: transparent;
   cursor: default;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font: inherit;
   color: inherit;
   min-width: 0;
@@ -600,7 +615,7 @@ body.has-set .doc-switcher-caret {
   min-width: 160px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
   padding: 4px;
   font-size: 13px;
@@ -615,7 +630,7 @@ body.has-set .doc-switcher-caret {
   padding: 8px 10px;
   border: 0;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--fg);
   font: inherit;
   cursor: pointer;
@@ -711,7 +726,7 @@ body.hub-body {
   flex: 0 0 auto;
   padding: 1px 7px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-subtle, transparent);
   color: var(--fg-muted);
   font-size: 11px;
@@ -974,7 +989,7 @@ body.hub-body {
   min-height: 36px;
   padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-panel);
   cursor: pointer;
   font-size: 13px;
@@ -1016,7 +1031,7 @@ body.hub-body {
   gap: 2px;
   padding: 8px 10px;
   border: 1px solid var(--yellow);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-panel);
   font-size: 12px;
   line-height: 1.4;
@@ -1289,7 +1304,7 @@ body.hub-body {
   min-height: 36px;
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg);
   cursor: pointer;
   font-size: 13px;
@@ -1435,7 +1450,7 @@ body.hub-body {
   display: inline-block;
   margin-left: 8px;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-wash, rgba(59, 111, 212, 0.07));
   color: var(--fg);
   font-weight: 600;
@@ -1507,7 +1522,7 @@ body.hub-body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 7px;
   white-space: nowrap;
   color: var(--fg-muted);
@@ -1828,7 +1843,7 @@ body.hub-body {
   min-height: 36px;
   padding: 6px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: none;
   font: inherit;
   font-size: 14px;
@@ -2141,7 +2156,7 @@ body.hub-body {
 }
 .hub-review-row-current {
   background: color-mix(in srgb, var(--accent) 9%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border-top-color: transparent;
 }
 /* Rows answered this sitting: still in the stack, visibly done (approved) —
@@ -2253,7 +2268,7 @@ body.hub-body {
 .hub-twisty:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 .hub-goal-title {
   min-width: 0;
@@ -2379,7 +2394,7 @@ body.hub-body {
   min-height: 36px;
   padding: 4px 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: none;
   font: inherit;
   font-size: 14px;
@@ -2397,7 +2412,7 @@ body.hub-body {
   min-height: 36px;
   padding: 4px 8px;
   border: 1px solid var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-panel);
   color: var(--fg);
   font: inherit;
@@ -2555,7 +2570,7 @@ body.hub-body {
 .hub-drag-handle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .hub-drag-handle:active {
   cursor: grabbing;
@@ -2911,7 +2926,7 @@ body.hub-body {
   font: inherit;
   padding: 2px 4px;
   border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 /* The row's status control: a native <select>, so the workflow isn't assumed
    to be linear (see TASK_STATUS_ORDER) and the phone gets its own picker. It
@@ -2948,7 +2963,7 @@ body.hub-body {
 .hub-badge {
   font-size: 11px;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   color: var(--fg-muted);
   white-space: nowrap;
@@ -2980,7 +2995,7 @@ body.hub-body {
   gap: 8px;
   padding: 8px 10px;
   margin: 0 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   font-size: 14px;
 }
@@ -3171,7 +3186,7 @@ body.hub-body {
   margin: 16px 0 0;
   padding: 11px 12px;
   border: 1px solid color-mix(in srgb, var(--warn-fg, #b25e09) 30%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--warn-wash, #fff4e5);
   font-size: 13.5px;
   line-height: 1.55;
@@ -3195,7 +3210,7 @@ body.hub-body {
   margin: 16px 0 0;
   padding: 11px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
   font-size: 13.5px;
   line-height: 1.55;
@@ -3220,7 +3235,7 @@ body.hub-body {
   margin: 16px 0 0;
   padding: 11px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
   font-size: 13.5px;
   line-height: 1.55;
@@ -3246,7 +3261,7 @@ body.hub-body {
   min-height: 36px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--bg-subtle, #fafafa);
   color: inherit;
   font: inherit;
@@ -3339,7 +3354,7 @@ body.hub-body {
   min-height: 44px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--bg-subtle, #fafafa);
   color: inherit;
   font: inherit;
@@ -3360,7 +3375,7 @@ body.hub-body {
 .hub-link-chip {
   max-width: 100%;
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   font-size: 12px;
   white-space: nowrap;
@@ -3578,7 +3593,7 @@ a.hub-link-chip:hover {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 7px;
   white-space: nowrap;
   color: var(--fg-muted);
@@ -4158,7 +4173,7 @@ a.hub-link-chip:hover {
   min-height: 36px;
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--bg) 45%, transparent);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: none;
   color: inherit;
   font: inherit;
@@ -4993,7 +5008,7 @@ a.hub-link-chip:hover {
 .format-bar button {
   border: 1px solid transparent;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 6px 10px;
   font-size: 13px;
   line-height: 1;
@@ -5056,7 +5071,7 @@ a.hub-link-chip:hover {
   padding: 4px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
 }
 .table-menu.hidden {
@@ -5066,7 +5081,7 @@ a.hub-link-chip:hover {
   text-align: left;
   border: 1px solid transparent;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 8px 10px;
   font-size: 13px;
   line-height: 1.2;
@@ -5345,7 +5360,7 @@ body.is-reading-width #editor > .ProseMirror {
   padding: 8px 12px;
   background: rgba(215, 58, 73, 0.08);
   border-left: 3px solid var(--red);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: pre-wrap;
 }
 
@@ -5653,7 +5668,7 @@ body.threads-resizing {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
   white-space: nowrap;
   color: var(--warn-fg, #b25e09);
@@ -5957,7 +5972,7 @@ body.threads-resizing {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 2px 7px;
   white-space: nowrap;
 }
@@ -6159,7 +6174,7 @@ body.threads-resizing {
   font-size: 0.92em;
   background: var(--code-bg, rgba(127, 127, 127, 0.14));
   padding: 0.1em 0.32em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   word-break: break-word;
 }
 .thread .body a {
@@ -6276,7 +6291,7 @@ body.threads-resizing {
     transform: translateX(-50%);
     width: 36px;
     height: 4px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--border);
   }
   .threads-open #threads-pane {
@@ -6537,7 +6552,7 @@ body.composer-open #editor > .ProseMirror ::selection {
   font-family: var(--mono);
   font-size: 0.92em;
   background: var(--bg-hover);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 .md-composer-surface .ProseMirror pre {
@@ -7453,7 +7468,7 @@ body.code-mode .cm-editor .cm-deletedChunk .cm-deletedText {
   display: inline-block;
   margin-right: 6px;
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--fg-muted);
   font: 600 10.5px / 16px var(--mono);
@@ -7491,7 +7506,7 @@ body.redline-mode .ProseMirror ins.lf-ins {
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 2px;
-  text-decoration-color: #1a7f37;
+  text-decoration-color: var(--green-strong);
   border-radius: 2px;
   padding: 0 1px;
 }
@@ -7501,7 +7516,7 @@ body.redline-mode .ProseMirror del.lf-del {
   color: #57606a;
   text-decoration: line-through;
   text-decoration-thickness: 2px;
-  text-decoration-color: #cf222e;
+  text-decoration-color: var(--red-strong);
   border-radius: 2px;
   padding: 0 1px;
 }
@@ -7525,11 +7540,11 @@ body.redline-mode .ProseMirror [data-lf-change]::before {
 }
 
 body.redline-mode .ProseMirror .lf-block-ins::before {
-  background: #1a7f37;
+  background: var(--green-strong);
 }
 
 body.redline-mode .ProseMirror .lf-block-del::before {
-  background: #cf222e;
+  background: var(--red-strong);
 }
 
 body.redline-mode .ProseMirror .lf-block-changed::before {
@@ -7665,7 +7680,7 @@ body.redline-mode #toggle-suggest-mode {
 }
 
 .lf-leader {
-  stroke: #cf222e;
+  stroke: var(--red-strong);
   stroke-width: 1.25;
   fill: none;
   opacity: 0.5;
@@ -7678,8 +7693,8 @@ body.redline-mode #toggle-suggest-mode {
   box-sizing: border-box;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-left: 3px solid #cf222e;
-  border-radius: 6px;
+  border-left: 3px solid var(--red-strong);
+  border-radius: var(--radius);
   padding: 8px 10px;
   font-size: 13px;
   line-height: 1.45;
@@ -7692,7 +7707,7 @@ body.redline-mode #toggle-suggest-mode {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #cf222e;
+  color: var(--red-strong);
   margin-bottom: 4px;
 }
 
@@ -7871,7 +7886,7 @@ body.redline-mode #toggle-suggest-mode {
   flex: none;
   min-width: 16px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--accent);
   color: #fff;
   font-size: 11px;
@@ -7891,17 +7906,17 @@ body.redline-mode #toggle-suggest-mode {
   font-size: 12px;
   line-height: 1.6;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-panel);
   cursor: pointer;
 }
 .lf-collapsed-actions .lf-suggest-accept:hover {
-  border-color: #1a7f37;
-  color: #1a7f37;
+  border-color: var(--green-strong);
+  color: var(--green-strong);
 }
 .lf-collapsed-actions .lf-suggest-reject:hover {
-  border-color: #cf222e;
-  color: #cf222e;
+  border-color: var(--red-strong);
+  color: var(--red-strong);
 }
 /* Collapse control on an expanded balloon, top-right. */
 .lf-balloon-collapse {
@@ -7930,7 +7945,7 @@ body.redline-mode #toggle-suggest-mode {
 .lf-suggest-actions button {
   border: 1px solid var(--border);
   background: var(--bg);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 3px 10px;
   font-size: 12px;
   font-weight: 600;
@@ -7942,13 +7957,13 @@ body.redline-mode #toggle-suggest-mode {
 }
 
 .lf-suggest-accept {
-  color: #1a7f37;
-  border-color: #1a7f37;
+  color: var(--green-strong);
+  border-color: var(--green-strong);
 }
 
 .lf-suggest-reject {
-  color: #cf222e;
-  border-color: #cf222e;
+  color: var(--red-strong);
+  border-color: var(--red-strong);
 }
 
 /* Balloons are desktop-only. Below 1100px the column and leader lines
@@ -7988,9 +8003,9 @@ body.redline-mode #toggle-suggest-mode {
   margin: 0 2px;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-panel);
-  color: #cf222e;
+  color: var(--red-strong);
   font: 600 12px / 1.4 var(--sans);
   cursor: pointer;
   vertical-align: baseline;
@@ -8016,7 +8031,7 @@ body.redline-mode #toggle-suggest-mode {
   margin: 0 2px;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-panel);
   color: var(--accent);
   font: 600 12px / 1.4 var(--sans);
