@@ -44,6 +44,7 @@ import {
   reviewCardHeadline,
   reviewItemBadge,
   reviewQueue,
+  reviewReplyRequest,
   reviewRow,
   stepTarget,
   taskVisible,
@@ -1009,23 +1010,99 @@ describe('reviewQueue', () => {
   });
 
   /**
-   * The server's queue route now also ships TICKET-borne review items
-   * (`kind: 'task-review'`), which this queue does not render yet — the task
-   * detail panel is being rewritten on another branch and owns that half.
-   *
-   * A row this model cannot place must be SKIPPED, not half-built: a legacy
-   * decision already arrives here as a `decision` row derived from the board,
-   * so admitting the server's row too would list the same question twice, and
-   * a row with no `docId`/`threadId` would key as `task-review:undefined:
-   * undefined` and collide with every other one.
+   * TICKET-borne review items (`kind: 'task-review'`) are placed like any
+   * other declared ask. This queue used to skip them wholesale, which is the
+   * measured defect: a review item filed with `create_tasks` / `add_review_item`
+   * — the verbs agents are told to use — was shipped by the route and rendered
+   * by NOTHING, so a decision addressed to a person never reached their Home
+   * queue at all. Task status was never the gate; the row's kind was.
    */
-  it('ignores a row of a kind it does not render, and keeps the ones it does', () => {
-    const unknown = {
-      ...threadItem({ threadId: 'th-ignored' }),
+  const ticketRowItem = (over: Partial<ReviewThreadItem> = {}): ReviewThreadItem =>
+    ({
       kind: 'task-review',
+      band: 'declared',
+      review: {
+        shape: 'decision',
+        headline: 'Which cache do we keep?',
+        why: 'Blocks the storage cleanup.',
+        options: [
+          { id: 'o-disk', label: 'Keep disk' },
+          { id: 'o-mem', label: 'Keep memory' },
+        ],
+      },
       taskId: 'tk-1',
-    } as unknown as ReviewThreadItem;
-    const q = reviewQueue([], [unknown, threadItem({ threadId: 'th-kept' })], T0);
+      reviewItemId: 'r-1',
+      title: 'Ship the widget',
+      ask: 'Which cache do we keep?',
+      askedBy: 'Helper',
+      since: T0,
+      direct: true,
+      askedAt: T0,
+      ...over,
+    }) as unknown as ReviewThreadItem;
+
+  it('places a ticket-borne review item with its own key and the authored why', () => {
+    const q = reviewQueue([], [ticketRowItem()], T0);
+    expect(q.items).toHaveLength(1);
+    expect(q.items[0]).toMatchObject({
+      key: 'task-review:tk-1:r-1',
+      kind: 'task-review',
+      title: 'Ship the widget',
+      why: 'Blocks the storage cleanup.',
+    });
+    expect(q.items[0].review?.headline).toBe('Which cache do we keep?');
+    expect(q.total).toBe(1);
+  });
+
+  // The row must surface even when its carrying task is not on the caller's
+  // task list — a triage row is on the board but a stale read may not hold
+  // it, and the ask is an ask whatever the row's vetting status is. It lands
+  // in the tail rank rather than vanishing.
+  it('places the item even when its task is missing from the board read', () => {
+    const q = reviewQueue([], [ticketRowItem({ taskId: 'tk-unseen' } as never)], T0);
+    expect(q.items.map((i) => i.key)).toEqual(['task-review:tk-unseen:r-1']);
+  });
+
+  /**
+   * The one row that must NOT be admitted: the store derives a `r-legacy`
+   * review item from every legacy `needs: 'decision'` task, and that decision
+   * already arrives here as a `decision` row read off the board projection.
+   * Admitting the derived copy too would list one question twice.
+   */
+  it('skips the derived legacy row — its decision row already lists it', () => {
+    const q = reviewQueue(
+      [decision({ id: 'tk-1' })],
+      [ticketRowItem({ reviewItemId: 'r-legacy' } as never)],
+      T0,
+    );
+    expect(q.items.map((i) => i.kind)).toEqual(['decision']);
+    expect(q.total).toBe(1);
+  });
+
+  // One task, two asks, two rows — a thread-borne declaration and a
+  // ticket-borne item are different questions and neither may shadow the
+  // other, nor list twice. (Team Lead re-filed ticket items as thread
+  // payloads as a stopgap; a board holding both shapes must stay readable.)
+  it('lists a thread-borne and a ticket-borne ask on one task once each', () => {
+    const q = reviewQueue(
+      [],
+      [threadItem({ taskId: 'tk-1', threadId: 'th-1' }), ticketRowItem()],
+      T0,
+    );
+    const keys = q.items.map((i) => i.key);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys).toContain('task-review:tk-1:r-1');
+  });
+
+  // A malformed row (no ids to answer at) is still skipped, not half-built:
+  // a card whose answer posts nowhere is worse than no card.
+  it('skips a ticket row missing the ids its answer path needs', () => {
+    const q = reviewQueue(
+      [],
+      [ticketRowItem({ reviewItemId: undefined } as never), threadItem({ threadId: 'th-kept' })],
+      T0,
+    );
     expect(q.items.map((i) => i.thread?.threadId)).toEqual(['th-kept']);
     expect(q.total).toBe(1);
   });
@@ -1068,6 +1145,76 @@ describe('reviewQueue', () => {
     // another ticket's row still never matches.
     expect(panelAsks([mine, other, docRow], 'tk-2').map((i) => i.threadId)).toEqual(['th-other']);
     expect(panelAsks([ticketRow], 'tk-1')).toEqual([]);
+  });
+
+  /**
+   * ONE spelling of "where does this answer go". The walkthrough's reply
+   * handler used to build its two thread routes inline, and a ticket-borne row
+   * reaching it would have posted a comment at `/api/docs/undefined/...` —
+   * an answer that lands nowhere while the card advances. The routing is a
+   * pure function so the test can hold all three doors.
+   */
+  describe('reviewReplyRequest', () => {
+    const base = (): ReviewItem => {
+      const q = reviewQueue([], [threadItem({ threadId: 'th-1', taskId: 'tk-1' })], T0);
+      return q.items[0];
+    };
+
+    it('answers a ticket-borne item at the task review-item route', () => {
+      const item: ReviewItem = {
+        key: 'task-review:tk-1:r-1',
+        kind: 'task-review',
+        title: 'Ship the widget',
+        ask: 'Which cache?',
+        why: 'Blocks cleanup.',
+        since: T0,
+        review: { shape: 'decision', headline: 'Which cache?', why: 'Blocks cleanup.' },
+        thread: {
+          kind: 'task-review',
+          taskId: 'tk-1',
+          reviewItemId: 'r-1',
+        } as unknown as ReviewThreadItem,
+      };
+      expect(reviewReplyRequest(item, 'Keep disk', 'o-disk')).toEqual({
+        path: '/api/tasks/tk-1/review-items/r-1/answer',
+        body: { text: 'Keep disk', answeredWith: 'o-disk' },
+      });
+      // Typed words carry no candidate id — nothing invents one.
+      expect(reviewReplyRequest(item, 'Neither, drop both')).toEqual({
+        path: '/api/tasks/tk-1/review-items/r-1/answer',
+        body: { text: 'Neither, drop both' },
+      });
+    });
+
+    it('answers a declared thread item against its declaring comment', () => {
+      const item = base();
+      expect(reviewReplyRequest(item, 'Green', 'g')).toEqual({
+        path: '/api/docs/task%3Atk-1/threads/th-1/answer',
+        body: { text: 'Green', commentId: 'c-1', optionId: 'g' },
+      });
+    });
+
+    it('replies to an undeclared thread item as a plain comment', () => {
+      const q = reviewQueue([], [note({ threadId: 'th-1', taskId: 'tk-1' })], T0);
+      expect(reviewReplyRequest(q.items[0], 'On it')).toEqual({
+        path: '/api/docs/task%3Atk-1/threads/th-1/comments',
+        body: { text: 'On it' },
+      });
+    });
+
+    it('refuses a row with nowhere to write', () => {
+      const item: ReviewItem = {
+        key: 'task-review:x',
+        kind: 'task-review',
+        title: 't',
+        ask: '',
+        why: '',
+        since: T0,
+        thread: { kind: 'task-review' } as unknown as ReviewThreadItem,
+      };
+      expect(reviewReplyRequest(item, 'words')).toBeNull();
+      expect(reviewReplyRequest({ ...item, thread: undefined }, 'words')).toBeNull();
+    });
   });
 });
 

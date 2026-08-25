@@ -62,6 +62,7 @@ import {
   presenceChips,
   refreshReviewItems,
   reviewQueue,
+  reviewReplyRequest,
   reviewRow,
   shouldPollHome,
   tabForNav,
@@ -598,6 +599,14 @@ async function main(): Promise<void> {
     }
     const t = item.thread;
     if (!t) return;
+    if (t.kind === 'task-review') {
+      // A ticket-borne review item lives on the TASK — there is no thread to
+      // aim at, so the panel itself is the place. Without this branch the
+      // fall-through below navigated to `/review/undefined`.
+      const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
+      if (task) boardHandlers.onOpenTask(task);
+      return;
+    }
     if (t.kind === 'goal-thread' && t.taskId) {
       // The goal PANEL, not the task panel and not the raw doc: the row is a
       // band, and the question was asked about the band. Aim at the queued
@@ -1828,24 +1837,16 @@ async function main(): Promise<void> {
     text: string,
     optionId?: string,
   ): Promise<boolean> {
-    const t = item.thread;
-    if (!t) return false;
-    const doc = encodeURIComponent(t.docId);
-    const thread = encodeURIComponent(t.threadId);
-    // A declared item goes through `/answer`, which posts the SAME reply and
-    // additionally records which candidate it came from on the declaring
-    // comment. Not a second answer path: the reply is what takes the item out
-    // of the queue in both cases, and `/answer` refuses rather than inventing
-    // one when the comment declared nothing.
-    const declared = item.review !== undefined && t.commentId !== undefined;
-    const res = declared
-      ? await send(`/api/docs/${doc}/threads/${thread}/answer`, 'POST', {
-          author,
-          text,
-          commentId: t.commentId,
-          ...(optionId !== undefined ? { optionId } : {}),
-        })
-      : await send(`/api/docs/${doc}/threads/${thread}/comments`, 'POST', { author, text });
+    // ONE spelling of "where does this answer go" (`reviewReplyRequest`): a
+    // declared thread item goes through the thread `/answer` route, which
+    // posts the SAME reply and additionally records which candidate it came
+    // from; an undeclared one is a plain comment; and a TICKET-borne item
+    // (`task-review`) posts to the task review-item answer route — it has no
+    // thread, and before the routing was shared this handler would have
+    // posted its answer at `/api/docs/undefined/…`.
+    const reqSpec = reviewReplyRequest(item, text, optionId);
+    if (!reqSpec) return false;
+    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
     if (!res.ok) {
       showToast('Posting the reply failed — your text is still in the box');
       return false;
