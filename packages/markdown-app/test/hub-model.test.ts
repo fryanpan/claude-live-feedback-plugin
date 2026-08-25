@@ -661,15 +661,21 @@ describe('presenceChips', () => {
     expect(new Set(chips.map((c) => c.key)).size).toBe(2);
   });
 
-  it('falls back to the name for a tab whose bundle sends no id', () => {
-    // An older tab is no worse off than the strip left everybody until now —
-    // it just cannot be told apart from a namesake.
+  it('falls back to the CONNECTION, not the name, for a tab that sends no id', () => {
+    // A tab on an older bundle behaves exactly as every tab did before the id
+    // existed — its own row, keyed on its connection — and folds with nobody.
+    // Falling back to the name would merge two strangers who share one, and a
+    // wrong identity is a wrong person, where an unstable key is only a lost
+    // DOM node.
     const chips = presenceChips(
-      [{ clientId: 1, name: 'Jordan', surface: 'hub', lastActive: NOW }],
+      [
+        { clientId: 1, name: 'Alex', surface: 'hub', lastActive: NOW },
+        { clientId: 2, name: 'Alex', surface: 'hub', lastActive: NOW },
+      ],
       [],
       NOW,
     );
-    expect(chips[0]?.key).toBe('p-Jordan');
+    expect(chips.map((c) => c.key)).toEqual(['p-c1', 'p-c2']);
   });
 
   it('folds one person’s several tabs into one chip, reading from the live one', () => {
