@@ -1394,6 +1394,33 @@ Every count that went wrong had one.
   refused you was the tool or a wrapper around it: `type -a <cmd>` costs one
   line and would have saved this one a ticket and a fleet-wide belief.
 
+## The other half: a built-in slash command has no agent-invocable form at all
+
+- The entry above is about a capability that LOOKED denied and was reachable.
+  This is the converse, and it cost a decision two days: **a built-in CLI
+  command such as `/reload-plugins` is not a skill, not a tool, and not a
+  binary** — there is nothing for a session to call. `Skill` refuses it
+  (correctly: built-ins are not in the skill registry), and no amount of
+  looking finds an alternative spelling, because there isn't one.
+- **The failure mode is planning, not execution.** A test plan was written as
+  "refresh the cache, then a session runs `/reload-plugins` and reports the
+  version before and after", assigned to a peer, and sat unrun while both
+  sessions treated it as in flight. Nothing errored. The step simply had no
+  agent path, and neither side noticed until the peer said so out loud.
+- **The only way an agent "types" a slash command is send-keys into somebody's
+  terminal pane, and that is not a workaround — it is the thing that once
+  submitted `/superpowers:brainstorming` into a peer's session unasked.** Do
+  not reach for it.
+- Practical rule when writing a plan: for every step, name **who or what
+  executes it**. A step whose executor is "a session" needs the next question
+  asked — *by what call?* If the answer is a slash command, the executor is a
+  person, and the step belongs in a filed ask with the exact keystroke in it,
+  not in an agent's queue.
+- Same family as the wrapper entry above and as "a negative probe needs a
+  positive control": both are about checking the shape of the obstacle before
+  building a belief on top of it. There the obstacle was softer than it
+  looked; here it was harder.
+
 ## Drift you have to go and look for is drift nobody looks for
 
 - **`main` reached 0.1.26 while every peer's cache sat at 0.1.15 — eleven
