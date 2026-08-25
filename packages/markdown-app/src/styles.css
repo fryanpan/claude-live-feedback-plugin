@@ -3088,6 +3088,16 @@ body.hub-body {
 .hub-detail.hidden {
   display: none;
 }
+/* The detail island owns a wrapper of its own inside `#hub-detail`, for the
+   same reason the board island does: Preact must never share a container with
+   vanilla code, and the backdrop above is a container vanilla code still
+   listens on. `display: contents` keeps the wrapper out of layout, so the
+   panel stays a DIRECT flex child of `.hub-detail` — the centring above is
+   written against that, and a real box here would centre the wrapper and let
+   the panel fill it. */
+.hub-detail > [data-preact-island] {
+  display: contents;
+}
 .hub-detail-panel {
   /* Asked for by number: *"default 1100px, at least 900px when space allows"*,
      and *"taking more than half the horizontal width on laptop/tablet is
