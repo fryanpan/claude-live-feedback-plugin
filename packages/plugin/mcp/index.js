@@ -14098,15 +14098,45 @@ function namedTask(p) {
     return `${title} (${p.taskId})`;
   return title ?? p.taskId ?? null;
 }
+function undeterminedCount(p) {
+  const u = p.undetermined;
+  if (!u)
+    return 0;
+  if (typeof u.count === "number" && u.count > 0)
+    return u.count;
+  return u.reasons && u.reasons.length > 0 ? u.reasons.length : 0;
+}
+function reasonsClause(p) {
+  const reasons = p.undetermined?.reasons ?? [];
+  return reasons.length > 0 ? reasons.join(", ") : "reason not reported";
+}
+function denominatorClause(p) {
+  if (p.consideredCount === undefined)
+    return "";
+  const parts = [`${p.consideredCount} open ${p.consideredCount === 1 ? "row" : "rows"} checked`];
+  const held = Object.entries(p.held ?? {}).filter(([, n]) => typeof n === "number" && n > 0).sort(([a], [b]) => a.localeCompare(b)).map(([reason, n]) => `${n} ${reason}`);
+  if (held.length > 0)
+    parts.push(`held: ${held.join(", ")}`);
+  const unread = undeterminedCount(p);
+  if (unread > 0) {
+    parts.push(`${unread} could NOT be evaluated (${reasonsClause(p)}) and is not counted ready`);
+  }
+  return ` (${parts.join("; ")})`;
+}
 function readyIdleLine(p) {
   const count = p.readyCount;
+  const unread = undeterminedCount(p);
+  if (count === 0 && unread > 0) {
+    const of = p.consideredCount === undefined ? `${unread}` : `${unread} of ${p.consideredCount}`;
+    return `[workspace.ready_idle] nothing is ready to hand over, and this pass could not establish that the board is quiet: ${of} open row(s) could not be evaluated (${reasonsClause(p)}). Read them with list_tasks before treating this board as clear.`;
+  }
   const one = count === 1;
   const subject = count === undefined ? "ready work has" : `${count} ${one ? "task has" : "tasks have"}`;
   const stood = p.idleMs === undefined ? "" : ` for ${humanDuration2(p.idleMs)}`;
   const nobody = count !== undefined && !one ? "them" : "it";
   const top = namedTask(p);
   const start = top ? ` Start with ${top}.` : "";
-  return `[workspace.ready_idle] ${subject} been ready${stood} with nobody on ${nobody}.${start} Take the top of the queue with next_tasks / task_transition.`;
+  return `[workspace.ready_idle] ${subject} been ready${stood} with nobody on ${nobody}${denominatorClause(p)}.${start} Take the top of the queue with next_tasks / task_transition.`;
 }
 function reviewAnsweredLine(p) {
   const about = namedTask(p);
@@ -14337,7 +14367,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.109";
+var PLUGIN_VERSION = "0.1.110";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",

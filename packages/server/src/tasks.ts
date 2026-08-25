@@ -15,6 +15,7 @@ import {
   type TaskReviewItem,
   agentIdCandidates,
   checkReviewPayload,
+  isReviewItemOpen,
   readReviewPayload,
   readTaskReviewItem,
   reviewFromDecisionTask,
@@ -3546,6 +3547,38 @@ export class TaskStore {
       if (item) out.push(item);
     }
     return out;
+  }
+
+  /**
+   * How much of this ticket is still waiting on a person — and, separately,
+   * how much of it could not be READ.
+   *
+   * The second number is the whole reason this exists next to
+   * `listReviewItems`. That reader deliberately drops a row that does not
+   * parse, so a ticket whose questions are corrupt answers "no open
+   * questions", byte-identical to a ticket that genuinely has none. That is
+   * fine for a renderer — better a short list than a thrown exception inside a
+   * card — and wrong for anything that ACTS on the answer, which the ready-work
+   * gate does: it would read an unreadable ticket as free work and wake
+   * somebody about a row that may well be blocked on Bryan.
+   *
+   * `open` counts the legacy `needs: 'decision'` row too, because
+   * `listReviewItems` derives one — so both spellings of "a question is
+   * outstanding" arrive here as one number and cannot drift apart.
+   *
+   * `undefined` for a task that does not exist. Not `{ open: 0, unreadable: 0 }`:
+   * "this ticket is clear" and "there is no such ticket" are the two answers
+   * this method exists to keep apart, so it must not merge them itself.
+   */
+  reviewState(taskId: string): { open: number; unreadable: number } | undefined {
+    const task = this.getTask(taskId);
+    if (!task) return undefined;
+    const open = this.listReviewItems(taskId).filter(isReviewItemOpen).length;
+    let unreadable = 0;
+    for (const raw of task.reviews ?? []) {
+      if (!readTaskReviewItem(raw)) unreadable++;
+    }
+    return { open, unreadable };
   }
 
   /**

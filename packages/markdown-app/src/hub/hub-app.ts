@@ -86,7 +86,6 @@ import {
   renderLeadStrip,
   renderQuickAdd,
   renderReviewBanner,
-  renderTaskDetail,
   renderUnplacedStrip,
   renderWorkspaceIdentity,
 } from './hub-render.ts';
@@ -101,6 +100,7 @@ import {
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
+import { mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import {
   type WalkProgress,
   mountWalkthroughIsland,
@@ -390,6 +390,11 @@ function buildShell(root: HTMLElement, name: string): void {
       </section>
     </div>
     <div id="hub-detail" class="hub-detail hidden"></div>
+    <!-- The GOAL panel's own container. It used to share #hub-detail with the
+         task panel and rebuild it with replaceChildren, which no vanilla code
+         may do to a node holding a live island — same resolution the archived
+         list got when the board became one. -->
+    <div id="hub-goal-detail" class="hub-detail hidden"></div>
     <div id="hub-help" class="hub-help hidden">
       <div class="hub-help-card">
         <h2>Keyboard shortcuts</h2>
@@ -498,6 +503,14 @@ async function main(): Promise<void> {
   // the reader opened) used to die with the nodes each repaint replaced.
   // It takes no handlers here; they change per paint and ride the signal.
   mountWalkthroughIsland(el('hub-walkthrough'));
+
+  // The task detail panel. Mounted once for the same reason again: it is
+  // repainted by every `thread.*` and `task.transitioned` event, and the tab,
+  // the review queue's position, an unfolded capture and every half-typed
+  // draft used to die with the nodes each repaint replaced. Handlers ride
+  // `taskDetailData` — they close over the task, the review rows and the clock
+  // this paint resolved.
+  mountTaskDetailIsland(el('hub-detail'));
 
   // The presence strip, in both places it renders: who is here in the
   // top-right cluster, and the drift notices in the settings panel. Same
@@ -1016,6 +1029,24 @@ async function main(): Promise<void> {
    *  and close are distinguishable — the goal panel's `renderedDetailId`. */
   let renderedGoalId: string | null = null;
 
+  /**
+   * Close the task panel — the island's own "no task" state.
+   *
+   * `handOverEditor` is for the one case where something ELSE is taking the
+   * body editor in the same turn: the goal panel mounts it synchronously,
+   * while this write's effect lands a microtask later, so without the hand-off
+   * the closing task panel would report a null slot and unmount the goal's
+   * editor from under it.
+   */
+  function closeTaskPanel(handOverEditor = false): void {
+    const handlers = { ...taskDetailData.value.handlers };
+    // `undefined` rather than `delete`: the island reaches this through
+    // `handlers.onBodySlot?.(…)`, so an absent key and an undefined one are
+    // the same absence to every reader of it.
+    if (handOverEditor) handlers.onBodySlot = undefined;
+    taskDetailData.value = { task: null, handlers };
+  }
+
   function renderDetail(): void {
     // Task wins when both ids are somehow set: the deep-link and voice paths
     // set a task id without knowing a goal panel was open, and what they mean
@@ -1047,8 +1078,11 @@ async function main(): Promise<void> {
         // load for a row the reader has left must not paint under this one.
         const goalDiscussion =
           state.discussionTaskId === section.id ? state.discussion : { loading: true, threads: [] };
+        // The task panel closes first: the two share the screen, never the
+        // container, so nothing else empties the island's host any more.
+        closeTaskPanel(true);
         renderGoalDetail(
-          el('hub-detail'),
+          el('hub-goal-detail'),
           section,
           {
             onClose: () => {
@@ -1070,7 +1104,7 @@ async function main(): Promise<void> {
         // than something this branch has to remember to tear down.
         bodyEditor.sync(
           { id: section.id, bodyDocId: goalBodyDocId(section) },
-          el('hub-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
+          el('hub-goal-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
         );
         renderedGoalId = section.id;
         renderedDetailId = null;
@@ -1079,13 +1113,21 @@ async function main(): Promise<void> {
         // Fresh opens take focus like the task panel does (that is what puts
         // Escape and hold-Space inside the dialog); repaints leave the
         // keyboard where the reader has it.
-        if (freshOpen) el('hub-detail').querySelector<HTMLElement>('.hub-detail-panel')?.focus();
+        if (freshOpen)
+          el('hub-goal-detail').querySelector<HTMLElement>('.hub-detail-panel')?.focus();
         return;
       }
       // The goal left the board under us (removed from the list, or the
       // projection has not caught up) — fall through to an empty panel.
       state.detailGoalId = null;
     }
+    // Past this point the goal panel is not what is showing, and its container
+    // is its own — so it has to be told to close rather than being replaced.
+    renderGoalDetail(el('hub-goal-detail'), null, {
+      onClose: () => {},
+      onTitleCommit: () => {},
+      onStatusSet: () => {},
+    });
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
     if (task && renderedDetailId === null) {
       const active = document.activeElement;
@@ -1115,10 +1157,10 @@ async function main(): Promise<void> {
       task && state.discussionTaskId === task.id
         ? state.discussion
         : { loading: true, threads: [] };
-    renderTaskDetail(
-      el('hub-detail'),
+    taskDetailData.value = {
       task,
-      {
+      discussion: task ? discussion : undefined,
+      handlers: {
         onClose: () => {
           state.detailTaskId = null;
           state.detailThreadId = null;
@@ -1158,18 +1200,15 @@ async function main(): Promise<void> {
         // The same list the Activity view reads — one log, two surfaces.
         activity: state.events,
         now: Date.now(),
+        // The panel reports its own slot, because a signal write does not
+        // paint synchronously: reading `.hub-detail-body-slot` off the DOM on
+        // the next line would find the slot as it stood BEFORE this write.
+        // Idempotent for an unchanged pair, so the repaints that arrive while
+        // somebody is typing cost nothing.
+        onBodySlot: (t, slot) =>
+          bodyEditor.sync(t ? { id: t.id, bodyDocId: t.bodyDocId } : null, slot),
       },
-      task ? discussion : undefined,
-    );
-    // After the render, never before: the slot this hands over is the one the
-    // render just decided on — a rebuilt element when the panel was opened or
-    // switched, the SAME element when a repaint kept a live editor in place.
-    // Idempotent for an unchanged pair, so the repaints that arrive while
-    // somebody is typing cost nothing.
-    bodyEditor.sync(
-      task ? { id: task.id, bodyDocId: task.bodyDocId } : null,
-      el('hub-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
-    );
+    };
     if (!task && (renderedDetailId !== null || renderedGoalId !== null)) {
       if (detailOpener?.isConnected) detailOpener.focus();
       detailOpener = null;

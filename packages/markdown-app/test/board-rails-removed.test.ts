@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as boardIsland from '../src/hub/board-island.tsx';
 import * as hubRender from '../src/hub/hub-render.ts';
+import * as taskDetailIsland from '../src/hub/task-detail-island.tsx';
 
 /**
  * The board's two side rails — "Docs" and "Open threads (N)" — are gone.
@@ -34,8 +35,12 @@ describe('the board no longer carries the docs and open-threads rails', () => {
     // renderers survived the excision beside them. `renderBoard` itself moved
     // to the Preact island — so the control follows it there rather than being
     // dropped, which would leave the two absences below unwitnessed.
+    // `renderTaskDetail` has now made the same move, for the same reason, so
+    // its control follows it to `task-detail-island.tsx` and the pieces it
+    // still fills from `hub-render.ts` stand in for the surface here.
     expect(Object.keys(boardIsland)).toContain('mountBoardIsland');
-    expect(names).toContain('renderTaskDetail');
+    expect(Object.keys(taskDetailIsland)).toContain('mountTaskDetailIsland');
+    expect(names).toContain('detailFields');
     expect(names).not.toContain('renderDocsSidebar');
     expect(names).not.toContain('renderThreadsSidebar');
   });
