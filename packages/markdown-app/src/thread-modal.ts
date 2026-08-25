@@ -116,9 +116,27 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
   let renderedKey = '';
   /** Where focus was when this opened, so closing puts it back. */
   let returnFocus: HTMLElement | null = null;
+  /** Watches the open card's faces so growth with no event anywhere — a reply
+   *  wrapping onto another line as it is typed, an image landing in a comment
+   *  body — re-sizes the slots instead of being clipped by a stale height. */
+  let faceWatch: ResizeObserver | null = null;
 
   function draft(): string | undefined {
     return bodyEl.querySelector<HTMLTextAreaElement>('textarea')?.value || undefined;
+  }
+
+  function watchFaces(card: HTMLElement): void {
+    faceWatch?.disconnect();
+    if (typeof ResizeObserver !== 'function') return;
+    // Height-reactive on purpose, unlike `installSlotRemeasure`'s width-only
+    // containers: a slot's height never feeds back into its face's height, so
+    // re-sizing on face growth settles instead of looping — the one indirect
+    // path (a write that summons the body's scrollbar and narrows the faces)
+    // converges, because the scrollbar appears at most once.
+    faceWatch = new ResizeObserver(() => sizeThreadSlots(bodyEl));
+    for (const face of Array.from(card.querySelectorAll<HTMLElement>('.thread-face'))) {
+      faceWatch.observe(face);
+    }
   }
 
   function paint(t: Thread, pendingReply?: string): void {
@@ -132,8 +150,12 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     syncFaceVisibility(card, true);
     bodyEl.appendChild(card);
     // A slot has no intrinsic height; nothing renders until it is measured,
-    // and it can only be measured once it is in the document.
+    // and it can only be measured once it is in the document — which is also
+    // why `open()` un-hides the dialog BEFORE painting: against `display:
+    // none` every face reads 0, the zero is refused, and the card would hang
+    // its whole interior on some later remeasure happening to fire.
     sizeThreadSlots(bodyEl);
+    watchFaces(card);
     // The dialog covers the document, so the anchor snippet is the one thing
     // the reader can no longer go and look at — "Comment" told them nothing
     // they had not just clicked. `threadSummary` is the shared seam every
@@ -151,10 +173,13 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
       returnFocus = document.activeElement as HTMLElement | null;
     }
     openId = t.id;
-    paint(t);
+    // Visible BEFORE painted: paint measures the card's slots, and a subtree
+    // under `display: none` measures 0 everywhere. Same tick, so no frame is
+    // ever shown between the two.
     scrim.classList.remove('hidden');
     root.classList.remove('hidden');
     scrim.setAttribute('aria-hidden', 'false');
+    paint(t);
     // Focus lands on the close button rather than on the card: it is the one
     // control that is always present and always safe to press, and tabbing on
     // from it walks the conversation in reading order.
@@ -169,6 +194,8 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     const was = openId;
     openId = null;
     renderedKey = '';
+    faceWatch?.disconnect();
+    faceWatch = null;
     bodyEl.textContent = '';
     root.classList.add('hidden');
     scrim.classList.add('hidden');
@@ -320,6 +347,10 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
   );
 
   scope.onCleanup(() => {
+    // A scope can die while the dialog is open — close() never runs then, so
+    // the observer must be released here too or it retains the removed card.
+    faceWatch?.disconnect();
+    faceWatch = null;
     root.remove();
     scrim.remove();
   });
