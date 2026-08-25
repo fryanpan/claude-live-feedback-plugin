@@ -25,7 +25,6 @@ import {
   renderLeadStrip,
   renderQuickAdd,
   renderReviewBanner,
-  renderTaskDetail,
   renderUnplacedStrip,
 } from '../src/hub/hub-render.ts';
 import {
@@ -35,6 +34,7 @@ import {
   refreshMarkdownComposer,
 } from '../src/md-composer.ts';
 import { caretAt, frame, renderedHtml, surfaceOf, typeInComposer } from './support/composer.ts';
+import { renderTaskDetail } from './support/task-detail.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
 
@@ -1669,14 +1669,18 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     paint({ ...t, status: 'in-progress' });
     await frame();
 
-    // Positive control, two ways: the panel really was rebuilt (the status
-    // control moved, and the composer is a NEW node), so a pass below is a
-    // restore and not a repaint that never happened.
+    // Positive control: the panel really did repaint (the status control
+    // moved), so a pass below is a repaint the composer SURVIVED rather than
+    // a repaint that never happened.
     expect((root.querySelector('.hub-detail-status') as HTMLSelectElement).value).toBe(
       'in-progress',
     );
+    // The inversion that IS the fix. This read `not.toBe(before)` while the
+    // panel was rebuilt wholesale and the words were snapshotted back into a
+    // fresh box; under the island the box is the SAME node, so its words, its
+    // focus and its caret were never anywhere to be restored from.
     const after = composer();
-    expect(after).not.toBe(before);
+    expect(after).toBe(before);
 
     expect(after.value).toBe('I think this is below the API work because');
     expect(isComposerFocused(after)).toBe(true);
@@ -1725,7 +1729,8 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     paint({ ...t, status: 'in-progress' }, { asks: [ask(t.id, 'th-1')] });
     await frame();
     const after = root.querySelector('.hub-decide-form textarea') as HTMLTextAreaElement;
-    expect(after).not.toBe(box);
+    // Kept, not restored — see the discussion composer above.
+    expect(after).toBe(box);
     expect(after.value).toBe('Keep threading.');
     expect(isComposerFocused(after)).toBe(true);
     expect(composerSelection(after)).toEqual(caretAt(4));
@@ -1740,15 +1745,19 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     paint({ ...t, updatedAt: NOW + 1 });
     await frame();
     const after = root.querySelector('.hub-answer-form textarea') as HTMLTextAreaElement;
-    expect(after).not.toBe(box);
+    // Kept, not restored — see the discussion composer above.
+    expect(after).toBe(box);
     expect(after.value).toBe('Option B, because');
     expect(isComposerFocused(after)).toBe(true);
     expect(composerSelection(after)).toEqual(caretAt(8));
   });
 
-  // The title editor is a control that only exists mid-edit, so a repaint
-  // does not merely empty it — it closes it. Reopened with the typed text.
-  it('a title being renamed survives, editor reopened with the typed text', () => {
+  // The title editor is a control that only exists mid-edit, so a repaint used
+  // to close it outright — the rescue was to reopen it and refill it from the
+  // snapshot. The heading is the island's element with no vnode children now,
+  // which is an element Preact never reaches into, so a rename in flight is
+  // simply never interrupted.
+  it('a title being renamed survives a repaint, still open and still typed in', () => {
     const t = task({ title: 'Old name' });
     paint(t);
     (root.querySelector('.hub-detail-title') as HTMLElement).click();
@@ -1758,7 +1767,7 @@ describe('a repaint of the detail panel keeps what was typed', () => {
     paint({ ...t, updatedAt: NOW + 1 });
     const after = root.querySelector('.hub-title-input') as HTMLInputElement;
     expect(after).toBeTruthy();
-    expect(after).not.toBe(input);
+    expect(after).toBe(input);
     expect(after.value).toBe('Old name, sharper');
     expect(document.activeElement).toBe(after);
     expect(after.selectionStart).toBe(3);
@@ -3096,13 +3105,17 @@ describe('the description slot the editor mounts into', () => {
   // The other half, and the reason the class exists at all: before the mount
   // the slot is showing the PROJECTION, and a projection that stopped
   // updating would leave a description the store no longer has.
-  it('rebuilds a slot no editor has claimed, so the text follows the store', () => {
+  it('refills a slot no editor has claimed, so the text follows the store', () => {
     const t = task({ body: 'First.' });
     renderTaskDetail(root, t, detailHandlers());
     const s = slot();
     renderTaskDetail(root, { ...t, body: 'Second.' }, detailHandlers());
 
-    expect(slot()).not.toBe(s);
+    // The slot ELEMENT is the island's and outlives the repaint either way —
+    // this used to assert it was replaced, which was true only because the
+    // whole panel was. What matters is the second half: an un-mounted slot
+    // still follows the projection.
+    expect(slot()).toBe(s);
     expect(slot()?.textContent).toContain('Second.');
   });
 
