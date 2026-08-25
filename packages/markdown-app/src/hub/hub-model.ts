@@ -1939,6 +1939,11 @@ export function timeAgo(ts: number, now: number): string {
 
 export interface PresencePerson {
   clientId: number;
+  /** WHO this is — `User.id`, which is stable per browser (localStorage) or
+   *  is the known user's own id. Optional because a tab running a bundle that
+   *  predates it sends no id; `presenceIdentity` falls back to the display
+   *  name there, which is what the strip used for everybody until then. */
+  userId?: string;
   name: string;
   surface: string;
   docId?: string;
@@ -2192,6 +2197,24 @@ export function presenceHue(label: string): number {
 }
 
 /**
+ * WHO a presence entry is, as opposed to which connection it arrived over.
+ *
+ * `userId` is `User.id` — stable per browser (localStorage) or the known
+ * user's own — so it is the same across every tab that person has open and
+ * different for anybody else. A display name cannot do either job: two
+ * people called Alex share one, and it is the wrong granularity for tabs
+ * only by accident.
+ *
+ * The name is the fallback, for an entry from a tab whose bundle predates the
+ * id travelling in awareness. That is the behaviour the strip had for
+ * everybody until now, so an older tab is no worse off than it was — it just
+ * cannot be told apart from a namesake.
+ */
+export function presenceIdentity(p: Pick<PresencePerson, 'userId' | 'name'>): string {
+  return p.userId ?? p.name;
+}
+
+/**
  * Fold every tab one person has open into the ONE person they are.
  *
  * Awareness is per-connection, so a second tab is a second entry with a
@@ -2203,23 +2226,18 @@ export function presenceHue(label: string): number {
  * The surviving tab is the most recently active one, because that is where
  * the person actually IS; `self` is sticky across the merge (one of your own
  * tabs being idle must not stop the strip from marking you as you).
- *
- * Identity is the display name — the only stable participant key awareness
- * carries today (its `user` field is `{ name, color }`). Two different people
- * sharing a display name therefore merge, which is a real limit of the name
- * as an identity and the reason the server's email-keyed identity work is
- * the thing that eventually replaces this line.
  */
 function foldTabs(people: PresencePerson[]): PresencePerson[] {
   const byIdentity = new Map<string, PresencePerson>();
   for (const p of people) {
-    const prev = byIdentity.get(p.name);
+    const id = presenceIdentity(p);
+    const prev = byIdentity.get(id);
     if (!prev) {
-      byIdentity.set(p.name, p);
+      byIdentity.set(id, p);
       continue;
     }
     const live = p.lastActive >= prev.lastActive ? p : prev;
-    byIdentity.set(p.name, { ...live, self: Boolean(prev.self || p.self) });
+    byIdentity.set(id, { ...live, self: Boolean(prev.self || p.self) });
   }
   return [...byIdentity.values()];
 }
@@ -2228,11 +2246,11 @@ function foldTabs(people: PresencePerson[]): PresencePerson[] {
  *  surface they're on; agent chips carry the derived liveness state — real
  *  signals (heartbeat, last tool call), never guesses.
  *
- *  `key` is the participant, not the connection: `p-<name>` for a person,
- *  `a-<agentId>` for an agent. It is what the presence island keys its rows
- *  on, so it has to survive a reconnect — a key that changed whenever a
- *  browser reconnected would rebuild the row (and drop an in-flight press)
- *  for a person who never moved. */
+ *  `key` is the participant, not the connection: `p-<identity>` for a person
+ *  (see `presenceIdentity`), `a-<agentId>` for an agent. It is what the
+ *  presence island keys its rows on, so it has to survive a reconnect — a key
+ *  that changed whenever a browser reconnected would rebuild the row (and
+ *  drop an in-flight press) for a person who never moved. */
 export function presenceChips(
   people: PresencePerson[],
   agents: PresenceAgent[],
@@ -2243,7 +2261,7 @@ export function presenceChips(
   for (const p of sortedPeople) {
     const where = p.surface === 'hub' ? 'hub' : (p.docId ?? p.surface);
     chips.push({
-      key: `p-${p.name}`,
+      key: `p-${presenceIdentity(p)}`,
       label: p.self ? `${p.name} (you)` : p.name,
       kind: 'person',
       where,
