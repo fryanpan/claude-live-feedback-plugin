@@ -51,6 +51,10 @@ Someone who was not in the conversation should be able to see a task, know why i
   - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — it stays `todo` and the board stops treating it as work nobody got to. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
 - Evidence goes in the transition `note` — the commit, the PR, what you verified and what you couldn't. `amend_evidence(taskId, evidence, note?)` fixes a move you already made; re-sending the transition refuses.
 - Share progress on a task by writing brief comments (100 words or less) in the task when you start, when you hit a blocker, when a PR opens, and when it merges.
+- **Your final message is a pointer, not the report.** Post the full report as a task comment FIRST — the harness drops final messages routinely, so the board comment is the copy that survives — then write the message from the `threadUrl` that comment returns. Three parts, 150 words or less all together:
+  1. The outcome, in one line.
+  2. The `threadUrl` of the comment holding the full report, formatted for wherever the message lands (below).
+  3. Any blocker, in one line.
 
 ## Use Links Effectively
 
