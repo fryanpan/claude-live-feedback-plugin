@@ -253,19 +253,13 @@ describe('the Home queue count', () => {
   });
 
   /**
-   * The count is a promise about the LIST rendered under it, and the list is
-   * the browser's `reviewQueue` — which deliberately does not place a
-   * ticket-borne row yet (the detail panel owns that half, and it is not in
-   * this change). So a ticket-borne row is shipped by the route, where agents
-   * and the MCP verbs read it, and is NOT counted by the brief, where counting
-   * it would print "something is waiting" above a list showing nothing and
-   * offering no control to answer it.
-   *
-   * This asymmetry is temporary and it is the deferred rendering half that
-   * removes it: when Home places a `task-review` row, the `kind` filter below
-   * goes with it and this test inverts.
+   * INVERTED from its original form, exactly as its own comment predicted:
+   * Home now places `task-review` rows, so the brief counts them. The
+   * asymmetry this test used to pin — shipped by the route, absent from the
+   * count — was one half of the measured defect (review items filed with
+   * `create_tasks` / `add_review_item` never reached Bryan's Home queue).
    */
-  it('ships a non-decision ticket’s review items without counting them into the brief', async () => {
+  it('counts a non-decision ticket’s review items into the brief', async () => {
     const ws = await seedWorkspace();
     const task = await seedAction(ws);
     expect(await briefLine(ws)).toContain('Nothing is queued for your review right now.');
@@ -276,8 +270,109 @@ describe('the Home queue count', () => {
     }
     // The route ships both — that is the entity reaching the API.
     expect((await queueRows(ws)).filter((r) => r.kind === 'task-review')).toHaveLength(2);
-    // …and the brief still describes only what Home draws.
-    expect(await briefLine(ws)).toContain('Nothing is queued for your review right now.');
+    // …and the brief now counts what Home draws, which includes them.
+    expect(await briefLine(ws)).toContain('What needs your review is queued below.');
+  });
+
+  /**
+   * The repro from the field, end to end: an AGENT files a row addressed to a
+   * person with a decision review item in ONE create call. The row lands in
+   * `triage` (agent-filed, unvetted) — and the ask must be on the person's
+   * Home queue anyway. The ask is an ask; the task still awaits vetting; the
+   * two gates are independent. Measured 2026-08-24/25: ten such rows filed,
+   * zero visible.
+   */
+  it('a review item on an agent-filed triage row reaches the queue and the brief', async () => {
+    const ws = await seedWorkspace();
+    const { tasks } = await jj<{ tasks: Task[] }>(
+      await post(`/api/workspaces/${ws}/tasks/batch`, {
+        author: AGENT,
+        tasks: [
+          {
+            title: 'Jordan can pick the cache so that the cleanup unblocks',
+            assignee: 'Jordan',
+            body: 'Jordan can pick the cache so that the storage cleanup can start.',
+            review: REVIEW,
+          },
+        ],
+      }),
+    );
+    expect(tasks[0]?.status).toBe('triage');
+    const rows = await queueRows(ws);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'task-review', taskId: tasks[0]?.id });
+    expect(await briefLine(ws)).toContain('What needs your review is queued below.');
+  });
+});
+
+describe('the create response names visibility', () => {
+  /**
+   * The defect's second half: a success-shaped response for an invisible ask.
+   * `placed: true` answered a different question (goal placement), and nothing
+   * said the row itself would be returned by no dispatch read. The response
+   * now states the row's actual visibility per created row: triage rows name
+   * the transition that makes them dispatchable, and a row carrying a review
+   * item states where the ask already is.
+   */
+  it('states triage invisibility and review-item visibility on the batch door', async () => {
+    const ws = await seedWorkspace();
+    const res = await jj<{
+      tasks: Task[];
+      visibility?: Array<{ taskId: string; note: string }>;
+    }>(
+      await post(`/api/workspaces/${ws}/tasks/batch`, {
+        author: AGENT,
+        tasks: [
+          {
+            title: 'Jordan can pick the cache so that the cleanup unblocks',
+            assignee: 'Jordan',
+            review: REVIEW,
+          },
+          {
+            title: 'Agent can sweep the cache dir so that disk stops filling',
+            assignee: AGENT.name,
+          },
+        ],
+      }),
+    );
+    const withReview = res.tasks.find((t) => t.title.includes('pick the cache'));
+    const plain = res.tasks.find((t) => t.title.includes('sweep the cache'));
+    const noteFor = (id?: string) => res.visibility?.find((v) => v.taskId === id)?.note ?? '';
+    expect(noteFor(withReview?.id)).toContain('triage');
+    expect(noteFor(withReview?.id)).toContain('task_transition');
+    expect(noteFor(withReview?.id)).toContain('Home review queue');
+    expect(noteFor(plain?.id)).toContain('triage');
+    expect(noteFor(plain?.id)).not.toContain('Home review queue');
+  });
+
+  it('says nothing extra for a person-filed row with no review item', async () => {
+    const ws = await seedWorkspace();
+    const res = await jj<{
+      tasks: Task[];
+      visibility?: Array<{ taskId: string; note: string }>;
+    }>(
+      await post(`/api/workspaces/${ws}/tasks/batch`, {
+        author: PERSON,
+        tasks: [{ title: 'keep disk or memory?', assignee: 'Jordan' }],
+      }),
+    );
+    expect(res.tasks[0]?.status).toBe('todo');
+    expect(res.visibility).toBeUndefined();
+  });
+
+  it('states visibility on the single door too', async () => {
+    const ws = await seedWorkspace();
+    const res = await jj<{ task: Task; visibility?: string }>(
+      await post(`/api/workspaces/${ws}/tasks`, {
+        title: 'Jordan can pick the cache so that the cleanup unblocks',
+        assignee: 'Jordan',
+        review: REVIEW,
+        author: AGENT,
+      }),
+    );
+    expect(res.task.status).toBe('triage');
+    expect(res.visibility).toContain('triage');
+    expect(res.visibility).toContain('Home review queue');
   });
 
   /**

@@ -829,10 +829,15 @@ export function humanBlockerRows(tasks: HubTask[]): BlockerRow[] {
 export interface ReviewThreadItem {
   /**
    * `task-review` is a row hanging on a TICKET rather than on a comment — the
-   * server ships it on the same route, in the same band. This model does not
-   * place one yet (the task detail panel owns that half), and `reviewQueue`
-   * skips it rather than half-building a row; see the guard there for why
-   * admitting it would double-list a legacy decision.
+   * server ships it on the same route, in the same band, and `reviewQueue`
+   * places it like any other declared ask. It carries `taskId` +
+   * `reviewItemId` instead of `docId`/`threadId` (those are absent on the
+   * wire despite the field types below — the shape predates the kind), and an
+   * answer posts to the task review-item route rather than a thread. This
+   * model SKIPPED the kind until 2026-08-24, which was the measured defect:
+   * review items filed via `create_tasks` / `add_review_item` were shipped by
+   * the route and rendered by nothing, so a decision addressed to a person
+   * never reached their Home queue.
    */
   /**
    * `goal-thread` is a question asked on a GOAL's discussion. Its own kind
@@ -841,6 +846,9 @@ export interface ReviewThreadItem {
    * resolves to no task at all.
    */
   kind: 'task-thread' | 'goal-thread' | 'doc-thread' | 'task-review';
+  /** Which row on the ticket, on a `task-review` item — an answer is stamped
+   *  back at this id. */
+  reviewItemId?: string;
   /**
    * How this row earned its place. Since 2026-08-21 membership is the
    * SERVER's call and every shipped row is an ask: `declared` — an agent
@@ -909,7 +917,17 @@ export async function refreshReviewItems(
   state.reviewItems = applyRefresh(state.reviewItems, res, (r) => r.items ?? []);
 }
 
-export type ReviewKind = 'decision' | 'task-thread' | 'goal-thread' | 'doc-thread';
+export type ReviewKind = 'decision' | 'task-thread' | 'goal-thread' | 'doc-thread' | 'task-review';
+
+/**
+ * The id the store gives the review item it DERIVES from a legacy
+ * `needs: 'decision'` task — the same string on every legacy ticket, by
+ * design (server: `LEGACY_REVIEW_ITEM_ID` in tasks.ts). The queue skips a
+ * `task-review` row carrying it, because that decision already arrives as a
+ * `decision` row read off the board projection; admitting the derived copy
+ * would list one question twice.
+ */
+export const LEGACY_REVIEW_ITEM_ID = 'r-legacy';
 
 export interface ReviewItem {
   /** Stable across re-fetches. The walkthrough steps by position and the list
@@ -1158,13 +1176,51 @@ export function reviewQueue(
   // detail panel's blocked note, built from the same `humanBlockerRows`.
 
   for (const t of threadItems) {
+    // TICKET-borne review items place like any other declared ask — this loop
+    // skipped the kind wholesale until 2026-08-24, which was the measured
+    // defect: an ask filed with `create_tasks`/`add_review_item` was shipped
+    // by the route and rendered by nothing, whatever the carrying task's
+    // status. Two rows are still refused, each for its own reason: the
+    // DERIVED legacy row (`r-legacy`) whose decision already arrives as a
+    // `decision` row from the board above — admitting the copy lists one
+    // question twice — and a row missing the ids its answer path posts to,
+    // because a card whose Answer button writes nowhere is worse than none.
+    if (t.kind === 'task-review') {
+      if (
+        !t.taskId ||
+        !t.reviewItemId ||
+        t.reviewItemId === LEGACY_REVIEW_ITEM_ID ||
+        t.review === undefined
+      )
+        continue;
+      ranked.push({
+        item: {
+          key: `task-review:${t.taskId}:${t.reviewItemId}`,
+          kind: 'task-review',
+          title: t.title,
+          ask: t.ask,
+          review: t.review,
+          // The authored second line, exactly as a declared thread row reads.
+          why: t.review.why ?? '',
+          since: t.since,
+          thread: t,
+        },
+        // Ranks with the task-thread band: it is a question about the WORK,
+        // and it inherits the task's own priority when the board read holds
+        // the task. A triage row's item may not — it then takes the tail
+        // rank rather than vanishing, because the ask is an ask whatever the
+        // row's vetting status is.
+        rank: rankOf(
+          taskById.get(t.taskId),
+          BAND_TASK_THREAD,
+          true,
+          t.since,
+          `${t.taskId}:${t.reviewItemId}`,
+        ),
+      });
+      continue;
+    }
     // A row of a kind this queue does not place is SKIPPED, not half-built.
-    // The route also ships TICKET-borne review items (`task-review`) now, and
-    // this queue does not render them yet: a legacy decision already arrives
-    // here as a `decision` row derived from the board above, so admitting the
-    // server's row too would list one question twice — and a row with no
-    // `docId`/`threadId` would key as `…:undefined:undefined` and collide with
-    // every other one of its kind.
     if (t.kind !== 'task-thread' && t.kind !== 'goal-thread' && t.kind !== 'doc-thread') continue;
     const where =
       t.kind === 'task-thread'
@@ -1230,6 +1286,53 @@ export function reviewQueue(
     total: items.length,
     blocking: decisions.blocking,
   };
+}
+
+/**
+ * Where an item's answer gets WRITTEN — path and body, minus the author the
+ * caller adds. One spelling for all three doors, because the walkthrough's
+ * reply handler used to build its two thread routes inline: a ticket-borne
+ * row reaching it would have posted at `/api/docs/undefined/…` — an answer
+ * that lands nowhere while the card advances, which is the one failure the
+ * answer flow cannot afford.
+ *
+ * - `task-review` → the task review-item answer route. `answeredWith` is that
+ *   entity's spelling of the tapped candidate's id.
+ * - a declared thread item → the thread `/answer` route, which posts the same
+ *   reply AND records which candidate it came from on the declaring comment.
+ * - anything else → a plain thread comment.
+ *
+ * Null when the row holds no address to write to; the caller keeps the words
+ * in the box rather than sending them nowhere.
+ */
+export function reviewReplyRequest(
+  item: ReviewItem,
+  text: string,
+  optionId?: string,
+): { path: string; body: Record<string, unknown> } | null {
+  const t = item.thread;
+  if (!t) return null;
+  if (t.kind === 'task-review') {
+    if (!t.taskId || !t.reviewItemId) return null;
+    return {
+      path: `/api/tasks/${encodeURIComponent(t.taskId)}/review-items/${encodeURIComponent(t.reviewItemId)}/answer`,
+      body: { text, ...(optionId !== undefined ? { answeredWith: optionId } : {}) },
+    };
+  }
+  if (!t.docId || !t.threadId) return null;
+  const doc = encodeURIComponent(t.docId);
+  const thread = encodeURIComponent(t.threadId);
+  const declared = item.review !== undefined && t.commentId !== undefined;
+  return declared
+    ? {
+        path: `/api/docs/${doc}/threads/${thread}/answer`,
+        body: {
+          text,
+          commentId: t.commentId,
+          ...(optionId !== undefined ? { optionId } : {}),
+        },
+      }
+    : { path: `/api/docs/${doc}/threads/${thread}/comments`, body: { text } };
 }
 
 /** "Blocking 2 tasks" / "Hard-blocking 1 task". One phrasing everywhere a
