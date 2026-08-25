@@ -30,6 +30,16 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from './agent-watches.ts';
+import { EmailCodes } from './auth/email-code.ts';
+import {
+  SESSION_COOKIE,
+  clearedSessionCookieHeader,
+  sessionKey as deriveSessionKey,
+  sessionCookieHeader as emailSessionCookieHeader,
+  mintSession,
+  sessionNeedsRefresh,
+  verifySession as verifyEmailSession,
+} from './auth/session.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress } from './compress.ts';
@@ -51,6 +61,7 @@ import {
   readerKey,
   taskDeepLink,
 } from './home-brief.ts';
+import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
 import {
   type LandingModel,
   type LandingProjectLink,
@@ -320,6 +331,36 @@ export interface ServerOptions {
   sharingEnvLocked?: boolean;
   port?: number;
   dataDir?: string;
+  /**
+   * Email-keyed identity is IN EFFECT (`CW_REQUIRE_EMAIL_AUTH`). Default off,
+   * and off means byte-for-byte today's behaviour.
+   *
+   * What the flag gates is the EFFECT of a session on authorship: with it
+   * off, a request carrying a verified session cookie is attributed exactly
+   * as it is attributed today — from the body, or through the guest
+   * sanitizer. With it on, the server's own verdict outranks the claimed
+   * body.
+   *
+   * What the flag deliberately does NOT gate is the `/api/auth/*` routes
+   * themselves. They are additive — nothing today calls them, so a request
+   * that never calls them is unchanged either way — and leaving them mounted
+   * is what lets the login flow be exercised on a real deployment before the
+   * switch is thrown. Minting a session changes nothing by itself.
+   *
+   * A request with NO session cookie behaves exactly as it does today,
+   * whichever way the flag is set.
+   */
+  requireEmailAuth?: boolean;
+  /**
+   * The address whose email identity is the fleet OWNER (`CW_OWNER_EMAIL`).
+   *
+   * `isOwnerActor` is otherwise hardcoded to the two spellings that predate
+   * email identity, and the moment the owner's identity becomes `user-<hash>`
+   * that check stops matching and fails SILENTLY — no error, just an
+   * owner-activity view that quietly reads empty. This is the input that
+   * keeps it matching. See activity.ts.
+   */
+  ownerEmail?: string;
   /**
    * How long an attachment stays `live` without a heartbeat (default five
    * minutes, `HEARTBEAT_FRESH_MS`). A test seam: the whole away-lead half of
@@ -2173,6 +2214,84 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     };
   };
 
+  // --- Email-keyed identity ---------------------------------------------
+  // The roster and the challenge store. Both are cheap to construct and
+  // neither reads anything at boot beyond `identities.json`, so they exist
+  // whether or not `CW_REQUIRE_EMAIL_AUTH` is set — the flag governs what a
+  // session MEANS, not whether a person can create one. See ServerOptions.
+  const identities = new Identities({ dataDir });
+  if (identities.loadError) {
+    console.error(`[identities] ${identities.loadError}`);
+  }
+  const emailCodes = new EmailCodes();
+  const requireEmailAuth = opts.requireEmailAuth ?? false;
+  let emailSessionKeyCache: string | null = null;
+  const emailSessionKey = (): string => {
+    emailSessionKeyCache ??= deriveSessionKey(cookieKey());
+    return emailSessionKeyCache;
+  };
+
+  /**
+   * Whether this request really reached us over https.
+   *
+   * Read off `policyFor`, which is the ONE place that derives a scheme from
+   * an allowlisted `x-forwarded-proto` — the server's own socket is always
+   * plain http, so `new URL(req.url).protocol` would answer "http" for every
+   * https visitor and strip `Secure` from every cookie they get. Reusing that
+   * derivation also inherits its defence against header injection.
+   */
+  const isSecureRequest = (req: Request): boolean =>
+    policyFor(req).requestOrigin.startsWith('https://');
+
+  /**
+   * The identity a request's session cookie attests to, or null.
+   *
+   * Four ways to be null and they are deliberately indistinguishable to the
+   * caller: no cookie, a cookie that does not verify or has expired, an
+   * identity the roster does not hold, and an identity whose sessions have
+   * been revoked or archived. Every one of them means "not signed in".
+   */
+  const sessionIdentityFor = (req: Request): IdentityRecord | null => {
+    const claims = verifyEmailSession(
+      readCookie(req.headers.get('cookie'), SESSION_COOKIE),
+      emailSessionKey(),
+    );
+    if (!claims) return null;
+    const rec = identities.get(claims.identityId);
+    if (!rec || rec.status !== 'active') return null;
+    // Server-side revocation: a cookie minted before the watermark is dead
+    // however long it says it lives.
+    if (claims.issuedAt < rec.sessionsValidFrom) return null;
+    return rec;
+  };
+
+  /**
+   * Extend a live session in place — the "sliding" half of 90 days sliding.
+   *
+   * Done in the response wrapper rather than per route because "on use" means
+   * every request, and a session that lapsed while somebody was reviewing
+   * daily would be the one failure this design exists to avoid. Skipped when
+   * the response already sets the cookie (login and logout own it), and
+   * cheap: the refresh only fires once a day of the session has been spent.
+   */
+  const refreshSession = (req: Request, res: Response): Response => {
+    const raw = readCookie(req.headers.get('cookie'), SESSION_COOKIE);
+    if (!raw) return res;
+    const claims = verifyEmailSession(raw, emailSessionKey());
+    if (!claims || !sessionNeedsRefresh(claims)) return res;
+    if (res.headers.get('set-cookie')?.includes(`${SESSION_COOKIE}=`)) return res;
+    const rec = sessionIdentityFor(req);
+    if (!rec) return res;
+    const headers = new Headers(res.headers);
+    headers.append(
+      'set-cookie',
+      emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
+        secure: isSecureRequest(req),
+      }),
+    );
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  };
+
   const applyCors = (req: Request, res: Response): Response => {
     const headers = corsHeadersFor(req.headers.get('origin'), policyFor(req));
     if (!headers) return res;
@@ -2205,7 +2324,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // same response the wrapper copies; `maybeCompress` skips anything that
       // isn't a buffered JSON body (see compress.ts for why that gate is
       // narrow).
-      return routed === undefined ? undefined : applyCors(req, await maybeCompress(req, routed));
+      return routed === undefined
+        ? undefined
+        : applyCors(req, refreshSession(req, await maybeCompress(req, routed)));
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
@@ -2448,6 +2569,112 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const result = await cfAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
           }
+        }
+
+        // --- REST: email login ---
+        // Reachability (the host gate, Access, a share session) and identity
+        // (who you are) stay orthogonal: a local host still bypasses the host
+        // guard — it may REACH the server — and still has to say who it is.
+        // These routes are what "saying who you are" means.
+        //
+        // They sit AFTER the host decision on purpose, so a share visitor
+        // reaches them only if `shareScopeAllows` lets them, and it does not:
+        // link mode keeps minting `guest-` identities and this is not a way
+        // around that.
+        if (pathname === '/api/auth/start' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const email = typeof body?.email === 'string' ? body.email : '';
+          const peer = server.requestIP(req)?.address ?? 'unknown';
+          const started = emailCodes.start(email, peer);
+          if (!started.ok) {
+            if (started.error === 'rate_limited') {
+              return new Response(
+                JSON.stringify({
+                  error: 'rate_limited',
+                  retryAfterSeconds: started.retryAfterSeconds,
+                }),
+                {
+                  status: 429,
+                  headers: {
+                    'content-type': 'application/json',
+                    'retry-after': String(started.retryAfterSeconds),
+                  },
+                },
+              );
+            }
+            return j(400, { error: 'invalid_email' });
+          }
+          // Delivery is the next commit's subject. Until then the code goes
+          // to the server log, which is what makes the flow testable end to
+          // end without an email provider.
+          console.log(`[auth] login code for ${started.email}: ${started.code}`);
+          // NEVER the code. The response is read by whoever made the request,
+          // and the whole point of mailing a code is that those are different
+          // people until one proves otherwise.
+          return j(200, {
+            ok: true,
+            email: started.email,
+            expiresInSeconds: Math.max(0, Math.floor((started.expiresAt - Date.now()) / 1000)),
+          });
+        }
+
+        if (pathname === '/api/auth/verify' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const email = typeof body?.email === 'string' ? body.email : '';
+          const code = typeof body?.code === 'string' ? body.code : '';
+          const peer = server.requestIP(req)?.address ?? 'unknown';
+          const result = emailCodes.verify(email, code, peer);
+          if (!result.ok) {
+            if (result.error === 'rate_limited') {
+              return j(429, {
+                error: 'rate_limited',
+                retryAfterSeconds: result.retryAfterSeconds,
+              });
+            }
+            if (result.error === 'too_many_attempts') {
+              return j(429, { error: 'too_many_attempts' });
+            }
+            if (result.error === 'invalid_email') return j(400, { error: 'invalid_email' });
+            return j(401, { error: result.error });
+          }
+          const rec = identities.upsertByEmail(result.email);
+          if (rec.status !== 'active') {
+            // An archived identity proved control of its mailbox and still
+            // may not sign in. Un-archiving is somebody's decision.
+            return j(403, { error: 'identity_archived' });
+          }
+          return new Response(JSON.stringify({ ok: true, user: userForIdentity(rec) }), {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'set-cookie': emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
+                secure: isSecureRequest(req),
+              }),
+            },
+          });
+        }
+
+        if (pathname === '/api/auth/session' && req.method === 'GET') {
+          const rec = sessionIdentityFor(req);
+          return j(200, {
+            // Whether email identity is IN EFFECT, so a client can tell "not
+            // signed in" from "signing in does not matter here yet".
+            required: requireEmailAuth,
+            authenticated: rec !== null,
+            ...(rec ? { user: userForIdentity(rec) } : {}),
+          });
+        }
+
+        if (pathname === '/api/auth/logout' && req.method === 'POST') {
+          // This browser only. Ending a person's sessions everywhere is a
+          // roster operation (`revokeSessions`), not a cookie one.
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'set-cookie': clearedSessionCookieHeader({ secure: isSecureRequest(req) }),
+            },
+          });
         }
 
         // --- REST: shares ---
