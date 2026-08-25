@@ -2217,6 +2217,7 @@ const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   'task-thread': 'Task comment',
   'goal-thread': 'Goal comment',
   'doc-thread': 'Doc comment',
+  'task-review': 'Review item on a task',
 };
 
 /**
@@ -2808,9 +2809,10 @@ export interface WalkProgress {
   last: ReviewItem | null;
 }
 
-/** How the thing you just finished reads in the banner. */
+/** How the thing you just finished reads in the banner. A ticket-borne
+ *  review item is ANSWERED like a decision — nothing was replied on. */
 function clearedVerb(kind: ReviewKind): string {
-  return kind === 'decision' ? 'Answered' : 'Replied on';
+  return kind === 'decision' || kind === 'task-review' ? 'Answered' : 'Replied on';
 }
 
 /**
