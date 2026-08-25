@@ -23,7 +23,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
   CHORES_ID,
@@ -32,7 +32,7 @@ import {
   type HubTask,
   boardSections,
 } from '../src/hub/hub-model.ts';
-import { type BoardHandlers, renderBoardForPane } from '../src/hub/hub-render.ts';
+import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
 const HUB_APP = readFileSync(resolve(import.meta.dirname, '../src/hub/hub-app.ts'), 'utf8');
 
@@ -84,34 +84,40 @@ beforeEach(() => {
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
+afterEach(disposeBoards);
 
 const rowCount = () => root.querySelectorAll('.hub-task-row').length;
 
-describe('renderBoardForPane', () => {
+describe('the board island’s pane gate', () => {
   it('renders the rows on the board — the control the Home case is measured against', () => {
-    renderBoardForPane(root, 'board', boardSections(GOALS, TASKS, filters), handlers());
+    renderBoard(root, boardSections(GOALS, TASKS, filters), handlers(), 'board');
     expect(rowCount()).toBe(TASKS.length);
   });
 
   it('renders NOTHING on Home — not a hidden row set, no rows at all', () => {
-    renderBoardForPane(root, 'home', boardSections(GOALS, TASKS, filters), handlers());
+    renderBoard(root, boardSections(GOALS, TASKS, filters), handlers(), 'home');
     expect(rowCount()).toBe(0);
     // The sections and the "New goal" row go with them: the whole column is
-    // off screen, so nothing in it has a reader.
+    // off screen, so nothing in it has a reader. What is left is the island's
+    // own wrapper — the container Preact owns, which must not be torn down and
+    // rebuilt per pane — and it is EMPTY, which is the claim being made here.
     expect(root.querySelectorAll('.hub-section')).toHaveLength(0);
-    expect(root.childElementCount).toBe(0);
+    const wrapper = root.querySelector('[data-preact-island="board"]');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.childNodes.length).toBe(0);
+    expect(root.childElementCount).toBe(1);
   });
 
   it('clears rows already on screen when the reader leaves the board for Home', () => {
-    renderBoardForPane(root, 'board', boardSections(GOALS, TASKS, filters), handlers());
+    renderBoard(root, boardSections(GOALS, TASKS, filters), handlers(), 'board');
     expect(rowCount()).toBe(TASKS.length);
-    renderBoardForPane(root, 'home', boardSections(GOALS, TASKS, filters), handlers());
+    renderBoard(root, boardSections(GOALS, TASKS, filters), handlers(), 'home');
     expect(rowCount()).toBe(0);
   });
 
   it('brings them back on the way in — the unmount is not one-way', () => {
-    renderBoardForPane(root, 'home', boardSections(GOALS, TASKS, filters), handlers());
-    renderBoardForPane(root, 'board', boardSections(GOALS, TASKS, filters), handlers());
+    renderBoard(root, boardSections(GOALS, TASKS, filters), handlers(), 'home');
+    renderBoard(root, boardSections(GOALS, TASKS, filters), handlers(), 'board');
     expect(rowCount()).toBe(TASKS.length);
     // Live, not a corpse: the row still carries the wiring a fresh render
     // gives it, so returning to the board is a working board.
@@ -122,9 +128,9 @@ describe('renderBoardForPane', () => {
 });
 
 describe('the hub wires the pane through', () => {
-  it('renderBoardRegion passes state.pane, so the gate cannot be bypassed at the call site', () => {
+  it('renderBoardRegion writes state.pane into the signal, so the gate cannot be bypassed', () => {
     const body = HUB_APP.match(/function renderBoardRegion\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
     expect(body, 'renderBoardRegion went missing from hub-app.ts').not.toBe('');
-    expect(body).toMatch(/renderBoardForPane\(\s*el\('hub-board'\),\s*state\.pane,/);
+    expect(body).toMatch(/boardData\.value = \{[\s\S]*?pane: state\.pane,/);
   });
 });
