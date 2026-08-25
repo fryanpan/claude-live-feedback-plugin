@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import * as boardIsland from '../src/hub/board-island.tsx';
 import * as hubRender from '../src/hub/hub-render.ts';
 
 /**
@@ -30,8 +31,10 @@ describe('the board no longer carries the docs and open-threads rails', () => {
   it('exports neither renderer, and still exports the board renderers', () => {
     const names = Object.keys(hubRender);
     // Positive control: this read can see exports at all, and the board's own
-    // renderers survived the excision beside them.
-    expect(names).toContain('renderBoard');
+    // renderers survived the excision beside them. `renderBoard` itself moved
+    // to the Preact island — so the control follows it there rather than being
+    // dropped, which would leave the two absences below unwitnessed.
+    expect(Object.keys(boardIsland)).toContain('mountBoardIsland');
     expect(names).toContain('renderTaskDetail');
     expect(names).not.toContain('renderDocsSidebar');
     expect(names).not.toContain('renderThreadsSidebar');
