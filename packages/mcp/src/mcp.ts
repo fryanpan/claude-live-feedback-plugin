@@ -97,7 +97,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.103';
+const PLUGIN_VERSION = '0.1.104';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1972,6 +1972,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: 'object', properties: {} },
     },
     {
+      name: 'get_unfiled_ask_count',
+      description:
+        'Read your own unfiled-ask count — asks that appeared in your chat without a matching filed review item, as the daily chat audit last counted them. This is the self-correction half of the "no unfiled asks" rule: query it at session start or before standing down, and if the number is above zero, the drift is yours to fix by filing review items instead of chat asks. HONEST LIMITS, read them: the server cannot see chat, so this is NOT a live measurement — the number is whatever the daily audit (which mines transcripts) last published via publish_chat_audit, and `today: null` means no audit has covered today yet, which is a real answer. `latest: null` means no audit has ever published about you — not innocence. Counts are keyed by display name (CW_AGENT_NAME); pass `agent` to read a different agent\'s number (a lead following up on the audit).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          agent: {
+            type: 'string',
+            description: "Display name to read; defaults to this session's own (CW_AGENT_NAME).",
+          },
+        },
+      },
+    },
+    {
+      name: 'publish_chat_audit',
+      description:
+        "FOR THE DAILY CHAT AUDIT: publish per-agent unfiled-ask counts so each session can read its own back via get_unfiled_ask_count. The audit's number and the number a session self-queries are the same stored row — one heuristic, one implementation — so reference these counts in the audit report rather than recomputing. Each entry: {agent (display name / CW_AGENT_NAME), unfiledAsks (asks in chat without a matching filed review item), totalAsks?, sessionId?, note? (evidence pointer)}. `day` is the audited day (YYYY-MM-DD, defaults to today on the server's clock). Publishing again for the same agent supersedes — latest wins, history kept (append-only). The bare name 'agent' is refused: counts belong to somebody.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          day: { type: 'string', description: 'Audited day, YYYY-MM-DD. Defaults to today.' },
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                agent: { type: 'string' },
+                unfiledAsks: { type: 'number' },
+                totalAsks: { type: 'number' },
+                sessionId: { type: 'string' },
+                note: { type: 'string' },
+              },
+              required: ['agent', 'unfiledAsks'],
+            },
+          },
+        },
+        required: ['entries'],
+      },
+    },
+    {
       name: 'list_attachments',
       description:
         "List the agents attached to a hub workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
@@ -3646,6 +3686,30 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         )) as { attachment?: { state?: string } };
         if (agentId === undefined || agentId === AUTHOR.id) markAttached(workspaceId);
         return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
+      }
+      case 'get_unfiled_ask_count': {
+        const { agent } = a as { agent?: string };
+        const who = agent?.trim() || AUTHOR.name;
+        return ok(await http('GET', `/api/chat-audit/${encodeURIComponent(who)}`));
+      }
+      case 'publish_chat_audit': {
+        const { day, entries } = a as {
+          day?: string;
+          entries: Array<{
+            agent: string;
+            unfiledAsks: number;
+            totalAsks?: number;
+            sessionId?: string;
+            note?: string;
+          }>;
+        };
+        return ok(
+          await http('POST', '/api/chat-audit', {
+            ...(day !== undefined ? { day } : {}),
+            auditor: AUTHOR.name,
+            entries,
+          }),
+        );
       }
       case 'request_plugin_refresh': {
         // No arguments reach the process this runs — the server's argv is
