@@ -69,6 +69,15 @@ board task that proposed it; what follows is the operating rule.
   before the turn ends; chat carries a pointer only. A "still waiting on you"
   list in chat is a smell — each entry must already be an item he can answer
   where he reads.
+- **Chat is 50 words** (owner's call, 2026-08-25), unless the message answers
+  a question just asked. Going over means you picked the wrong surface:
+  something needing explanation is a review item on the task it came from, and
+  something you will both work on is a doc you create and then point at. The
+  cap is on the chat you produce, not per message — five short narration
+  messages spend the same attention as one long one. It replaced a rule that
+  forbade progress-chat without naming a size, which agents met while still
+  writing paragraphs. Contract ships in the
+  `claude-workspaces:working-in-a-workspace` skill; this bullet is the number.
 - **Goal bands run automatically.** Work goal-band tasks in priority order
   without being told, unless a task is blocked by a decision or dependency —
   and record that blockage as an `after` edge, never in your head. **Backlog
