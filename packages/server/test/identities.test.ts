@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emailIdentityId } from '@feedback/core';
@@ -46,6 +46,21 @@ describe('upsertByEmail', () => {
   it('refuses something that is not an address', () => {
     const store = new Identities({ dataDir });
     expect(() => store.upsertByEmail('alice')).toThrow();
+  });
+
+  it('writes nothing when nothing would change', () => {
+    // The Access path resolves an identity on every authenticated write, so
+    // an unconditional save would rewrite this file once per comment.
+    let clock = 1_000;
+    const store = new Identities({ dataDir, now: () => clock });
+    const first = store.upsertByEmail('alice@example.com');
+    const path = join(dataDir, 'identities.json');
+    const before = statSync(path).mtimeMs;
+    clock = 50_000;
+    expect(store.upsertByEmail('alice@example.com').updatedAt).toBe(first.updatedAt);
+    expect(statSync(path).mtimeMs).toBe(before);
+    // Positive control: a real change still writes, and moves updatedAt.
+    expect(store.upsertByEmail('alice@example.com', { displayName: 'Al' }).updatedAt).toBe(50_000);
   });
 });
 

@@ -132,6 +132,12 @@ export class Identities {
    * update of the same row rather than a second person. `createdAt` and any
    * chosen `displayName` survive; an archived row is NOT silently revived,
    * because un-archiving is a decision somebody makes (see `unarchive`).
+   *
+   * An upsert that would change NOTHING writes nothing. That is not a
+   * micro-optimization: the Cloudflare Access path resolves an identity on
+   * every authenticated write, so an unconditional save would rewrite this
+   * file once per comment — and it would leave `updatedAt` meaning "last
+   * seen" when every other field in the row means "last changed".
    */
   upsertByEmail(email: string, patch: IdentityPatch = {}): IdentityRecord {
     if (!isEmailLike(email)) throw new Error(`not an email address: ${JSON.stringify(email)}`);
@@ -139,25 +145,38 @@ export class Identities {
     const id = emailIdentityId(normalized);
     const now = this.now();
     const existing = this.state.identities[id];
-    const record: IdentityRecord = existing
-      ? {
-          ...existing,
-          email: normalized,
-          displayName: cleanName(patch.displayName) ?? existing.displayName,
-          color: cleanColor(patch.color) ?? existing.color,
-          updatedAt: now,
-        }
-      : {
-          id,
-          email: normalized,
-          displayName: cleanName(patch.displayName) ?? emailDisplayName(normalized),
-          color: cleanColor(patch.color) ?? hashToColor(id),
-          status: 'active',
-          mergedFrom: [],
-          createdAt: now,
-          updatedAt: now,
-          sessionsValidFrom: 0,
-        };
+    if (existing) {
+      const displayName = cleanName(patch.displayName) ?? existing.displayName;
+      const color = cleanColor(patch.color) ?? existing.color;
+      if (
+        existing.email === normalized &&
+        existing.displayName === displayName &&
+        existing.color === color
+      ) {
+        return existing;
+      }
+      const updated: IdentityRecord = {
+        ...existing,
+        email: normalized,
+        displayName,
+        color,
+        updatedAt: now,
+      };
+      this.state.identities[id] = updated;
+      this.save();
+      return updated;
+    }
+    const record: IdentityRecord = {
+      id,
+      email: normalized,
+      displayName: cleanName(patch.displayName) ?? emailDisplayName(normalized),
+      color: cleanColor(patch.color) ?? hashToColor(id),
+      status: 'active',
+      mergedFrom: [],
+      createdAt: now,
+      updatedAt: now,
+      sessionsValidFrom: 0,
+    };
     this.state.identities[id] = record;
     this.save();
     return record;
