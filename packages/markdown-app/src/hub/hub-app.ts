@@ -602,6 +602,17 @@ async function main(): Promise<void> {
     }
     const t = item.thread;
     if (!t) return;
+    if (t.kind === 'goal-thread' && t.taskId) {
+      // The goal PANEL, not the task panel and not the raw doc: the row is a
+      // band, and the question was asked about the band. Aim at the queued
+      // thread the same way a task row does — landing on the panel top is the
+      // "now go find it" the queue exists to remove.
+      state.detailGoalId = t.taskId;
+      state.detailTaskId = null;
+      state.detailThreadId = t.threadId;
+      renderDetail();
+      return;
+    }
     if (t.kind === 'task-thread') {
       const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
       if (!task) return;
@@ -956,17 +967,41 @@ async function main(): Promise<void> {
           detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
         }
         const freshOpen = renderedGoalId !== section.id;
-        renderGoalDetail(el('hub-detail'), section, {
-          onClose: () => {
-            state.detailGoalId = null;
-            renderDetail();
+        // The goal's comments, fetched the same lazy way a task's are and
+        // guarded by the same id — one fetch per open, and the guard is what
+        // stops the fetch's own re-render from looping back through here.
+        if (state.discussionTaskId !== section.id) {
+          void loadDiscussion({ id: section.id, bodyDocId: goalBodyDocId(section) });
+        }
+        // Only a discussion that belongs to the goal on screen: an in-flight
+        // load for a row the reader has left must not paint under this one.
+        const goalDiscussion =
+          state.discussionTaskId === section.id ? state.discussion : { loading: true, threads: [] };
+        renderGoalDetail(
+          el('hub-detail'),
+          section,
+          {
+            onClose: () => {
+              state.detailGoalId = null;
+              renderDetail();
+            },
+            onTitleCommit: (goalId, title) => void retitleGoal(goalId, title),
+            onStatusSet: (goalId, to) => void transitionGoal(goalId, to),
+            onComment: (goalId, text, threadId) =>
+              postRowComment({ id: goalId, bodyDocId: goalBodyDocId(section) }, text, threadId),
+            ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
+            now: Date.now(),
           },
-          onTitleCommit: (goalId, title) => void retitleGoal(goalId, title),
-          onStatusSet: (goalId, to) => void transitionGoal(goalId, to),
-        });
-        // A body editor left mounted by the last open TASK must not keep its
-        // websocket while a goal is on screen.
-        bodyEditor.sync(null, null);
+          goalDiscussion,
+        );
+        // The goal's description is a live room like a task's, so the SAME
+        // editor host drives it — one mount at a time, which is what makes
+        // "a body editor left mounted by the last open row" impossible rather
+        // than something this branch has to remember to tear down.
+        bodyEditor.sync(
+          { id: section.id, bodyDocId: goalBodyDocId(section) },
+          el('hub-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
+        );
         renderedGoalId = section.id;
         renderedDetailId = null;
         detailEventsFor = null;
@@ -1038,7 +1073,7 @@ async function main(): Promise<void> {
         onParkSet: (t, parkedUntil) => void setTaskPark(t, parkedUntil),
         onArchive: (t) => void archiveTask(t),
         onRestore: (t) => void restoreTask(t),
-        onComment: (t, text, threadId) => postTaskComment(t, text, threadId),
+        onComment: (t, text, threadId) => postRowComment(t, text, threadId),
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
         // the panel says the same thing the row that sent them here said.
@@ -1093,11 +1128,34 @@ async function main(): Promise<void> {
   // ── Task discussion ─────────────────────────────────────────────────────
 
   /**
-   * A task's comments live in its body doc (`task:<taskId>`), so this is the
-   * ordinary thread API pointed at the task room — no second store, and the
-   * same threads an agent sees through `create_thread`.
+   * A row and its live body room — the only two things the discussion and the
+   * description editor ever needed from a task, which is why a GOAL reaches
+   * both through the same functions.
    */
-  async function loadDiscussion(task: HubTask, quiet = false): Promise<void> {
+  interface DiscussionRow {
+    id: string;
+    bodyDocId: string;
+  }
+
+  /**
+   * Where a goal's description and comments live.
+   *
+   * Prefers what the projection sent, and falls back to deriving it. The
+   * fallback is not defensive padding: a board served by a server that
+   * predates the goal-body projection carries no `bodyDocId`, and without it
+   * the panel would fetch `/api/docs//threads` and mount an editor on
+   * nothing. Deriving is safe because the shape is a DECISION rather than a
+   * lookup — `task:<goalId>`, settled in the goals-as-a-task-type design.
+   */
+  const goalBodyDocId = (section: { id: string; bodyDocId?: string }): string =>
+    section.bodyDocId ?? `task:${section.id}`;
+
+  /**
+   * A row's comments live in its body doc (`task:<rowId>` for a task and for a
+   * goal alike), so this is the ordinary thread API pointed at that room — no
+   * second store, and the same threads an agent sees through `create_thread`.
+   */
+  async function loadDiscussion(task: DiscussionRow, quiet = false): Promise<void> {
     state.discussionTaskId = task.id;
     if (!quiet) {
       // A quiet reload is a refresh of something already on screen; flipping
@@ -1144,8 +1202,13 @@ async function main(): Promise<void> {
   }
 
   /** Resolves to whether the comment actually landed — the composer keeps the
-   *  text until it hears yes, so a failed post is retryable. */
-  async function postTaskComment(task: HubTask, text: string, threadId?: string): Promise<boolean> {
+   *  text until it hears yes, so a failed post is retryable. Takes a row
+   *  rather than a task: a goal's discussion posts through the same route. */
+  async function postRowComment(
+    task: DiscussionRow,
+    text: string,
+    threadId?: string,
+  ): Promise<boolean> {
     const doc = encodeURIComponent(task.bodyDocId);
     const res = threadId
       ? await send(`/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`, 'POST', {
@@ -1998,7 +2061,15 @@ async function main(): Promise<void> {
       // is the surface that has to be right when Bryan comes back, so it
       // refreshes whether or not a task panel happens to be open.
       void loadReviewItems();
-      const open = state.detailTaskId ? state.tasks.get(state.detailTaskId) : undefined;
+      // Whichever panel is open — a goal's discussion goes as stale as a
+      // task's, and it is reached through the same room, so leaving it out
+      // would mean a comment landing on a goal was invisible until the reader
+      // closed and reopened the panel.
+      const open: DiscussionRow | undefined = state.detailTaskId
+        ? state.tasks.get(state.detailTaskId)
+        : state.detailGoalId
+          ? { id: state.detailGoalId, bodyDocId: `task:${state.detailGoalId}` }
+          : undefined;
       if (!open || discussionIsBusy(document)) return;
       void loadDiscussion(open, true);
     });
