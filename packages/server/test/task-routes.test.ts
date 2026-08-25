@@ -1243,7 +1243,7 @@ describe('hub workspace + task routes', () => {
     });
 
     it('404s an unknown workspace rather than answering with an empty queue', async () => {
-      const res = await local('/api/workspaces/w-does-not-exist/review-items');
+      const res = await local('/api/workspaces/w-absent/review-items');
       expect(res.status).toBe(404);
     });
   });
