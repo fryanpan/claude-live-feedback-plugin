@@ -43,7 +43,7 @@ import {
   type Task,
   TaskStore,
   eventsLogPath,
-  legacyRetriageSidecarPath,
+  legacyTriageSidecarPaths,
   tasksSidecarPath,
   voiceQueuePath,
 } from '../src/tasks.ts';
@@ -223,15 +223,17 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
         actor: AGENT,
       }),
     ).toBeTypeOf('string');
-    // The second is a file NOTHING writes any more: the removed north-star
-    // re-triage queued here, and a board created before that removal can
-    // still be carrying one. Written by hand because there is no longer a
-    // code path that produces it — and swept all the same, or a delete
-    // leaves behind a `.retriage.json` nothing on the box can explain.
-    const legacy = legacyRetriageSidecarPath(dataDir as string, wsId);
-    writeFileSync(legacy, `${JSON.stringify({ pending: { ts: 1_700_000_000_000 } }, null, 2)}\n`);
+    // The rest are files NOTHING writes any more: the removed triage-request
+    // flow queued its undelivered asks in these three, and a board created
+    // before that removal can still be carrying them. Written by hand because
+    // there is no longer a code path that produces them — and swept all the
+    // same, or a delete leaves sidecars nothing on the box can explain.
+    const legacyPaths = legacyTriageSidecarPaths(dataDir as string, wsId);
+    for (const path of legacyPaths) {
+      writeFileSync(path, `${JSON.stringify({ pending: { ts: 1_700_000_000_000 } }, null, 2)}\n`);
+    }
     expect(existsSync(voiceQueuePath(dataDir as string, wsId))).toBe(true);
-    expect(existsSync(legacy)).toBe(true);
+    expect(legacyPaths.every((p) => existsSync(p))).toBe(true);
 
     const res = await del(`/api/workspaces/${wsId}?force=true`);
     expect(res.status).toBe(200);
@@ -242,7 +244,7 @@ describe('DELETE /api/workspaces/:id — hub workspace', () => {
     expect(await listWorkspaceIds()).not.toContain(wsId);
     expect(existsSync(tasksSidecarPath(dataDir as string, wsId))).toBe(false);
     expect(existsSync(eventsLogPath(dataDir as string, wsId))).toBe(false);
-    expect(existsSync(legacy)).toBe(false);
+    expect(legacyPaths.some((p) => existsSync(p))).toBe(false);
     expect(handle?.rooms.get(boardRoom)).toBeUndefined();
     expect(handle?.rooms.get(openBody)).toBeUndefined();
     expect(handle?.rooms.get(doneBody)).toBeUndefined();

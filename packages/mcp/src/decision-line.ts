@@ -2,7 +2,7 @@
  * How `decision.answered` reads to the agent that receives it.
  *
  * Kept out of mcp.ts — a bundle entry point that exports nothing — for the
- * same reason `nudge-line.ts`, `triage-line.ts` and `voice-line.ts` are: the
+ * same reason `nudge-line.ts` and `voice-line.ts` are: the
  * wording is a decision, and inline in a 3,000-line switch it cannot be
  * asserted against the payload the server really emits.
  */

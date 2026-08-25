@@ -86,11 +86,11 @@ describe('triage shaping', () => {
     return workspace.id;
   }
 
-  /** File exactly what quick-capture files: no goal, so it routes to triage. */
+  /** File exactly what quick-capture files: no goal, so it lands unplaced. */
   async function capture(
     workspaceId: string,
     extra: Record<string, unknown> = {},
-  ): Promise<{ task: Task; placement: { placed: boolean; triageDelivered: boolean } }> {
+  ): Promise<{ task: Task; placement: { placed: boolean } }> {
     return jj(
       await post(`/api/workspaces/${workspaceId}/tasks`, {
         author: PERSON,
@@ -120,11 +120,13 @@ describe('triage shaping', () => {
   it('lands the raw row untouched when nothing is there to shape it, and shapes the same row when something is', async () => {
     const wsId = await seedWorkspace();
 
-    // ── The failure path. No attachment, so no triage request goes anywhere.
+    // ── The failure path. Nobody named a goal, so the row lands unplaced and
+    // nothing shapes it.
     const { task, placement } = await capture(wsId);
-    expect(placement.triageDelivered).toBe(false);
+    expect(placement.placed).toBe(false);
 
     const raw = await readTask(wsId, task.id);
+    expect(raw.unplacedSince).toBeGreaterThan(0);
     // Byte-identical to what capture posted — not "close enough".
     expect(raw.title).toBe(CAPTURE.title);
     expect(raw.body).toBe(CAPTURE.body);

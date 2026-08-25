@@ -20,7 +20,6 @@ import { readyIdleLine, reviewAnsweredLine } from './nudge-line.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { projectTaskRows } from './task-projection.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
-import { TASK_REVIEW_SKILL, triageRequestLine } from './triage-line.ts';
 import { voiceRequestLine } from './voice-line.ts';
 import {
   type WatchCoverage,
@@ -98,7 +97,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.100';
+const PLUGIN_VERSION = '0.1.101';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -230,8 +229,8 @@ const server = new Server(
       'single gate for status changes — blockers come back in the result, and',
       'attach evidence ({commit} or {threadRef}) or the move is flagged unproven.',
       'attach_agent registers you as the workspace agent (heartbeat every few',
-      'minutes to stay live; triage requests only reach live agents). Workspace',
-      'events (task.*, decision.answered, triage.requested, workspace.goals_changed)',
+      'minutes to stay live; lead-addressed deliveries only reach live agents).',
+      'Workspace events (task.*, decision.answered, workspace.goals_changed)',
       'arrive on the same channel as thread events once you create/attach.',
       'import_tasks_markdown moves an existing hand-maintained markdown tracker',
       'onto the board (dry-run first — review the mapping before apply:true).',
@@ -1116,7 +1115,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_watched_docs',
       description:
-        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards you follow — through a watched doc OR through the board's own `ws:` key — where you have no LIVE attachment, each with what is queued for that board's lead (queuedVoice / pendingBucketReview / taskReviews) plus who holds the seat (`leadAgentId`, `leadLive`) and which clock lapsed on your own record (`attached: true, heartbeatFresh: false`). Watching a doc is not attaching, and an attachment the server has stopped OBSERVING is not attached either — a delivery gate asks for recent observed work, a heartbeat or a tool call whichever is later, plus an open channel; liveness is observed, never self-reported. A row there means real work is queuing that will never reach you. Note the two clocks differ: `heartbeatFresh` is the shorter displayed active/away label, `live` is the delivery gate, and a working session can be `heartbeatFresh: false` and still be reached — which is why rows are selected on `live`. The remedy depends on who is there: `set_workspace_lead(workspaceId)` when the seat is empty or its holder is gone, `heartbeat(workspaceId)` when the seat is already yours and you have simply gone quiet, and `attach_agent(workspaceId)` when a live peer leads it — taking that seat would evict them, and is refused. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
+        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards you follow — through a watched doc OR through the board's own `ws:` key — where you have no LIVE attachment, each with what is queued for that board's lead (`queuedVoice`) plus who holds the seat (`leadAgentId`, `leadLive`) and which clock lapsed on your own record (`attached: true, heartbeatFresh: false`). Watching a doc is not attaching, and an attachment the server has stopped OBSERVING is not attached either — a delivery gate asks for recent observed work, a heartbeat or a tool call whichever is later, plus an open channel; liveness is observed, never self-reported. A row there means real work is queuing that will never reach you. Note the two clocks differ: `heartbeatFresh` is the shorter displayed active/away label, `live` is the delivery gate, and a working session can be `heartbeatFresh: false` and still be reached — which is why rows are selected on `live`. The remedy depends on who is there: `set_workspace_lead(workspaceId)` when the seat is empty or its holder is gone, `heartbeat(workspaceId)` when the seat is already yours and you have simply gone quiet, and `attach_agent(workspaceId)` when a live peer leads it — taking that seat would evict them, and is refused. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -1206,7 +1205,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_workspace',
       description:
-        "Create a WORKSPACE — a goal board + task board + the docs and reviews filed on it, the unit a reviewer opens at /workspaces/<id>. A folder bind or diff review is CONTENT in one, not another workspace; file one with attach_doc. A board starts with no goals; write them with set_goal_list, which is where a workspace's aims live — there is no separate north-star field. YOU become the workspace's LEAD AGENT — the addressee for anything the board needs a responsible party for — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, triage.requested, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
+        "Create a WORKSPACE — a goal board + task board + the docs and reviews filed on it, the unit a reviewer opens at /workspaces/<id>. A folder bind or diff review is CONTENT in one, not another workspace; file one with attach_doc. A board starts with no goals; write them with set_goal_list, which is where a workspace's aims live — there is no separate north-star field. YOU become the workspace's LEAD AGENT — the addressee for anything the board needs a responsible party for — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, workspace.goals_changed, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1264,7 +1263,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_workspace_lead',
       description:
-        "DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, voice notes, and the board's triage asks. Call it with just `workspaceId` at session start; there is no per-surface subscribe to remember, and a respawn re-wires the subscription AND re-attaches you (both are persisted against your agent identity). STAYING LIVE IS NOT AUTOMATIC ON A QUIET SESSION: every lead-addressed delivery — voice notes, bucket and task reviews — is gated on the server having OBSERVED you recently, which means a heartbeat or a tool call, whichever came last, plus an open channel. Work on the board refreshes it for you, so a busy session stays live on its own; a session that stops touching this server for a stretch goes quiet on every board it holds, including ones it is not actively working. Call heartbeat(workspaceId) then, and use `list_watched_docs` → `coverage` to check rather than assume. It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every lead-addressed review, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent's own field names: `queuedVoice` (act on each transcript verbatim), `pendingBucketReview`, `taskReviews`, plus `gating` and `untriaged`. `subscribed` on the response is the answer to \"am I actually listening?\" — the question an agent otherwise cannot answer from the inside — and it is MEASURED, not asserted: it reports whether the event stream really opened, so `subscribed: false` with a `subscriptionWarning` is a real outcome to retry rather than a field you can skim past. `subscriptionPersisted: false` is the separate failure — the watch will not survive a respawn, usually because this session has no stable agent name. The lead is a STANDING assignment, not a session fact, so a board's asks wait for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent's behalf would make the board report a live lead that is not there.",
+        "DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, and voice notes. Call it with just `workspaceId` at session start; there is no per-surface subscribe to remember, and a respawn re-wires the subscription AND re-attaches you (both are persisted against your agent identity). STAYING LIVE IS NOT AUTOMATIC ON A QUIET SESSION: every lead-addressed delivery — voice notes above all — is gated on the server having OBSERVED you recently, which means a heartbeat or a tool call, whichever came last, plus an open channel. Work on the board refreshes it for you, so a busy session stays live on its own; a session that stops touching this server for a stretch goes quiet on every board it holds, including ones it is not actively working. Call heartbeat(workspaceId) then, and use `list_watched_docs` → `coverage` to check rather than assume. It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every board event, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent's own field names: `queuedVoice` (act on each transcript verbatim), plus `gating` and `untriaged`. `subscribed` on the response is the answer to \"am I actually listening?\" — the question an agent otherwise cannot answer from the inside — and it is MEASURED, not asserted: it reports whether the event stream really opened, so `subscribed: false` with a `subscriptionWarning` is a real outcome to retry rather than a field you can skim past. `subscriptionPersisted: false` is the separate failure — the watch will not survive a respawn, usually because this session has no stable agent name. The lead is a STANDING assignment, not a session fact, so a board's asks wait for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent's behalf would make the board report a live lead that is not there.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1299,7 +1298,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_tasks',
       description:
-        'THE way to create tasks — always takes a LIST, and a single task is a one-row list, so reach for this one whether you have one idea or fifteen. Filing 24 things one at a time costs 78s against 13s for the same rows in one call, and that gap is a tooling choice rather than a floor. It is the ONLY create verb — the single-row form it replaced is gone, so there is no second way to file work that skips the batch and the placement report. Every rule applies PER ROW: an omitted `assignee` means YOU own that row, an omitted `goal` leaves that row UNPLACED at the bottom of Backlog and routes it through triage, an explicit `order` places it. A row may name another row of the SAME batch in `after` / `afterEnforce` — by index (`0`) or by a `key` another row declares (`"#seed"`) — so a burst with internal ordering no longer needs a follow-up set_task_dependencies. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn\'t land, plus `placement` when any row went in unplaced (the unplaced task ids and the ordered goal bands, so you can set_task_goal without reading the board first). A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).\n\nEVERY ROW YOU FILE LANDS IN THE `triage` STATUS, because you are an agent and nobody has vetted it yet. It is on the board, in its band, in its order — but next_tasks does not return it, so filing work is not the same as queueing it. Somebody moves it out with task_transition (to `todo` or straight to `in-progress`) and it is ordinary work again. Do not file a row and then expect to pick it up on your next queue read; if the row is yours to start and the decision is yours to make, transition it yourself and the trail records that you did. A person filing the same row through the board skips triage entirely.\n\nNote the word does double duty on this board and these are two different things: the STATUS above is about whether the work is agreed to, while the placement triage in the paragraph before it is about which goal a row belongs under. A row can be in either, both, or neither.',
+        'THE way to create tasks — always takes a LIST, and a single task is a one-row list, so reach for this one whether you have one idea or fifteen. Filing 24 things one at a time costs 78s against 13s for the same rows in one call, and that gap is a tooling choice rather than a floor. It is the ONLY create verb — the single-row form it replaced is gone, so there is no second way to file work that skips the batch and the placement report. Every rule applies PER ROW: an omitted `assignee` means YOU own that row, an omitted `goal` leaves that row UNPLACED at the bottom of Backlog for the lead to place, an explicit `order` places it. A row may name another row of the SAME batch in `after` / `afterEnforce` — by index (`0`) or by a `key` another row declares (`"#seed"`) — so a burst with internal ordering no longer needs a follow-up set_task_dependencies. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn\'t land, plus `placement` when any row went in unplaced (the unplaced task ids and the ordered goal bands, so you can set_task_goal without reading the board first). A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).\n\nEVERY ROW YOU FILE LANDS IN THE `triage` STATUS, because you are an agent and nobody has vetted it yet. It is on the board, in its band, in its order — but next_tasks does not return it, so filing work is not the same as queueing it. Somebody moves it out with task_transition (to `todo` or straight to `in-progress`) and it is ordinary work again. Do not file a row and then expect to pick it up on your next queue read; if the row is yours to start and the decision is yours to make, transition it yourself and the trail records that you did. A person filing the same row through the board skips triage entirely.\n\nThe `triage` STATUS and being UNPLACED are two different things: the status is about whether the work is agreed to, placement is about which goal band a row sits under. A row can be in either, both, or neither.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1362,7 +1361,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 goal: {
                   type: 'string',
                   description:
-                    'Goal/subgoal id, or "chores". OMIT to leave this row UNPLACED at the bottom of Backlog and route it through triage. An explicit goal — even "chores" — is a placement and skips triage.',
+                    'Goal/subgoal id, or "chores". OMIT to leave this row UNPLACED at the bottom of Backlog for the lead to place. An explicit goal — even "chores" — is a placement.',
                 },
                 order: { type: 'number', description: 'Fractional position within the goal.' },
                 after: {
@@ -1404,7 +1403,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'promote_to_task',
       description:
-        "Promote a comment thread into a task. Captures the origin ref (the thread backlinks to the task automatically), the latest HUMAN comment as the verbatim `quote` (agent replies never become the quote), and drafts a title + body from the quote when you don't supply them. Same goal semantics as create_tasks: omit `goal` to route the placement through triage. Returns { taskId, title, goal, order, quote } — trimmed.",
+        "Promote a comment thread into a task. Captures the origin ref (the thread backlinks to the task automatically), the latest HUMAN comment as the verbatim `quote` (agent replies never become the quote), and drafts a title + body from the quote when you don't supply them. Same goal semantics as create_tasks: omit `goal` to leave it UNPLACED at the bottom of Backlog. Returns { taskId, title, goal, order, quote } — trimmed.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1439,7 +1438,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'get_workspace',
       description:
-        'Read a hub workspace: the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Backlog last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal), `parent` on subgoals, and `reorderable` — the three fields reorder_goals needs, so read here then reorder there with ids alone. `reorderable: false` marks the rows that are APPENDED rather than ordered (Backlog, and a goal id left behind on a done task): they look exactly like a band, and sending them back is a 400, so scope a reorder as "the rows at my scope where reorderable is true", never "every depth-0 row". Also reports what the LEAD has not picked up yet — `pendingBucketReview`, a goal BAND that appeared, with the unplaced tasks worth re-looking at against it. Reading it here does NOT drain it; only attach_agent does.',
+        'Read a hub workspace: the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Backlog last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal), `parent` on subgoals, and `reorderable` — the three fields reorder_goals needs, so read here then reorder there with ids alone. `reorderable: false` marks the rows that are APPENDED rather than ordered (Backlog, and a goal id left behind on a done task): they look exactly like a band, and sending them back is a 400, so scope a reorder as "the rows at my scope where reorderable is true", never "every depth-0 row". ',
       inputSchema: {
         type: 'object',
         properties: { workspaceId: { type: 'string' } },
@@ -1660,7 +1659,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_task_goal',
       description:
-        "Place a task under a goal (or subgoal) at an exact position — this IS triage's write half: pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the triage-pending marker; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
+        "Place a task under a goal (or subgoal) at an exact position — pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the row's unplaced mark; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1670,7 +1669,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           batchId: {
             type: 'string',
             description:
-              'Echo the batchId from a goal-change re-triage request. It ties this placement to the goal edit that asked for it, so the activity view reads N moves as one edit instead of N unexplained rereviews.',
+              'Echo the batchId from the `workspace.goals_changed` event this placement answers. It ties the move to the goal edit that prompted it, so the activity view reads N moves as one edit instead of N unexplained rereviews.',
           },
         },
         required: ['taskId', 'goal'],
@@ -1873,7 +1872,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'import_tasks_markdown',
       description:
-        "Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (no triage), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Backlog; a leading H1 is the document title, not a group. In the DRY-RUN, a mapped goal that does not exist yet carries a readable PLACEHOLDER id: goal ids are minted at apply time, so read the dry run for its titles and structure, and take the real ids from the apply result's goalsCreated.",
+        "Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (nothing lands unplaced), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Backlog; a leading H1 is the document title, not a group. In the DRY-RUN, a mapped goal that does not exist yet carries a readable PLACEHOLDER id: goal ids are minted at apply time, so read the dry run for its titles and structure, and take the real ids from the apply result's goalsCreated.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1928,7 +1927,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then, if you LEAD this workspace, queuedVoice — voice change-requests that arrived while no lead was live (lead-only: a bystander's attach leaves the queue for the seat); act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it — and pendingBucketReview: a goal BAND that appeared while you were away, with the unplaced tasks worth re-looking at against it — place the ones that now have a home, and leave the rest, since nothing has moved them — plus taskReviews: rows created, renamed, or rewritten while no lead was live, each waiting for the shape pass §2 of the `claude-workspaces:leading-a-workspace` skill describes (judge the title and body; rewrite with rewrite_task or ask the filer on the task). All of these are drained by this call. Also auto-subscribes to the workspace event channel. STAY LIVE: call heartbeat every few minutes — triage requests are only delivered to attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
+        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then, if you LEAD this workspace, queuedVoice — voice change-requests that arrived while no lead was live (lead-only: a bystander's attach leaves the queue for the seat); act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it. All of these are drained by this call. Also auto-subscribes to the workspace event channel — from then on the board's own events (task.*, workspace.goals_changed, decision.answered) are what tell you a row needs shaping, placing or re-ranking; there is no separate ask queued for you. STAY LIVE: call heartbeat every few minutes — lead-addressed deliveries only reach attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1952,7 +1951,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'heartbeat',
       description:
-        'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away, though what actually parks a triage request is the server not having observed you at all — no heartbeat AND no tool call — and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
+        'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away, though what actually parks a lead-addressed delivery is the server not having observed you at all — no heartbeat AND no tool call — and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2017,7 +2016,6 @@ interface TaskPayload {
   quote?: string;
   links?: unknown[];
   transitions?: unknown[];
-  triagePendingTs?: number;
   after?: string[];
   afterEnforce?: string[];
   parkedUntil?: number;
@@ -2028,8 +2026,7 @@ interface TaskPayload {
 }
 
 /** Trimmed create/promote result (§3.10: an edit returns ids + status, not
- *  the object the caller just wrote). `triagePending` tells the caller
- *  whether a triage request was actually delivered to a live agent. */
+ *  the object the caller just wrote). */
 function taskCreatedSummary(
   task: TaskPayload,
   ignoredLinks?: unknown[],
@@ -2042,7 +2039,6 @@ function taskCreatedSummary(
     order: task.order,
     status: task.status,
     assignee: task.assignee,
-    triagePending: task.triagePendingTs !== undefined,
     // Whether the CALLER named a goal — which is not the same question as
     // `goal === 'chores'`, because an explicit 'chores' is a placement and an
     // omitted goal that landed there is not. Only the create call can still
@@ -2733,8 +2729,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // the question that actually goes wrong: what am I MISSING. Six live
         // watches is a true answer to the first and an all-clear to nobody —
         // the peer that measured this held exactly that while a voice note
-        // and a re-triage request queued for a board it had never attached
-        // to. Absent rather than empty when the server did not say.
+        // queued for a board it had never attached to. Absent rather than
+        // empty when the server did not say.
         const coverage = await refreshCoverage();
         return ok({
           watching: Array.from(watchers.keys()),
@@ -2920,7 +2916,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
           shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
           reviewAdvice?: Array<{ taskId: string; advice: string }>;
-          placement?: { unplaced: string[]; triageDelivered: string[]; goals: unknown[] };
+          placement?: { unplaced: string[]; goals: unknown[] };
         };
         const gapsFor = (taskId: string) =>
           res.shapeGaps?.find((g) => g.taskId === taskId)?.gaps ?? undefined;
@@ -3014,11 +3010,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             leadAgentId?: string;
           };
           goalSummary: unknown[];
-          pendingBucketReview?: {
-            batchId: string;
-            newBands: Array<{ id: string; title: string }>;
-            taskIds: string[];
-          };
           retired?: { since: number; reason?: string; notice: string };
         };
         return ok({
@@ -3027,9 +3018,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Absent means nobody is responsible for this board — its asks
           // have no addressee until someone attaches or takes the seat.
           leadAgentId: res.workspace.leadAgentId,
-          // A goal BAND that appeared and has not been re-looked at. Only
-          // attach_agent drains it — reading it here does not.
-          pendingBucketReview: res.pendingBucketReview,
           // Present only when this board has been stood down. Carried FIRST
           // in spirit even though it reads last: an agent that got this far
           // is about to decide what to work on, and a retired board's goal
@@ -3562,17 +3550,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ts: number;
           }>;
           lead?: boolean;
-          pendingBucketReview?: {
-            batchId: string;
-            newBands: Array<{ id: string; title: string }>;
-            taskIds: string[];
-          };
-          taskReviews?: Array<{
-            taskId: string;
-            trigger: string;
-            actor?: { id: string; name?: string; kind?: string };
-            ts: number;
-          }>;
           retired?: { since: number; reason?: string; notice: string };
           leadNameConflicts?: {
             boards: Array<{ workspaceId: string; name: string }>;
@@ -3619,8 +3596,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(res.leadNameConflicts ? { leadNameConflicts: res.leadNameConflicts } : {}),
           gating: res.gating,
           // Are you the board's LEAD agent? True if you already held the seat
-          // or just claimed an empty one. The lead is where goal-edit
-          // re-triage is addressed, so this says whether those land on you.
+          // or just claimed an empty one. The lead is the addressee for
+          // anything this board needs a responsible party for.
           lead: res.lead ?? false,
           untriaged: res.untriaged ?? [],
           // Voice change-requests that arrived while no agent was live
@@ -3643,21 +3620,6 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             text: q.text,
             ts: q.ts,
           })),
-          // A goal BAND appeared while you were away, so the unknown-goal
-          // bucket is worth another look: place the ones that now have a
-          // home with set_task_goal (echo the batchId), and leave the rest —
-          // "still unplaced" is a real answer, and nothing here has moved a
-          // task. Drained by this call, same as the others.
-          ...(res.pendingBucketReview ? { pendingBucketReview: res.pendingBucketReview } : {}),
-          // Rows written while no lead was live, waiting for their shape
-          // review — the away-lead half of the task-review loop. Each row
-          // names what happened (`trigger`: created/renamed/edited) and who
-          // did it; the pass itself is the `claude-workspaces:leading-a-workspace`
-          // skill: read the row, judge title and body, rewrite with
-          // rewrite_task or ask the filer on the task. Drained by this call.
-          ...(res.taskReviews !== undefined && res.taskReviews.length > 0
-            ? { taskReviews: res.taskReviews, taskReviewContract: TASK_REVIEW_SKILL }
-            : {}),
         });
       }
       case 'heartbeat': {
@@ -3929,8 +3891,8 @@ async function ensureWatchesRestored(): Promise<void> {
       // back on the wire; it does nothing about the attachment record, which
       // hydrates with the heartbeat from before the restart and is therefore
       // `away` the moment the session comes back. Every lead-addressed
-      // delivery — voice notes, goal re-triage, bucket and task reviews —
-      // asks for a LIVE attachment, so without this a respawned lead is
+      // delivery — voice notes above all — asks for a LIVE attachment, so
+      // without this a respawned lead is
       // subscribed and still invisible, which is the original incident with
       // extra steps. Only boards it already led or was already attached to;
       // see boardsToReattach.
@@ -4096,7 +4058,7 @@ async function watchDoc(docId: string, persist = true): Promise<boolean> {
  * What this key still does NOT do is attach you. Watching is listening;
  * attaching is being addressable. Every delivery gate asks the second
  * question, so a session with this key and no attachment hears comments while
- * voice notes and re-triage requests queue for a lead it is not. `coverage`
+ * voice notes queue for a lead it is not. `coverage`
  * on `list_watched_docs` is what reports that gap.
  */
 async function watchWorkspace(
@@ -4369,7 +4331,7 @@ interface ChannelPayload {
 /** Hub/workspace event families formatted by emitHubChannelMessage. Thread
  *  and suggestion events on the same workspace stream keep the doc-shaped
  *  path below. */
-const HUB_EVENT_RE = /^(task|decision|workspace|agent|triage|voice)\./;
+const HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
 
 interface HubEventPayload {
   workspaceId?: string;
@@ -4497,11 +4459,6 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       break;
     case 'workspace.review_answered':
       body = reviewAnsweredLine(p);
-      break;
-    // The request reaches EVERY agent attached to the board, so who it is
-    // addressed to has to survive into the wording — see triage-line.ts.
-    case 'triage.requested':
-      body = triageRequestLine(p, AUTHOR.id);
       break;
     case 'agent.attached':
     case 'agent.detached':

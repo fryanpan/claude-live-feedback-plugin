@@ -471,9 +471,9 @@ describe('import route (dry-run first, apply stamps the file)', () => {
     expect(byTitle.get('Photograph the six anchor stalls')?.status).toBe('todo');
     expect(byTitle.get('Photograph the six anchor stalls')?.transitions).toHaveLength(0);
 
-    // Explicit placement, never triage: imported rows are placements by the
-    // tracker, so no task carries the triage-pending promise.
-    expect(tasks.every((t) => t.triagePendingTs === undefined)).toBe(true);
+    // Explicit placement: imported rows are placements by the tracker, so no
+    // task comes back marked unplaced.
+    expect(tasks.every((t) => t.unplacedSince === undefined)).toBe(true);
 
     // Events fired for everything: 6 created, 4 imported statuses, 1 goal-list
     // change — the audit trail shows the import as it happened.
