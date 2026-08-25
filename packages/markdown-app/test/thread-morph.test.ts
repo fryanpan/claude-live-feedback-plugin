@@ -674,6 +674,52 @@ describe('sizeThreadSlots refuses a zero measurement', () => {
   });
 });
 
+describe('sizeThreadSlots converges when its own writes change layout', () => {
+  /* Writing slot heights can itself reflow the cards it just measured: on a
+     scroller whose content crosses its height only once the slots are tall,
+     the scrollbar appears, every face narrows, and the longest text rewraps
+     TALLER — after the pass that measured it. Measured live in the thread
+     modal: face 1691px at measure, 1740px one microtask later, and the 49px
+     clipped by the stale height was exactly the Reply row. So a pass must
+     re-read after writing and keep going until the numbers stop moving. */
+  it('re-measures after writing, so a rewrap caused by the write still lands', () => {
+    const { card, container } = mountCard();
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const face = card.querySelector<HTMLElement>('.slot-b > .face-summary') as HTMLElement;
+    // Emulate the scrollbar feedback: while the slot is unset the scroller
+    // does not overflow and the face measures 35; the moment a height ≥35 is
+    // written the scroller overflows, the face narrows, and it rewraps to 84.
+    slotB.style.height = '';
+    Object.defineProperty(face, 'offsetHeight', {
+      get: () => (Number.parseFloat(slotB.style.height) >= 35 ? 84 : 35),
+      configurable: true,
+    });
+    sizeThreadSlots(container);
+    expect(slotB.style.height).toBe('84px');
+  });
+
+  it('gives up on an oscillating layout instead of looping forever', () => {
+    const { card, container } = mountCard();
+    const slotB = card.querySelector<HTMLElement>('.slot-b') as HTMLElement;
+    const face = card.querySelector<HTMLElement>('.slot-b > .face-summary') as HTMLElement;
+    slotB.style.height = '';
+    // Pathological: every re-read disagrees with the last write.
+    let reads = 0;
+    Object.defineProperty(face, 'offsetHeight', {
+      get: () => {
+        reads += 1;
+        return 30 + reads;
+      },
+      configurable: true,
+    });
+    sizeThreadSlots(container);
+    // Bounded: a handful of reads, not an unbounded loop. The exact count is
+    // the pass cap's business; what matters is that it stopped.
+    expect(reads).toBeLessThanOrEqual(8);
+    expect(slotB.style.height).not.toBe('');
+  });
+});
+
 describe('an interrupted morph', () => {
   /*
    * The animations use `fill: 'backwards'` and no forwards fill, so each one
