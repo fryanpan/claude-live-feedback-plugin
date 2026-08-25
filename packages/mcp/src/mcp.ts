@@ -17,6 +17,7 @@ import { declareWorkspaceLead } from './declare-lead.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
 import { readyIdleLine, reviewAnsweredLine } from './nudge-line.ts';
+import { isSelfAuthoredEvent } from './self-authored.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { projectTaskRows } from './task-projection.ts';
 import { type ThreadCreateInput, threadCreateRequest } from './thread-create.ts';
@@ -4514,6 +4515,14 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
     await emitHubChannelMessage(event, rawPayload);
     return;
   }
+  // The doc-shaped companion to the actor check in emitHubChannelMessage:
+  // never deliver an author's own thread event back to them. The fan-out
+  // reaches the author's own watch stream by design (it is one subscriber
+  // among many), so the suppression belongs at the render point, where it
+  // covers the doc channel, every board channel, and the replay buffer with
+  // one gate — and where it cannot affect a browser, which must still watch
+  // its own comment appear. Fails OPEN on any ambiguity; see self-authored.ts.
+  if (isSelfAuthoredEvent(event, rawPayload, AUTHOR.id)) return;
   const p = (rawPayload ?? {}) as ChannelPayload;
   const docId = p.docId ?? 'unknown';
 
