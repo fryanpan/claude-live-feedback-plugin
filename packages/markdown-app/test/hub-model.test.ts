@@ -829,7 +829,6 @@ describe('reviewQueue', () => {
     review: {
       shape: 'decision',
       headline: 'Green or blue?',
-      why: 'Blocks the widget.',
       options: [
         { id: 'g', label: 'Green' },
         { id: 'b', label: 'Blue' },
@@ -1024,7 +1023,6 @@ describe('reviewQueue', () => {
       review: {
         shape: 'decision',
         headline: 'Which cache do we keep?',
-        why: 'Blocks the storage cleanup.',
         options: [
           { id: 'o-disk', label: 'Keep disk' },
           { id: 'o-mem', label: 'Keep memory' },
@@ -1048,7 +1046,6 @@ describe('reviewQueue', () => {
       key: 'task-review:tk-1:r-1',
       kind: 'task-review',
       title: 'Ship the widget',
-      why: 'Blocks the storage cleanup.',
     });
     expect(q.items[0].review?.headline).toBe('Which cache do we keep?');
     expect(q.total).toBe(1);
@@ -1166,9 +1163,9 @@ describe('reviewQueue', () => {
         kind: 'task-review',
         title: 'Ship the widget',
         ask: 'Which cache?',
-        why: 'Blocks cleanup.',
+        why: '',
         since: T0,
-        review: { shape: 'decision', headline: 'Which cache?', why: 'Blocks cleanup.' },
+        review: { shape: 'decision', headline: 'Which cache?' },
         thread: {
           kind: 'task-review',
           taskId: 'tk-1',
@@ -1321,7 +1318,7 @@ describe('reviewQueue — task priority is the primary key', () => {
   const thread = (over: Partial<ReviewThreadItem>): ReviewThreadItem => ({
     kind: 'task-thread',
     band: 'declared',
-    review: { shape: 'review', headline: 'Which one?', why: 'Waiting on you.' },
+    review: { shape: 'review', headline: 'Which one?' },
     commentId: 'c-x',
     docId: 'task:x',
     threadId: 'th-x',
@@ -1522,7 +1519,6 @@ describe('reviewQueue — every row the server ships is placed', () => {
       review: {
         shape: 'review',
         headline: 'Read the new onboarding copy',
-        why: 'Ships with the next release; nobody outside the team has read it.',
       },
       ...over,
     });
@@ -1628,13 +1624,15 @@ describe('reviewQueue — every row the server ships is placed', () => {
     expect(q.items[0].why).toContain('ago');
   });
 
-  it("takes a declared item's second line from its author, not from the clock", () => {
+  // This asserted the opposite until 2026-08-25: a declared row substituted
+  // its author's `why` here while every other row got the derived provenance
+  // line. That field is gone from the payload, and its words are read where
+  // the author wrote them — in the card's one body — so the row's second line
+  // is now one sentence with one meaning for every row that has one.
+  it("takes a declared item's second line from the clock, like every other row", () => {
     const q = reviewQueue([], [declared()], T0);
-    expect(q.items[0].why).toBe(
-      'Ships with the next release; nobody outside the team has read it.',
-    );
-    expect(q.items[0].why).not.toContain('ago');
-    // Positive control: the derived line is still what an undeclared row gets.
+    expect(q.items[0].why).toContain('ago');
+    // Positive control: the same derived line, on an undeclared row.
     expect(reviewQueue([], [base()], T0).items[0].why).toContain('ago');
   });
 });
@@ -1643,9 +1641,9 @@ describe('reviewCardHeadline — an authored headline is never clipped', () => {
   const item = (over: Partial<ReviewItem> = {}): ReviewItem => ({
     key: 'k',
     kind: 'doc-thread',
+    why: '',
     title: 'Onboarding copy',
     ask: 'Ship v2 now. Or wait for the rebuild?',
-    why: 'w',
     since: 0,
     ...over,
   });
@@ -1657,7 +1655,7 @@ describe('reviewCardHeadline — an authored headline is never clipped', () => {
     expect(reviewCardHeadline(item())).toBe('Ship v2 now.');
     expect(
       reviewCardHeadline(
-        item({ review: { shape: 'decision', headline: 'Ship v2 now. Or wait?', why: 'w' } }),
+        item({ review: { shape: 'decision', headline: 'Ship v2 now. Or wait?' } }),
       ),
     ).toBe('Ship v2 now. Or wait?');
   });
@@ -1669,18 +1667,14 @@ describe('reviewItemBadge', () => {
     kind: 'doc-thread',
     title: 't',
     ask: 'a',
-    why: 'w',
+    why: '',
     since: 0,
     ...(review ? { review } : {}),
   });
 
   it('reads a declared decision as a Decision wherever it arrived from', () => {
-    expect(reviewItemBadge(item({ shape: 'decision', headline: 'h', why: 'w' })).label).toBe(
-      'Decision',
-    );
-    expect(reviewItemBadge(item({ shape: 'review', headline: 'h', why: 'w' })).label).toBe(
-      'Question',
-    );
+    expect(reviewItemBadge(item({ shape: 'decision', headline: 'h' })).label).toBe('Decision');
+    expect(reviewItemBadge(item({ shape: 'review', headline: 'h' })).label).toBe('Question');
     // Positive control: an undeclared thread keeps the pre-existing badge.
     expect(reviewItemBadge(item()).label).toBe('Needs your reply');
   });
@@ -1694,7 +1688,7 @@ describe('askedMeta — the one provenance line the card head carries', () => {
     kind: 'task-thread',
     title: 'Ship the widget',
     ask: 'Green or blue?',
-    why: 'w',
+    why: '',
     since: T0 - 2 * DAY,
     thread: {
       kind: 'task-thread',
@@ -1709,7 +1703,7 @@ describe('askedMeta — the one provenance line the card head carries', () => {
     ...over,
   });
   const declared = (over: Partial<ReviewItem> = {}): ReviewItem =>
-    item({ review: { shape: 'review', headline: 'Green or blue?', why: 'w' }, ...over });
+    item({ review: { shape: 'review', headline: 'Green or blue?' }, ...over });
 
   it('says Asked by <who> N days ago, singular and plural off one clock', () => {
     expect(askedMeta(declared(), T0)).toBe('Asked by Harbor agent 2 days ago');
@@ -1769,23 +1763,23 @@ describe('askedMeta — the one provenance line the card head carries', () => {
   });
 });
 
-describe('reviewItemBodyMarkdown — one body, composed from the authored parts', () => {
-  it('joins why, lookFor and detail with blank lines, in that order', () => {
+// This used to join three authored fields. It reads one now — `why` and
+// `lookFor` are gone from the payload, and `readReviewPayload` has already
+// folded any legacy text into `detail` before a renderer ever sees it. The
+// join itself moved there; what stays here is the surfaces' one answer to
+// "what is the body", so three renderers cannot each decide it.
+describe('reviewItemBodyMarkdown — the one body a card renders', () => {
+  it('is the detail, markdown and links intact', () => {
     expect(
       reviewItemBodyMarkdown({
-        why: 'It blocks the nightly job.',
-        lookFor: 'Whether the join drops rows.',
         detail: 'The change is in [the PR](https://example.test/pr/12).',
       }),
-    ).toBe(
-      'It blocks the nightly job.\n\nWhether the join drops rows.\n\nThe change is in [the PR](https://example.test/pr/12).',
-    );
+    ).toBe('The change is in [the PR](https://example.test/pr/12).');
   });
 
-  it('omits the parts the author left out — no labels, no placeholders', () => {
-    expect(reviewItemBodyMarkdown({ why: 'It ships Tuesday.' })).toBe('It ships Tuesday.');
-    expect(reviewItemBodyMarkdown({ why: 'Why.', detail: 'Detail.' })).toBe('Why.\n\nDetail.');
-    expect(reviewItemBodyMarkdown({ why: '  ', lookFor: '\n' })).toBe('');
+  it('is empty when the author wrote no body — no labels, no placeholders', () => {
+    expect(reviewItemBodyMarkdown({})).toBe('');
+    expect(reviewItemBodyMarkdown({ detail: '  ' })).toBe('');
   });
 });
 
@@ -1799,7 +1793,7 @@ describe('reviewRow — the row an item carries, when it carries one', () => {
         {
           kind: 'doc-thread',
           band: 'declared',
-          review: { shape: 'review', headline: 'Still true?', why: 'Ships Friday.' },
+          review: { shape: 'review', headline: 'Still true?' },
           commentId: 'c-1',
           docId: 'doc-1',
           threadId: 'th-1',

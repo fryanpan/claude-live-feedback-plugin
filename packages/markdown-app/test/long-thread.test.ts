@@ -44,7 +44,6 @@ function words(n: number): string {
 const decisionPayload = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
   shape: 'decision',
   headline: 'Pick a cache strategy',
-  why: 'The rollout is blocked on it',
   options: [
     { id: 'a', label: 'Write through' },
     { id: 'b', label: 'Write behind' },
@@ -55,7 +54,6 @@ const decisionPayload = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
 const questionPayload = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
   shape: 'review',
   headline: 'Read the intro',
-  why: 'It sets up everything after it',
   ...over,
 });
 
@@ -67,7 +65,7 @@ describe('threadWordCount — everything the opened card would show', () => {
   it('counts a declaration’s prose, because the item card renders all of it', () => {
     const bare = threadWordCount(thread([comment(words(5))]));
     const declared = threadWordCount(
-      thread([comment(words(5), questionPayload({ detail: words(40), lookFor: words(6) }))]),
+      thread([comment(words(5), questionPayload({ detail: words(46) }))]),
     );
     expect(declared).toBeGreaterThan(bare + 40);
   });

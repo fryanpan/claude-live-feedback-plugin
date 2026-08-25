@@ -43,7 +43,7 @@ function item(over: Partial<ReviewItem> = {}): ReviewItem {
     kind: 'task-thread',
     title: `Some task ${seq}`,
     ask: `Question ${seq}?`,
-    why: 'The next commit depends on it.',
+    why: 'Reviewer asked you 2m ago · on this task',
     since: NOW - 2 * 86_400_000,
     thread: {
       kind: 'task-thread',
@@ -60,7 +60,6 @@ function item(over: Partial<ReviewItem> = {}): ReviewItem {
     review: {
       shape: 'review',
       headline: `Question ${seq}?`,
-      why: 'The next commit depends on it.',
     },
     ...over,
   };
@@ -185,6 +184,49 @@ describe('home-review island parity', () => {
     host.remove();
   });
 
+  /**
+   * The TICKET-borne row, which had no rendered-shape test of its own — and
+   * which is the row whose `why` changed value on 2026-08-25.
+   *
+   * Two claims, and they are different claims. The RENDERED row is unmoved:
+   * it has been title + askedMeta since the approved design put the body in
+   * the card, and neither span reads `why`. What did move is the hover title,
+   * which used to end with the author's `why` and now ends with the ask —
+   * because a ticket-borne item has no comment whose provenance it could
+   * quote instead, so `reviewQueue` gives it `''` rather than inventing one.
+   *
+   * The dangling-separator assertion is the point of the test. `why: ''`
+   * would otherwise render "… — Which cache? · " with a trailing middot and
+   * nothing after it, which is what a naive removal produces.
+   */
+  it('renders a ticket-borne row as title + meta, with no empty why in its hover title', () => {
+    const ticket = item({
+      key: 'k-ticket',
+      kind: 'task-review',
+      title: 'Ship the widget',
+      ask: 'Which cache do we keep?',
+      why: '',
+      review: { shape: 'decision', headline: 'Which cache do we keep?' },
+    });
+    const { host, unmount } = mount([ticket]);
+    const row = host.querySelector('.hub-review-row') as HTMLElement;
+
+    // The rendered row: two spans, neither of them the why.
+    expect(row.querySelector('.hub-review-row-title')?.textContent).toBe('Which cache do we keep?');
+    expect(row.querySelector('.hub-review-row-sub')?.textContent).toBe(
+      'Asked by Helper 2 days ago',
+    );
+    expect(row.querySelector('.hub-review-row-why')).toBeNull();
+
+    // The hover title stops at the ask — no orphaned separator behind it.
+    const hover = row.getAttribute('title') ?? '';
+    expect(hover).toContain('Which cache do we keep?');
+    expect(hover.endsWith('·')).toBe(false);
+    expect(hover).not.toContain('· ·');
+    expect(hover.trimEnd()).toBe(hover);
+    unmount();
+  });
+
   it('renders each item as a ranked row: the question as the title, the asked-by meta as the subline', () => {
     const first = item({ ask: 'Ship now or wait?' });
     const second = item({ ask: 'Which repo does this land in?' });
@@ -198,9 +240,9 @@ describe('home-review island parity', () => {
     expect(rows[1]?.querySelector('.hub-review-row-sub')?.textContent).toBe(
       'Asked by Helper 2 days ago',
     );
-    // No separate why line — the why lives in the card's body (approved design).
+    // No separate why line — the body lives in the card (approved design).
     expect(rows[0]?.querySelector('.hub-review-row-why')).toBeNull();
-    // The hover title carries kind, subject, ask and why, as before.
+    // The hover title carries kind, subject and ask, as before.
     expect(rows[1]?.getAttribute('title')).toContain('Task comment');
     (rows[1] as HTMLElement).click();
     expect(h.onReview).toHaveBeenCalledTimes(1);

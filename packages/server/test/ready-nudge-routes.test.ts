@@ -263,7 +263,6 @@ describe('the board wakes its lead over the wire', () => {
         review: {
           shape: 'decision',
           headline: 'Rank by recency or by dwell time?',
-          why: 'The two orderings disagree on every stale-but-popular page.',
           options: [
             { id: 'o-recency', label: 'Recency' },
             { id: 'o-dwell', label: 'Dwell time' },
