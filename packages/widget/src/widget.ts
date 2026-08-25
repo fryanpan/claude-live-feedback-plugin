@@ -41,7 +41,7 @@ function threadSnippet(anchor: Thread['anchor']): string {
  *     FeedbackWidget.init({
  *       serverUrl: 'wss://host.example',  // optional; defaults to same host
  *       docId: 'my-mockup',
- *       user: 'bryan' | 'agent' | null,   // null → anonymous
+ *       user: null,                       // omit/null → resolved from the browser
  *     });
  *   </script>
  */
