@@ -98,7 +98,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.109';
+const PLUGIN_VERSION = '0.1.110';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4367,6 +4367,13 @@ interface HubEventPayload {
    *  had stood still when the wake fired. See ready-nudge.ts. */
   readyCount?: number;
   idleMs?: number;
+  /** `workspace.ready_idle` only: the DENOMINATOR — how many open rows the
+   *  pass examined — plus what it withheld and why, and the rows it could not
+   *  evaluate at all. All three absent from a server older than the
+   *  dependency-state gate, which is why the line renders without them. */
+  consideredCount?: number;
+  held?: Record<string, number>;
+  undetermined?: { count?: number; reasons?: string[] };
   trigger?: string;
   transcript?: string;
   ack?: string;
