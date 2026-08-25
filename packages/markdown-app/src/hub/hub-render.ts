@@ -1312,7 +1312,10 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
  * still here, in the author's order, unlabelled.
  * `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
  */
-function walkReviewBody(review: NonNullable<ReviewItem['review']>): DocumentFragment | null {
+function walkReviewBody(
+  review: NonNullable<ReviewItem['review']>,
+  expanded: boolean,
+): DocumentFragment | null {
   const markdown = reviewItemBodyMarkdown(review);
   if (markdown === '') return null;
   const frag = document.createDocumentFragment();
@@ -1320,6 +1323,10 @@ function walkReviewBody(review: NonNullable<ReviewItem['review']>): DocumentFrag
   body.className = 'hub-walk-body';
   body.innerHTML = renderCommentMarkdown(markdown);
   frag.append(body);
+  // Marked whether or not it clamps: the snapshot below asks "was this body
+  // one that CAN clamp, and had the reader already opened it" — and an
+  // unmarked body is indistinguishable from a short one that never clamped.
+  if (expanded) body.dataset.walkExpanded = '1';
   // The API stopped refusing a long detail (the refusal split every real ask
   // into a thread body and a weaker card copy), so the card now has to carry
   // it: the FULL words are always in the DOM — card and thread say the same
@@ -1327,7 +1334,7 @@ function walkReviewBody(review: NonNullable<ReviewItem['review']>): DocumentFrag
   // ONLY (the CSS scopes it; wider screens render everything, since 430px is
   // where an unbounded body buries the options and the composer). The button
   // is the explicit expand affordance; expanding is one-way, like reading.
-  if (markdown.split(/\s+/).length > REVIEW_LIMITS.detailTargetWords.review) {
+  if (markdown.split(/\s+/).length > REVIEW_LIMITS.detailTargetWords.review && !expanded) {
     body.classList.add('hub-walk-body-clamp');
     const expand = document.createElement('button');
     expand.type = 'button';
@@ -1335,6 +1342,7 @@ function walkReviewBody(review: NonNullable<ReviewItem['review']>): DocumentFrag
     expand.textContent = 'Show the whole ask';
     expand.addEventListener('click', () => {
       body.classList.remove('hub-walk-body-clamp');
+      body.dataset.walkExpanded = '1';
       expand.remove();
     });
     frag.append(expand);
@@ -1470,9 +1478,23 @@ export function renderReviewWalkthrough(
   // typing an answer into. Same guarantee the detail panel gives: read the
   // drafts out before the swap, put them back after.
   const kept = keepFields(container);
+  // …and the same guarantee for what the reader OPENED. Both expansions on
+  // this card used to live only in the DOM the swap throws away, so a
+  // background event a second later closed them with nothing the reader did:
+  // Bryan, 2026-08-24 — "when I expand a task, it collapses a second later".
+  // Keyed on the item, so it is this card's expansion and not the next one's.
+  const wasOn = container.dataset.walkItem ?? '';
+  const openBefore = {
+    body: container.querySelector('.hub-walk-body[data-walk-expanded]') !== null,
+    info: (() => {
+      const info = container.querySelector('.hub-walk-info');
+      return info !== null && !info.classList.contains('hidden');
+    })(),
+  };
   container.replaceChildren();
   if (index < 0) {
     container.classList.add('hidden');
+    delete container.dataset.walkItem;
     return;
   }
   container.classList.remove('hidden');
@@ -1492,6 +1514,12 @@ export function renderReviewWalkthrough(
   panel.append(topline);
 
   const item = queue.items[index];
+  // Only what the reader opened ON THIS ITEM comes back. Moving on — or
+  // having the item answered out from under them — draws the next card the
+  // way it was authored, rather than unfolding a body nobody asked to see.
+  const open = item && wasOn === item.key ? openBefore : { body: false, info: false };
+  if (item) container.dataset.walkItem = item.key;
+  else delete container.dataset.walkItem;
   // Only a decision gets the answer furniture — the thread kinds below get a
   // reply path instead. (A blocker never reaches this queue at all: it is
   // task state, surfaced as the detail panel's blocked note.)
@@ -1578,7 +1606,7 @@ export function renderReviewWalkthrough(
       // A DECLARED review item. Everything below was written by the agent for
       // this card, so none of it is derived, clipped or guessed at — which is
       // the whole reason declaring exists.
-      const body = walkReviewBody(review);
+      const body = walkReviewBody(review, open.body);
       if (body) card.append(body);
       if (review.options && review.options.length > 0) {
         const opts = document.createElement('div');
@@ -1729,7 +1757,7 @@ export function renderReviewWalkthrough(
   // open/closed state lives in the DOM the repaint just threw away, so reopen
   // the ask box when the reader was mid-question.
   const infoSnap = kept.get(`walk-info:${task.id}`);
-  if (infoSnap && (infoSnap.value.trim() !== '' || infoSnap.focused)) {
+  if (open.info || (infoSnap && (infoSnap.value.trim() !== '' || infoSnap.focused))) {
     info.classList.remove('hidden');
     more.setAttribute('aria-expanded', 'true');
   }
@@ -3415,6 +3443,11 @@ export function renderTaskDetail(
   const priorDecide = prior?.querySelector<HTMLElement>('.hub-decide');
   const priorReviewIndex = Number(priorDecide?.dataset.reviewIndex ?? '0');
   const priorReviewItemId = priorDecide?.dataset.reviewItemId || null;
+  // …and whether the preserved capture was open. Same reason again: `open` on
+  // a `<details>` is DOM-only state, and this panel is rebuilt on every board
+  // event, so the words the reader had just unfolded folded away under them.
+  const priorQuoteOpen =
+    prior?.querySelector<HTMLDetailsElement>('.hub-detail-quote-block')?.open ?? false;
   if (!task) {
     container.replaceChildren();
     container.classList.add('hidden');
@@ -3738,6 +3771,9 @@ export function renderTaskDetail(
     if (!task.quote) return null;
     const det = document.createElement('details');
     det.className = 'hub-detail-quote-block';
+    // Closed by default, and closed again when the panel opens on a DIFFERENT
+    // task: the reader chose to read this one's capture, not every task's.
+    det.open = !freshOpen && priorQuoteOpen;
     const sum = document.createElement('summary');
     sum.className = 'hub-detail-quote-label';
     sum.textContent = 'Original words';
