@@ -684,6 +684,24 @@ describe('renderTaskDetail', () => {
     expect(quote.textContent).toContain('the original words, verbatim');
   });
 
+  // The same failure the walkthrough card had: `open` on a `<details>` lives
+  // only in the DOM, and this panel repaints on every board event — so the
+  // words the reader had just opened folded away a second later, with nothing
+  // they did to cause it.
+  it('keeps the capture open across a repaint once the reader opens it', () => {
+    const t = task({ quote: 'the original words, verbatim' });
+    renderTaskDetail(root, t, detailHandlers());
+    const quote = root.querySelector('.hub-detail-quote-block') as HTMLDetailsElement;
+    quote.open = true;
+    // The board event lands: same task, a fresh panel.
+    renderTaskDetail(root, t, detailHandlers());
+    expect((root.querySelector('.hub-detail-quote-block') as HTMLDetailsElement).open).toBe(true);
+    // …and opening a DIFFERENT task still starts closed — the reader chose to
+    // read one task's capture, not every task's.
+    renderTaskDetail(root, task({ quote: 'someone else’s words' }), detailHandlers());
+    expect((root.querySelector('.hub-detail-quote-block') as HTMLDetailsElement).open).toBe(false);
+  });
+
   it('shows no quote block at all on a task that never had one', () => {
     // Positive control first: the label renders when there IS a quote, so its
     // absence below means the branch was skipped rather than that this test
