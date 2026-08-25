@@ -600,6 +600,13 @@ describe('the threading UI left no rules behind', () => {
       '.hub-decide-why',
       '.hub-decide-detail',
       '.hub-decide-lookfor',
+      // The payload's own `why` went the same way on 2026-08-25 — the field
+      // was deleted, not just the layout — so the two rules that styled its
+      // line on the comment surfaces are dead for good. `.hub-comment-review-
+      // why` had already lost its emitter before that; `.comment-review-why`
+      // lost one in the same commit as the field.
+      '.hub-comment-review-why',
+      '.comment-review-why',
       // The status chip ROW went with the redesign too (replaced by the
       // status <select>), and it left these four rules behind: the chip base,
       // its two interaction states, and the -current variant only a row of
