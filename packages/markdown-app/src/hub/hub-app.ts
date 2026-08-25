@@ -81,7 +81,6 @@ import {
   renderBoardForPane,
   renderGoalDetail,
   renderHomeBrief,
-  renderHomeReview,
   renderLeadStrip,
   renderPresence,
   renderQuickAdd,
@@ -91,6 +90,7 @@ import {
   renderUnplacedStrip,
   renderWorkspaceIdentity,
 } from './hub-render.ts';
+import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
 import { mountPushToggle } from './push-toggle.ts';
@@ -468,6 +468,19 @@ async function main(): Promise<void> {
 
   const el = (id: string) => document.getElementById(id) as HTMLElement;
 
+  // The "For Your Review" pane — the first real Preact island (contract per
+  // island-probe: it owns a wrapper inside #hub-home-review, and no vanilla
+  // code may wipe that container while the island lives in it). Mounted once,
+  // here, because buildShell above was the last vanilla write of this subtree;
+  // from now on the pane repaints itself from `homeReviewData` writes in
+  // renderHomeRegion. The handlers are hoisted function declarations below —
+  // the same stable closures the vanilla renderer received.
+  mountHomeReviewIsland(el('hub-home-review'), {
+    onReview: (item, index) => openInQueue(item, index),
+    onOpen: (item) => openReviewItem(item),
+    onWalkthrough: () => startWalkthrough(),
+  });
+
   // ── The description, edited in place ────────────────────────────────────
   //
   // A second room, opened per task rather than per board: the task's body is
@@ -802,12 +815,16 @@ async function main(): Promise<void> {
         renderHomeRegion();
       },
     });
-    renderHomeReview(
-      el('hub-home-review'),
-      currentQueue(),
-      { onReview: openInQueue, onOpen: openReviewItem, onWalkthrough: startWalkthrough },
-      [...state.homeSettled.values()],
-    );
+    // The island's one input. A plain signal write, not a render call: the
+    // pane re-renders itself, keyed on `ReviewItem.key`, so unchanged rows
+    // keep their DOM nodes. Background events still reach this line through
+    // `repaintGuard.schedule(...)` exactly as they reached the old renderer —
+    // the guard's parked/flush path is upstream of the write, not bypassed.
+    homeReviewData.value = {
+      queue: currentQueue(),
+      settled: [...state.homeSettled.values()],
+      now: Date.now(),
+    };
   }
 
   /**

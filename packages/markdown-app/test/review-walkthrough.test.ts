@@ -11,8 +11,11 @@ import {
 } from '../src/hub/hub-model.ts';
 import {
   type ReviewStripHandlers,
+  homeReviewData,
+  mountHomeReviewIsland,
+} from '../src/hub/home-review-island.tsx';
+import {
   type WalkthroughHandlers,
-  renderHomeReview,
   renderReviewWalkthrough,
   renderTaskDetail,
 } from '../src/hub/hub-render.ts';
@@ -98,6 +101,24 @@ function strip(over: Partial<ReviewStripHandlers> = {}): ReviewStripHandlers {
   return { onReview: vi.fn(), onOpen: vi.fn(), onWalkthrough: vi.fn(), ...over };
 }
 
+/**
+ * The pane is a Preact island now. Same call shape the vanilla renderer had,
+ * for these cases: write the signal, mount fresh (disposing any previous
+ * mount so a case may render twice into the same root).
+ */
+let disposeIsland: (() => void) | null = null;
+function renderHomeReview(
+  container: HTMLElement,
+  queue: ReturnType<typeof reviewQueue>,
+  handlers: ReviewStripHandlers,
+  settled: ReviewItem[] = [],
+  now: number = NOW,
+): void {
+  disposeIsland?.();
+  homeReviewData.value = { queue, settled, now };
+  disposeIsland = mountHomeReviewIsland(container, handlers);
+}
+
 function walk(over: Partial<WalkthroughHandlers> = {}): WalkthroughHandlers {
   return {
     onAnswer: vi.fn(),
@@ -112,6 +133,7 @@ function walk(over: Partial<WalkthroughHandlers> = {}): WalkthroughHandlers {
 
 let root: HTMLElement;
 beforeEach(() => {
+  disposeIsland = null;
   document.body.replaceChildren();
   root = document.createElement('div');
   document.body.append(root);
