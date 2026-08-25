@@ -181,14 +181,31 @@ function faceOf(slot: HTMLElement, expanded: boolean): HTMLElement | null {
  * keeps its head and its foot and loses everything in between. Skipping
  * leaves the last good height in place until the drawer opens and someone
  * re-measures for real (`ReviewChrome.openDrawer`).
+ *
+ * The pass repeats until the numbers stop moving, because WRITING the heights
+ * can reflow the very faces it just measured: on a scroller whose content
+ * only overflows once the slots are tall, the write summons the scrollbar,
+ * every face narrows, and the longest text rewraps TALLER — after its
+ * measurement was taken. Measured live in the thread modal (2026-08-24): face
+ * 1691px at measure, 1740px once the body's scrollbar appeared, and the
+ * missing 49px was the Reply row, clipped inside `overflow: hidden` where no
+ * scrolling can reach it. Convergence is natural (a scrollbar appears at most
+ * once), but the pass count is capped so a pathological feedback cannot loop.
  */
 export function sizeThreadSlots(root: ParentNode): void {
-  for (const slot of Array.from(root.querySelectorAll<HTMLElement>('.thread-slot'))) {
-    const expanded = slot.closest('.thread')?.classList.contains('expanded') ?? false;
-    const face = faceOf(slot, expanded);
-    if (!face) continue;
-    const h = face.offsetHeight;
-    if (h > 0) slot.style.height = `${h}px`;
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    for (const slot of Array.from(root.querySelectorAll<HTMLElement>('.thread-slot'))) {
+      const expanded = slot.closest('.thread')?.classList.contains('expanded') ?? false;
+      const face = faceOf(slot, expanded);
+      if (!face) continue;
+      const h = face.offsetHeight;
+      if (h > 0 && slot.style.height !== `${h}px`) {
+        slot.style.height = `${h}px`;
+        changed = true;
+      }
+    }
+    if (!changed) break;
   }
 }
 
