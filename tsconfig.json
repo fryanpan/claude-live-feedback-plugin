@@ -2,8 +2,10 @@
   "extends": "./tsconfig.base.json",
   "include": [
     "packages/*/src/**/*.ts",
+    "packages/*/src/**/*.tsx",
     "packages/*/scripts/**/*.ts",
     "packages/*/test/**/*.ts",
+    "packages/*/test/**/*.tsx",
     "demos/*/src/**/*.ts",
     "demos/*/scripts/**/*.ts",
     "cookbook/**/*.ts",
