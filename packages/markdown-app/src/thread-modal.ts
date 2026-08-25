@@ -347,6 +347,10 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
   );
 
   scope.onCleanup(() => {
+    // A scope can die while the dialog is open — close() never runs then, so
+    // the observer must be released here too or it retains the removed card.
+    faceWatch?.disconnect();
+    faceWatch = null;
     root.remove();
     scrim.remove();
   });

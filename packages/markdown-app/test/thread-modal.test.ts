@@ -418,7 +418,9 @@ describe('the dialog keeps its slots sized to their faces', () => {
    */
 
   /** A harness whose card faces measure `h()` while the dialog is visible. */
-  function mountMeasured(h: () => number): Harness & { faces: () => HTMLElement[] } {
+  function mountMeasured(
+    h: () => number,
+  ): Harness & { faces: () => HTMLElement[]; scope: MountScope } {
     const scope = new MountScope();
     cleanups.push(() => scope.dispose());
     const container = document.createElement('div');
@@ -433,8 +435,9 @@ describe('the dialog keeps its slots sized to their faces', () => {
       onReopen: () => {},
       onReanchor: () => {},
     });
-    const harness: Harness & { faces: () => HTMLElement[] } = {
+    const harness: Harness & { faces: () => HTMLElement[]; scope: MountScope } = {
       panel,
+      scope,
       closed: 0,
       modal: mountThreadModal({
         scope,
@@ -510,5 +513,38 @@ describe('the dialog keeps its slots sized to their faces', () => {
     faceH = 90;
     for (const o of watching) o.cb();
     expect(slotOf(h).style.height).toBe('90px');
+  });
+
+  it('disposing the mount scope while the dialog is open releases the face watch', () => {
+    // Navigating away never calls close() — the scope's own teardown is the
+    // only thing that runs, and an observer it misses retains the whole card.
+    class FakeResizeObserver {
+      static instances: FakeResizeObserver[] = [];
+      observed: Element[] = [];
+      constructor(public cb: () => void) {
+        FakeResizeObserver.instances.push(this);
+      }
+      observe(el: Element): void {
+        this.observed.push(el);
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.observed = [];
+      }
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    cleanups.push(() => vi.unstubAllGlobals());
+
+    const h = mountMeasured(() => 40);
+    h.modal.open(thread('t1', [comment('hello')]));
+    const watching = FakeResizeObserver.instances.filter((o) =>
+      o.observed.some((el) => el.classList.contains('thread-face')),
+    );
+    expect(watching.length).toBeGreaterThan(0);
+
+    h.scope.dispose();
+    for (const o of watching) {
+      expect(o.observed).toHaveLength(0);
+    }
   });
 });
