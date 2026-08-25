@@ -93,7 +93,9 @@ import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from '.
 import { localHostnames, publicBaseUrl } from './public-host.ts';
 import { type PushFetch, PushNotifier, reviewItemNotification } from './push-notify.ts';
 import { PushStore, loadOrCreateVapidKeys } from './push-store.ts';
+import { evaluateReadyWork } from './ready-gate.ts';
 import {
+  type NudgeTally,
   READY_IDLE_DEFAULT_MS,
   READY_NUDGE_STAMP_FILENAME,
   ReadyWorkNudger,
@@ -688,6 +690,17 @@ export interface ServerHandle {
   /** One pass of the ready-work wake (ready-nudge.ts). Runs on a 60s
    *  interval; exposed so tests exercise the real pass. */
   nudgeReadyWork: () => void;
+  /**
+   * The wake's own falsifiability counter — what it suppressed, by condition,
+   * against what it actually delivered.
+   *
+   * Exposed on the handle so the number has a destination besides the stamp
+   * file it is persisted in. It does not need a reader to be USEFUL, which is
+   * the design: the verdict fires itself through the nudger's reporter when
+   * the seven-day window closes. See `NUDGE_TALLY_WINDOW_MS` in
+   * ready-nudge.ts for the stopping rule and who acts on it.
+   */
+  readyNudgeTally: () => NudgeTally;
   /** The external-access master switch — read/flip it without HTTP. */
   sharingGate: SharingGate;
   webhookLog: WebhookLogEntry[];
@@ -1086,42 +1099,67 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
 
   /**
    * One board as the nudger reads it: who to wake, whether to wake them at
-   * all, what is ready, and when the board last moved.
+   * all, what is ready, WHAT THE PASS EXAMINED TO SAY SO, and when the board
+   * last moved.
    *
-   * "Ready" is the SAME computation `next_tasks` serves — `buildQueue` with
-   * blocked rows filtered out — rather than a second reading of the same
-   * rules. Narrowed three times on top of it, and every narrowing is the
-   * point of the feature: `todo` only, because an in-progress row is claimed
-   * and somebody is already on it; agent-owned only, because a row waiting on
-   * a person is not work an agent wake unblocks; and NOT PARKED, because a
-   * row somebody deliberately deferred is not work anybody has failed to pick
-   * up. `ownerKind` comes from the projection's roster reader, so the answer
-   * here is the one the board draws.
+   * The candidate set is the SAME computation `next_tasks` serves —
+   * `buildQueue` — rather than a second reading of the same rules, and it is
+   * now asked with `includeBlocked` so the gate sees every open row it is
+   * deciding about. That is what makes `considered` a real denominator: a
+   * pre-filtered list can only ever report the rows that survived it, so an
+   * empty `ready` would read as an empty board rather than as a board whose
+   * rows are all waiting on somebody.
    *
-   * The park narrowing lives here rather than inside `buildQueue` on purpose:
-   * `next_tasks` keeps LISTING a parked row (with `parked` on it, so a lead
-   * reading the queue sees the deferral and can disagree with it), and it is
-   * only this wake — the surface that spends somebody's turn — that has to
-   * leave it alone. Filtering in the shared builder would have made "parked"
-   * mean "hidden" for every reader.
+   * Which rows survive is `evaluateReadyWork`'s call — see `ready-gate.ts` for
+   * why every one of those conditions is dependency state and none of them is
+   * a clock. Two things stay here because they need the store:
+   *
+   *  - `ownerKind`, from the projection's roster reader, so the answer is the
+   *    one the board draws rather than a guess from the assignee's name.
+   *  - `reviewState`, which reports open questions AND unparseable ones
+   *    separately. `listReviewItems` drops a corrupt row rather than throwing,
+   *    so without the second number a ticket nobody can read is indistinguish-
+   *    able from a ticket with nothing outstanding — and this is the one
+   *    caller that ACTS on the difference.
+   *
+   * The park narrowing lives on this side rather than inside `buildQueue` on
+   * purpose: `next_tasks` keeps LISTING a parked row (with `parked` on it, so
+   * a lead reading the queue sees the deferral and can disagree with it), and
+   * it is only this wake — the surface that spends somebody's turn — that has
+   * to leave it alone. Filtering in the shared builder would have made
+   * "parked" mean "hidden" for every reader.
    */
   const readyWorkSnapshot = (workspace: HubWorkspace): ReadyWorkSnapshot => {
     const tasks = taskStore.listTasks(workspace.id);
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
-    const ready = buildQueue(tasks, workspace.goals)
-      .filter((row) => {
-        if (row.status !== 'todo') return false;
-        if (row.parked !== undefined) return false;
-        const task = byId.get(row.id);
-        return task !== undefined && ownerKindOf(task) === 'agent';
-      })
-      .map((row) => ({ id: row.id, title: row.title }));
+    const verdict = evaluateReadyWork(
+      buildQueue(tasks, workspace.goals, { includeBlocked: true }),
+      {
+        ownerKind: (id) => {
+          const task = byId.get(id);
+          // Impossible as long as the rows come from the list above, and it
+          // throws rather than defaulting anyway: a default here would be a
+          // guess about who owns a row, which is the one thing the gate must
+          // never make up. The gate turns the throw into an undetermined row.
+          if (!task) throw new Error(`no such task: ${id}`);
+          return ownerKindOf(task);
+        },
+        reviewState: (id) => {
+          const state = taskStore.reviewState(id);
+          if (!state) throw new Error(`no such task: ${id}`);
+          return state;
+        },
+      },
+    );
     return {
       workspaceId: workspace.id,
       ...(workspace.leadAgentId !== undefined ? { leadAgentId: workspace.leadAgentId } : {}),
       retired: workspace.retiredAt !== undefined,
-      ready,
+      ready: verdict.ready,
+      considered: verdict.considered,
+      held: verdict.held,
+      undetermined: verdict.undetermined,
       // The store's durable half of the idle clock. Survives a restart, which
       // the in-process observations cannot — see ready-nudge.ts.
       lastActivityAt: tasks.reduce((max, t) => Math.max(max, t.updatedAt, t.createdAt), 0),
@@ -6878,6 +6916,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // `sweepDeadShares` is: a test drives the real thing rather than a
     // re-implementation of it.
     nudgeReadyWork: () => readyNudger.tick(),
+    readyNudgeTally: () => readyNudger.tally(),
     sharingGate,
     webhookLog,
     stop: async () => {
