@@ -14,10 +14,13 @@
  * top band fails in the dangerous direction — it outranks work somebody
  * actually ranked, and stamps a placement nobody made. The fix is to make
  * the create SAY it, grounded in what happened rather than inferred:
- * `placed` comes from whether the caller named a goal, `triageDelivered`
- * from whether the request reached a live attachment (never from "this
- * workspace has an agent somewhere"), and the bands come along so the
- * caller can act in the same breath.
+ * `placed` comes from whether the caller named a goal, and the bands come
+ * along so the caller can act in the same breath.
+ *
+ * The server used to ALSO emit a `triage.requested` ask at this moment and
+ * report whether it was delivered. That flow was removed on 2026-08-24 — the
+ * lead is woken by the board's own events. The absence of that frame is
+ * pinned in attachments.test.ts, where the stream is already in hand.
  *
  * All fixtures are synthetic.
  */
@@ -27,7 +30,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { TaskStore } from '../src/tasks.ts';
-import { openWorkspaceStream } from './agent-stream.ts';
 import { type GoalIds, seedGoals, seedGoalsOverHttp } from './goal-seed.ts';
 
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known', color: '#888888' };
@@ -40,12 +42,10 @@ interface GoalRef {
 }
 interface SinglePlacement {
   placed: boolean;
-  triageDelivered: boolean;
   goals?: GoalRef[];
 }
 interface BatchPlacement {
   unplaced: string[];
-  triageDelivered: string[];
   goals: GoalRef[];
 }
 
@@ -87,33 +87,26 @@ describe('the store reports placement, grounded in what actually happened', () =
     expect(chores.ok && chores.placement.placed).toBe(true);
   });
 
-  it('an omitted goal is not a placement, and triageDelivered follows the delivery', () => {
+  it('an omitted goal is not a placement, and the row records that it is waiting', () => {
     const { wsId } = seed();
-    // No delivery wired: the request reaches nobody, and the report says so.
     const away = store.createTask(wsId, { title: 'Nobody home', assignee: 'Search Revamp' });
-    expect(away.ok && away.placement).toEqual({ placed: false, triageDelivered: false });
-
-    // Positive control: with a live delivery the SAME call reports true, so
-    // the false above is a measurement and not a constant.
-    store.setTriageDelivery(() => true);
-    const live = store.createTask(wsId, { title: 'Somebody home', assignee: 'Search Revamp' });
-    expect(live.ok && live.placement).toEqual({ placed: false, triageDelivered: true });
-
-    // …and a delivery that reports no live attachment reads as away again.
-    store.setTriageDelivery(() => false);
-    const refused = store.createTask(wsId, { title: 'Away again', assignee: 'Search Revamp' });
-    expect(refused.ok && refused.placement.triageDelivered).toBe(false);
+    expect(away.ok && away.placement).toEqual({ placed: false });
+    // The DURABLE half, and now the only half: nothing is emitted to ask
+    // anyone to place it, so `unplacedSince` is what any later reader has.
+    // Positive control below — a placed create leaves it unset — so an
+    // assertion that it is set is a measurement rather than a constant.
+    expect(away.ok && away.task.unplacedSince).toBeGreaterThan(0);
   });
 
-  it('never claims delivery for a placed task — a placement asks for no triage', () => {
+  it('a placed create stamps no unplaced mark', () => {
     const { wsId, G } = seed();
-    store.setTriageDelivery(() => true);
     const res = store.createTask(wsId, {
       title: 'Placed while an agent is live',
       assignee: 'Search Revamp',
       goal: G.ship,
     });
-    expect(res.ok && res.placement).toEqual({ placed: true, triageDelivered: false });
+    expect(res.ok && res.placement).toEqual({ placed: true });
+    expect(res.ok && res.task.unplacedSince).toBeUndefined();
   });
 });
 
@@ -184,7 +177,7 @@ describe('the create ROUTES carry placement to the caller', () => {
         goal: G.index,
       }),
     );
-    expect(res.placement).toEqual({ placed: true, triageDelivered: false });
+    expect(res.placement).toEqual({ placed: true });
   });
 
   it('batch: reports which rows are unplaced, once, with the bands', async () => {
@@ -224,33 +217,5 @@ describe('the create ROUTES carry placement to the caller', () => {
       }),
     );
     expect(res.placement).toBeUndefined();
-  });
-
-  it('the route forwards the DELIVERY, not a guess about it', async () => {
-    // The half a unit test cannot prove: whether the route reads the store's
-    // answer or re-derives one. With no attachment it must be false; with a
-    // live attachment, true — same call, same body, different report.
-    const { wsId } = await seedWorkspace();
-    const away = await jj<{ placement: SinglePlacement }>(
-      await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Filed while away' }),
-    );
-    expect(away.placement.triageDelivered).toBe(false);
-
-    const attached = await post(`/api/workspaces/${wsId}/attachments`, {
-      agentId: AGENT.id,
-      runtime: 'claude-code-local',
-      author: AGENT,
-    });
-    expect(attached.status).toBe(200);
-    // …and reachable. The MCP opens this stream immediately after attaching,
-    // and the request is delivered by broadcasting on it, so an agent that
-    // registered without connecting is not somewhere a delivery can land.
-    const stream = await openWorkspaceStream(base, wsId);
-
-    const live = await jj<{ placement: SinglePlacement }>(
-      await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Filed while live' }),
-    );
-    expect(live.placement.triageDelivered).toBe(true);
-    await stream.close();
   });
 });

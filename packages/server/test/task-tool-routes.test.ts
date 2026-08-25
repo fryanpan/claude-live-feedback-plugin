@@ -24,7 +24,6 @@ import type { ElementAnchor, Thread, User } from '@feedback/core';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import type { Task, TaskStoreEvent } from '../src/tasks.ts';
-import { openWorkspaceStream } from './agent-stream.ts';
 import { type GoalIds, seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON: User = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
@@ -404,38 +403,25 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(res.task.order).toBeGreaterThan(existing.order);
     });
 
-    it('placement IS triage: stamps triagedAgainst with the goal id and clears the pending marker', async () => {
+    it('placement stamps triagedAgainst with the goal id and clears the unplaced mark', async () => {
       const { wsId, G } = await seedWorkspace();
-      // A live attachment makes the triage request deliverable, which is the
-      // only path that stamps triagePendingTs (grounded-pending rule).
-      // Deliverable means REACHABLE, not merely registered: the request is a
-      // broadcast on the workspace channel, so the agent has to be holding
-      // it — which is what the MCP does right after attaching.
-      await jj(
-        await post(`/api/workspaces/${wsId}/attachments`, {
-          agentId: 'agent-search-revamp',
-          runtime: 'claude-code-local',
-        }),
-      );
-      const stream = await openWorkspaceStream(base, wsId);
       const { task } = await jj<{ task: Task }>(
         await post(`/api/workspaces/${wsId}/tasks`, {
           assignee: 'human',
-          title: 'untriaged capture',
+          title: 'unplaced capture',
         }),
       );
-      // Positive control: the marker IS set before placement.
-      expect(task.triagePendingTs).toBeGreaterThan(0);
+      // Positive control: the row IS unplaced, and unjudged, before the move.
+      expect(task.unplacedSince).toBeGreaterThan(0);
       expect(task.triagedAgainst).toBeUndefined();
 
       const res = await jj<{ task: Task }>(
         await post(`/api/tasks/${task.id}/goal`, { goal: G.g1, author: AGENT }),
       );
-      expect(res.task.triagePendingTs).toBeUndefined();
+      expect(res.task.unplacedSince).toBeUndefined();
       expect(res.task.triagedAgainst).toMatchObject({ goalId: G.g1 });
       expect(res.task.triagedAgainst).not.toHaveProperty('goal');
       expect(res.task.triagedAgainst?.ts).toBeGreaterThan(0);
-      await stream.close();
     });
 
     it('same goal + same position → changed:false and NO task.regrouped, but the triage stamp still lands', async () => {
@@ -1005,24 +991,17 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(placed.placement.goals).toBeUndefined();
     });
 
-    it('an omitted goal is a triage candidate; an explicit goal is a placement', async () => {
+    it('an omitted goal leaves the row unplaced; an explicit goal is a placement', async () => {
       const { wsId, G } = await seedWorkspace();
-      await jj(
-        await post(`/api/workspaces/${wsId}/attachments`, {
-          agentId: 'agent-search-revamp',
-          runtime: 'claude-code-local',
-        }),
-      );
-      const stream = await openWorkspaceStream(base, wsId);
       const a = await seedThread();
-      const untriaged = await jj<{ task: Task }>(
+      const unplaced = await jj<{ task: Task }>(
         await post(`/api/docs/${a.docId}/threads/${a.threadId}/promote`, {
           workspaceId: wsId,
           author: AGENT,
         }),
       );
-      expect(untriaged.task.goal).toBe('chores');
-      expect(untriaged.task.triagePendingTs).toBeGreaterThan(0);
+      expect(unplaced.task.goal).toBe('chores');
+      expect(unplaced.task.unplacedSince).toBeGreaterThan(0);
 
       const b = await seedThread();
       const placed = await jj<{ task: Task }>(
@@ -1032,8 +1011,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
           author: AGENT,
         }),
       );
-      expect(placed.task.triagePendingTs).toBeUndefined();
-      await stream.close();
+      expect(placed.task.unplacedSince).toBeUndefined();
     });
 
     it('404s an unknown thread, doc, or workspace; 400s a missing workspaceId', async () => {

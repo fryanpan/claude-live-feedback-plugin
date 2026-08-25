@@ -17,7 +17,7 @@ Goals describe **real-world outcomes** and say what is in scope. Ambitious, spec
 
 ## 2. Make every task clear, and ranked
 
-Every task you create — and every task you *see* — is yours to check against the standard in the general skill. Where the standard is not met, rewrite it with `rewrite_task`, or add a review item asking the primary user what they meant. This is the whole of the `task-review` ask that routes to you.
+Every task you create — and every task you *see* — is yours to check against the standard in the general skill. Where the standard is not met, rewrite it with `rewrite_task`, or add a review item asking the primary user what they meant. Nothing asks you to do this row by row: the `task.created` events you already receive are the trigger, and `attach_agent` hands you the rows still waiting for a goal.
 
 Then **place it**: the right goal, in the right position relative to the rows already there. `after` on a `create_tasks` row for a new one, `set_task_goal` for an existing one.
 
@@ -41,7 +41,7 @@ set_workspace_lead(workspaceId)          // no second argument
 
 Everything on the board then reaches you:
 
-- Events for tasks, review items, comments, docs, voice requests, bucket reviews, task reviews
+- Events for tasks, review items, comments, docs, voice requests
 - Includes events from resources created later — you listen to everything
 - If you disconnect, events that happen in the meantime will remain queued for when you reconnect
 

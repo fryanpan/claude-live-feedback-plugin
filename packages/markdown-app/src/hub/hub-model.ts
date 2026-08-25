@@ -117,7 +117,6 @@ export interface HubTask {
   infoRequests?: HubInfoRequest[];
   answer?: { text: string; by: string; ts: number; optionId?: string };
   triagedAgainst?: { goalId: string; ts: number };
-  triagePendingTs?: number;
   transitions: HubTransition[];
   bodyDocId: string;
   /** The description, as markdown. Capped by the server projection — see
@@ -159,24 +158,31 @@ export interface HubSubgoal {
    *  row draws no name it was not given. */
   assignee?: string;
   ownerKind?: HubOwnerKind;
+  /**
+   * The goal's live description room — `task:<goalId>`, the same prefix a
+   * task's body uses (settled in the goals-as-a-task-type design: goal ids
+   * are `g-…` and task ids are `t-…`, so one namespace holds both and every
+   * piece of body machinery applies unchanged).
+   *
+   * The ADDRESS, not the text: it is projected even for a goal nobody has
+   * described, because the panel mounts its editor on it and fetches the
+   * discussion from it, both of which have to work on an empty goal. Absent
+   * from an older server's projection, and the panel then draws the
+   * description read-only with no link out rather than a link that 404s.
+   */
+  bodyDocId?: string;
+  /** The description, capped by the projection the way a task's is. */
+  body?: string;
+  /** Whether that cap bit. Only the pre-mount fallback can be short — the
+   *  room is not capped, and the editor reads the room. */
+  bodyTruncated?: boolean;
+  /** How many comments the goal's discussion holds. Absent means none; the
+   *  band says nothing rather than saying zero. */
+  commentCount?: number;
 }
 
 export interface HubGoal extends HubSubgoal {
   subgoals?: HubSubgoal[];
-}
-
-/** A goal BAND that appeared while the lead was away, and the unplaced tasks
- *  worth re-looking at against it. Projected because an ask that only exists
- *  in a sidecar leaves the board silent about work that is waiting. */
-export interface PendingBucketReviewView {
-  batchId: string;
-  taskIds: string[];
-  /** Display only; the record is keyed on ids. Rebuilt from the live list on
-   *  every read, so a band renamed since the edit reads the way the board
-   *  names it now. */
-  bandTitles: string[];
-  ts: number;
-  byName: string;
 }
 
 export interface HubWorkspaceInfo {
@@ -186,9 +192,6 @@ export interface HubWorkspaceInfo {
   /** The agent responsible for this board. Absent = the seat is empty, and
    *  the strip says so rather than showing a stale or guessed name. */
   leadAgentId?: string;
-  /** A goal band the lead agent has not re-looked at the bucket against yet.
-   *  Absent = none waiting; the board never infers one. */
-  pendingBucketReview?: PendingBucketReviewView;
   /** When this board was retired — present iff it was. Absent = live; the
    *  board never infers a retirement, the same way it never guesses a lead. */
   retiredAt?: number;
@@ -391,6 +394,13 @@ export interface BoardSection {
   /** The goal row's owner, carried the same way (see `HubSubgoal`). */
   assignee?: string;
   ownerKind?: HubOwnerKind;
+  /** The goal's description and its discussion, carried the same way again —
+   *  see `HubSubgoal` for what each one is and why the address rides even
+   *  when the text does not. Absent on Backlog: a bucket has no body. */
+  bodyDocId?: string;
+  body?: string;
+  bodyTruncated?: boolean;
+  commentCount?: number;
   isChores: boolean;
   tasks: HubTask[];
 }
@@ -417,6 +427,10 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
     ...(g.doneBy !== undefined ? { doneBy: g.doneBy } : {}),
     ...(g.assignee !== undefined ? { assignee: g.assignee } : {}),
     ...(g.ownerKind !== undefined ? { ownerKind: g.ownerKind } : {}),
+    ...(g.bodyDocId !== undefined ? { bodyDocId: g.bodyDocId } : {}),
+    ...(g.body !== undefined ? { body: g.body } : {}),
+    ...(g.bodyTruncated !== undefined ? { bodyTruncated: g.bodyTruncated } : {}),
+    ...(g.commentCount !== undefined ? { commentCount: g.commentCount } : {}),
   });
   for (const g of goals) {
     sections.push({
@@ -820,7 +834,13 @@ export interface ReviewThreadItem {
    * skips it rather than half-building a row; see the guard there for why
    * admitting it would double-list a legacy decision.
    */
-  kind: 'task-thread' | 'doc-thread' | 'task-review';
+  /**
+   * `goal-thread` is a question asked on a GOAL's discussion. Its own kind
+   * rather than a `task-thread` carrying a goal id, because the two open
+   * different panels — and `taskId` on one of these holds the GOAL's id, which
+   * resolves to no task at all.
+   */
+  kind: 'task-thread' | 'goal-thread' | 'doc-thread' | 'task-review';
   /**
    * How this row earned its place. Since 2026-08-21 membership is the
    * SERVER's call and every shipped row is an ask: `declared` — an agent
@@ -889,7 +909,7 @@ export async function refreshReviewItems(
   state.reviewItems = applyRefresh(state.reviewItems, res, (r) => r.items ?? []);
 }
 
-export type ReviewKind = 'decision' | 'task-thread' | 'doc-thread';
+export type ReviewKind = 'decision' | 'task-thread' | 'goal-thread' | 'doc-thread';
 
 export interface ReviewItem {
   /** Stable across re-fetches. The walkthrough steps by position and the list
@@ -1145,8 +1165,13 @@ export function reviewQueue(
     // server's row too would list one question twice — and a row with no
     // `docId`/`threadId` would key as `…:undefined:undefined` and collide with
     // every other one of its kind.
-    if (t.kind !== 'task-thread' && t.kind !== 'doc-thread') continue;
-    const where = t.kind === 'task-thread' ? 'on this task' : 'on this doc';
+    if (t.kind !== 'task-thread' && t.kind !== 'goal-thread' && t.kind !== 'doc-thread') continue;
+    const where =
+      t.kind === 'task-thread'
+        ? 'on this task'
+        : t.kind === 'goal-thread'
+          ? 'on this goal'
+          : 'on this doc';
     const declared = t.band === 'declared' && t.review !== undefined;
     const entry = {
       item: {
@@ -1176,7 +1201,10 @@ export function reviewQueue(
       },
       rank: rankOf(
         t.kind === 'task-thread' && t.taskId ? taskById.get(t.taskId) : undefined,
-        t.kind === 'task-thread' ? BAND_TASK_THREAD : BAND_DOC_THREAD,
+        // A goal's question ranks with a task's rather than with a doc's: it
+        // is a question about the WORK, asked by somebody who wants to act on
+        // the answer, which is the distinction the two bands draw.
+        t.kind === 'doc-thread' ? BAND_DOC_THREAD : BAND_TASK_THREAD,
         t.direct ?? false,
         t.since,
         t.threadId,
