@@ -1939,6 +1939,11 @@ export function timeAgo(ts: number, now: number): string {
 
 export interface PresencePerson {
   clientId: number;
+  /** WHO this is — `User.id`, which is stable per browser (localStorage) or
+   *  is the known user's own id. Optional because a tab running a bundle that
+   *  predates it sends no id; `presenceIdentity` falls back to the CONNECTION
+   *  there, never to the name — see the reasoning on that function. */
+  userId?: string;
   name: string;
   surface: string;
   docId?: string;
@@ -1954,6 +1959,9 @@ export interface PresenceAgent {
 }
 
 export interface PresenceChip {
+  /** The PARTICIPANT: `p-<name>` or `a-<agentId>`. Stable across reconnects
+   *  and across the several tabs one person may have open — it is the row key
+   *  the presence island renders on, and what `followedKey` names. */
   key: string;
   label: string;
   kind: 'person' | 'agent';
@@ -1962,6 +1970,9 @@ export interface PresenceChip {
   /** Full detail for the tooltip. */
   title: string;
   docId?: string;
+  /** The connection this chip's reading came from — the most recently active
+   *  of the person's tabs. Only ever a way to tell tabs apart, never the
+   *  identity: it is minted fresh on every connect. */
   clientId?: number;
   state?: PresenceAgent['state'];
 }
@@ -2185,20 +2196,76 @@ export function presenceHue(label: string): number {
   return h;
 }
 
+/**
+ * WHO a presence entry is, as opposed to which connection it arrived over.
+ *
+ * `userId` is `User.id` — stable per browser (localStorage) or the known
+ * user's own — so it is the same across every tab that person has open and
+ * different for anybody else. Those are the two things the strip's row key
+ * has to get right, and a display name gets both wrong: two people called
+ * Alex share one, and it tells tabs apart only by accident.
+ *
+ * With no id, the fallback is the CONNECTION, not the name. A hub tab running
+ * a bundle that predates the id in awareness therefore behaves exactly as
+ * every tab did before this change — its own row, rebuilt on reconnect — and
+ * critically it does NOT fold with anyone. Falling back to the name instead
+ * would merge two strangers who share one (codex review, and it is the right
+ * call): the chip would show whichever of them moved last, and following one
+ * could land on the other's document. An unstable key for an old tab is a
+ * lost DOM node; a wrong identity is a wrong person.
+ */
+export function presenceIdentity(p: Pick<PresencePerson, 'userId' | 'clientId'>): string {
+  return p.userId ?? `c${p.clientId}`;
+}
+
+/**
+ * Fold every tab one person has open into the ONE person they are.
+ *
+ * Awareness is per-connection, so a second tab is a second entry with a
+ * different Yjs `clientId` and the same human behind it. Left alone that
+ * drew the same person twice in the strip and burned two of the four circle
+ * slots on one body — and, because a `clientId` is minted fresh on every
+ * connect, it also meant a reload rebuilt the row under a new identity.
+ *
+ * The surviving tab is the most recently active one, because that is where
+ * the person actually IS; `self` is sticky across the merge (one of your own
+ * tabs being idle must not stop the strip from marking you as you).
+ */
+function foldTabs(people: PresencePerson[]): PresencePerson[] {
+  const byIdentity = new Map<string, PresencePerson>();
+  for (const p of people) {
+    const id = presenceIdentity(p);
+    const prev = byIdentity.get(id);
+    if (!prev) {
+      byIdentity.set(id, p);
+      continue;
+    }
+    const live = p.lastActive >= prev.lastActive ? p : prev;
+    byIdentity.set(id, { ...live, self: Boolean(prev.self || p.self) });
+  }
+  return [...byIdentity.values()];
+}
+
 /** One chip per person and agent (§2.7), people first. Person chips carry the
  *  surface they're on; agent chips carry the derived liveness state — real
- *  signals (heartbeat, last tool call), never guesses. */
+ *  signals (heartbeat, last tool call), never guesses.
+ *
+ *  `key` is the participant, not the connection: `p-<identity>` for a person
+ *  (see `presenceIdentity`), `a-<agentId>` for an agent. It is what the
+ *  presence island keys its rows on, so it has to survive a reconnect — a key
+ *  that changed whenever a browser reconnected would rebuild the row (and
+ *  drop an in-flight press) for a person who never moved. */
 export function presenceChips(
   people: PresencePerson[],
   agents: PresenceAgent[],
   now: number,
 ): PresenceChip[] {
   const chips: PresenceChip[] = [];
-  const sortedPeople = [...people].sort((a, b) => a.name.localeCompare(b.name));
+  const sortedPeople = foldTabs(people).sort((a, b) => a.name.localeCompare(b.name));
   for (const p of sortedPeople) {
     const where = p.surface === 'hub' ? 'hub' : (p.docId ?? p.surface);
     chips.push({
-      key: `p-${p.clientId}`,
+      key: `p-${presenceIdentity(p)}`,
       label: p.self ? `${p.name} (you)` : p.name,
       kind: 'person',
       where,
