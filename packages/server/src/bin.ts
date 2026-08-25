@@ -108,6 +108,23 @@ const sharingEnvLocked = ['1', 'true', 'yes'].includes(
   (readRenamedEnv(process.env, 'CW_SHARING_DISABLED') ?? '').trim().toLowerCase(),
 );
 
+/**
+ * Email-keyed identity is IN EFFECT. Default off, and off means a request
+ * with a session cookie is attributed exactly as it is attributed today.
+ * The `/api/auth/*` routes are mounted either way — see ServerOptions.
+ */
+const requireEmailAuth = ['1', 'true', 'yes'].includes(
+  (process.env.CW_REQUIRE_EMAIL_AUTH ?? '').trim().toLowerCase(),
+);
+
+/**
+ * The address whose email identity is the fleet owner. Without it,
+ * `isOwnerActor` keeps matching only the two pre-email spellings, and the
+ * day the owner signs in by email the owner-activity view quietly reads
+ * empty — see activity.ts.
+ */
+const ownerEmail = (process.env.CW_OWNER_EMAIL ?? '').trim();
+
 const trustedHosts = (process.env.TRUSTED_HOSTS ?? '')
   .split(',')
   .map((h) => h.trim())
@@ -270,6 +287,8 @@ for (let i = 0; i < 20 && !handle; i++) {
       allowedOrigins,
       publicBaseUrl: publicBaseUrlOverride,
       sharingEnvLocked,
+      requireEmailAuth,
+      ...(ownerEmail ? { ownerEmail } : {}),
       cfAccess,
       share,
       summarizer,

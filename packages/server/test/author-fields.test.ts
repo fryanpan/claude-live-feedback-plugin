@@ -10,8 +10,16 @@
  * attribution instead — which lands in `activity.jsonl`, i.e. the stream the
  * weekly review reads.
  */
-import { describe, expect, test } from 'bun:test';
-import { authorFields, classifyActor, isOwnerActor } from '../src/activity';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { emailIdentityId } from '@feedback/core';
+import {
+  authorFields,
+  classifyActor,
+  isOwnerActor,
+  ownerIdentityIds,
+  registerOwnerIdentity,
+  resetOwnerIdentities,
+} from '../src/activity';
 import { eventsForDoc } from '../src/activity-backfill';
 
 describe('authorFields — legacy string authors carry a recoverable name', () => {
@@ -58,6 +66,46 @@ describe('isOwnerActor over the same shapes', () => {
     expect(isOwnerActor({ id: 'known-bryan', name: 'someone else' })).toBe(true);
     expect(isOwnerActor({ id: 'anon-1', name: 'Bryan' })).toBe(true);
     expect(isOwnerActor({ id: 'anon-1', name: 'Someone' })).toBe(false);
+  });
+});
+
+/**
+ * The check was `id === 'known-bryan' || name === 'Bryan'`, by literal. The
+ * moment the owner's identity becomes `user-<hash>` that stops matching and
+ * fails SILENTLY — no error, just an owner-activity view that reads empty and
+ * a weekly review that under-counts. So the rename is pinned here rather than
+ * discovered in production.
+ */
+describe('owner recognition survives the email rename', () => {
+  afterEach(() => resetOwnerIdentities());
+
+  test('a registered email identity is the owner', () => {
+    const id = emailIdentityId('owner@example.com');
+    // Before registering: the very shape that will arrive on every comment
+    // once the owner signs in by email is NOT recognized.
+    expect(isOwnerActor({ id, name: 'Owner' })).toBe(false);
+    registerOwnerIdentity(id);
+    expect(isOwnerActor({ id, name: 'Owner' })).toBe(true);
+  });
+
+  test('positive control: both pre-email spellings still match afterwards', () => {
+    registerOwnerIdentity(emailIdentityId('owner@example.com'));
+    expect(isOwnerActor({ id: 'known-bryan', name: 'whoever' })).toBe(true);
+    expect(isOwnerActor({ id: 'anon-1', name: 'Bryan' })).toBe(true);
+    expect(isOwnerActor('Bryan')).toBe(true);
+  });
+
+  test('negative control: another email identity is not the owner', () => {
+    registerOwnerIdentity(emailIdentityId('owner@example.com'));
+    const other = emailIdentityId('someone-else@example.com');
+    expect(isOwnerActor({ id: other, name: 'Someone Else' })).toBe(false);
+    expect(isOwnerActor({ id: 'anon-1', name: 'Someone Else' })).toBe(false);
+  });
+
+  test('registering blank changes nothing', () => {
+    registerOwnerIdentity('   ');
+    expect(ownerIdentityIds()).toEqual(['known-bryan']);
+    expect(isOwnerActor({ id: '', name: '' })).toBe(false);
   });
 });
 
