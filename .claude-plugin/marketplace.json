@@ -10,7 +10,7 @@
       "name": "claude-workspaces",
       "source": "./packages/plugin",
       "description": "MCP tools + /feedback commands + PreToolUse hook + live review surface (markdown + injectable widget).",
-      "version": "0.1.107",
+      "version": "0.1.108",
       "homepage": "https://github.com/fryanpan/claude-workspaces-plugin"
     }
   ]
