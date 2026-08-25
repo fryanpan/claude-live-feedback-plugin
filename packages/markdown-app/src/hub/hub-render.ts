@@ -1669,15 +1669,6 @@ export function renderGoalDetail(
   actions.append(close);
   head.append(identity, actions);
 
-  const counts = { triage: 0, todo: 0, 'in-progress': 0, done: 0 } as Record<TaskStatus, number>;
-  // `?? 0` because a status this bundle predates is a real key here, and
-  // `undefined + 1` would render the band's whole task line as NaN.
-  for (const t of section.tasks) counts[t.status] = (counts[t.status] ?? 0) + 1;
-  // What is left to do in this band. Triage counts as open — the work exists,
-  // it just has not been agreed to yet, and calling it closed is the reading
-  // that lets a band look finished while nobody has looked at half of it.
-  const open = counts.triage + counts.todo + counts['in-progress'];
-
   const dl = document.createElement('dl');
   dl.className = 'hub-detail-fields';
   const cell = (key: string, value: Node | string): void => {
@@ -1724,11 +1715,12 @@ export function renderGoalDetail(
       `due ${new Date(section.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
     );
   }
-  cell(
-    'Tasks',
-    TASK_STATUS_ORDER.map((s) => `${counts[s]} ${statusLabel(s).toLowerCase()}`).join(' · '),
-  );
-
+  // No `Tasks` breakdown. *"How many tasks are in triage/todo/in-progress/done
+  // is just not useful information"* (Bryan, 2026-08-24, reviewing the live
+  // panel). The board's band header still carries the count, where it answers
+  // "how big is this band" while you are scanning; repeated inside the goal you
+  // already opened it answered nothing and cost a row of a panel whose scarce
+  // axis is height. A goal's detail now carries the same fields a task's does.
   const body = document.createElement('div');
   body.className = 'hub-detail-body';
   body.append(dl);
@@ -1747,17 +1739,11 @@ export function renderGoalDetail(
       ? `Declared by ${section.doneBy.name}${when}`
       : 'Declared done';
     body.append(note);
-  } else if (open > 0) {
-    // The advisory from the mock, verbatim in spirit: the server reports open
-    // children on a done declaration and never enforces them, so the panel
-    // says up front what a declaration would leave open.
-    const advisory = document.createElement('p');
-    advisory.className = 'hub-goal-advisory';
-    advisory.textContent =
-      `Marking this goal done leaves ${open} open task${open === 1 ? '' : 's'} in it. ` +
-      'A goal is done because you say so — its tasks are reported, never enforced.';
-    body.append(advisory);
   }
+  // No open-children advisory either (Bryan, same review). It was never a
+  // gate — the server has always accepted a done declaration over open
+  // children (`enforce:false`) — so it spent two lines restating a rule
+  // nothing enforced, on the one panel that has no room to spare.
 
   // ── Description ──────────────────────────────────────────────────────────
   //

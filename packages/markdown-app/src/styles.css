@@ -2436,18 +2436,6 @@ body.hub-body {
   font-size: 11px;
   color: var(--fg-muted);
 }
-/* The open-children advisory, from the approved mock: a quiet amber note,
-   never a blocker — the server reports open children and does not enforce
-   them. */
-.hub-goal-advisory {
-  margin: 14px 0 0;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--warn, #b58900) 45%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--warn, #b58900) 10%, transparent);
-  font-size: 13px;
-  line-height: 1.45;
-}
 .hub-goal-done-note {
   margin: 14px 0 0;
   font-size: 13px;
