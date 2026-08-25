@@ -296,7 +296,6 @@ describe('an inline card repaints when its review item changes', () => {
     ({
       shape: 'review',
       headline: 'Read the stall rota',
-      why: 'It goes out Thursday.',
       ...over,
     }) as NonNullable<Comment['review']>;
 

@@ -1136,7 +1136,6 @@ describe('hub workspace + task routes', () => {
         review: {
           shape: 'decision',
           headline: 'Dim resolved threads or hide them?',
-          why: 'Blocks the inline-comments branch.',
           detail: 'Hiding is tidier; dimming keeps the history one tap away.',
           options: [
             { id: 'hide', label: 'Hide them' },

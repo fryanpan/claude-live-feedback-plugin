@@ -93,7 +93,7 @@ function ReviewRow(props: {
     <button
       type="button"
       class={`hub-review-row hub-review-${item.kind}${index === 0 ? ' hub-review-row-current' : ''}`}
-      title={`${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''} · ${item.why}`}
+      title={`${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''}${item.why ? ` · ${item.why}` : ''}`}
       // Into the queue's own card at this row, not out to the task or the doc.
       // The index rides along so the card opens where the reader was pointing;
       // the card re-resolves it by key on every repaint from there.
@@ -102,7 +102,7 @@ function ReviewRow(props: {
       <span class="hub-review-row-title">{reviewRowTitle(item)}</span>
       {/* The asked-by meta, in the same spelling the card head uses — one
           clock, one sentence, so the row and the card it opens can never
-          disagree. The declared why lives in the card's one markdown body
+          disagree. Everything the author wrote lives in the card's one body
           (approved design); the row is title + meta and nothing else. */}
       <span class="hub-review-row-sub">{askedMeta(item, now)}</span>
     </button>

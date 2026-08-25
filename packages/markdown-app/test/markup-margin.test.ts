@@ -615,7 +615,6 @@ describe('mountMarkupMargin — comment balloons', () => {
     const declared = {
       shape: 'review' as const,
       headline: 'Pick the rota order',
-      why: 'It goes out Thursday.',
     };
     const commentId = (
       (ydoc.getMap('threads').get(thread.id) as Y.Map<unknown>).get('comments') as Y.Array<

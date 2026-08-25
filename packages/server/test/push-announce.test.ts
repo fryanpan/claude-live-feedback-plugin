@@ -118,7 +118,6 @@ describe('filing a review item announces it', () => {
       review: {
         shape: 'decision',
         headline: 'Cache size for the rebuild',
-        why: 'The nightly rebuild stalls until this is settled.',
         options: [
           { id: 'o-7f3a', label: 'Keep it' },
           { id: 'o-4b2e', label: 'Halve it' },
@@ -167,7 +166,6 @@ describe('filing a review item announces it', () => {
       review: {
         shape: 'decision',
         headline: 'Cache size for the rebuild',
-        why: 'The nightly rebuild stalls until this is settled.',
         options: [
           { id: 'o-7f3a', label: 'Keep it' },
           { id: 'o-4b2e', label: 'Halve it' },
@@ -219,7 +217,6 @@ describe('filing a review item announces it', () => {
       review: {
         shape: 'decision',
         headline: 'Cache size for the rebuild',
-        why: 'The nightly rebuild stalls until this is settled.',
         options: [
           { id: 'o-7f3a', label: 'Keep it' },
           { id: 'o-4b2e', label: 'Halve it' },

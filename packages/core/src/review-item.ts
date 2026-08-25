@@ -55,20 +55,27 @@ export interface ReviewOption {
 /**
  * The payload an agent attaches to a comment.
  *
- * `headline` and `why` are the two-line header Bryan asked to be enforced —
- * "clear on what needs review, why it's important, and what to review for, all
- * in two lines or less on mobile screen". They are the queue row. `lookFor` is
- * the third thing he named and is advisory; see `checkReviewPayload` for why
- * the line between refused and advised falls there.
+ * A TITLE AND A DETAIL, and nothing else. This carried two more authored
+ * fields — a required `why` (line 2 of the row) and an advisory `lookFor`
+ * ("what to review for") — from the first cut until 2026-08-25. Bryan, having
+ * asked for their removal twice: *"I asked to get rid of this. It imposes a
+ * structure that's too rigid and leaves not enough room to manouevwd. Title
+ * and detail is enough."*
+ *
+ * The structure was the defect, not the length of it. Three prescribed slots
+ * told every author how an ask had to be SHAPED before they knew what it was,
+ * and the card then rendered all three as one markdown body anyway (see
+ * `reviewItemBodyMarkdown`) — so the split bought the reader nothing and cost
+ * the writer a form to fill in.
+ *
+ * The words already written under the old shape are not lost, and old callers
+ * are not refused: `readReviewPayload` folds a legacy `why` / `lookFor` into
+ * `detail`, on the write path and the read path alike.
  */
 export interface ReviewPayload {
   shape: ReviewShape;
-  /** Line 1 of the row: what needs review. */
+  /** The row title: what needs review. */
   headline: string;
-  /** Line 2 of the row: why it matters / what is blocked. */
-  why: string;
-  /** What to review FOR. Shown on the opened card, not on the row. */
-  lookFor?: string;
   /**
    * The body — the ask's real context, markdown, inline links included. Aim
    * for ~50 words on a `decision` (context before the options), ~150 on a
@@ -151,25 +158,39 @@ export function reviewAnswered(review: ReviewPayload): boolean {
 }
 
 /**
- * The item's ONE body, as markdown: why, then lookFor, then detail, blank-line
- * separated, empty parts omitted.
+ * Legacy authored text, folded into one body — `why`, then `lookFor`, then
+ * `detail`, blank-line separated, empty parts omitted.
  *
- * The card used to render these as labelled sub-sections ("What to review
- * for", a provenance block, a clamped why line), and the approved design
- * (review-flow-mock-v1) collapses all of it into a single markdown body under
- * the head row. Composed here rather than in each renderer because THREE
- * surfaces show the same item — Home's walkthrough, the task panel, the doc
- * thread — and a second copy of the join is how one of them ends up rendering
- * a part the others dropped. The stored payload keeps its three fields; this
- * is presentation, not schema.
+ * This WAS the card's composition step: the payload carried three authored
+ * fields and every surface joined them here so none could render a part the
+ * others dropped. Now that the payload carries one, the join has one job left,
+ * and it is a migration rather than a layout: text an OLD caller sends and
+ * text already sitting in a `.ydoc` arrives under the retired names, and both
+ * have to come out as words the reader sees. `readReviewPayload` is the only
+ * caller — one funnel, so a folded read and a folded write cannot disagree.
+ *
+ * The order is the order the card used to render them in, so a stored item
+ * reads today exactly as it read yesterday.
  */
-export function reviewItemBodyMarkdown(
-  review: Pick<ReviewPayload, 'why' | 'lookFor' | 'detail'>,
-): string {
-  return [review.why, review.lookFor, review.detail]
-    .map((part) => part?.trim() ?? '')
+function foldLegacyBody(why: unknown, lookFor: unknown, detail: unknown): string | undefined {
+  const body = [why, lookFor, detail]
+    .map((part) => (typeof part === 'string' ? part.trim() : ''))
     .filter((part) => part !== '')
     .join('\n\n');
+  return body === '' ? undefined : body;
+}
+
+/**
+ * The item's ONE body, as markdown.
+ *
+ * Now just `detail` — every payload reaching a renderer has been through
+ * `readReviewPayload`, which folded any legacy `why`/`lookFor` into it. Kept
+ * as a named function rather than inlined because THREE surfaces show the same
+ * item (Home's walkthrough, the task panel, the doc thread) and "what the body
+ * is" is exactly the thing they must not each decide for themselves.
+ */
+export function reviewItemBodyMarkdown(review: Pick<ReviewPayload, 'detail'>): string {
+  return review.detail?.trim() ?? '';
 }
 
 /**
@@ -314,10 +335,14 @@ export function isReviewItemOpen(item: TaskReviewItem): boolean {
  * cannot disagree with the gate.
  *
  * The unit mix is a rule, not an accident: **characters for the one-line row
- * fields, words for bodies.** A row field's budget tracks RENDERED WIDTH —
- * how much fits one line on a phone — and width is a property of characters.
- * A body's budget tracks READING EFFORT, which is a property of words; the
- * card wraps, so width never enters into it.
+ * field, words for bodies.** A row field's budget tracks RENDERED WIDTH — how
+ * much fits one line on a phone — and width is a property of characters. A
+ * body's budget tracks READING EFFORT, which is a property of words; the card
+ * wraps, so width never enters into it.
+ *
+ * `why` (90) and `lookFor` (90) were removed with the fields themselves on
+ * 2026-08-25. A published budget for a field that no longer exists is a rule
+ * an author can still read and still obey.
  */
 export const REVIEW_LIMITS = {
   /**
@@ -327,20 +352,19 @@ export const REVIEW_LIMITS = {
    * advisory a day earlier: a budget here is a statement about RENDERED WIDTH,
    * and over-running it wraps the row. Refusing instead turned a rendering
    * imperfection into a failed filing — measured over one 24-hour window, six
-   * honest asks were bounced with a `why` of 92–102 characters, each at the
+   * honest asks were bounced over a 90-character row budget, each at the
    * moment an agent was routing an ask to the queue instead of to chat, and
    * each costing a retry to shave two words. A wrapped row is worse than a
    * tight one and far better than an ask that never got filed.
    */
   headline: 70,
-  why: 90,
-  lookFor: 90,
   /**
-   * The one one-line length that still refuses — the sanity ceiling for a row
-   * field, the counterpart of `detailMaxWords` for a body. Well past anything
-   * a model overshoots a 70/90-character budget by (the measured over-runs sat
-   * at 92–102), so it bounces a paragraph pasted into a row and nothing else.
-   * Shared by the option `label`, which is a row field wearing a button.
+   * The one one-line length that still refuses — the sanity ceiling for the
+   * row field, the counterpart of `detailMaxWords` for a body. Well past
+   * anything a model overshoots a 70-character budget by (the measured
+   * over-runs sat at 92–102), so it bounces a paragraph pasted into a row and
+   * nothing else. Shared by the option `label`, which is a row field wearing
+   * a button.
    */
   lineMaxChars: 500,
   /**
@@ -377,16 +401,9 @@ export const REVIEW_LIMITS = {
  * Two families, and keeping them distinct is what makes the advice usable: a
  * bare field name means the field is ABSENT ("write one"), a `…Length` gap
  * means the field is there and runs long ("it will wrap"). Told the same way,
- * an author who wrote a 100-character `why` would be advised to write a `why`.
+ * an author who wrote a 100-character headline would be advised to write one.
  */
-export type ReviewGap =
-  | 'lookFor'
-  | 'detail'
-  | 'headlineLength'
-  | 'whyLength'
-  | 'lookForLength'
-  | 'optionLabelLength'
-  | 'optionDetailLength';
+export type ReviewGap = 'detail' | 'headlineLength' | 'optionLabelLength' | 'optionDetailLength';
 
 export interface ReviewCheck {
   /** No refusal-grade problem. `errors` is empty exactly when this is true. */
@@ -415,18 +432,25 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * response to a chore is to route around it — there, by filing the decision as
  * an action instead. So only what the ROW is made of refuses.
  *
- * - **Refused**: a missing `headline` or `why`, a line break inside one of
- *   them, a `decision` with fewer than two options, and anything past a sanity
- *   ceiling (`lineMaxChars` for a row field, `detailMaxWords` for a body).
- *   These are structural: the row cannot be built at all without them, and a
- *   ceiling is only ever reached by a pasted document. Note it refuses rather
- *   than truncating — clipping a headline is precisely how the title went back
- *   to being a sentence cut in half, and the author would never learn.
- * - **Advised**: a missing `lookFor` or `detail`, and any LENGTH over a
- *   budget. Both make the card thinner or wider than it wants to be; neither
- *   makes it unreadable. Demanding a third and fourth field for a two-word
- *   question is the chore that gets routed around, and so is bouncing a
- *   filing to shave two words off a `why` — measured, six times in one day.
+ * - **Refused**: a missing `headline`, a line break inside it, a `decision`
+ *   with fewer than two options, and anything past a sanity ceiling
+ *   (`lineMaxChars` for the row field, `detailMaxWords` for a body). These are
+ *   structural: the row cannot be built at all without them, and a ceiling is
+ *   only ever reached by a pasted document. Note it refuses rather than
+ *   truncating — clipping a headline is precisely how the title went back to
+ *   being a sentence cut in half, and the author would never learn.
+ * - **Advised**: a missing `detail`, and any LENGTH over a budget. Both make
+ *   the card thinner or wider than it wants to be; neither makes it
+ *   unreadable. Demanding another field for a two-word question is the chore
+ *   that gets routed around, and so is bouncing a filing to shave two words
+ *   off a row line — measured, six times in one day.
+ *
+ * As of 2026-08-25 there is exactly ONE required field, because there is
+ * exactly one field the row is made of. A payload still carrying the retired
+ * `why` / `lookFor` passes untouched: unknown keys were never refused, and an
+ * unrestarted caller must not get a 400 from a rule it cannot know about.
+ * Their text is not discarded either — `readReviewPayload` folds it into the
+ * body on the way to storage.
  *
  * Every check is one-directional in the same sense as `checkDecisionShape`:
  * counting words can undercount a field somebody wrote well (a false gap, i.e.
@@ -466,43 +490,32 @@ export function checkReviewPayload(input: unknown): ReviewCheck {
     );
   }
 
-  const line = (key: 'headline' | 'why' | 'lookFor', required: boolean) => {
-    const v = p[key];
-    if (v === undefined || (typeof v === 'string' && v.trim() === '')) {
-      if (required) {
-        fail(
-          key === 'headline'
-            ? `review.headline is required — one line saying what needs review, at most ${REVIEW_LIMITS.headline} characters. It is the row title; write it as a ticket title, not as the first sentence of a status note.`
-            : `review.why is required — one line saying why it matters or what it blocks, at most ${REVIEW_LIMITS.why} characters.`,
-        );
-      } else {
-        gaps.push('lookFor');
-      }
-      return;
+  const headline = p.headline;
+  if (headline === undefined || (typeof headline === 'string' && headline.trim() === '')) {
+    fail(
+      `review.headline is required — one line saying what needs review, at most ${REVIEW_LIMITS.headline} characters. It is the row title; write it as a ticket title, not as the first sentence of a status note.`,
+    );
+  } else if (typeof headline !== 'string') {
+    fail('review.headline must be a string.');
+  } else {
+    // A newline is a second line by definition, and the headline is one line.
+    // Refusing here is what keeps the card's clamp from being the thing that
+    // enforces it.
+    if (/[\r\n]/.test(headline)) {
+      fail('review.headline must be a single line — it contains a line break.');
     }
-    if (typeof v !== 'string') {
-      fail(`review.${key} must be a string.`);
-      return;
-    }
-    // A newline is a second line by definition, and the whole rule is that the
-    // header is two lines. Refusing here is what keeps the card's clamp from
-    // being the thing that enforces it.
-    if (/[\r\n]/.test(v)) fail(`review.${key} must be a single line — it contains a line break.`);
     // Length ADVISES up to the sanity ceiling. The budget describes how much
     // fits one line on a phone, and over-running it wraps the row — a
     // rendering imperfection, which refusing turned into a failed filing.
-    const n = v.trim().length;
+    const n = headline.trim().length;
     if (n > REVIEW_LIMITS.lineMaxChars) {
       fail(
-        `review.${key} is ${n} characters; past ${REVIEW_LIMITS.lineMaxChars} it is a paragraph, not a row. Put the context in review.detail — the card renders all of it — and leave one line here.`,
+        `review.headline is ${n} characters; past ${REVIEW_LIMITS.lineMaxChars} it is a paragraph, not a row. Put the context in review.detail — the card renders all of it — and leave one line here.`,
       );
-    } else if (n > REVIEW_LIMITS[key]) {
-      gaps.push(`${key}Length`);
+    } else if (n > REVIEW_LIMITS.headline) {
+      gaps.push('headlineLength');
     }
-  };
-  line('headline', true);
-  line('why', true);
-  line('lookFor', false);
+  }
 
   const detail = p.detail;
   if (detail === undefined || (typeof detail === 'string' && detail.trim() === '')) {
@@ -605,7 +618,7 @@ export function reviewPayloadMessage(check: ReviewCheck): string {
   return [
     'This review item cannot be filed as written.',
     ...check.errors,
-    'A review item is a row on a phone: one line saying what needs review, one line saying why, then the body. Post it as an ordinary comment instead if it is a status note — status notes are welcome and no longer enter the review queue.',
+    'A review item is a row on a phone: one line saying what needs review, then the body. Post it as an ordinary comment instead if it is a status note — status notes are welcome and no longer enter the review queue.',
   ].join(' ');
 }
 
@@ -626,11 +639,6 @@ export function reviewPayloadMessage(check: ReviewCheck): string {
 export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
   if (gaps.length === 0) return undefined;
   const thin: string[] = [];
-  if (gaps.includes('lookFor')) {
-    thin.push(
-      "review.lookFor is missing — one line saying what to look at, so the card says what a useful answer would be about. Without it the reader gets the question and no idea what you're unsure of.",
-    );
-  }
   if (gaps.includes('detail')) {
     thin.push(
       'review.detail is missing — the markdown body under the header. Without it the card is a headline and two options with nothing behind them.',
@@ -641,11 +649,11 @@ export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
   // rule that was broken: these lengths FILED, and an author who reads this as
   // a refusal retries and files the ask twice.
   const long: string[] = [];
-  const over = (key: 'headline' | 'why' | 'lookFor') =>
-    `review.${key} runs past ${REVIEW_LIMITS[key]} characters, so it wraps instead of holding its line on a phone.`;
-  if (gaps.includes('headlineLength')) long.push(over('headline'));
-  if (gaps.includes('whyLength')) long.push(over('why'));
-  if (gaps.includes('lookForLength')) long.push(over('lookFor'));
+  if (gaps.includes('headlineLength')) {
+    long.push(
+      `review.headline runs past ${REVIEW_LIMITS.headline} characters, so it wraps instead of holding its line on a phone.`,
+    );
+  }
   if (gaps.includes('optionLabelLength')) {
     long.push(
       `An option label runs past ${REVIEW_LIMITS.optionLabelWords} words or ${REVIEW_LIMITS.optionLabelChars} characters, so the button wraps — the reasoning belongs in that option's detail.`,
@@ -674,19 +682,26 @@ export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
  * Payload` guards the door, this only guards against a shape that would throw,
  * so an item written before a limit changed still renders rather than
  * vanishing.
+ *
+ * It is also where the retired `why` / `lookFor` are RECOVERED. Both paths run
+ * through here — the write path normalizes an incoming payload with it before
+ * storing, every read path runs it on the way out — so folding their text into
+ * `detail` here answers the two obligations the removal created with one
+ * mechanism: an old bundle's write keeps every word its author typed, and the
+ * thousands of payloads already in `.ydoc` state keep rendering in full
+ * without anything rewriting stored docs. A reader cannot tell which field a
+ * paragraph came from, which is the point — they are one body now.
  */
 export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   if (!isPlainObject(value)) return undefined;
   const shape = normalizeReviewType(value.review_type ?? value.shape);
   if (shape === undefined) return undefined;
   const headline = value.headline;
-  const why = value.why;
   if (typeof headline !== 'string' || headline.trim() === '') return undefined;
-  if (typeof why !== 'string') return undefined;
 
-  const out: ReviewPayload = { shape, headline, why };
-  if (typeof value.lookFor === 'string' && value.lookFor.trim() !== '') out.lookFor = value.lookFor;
-  if (typeof value.detail === 'string' && value.detail.trim() !== '') out.detail = value.detail;
+  const out: ReviewPayload = { shape, headline };
+  const detail = foldLegacyBody(value.why, value.lookFor, value.detail);
+  if (detail !== undefined) out.detail = detail;
   if (typeof value.answeredWith === 'string') out.answeredWith = value.answeredWith;
   // Read back defensively like the rest: a peer could sync anything here, and
   // an item whose answer stamp arrived as a string must not read as answered
@@ -834,13 +849,6 @@ export interface DecisionTaskLike {
  *  - `headline` is the task TITLE verbatim. A title is an authored string —
  *    somebody wrote it to be a title — so this is not the clip-prose-into-a-
  *    headline move `review-migration.ts` refuses to make. Nothing is generated.
- *  - `why` is `''`. No legacy decision task ever authored one, and there is
- *    nothing on the row to derive it from. Fabricating a sentence here would
- *    manufacture exactly the row shape this feature exists to delete, so the
- *    honest value is empty: `readReviewPayload` permits it (already-stored
- *    items must keep rendering) while `checkReviewPayload` still refuses it
- *    for new writes. That asymmetry is deliberate, not an oversight — the
- *    derivation is NOT routed through the writer's gate.
  *  - `detail` is the body verbatim, unbudgeted for the same reason: a limit
  *    invented after the fact cannot retroactively make stored content invalid.
  *  - `options` keep their SERVER-MINTED ids. `ReviewOption.id` only promises
@@ -852,7 +860,7 @@ export interface DecisionTaskLike {
  * caller can derive this on every read without ever rewriting stored data.
  */
 export function reviewFromDecisionTask(task: DecisionTaskLike): ReviewPayload {
-  const out: ReviewPayload = { shape: 'decision', headline: task.title, why: '' };
+  const out: ReviewPayload = { shape: 'decision', headline: task.title };
   if (typeof task.body === 'string' && task.body.trim() !== '') out.detail = task.body;
   if (task.options && task.options.length > 0) {
     out.options = task.options.map((o) => {

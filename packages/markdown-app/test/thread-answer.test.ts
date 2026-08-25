@@ -30,7 +30,6 @@ function comment(author: User, text: string, review?: ReviewPayload): Comment {
 const ask = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
   shape: 'review',
   headline: 'Read the stall rota before Thursday',
-  why: 'The rota goes out Thursday and nobody has checked it',
   ...over,
 });
 
@@ -187,7 +186,6 @@ describe('the full item interface in the carrying thread', () => {
   const decision = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
     shape: 'decision',
     headline: 'Pick the rota order',
-    why: 'The rota goes out Thursday.',
     options: [
       { id: 'o1', label: 'Alphabetical', detail: 'By stall name.' },
       { id: 'o2', label: 'By arrival', detail: 'First come, first listed.' },
