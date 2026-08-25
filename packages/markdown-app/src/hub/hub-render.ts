@@ -4,10 +4,10 @@
  * so the interaction contracts (the status dropdown, in-place title edits,
  * the two-filter activity view) are testable under happy-dom.
  */
-import { type ReviewPayload, reviewAnswered, reviewItemBodyMarkdown } from '@feedback/core';
+import { type ReviewPayload, reviewAnswered } from '@feedback/core';
 import type { ReviewShape } from '@feedback/core';
 import {} from '@feedback/core/goal-summary';
-import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
+import { renderCommentMarkdown } from '../comment-markdown.ts';
 import { MIC_ICON } from '../icons.ts';
 import {
   type ComposerSelection,
@@ -18,7 +18,6 @@ import {
   isComposerFocused,
   refreshMarkdownComposer,
 } from '../md-composer.ts';
-import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
 import {
   type ActivityEvent,
   type ActivityFilter,
@@ -39,13 +38,9 @@ import {
   type UptimeReport,
   activityRows,
   appendDictation,
-  askedMetaLine,
   assigneeLabel,
-  blockedNoteLine,
   describeEvent,
   homeSinceLabel,
-  isTaskArchived,
-  isTaskParked,
   ownerKindSuffix,
   ownerMarkKind,
   quoteAfterCapture,
@@ -54,7 +49,6 @@ import {
   reviewBannerText,
   statusLabel,
   statusOptions,
-  taskActivity,
   timeAgo,
   uptimeSummary,
 } from './hub-model.ts';
@@ -77,7 +71,7 @@ import { caretOffsetIn } from './inline-rename.ts';
  * The goal strip and the task detail panel use this. The task ROW does not —
  * see `wireWordsInPlace` for why an input cannot serve it.
  */
-function wireInPlaceTitle(
+export function wireInPlaceTitle(
   el: HTMLElement,
   current: () => string,
   commit: (v: string) => void,
@@ -323,7 +317,7 @@ function assigneePicker(
  * rather than thrown on — an older client must survive a newer server
  * adding a kind, and a task that fails to open is worse than a missing chip.
  */
-function renderTaskLinks(task: HubTask): HTMLElement | null {
+export function renderTaskLinks(task: HubTask): HTMLElement | null {
   const refs = Array.isArray(task.links) ? task.links : [];
   if (refs.length === 0) return null;
   const wrap = document.createElement('div');
@@ -1285,6 +1279,18 @@ export interface DetailHandlers {
    * projection of one log.
    */
   activity?: ActivityEvent[];
+  /**
+   * Where the live description editor should be mounted, handed over the
+   * moment the panel has decided on it — a rebuilt element when the panel
+   * opened on another task, the SAME element when a repaint kept a live editor
+   * in place, and `null` when the panel closed.
+   *
+   * The app used to read this off the DOM immediately after calling the
+   * renderer, which worked only because the renderer painted synchronously.
+   * The island writes a signal instead, so nothing outside it can know when
+   * the slot exists; the panel therefore reports its own.
+   */
+  onBodySlot?: (task: HubTask | null, slot: HTMLElement | null) => void;
 }
 
 export interface TaskComment {
@@ -1583,6 +1589,90 @@ export function composerTarget(threads: TaskThread[], focusThreadId?: string): T
 }
 
 /**
+ * One comment, as the stream draws it — the row anatomy the task panel and
+ * the goal panel share.
+ *
+ * Exported because the task detail island owns the `<ol>` these rows land in
+ * but not the rows themselves: a comment row holds nothing a reader can be
+ * part-way through, so rebuilding it on every paint costs nothing — while a
+ * second copy of this markup in JSX would be a second thing to keep in step.
+ */
+export function commentRow(
+  row: StreamComment,
+  focusThreadId: string | undefined,
+  now: number,
+): HTMLLIElement {
+  const c = row.comment;
+  const li = document.createElement('li');
+  // Every comment is a peer of every other one. No resolved styling, no
+  // "opens a thread" styling, no quoted anchor above the first of a run —
+  // those were the last places the thread structure showed through, and
+  // Bryan's instruction was to remove it from the UX, not only to remove the
+  // buttons. `focus` survives because it is not about threads: it marks the
+  // comment the review queue sent the reader here to read.
+  li.className = [
+    'hub-comment',
+    c.review ? 'hub-comment-review' : '',
+    row.threadId === focusThreadId ? 'hub-comment-focus' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  // Kept as DATA and rendered nowhere: it is how a reply reaches the agent
+  // watching that conversation, and dropping it would make every answer a
+  // new thread nobody is subscribed to.
+  li.dataset.threadId = row.threadId;
+
+  // Author AND time, both as text. The time used to live only in a `title`
+  // attribute — which is a hover tooltip, and the reader this surface is
+  // for is on a phone, where nothing hovers. "Who said this and when" was
+  // therefore unanswerable on the device it mattered on.
+  const head = document.createElement('div');
+  head.className = 'hub-comment-head';
+  const who = document.createElement('span');
+  who.className = 'hub-comment-author';
+  who.textContent = c.author;
+  const when = document.createElement('span');
+  when.className = 'hub-comment-when';
+  when.textContent = timeAgo(c.ts, now);
+  when.title = new Date(c.ts).toLocaleString();
+  head.append(who, when);
+  if (c.review) {
+    const badge = document.createElement('span');
+    badge.className = 'hub-comment-review-k';
+    badge.textContent = c.review.shape === 'decision' ? 'Decision' : 'Question';
+    head.append(badge);
+  }
+  // "Needs your reply" was a THREAD badge — it named a thread, because the
+  // server's queue names threads — so it went with the rest of the thread
+  // presentation. The signal did not go with it: everything waiting on the
+  // reader now renders in the review queue at the TOP of the panel, which is
+  // where they were told to look and is above the fold. A badge two hundred
+  // pixels down a comment stream was the weaker of the two anyway.
+  li.append(head);
+
+  if (c.review) {
+    // The declared headline, in the author's words. It goes ABOVE the
+    // comment text rather than replacing it: the text is what the agent
+    // said, the declaration is what it is asking for, and the two are not
+    // the same sentence. The why paragraph is gone from here — it leads the
+    // item card's markdown body at the top of the panel, and a second copy
+    // in the stream was the duplication the one-card anatomy removes.
+    const headline = document.createElement('p');
+    headline.className = 'hub-comment-review-headline';
+    headline.textContent = c.review.headline;
+    li.append(headline);
+  }
+
+  const body = document.createElement('div');
+  body.className = 'hub-comment-body';
+  // Same escape-then-allow-known-tags path the description uses, so a
+  // comment written by anyone with write access is inert markup.
+  body.innerHTML = renderCommentMarkdown(c.text);
+  li.append(body);
+  return li;
+}
+
+/**
  * The task's Discussion: ONE chronological sequence of comments, and ONE
  * composer at the bottom.
  *
@@ -1648,75 +1738,7 @@ function renderDiscussion(
   const stream = document.createElement('ol');
   stream.className = 'hub-comment-stream';
   for (const row of flattenComments(discussion.threads)) {
-    const c = row.comment;
-    const li = document.createElement('li');
-    // Every comment is a peer of every other one. No resolved styling, no
-    // "opens a thread" styling, no quoted anchor above the first of a run —
-    // those were the last places the thread structure showed through, and
-    // Bryan's instruction was to remove it from the UX, not only to remove the
-    // buttons. `focus` survives because it is not about threads: it marks the
-    // comment the review queue sent the reader here to read.
-    li.className = [
-      'hub-comment',
-      c.review ? 'hub-comment-review' : '',
-      row.threadId === focusThreadId ? 'hub-comment-focus' : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
-    // Kept as DATA and rendered nowhere: it is how a reply reaches the agent
-    // watching that conversation, and dropping it would make every answer a
-    // new thread nobody is subscribed to.
-    li.dataset.threadId = row.threadId;
-
-    // Author AND time, both as text. The time used to live only in a `title`
-    // attribute — which is a hover tooltip, and the reader this surface is
-    // for is on a phone, where nothing hovers. "Who said this and when" was
-    // therefore unanswerable on the device it mattered on.
-    const head = document.createElement('div');
-    head.className = 'hub-comment-head';
-    const who = document.createElement('span');
-    who.className = 'hub-comment-author';
-    who.textContent = c.author;
-    const when = document.createElement('span');
-    when.className = 'hub-comment-when';
-    when.textContent = timeAgo(c.ts, now);
-    when.title = new Date(c.ts).toLocaleString();
-    head.append(who, when);
-    if (c.review) {
-      const badge = document.createElement('span');
-      badge.className = 'hub-comment-review-k';
-      badge.textContent = c.review.shape === 'decision' ? 'Decision' : 'Question';
-      head.append(badge);
-    }
-    // "Needs your reply" was a THREAD badge — it named a thread, because the
-    // server's queue names threads — so it went with the rest of the thread
-    // presentation. The signal did not go with it: everything waiting on the
-    // reader now renders in the review queue at the TOP of the panel, which is
-    // where they were told to look and is above the fold. A badge two hundred
-    // pixels down a comment stream was the weaker of the two anyway.
-    li.append(head);
-
-    if (c.review) {
-      // The declared headline, in the author's words. It goes ABOVE the
-      // comment text rather than replacing it: the text is what the agent
-      // said, the declaration is what it is asking for, and the two are not
-      // the same sentence. The why paragraph is gone from here — it leads the
-      // item card's markdown body at the top of the panel, and a second copy
-      // in the stream was the duplication the one-card anatomy removes.
-      const headline = document.createElement('p');
-      headline.className = 'hub-comment-review-headline';
-      headline.textContent = c.review.headline;
-      li.append(headline);
-    }
-
-    const body = document.createElement('div');
-    body.className = 'hub-comment-body';
-    // Same escape-then-allow-known-tags path the description uses, so a
-    // comment written by anyone with write access is inert markup.
-    body.innerHTML = renderCommentMarkdown(c.text);
-    li.append(body);
-
-    stream.append(li);
+    stream.append(commentRow(row, focusThreadId, now));
   }
   if (stream.childElementCount > 0) section.append(stream);
 
@@ -1739,7 +1761,7 @@ function renderDiscussion(
 
 /** One audit row in a ticket's history, in the same sentence the workspace
  *  Activity view would read it in — one `describeEvent`, two surfaces. */
-function activityRow(ev: ActivityEvent, title: string): HTMLLIElement {
+export function activityRow(ev: ActivityEvent, title: string): HTMLLIElement {
   const li = document.createElement('li');
   li.className = 'hub-detail-activity-row';
   li.title = new Date(ev.ts).toLocaleString();
@@ -1749,7 +1771,7 @@ function activityRow(ev: ActivityEvent, title: string): HTMLLIElement {
   return li;
 }
 
-function renderTransitionRow(t: HubTransition): HTMLLIElement {
+export function renderTransitionRow(t: HubTransition): HTMLLIElement {
   const li = document.createElement('li');
   li.title = new Date(t.ts).toLocaleString();
   const head = document.createElement('span');
@@ -1781,13 +1803,13 @@ function renderTransitionRow(t: HubTransition): HTMLLIElement {
  * and renaming it to something kind-neutral would be a rename across two
  * files to say nothing new.
  */
-interface BodyRow {
+export interface BodyRow {
   id: string;
   body?: string;
   bodyTruncated?: boolean;
 }
 
-function bodySlot(row: BodyRow): HTMLElement {
+export function bodySlot(row: BodyRow): HTMLElement {
   const slot = document.createElement('div');
   slot.className = 'hub-detail-body-slot';
   slot.dataset.taskId = row.id;
@@ -1885,7 +1907,7 @@ function keptBodySlot(container: HTMLElement, rowId: string): HTMLElement | null
  * were pills, so the state you were IN read as a stray label rather than as
  * the selected one.
  */
-function detailFields(task: HubTask, handlers: DetailHandlers): HTMLElement {
+export function detailFields(task: HubTask, handlers: DetailHandlers): HTMLElement {
   const dl = document.createElement('dl');
   dl.className = 'hub-detail-fields';
   // Each field is a `<div>` WRAPPING its `dt` + `dd`, which HTML has allowed
@@ -2006,7 +2028,7 @@ function detailFields(task: HubTask, handlers: DetailHandlers): HTMLElement {
 /** An epoch-ms instant as the `YYYY-MM-DD` a `<input type="date">` wants, in
  *  the reader's own timezone. `toISOString().slice(0,10)` is the tempting
  *  one-liner and it is wrong west of UTC for anything set in the evening. */
-function localDateInputValue(ts: number): string {
+export function localDateInputValue(ts: number): string {
   const d = new Date(ts);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -2268,423 +2290,6 @@ function optionLabel(r: ReviewPayload, optionId: string | undefined): string | u
 }
 
 /**
- * The review queue INSIDE a ticket: what is waiting on the reader, one item
- * expanded, with a walkthrough when there is more than one.
- *
- * Two complaints shaped this. The layout one, reported against the same card
- * on the Home queue (2026-08-18): *"options crammed against their details, no
- * spacing between the answer buttons, no spacing between buttons and comment
- * text, nothing aligned."* The task-detail copy had NO stylesheet rules at all
- * — every class it emitted was unstyled, so the browser's defaults stacked the
- * options edge to edge. And the content one, the same day: the card jumped
- * from "WAITING ON YOUR DECISION" straight to the buttons, leaning on the
- * ticket title to say what was being decided.
- *
- * The `hub-decide-*` classes are deliberately NOT panel-specific: one layout
- * for "here is a question and here are the ways to answer it", defined once,
- * for the Home card to adopt when that ticket comes off hold rather than
- * growing a second layout that drifts from this one.
- *
- * The walkthrough chrome appears only from two items up. With one — the common
- * case — this renders exactly the single card it always did, because a "1 of 1"
- * counter and two dead arrows are furniture that says nothing.
- */
-function reviewQueueRegion(
-  task: HubTask,
-  handlers: DetailHandlers,
-  now: number,
-  prior: { index: number; itemId: string | null },
-  discussion?: TaskDiscussion,
-): HTMLElement | null {
-  // What was decided, and the way back out of it.
-  //
-  // This used to RETURN here, which retired the whole region the moment the
-  // task's own decision was answered — including thread items that were still
-  // open server-side. Measured in the browser 2026-08-18: answering the
-  // decision on a task with two open thread items left the reader with no
-  // queue at all and nothing saying two questions were still waiting. The
-  // answered line is now one part of the region, and the queue below it
-  // carries whatever is still open.
-  const answered = task.answer ? answeredNote(task, handlers) : null;
-  const queue = panelReviewQueue(task, handlers.asks, discussion);
-  if (queue.length === 0) {
-    if (!answered) return null;
-    const only = document.createElement('section');
-    only.className = 'hub-decide hub-decide--answered';
-    only.append(answered);
-    return only;
-  }
-  // `prior.index < 0` means "this is a fresh open, there is no position to
-  // keep" — so a deep link into a thread opens the queue AT that thread's
-  // item rather than at whatever happened to be first.
-  const linked =
-    prior.index < 0 && handlers.focusThreadId
-      ? queue.findIndex((i) => i.threadId === handlers.focusThreadId)
-      : -1;
-  // Position is the ITEM, not its number — this is what `PanelReviewItem.id`
-  // exists for. A repaint that inserts an item ahead (a peer's undo puts the
-  // task's own decision back at rank 0) must not swap which question is
-  // shown under the reader mid-thought; the numeric index is only the
-  // fallback for when the kept item itself left the queue.
-  const kept = prior.itemId !== null ? queue.findIndex((i) => i.id === prior.itemId) : -1;
-  const wanted = linked >= 0 ? linked : kept >= 0 ? kept : prior.index;
-  let at = Math.min(Math.max(Number.isInteger(wanted) ? wanted : 0, 0), queue.length - 1);
-
-  const region = document.createElement('section');
-  region.className = 'hub-decide';
-  region.dataset.reviewIndex = String(at);
-  if (answered) region.append(answered);
-
-  const head = document.createElement('div');
-  head.className = 'hub-decide-head';
-  const kicker = document.createElement('p');
-  kicker.className = 'hub-decide-kicker';
-  head.append(kicker);
-  const count = document.createElement('span');
-  count.className = 'hub-decide-count';
-  const prev = document.createElement('button');
-  const next = document.createElement('button');
-  if (queue.length > 1) {
-    const walk = document.createElement('div');
-    walk.className = 'hub-decide-walk';
-    for (const [b, label, glyph] of [
-      [prev, 'Previous item', '‹'],
-      [next, 'Next item', '›'],
-    ] as const) {
-      b.type = 'button';
-      b.className = 'hub-btn hub-decide-step';
-      b.textContent = glyph;
-      b.setAttribute('aria-label', label);
-    }
-    walk.append(prev, count, next);
-    head.append(walk);
-  }
-  region.append(head);
-
-  // Every item is BUILT, and the walkthrough only changes which one is shown.
-  // Same reasoning as the tabs: repainting to step the queue would tear down
-  // the answer box the reader may be typing in, and the panel already repaints
-  // on every board change without anybody asking it to.
-  const cards = queue.map((item) => reviewItemCard(task, item, handlers, now));
-  region.append(...cards);
-
-  const show = (i: number): void => {
-    at = Math.min(Math.max(i, 0), queue.length - 1);
-    region.dataset.reviewIndex = String(at);
-    // The shown item's identity, for the next repaint to restore by — the
-    // index alone names a different item the moment the queue moves.
-    region.dataset.reviewItemId = queue[at]?.id ?? '';
-    cards.forEach((c, ci) => c.classList.toggle('hidden', ci !== at));
-    const item = queue[at];
-    // Two headings. There was a third — "Flagged for you — not addressed to
-    // you by name" over an item whose `direct` flag came back false — and it
-    // is gone per the mock direction. It was written when an undeclared status
-    // note could reach this queue (measured 2026-08-17: 23 items, ZERO of them
-    // `direct`), and it hedged the heading because the row underneath might
-    // not be a question at all. Membership is decided server-side now — a row
-    // here is a declared item or a surviving direct ask — so the hedge
-    // apologises for a row that no longer arrives, in the reader's most
-    // prominent line.
-    kicker.textContent =
-      item?.shape === 'decision' ? 'Waiting on your decision' : 'Waiting on your review';
-    // A settled item is none of the above: the card below it is the RECORD,
-    // and the kicker says so. An override rather than a fourth ternary arm so
-    // the three waiting headings above stay exactly as written.
-    if (item?.answered !== undefined) kicker.textContent = 'Answered';
-    count.textContent = `${at + 1} of ${queue.length}`;
-    prev.disabled = at === 0;
-    next.disabled = at === queue.length - 1;
-  };
-  prev.addEventListener('click', () => show(at - 1));
-  next.addEventListener('click', () => show(at + 1));
-  show(at);
-  return region;
-}
-
-/**
- * What was decided — and the way back out of it.
- *
- * Answering is a single click with no confirmation step, which is the right
- * cost for the common case and unrecoverable for the stray one. The recovery
- * chosen here is a persistent UNDO rather than a confirm dialog or a
- * five-second toast, for three reasons: it does not tax the 99% of taps that
- * are deliberate, it is still there when the reader notices the mistake a
- * minute later, and it survives a reload because it is rendered from the
- * stored answer rather than from a timer nobody can see. The write behind it
- * is reversible too — the server moves the answer to `answerHistory` rather
- * than dropping it.
- */
-function answeredNote(task: HubTask, handlers: DetailHandlers): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'hub-detail-answered';
-  const ans = document.createElement('p');
-  ans.className = 'hub-detail-answer';
-  const answer = task.answer;
-  ans.textContent = answer ? `Answered by ${answer.by}: “${answer.text}”` : '';
-  wrap.append(ans);
-  if (!handlers.onUndoAnswer) return wrap;
-  const undo = document.createElement('button');
-  undo.type = 'button';
-  undo.className = 'hub-btn hub-detail-undo-answer';
-  undo.textContent = 'Undo';
-  undo.title = 'Take this answer back — it reopens the decision and keeps a record';
-  undo.setAttribute('aria-label', 'Undo this answer and reopen the decision');
-  undo.addEventListener('click', () => {
-    // Disabled for the round trip. On success the panel repaints without this
-    // note, so nothing here needs to happen. On FAILURE the handler resolves
-    // `false` — the app's `send()` never rejects, it reports fetch errors as
-    // `{ok: false}` — and the app returns before its `loadReviewItems()`, so
-    // no repaint rebuilds this button either. Re-enabling on that resolved
-    // `false` (same contract as `reviewItemCard`'s answer path) is the only
-    // thing that gives the reader a retry on a quiet board; the `.catch` alone
-    // could never fire.
-    undo.disabled = true;
-    void Promise.resolve(handlers.onUndoAnswer?.(task))
-      .then((ok) => {
-        if (ok === false) undo.disabled = false;
-      })
-      .catch(() => {
-        undo.disabled = false;
-      });
-  });
-  wrap.append(undo);
-  return wrap;
-}
-
-/**
- * The answered RECORD for a thread-borne item, in place: the same anatomy as
- * the task decision's `answeredNote` — "Answered by …" and a persistent Undo
- * — because a typed answer and a tapped option produce the identical record
- * (approved design). "you" when the reader is the one who answered; the
- * answer's words render markdown-inline, since they are a comment's words.
- * The Undo goes through the thread-answer undo route, which moves the stamps
- * into `answerHistory` rather than dropping them.
- */
-function threadAnsweredNote(
-  task: HubTask,
-  item: PanelReviewItem,
-  answered: NonNullable<PanelReviewItem['answered']>,
-  handlers: DetailHandlers,
-): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'hub-detail-answered';
-  const ans = document.createElement('p');
-  ans.className = 'hub-detail-answer';
-  const label =
-    answered.by !== undefined &&
-    handlers.selfName !== undefined &&
-    answered.by === handlers.selfName
-      ? 'you'
-      : answered.by;
-  ans.append(document.createTextNode(label ? `Answered by ${label}: “` : 'Answered: “'));
-  const words = document.createElement('span');
-  words.className = 'hub-answer-words';
-  words.innerHTML = renderCommentMarkdownInline(answered.text ?? '');
-  ans.append(words, document.createTextNode('”'));
-  wrap.append(ans);
-  // No comment id means the undo route has nothing to name — the record still
-  // renders, without a button that could only 400.
-  if (!handlers.onUndoThreadAnswer || item.commentId === undefined) return wrap;
-  const undo = document.createElement('button');
-  undo.type = 'button';
-  undo.className = 'hub-btn hub-detail-undo-answer';
-  undo.textContent = 'Undo';
-  undo.title = 'Take this answer back — it reopens the item and keeps a record';
-  undo.setAttribute('aria-label', 'Undo this answer and reopen the review item');
-  undo.addEventListener('click', () => {
-    // Same contract as `answeredNote`'s Undo: disabled for the round trip,
-    // re-enabled only on a resolved `false` so a quiet board still offers a
-    // retry (the app's `send()` never rejects).
-    undo.disabled = true;
-    void Promise.resolve(handlers.onUndoThreadAnswer?.(task, item))
-      .then((ok) => {
-        if (ok === false) undo.disabled = false;
-      })
-      .catch(() => {
-        undo.disabled = false;
-      });
-  });
-  wrap.append(undo);
-  return wrap;
-}
-
-/** One item's card: the head row and body, then the ways to answer it — or
- *  the answered record, once somebody has. */
-function reviewItemCard(
-  task: HubTask,
-  item: PanelReviewItem,
-  handlers: DetailHandlers,
-  now: number,
-): HTMLElement {
-  const card = document.createElement('div');
-  card.className = 'hub-decide-card';
-  card.dataset.reviewItemId = item.id;
-  // Routing data, and the thing the focus-scroll guard below reads to tell
-  // whether the thread a deep link named is already hoisted to the top.
-  if (item.threadId) card.dataset.reviewThreadId = item.threadId;
-
-  // ONE anatomy (approved design, review-flow-mock-v1): a head row — kind
-  // badge, the headline, the asked-by meta top-right — then one markdown
-  // body. The separate why/detail/lookFor paragraphs and the trailing meta
-  // line this replaces were four blocks saying what the mock says in two.
-  const head = document.createElement('div');
-  head.className = 'hub-decide-card-head';
-  const badge = document.createElement('span');
-  // New UI text says Question; the class token stays `review` (stored
-  // vocabulary and tone classes are unchanged by the rename in flight).
-  badge.className = `hub-decide-k hub-decide-k-${item.shape === 'decision' ? 'decision' : 'review'}`;
-  badge.textContent = item.shape === 'decision' ? 'Decision' : 'Question';
-  head.append(badge);
-  // The one body, markdown-rendered — the links to the thing under review are
-  // the whole reason a declaration carries a detail, and appended as text
-  // they rendered as bracket soup (reported with a screenshot 2026-08-19).
-  // `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
-  const bodyMarkdown = reviewItemBodyMarkdown(item);
-  // The headline is free-flowing prose rather than a clipped line: a decision
-  // blurb *"may run a few lines"*, so nothing here truncates it. Without it
-  // the card leans on the ticket title, and "the ticket title is not the
-  // decision".
-  //
-  // Which is why it is DROPPED when it came out as the ticket title anyway:
-  // `panelReviewQueue` falls back to `task.title` for a decision whose body
-  // yields no blurb, and this card renders directly under the panel's own
-  // `.hub-detail-title`, so the reader gets the same words twice in a row.
-  // Only when the body below still says something, though — the fallback
-  // exists so an unreadable body yields the title rather than a card that
-  // says nothing at all, and that remains the better of the two.
-  const echoesTitle = item.headline.trim() === task.title.trim();
-  if (!(echoesTitle && bodyMarkdown !== '')) {
-    const headline = document.createElement('p');
-    headline.className = 'hub-decide-headline';
-    headline.textContent = item.headline;
-    head.append(headline);
-  }
-  const meta = document.createElement('p');
-  meta.className = 'hub-decide-meta';
-  meta.textContent = askedMetaLine(item.askedBy, item.asked ?? true, item.since, now);
-  head.append(meta);
-  card.append(head);
-  if (bodyMarkdown !== '') {
-    const body = document.createElement('div');
-    body.className = 'hub-decide-body';
-    body.innerHTML = renderCommentMarkdown(bodyMarkdown);
-    card.append(body);
-  }
-
-  // A settled item renders the RECORD in place of the ways to answer: the
-  // same "Answered by …" + persistent Undo the task's own decision gets, so a
-  // typed answer and a tapped option read identically wherever they landed.
-  if (item.answered) {
-    card.append(threadAnsweredNote(task, item, item.answered, handlers));
-    return card;
-  }
-
-  // Answering a thread-borne item is a REPLY on its thread, so the agent
-  // watching it hears the answer; answering the task's own decision goes
-  // through `answer_decision`. Same card, two destinations — which is the
-  // whole reason the item carries `threadId`.
-  //
-  // Every control on the card is disabled for the round trip. Without it the
-  // card sat unchanged while the write was in flight — measured 2026-08-18:
-  // a free-text answer on a thread item persisted server-side and repainted
-  // nothing for 2.5 seconds, so the natural retry posted the answer twice.
-  const controls: Array<HTMLButtonElement | HTMLTextAreaElement> = [];
-  const busy = (on: boolean): void => {
-    card.classList.toggle('is-busy', on);
-    for (const c of controls) c.disabled = on;
-  };
-  const answer = (text: string, optionId?: string, onFail?: () => void): void => {
-    busy(true);
-    const sent = item.threadId
-      ? handlers.onAnswerThread?.(task, item, text, optionId)
-      : handlers.onAnswer(task, text, optionId);
-    // Only an explicit `false` is a refusal. A handler that returns nothing
-    // has said nothing about success, and reading that as failure would put a
-    // "your words are still in the box" story over a write that landed.
-    void Promise.resolve(sent)
-      .then((ok) => {
-        if (ok === false) onFail?.();
-      })
-      .catch(() => onFail?.())
-      .finally(() => busy(false));
-  };
-
-  if (item.options && item.options.length > 0) {
-    const opts = document.createElement('div');
-    opts.className = 'hub-decide-options';
-    for (const o of item.options) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'hub-decide-option';
-      const label = document.createElement('span');
-      label.className = 'hub-decide-option-label';
-      label.textContent = o.label;
-      b.append(label);
-      if (o.detail) {
-        const detail = document.createElement('span');
-        detail.className = 'hub-decide-option-detail';
-        detail.textContent = o.detail;
-        b.append(detail);
-      }
-      b.addEventListener('click', () => answer(o.label, o.id));
-      controls.push(b);
-      opts.append(b);
-    }
-    card.append(opts);
-  }
-
-  const form = document.createElement('form');
-  form.className = 'hub-answer-form hub-decide-form';
-  const hint = document.createElement('p');
-  hint.className = 'hub-decide-form-hint';
-  // Says which of the two this box is. With options above it and no line
-  // between, the box read as a required second step rather than an alternative.
-  hint.textContent =
-    item.options && item.options.length > 0
-      ? 'Or answer in your own words'
-      : 'Answer in your own words';
-  const ta = document.createElement('textarea');
-  ta.placeholder = 'Record your answer, verbatim…';
-  ta.rows = 3;
-  // Keyed by ITEM, so walking to the next question and back does not hand the
-  // reader the answer they were drafting for a different one.
-  ta.dataset.keep = `answer:${task.id}:${item.id}`;
-  const submit = document.createElement('button');
-  submit.type = 'submit';
-  submit.className = 'hub-btn hub-btn-primary';
-  submit.textContent = 'Record answer';
-  form.append(hint, ta, submit);
-  controls.push(ta, submit);
-  // Every composer is a markdown editor (design point 4); refresh covers the
-  // programmatic clear and restore below, which the editor cannot see.
-  const refreshComposer = attachMarkdownComposer(ta);
-  form.addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    const text = ta.value.trim();
-    if (!text) {
-      // Not a silent no-op. An empty submit used to do literally nothing —
-      // enabled button, no message — which reads as a broken control rather
-      // than as a refusal.
-      requireText(ta, submit, 'Write an answer first');
-      return;
-    }
-    // Cleared BEFORE the round trip, not after it. Answering repaints the
-    // panel from inside the await, and `keepFields` snapshots this box on the
-    // way through — so a clear that runs after the write lands writes into a
-    // detached node while the rebuilt one is refilled with the words that
-    // were just sent. Restored verbatim if the write is refused.
-    ta.value = '';
-    refreshComposer();
-    answer(text, undefined, () => {
-      ta.value = text;
-      refreshComposer();
-    });
-  });
-  card.append(form);
-  return card;
-}
-
-/**
  * Say why a submit did nothing, next to the control that did nothing.
  *
  * A disabled button would be the tidier affordance and it is the wrong one
@@ -2694,7 +2299,7 @@ function reviewItemCard(
  * says the same thing at the moment it matters and needs no state to be kept
  * in sync.
  */
-function requireText(field: HTMLTextAreaElement, near: HTMLElement, message: string): void {
+export function requireText(field: HTMLTextAreaElement, near: HTMLElement, message: string): void {
   const form = near.closest('form');
   const existing = form?.querySelector('.hub-form-error');
   const note = existing instanceof HTMLElement ? existing : document.createElement('p');
@@ -2708,606 +2313,4 @@ function requireText(field: HTMLTextAreaElement, near: HTMLElement, message: str
   // Clears itself the moment the reason goes away, so it never contradicts
   // what the reader can see in the box.
   field.addEventListener('input', () => note.remove(), { once: true });
-}
-
-/**
- * The head-height observer for each open panel, so a repaint can retire the
- * previous one. A WeakMap rather than a field on the element: the entry goes
- * with the panel when the panel goes, and nothing has to remember to clean up
- * after a close.
- */
-const headObservers = new WeakMap<HTMLElement, ResizeObserver>();
-
-/** The two tabs at the bottom of the panel, and which one is showing. */
-type DetailTab = 'comments' | 'activity';
-const DETAIL_TABS: { id: DetailTab; label: string }[] = [
-  { id: 'comments', label: 'Comments' },
-  { id: 'activity', label: 'Activity' },
-];
-
-export function renderTaskDetail(
-  container: HTMLElement,
-  task: HubTask | null,
-  handlers: DetailHandlers,
-  discussion?: TaskDiscussion,
-): void {
-  // Read what the reader has typed BEFORE the swap throws it away — see
-  // `keepFields`. Every repaint of this panel comes through here, which is
-  // what makes this the one place the guarantee can live.
-  //
-  // Two things a repaint must not destroy, and they need opposite mechanisms.
-  // A text control can be rebuilt and refilled, because its whole state is a
-  // string and a caret offset; an editor cannot, because its state is a
-  // ProseMirror view bound to a Yjs room. So drafts are SNAPSHOT and restored,
-  // and the description slot is KEPT — see `keptBodySlot`.
-  const keptDrafts = keepFields(container);
-  // Whether this call OPENS the panel on a task, as opposed to repainting the
-  // one already there. Read before the swap, because the swap is what makes
-  // the two indistinguishable.
-  const prior = container.querySelector<HTMLElement>('.hub-detail-panel');
-  const priorTaskId = prior?.dataset.taskId ?? null;
-  // Which tab was showing, for the same reason and read the same way: the
-  // panel repaints on every board change, and a tab choice that reset on the
-  // next peer's comment is a tab nobody can use.
-  const priorTab = prior?.dataset.tab === 'activity' ? 'activity' : 'comments';
-  // And which review item the walkthrough was on, for the same reason: a
-  // position that reset on a peer's comment would walk the reader back to the
-  // first question while they were answering the third. The item's ID leads
-  // and the index is only its fallback — a queue that gained or lost an item
-  // ahead of this one renumbers every position, and restoring the number
-  // would swap which question is on screen mid-thought.
-  const priorDecide = prior?.querySelector<HTMLElement>('.hub-decide');
-  const priorReviewIndex = Number(priorDecide?.dataset.reviewIndex ?? '0');
-  const priorReviewItemId = priorDecide?.dataset.reviewItemId || null;
-  // …and whether the preserved capture was open. Same reason again: `open` on
-  // a `<details>` is DOM-only state, and this panel is rebuilt on every board
-  // event, so the words the reader had just unfolded folded away under them.
-  const priorQuoteOpen =
-    prior?.querySelector<HTMLDetailsElement>('.hub-detail-quote-block')?.open ?? false;
-  if (!task) {
-    container.replaceChildren();
-    container.classList.add('hidden');
-    // The board gets its width back. Marked on `<body>` rather than inferred
-    // with `:has()` because the board and the panel are siblings under
-    // different subtrees, and a class is the thing a test can assert on.
-    document.body.classList.remove('hub-detail-open');
-    return;
-  }
-  const freshOpen = priorTaskId !== task.id;
-  container.classList.remove('hidden');
-  // Wide screens reflow the BOARD out from under the panel instead of letting
-  // it run beneath the panel's edge — the review banner and the quick-capture
-  // row were both being clipped by it.
-  document.body.classList.add('hub-detail-open');
-  const keptSlot = keptBodySlot(container, task.id);
-  const panel = keptSlot?.parentElement ?? document.createElement('div');
-  panel.className = 'hub-detail-panel';
-  panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-modal', 'true');
-  // Focusable as a container, and declared page-like for the Space hold.
-  //
-  // Both halves are one fix. A dialog that never takes focus leaves the
-  // keyboard behind the thing it opened; and because the board opens this
-  // panel from a CLICK on a task row, focus stayed on that row — where a held
-  // Space is not "the page", so hold-to-talk was dead for the entire time a
-  // task was open (reported as "voice does nothing in the task detail"). The
-  // panel is a scroll container with no Space behaviour of its own, so taking
-  // the focus is what makes the hold legible again. See `spaceHoldTargetsPage`.
-  panel.tabIndex = -1;
-  panel.setAttribute(SPACE_HOLD_PAGE_ATTR, 'page');
-  panel.dataset.taskId = task.id;
-  // Everything the panel shows, split around the description: `before` is
-  // patched in above the slot and `after` below it, so the slot itself never
-  // leaves the document (see `keptBodySlot`).
-  const before: Node[] = [];
-  const after: Node[] = [];
-
-  const head = document.createElement('div');
-  head.className = 'hub-detail-head';
-  const title = document.createElement('h2');
-  title.className = 'hub-detail-title';
-  title.textContent = task.title;
-  // The same affordance the board row's title carries, for the same reason:
-  // renaming here was pointer-only, so on a keyboard the panel's title could
-  // not be reached at all — and with no tooltip nothing said it was editable
-  // to anyone. `wireInPlaceTitle` already answers Enter and F2; what was
-  // missing was a way to put the focus on it. Deliberately unconditional,
-  // where the board makes it depend on a fine pointer: the panel's title is a
-  // full-width target with no competing tap gesture over it.
-  title.tabIndex = 0;
-  title.title = 'Click or press Enter to rename';
-  const titleKeepKey = `title:${task.id}`;
-  wireInPlaceTitle(
-    title,
-    () => task.title,
-    (v) => handlers.onTitleCommit(task, v),
-    titleKeepKey,
-  );
-  const actions = document.createElement('div');
-  actions.className = 'hub-detail-head-actions';
-  // Share first, because it is the one action about the task AS A LINK, and
-  // the reader who wants it wants it before they have read anything.
-  //
-  // Icons rather than words, asked for by name ("icons instead of text
-  // buttons, Asana-style"). Each one keeps BOTH an `aria-label` and a `title`:
-  // the label is what a screen reader says and the title is what a desktop
-  // hover says, and an icon-only control with neither is a control nobody can
-  // identify. The glyphs are text characters rather than inline SVG so they
-  // inherit the button's colour and the reader's font scaling for free.
-  if (handlers.onCopyLink) {
-    const share = document.createElement('button');
-    share.type = 'button';
-    share.className = 'hub-btn hub-icon-btn hub-detail-share';
-    share.textContent = '🔗';
-    share.title = 'Copy a link to this task';
-    share.setAttribute('aria-label', 'Copy a link to this task');
-    share.addEventListener('click', () => handlers.onCopyLink?.(task));
-    actions.append(share);
-  }
-  // Full screen is a preference of the READER, not of the task, so it lives on
-  // the container and survives both a repaint and a move to another task. On a
-  // phone the panel is already full-bleed and the toggle would promise a
-  // change nothing can make, so it is desktop-only — hidden by the same media
-  // query that makes the panel a split pane.
-  const full = document.createElement('button');
-  full.type = 'button';
-  const isFull = container.classList.contains('hub-detail--full');
-  full.className = 'hub-btn hub-icon-btn hub-detail-expand';
-  const fullState = (on: boolean): void => {
-    // At full screen the panel covers the board, so the board must stop
-    // reserving room for it — otherwise it is squeezed to nothing behind a
-    // panel that is already hiding it, and comes back reflowing.
-    document.body.classList.toggle('hub-detail-full', on);
-    full.textContent = on ? '⤡' : '⤢';
-    const label = on ? 'Exit full screen' : 'Full screen';
-    full.title = label;
-    full.setAttribute('aria-label', label);
-    full.setAttribute('aria-pressed', on ? 'true' : 'false');
-  };
-  fullState(isFull);
-  full.addEventListener('click', () => fullState(container.classList.toggle('hub-detail--full')));
-  actions.append(full);
-  // Archive, between the reader's preference and the way out. Last of the
-  // three that DO something to the task, and the only one that changes it —
-  // so it sits closest to Close, which is where a secondary action belongs on
-  // a head whose left-hand end is the title people came to read. The glyph is
-  // the tray every mail client uses; the tooltip says "archive" in words,
-  // because a box outline on its own has been read as both "download" and
-  // "delete" and this action is neither.
-  const archived = isTaskArchived(task);
-  if (archived ? handlers.onRestore : handlers.onArchive) {
-    const arch = document.createElement('button');
-    arch.type = 'button';
-    arch.className = 'hub-btn hub-icon-btn hub-detail-archive';
-    arch.textContent = archived ? '↩︎' : '🗄';
-    const label = archived ? 'Restore this task to the board' : 'Archive this task (e)';
-    arch.title = label;
-    arch.setAttribute('aria-label', label);
-    arch.addEventListener('click', () =>
-      archived ? handlers.onRestore?.(task) : handlers.onArchive?.(task),
-    );
-    actions.append(arch);
-  }
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.className = 'hub-btn hub-icon-btn hub-detail-close';
-  close.textContent = '✕';
-  close.title = 'Close task detail';
-  close.setAttribute('aria-label', 'Close task detail');
-  close.addEventListener('click', () => handlers.onClose());
-  actions.append(close);
-  head.append(title, actions);
-  before.push(head);
-
-  // Then the four key fields, then whatever is WAITING on the reader, and only
-  // then the description.
-  //
-  // The requirement is that opening a row from the review queue shows what is
-  // wanted without scrolling on a 430px phone, and the old order — statuses,
-  // then a nine-row metadata list, then the preserved capture, then finally
-  // the description — spent the entire first screen on facts that are
-  // identical across every task on the board. None of that is what the reader
-  // came to answer.
-  before.push(detailFields(task, handlers));
-
-  // The blocked note (design point 5): this task is a person's own open work
-  // that other tasks wait on, and this panel is the ONE surface that says so
-  // — a blocker is task state, never a review item, so it appears in no
-  // queue, no walkthrough, and no row badge. The chip keeps the card-head
-  // pill shape (`.hub-decide-k`) so "what kind of thing is this" reads in one
-  // vocabulary across the panel.
-  if (handlers.blocked) {
-    const note = document.createElement('div');
-    note.className = 'hub-blocked-note';
-    const k = document.createElement('span');
-    k.className = 'hub-decide-k hub-blocked-k';
-    // "Blocking", because this task IS the blocker: `handlers.blocked` is a
-    // humanBlockerRow — the reader's own open task other work waits on — and
-    // the line beside the chip says so ("Blocking 2 tasks: …"). "Blocked"
-    // here asserted the opposite dependency direction, on the same card.
-    k.textContent = 'Blocking';
-    const line = document.createElement('p');
-    line.textContent = blockedNoteLine(handlers.blocked);
-    note.append(k, line);
-    before.push(note);
-  }
-
-  // Deferred on purpose, in the same shape as the blocking note above — and
-  // in a block of its OWN rather than as a fifth cell in the fields row.
-  // That row is a pinned four: *"the four facts a reader checks before doing
-  // anything else"*, on a panel whose scarcest axis is height. A park is also
-  // true of almost no rows, so a permanent fifth control would cost every
-  // task a cell to say nothing.
-  //
-  // It carries a control anyway, because a field an agent writes and a person
-  // cannot correct reads as broken (Bryan, 2026-08-18: *"All fields must be
-  // human editable"*) — and this one more than most, since deferring somebody
-  // else's work is exactly the call a reader wants to overturn in one tap.
-  // The REASON is read-only here: it is prose that belongs with the
-  // discussion, and clearing the date clears it server-side anyway.
-  if (isTaskParked(task, handlers.now ?? Date.now())) {
-    const note = document.createElement('div');
-    note.className = 'hub-parked-note';
-    const k = document.createElement('span');
-    k.className = 'hub-decide-k hub-parked-k';
-    k.textContent = 'Parked';
-    const line = document.createElement('p');
-    line.textContent = task.parkedReason
-      ? `until ${new Date(task.parkedUntil as number).toLocaleDateString()} — ${task.parkedReason}`
-      : `until ${new Date(task.parkedUntil as number).toLocaleDateString()}`;
-    // Local noon both ways, exactly as the Due control does it: `toISOString`
-    // shows yesterday to anyone west of UTC, and `new Date('2026-09-02')`
-    // parses back as UTC midnight, which is the previous day in the same
-    // places. An emptied input is an explicit un-park, not a bad value.
-    const until = document.createElement('input');
-    until.type = 'date';
-    until.className = 'hub-detail-input hub-parked-until';
-    until.value = localDateInputValue(task.parkedUntil as number);
-    until.setAttribute('aria-label', 'Parked until — clear the date to un-park');
-    until.addEventListener('change', () => {
-      const v = until.value;
-      if (!v) {
-        handlers.onParkSet?.(task, null);
-        return;
-      }
-      const [y, m, d] = v.split('-').map(Number);
-      if (!y || !m || !d) return;
-      handlers.onParkSet?.(task, new Date(y, m - 1, d, 12, 0, 0, 0).getTime());
-    });
-    note.append(k, line, until);
-    before.push(note);
-  }
-
-  // Archived, and the panel has to SAY so. A deep link, a search result or a
-  // restore list can all open a task that is no longer on any board, and
-  // without this the panel would look exactly like any other task's — a row
-  // whose absence from the lanes reads as a rendering bug rather than as
-  // something somebody decided. Same shape as the parked note above, and it
-  // is a note rather than a fields cell for the same reason: it is true of
-  // almost no rows, so a permanent cell would cost every task height to say
-  // nothing.
-  if (isTaskArchived(task)) {
-    const note = document.createElement('div');
-    note.className = 'hub-archived-note';
-    const k = document.createElement('span');
-    k.className = 'hub-decide-k hub-parked-k';
-    k.textContent = 'Archived';
-    const who = task.archivedBy ? ` by ${task.archivedBy}` : '';
-    const when = task.archivedAt ? new Date(task.archivedAt).toLocaleDateString() : '';
-    const line = document.createElement('p');
-    line.textContent = task.archiveReason
-      ? `${when}${who} — ${task.archiveReason}`
-      : `${when}${who}`;
-    note.append(k, line);
-    if (handlers.onRestore) {
-      const back = document.createElement('button');
-      back.type = 'button';
-      back.className = 'hub-btn hub-archived-restore';
-      back.textContent = 'Restore to the board';
-      back.addEventListener('click', () => handlers.onRestore?.(task));
-      note.append(back);
-    }
-    before.push(note);
-  }
-
-  // Everything waiting on the reader, as ONE queue — the task's own decision
-  // and every declared or unanswered item on its threads, ranked together.
-  // There used to be two regions here, a decision card and an "ask" panel,
-  // each rendering one item and each blind to the other; a task with both
-  // showed two competing headers, and a task with three thread items showed
-  // one and silently dropped the rest.
-  const decide = reviewQueueRegion(
-    task,
-    handlers,
-    handlers.now ?? Date.now(),
-    freshOpen
-      ? { index: -1, itemId: null }
-      : { index: priorReviewIndex, itemId: priorReviewItemId },
-    // The discussion rides along so ANSWERED declared items keep their card —
-    // the in-place record — after the review-items route stops shipping them.
-    discussion,
-  );
-  if (decide) before.push(decide);
-
-  // What is left of the old definition list: reference material, and it moves
-  // to the Activity tab with the rest of it. `Goal` and `Due` are not repeated
-  // here — they are in the fields row above, where a reader looks for them.
-  const meta = document.createElement('dl');
-  meta.className = 'hub-detail-meta';
-  const addMeta = (k: string, v: string) => {
-    const dt = document.createElement('dt');
-    dt.textContent = k;
-    const dd = document.createElement('dd');
-    dd.textContent = v;
-    meta.append(dt, dd);
-  };
-  /* `addMeta('Risk', task.riskTier)` was here. It existed to explain the
-     transition gate when it fired; the gate was removed 2026-08-18 and the
-     field with it, so a tier in the panel would describe machinery that no
-     longer exists. */
-  if (task.after.length > 0) addMeta('After', task.after.join(', '));
-
-  const linkChips = renderTaskLinks(task);
-
-  /**
-   * The words the task came from, kept verbatim — moved out of the top of the
-   * panel and collapsed.
-   *
-   * The in-place argument for the LABEL still holds and is kept: an unlabelled
-   * blockquote invites two readings ("here is what you said, check I
-   * understood it" versus "here is a source somebody chose to quote") that
-   * want opposite reactions from the reader, so the caption settles it. That
-   * argument was always about the label, never about the POSITION — and the
-   * position is what was wrong. This block rendered above the description, so
-   * a reader maintaining a task saw their own superseded words before the
-   * content they maintain, every single time.
-   *
-   * `<details>` rather than a comment row: the preservation guarantee lives at
-   * the storage choke point (`updateBodySnapshot`) and turning it into a real
-   * stored comment would mean a write path and a migration for what is a
-   * placement complaint. Reachable, labelled, closed by default — which is
-   * what was asked for. The guarantee itself is untouched; nothing here
-   * decides whether a quote is kept, only where it renders.
-   *
-   * ONE label serves every quote, because `quote` has exactly one meaning.
-   * All four writers fill it with the words the task came from, verbatim: a
-   * dictated capture transcript (`quoteForCapture`), the human's words on a
-   * chat-born `create_tasks` row, the latest HUMAN comment on a
-   * `promote_to_task` (agent replies are excluded there by design), and the
-   * row's own pre-rewrite title-and-body preserved by `updateBodySnapshot`.
-   * None of them is an author-chosen quotation, so the field needs no way to
-   * say which kind it is and the label cannot lie on a kind it doesn't cover.
-   *
-   * "Original words" rather than anything that names a person: the preserved
-   * pre-rewrite body of an agent-created row is not something a human said, so
-   * "in their words" / "what Bryan said" would be false on that case — and a
-   * label that lies is worse than no label.
-   */
-  const quoteBlock = (): HTMLElement | null => {
-    if (!task.quote) return null;
-    const det = document.createElement('details');
-    det.className = 'hub-detail-quote-block';
-    // Closed by default, and closed again when the panel opens on a DIFFERENT
-    // task: the reader chose to read this one's capture, not every task's.
-    det.open = !freshOpen && priorQuoteOpen;
-    const sum = document.createElement('summary');
-    sum.className = 'hub-detail-quote-label';
-    sum.textContent = 'Original words';
-    sum.title = 'The words this task came from, kept verbatim.';
-    const q = document.createElement('blockquote');
-    q.className = 'hub-detail-quote';
-    q.textContent = task.quote;
-    det.append(sum, q);
-    return det;
-  };
-
-  // The description reads — and is written — HERE. It used to be a link and
-  // nothing else, so "what is this task for" cost a navigation and the board
-  // read as a list of bare titles; then it was read-only text plus a link to a
-  // separate doc for editing, which put the description and the place to
-  // change it on two different pages. The slot below is where hub-app.ts
-  // mounts the live editor over the task's body room; see `bodySlot` for what
-  // it holds until then.
-  const slot = keptSlot ?? bodySlot(task);
-  // A heading above it, because the description is a SECTION and everything
-  // around it now announces itself — the fields row, the review card, the
-  // tabs. Without one the body ran straight on from whatever was above it,
-  // and on a decision task that meant prose appearing directly under the
-  // answer buttons with nothing saying it had changed subject.
-  const bodyHead = document.createElement('h3');
-  bodyHead.className = 'hub-detail-subhead hub-detail-body-head';
-  bodyHead.textContent = 'Description';
-  before.push(bodyHead);
-
-  // Everything below the description is one of two things, and they get one
-  // tab each: the CONVERSATION, which is what a reviewer came for, and the
-  // RECORD — the audit trail, the words the task came from, the leftover
-  // fields, the link chips. Asked for by name ("Activity hidden behind a
-  // second tab beside Comments"), and the reason is that the record used to
-  // sit inline underneath the discussion, so scrolling to the bottom of a
-  // conversation meant scrolling through a transition list first.
-  const tabs = document.createElement('div');
-  tabs.className = 'hub-detail-tabs';
-  tabs.setAttribute('role', 'tablist');
-  const tab = freshOpen ? 'comments' : priorTab;
-  panel.dataset.tab = tab;
-
-  const comments = document.createElement('div');
-  comments.className = 'hub-detail-tabpanel hub-detail-tabpanel-comments';
-  comments.setAttribute('role', 'tabpanel');
-  if (discussion && handlers.onComment) {
-    const onComment = handlers.onComment;
-    comments.append(
-      renderDiscussion(
-        task.id,
-        discussion,
-        (text, threadId) => onComment(task, text, threadId),
-        handlers.focusThreadId,
-        handlers.now ?? Date.now(),
-      ),
-    );
-  }
-
-  const activity = document.createElement('div');
-  activity.className = 'hub-detail-tabpanel hub-detail-tabpanel-activity';
-  activity.setAttribute('role', 'tabpanel');
-  // ONE history, newest first: the stored transitions merged with the task's
-  // own rows from the workspace audit log. The tab used to render transitions and nothing else, so a
-  // rename, a description rewrite, a reassignment and a due-date change all
-  // left no trace on the ticket they changed — every one of them was in the
-  // log the whole time, on a surface nobody opens a ticket to read.
-  const history: Array<{ ts: number; node: HTMLLIElement }> = [
-    ...task.transitions.map((t) => ({ ts: t.ts, node: renderTransitionRow(t) })),
-    ...taskActivity(handlers.activity, task.id).map((e) => ({
-      ts: e.ts,
-      node: activityRow(e, task.title),
-    })),
-  ].sort((a, b) => b.ts - a.ts);
-  if (history.length > 0) {
-    const h = document.createElement('h3');
-    h.className = 'hub-detail-subhead';
-    h.textContent = 'History';
-    activity.append(h);
-    const list = document.createElement('ul');
-    list.className = 'hub-detail-transitions';
-    for (const row of history) list.append(row.node);
-    activity.append(list);
-  }
-  const quote = quoteBlock();
-  if (quote) activity.append(quote);
-  if (meta.childElementCount > 0) activity.append(meta);
-  if (linkChips) activity.append(linkChips);
-
-  const body = document.createElement('p');
-  body.className = 'hub-detail-body-link';
-  const bodyLink = document.createElement('a');
-  bodyLink.href = `/review/${encodeURIComponent(task.bodyDocId)}`;
-  // A secondary way in, not the way to edit: the same room in the full review
-  // surface, for anchored comments and the wider page.
-  bodyLink.textContent = 'Open in the full editor';
-  body.append(bodyLink);
-  activity.append(body);
-
-  const panels: Record<DetailTab, HTMLElement> = { comments, activity };
-  const buttons: Partial<Record<DetailTab, HTMLButtonElement>> = {};
-  const show = (want: DetailTab): void => {
-    panel.dataset.tab = want;
-    for (const t of DETAIL_TABS) {
-      panels[t.id].classList.toggle('hidden', t.id !== want);
-      buttons[t.id]?.setAttribute('aria-selected', t.id === want ? 'true' : 'false');
-    }
-  };
-  /**
-   * Where the reader lands after switching, and it is not "wherever the
-   * scrollbar ends up".
-   *
-   * Hiding the taller panel shortens the content under the scroll position, so
-   * the browser clamps it — measured going straight to 0 on a switch to
-   * Activity. That drops the reader at the top of the ticket with the tab row
-   * a screenful below and the panel they just chose off the bottom of the
-   * screen: the click reads as having done nothing at all, which is exactly
-   * how it was reported. Parking the tab row under the sticky head instead
-   * puts the switch where it happened — the row that changed stays put, and
-   * the new panel starts immediately under it.
-   *
-   * `scroll-margin-top` on the row (styles.css) is what keeps it clear of the
-   * head; without it `block: 'start'` aligns to the scrollport's own top,
-   * which is the position the head is painted over.
-   */
-  const land = (): void => {
-    if (typeof tabs.scrollIntoView === 'function') tabs.scrollIntoView({ block: 'start' });
-  };
-  for (const t of DETAIL_TABS) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = `hub-detail-tab hub-detail-tab-${t.id}`;
-    b.textContent = t.label;
-    b.setAttribute('role', 'tab');
-    b.addEventListener('click', () => {
-      show(t.id);
-      land();
-    });
-    buttons[t.id] = b;
-    tabs.append(b);
-  }
-  // Switching a tab does not repaint the panel, so this is the only place the
-  // two states are set — including the initial one.
-  show(tab);
-  after.push(tabs, comments, activity);
-
-  if (keptSlot) {
-    // Repaint around the slot, never through it — see `keptBodySlot`.
-    for (const child of [...panel.childNodes]) if (child !== keptSlot) child.remove();
-    for (const n of before) panel.insertBefore(n, keptSlot);
-    panel.append(...after);
-  } else {
-    panel.append(...before, slot, ...after);
-    container.addEventListener('click', (ev) => {
-      if (ev.target === container) handlers.onClose();
-    });
-    container.replaceChildren(panel);
-  }
-  // How tall the sticky head actually is, published to the stylesheet.
-  //
-  // The tab row docks under the head rather than sliding beneath it, and the
-  // head's height is not a constant a stylesheet can know: it grows by a line
-  // whenever the title wraps, which depends on the title and on the panel's
-  // width. A hard-coded offset is therefore wrong on exactly the tickets with
-  // the longest names. The CSS carries a fallback for the first paint and for
-  // environments with no layout at all (happy-dom measures everything as 0,
-  // which is why a zero is discarded rather than published).
-  const syncHeadHeight = (): void => {
-    const h = head.getBoundingClientRect?.().height ?? 0;
-    if (h > 0) panel.style.setProperty('--hub-detail-head-h', `${Math.round(h)}px`);
-  };
-  syncHeadHeight();
-  // A window resize re-wraps the title without repainting the panel, so a
-  // measurement taken only at render goes stale in the one case that moves it.
-  // Keyed by panel and disconnected first: this function runs on every repaint
-  // and each one builds a new head, so an observer per render would accumulate
-  // one live observer per board event for as long as the ticket is open.
-  headObservers.get(panel)?.disconnect();
-  if (typeof ResizeObserver === 'function') {
-    const ro = new ResizeObserver(syncHeadHeight);
-    ro.observe(head);
-    headObservers.set(panel, ro);
-  }
-
-  // After it is in the document — scrollIntoView on a detached node does
-  // nothing, silently. Guarded because happy-dom has no implementation.
-  //
-  // NOT when the review queue is already carrying that same thread's item.
-  // Measured in a real browser at 430px before this guard existed: opening a
-  // review item left the panel at scrollTop 112, with the queue's heading cut
-  // off above the fold — the deep-link centred the thread the panel had just
-  // hoisted to the top, so the reader landed mid-page on a second copy of what
-  // they came for. Centring is still right when the focused thread is NOT in
-  // the queue, which is why this is a condition and not a deletion.
-  const focusInQueue =
-    handlers.focusThreadId !== undefined &&
-    panel.querySelector(
-      `.hub-decide-card[data-review-thread-id="${CSS.escape(handlers.focusThreadId)}"]`,
-    ) !== null;
-  const focus =
-    handlers.focusThreadId && !focusInQueue
-      ? panel.querySelector<HTMLElement>(
-          `.hub-comment[data-thread-id="${CSS.escape(handlers.focusThreadId)}"]`,
-        )
-      : null;
-  if (focus && typeof focus.scrollIntoView === 'function') {
-    focus.scrollIntoView({ block: 'center' });
-  }
-
-  // Take the focus on OPEN only. A repaint that focused the panel would pull
-  // the caret out of the composer every time a peer's comment landed, which is
-  // the same class of bug `keptBodySlot` exists to prevent one element over.
-  if (freshOpen && typeof panel.focus === 'function') panel.focus({ preventScroll: true });
-
-  // Last, after the thread-centring above: restoring focus scrolls the field
-  // back into view, so the composer someone is typing in wins over a centred
-  // thread rather than losing to it. The title editor is a control that only
-  // exists mid-edit, so a repaint does not merely empty it — it closes it;
-  // reopen it first so there is a field for the restore to find.
-  if (keptDrafts.has(titleKeepKey)) title.click();
-  restoreFields(container, keptDrafts);
 }

@@ -14,7 +14,6 @@ import {
   reviewQueue,
   walkPosition,
 } from '../src/hub/hub-model.ts';
-import { renderTaskDetail } from '../src/hub/hub-render.ts';
 import {
   type WalkProgress,
   type WalkthroughHandlers,
@@ -24,6 +23,7 @@ import {
 } from '../src/hub/walkthrough-island.tsx';
 import { refreshMarkdownComposer } from '../src/md-composer.ts';
 import { renderedHtml, surfaceOf } from './support/composer.ts';
+import { renderTaskDetail } from './support/task-detail.ts';
 
 /** All fixtures are synthetic — invented names and ids throughout. */
 

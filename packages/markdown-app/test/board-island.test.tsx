@@ -38,8 +38,8 @@ import {
   type HubTask,
   boardSections,
 } from '../src/hub/hub-model.ts';
-import { renderTaskDetail } from '../src/hub/hub-render.ts';
 import { type ShimHandlers, disposeBoards, renderBoard } from './support/board.ts';
+import { renderTaskDetail } from './support/task-detail.ts';
 
 const NOW = 1_700_000_000_000;
 
