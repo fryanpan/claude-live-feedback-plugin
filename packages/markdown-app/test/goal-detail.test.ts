@@ -50,6 +50,14 @@ function handlers(over: Partial<GoalDetailHandlers> = {}): GoalDetailHandlers {
   };
 }
 
+/** The commentForm submits on its own form element; find whichever node the
+ *  helper actually built so the test does not encode its internals. */
+function submitComposer(panel: HTMLElement): void {
+  const form = panel.querySelector('.hub-comment-form');
+  const target = form instanceof HTMLFormElement ? form : panel.querySelector('form');
+  target?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+}
+
 const filters = {
   tab: 'all',
   userName: 'Jordan',
@@ -131,7 +139,12 @@ describe('renderGoalDetail', () => {
     expect(h.onStatusSet).toHaveBeenCalledWith('g-pr', 'done');
   });
 
-  it('attributes a declared done, and the counts say where the work is', () => {
+  // Attribution stays: a done goal is somebody's claim and the claim names
+  // its author. The per-status breakdown does NOT — *"how many tasks are in
+  // triage/todo/in-progress/done is just not useful information"* (Bryan,
+  // 2026-08-24, reviewing the live panel). The band header on the board still
+  // counts; this panel is where the number was noise rather than news.
+  it('attributes a declared done, and no longer breaks its tasks down by status', () => {
     renderGoalDetail(
       root,
       sectionWith({ status: 'done', doneAt: NOW, doneBy: { name: 'Jordan', kind: 'person' } }, [
@@ -142,31 +155,30 @@ describe('renderGoalDetail', () => {
       handlers(),
     );
     const text = (root.querySelector('.hub-detail-panel') as HTMLElement).textContent ?? '';
+    // The positive half first — without it every assertion below passes on a
+    // panel that never rendered, which is the same shape as the feature
+    // working.
     expect(text).toContain('Declared by Jordan');
-    expect(text).toContain('1 to do');
-    expect(text).toContain('1 in progress');
-    expect(text).toContain('1 done');
+    expect(text).not.toContain('1 to do');
+    expect(text).not.toContain('1 in progress');
+    // The field is GONE, not merely emptied — an empty `Tasks` row would still
+    // spend a line of the panel's scarcest axis.
+    const keys = [...root.querySelectorAll('.hub-detail-field-k')].map((n) => n.textContent);
+    expect(keys).toContain('Status');
+    expect(keys).not.toContain('Tasks');
   });
 
-  // The advisory, straight from the approved mock: open children never block
-  // a done declaration (enforce:false on the server), but the panel SAYS what
-  // the declaration leaves open. An already-done goal gets no advisory, and
-  // neither does an open goal with nothing open in it.
-  it('advises what a done declaration leaves open — only while that is true', () => {
+  // The "marking this goal done leaves N open tasks" advisory is gone in the
+  // same pass. It was never a gate — the server has always accepted a done
+  // declaration over open children (`enforce:false`) — so removing it changes
+  // what the panel SAYS, not what anyone is allowed to do.
+  it('no longer warns about what a done declaration would leave open', () => {
     renderGoalDetail(root, sectionWith({}, [task(), task({ status: 'in-progress' })]), handlers());
-    const advisory = root.querySelector('.hub-goal-advisory') as HTMLElement;
-    expect(advisory).not.toBeNull();
-    expect(advisory.textContent).toContain('2 open');
-    renderGoalDetail(root, sectionWith({}, [task({ status: 'done' })]), handlers());
+    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    const text = panel.textContent ?? '';
+    expect(text).toContain('1. Get the PR out');
     expect(root.querySelector('.hub-goal-advisory')).toBeNull();
-    renderGoalDetail(
-      root,
-      sectionWith({ status: 'done', doneAt: NOW, doneBy: { name: 'Jordan', kind: 'person' } }, [
-        task(),
-      ]),
-      handlers(),
-    );
-    expect(root.querySelector('.hub-goal-advisory')).toBeNull();
+    expect(text).not.toContain('open task');
   });
 
   it('draws the owner as a vacancy until the projection says otherwise, and the due date', () => {
@@ -200,6 +212,85 @@ describe('renderGoalDetail', () => {
     const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
     panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(h.onClose).toHaveBeenCalled();
+  });
+
+  /**
+   * Description and discussion — the parity Bryan reopened the ticket for:
+   * *"Goals are missing a bunch of the usual ticket behaviour -- no
+   * description? no comments?"*
+   *
+   * Both are the TASK panel's own machinery pointed at the goal's body room,
+   * which is `task:<goalId>` by the approved design's naming decision. So
+   * these assert the seams the app wires into — the slot the live editor
+   * mounts on, and the stream/composer the discussion renders — rather than
+   * re-testing the editor or the comment renderer, which the task panel's
+   * suites already cover.
+   */
+  it('shows the goal description, and offers a slot for the live editor', () => {
+    renderGoalDetail(
+      root,
+      sectionWith({ bodyDocId: 'task:g-pr', body: 'Ten teams using it weekly, unprompted.' }),
+      handlers(),
+    );
+    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    expect(panel.textContent).toContain('Description');
+    const slot = panel.querySelector('.hub-detail-body-slot') as HTMLElement;
+    expect(slot).not.toBeNull();
+    // The app keys `bodyEditor.sync` on this, and it is what `keptBodySlot`
+    // matches to keep a mounted editor alive through a repaint.
+    expect(slot.dataset.taskId).toBe('g-pr');
+    expect(slot.textContent).toContain('Ten teams using it weekly');
+  });
+
+  it('says so plainly when nobody has described the goal yet', () => {
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    expect(slot.textContent).toContain('No description yet.');
+  });
+
+  it('renders the goal discussion and posts a comment to it', async () => {
+    const onComment = vi.fn(async (_goalId: string, _text: string, _threadId?: string) => true);
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers({ onComment }), {
+      loading: false,
+      threads: [
+        {
+          id: 'th-1',
+          comments: [{ author: 'Search Revamp', text: 'Ten teams, or ten that renew?', ts: NOW }],
+        },
+      ],
+    });
+    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    expect(panel.querySelector('.hub-discussion')).not.toBeNull();
+    expect(panel.textContent).toContain('Ten teams, or ten that renew?');
+    const box = panel.querySelector('.hub-comment-form textarea') as HTMLTextAreaElement;
+    expect(box).not.toBeNull();
+    box.value = 'Ten that renew.';
+    submitComposer(panel);
+    await Promise.resolve();
+    expect(onComment).toHaveBeenCalled();
+    // The reply lands in the thread that is already there rather than opening
+    // a second one — `composerTarget`'s derivation, same as a task's.
+    expect(onComment.mock.calls[0]?.[2]).toBe('th-1');
+  });
+
+  it('carries no discussion at all when the app has not fetched one', () => {
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    expect(root.querySelector('.hub-discussion')).toBeNull();
+  });
+
+  // A description is a live editor over a websocket. The repaint guarantee
+  // that protects a task's — keep the SLOT node itself, never re-create it —
+  // has to hold here too, or the board's own projection updates would tear
+  // the editor down under whoever is typing in it.
+  it('a repaint keeps a mounted description editor in place', () => {
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    const slot = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    slot.classList.add('hub-detail-body-live');
+    slot.dataset.marker = 'mounted';
+    renderGoalDetail(root, sectionWith({ bodyDocId: 'task:g-pr' }), handlers());
+    const after = root.querySelector('.hub-detail-body-slot') as HTMLElement;
+    expect(after.dataset.marker).toBe('mounted');
+    expect(after).toBe(slot);
   });
 
   it('refuses the reserved bucket — Backlog has no detail to open', () => {

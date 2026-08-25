@@ -1528,6 +1528,20 @@ export interface GoalDetailHandlers {
    *  (the server's transition route accepts a goal row's id), which is how
    *  "somebody declares the goal done" happens from the board. */
   onStatusSet: (goalId: string, to: TaskStatus) => void;
+  /**
+   * Post to the goal's discussion. Resolves to whether it LANDED — the
+   * composer keeps the text until it hears yes, so a failed post is
+   * retryable, exactly as on a task.
+   *
+   * Absent means the app has not wired one, and the section is then not drawn
+   * at all rather than drawn dead. The same is true of `discussion` below:
+   * the panel never renders a composer it cannot deliver from.
+   */
+  onComment?: (goalId: string, text: string, threadId?: string) => Promise<boolean>;
+  /** Which comment the review queue sent the reader here to read. */
+  focusThreadId?: string;
+  /** Clock seam, so "3 hours ago" is assertable. */
+  now?: number;
 }
 
 /**
@@ -1551,10 +1565,18 @@ export function renderGoalDetail(
   container: HTMLElement,
   section: BoardSection | null,
   handlers: GoalDetailHandlers,
+  /** The goal's comments, as fetched. Absent while the app has not asked —
+   *  the section is then omitted rather than drawn empty, so "no comments
+   *  yet" is never shown about a discussion nobody has looked for. */
+  discussion?: TaskDiscussion,
 ): void {
   // Snapshot any in-flight rename before the repaint destroys the input —
   // the same guarantee the task panel gives, via the same two helpers.
   const kept = keepFields(container);
+  // And the live description editor, which is a websocket rather than a
+  // field: the slot is the one node a repaint must not rebuild. Read BEFORE
+  // `replaceChildren` below, same as the task panel.
+  const keptSlot = section ? keptBodySlot(container, section.id) : null;
   // Backlog is a bucket, not a goal: nothing to declare, nothing to rename,
   // so there is deliberately no panel for it — same refusal as its row's.
   if (!section || section.isChores) {
@@ -1566,7 +1588,10 @@ export function renderGoalDetail(
   container.classList.remove('hidden');
   document.body.classList.add('hub-detail-open');
 
-  const panel = document.createElement('div');
+  // REUSED when a live description editor is mounted, exactly as the task
+  // panel does it: the slot must never leave the document, and the only way to
+  // guarantee that is to keep its parent and patch around it.
+  const panel = keptSlot?.parentElement ?? document.createElement('div');
   panel.className = 'hub-detail-panel';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
@@ -1575,9 +1600,15 @@ export function renderGoalDetail(
   // land without a global listener.
   panel.tabIndex = -1;
   panel.dataset.goalId = section.id;
-  panel.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape') handlers.onClose();
-  });
+  if (!keptSlot) {
+    panel.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') handlers.onClose();
+    });
+  }
+  // Everything the panel shows, split around the description — `before` goes
+  // above the slot and `after` below it, so the slot itself stays put.
+  const before: Node[] = [];
+  const after: Node[] = [];
 
   const head = document.createElement('div');
   head.className = 'hub-detail-head';
@@ -1614,15 +1645,6 @@ export function renderGoalDetail(
   close.addEventListener('click', () => handlers.onClose());
   actions.append(close);
   head.append(identity, actions);
-
-  const counts = { triage: 0, todo: 0, 'in-progress': 0, done: 0 } as Record<TaskStatus, number>;
-  // `?? 0` because a status this bundle predates is a real key here, and
-  // `undefined + 1` would render the band's whole task line as NaN.
-  for (const t of section.tasks) counts[t.status] = (counts[t.status] ?? 0) + 1;
-  // What is left to do in this band. Triage counts as open — the work exists,
-  // it just has not been agreed to yet, and calling it closed is the reading
-  // that lets a band look finished while nobody has looked at half of it.
-  const open = counts.triage + counts.todo + counts['in-progress'];
 
   const dl = document.createElement('dl');
   dl.className = 'hub-detail-fields';
@@ -1670,11 +1692,12 @@ export function renderGoalDetail(
       `due ${new Date(section.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`,
     );
   }
-  cell(
-    'Tasks',
-    TASK_STATUS_ORDER.map((s) => `${counts[s]} ${statusLabel(s).toLowerCase()}`).join(' · '),
-  );
-
+  // No `Tasks` breakdown. *"How many tasks are in triage/todo/in-progress/done
+  // is just not useful information"* (Bryan, 2026-08-24, reviewing the live
+  // panel). The board's band header still carries the count, where it answers
+  // "how big is this band" while you are scanning; repeated inside the goal you
+  // already opened it answered nothing and cost a row of a panel whose scarce
+  // axis is height. A goal's detail now carries the same fields a task's does.
   const body = document.createElement('div');
   body.className = 'hub-detail-body';
   body.append(dl);
@@ -1693,23 +1716,87 @@ export function renderGoalDetail(
       ? `Declared by ${section.doneBy.name}${when}`
       : 'Declared done';
     body.append(note);
-  } else if (open > 0) {
-    // The advisory from the mock, verbatim in spirit: the server reports open
-    // children on a done declaration and never enforces them, so the panel
-    // says up front what a declaration would leave open.
-    const advisory = document.createElement('p');
-    advisory.className = 'hub-goal-advisory';
-    advisory.textContent =
-      `Marking this goal done leaves ${open} open task${open === 1 ? '' : 's'} in it. ` +
-      'A goal is done because you say so — its tasks are reported, never enforced.';
-    body.append(advisory);
+  }
+  // No open-children advisory either (Bryan, same review). It was never a
+  // gate — the server has always accepted a done declaration over open
+  // children (`enforce:false`) — so it spent two lines restating a rule
+  // nothing enforced, on the one panel that has no room to spare.
+
+  // ── Description ──────────────────────────────────────────────────────────
+  //
+  // The prose the whole ticket is about: *"the most important object on the
+  // board is the only one you cannot explain"*. Same slot the task panel uses,
+  // because the goal's body lives in the same kind of room — `task:<goalId>`
+  // — and hub-app mounts the same live editor over it. Until that editor
+  // paints, the slot holds the projection's text.
+  //
+  // Drawn unconditionally, including for a goal nobody has described: the
+  // empty state is an invitation ("No description yet.") and, more to the
+  // point, the slot has to EXIST for the editor to mount on.
+  const bodyHead = document.createElement('h3');
+  bodyHead.className = 'hub-detail-subhead hub-detail-body-head';
+  bodyHead.textContent = 'Description';
+  before.push(head, body, bodyHead);
+  const slot = keptSlot ?? bodySlot(section);
+
+  // A secondary way in, not the way to edit — the same room in the full
+  // review surface, where anchored comments and the wider page live. Only
+  // once the projection has told us the address; a link built from a guessed
+  // docId would 404 on exactly the older servers that omit it.
+  if (section.bodyDocId) {
+    const link = document.createElement('p');
+    link.className = 'hub-detail-body-link';
+    const a = document.createElement('a');
+    a.href = `/review/${encodeURIComponent(section.bodyDocId)}`;
+    a.textContent = 'Open in the full editor';
+    link.append(a);
+    after.push(link);
   }
 
-  panel.append(head, body);
-  container.addEventListener('click', (ev) => {
-    if (ev.target === container) handlers.onClose();
-  });
-  container.replaceChildren(panel);
+  // ── Discussion ───────────────────────────────────────────────────────────
+  //
+  // *"A single comment thread with review item support — so a decision about
+  // a goal has somewhere to live."* Today that argument has to become a task
+  // in a decisions band, which is why this board has decisions about goals
+  // filed as peers of the work they govern.
+  //
+  // No tab row, unlike the task panel. A goal has no transitions worth a
+  // second tab and no `quote` — its History is the band's, which the counts
+  // above already say — so the conversation sits directly under the
+  // description where a reader on a short screen reaches it by scrolling
+  // rather than by finding a control.
+  const onComment = handlers.onComment;
+  if (discussion && onComment) {
+    const commentsHead = document.createElement('h3');
+    commentsHead.className = 'hub-detail-subhead';
+    commentsHead.textContent = 'Comments';
+    after.push(
+      commentsHead,
+      renderDiscussion(
+        section.id,
+        discussion,
+        (text, threadId) => onComment(section.id, text, threadId),
+        handlers.focusThreadId,
+        handlers.now ?? Date.now(),
+      ),
+    );
+  }
+
+  if (keptSlot) {
+    // Repaint AROUND the slot, never through it — the task panel's own
+    // two-line patch, and the reason both panels keep the description as a
+    // direct child of the dialog rather than nesting it in a section: only a
+    // direct child can be left alone while everything beside it is rebuilt.
+    for (const child of [...panel.childNodes]) if (child !== keptSlot) child.remove();
+    for (const n of before) panel.insertBefore(n, keptSlot);
+    panel.append(...after);
+  } else {
+    panel.append(...before, slot, ...after);
+    container.addEventListener('click', (ev) => {
+      if (ev.target === container) handlers.onClose();
+    });
+    container.replaceChildren(panel);
+  }
   // A rename in flight when the repaint hit: reopen the editor, then let
   // `restoreFields` put the draft and the caret back — the task panel's own
   // two-step, for the same reason.
@@ -2128,6 +2215,7 @@ function clip(text: string, max = 60): string {
 const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   decision: 'Decision',
   'task-thread': 'Task comment',
+  'goal-thread': 'Goal comment',
   'doc-thread': 'Doc comment',
 };
 
@@ -3687,10 +3775,17 @@ export function composerTarget(threads: TaskThread[], focusThreadId?: string): T
  * rather than presentation — it is how a reply reaches the agent watching that
  * conversation.
  */
+/**
+ * Takes a bare `rowId` and a bound `post`, rather than a `HubTask` and a
+ * handler that re-derives the row: a GOAL's discussion is the same surface
+ * over the same thread API pointed at the same kind of body room, and the only
+ * thing this function ever wanted from the task was an id to key the draft on.
+ * The callers hold the row and close over it.
+ */
 function renderDiscussion(
-  task: HubTask,
+  rowId: string,
   discussion: TaskDiscussion,
-  onComment: (task: HubTask, text: string, threadId?: string) => Promise<boolean>,
+  post: (text: string, threadId?: string) => Promise<boolean>,
   focusThreadId?: string,
   now: number = Date.now(),
 ): HTMLElement {
@@ -3799,10 +3894,10 @@ function renderDiscussion(
     'hub-comment-form',
     'Add a comment…',
     'Comment',
-    (text) => onComment(task, text, target?.id),
-    // Keyed by task: a draft survives every repaint of this panel and never
-    // follows the reader onto a different task.
-    `discussion:${task.id}`,
+    (text) => post(text, target?.id),
+    // Keyed by row: a draft survives every repaint of this panel and never
+    // follows the reader onto a different task or goal.
+    `discussion:${rowId}`,
   );
   section.append(form);
   return section;
@@ -3894,22 +3989,38 @@ function renderTransitionRow(t: HubTransition): HTMLLIElement {
  * which is the whole description for anything under the projection cap and an
  * honest note when it is not.
  */
-function bodySlot(task: HubTask): HTMLElement {
+/**
+ * The row a description belongs to, whatever kind of row that is.
+ *
+ * A task and a goal reach this with the same three fields and the same body
+ * room (`task:<id>` for both — the approved design's naming decision), so the
+ * slot is built once rather than twice. `dataset.taskId` keeps its name on
+ * both: it is the key `keptBodySlot` and `TaskBodyEditorHost.sync` match on,
+ * and renaming it to something kind-neutral would be a rename across two
+ * files to say nothing new.
+ */
+interface BodyRow {
+  id: string;
+  body?: string;
+  bodyTruncated?: boolean;
+}
+
+function bodySlot(row: BodyRow): HTMLElement {
   const slot = document.createElement('div');
   slot.className = 'hub-detail-body-slot';
-  slot.dataset.taskId = task.id;
+  slot.dataset.taskId = row.id;
   // `renderCommentMarkdown` escapes first and only adds known-safe tags, so a
   // body written by anyone with write access is inert markup either way.
   const desc = document.createElement('div');
-  if (task.body?.trim()) {
+  if (row.body?.trim()) {
     desc.className = 'hub-detail-body';
-    desc.innerHTML = renderCommentMarkdown(task.body);
+    desc.innerHTML = renderCommentMarkdown(row.body);
   } else {
     desc.className = 'hub-detail-body-empty';
     desc.textContent = 'No description yet.';
   }
   slot.append(desc);
-  if (task.bodyTruncated) {
+  if (row.bodyTruncated) {
     // Only the pre-mount fallback can be short: the projection caps a body,
     // the room does not, and the editor reads the room.
     const more = document.createElement('p');
@@ -3939,13 +4050,21 @@ function bodySlot(task: HubTask): HTMLElement {
  * kept would show a description the store no longer has.
  */
 export const BODY_LIVE_CLASS = 'hub-detail-body-live';
-function keptBodySlot(container: HTMLElement, task: HubTask): HTMLElement | null {
+/**
+ * `rowId` rather than a task, because a GOAL's description is a live editor
+ * over a websocket too and needs the same repaint guarantee. The panel on
+ * screen is identified by whichever id it carries — `dataset.taskId` on the
+ * task panel, `dataset.goalId` on the goal one — and the two id spaces do not
+ * overlap (`t-…` against `g-…`), so asking both cannot match the wrong panel.
+ */
+function keptBodySlot(container: HTMLElement, rowId: string): HTMLElement | null {
   const prior = container.querySelector<HTMLElement>('.hub-detail-panel');
-  if (!prior || prior.dataset.taskId !== task.id) return null;
+  if (!prior) return null;
+  if (prior.dataset.taskId !== rowId && prior.dataset.goalId !== rowId) return null;
   const slot = prior.querySelector<HTMLElement>('.hub-detail-body-slot');
   return slot &&
     slot.parentElement === prior &&
-    slot.dataset.taskId === task.id &&
+    slot.dataset.taskId === rowId &&
     slot.classList.contains(BODY_LIVE_CLASS)
     ? slot
     : null;
@@ -4863,7 +4982,7 @@ export function renderTaskDetail(
   // it run beneath the panel's edge — the review banner and the quick-capture
   // row were both being clipped by it.
   document.body.classList.add('hub-detail-open');
-  const keptSlot = keptBodySlot(container, task);
+  const keptSlot = keptBodySlot(container, task.id);
   const panel = keptSlot?.parentElement ?? document.createElement('div');
   panel.className = 'hub-detail-panel';
   panel.setAttribute('role', 'dialog');
@@ -5217,11 +5336,12 @@ export function renderTaskDetail(
   comments.className = 'hub-detail-tabpanel hub-detail-tabpanel-comments';
   comments.setAttribute('role', 'tabpanel');
   if (discussion && handlers.onComment) {
+    const onComment = handlers.onComment;
     comments.append(
       renderDiscussion(
-        task,
+        task.id,
         discussion,
-        handlers.onComment,
+        (text, threadId) => onComment(task, text, threadId),
         handlers.focusThreadId,
         handlers.now ?? Date.now(),
       ),
