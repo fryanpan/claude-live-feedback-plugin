@@ -45,19 +45,13 @@ function countWords(text: string | undefined): number {
 /**
  * Every word a declaration puts on the card.
  *
- * All of `why` / `lookFor` / `detail`, because `reviewItemBodyMarkdown` joins
- * all three into the one body the card renders — and the option labels and
- * their detail, because those are the rows that actually make a decision card
- * tall. `answerText` counts too: once answered, the record is part of what a
- * reader opens the thread to read.
+ * The headline and the one body (`detail`) — and the option labels and their
+ * detail, because those are the rows that actually make a decision card tall.
+ * `answerText` counts too: once answered, the record is part of what a reader
+ * opens the thread to read.
  */
 function reviewWords(review: ReviewPayload): number {
-  let n =
-    countWords(review.headline) +
-    countWords(review.why) +
-    countWords(review.lookFor) +
-    countWords(review.detail) +
-    countWords(review.answerText);
+  let n = countWords(review.headline) + countWords(review.detail) + countWords(review.answerText);
   for (const o of review.options ?? []) n += countWords(o.label) + countWords(o.detail);
   return n;
 }
