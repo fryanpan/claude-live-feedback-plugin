@@ -30,6 +30,7 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from './agent-watches.ts';
+import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress } from './compress.ts';
 import type { Deployer } from './deploy.ts';
@@ -833,6 +834,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const agentWatches = new AgentWatches({ dataDir });
   if (agentWatches.loadError) {
     console.error(`[agent-watches] ${agentWatches.loadError}`);
+  }
+
+  // The per-agent unfiled-ask counters the daily chat audit publishes, kept
+  // so a session can read its own number back. The audit is the only writer
+  // — the server cannot see chat — see chat-audit.ts for the honest limits.
+  const chatAudit = new ChatAudit({ dataDir });
+  if (chatAudit.loadError) {
+    console.error(`[chat-audit] ${chatAudit.loadError}`);
   }
 
   // --- Push notifications ---------------------------------------------
@@ -4727,6 +4736,54 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(200, res);
           }
           return j(405, { error: 'method not allowed' });
+        }
+        // --- REST: chat-audit counters ---
+        // The daily chat audit publishes per-agent unfiled-ask counts here
+        // (POST), and any session reads its own back (GET /:agent). The
+        // server stores the audit's number rather than measuring anything —
+        // it cannot see chat — so the count a session queries and the count
+        // the audit reports are the same row. See chat-audit.ts.
+        if (pathname === '/api/chat-audit') {
+          // Same defense-in-depth posture as the agent-watches route: no
+          // share host reaches here today, and this keeps a later
+          // allowlisting from exposing fleet discipline numbers to an
+          // external reviewer.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method === 'GET') {
+            return j(200, { day: localDay(Date.now()), rows: chatAudit.latestPerAgent() });
+          }
+          if (req.method === 'POST') {
+            const body = await safeJson(req);
+            try {
+              const res = chatAudit.publish({
+                day: typeof body?.day === 'string' ? body.day : undefined,
+                auditor: typeof body?.auditor === 'string' ? body.auditor : undefined,
+                // The store re-validates every field before a byte lands, so
+                // this cast narrows shape only, not trust.
+                entries: Array.isArray(body?.entries)
+                  ? (body?.entries as Parameters<ChatAudit['publish']>[0]['entries'])
+                  : [],
+              });
+              return j(200, res);
+            } catch (e) {
+              return j(400, { error: e instanceof Error ? e.message : String(e) });
+            }
+          }
+          return j(405, { error: 'method not allowed' });
+        }
+        const chatAuditMatch = pathname.match(/^\/api\/chat-audit\/([^/]+)$/);
+        if (chatAuditMatch) {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method !== 'GET') return j(405, { error: 'method not allowed' });
+          const agent = decodeURIComponent(chatAuditMatch[1] ?? '').trim();
+          if (!agent) return j(400, { error: 'bad agent name' });
+          if (isSharedAgentName(agent)) {
+            return j(400, {
+              error: `"${agent}" is a shared identity — counts are kept per display name (CW_AGENT_NAME)`,
+            });
+          }
+          const day = localDay(Date.now());
+          return j(200, { agent, day, ...chatAudit.readFor(agent, day) });
         }
         // --- REST: plugin refresh ---
         // The other half of the drift signal: any peer that can read who is
