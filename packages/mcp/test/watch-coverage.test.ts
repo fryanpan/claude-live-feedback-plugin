@@ -36,8 +36,6 @@ import {
 
 const EMPTY: CoverageQueue = {
   queuedVoice: 0,
-  pendingBucketReview: 0,
-  taskReviews: 0,
 };
 
 const board = (over: Partial<CoverageUnattachedBoard> = {}): CoverageUnattachedBoard => {
@@ -50,8 +48,7 @@ const board = (over: Partial<CoverageUnattachedBoard> = {}): CoverageUnattachedB
     heartbeatFresh: false,
     leadLive: false,
     queued,
-    queuedTotal:
-      over.queuedTotal ?? queued.queuedVoice + queued.pendingBucketReview + queued.taskReviews,
+    queuedTotal: over.queuedTotal ?? queued.queuedVoice,
     ...over,
   };
 };
@@ -87,15 +84,7 @@ describe('coverageAlertLine — say what is waiting, and only when something is'
   it('names the board, the docs, the count and the fix', () => {
     const line = coverageAlertLine(
       coverage({
-        unattachedBoards: [
-          board({
-            queued: {
-              queuedVoice: 1,
-              pendingBucketReview: 1,
-              taskReviews: 2,
-            },
-          }),
-        ],
+        unattachedBoards: [board({ queued: { queuedVoice: 4 } })],
       }),
     );
     expect(line).not.toBeNull();
@@ -107,8 +96,6 @@ describe('coverageAlertLine — say what is waiting, and only when something is'
     expect(text).toContain('4');
     expect(text).toContain('2 docs');
     expect(text).toContain('voice');
-    expect(text).toContain('bucket review');
-    expect(text).toContain('task review');
     // And it names the one call that fixes it, so the reader is not left to
     // work out which of attach_agent / watch_doc / set_workspace_lead it was.
     expect(text).toContain('set_workspace_lead');
@@ -140,7 +127,7 @@ describe('coverageAlertLine — say what is waiting, and only when something is'
           board({
             workspaceId: 'ws-loud',
             name: 'loud-board',
-            queued: { ...EMPTY, taskReviews: 3 },
+            queued: { queuedVoice: 3 },
           }),
           board({ workspaceId: 'ws-quiet', name: 'quiet-board', queued: EMPTY }),
         ],
@@ -212,7 +199,7 @@ describe('coverageAlertLine — say what is waiting, and only when something is'
           unattachedBoards: [
             board({
               name: 'my-own-board',
-              queued: { ...EMPTY, pendingBucketReview: 1 },
+              queued: { queuedVoice: 1 },
               attached: true,
               heartbeatFresh: false,
               leadAgentId: 'agent-self',
@@ -325,7 +312,7 @@ describe('restoreNoticeContent — the unprompted line a respawn gets', () => {
       pruned: [],
       agentName,
       coverage: coverage({
-        unattachedBoards: [board({ queued: { ...EMPTY, pendingBucketReview: 1 } })],
+        unattachedBoards: [board({ queued: { queuedVoice: 1 } })],
       }),
     });
     expect(content).not.toBeNull();

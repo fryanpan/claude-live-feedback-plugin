@@ -699,15 +699,6 @@ export interface Task {
   /** Which goal (id + its text at the time) produced this placement. */
   triagedAgainst?: { goalId: string; ts: number };
   /**
-   * Triage-pending marker (§3.4). Stamped ONLY at the moment a triage
-   * request is actually emitted to a live attachment — the grounded-pending
-   * rule from the summaries incident: never promise work that isn't queued.
-   * No attachment → no marker; the task simply sits in Backlog. Cleared on
-   * hydrate (a restart kills the emitted request, so the promise must not
-   * outlive it) and by the agent's eventual placement.
-   */
-  triagePendingTs?: number;
-  /**
    * When this task's placement stopped being named by anybody — the durable
    * form of "it's in the bucket" (Bryan, 2026-08-17: "a bucket of tasks with
    * unknown goal that's the lowest priority… tasks from there should get
@@ -721,11 +712,10 @@ export interface Task {
    *    which un-names a placement somebody DID make.
    * Cleared by `setTaskGoal`, the one write half of placement.
    *
-   * SURVIVES hydrate, unlike `triagePendingTs` directly above — and the
-   * contrast is the point. That marker promises an in-flight request a restart
-   * killed; this records a review still OWED, which a restart does not answer.
-   * Before this field the distinction lived only in the create RESPONSE, so
-   * after a restart an unplaced task and a deliberate chore were identical.
+   * SURVIVES hydrate: it records a placement still OWED, which a restart does
+   * not answer. Before this field the distinction lived only in the create
+   * RESPONSE, so after a restart an unplaced task and a deliberate chore were
+   * identical.
    *
    * A timestamp rather than a boolean because "how long has this waited" is
    * the question a reading has to answer, and a flag cannot tell minutes from
@@ -943,22 +933,16 @@ export type AmendEvidenceResult =
 /**
  * What actually happened to a new task's placement.
  *
- * Both fields are MEASURED, never inferred. `placed` is "the caller named a
- * goal", which is a different fact from "the task's goal is chores" — an
- * explicit `'chores'` is a placement and an omitted goal that landed there is
- * not, and only the create call can still tell them apart. `triageDelivered`
- * is the return value of the delivery bridge, i.e. "a live attachment
- * received this request", not "this workspace has an agent". The distinction
- * is the one the summary-pending marker had to learn the hard way: "this
- * server does X" is not "X is happening for this item".
+ * `placed` is MEASURED, never inferred: it is "the caller named a goal",
+ * which is a different fact from "the task's goal is chores" — an explicit
+ * `'chores'` is a placement and an omitted goal that landed there is not, and
+ * only the create call can still tell them apart. An unplaced create records
+ * that in `unplacedSince`, which outlives the response and every restart.
  */
 export interface TaskPlacement {
   /** The caller named a goal — even `'chores'`. False means it fell to the
    *  Backlog resting state without anyone judging it. */
   placed: boolean;
-  /** A triage request for this task reached a live attachment. Always false
-   *  for a placed task, which asks for no triage. */
-  triageDelivered: boolean;
 }
 
 export type CreateTaskResult =
@@ -1023,100 +1007,6 @@ export type LinkRefResult =
 export type UnlinkRefResult =
   | { ok: true; task: Task; changed: boolean }
   | { ok: false; error: 'not-found' | 'bad-ref' };
-
-/**
- * A triage request the server EMITS — triage itself executes in the attached
- * agent, never here (§3.4: the server has no judgment about the goal; the
- * Haiku fast path gets lookups only, changes belong to the attachment).
- */
-export type TriageRequest =
-  | {
-      /** A freshly created task with no explicit goal needs placing. */
-      kind: 'task';
-      workspaceId: string;
-      taskId: string;
-      ts: number;
-    }
-  | {
-      /**
-       * A band APPEARED in the goal list, so the unknown-goal bucket is worth
-       * re-looking at: some of what nobody could place before may have a home
-       * now. The ask is to LOOK — it never places anything, because
-       * auto-assigning stamps a ranking decision no human made, invisibly.
-       *
-       * Its baseline is the goal LIST before and after — the only thing a
-       * goal-list edit actually moves.
-       */
-      kind: 'bucket-review';
-      workspaceId: string;
-      /** The bands that appeared in this edit (top-level or subgoal — both
-       *  are placement destinations), in list order. */
-      newBands: GoalBand[];
-      /** The bucket at emission time: open tasks with `unplacedSince` set. */
-      taskIds: string[];
-      /** The baseline this ask is against: the goal list before and after. */
-      oldGoals: WorkspaceGoal[];
-      newGoals: WorkspaceGoal[];
-      /** Who this is ADDRESSED to — the workspace's lead agent. The request
-       *  rides a per-workspace channel every attached agent can hear, so the
-       *  addressee has to be in the payload; a non-lead listener is reading
-       *  someone else's mail. Placing the bucket is a board-wide ranking
-       *  judgment, not first-come work. Absent only when the seat is empty,
-       *  which is also the one case where it cannot be delivered at all. */
-      leadAgentId?: string;
-      /** The `workspace.goals_changed` batch this ask belongs to, so a
-       *  placement made in answer to it reads as part of that edit. */
-      batchId: string;
-      actor: TaskActor;
-      ts: number;
-    }
-  | {
-      /**
-       * Somebody wrote to this row — created it placed, renamed it, or
-       * rewrote its body — so the ask is a REVIEW by the lead: the one
-       * party with project context. The JUDGMENT of the title/body standard
-       * lives in the reviewing skill's prompt, not in this server (Bryan,
-       * 2026-08-18: the code-written format check moved into an LLM
-       * prompt), so every attributed non-lead write routes and the reviewer
-       * decides fine as-is / rewrite / ask the filer. Never a refusal — the
-       * write this request is about has already landed.
-       *
-       * PLACED creates only: an unplaced create is already owned by the
-       * shape-and-place `kind: 'task'` ask (live) or the untriaged sweep
-       * (attach), and a second request would say the same thing twice.
-       * Renames and body edits route regardless of placement.
-       */
-      kind: 'task-review';
-      workspaceId: string;
-      taskId: string;
-      /** The name the row has NOW — what the reviewer judges. */
-      title: string;
-      /** What just happened to the row. */
-      trigger: TaskReviewTrigger;
-      /** Addressed to the lead, same rule as a bucket review: judging a
-       *  title against the project is the lead's seat, not first-come work. */
-      leadAgentId?: string;
-      /** Who wrote the title/body this asks about — the addressee of any
-       *  follow-up question, and whose own echo the MCP watch suppresses. */
-      actor?: TaskActor;
-      ts: number;
-    };
-
-/** A goal or subgoal named as a place a task could go. */
-export interface GoalBand {
-  id: string;
-  title: string;
-}
-
-/**
- * Bridge to whatever can carry a triage request to a live attached agent —
- * server.ts installs the real one: `hasLiveAttachment` decides live, the
- * workspace SSE channel (the MCP watch transport) carries it. MUST return
- * true ONLY when the request was actually emitted to a live attachment —
- * the return value is what grounds the task's triage-pending marker, so an
- * optimistic true would promise work that isn't queued.
- */
-export type TriageDelivery = (req: TriageRequest) => boolean;
 
 // ── Agent attachments (plan §4) ─────────────────────────────────────────────
 
@@ -1325,49 +1215,20 @@ export interface GatingSummary {
   summary: string;
 }
 
-/** What happened to a row to earn it a review. */
-export type TaskReviewTrigger = 'created' | 'renamed' | 'edited';
-
-/**
- * One row of the lead's review queue: a task somebody wrote to while the
- * lead was away, or whose live request went undelivered. QUEUED rather than
- * derived: the judgment of the title/body standard lives in the reviewing
- * skill's prompt now, so the server cannot re-derive "which rows fall
- * short" — it can only remember which rows changed. Coalesced by taskId,
- * pruned of done rows on read, and persisted to its own sidecar for the
- * same reason the re-triage queue is: a promise that lives only in memory
- * dies with the process.
- */
-export interface PendingTaskReview {
-  taskId: string;
-  /** The LATEST undelivered write's kind. */
-  trigger: TaskReviewTrigger;
-  /** Who wrote it — the addressee of any follow-up question. Latest wins. */
-  actor?: TaskActor;
-  /** When the FIRST undelivered write happened, so the queue ages honestly. */
-  ts: number;
-}
-
-/** Where a workspace's undelivered task reviews wait. Exported so tests
- *  assert the real contract path rather than a re-implementation of it. */
-export function pendingTaskReviewsPath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.taskreviews.json`);
-}
-
 export type AttachAgentResult =
   | {
       ok: true;
       attachment: AgentAttachment;
       gating: GatingSummary;
-      /** Open Backlog tasks no triage has placed — what the agent sweeps
-       *  after attaching (§3.4). */
+      /** Open Backlog tasks nobody has placed under a goal — what the lead
+       *  looks over after attaching. */
       untriaged: string[];
       /** Voice change-requests that arrived while no agent was live (§2.4
        *  "agent away — queued"). Delivered HERE — in the attach result, the
        *  one payload a fresh attachment is guaranteed to read — and drained:
-       *  a second attach gets an empty list. Only ever handed to the LEAD,
-       *  like `pendingBucketReview`; a bystander attaching leaves the queue
-       *  intact (and this field absent) for the lead's next attach. */
+       *  a second attach gets an empty list. Only ever handed to the LEAD;
+       *  a bystander attaching leaves the queue intact (and this field
+       *  absent) for the lead's next attach. */
       queuedVoice?: QueuedVoiceRequest[];
       /** Comments addressed to THIS agent that it has not yet receipted.
        *  Handed over here (a fresh process holds nothing in flight) but NOT
@@ -1377,22 +1238,10 @@ export type AttachAgentResult =
        *  agentId rather than gated on the lead seat, so a bystander is
        *  handed its OWN rows and nobody else's. */
       queuedComments: QueuedComment[];
-      /** A band that appeared in the goal list while the lead was away, with
-       *  the bucket it is worth re-looking at. Lead only, and drained here —
-       *  the one payload a fresh attachment is guaranteed to read — so a
-       *  re-attach never asks for the same look twice. */
-      pendingBucketReview?: PendingBucketReview;
-      /** The correction loop's pickup: rows written to while the lead was
-       *  away (or whose live ask went undelivered), waiting for the
-       *  reviewing skill's pass. Lead only, like `pendingBucketReview`, and
-       *  drained the same way — delivered here and cleared, so a re-attach
-       *  never asks for the same look twice. Absent when nothing waits or
-       *  the attacher is not the lead. */
-      taskReviews?: PendingTaskReview[];
       /** Is THIS attachment the workspace's lead agent — either because it
        *  already held the seat, or because it just claimed an empty one? The
-       *  lead is the addressee for goal-edit re-triage, so a fresh context
-       *  needs to know which it is without a second call. */
+       *  lead is the addressee for anything that needs one, so a fresh
+       *  context needs to know which it is without a second call. */
       lead: boolean;
       /** This board has been stood down. Present iff retired, and carried in
        *  the attach result for the same reason the queues are: it is the one
@@ -2046,49 +1895,26 @@ export const MAX_QUEUED_COMMENTS = 200;
 export const COMMENT_ACK_GRACE_MS = VOICE_ACK_GRACE_MS;
 
 /**
- * The "a band appeared, re-look at the bucket" ask waiting for this
- * workspace's lead, mirrored from its own sidecar.
+ * Sidecars the REMOVED triage-request flow used to queue undelivered asks in:
+ * the workspace-level north-star re-triage (`.retriage.json`), the "a band
+ * appeared, re-look at the bucket" ask (`.bucket.json`), and the lead's
+ * task-review queue (`.taskreviews.json`).
  *
- * At most ONE per workspace: successive edits in the same gap coalesce into a
- * single ask — `oldGoals` and `ts` stay with the FIRST undelivered edit (that
- * is the list the bucket was last looked at against), `newGoals` and
- * `batchId` take the newest, `taskIds` and `newBands` union. Two separate
- * asks would walk the same bucket twice against a list that is already stale.
+ * Nothing reads or writes any of them any more — the lead is woken by the
+ * events that already reach it, so there is no bespoke ask to park. They
+ * survive as names only so `deleteWorkspace` keeps sweeping the files up: a
+ * board deleted after this change would otherwise leave sidecars behind that
+ * nothing on the box can reach or explain. Deleting queue bookkeeping is not
+ * a soft-delete concern (CLAUDE.md: "the rule is about user content and
+ * history"); these files hold neither.
  */
-export interface PendingBucketReview {
-  /** The `workspace.goals_changed` batch this stands for — echoed on each
-   *  placement so the moves read as part of that edit. */
-  batchId: string;
-  /** Bands that appeared across the undelivered edits, union. */
-  newBands: GoalBand[];
-  taskIds: string[];
-  /** The goal list before the FIRST undelivered edit. */
-  oldGoals: WorkspaceGoal[];
-  /** The goal list as it stood after the NEWEST one. */
-  newGoals: WorkspaceGoal[];
-  actor: TaskActor;
-  /** When the first undelivered edit in this pending happened. */
-  ts: number;
-}
-
-/**
- * Where the REMOVED north-star re-triage used to queue its undelivered ask.
- *
- * Nothing reads or writes it any more — the workspace-level text goal it
- * belonged to is gone. It survives only so `deleteWorkspace` keeps sweeping
- * the file up: a board deleted after this change would otherwise leave a
- * `.retriage.json` behind that nothing on the box can reach or explain.
- */
-export function legacyRetriageSidecarPath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.retriage.json`);
-}
-
-/** Where a workspace's undelivered bucket re-look waits. Its own sidecar for
- *  the same reason the re-triage has one — a promise that lives only in
- *  memory dies with the process — and separate from it because the two asks
- *  are answered independently. */
-export function pendingBucketReviewPath(dataDir: string, workspaceId: string): string {
-  return join(dataDir, 'workspaces', `${workspaceId}.bucket.json`);
+export function legacyTriageSidecarPaths(dataDir: string, workspaceId: string): string[] {
+  const dir = join(dataDir, 'workspaces');
+  return [
+    join(dir, `${workspaceId}.retriage.json`),
+    join(dir, `${workspaceId}.bucket.json`),
+    join(dir, `${workspaceId}.taskreviews.json`),
+  ];
 }
 
 export type SetLeadAgentResult =
@@ -2289,20 +2115,6 @@ export type SetGoalListResult =
        *  existed nothing reported them at all. Re-place them with
        *  `set_task_goal` if you want the row gone. */
       strandedDone: string[];
-      /** Whether this edit revealed a new band and therefore asked the lead
-       *  to re-look at the unknown-goal bucket. `taskIds` is that bucket and
-       *  `newBands` what appeared — both empty when nothing was revealed (a
-       *  reorder, a retitle) or the bucket was empty. `requested` = it
-       *  reached the live lead; `queued` = the lead was away and it is
-       *  WAITING for their next attach. Never a placement: the ask is to
-       *  look. */
-      bucketReview: {
-        requested: boolean;
-        queued: boolean;
-        taskIds: string[];
-        newBands: GoalBand[];
-        batchId?: string;
-      };
     }
   | { ok: false; error: 'workspace-not-found' | 'reserved-goal-id' | 'duplicate-goal-id' }
   | {
@@ -2458,12 +2270,6 @@ interface WorkspaceState {
   /** agentId → attachment (§4). Keyed per workspace, so the same agentId in
    *  two workspaces is two independent records. */
   attachments: Map<string, AgentAttachment>;
-  /** The "a band appeared" bucket re-look waiting for the lead agent,
-   *  mirrored from its own sidecar. */
-  pendingBucketReview?: PendingBucketReview;
-  /** Task writes waiting for the lead's review pass, mirrored from their
-   *  own sidecar. */
-  pendingTaskReviews?: PendingTaskReview[];
 }
 
 /** Where a workspace's sidecar lives. Exported so tests assert the real
@@ -2529,7 +2335,6 @@ export class TaskStore {
   private dataDir: string;
   private debounceMs: number;
   private attachmentThresholds: AttachmentThresholds;
-  private triageDelivery: TriageDelivery | undefined;
   private deliveryProbe: DeliveryProbe | undefined;
   private readonly voiceAckGraceMs: number;
   private readonly commentAckGraceMs: number;
@@ -2587,12 +2392,6 @@ export class TaskStore {
 
   setDeliveryProbe(probe: DeliveryProbe | undefined): void {
     this.deliveryProbe = probe;
-  }
-
-  /** Wire (or clear) the bridge that carries triage requests to a live
-   *  attached agent. The attachment registry commit installs the real one. */
-  setTriageDelivery(delivery: TriageDelivery | undefined): void {
-    this.triageDelivery = delivery;
   }
 
   /**
@@ -2672,18 +2471,6 @@ export class TaskStore {
       );
     } catch (err) {
       console.error('[tasks] failed to append audit event:', err);
-    }
-  }
-
-  /** Emit a triage request. True ONLY if it reached a live attachment — a
-   *  throwing/absent delivery grounds to false, never to a broken caller. */
-  private requestTriage(req: TriageRequest): boolean {
-    if (!this.triageDelivery) return false;
-    try {
-      return this.triageDelivery(req) === true;
-    } catch (err) {
-      console.error('[tasks] triage delivery threw:', err);
-      return false;
     }
   }
 
@@ -2815,9 +2602,7 @@ export class TaskStore {
       eventsLogPath(this.dataDir, workspaceId),
       voiceQueuePath(this.dataDir, workspaceId),
       commentQueuePath(this.dataDir, workspaceId),
-      legacyRetriageSidecarPath(this.dataDir, workspaceId),
-      pendingBucketReviewPath(this.dataDir, workspaceId),
-      pendingTaskReviewsPath(this.dataDir, workspaceId),
+      ...legacyTriageSidecarPaths(this.dataDir, workspaceId),
     ]) {
       try {
         rmSync(path, { force: true });
@@ -3043,54 +2828,6 @@ export class TaskStore {
     // Its own operation, so its own moment — nothing else in this call is
     // stamped, and there is no sibling clock for it to disagree with.
     this.assignLead(state, next, actor, Date.now());
-    // A waiting request is addressed to the SEAT, not to the agent that was
-    // sitting in it — so a handover has to re-ask the new occupant. Draining
-    // happens on attach, and an agent that is ALREADY attached has no next
-    // attach: without this the ask waits on a reconnect that may never come,
-    // with its addressee live the whole time. Away leads are unaffected —
-    // `hasLiveLeadAttachment` is false for them and it keeps waiting.
-    const bucket = this.getPendingBucketReview(workspaceId);
-    if (bucket && this.hasLiveLeadAttachment(workspaceId)) {
-      const delivered = this.requestTriage({
-        kind: 'bucket-review',
-        workspaceId,
-        newBands: bucket.newBands,
-        taskIds: bucket.taskIds,
-        oldGoals: bucket.oldGoals,
-        newGoals: bucket.newGoals,
-        leadAgentId: next,
-        batchId: bucket.batchId,
-        actor: bucket.actor,
-        ts: bucket.ts,
-      });
-      if (delivered) this.clearPendingBucketReview(state);
-    }
-    // Waiting task reviews are addressed to the same seat. Re-deliver each
-    // to the new live occupant; whatever fails to go out stays queued. Rows
-    // the new occupant itself wrote are pruned at the read — author ==
-    // addressee is never delivered (see `getPendingTaskReviews`).
-    const reviews = this.getPendingTaskReviews(workspaceId, { excludeActorId: next });
-    if (reviews && this.hasLiveLeadAttachment(workspaceId)) {
-      const undelivered = reviews.filter((r) => {
-        const reviewTask = state.tasks.get(r.taskId);
-        if (!reviewTask) return false;
-        return !this.requestTriage({
-          kind: 'task-review',
-          workspaceId,
-          taskId: r.taskId,
-          title: reviewTask.title,
-          trigger: r.trigger,
-          leadAgentId: next,
-          ...(r.actor !== undefined ? { actor: r.actor } : {}),
-          ts: r.ts,
-        });
-      });
-      if (undelivered.length === 0) this.clearPendingTaskReviews(state);
-      else {
-        state.pendingTaskReviews = undelivered;
-        this.writePendingTaskReviews(state);
-      }
-    }
     return {
       ok: true,
       workspace,
@@ -3301,28 +3038,19 @@ export class TaskStore {
     // task that was never renamed — which is most of them.
     this.applyTitle(task, task.title);
 
-    // Triage hook (§3.4): an OMITTED goal means "needs placing" — the task
-    // has already landed at the bottom of Backlog (the resting state; the
-    // human is never blocked on placement), and the server emits a triage
-    // request for the attached agent to act on. The pending marker is
-    // stamped ONLY when that request actually reached a live attachment.
-    // An explicit goal — even an explicit 'chores' — is a placement by the
-    // caller, not a triage candidate.
-    let triageDelivered = false;
-    if (opts.goal === undefined) {
-      // The DURABLE half, written before the request is attempted and
-      // deliberately not conditioned on it: delivery decides whether a
-      // request went out, never whether a placement was named. An undelivered
-      // request used to leave no trace of the review it owed.
-      task.unplacedSince = now;
-      triageDelivered = this.requestTriage({
-        kind: 'task',
-        workspaceId,
-        taskId: task.id,
-        ts: now,
-      });
-      if (triageDelivered) task.triagePendingTs = Date.now();
-    }
+    // An OMITTED goal means "needs placing": the task lands at the bottom of
+    // Backlog (the resting state; the human is never blocked on placement)
+    // and records that it is waiting. An explicit goal — even an explicit
+    // 'chores' — is a placement by the caller and stamps nothing.
+    //
+    // The record is DURABLE and nothing else is. The server used to also
+    // emit a `triage.requested` ask at this moment and mark the row pending
+    // against whether it was delivered; that flow is gone (2026-08-24). The
+    // lead learns a row needs placing from the events it already receives —
+    // `task.created` on the workspace channel while it is attached, and the
+    // `untriaged` list in its next attach payload otherwise — so a marker
+    // grounded in one in-flight send bought nothing a restart did not erase.
+    if (opts.goal === undefined) task.unplacedSince = now;
 
     this.scheduleSave(workspaceId);
     this.emit({
@@ -3344,14 +3072,10 @@ export class TaskStore {
         : {}),
       ts: now,
     });
-    // The correction loop, PLACED rows only: an unplaced create's shaping is
-    // already the placement request's ask (and the untriaged sweep's, when
-    // nobody was home), so asking again here would say the same thing twice.
-    if (opts.goal !== undefined) this.requestTaskReview(task, 'created', opts.actor);
     return {
       ok: true,
       task,
-      placement: { placed: opts.goal !== undefined, triageDelivered },
+      placement: { placed: opts.goal !== undefined },
       ...(shapeGaps !== undefined ? { shapeGaps } : {}),
     };
   }
@@ -4277,160 +4001,14 @@ export class TaskStore {
    *
    * Deliberately NOT a validator. Nothing is refused, rewritten, or
    * normalized on the way through — the standard's judgment lives in the
-   * reviewing skill's prompt, reached by `requestTaskReview` — so a raw
+   * lead's reviewing pass, which the row's own `task.created` /
+   * `task.retitled` / `task.body_written` event is what summons — so a raw
    * capture still lands.
    */
   private applyTitle(task: Task, title: string): void {
     task.title = title;
     task.titleWrittenAt = Date.now();
     task.titleHead = bodyHead(task.body);
-  }
-
-  /**
-   * The correction loop's trigger. Called after an attributed write of a
-   * title or body; the workspace's LEAD is asked to review the row over the
-   * same delivery bridge every triage request rides. The JUDGMENT — does
-   * the title read as `<persona> can <do x> so that <goal y>`, does the
-   * body open with a problem statement — lives in the reviewing skill's prompt, not
-   * here (Bryan, 2026-08-18: the code-written format check moved into an
-   * LLM prompt), so EVERY write routes and the reviewer decides fine as-is
-   * / rewrite / ask the filer. Decision rows route too: they are exempt
-   * from the story shape, and the prompt knows that, but a muddy question
-   * is exactly what a reviewer with context can sharpen.
-   *
-   * Fire-and-forget for the writer — the write has already landed and
-   * nothing here can refuse it. An undelivered ask is not lost: it is
-   * queued to the workspace's sidecar and drained on the lead's next
-   * attach.
-   *
-   * The one exemption: the LEAD's own writes are never re-addressed to the
-   * lead. Its rewrites ARE the review, and a lead sweeping a board must not
-   * generate one request per pass of its own.
-   */
-  private requestTaskReview(
-    task: Task,
-    trigger: TaskReviewTrigger,
-    actor?: { id: string; name: string; kind?: string },
-  ): void {
-    const state = this.workspaces.get(task.workspaceId);
-    if (!state) return;
-    if (actor !== undefined && actor.id === state.workspace.leadAgentId) return;
-    const ts = Date.now();
-    const taskActor: TaskActor | undefined =
-      actor !== undefined
-        ? { id: actor.id, name: actor.name, kind: classifyActor(actor) }
-        : undefined;
-    const delivered = this.requestTriage({
-      kind: 'task-review',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      title: task.title,
-      trigger,
-      ...(state.workspace.leadAgentId !== undefined
-        ? { leadAgentId: state.workspace.leadAgentId }
-        : {}),
-      ...(taskActor !== undefined ? { actor: taskActor } : {}),
-      ts,
-    });
-    if (!delivered) {
-      this.queuePendingTaskReview(state, {
-        taskId: task.id,
-        trigger,
-        ...(taskActor !== undefined ? { actor: taskActor } : {}),
-        ts,
-      });
-    }
-  }
-
-  /**
-   * The task reviews waiting for this workspace's lead, pruned read-time:
-   * rows that have since gone done (or vanished) drop out — same reasoning
-   * as `getPendingBucketReview`, "which rows still need a look" is a question
-   * about the CURRENT board, not about a snapshot taken when they queued.
-   *
-   * `excludeActorId` is the addressee about to receive the queue, and rows
-   * IT wrote are pruned the same way — dropped, not deferred. The live path
-   * already refuses to address the lead's own write back to the lead ("its
-   * rewrites ARE the review"), but a write queues precisely when the seat is
-   * empty or its holder is away, so the queue meets its addressee only here
-   * — and without this check an agent that wrote while nobody was home and
-   * then took the seat was handed a review of its own edit. That is the
-   * self-review loop Bryan named on 2026-08-21 ("I have no idea why this is
-   * flagged for me?"), reaching an agent through the sidecar instead of a
-   * browser through the broadcast. Dropping is correct rather than lossy:
-   * the moment the author holds the seat, the row is a lead's own write,
-   * which the request path never routes either.
-   */
-  getPendingTaskReviews(
-    workspaceId: string,
-    opts?: { excludeActorId?: string },
-  ): PendingTaskReview[] | undefined {
-    const state = this.workspaces.get(workspaceId);
-    if (!state?.pendingTaskReviews) return undefined;
-    const live = state.pendingTaskReviews.filter((r) => {
-      const task = state.tasks.get(r.taskId);
-      if (task === undefined || task.status === 'done') return false;
-      return opts?.excludeActorId === undefined || r.actor?.id !== opts.excludeActorId;
-    });
-    if (live.length === 0) {
-      this.clearPendingTaskReviews(state);
-      return undefined;
-    }
-    if (live.length !== state.pendingTaskReviews.length) {
-      state.pendingTaskReviews = live;
-      this.writePendingTaskReviews(state);
-    }
-    return state.pendingTaskReviews;
-  }
-
-  /** Coalesce by row: a second undelivered write to the same task updates
-   *  the trigger and the addressee but keeps the FIRST `ts` — one review
-   *  per row, aged from when it started waiting. Synchronous write, same
-   *  contract as the re-triage queue: the queue is a promise, and a promise
-   *  grounded in a debounce a crash can drop is a lie. */
-  private queuePendingTaskReview(state: WorkspaceState, next: PendingTaskReview): void {
-    const prev = state.pendingTaskReviews ?? [];
-    const existing = prev.find((r) => r.taskId === next.taskId);
-    state.pendingTaskReviews = existing
-      ? prev.map((r) => (r.taskId === next.taskId ? { ...next, ts: existing.ts } : r))
-      : [...prev, next];
-    this.writePendingTaskReviews(state);
-  }
-
-  private writePendingTaskReviews(state: WorkspaceState): void {
-    const path = pendingTaskReviewsPath(this.dataDir, state.workspace.id);
-    try {
-      const dir = join(this.dataDir, 'workspaces');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(path, `${JSON.stringify({ pending: state.pendingTaskReviews }, null, 2)}\n`);
-    } catch (err) {
-      console.error(`[tasks] failed to queue task review for ${state.workspace.id}:`, err);
-    }
-  }
-
-  private clearPendingTaskReviews(state: WorkspaceState): void {
-    if (state.pendingTaskReviews === undefined) return;
-    state.pendingTaskReviews = undefined;
-    try {
-      rmSync(pendingTaskReviewsPath(this.dataDir, state.workspace.id), { force: true });
-    } catch {}
-  }
-
-  /** Load a workspace's waiting task reviews, if any. A corrupt sidecar
-   *  loses the queue, never the workspace. */
-  private loadPendingTaskReviews(workspaceId: string): PendingTaskReview[] | undefined {
-    const path = pendingTaskReviewsPath(this.dataDir, workspaceId);
-    if (!existsSync(path)) return undefined;
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pending?: PendingTaskReview[] };
-      const pending = parsed.pending;
-      if (!Array.isArray(pending)) return undefined;
-      const rows = pending.filter((r) => typeof r?.taskId === 'string');
-      return rows.length > 0 ? rows : undefined;
-    } catch (err) {
-      console.error(`[tasks] unreadable task-review sidecar for ${workspaceId} — skipped:`, err);
-      return undefined;
-    }
   }
 
   /**
@@ -4465,7 +4043,6 @@ export class TaskStore {
       ...(opts.reason ? { reason: opts.reason } : {}),
       ts,
     });
-    this.requestTaskReview(task, 'renamed', opts.actor);
     return { ok: true, task, changed: true };
   }
 
@@ -4537,7 +4114,6 @@ export class TaskStore {
       ...(opts.reason ? { reason: opts.reason } : {}),
       ts,
     });
-    this.requestTaskReview(task, 'edited', opts.actor);
     return true;
   }
 
@@ -4858,10 +4434,6 @@ export class TaskStore {
     task.order = order;
     if (renumbered) for (const [i, t] of renumbered.entries()) t.order = i + 1;
     task.triagedAgainst = { goalId: goal, ts };
-    // The placement fulfils whatever triage request stamped the marker.
-    // Assignment, not delete (biome noDelete); JSON.stringify drops it from
-    // the sidecar either way, same as the hydrate-time clear.
-    task.triagePendingTs = undefined;
     // Somebody has now named this task's band — including a confirm-in-place
     // into Backlog, which is a judgement rather than a fallback. The owed
     // review is answered, so it must not be asked again.
@@ -5000,7 +4572,6 @@ export class TaskStore {
         created: [],
         movedToChores: [],
         strandedDone: [],
-        bucketReview: { requested: false, queued: false, taskIds: [], newBands: [] },
       };
     }
 
@@ -5028,15 +4599,6 @@ export class TaskStore {
       }
     }
     if (stranding.length > 0) return { ok: false, error: 'would-strand-tasks', stranding };
-
-    // Bands that APPEARED — the reason to re-look at the bucket. Computed
-    // from the ID sets at both scopes, not from `kind` below: `kind:'edit'`
-    // also covers a retitle and a dueAt change, neither of which adds a place
-    // a task could go. A band is "apparent" when it becomes a destination.
-    const oldBandIds = new Set(flattenGoals(oldGoals).map((g) => g.id));
-    const newBands: GoalBand[] = flattenGoals(goals)
-      .filter((g) => !oldBandIds.has(g.id))
-      .map((g) => ({ id: g.id, title: g.title }));
 
     // Same members in a different order = the priority gesture; anything
     // else (add / remove / retitle / dueAt) = an edit. Sorting by id makes
@@ -5097,23 +4659,6 @@ export class TaskStore {
     // removed) belongs to the bucket the new band is being offered to;
     // "replace band A with band B" is where that matters most.
     //
-    // Before the emits, because `workspace.goals_changed` is what refreshes
-    // the board's projection, and a projection taken before the record exists
-    // does not carry it — with no later event to correct it the chip simply
-    // never appears, and the ask stays invisible until somebody attaches.
-    // This path deliberately emits no store event of its own (a request is a
-    // delivery, not a change, and the audit row for WHAT changed is
-    // `workspace.goals_changed` itself, oldGoals and newGoals and all), so it
-    // rides that one. Safe to depend on: a new band means the list changed,
-    // and a changed list always emits.
-    const bucketReview = this.requestBucketReview(state, {
-      newBands,
-      oldGoals,
-      newGoals: goals,
-      batchId,
-      actor,
-      ts,
-    });
     this.emit({
       type: 'workspace.goals_changed',
       workspaceId,
@@ -5145,228 +4690,7 @@ export class TaskStore {
       created,
       movedToChores: moved.map((m) => m.task.id),
       strandedDone,
-      bucketReview,
     };
-  }
-
-  /**
-   * "A band appeared — re-look at the bucket." Emitted only when the edit
-   * revealed a new destination AND there is something unplaced to offer it
-   * to; a reorder, a retitle, or an empty bucket asks nobody anything.
-   *
-   * Live-or-queue, exactly like the north-star re-triage: delivered if the
-   * lead is here, persisted for their next attach if not. It NEVER places —
-   * an auto-assign would stamp a ranking decision no human made, invisibly,
-   * and the bucket exists precisely because nobody has made that call yet.
-   */
-  private requestBucketReview(
-    state: WorkspaceState,
-    edit: {
-      newBands: GoalBand[];
-      oldGoals: WorkspaceGoal[];
-      newGoals: WorkspaceGoal[];
-      batchId: string;
-      actor: TaskActor;
-      ts: number;
-    },
-  ): {
-    requested: boolean;
-    queued: boolean;
-    taskIds: string[];
-    newBands: GoalBand[];
-    batchId?: string;
-  } {
-    const workspaceId = state.workspace.id;
-    const taskIds = this.listUntriaged(workspaceId).map((t) => t.id);
-    if (edit.newBands.length === 0 || taskIds.length === 0) {
-      return { requested: false, queued: false, taskIds, newBands: [] };
-    }
-    const requested = this.requestTriage({
-      kind: 'bucket-review',
-      workspaceId,
-      newBands: edit.newBands,
-      taskIds,
-      oldGoals: edit.oldGoals,
-      newGoals: edit.newGoals,
-      ...(state.workspace.leadAgentId !== undefined
-        ? { leadAgentId: state.workspace.leadAgentId }
-        : {}),
-      batchId: edit.batchId,
-      actor: edit.actor,
-      ts: edit.ts,
-    });
-    let queued = false;
-    if (requested) {
-      // It went out live, so anything still waiting from an earlier gap is
-      // superseded — the lead is looking at the bucket against the CURRENT
-      // list right now. Same rule the north-star path follows.
-      this.clearPendingBucketReview(state);
-    } else {
-      queued = this.queuePendingBucketReview(state, {
-        batchId: edit.batchId,
-        newBands: edit.newBands,
-        taskIds,
-        oldGoals: edit.oldGoals,
-        newGoals: edit.newGoals,
-        actor: edit.actor,
-        ts: edit.ts,
-      });
-    }
-    // When it QUEUED, report the record that is actually waiting — a second
-    // edit during the same gap merges into the first, so this edit's bands
-    // alone would describe something narrower than what the lead is handed.
-    // `queued: true` and `newBands` have to be about the same object.
-    const waiting = queued ? state.pendingBucketReview : undefined;
-    return {
-      requested,
-      queued,
-      taskIds: waiting?.taskIds ?? taskIds,
-      newBands: waiting?.newBands ?? edit.newBands,
-      batchId: edit.batchId,
-    };
-  }
-
-  /**
-   * The bucket re-look waiting for this workspace's lead, or undefined.
-   *
-   * Read-and-REFRESH, for the same reason `getPendingBucketReview` prunes: this
-   * describes the board as it stands NOW, not as it stood when the band
-   * appeared. Two things can go stale, and each retires the ask outright when
-   * it empties:
-   *
-   *  - the BUCKET moves in both directions. A task placed or closed since the
-   *    edit is gone from it, so re-asking about it is asking for work already
-   *    done — and a task FILED since the edit is newly in it, unplaced, with
-   *    the same new band available to it. Intersecting against the stored
-   *    snapshot could only ever shrink, which quietly dropped that second
-   *    task from the one ask it belongs in while the same attach response
-   *    listed it under `untriaged`. So the bucket is re-read live rather
-   *    than filtered; the stored ids are provenance, not the answer;
-   *  - a band that has since been REMOVED is not apparent any more, and a
-   *    request naming a band that no longer exists is the field-that-lies
-   *    failure this record's own slot exists to avoid.
-   *
-   * A surviving band is REBUILT from the live list rather than replayed from
-   * the record, so a rename between the capture and the attach reaches the
-   * lead. Nothing else would deliver it: a retitle deliberately asks for
-   * nothing (it reveals no new destination), which also means it never
-   * refreshes a waiting ask — so the stored title would name a band the board
-   * no longer calls that, in a request whose entire job is to say which band
-   * appeared. The id is what the record is keyed on; the title is display.
-   */
-  getPendingBucketReview(workspaceId: string): PendingBucketReview | undefined {
-    const state = this.workspaces.get(workspaceId);
-    if (!state?.pendingBucketReview) return undefined;
-    const pending = state.pendingBucketReview;
-    const liveTasks = this.listUntriaged(workspaceId).map((t) => t.id);
-    const current = new Map(flattenGoals(state.workspace.goals).map((g) => [g.id, g.title]));
-    const liveBands: GoalBand[] = pending.newBands
-      .filter((b) => current.has(b.id))
-      .map((b) => ({ id: b.id, title: current.get(b.id) as string }));
-    if (liveTasks.length === 0 || liveBands.length === 0) {
-      this.clearPendingBucketReview(state);
-      return undefined;
-    }
-    // Compare BOTH by value, not by length: a rename keeps the band count,
-    // and one task placed while another is filed keeps the task count. A
-    // length compare on either is a guard that passes on the exact edit it
-    // exists to catch.
-    if (
-      JSON.stringify(liveTasks) !== JSON.stringify(pending.taskIds) ||
-      JSON.stringify(liveBands) !== JSON.stringify(pending.newBands)
-    ) {
-      state.pendingBucketReview = { ...pending, taskIds: liveTasks, newBands: liveBands };
-      this.writePendingBucketReview(state);
-    }
-    return state.pendingBucketReview;
-  }
-
-  /** Coalesce with anything already waiting: the FIRST undelivered edit keeps
-   *  the baseline (`oldGoals`) and the provenance (`ts`, `actor`), the newest
-   *  wins on list and batch, and bands and tasks union. Synchronous write,
-   *  like the re-triage queue: the caller is about to be told the ask is
-   *  waiting.
-   *
-   *  `ts` and `actor` move together on purpose. Taking the clock from the
-   *  first edit and the person from the last produces a pair that reads as
-   *  "this person did this then" and is true of nobody — the shape a strip
-   *  renders as `Edited by <name>` beside a relative time. The ask began with
-   *  the first edit, so both come from it. */
-  private queuePendingBucketReview(state: WorkspaceState, next: PendingBucketReview): boolean {
-    const prev = state.pendingBucketReview;
-    if (prev) {
-      const bands = new Map(prev.newBands.map((b) => [b.id, b]));
-      // Newest title wins — a band added and then retitled in the same gap
-      // should be named the way the board names it now.
-      for (const b of next.newBands) bands.set(b.id, b);
-      state.pendingBucketReview = {
-        batchId: next.batchId,
-        newBands: Array.from(bands.values()),
-        taskIds: Array.from(new Set([...prev.taskIds, ...next.taskIds])),
-        oldGoals: prev.oldGoals,
-        newGoals: next.newGoals,
-        actor: prev.actor,
-        ts: prev.ts,
-      };
-    } else {
-      state.pendingBucketReview = next;
-    }
-    return this.writePendingBucketReview(state);
-  }
-
-  /** @returns whether the ask is actually on disk — the caller ACKS with it,
-   *  so a swallowed write must under-promise rather than over-promise. */
-  private writePendingBucketReview(state: WorkspaceState): boolean {
-    const path = pendingBucketReviewPath(this.dataDir, state.workspace.id);
-    try {
-      const dir = join(this.dataDir, 'workspaces');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(path, `${JSON.stringify({ pending: state.pendingBucketReview }, null, 2)}\n`);
-      return true;
-    } catch (err) {
-      console.error(`[tasks] failed to queue bucket review for ${state.workspace.id}:`, err);
-      return false;
-    }
-  }
-
-  private clearPendingBucketReview(state: WorkspaceState): void {
-    if (state.pendingBucketReview === undefined) return;
-    state.pendingBucketReview = undefined;
-    try {
-      rmSync(pendingBucketReviewPath(this.dataDir, state.workspace.id), { force: true });
-    } catch {}
-  }
-
-  /** Load a workspace's waiting bucket re-look, if any. A corrupt sidecar
-   *  loses the ask, never the workspace. */
-  private loadPendingBucketReview(workspaceId: string): PendingBucketReview | undefined {
-    const path = pendingBucketReviewPath(this.dataDir, workspaceId);
-    if (!existsSync(path)) return undefined;
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pending?: PendingBucketReview };
-      const pending = parsed.pending;
-      // Every field the type declares non-optional, not just the ones a
-      // reader happens to touch today: a truncated sidecar that loads with
-      // `oldGoals` undefined puts that undefined straight back on the wire
-      // inside a `TriageRequest` that declares it `WorkspaceGoal[]`, and the
-      // next reader of that field is the one who finds out.
-      if (
-        !pending ||
-        typeof pending.batchId !== 'string' ||
-        typeof pending.ts !== 'number' ||
-        !Array.isArray(pending.taskIds) ||
-        !Array.isArray(pending.newBands) ||
-        !Array.isArray(pending.oldGoals) ||
-        !Array.isArray(pending.newGoals) ||
-        typeof pending.actor?.id !== 'string'
-      ) {
-        return undefined;
-      }
-      return pending;
-    } catch (err) {
-      console.error(`[tasks] unreadable bucket-review sidecar for ${workspaceId} — skipped:`, err);
-      return undefined;
-    }
   }
 
   /**
@@ -5519,10 +4843,8 @@ export class TaskStore {
    * writer can be raced on ORDER; it cannot be raced out of existence.
    *
    * The new entry carries no `id`, which is what tells `setGoalList` to mint
-   * one — so id generation, the bucket re-look (a new band IS a new
-   * destination, which is exactly the case `requestBucketReview` is keyed on)
-   * and the `workspace.goals_changed` emit are all inherited rather than
-   * re-implemented.
+   * one — so id generation and the `workspace.goals_changed` emit are both
+   * inherited rather than re-implemented.
    *
    * Top-level only, deliberately. Display flattens subgoals, so there is no
    * surface that could express "add under this parent", and adding one here
@@ -5994,23 +5316,7 @@ export class TaskStore {
       );
     }
     const lead = state.workspace.leadAgentId === opts.agentId;
-    // Only the lead carries the waiting bucket re-look off. A bystander
-    // attaching must leave it where it is, or the ask is "delivered" to
-    // whoever showed up first — the failure this whole path exists to end.
-    const pendingBucketReview = lead ? this.getPendingBucketReview(workspaceId) : undefined;
-    if (pendingBucketReview) this.clearPendingBucketReview(state);
-    // The correction loop's durable half: writes whose live request never
-    // reached anyone (or that arrived while the lead was away), drained the
-    // same way the re-triage is — delivered in the one payload a fresh
-    // attachment is guaranteed to read, then cleared. The attaching lead's
-    // own queued writes are pruned at the read: author == addressee is never
-    // delivered (see `getPendingTaskReviews`).
-    const taskReviews = lead
-      ? this.getPendingTaskReviews(workspaceId, { excludeActorId: opts.agentId })
-      : undefined;
-    if (taskReviews) this.clearPendingTaskReviews(state);
-    // The voice queue is the same ask with the same addressee: only the lead
-    // drains it. A bystander attaching leaves the notes where they are for
+    // Only the lead drains the voice queue. A bystander attaching leaves the notes where they are for
     // the lead's next attach — otherwise they are "delivered" into a payload
     // that has no contract to act on them.
     const queuedVoice = lead ? this.drainVoiceQueue(workspaceId, { freshProcess }) : undefined;
@@ -6021,7 +5327,7 @@ export class TaskStore {
       : undefined;
     // Emitted LAST, after every state change above: the projection refreshes
     // off this event, so an earlier emit would repaint the board with a
-    // pending re-triage this very call just drained.
+    // queued note this very call just drained.
     this.emit({
       type: 'agent.attached',
       workspaceId,
@@ -6040,8 +5346,6 @@ export class TaskStore {
       queuedComments: this.takeDeliverableComments(workspaceId, opts.agentId, {
         freshProcess,
       }),
-      ...(pendingBucketReview ? { pendingBucketReview } : {}),
-      ...(taskReviews !== undefined && taskReviews.length > 0 ? { taskReviews } : {}),
       lead,
       ...(isRetired(state.workspace) ? { retired: retiredNotice(state.workspace) } : {}),
       ...(leadNameConflicts ? { leadNameConflicts } : {}),
@@ -6830,10 +6134,6 @@ export class TaskStore {
         const tasks = new Map<string, Task>();
         for (const task of parsed.tasks ?? []) {
           if (typeof task?.id !== 'string') continue;
-          // A restart killed any in-flight triage request, so its marker
-          // must not outlive it (grounded-pending, §3.4): the task goes back
-          // to plainly sitting in Backlog until an agent attaches and sweeps.
-          task.triagePendingTs = undefined;
           // `unplacedSince` is deliberately NOT cleared here — see the field.
           // But every task written before it existed lacks it, and the sweep
           // now keys on it, so a writer-only fix would empty the bucket for
@@ -6862,20 +6162,11 @@ export class TaskStore {
           goalRows.set(row.id, row);
           this.goalIndex.set(row.id, workspace.id);
         }
-        const pendingBucketReview = this.loadPendingBucketReview(workspace.id);
-        const pendingTaskReviews = this.loadPendingTaskReviews(workspace.id);
         this.workspaces.set(workspace.id, {
           workspace,
           tasks,
           goalRows,
           attachments: this.loadAttachments(workspace.id),
-          // Unlike a task's triage marker above, a queued bucket re-look
-          // SURVIVES the restart: the marker promised in-flight work that the
-          // restart killed, this is a request nobody has answered yet.
-          ...(pendingBucketReview ? { pendingBucketReview } : {}),
-          // And again: a row somebody wrote to is still waiting for its
-          // review pass — a restart does not perform it.
-          ...(pendingTaskReviews ? { pendingTaskReviews } : {}),
         });
         // The migration, and it is lazy on purpose: every board on disk today
         // has `goals` and no `goalRows`, so the rows are minted the first time

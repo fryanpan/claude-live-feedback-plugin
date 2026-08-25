@@ -117,7 +117,6 @@ export interface HubTask {
   infoRequests?: HubInfoRequest[];
   answer?: { text: string; by: string; ts: number; optionId?: string };
   triagedAgainst?: { goalId: string; ts: number };
-  triagePendingTs?: number;
   transitions: HubTransition[];
   bodyDocId: string;
   /** The description, as markdown. Capped by the server projection — see
@@ -165,20 +164,6 @@ export interface HubGoal extends HubSubgoal {
   subgoals?: HubSubgoal[];
 }
 
-/** A goal BAND that appeared while the lead was away, and the unplaced tasks
- *  worth re-looking at against it. Projected because an ask that only exists
- *  in a sidecar leaves the board silent about work that is waiting. */
-export interface PendingBucketReviewView {
-  batchId: string;
-  taskIds: string[];
-  /** Display only; the record is keyed on ids. Rebuilt from the live list on
-   *  every read, so a band renamed since the edit reads the way the board
-   *  names it now. */
-  bandTitles: string[];
-  ts: number;
-  byName: string;
-}
-
 export interface HubWorkspaceInfo {
   id: string;
   name: string;
@@ -186,9 +171,6 @@ export interface HubWorkspaceInfo {
   /** The agent responsible for this board. Absent = the seat is empty, and
    *  the strip says so rather than showing a stale or guessed name. */
   leadAgentId?: string;
-  /** A goal band the lead agent has not re-looked at the bucket against yet.
-   *  Absent = none waiting; the board never infers one. */
-  pendingBucketReview?: PendingBucketReviewView;
   /** When this board was retired — present iff it was. Absent = live; the
    *  board never infers a retirement, the same way it never guesses a lead. */
   retiredAt?: number;

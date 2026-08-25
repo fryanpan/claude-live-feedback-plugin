@@ -3,15 +3,15 @@
  *
  * The measured incident: a peer held six docs under `watch_doc` and believed
  * it was listening. It had never called `attach_agent` on the board those
- * docs live on. A voice note and a re-triage request queued SILENTLY, and
- * every probe the agent could run answered confidently: `list_watched_docs`
- * said six watches, all live. Six watches IS the true answer to the question
- * that probe asks. It is the wrong question.
+ * docs live on. Spoken changes queued SILENTLY, and every probe the agent
+ * could run answered confidently: `list_watched_docs` said six watches, all
+ * live. Six watches IS the true answer to the question that probe asks. It is
+ * the wrong question.
  *
  * So `GET /api/agents/:id/watches` grows a `coverage` block that answers the
  * question the agent actually has: not "what am I watching" but "what am I
  * MISSING". `unattachedBoards` is that incident rendered as a row — six docs
- * watched, zero attachments, four items waiting for a lead that is not there.
+ * watched, zero attachments, items waiting for a lead that is not there.
  *
  * Every absence assertion here sits beside a positive control in the same
  * read, because "no row" and "a probe that cannot see" are the two things
@@ -37,8 +37,6 @@ const AGENT = 'agent-coverage';
 
 interface CoverageQueue {
   queuedVoice: number;
-  pendingBucketReview: number;
-  taskReviews: number;
 }
 interface CoverageWorkspaceRow {
   key: string;
@@ -85,8 +83,6 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     });
   const post = (path: string, body: unknown) =>
     local(path, { method: 'POST', body: JSON.stringify(body) });
-  const put = (path: string, body: unknown) =>
-    local(path, { method: 'PUT', body: JSON.stringify(body) });
 
   /** Event streams opened by `attach`, hung up after each test. */
   const streams: AgentStream[] = [];
@@ -168,41 +164,22 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
   };
 
   /**
-   * Every kind of thing that queues for a board's lead, produced the way each
-   * actually happens: a PLACED row wants its shape reviewed, a spoken change
-   * has nobody to route to, and a new goal band has nobody to ask about the
-   * unplaced bucket. The second row is deliberately unplaced — it is what
-   * gives the band edit something to ask about, and an unplaced create
-   * routes no task review of its own, so the counts below stay exact.
+   * The one thing that still queues for a board's lead, produced the way it
+   * actually happens: a spoken change with nobody to route it to. Three of
+   * them, so the totals below can tell "counted them all" from "found one".
    */
   const queueThreeForLead = async (workspaceId: string): Promise<void> => {
-    // `goal` set on create is what routes a new row through task review.
-    const t = await post(`/api/workspaces/${workspaceId}/tasks`, {
-      author: PERSON,
-      title: 'An open row',
-      goal: 'chores',
-    });
-    expect(t.status).toBe(200);
-    expect(
-      (
-        await post(`/api/workspaces/${workspaceId}/tasks`, {
-          author: PERSON,
-          title: 'Unplaced row',
-        })
-      ).status,
-    ).toBe(200);
-    const voice = await post(`/api/workspaces/${workspaceId}/voice`, {
-      transcript: 'make cutting token usage the top goal',
-      author: PERSON,
-    });
-    expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
-    const goal = await put(`/api/workspaces/${workspaceId}/goals`, {
-      goals: [{ title: 'Cut token usage per session in half' }],
-      author: PERSON,
-    });
-    expect(((await goal.json()) as { bucketReview: { queued: boolean } }).bucketReview.queued).toBe(
-      true,
-    );
+    for (const transcript of [
+      'make cutting token usage the top goal',
+      'the landing page copy needs another pass',
+      'park the export work until next week',
+    ]) {
+      const voice = await post(`/api/workspaces/${workspaceId}/voice`, {
+        transcript,
+        author: PERSON,
+      });
+      expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
+    }
   };
 
   it('names the board holding this agent’s watched docs where it has no attachment, with what is waiting', async () => {
@@ -225,11 +202,7 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // Sorted on both sides: the watch set is a SET, and minted ids no longer
     // happen to sort the way `doc-one` / `doc-two` did.
     expect([...row.watchedDocs].sort()).toEqual([one, two].sort());
-    expect(row.queued).toEqual({
-      queuedVoice: 1,
-      pendingBucketReview: 1,
-      taskReviews: 1,
-    });
+    expect(row.queued).toEqual({ queuedVoice: 3 });
     expect(row.queuedTotal).toBe(3);
   });
 
@@ -251,12 +224,8 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
     // attach received.
     const drained = (await (await attach(boardId)).json()) as {
       queuedVoice: Array<{ transcript: string }>;
-      pendingBucketReview?: { taskIds: string[] };
-      taskReviews?: Array<{ taskId: string }>;
     };
-    expect(drained.queuedVoice).toHaveLength(1);
-    expect(drained.pendingBucketReview?.taskIds).toHaveLength(1);
-    expect(drained.taskReviews).toHaveLength(1);
+    expect(drained.queuedVoice).toHaveLength(3);
   });
 
   it('POSITIVE CONTROL 1: after attaching, the board leaves unattachedBoards and reports attached + lead truthfully', async () => {
@@ -374,12 +343,6 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
         headers: { host: `localhost:${tight.port}`, 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-    const tput = (path: string, body: unknown) =>
-      fetch(`${tightBase}${path}`, {
-        method: 'PUT',
-        headers: { host: `localhost:${tight.port}`, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
     const tcoverage = async (agentId = AGENT): Promise<Coverage> => {
       const res = await fetch(`${tightBase}/api/agents/${encodeURIComponent(agentId)}/watches`, {
         headers: { host: `localhost:${tight.port}` },
@@ -426,25 +389,18 @@ describe('watch coverage — what an agent is missing, not what it holds', () =>
      *  so queueing first and attaching second would leave nothing to find and
      *  the assertion would pass for the wrong reason. */
     const queueThree = async (boardId: string): Promise<void> => {
-      await tpost(`/api/workspaces/${boardId}/tasks`, {
-        author: PERSON,
-        title: 'An open row',
-        goal: 'chores',
-      });
-      await tpost(`/api/workspaces/${boardId}/tasks`, { author: PERSON, title: 'Unplaced row' });
-      const voice = await tpost(`/api/workspaces/${boardId}/voice`, {
-        transcript: 'make cutting token usage the top goal',
-        author: PERSON,
-      });
-      // The incident's own signature: routed to a queue, not to an agent.
-      expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
-      const goal = await tput(`/api/workspaces/${boardId}/goals`, {
-        goals: [{ title: 'Cut token usage per session in half' }],
-        author: PERSON,
-      });
-      expect(
-        ((await goal.json()) as { bucketReview: { queued: boolean } }).bucketReview.queued,
-      ).toBe(true);
+      for (const transcript of [
+        'make cutting token usage the top goal',
+        'the landing page copy needs another pass',
+        'park the export work until next week',
+      ]) {
+        const voice = await tpost(`/api/workspaces/${boardId}/voice`, {
+          transcript,
+          author: PERSON,
+        });
+        // The incident's own signature: routed to a queue, not to an agent.
+        expect(((await voice.json()) as { route: string }).route).toBe('agent-queued');
+      }
     };
 
     it('reports a stale-heartbeat lead holding only a ws: key, with what is queued', async () => {
