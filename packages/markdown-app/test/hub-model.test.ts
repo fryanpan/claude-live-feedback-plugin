@@ -293,7 +293,6 @@ describe('ACTIVITY_REFRESH_EVENTS', () => {
       'task.retitled',
       'task.due_set',
       'task.parked',
-      'task.evidence_amended',
       'task.regrouped',
       'decision.answered',
       'decision.answer_withdrawn',
@@ -467,11 +466,12 @@ describe('describeEvent', () => {
     expect(s).not.toContain('task.retitled');
   });
 
-  it('says what an evidence amendment corrected, and what it replaced', () => {
-    // Same shape as the row above: the fallback would print
-    // `task.evidence_amended` and read as a log line in a view built for
-    // people. Two facts have to survive — that proof arrived late, and
-    // whether it REPLACED a claim that was wrong.
+  it('still reads back an evidence amendment written before the feature was removed', () => {
+    // Evidence support went away on 2026-08-25 and nothing emits this any
+    // more, but rows are already in `events.jsonl` and a person still opens
+    // the feed. Without the case the fallback prints the bare slug
+    // `task.evidence_amended` in a view built for people — the retired
+    // `task.gate_refused` case exists for exactly this reason.
     const filled = describeEvent(
       {
         event: 'task.evidence_amended',

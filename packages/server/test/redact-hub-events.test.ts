@@ -49,7 +49,6 @@ describe('redactHubEventForVisitor', () => {
       from: 'todo',
       to: 'in-progress',
       actor: { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'agent' },
-      unproven: false,
       ts: 5,
     });
     // Positive control first: the redacted payload still carries the event
