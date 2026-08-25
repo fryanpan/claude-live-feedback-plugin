@@ -1432,9 +1432,9 @@ async function main(): Promise<void> {
       if (!s?.user?.name) return;
       people.push({
         clientId,
-        // Absent from a tab still running a bundle that predates this line;
-        // `presenceIdentity` falls back to the name there, which is what the
-        // strip did for everybody until now.
+        // Absent from a hub tab still running a bundle that predates this
+        // line. `presenceIdentity` falls back to that tab's own connection
+        // there, so it keeps its own row and folds with nobody.
         userId: s.user.id,
         name: s.user.name,
         surface: s.surface ?? 'hub',

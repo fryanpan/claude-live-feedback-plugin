@@ -2201,17 +2201,21 @@ export function presenceHue(label: string): number {
  *
  * `userId` is `User.id` — stable per browser (localStorage) or the known
  * user's own — so it is the same across every tab that person has open and
- * different for anybody else. A display name cannot do either job: two
- * people called Alex share one, and it is the wrong granularity for tabs
- * only by accident.
+ * different for anybody else. Those are the two things the strip's row key
+ * has to get right, and a display name gets both wrong: two people called
+ * Alex share one, and it tells tabs apart only by accident.
  *
- * The name is the fallback, for an entry from a tab whose bundle predates the
- * id travelling in awareness. That is the behaviour the strip had for
- * everybody until now, so an older tab is no worse off than it was — it just
- * cannot be told apart from a namesake.
+ * With no id, the fallback is the CONNECTION, not the name. A hub tab running
+ * a bundle that predates the id in awareness therefore behaves exactly as
+ * every tab did before this change — its own row, rebuilt on reconnect — and
+ * critically it does NOT fold with anyone. Falling back to the name instead
+ * would merge two strangers who share one (codex review, and it is the right
+ * call): the chip would show whichever of them moved last, and following one
+ * could land on the other's document. An unstable key for an old tab is a
+ * lost DOM node; a wrong identity is a wrong person.
  */
-export function presenceIdentity(p: Pick<PresencePerson, 'userId' | 'name'>): string {
-  return p.userId ?? p.name;
+export function presenceIdentity(p: Pick<PresencePerson, 'userId' | 'clientId'>): string {
+  return p.userId ?? `c${p.clientId}`;
 }
 
 /**
