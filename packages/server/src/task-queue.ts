@@ -27,6 +27,7 @@
  * at execution. `blockedBy` carries the dependency half, which is real data
  * someone stated on purpose; the judgment half stays with the reader.
  */
+import { taskBodyDocId } from './task-projection.ts';
 import {
   type PremiseDrift,
   type PremiseNote,
@@ -275,6 +276,18 @@ export interface GoalSummaryRow {
   doneAt?: number;
   /** Who declared it, display name and kind only. */
   doneBy?: { name: string; kind: 'person' | 'agent' };
+  /**
+   * The goal's live description room — `task:<goalId>`, the same address a
+   * task's `bodyDocId` names and reachable with the same `get_doc` /
+   * `find_and_replace` / `create_thread` calls.
+   *
+   * Stated on the read because a body room nobody can NAME is a body room
+   * nobody opens: the address is derivable, but an agent that has to derive
+   * it has to first know that goals have bodies at all. Absent on the
+   * appended rows (Backlog, an orphaned goal id) for the same reason `status`
+   * is — those are buckets with no row to describe.
+   */
+  bodyDocId?: string;
   /** Rows an agent filed that nobody has vetted yet. Counted separately, and
    *  never folded into `todo`: these are the only rows in the band that no
    *  dispatch read will return, so a band whose whole count is triage looks
@@ -353,7 +366,12 @@ export function summarizeGoals(
     else c.todo++;
     counts.set(t.goal, c);
   }
-  const meta = new Map<string, GoalStatusMeta>(goalRows.map((r) => [r.id, goalStatusMeta(r)]));
+  // Status, done attribution, and the address of the goal's description — the
+  // whole of what a goal ROW contributes to a summary row, spread together so
+  // the appended buckets (Backlog, an orphaned id) pick up none of it.
+  const meta = new Map<string, GoalStatusMeta & { bodyDocId: string }>(
+    goalRows.map((r) => [r.id, { ...goalStatusMeta(r), bodyDocId: taskBodyDocId(r.id) }]),
+  );
   const row = (
     id: string,
     title: string,

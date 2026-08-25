@@ -60,7 +60,20 @@ const DIRECT_ASK_MAX = 420;
 export type ReviewBand = 'declared' | 'unreplied';
 
 export interface ReviewThreadItem {
-  kind: 'task-thread' | 'doc-thread';
+  /**
+   * Which container the thread hangs on.
+   *
+   * `goal-thread` is its own kind rather than a `task-thread` carrying a goal
+   * id, because the two are opened differently — a task row opens the task
+   * panel, a goal row opens the goal panel — and a client that cannot tell
+   * them apart takes the reader nowhere. An OLD bundle that has never heard
+   * of this kind falls through to its doc branch and opens
+   * `/review/task:<goalId>`, which is the goal's real body room in the full
+   * editor: a narrower landing than the panel, and a working one. Spelling it
+   * `task-thread` instead would have handed those bundles a taskId that
+   * resolves to no task, which is a click that silently does nothing.
+   */
+  kind: 'task-thread' | 'goal-thread' | 'doc-thread';
   band: ReviewBand;
   docId: string;
   threadId: string;
@@ -69,7 +82,8 @@ export interface ReviewThreadItem {
   commentId: string;
   /** The declaration itself, present exactly when `band === 'declared'`. */
   review?: ReviewPayload;
-  /** Present on a task discussion — the board opens the task, not the doc. */
+  /** Present on a task discussion, and on a goal's — the board opens the ROW,
+   *  not the doc, and `kind` says which panel that is. */
   taskId?: string;
   /** What the reader is being asked ABOUT: the task title, or the doc's label. */
   title: string;
@@ -497,11 +511,22 @@ function extractAsk(text: string, people: Iterable<string>): string {
  */
 export function reviewThreadItems(args: {
   tasks: ReviewTaskRef[];
+  /**
+   * The board's goal rows, whose discussions queue exactly like a task's.
+   *
+   * Optional so every existing caller keeps compiling and keeps its current
+   * output: a caller that passes no goals produces the identical list it
+   * produced before. A goal declared done is skipped by the same rule a done
+   * task is — answering a finished band's question changes nothing.
+   */
+  goals?: ReviewTaskRef[];
   docs: ReviewDocRef[];
   source: ThreadSource;
 }): ReviewThreadItem[] {
+  const goals = args.goals ?? [];
   const docIds = [
     ...args.tasks.filter((t) => !t.done).map((t) => t.bodyDocId),
+    ...goals.filter((g) => !g.done).map((g) => g.bodyDocId),
     ...args.docs.map((d) => d.docId),
   ];
   const people = knownPeople(docIds, args.source);
@@ -584,6 +609,10 @@ export function reviewThreadItems(args: {
     if (task.done) continue;
     collect('task-thread', task.bodyDocId, task.title, task.id);
   }
+  for (const goal of goals) {
+    if (goal.done) continue;
+    collect('goal-thread', goal.bodyDocId, goal.title, goal.id);
+  }
   for (const doc of args.docs) collect('doc-thread', doc.docId, doc.title);
 
   return items.sort((a, b) => a.since - b.since || a.threadId.localeCompare(b.threadId));
@@ -654,6 +683,9 @@ export function taskReviewItems(tasks: ReviewTaskRef[]): ReviewTaskItem[] {
  */
 export function reviewItemRows(args: {
   tasks: ReviewTaskRef[];
+  /** The board's goal rows — their discussions queue, their `reviews` do not:
+   *  `add_review_item` is a TASK verb and a goal row carries no such array. */
+  goals?: ReviewTaskRef[];
   docs: ReviewDocRef[];
   source: ThreadSource;
 }): ReviewItemRow[] {

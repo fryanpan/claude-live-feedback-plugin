@@ -2916,7 +2916,14 @@ export class TaskStore {
    */
   workspaceOfDoc(docId: string): string | null {
     if (docId.startsWith('task:')) {
-      return this.getTask(docId.slice('task:'.length))?.workspaceId ?? null;
+      // A `task:` room is a TASK's body or a GOAL's — one prefix, two kinds of
+      // row (see `ensureGoalBody` in task-projection.ts). Asking only
+      // `getTask` answered null for every goal, and null here is not a
+      // harmless miss: it is what the back-link, the review URL and SHARE
+      // SCOPING resolve against, so a goal's description opened with no way
+      // back to its board and a share visitor was refused it outright.
+      const rowId = docId.slice('task:'.length);
+      return (this.getTask(rowId) ?? this.getGoalRow(rowId))?.workspaceId ?? null;
     }
     for (const state of this.workspaces.values()) {
       if (state.workspace.docIds.includes(docId)) return state.workspace.id;
@@ -3117,6 +3124,34 @@ export class TaskStore {
     const wsId = this.goalIndex.get(goalId);
     if (!wsId) return undefined;
     return this.workspaces.get(wsId)?.goalRows.get(goalId);
+  }
+
+  /**
+   * Flush a goal's live body room back into its row — the goal half of
+   * `updateBodySnapshot`, and separate from it for the reason `getGoalRow` is
+   * separate from `getTask`: a goal row is not a `Task` and the two fields the
+   * task path also writes are fields it does not have.
+   *
+   * No `quote` preservation, because there is nothing to preserve against: the
+   * pre-rewrite-words rule exists for tasks born from a dictated capture, a
+   * chat message or a promoted comment, and a goal has none of those origins —
+   * its prose is written in the room and nowhere else. No `bodyWrittenAt`
+   * either; the drift notice it feeds is a TASK staleness signal and inventing
+   * a goal-shaped one here would be a field nothing reads.
+   *
+   * What it keeps is the equality guard, which is load-bearing rather than an
+   * optimization: the room seeds from this snapshot on first open, so the seed
+   * round-trip flushes back the identical text, and without the guard every
+   * board open would stamp `updatedAt` on every goal it had ever described.
+   */
+  updateGoalBodySnapshot(goalId: string, body: string): boolean {
+    const row = this.getGoalRow(goalId);
+    if (!row) return false;
+    if (row.body === body) return true;
+    row.body = body;
+    row.updatedAt = Date.now();
+    this.scheduleSave(row.workspaceId);
+    return true;
   }
 
   /**
