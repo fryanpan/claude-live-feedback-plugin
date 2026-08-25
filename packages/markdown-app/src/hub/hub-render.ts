@@ -2550,10 +2550,10 @@ function walkCardHead(item: ReviewItem, handlers: WalkthroughHandlers, now: numb
 }
 
 /**
- * A declared item's ONE body: why + lookFor + detail, composed in core and
- * rendered as markdown. The labelled sub-sections this replaces ("What to
- * review for", the separate detail block) are the anatomy the approved design
- * collapsed — every part is still here, in the author's order, unlabelled.
+ * A declared item's ONE body, read through core and rendered as markdown. The
+ * labelled sub-sections this replaces ("What to review for", the separate
+ * detail block) are the anatomy the approved design collapsed — every word is
+ * still here, in the author's order, unlabelled.
  * `renderCommentMarkdown` escapes first and only re-adds known-safe tags.
  */
 function walkReviewBody(review: NonNullable<ReviewItem['review']>): DocumentFragment | null {
@@ -4082,7 +4082,7 @@ function localDateInputValue(ts: number): string {
  * renders — whether it came from the task's own decision or from a declaration
  * on one of its comment threads.
  *
- * Deliberately the `ReviewPayload` shape (headline / why / detail / options),
+ * Deliberately the `ReviewPayload` shape (headline / detail / options),
  * because that entity is where task decisions are heading: a separate ticket
  * unifies them onto it, and a panel rendering a bespoke task-options layout
  * would need rewriting the day it lands. Two sources, one shape, one renderer.
@@ -4094,9 +4094,9 @@ export interface PanelReviewItem {
   source: 'task' | 'thread';
   shape: ReviewShape;
   headline: string;
-  why: string;
+  /** The ONE body. A task-borne decision has no `detail` field to read, so
+   *  this is `decisionBlurb`'s derived prose; a declaration carries its own. */
   detail?: string;
-  lookFor?: string;
   options?: HubDecisionOption[];
   askedBy?: string;
   /** Ranking key: when this started waiting. */
@@ -4151,12 +4151,17 @@ export interface PanelReviewItem {
  * This is also why the description below can be de-emphasised — on a decision
  * task it repeats what the card now shows.
  *
+ * The second half was called `why` while the payload had a field of that name
+ * and this fed it. It never was one: it is everything in the body that is not
+ * the question and not the options — a BODY — so it is spelled as one now and
+ * lands in `detail`, which is where the card reads a body from.
+ *
  * One-directional, like the gate: a body it cannot read yields an empty
  * headline, and the caller falls back rather than inventing a question.
  */
-export function decisionBlurb(body: string | undefined): { headline: string; why: string } {
+export function decisionBlurb(body: string | undefined): { headline: string; body: string } {
   const text = (body ?? '').trim();
-  if (!text) return { headline: '', why: '' };
+  if (!text) return { headline: '', body: '' };
   const rows = text.split('\n');
   // A markdown list item — the options, which the card renders as buttons and
   // must not repeat as prose.
@@ -4187,12 +4192,12 @@ export function decisionBlurb(body: string | undefined): { headline: string; why
   };
   const questionAt = rows.findIndex((l) => l.includes('?'));
   const headline = questionAt >= 0 ? plain(rows[questionAt] ?? '') : '';
-  const why = rows
+  const rest = rows
     .filter((l, i) => i !== questionAt && !isListItem(l) && plain(l) !== '' && !introducesList(i))
     .map(plain)
     .join(' ')
     .trim();
-  return { headline, why };
+  return { headline, body: rest };
 }
 
 /**
@@ -4231,7 +4236,7 @@ export function panelReviewQueue(
       // and the ticket is not the decision. An unreadable body yields the
       // title rather than a blank card, which would say nothing at all.
       headline: blurb.headline || task.title,
-      why: blurb.why,
+      ...(blurb.body !== '' ? { detail: blurb.body } : {}),
       ...(task.options ? { options: task.options } : {}),
       since: task.createdAt,
       asked: true,
@@ -4247,9 +4252,7 @@ export function panelReviewQueue(
       // has no declaration, so its headline is the comment itself — which is
       // what the strip shows, and it is honest about being an excerpt.
       headline: r?.headline ?? a.ask,
-      why: r?.why ?? '',
       ...(r?.detail !== undefined ? { detail: r.detail } : {}),
-      ...(r?.lookFor !== undefined ? { lookFor: r.lookFor } : {}),
       ...(r?.options ? { options: r.options } : {}),
       askedBy: a.askedBy,
       since: a.askedAt ?? a.since,
@@ -4282,9 +4285,7 @@ export function panelReviewQueue(
         source: 'thread',
         shape: r.shape,
         headline: r.headline,
-        why: r.why,
         ...(r.detail !== undefined ? { detail: r.detail } : {}),
-        ...(r.lookFor !== undefined ? { lookFor: r.lookFor } : {}),
         askedBy: c.author,
         since: c.ts,
         threadId: t.id,
@@ -4304,8 +4305,18 @@ export function panelReviewQueue(
       });
     }
   }
+  // Declared before inferred. This asked `why !== ''` while the payload had a
+  // required `why` and an inferred item had none — a proxy for `declared`,
+  // which the row now carries outright. Same ordering, stated rather than
+  // inferred from a field's emptiness.
   const rank = (i: PanelReviewItem): number =>
-    i.answered ? 3 : i.source === 'task' ? 0 : i.shape === 'decision' || i.why !== '' ? 1 : 2;
+    i.answered
+      ? 3
+      : i.source === 'task'
+        ? 0
+        : i.shape === 'decision' || i.declared === true
+          ? 1
+          : 2;
   return items.sort((a, b) => {
     const r = rank(a) - rank(b);
     if (r !== 0) return r;
@@ -4579,9 +4590,8 @@ function reviewItemCard(
 
   // ONE anatomy (approved design, review-flow-mock-v1): a head row — kind
   // badge, the headline, the asked-by meta top-right — then one markdown
-  // body composed of why + lookFor + detail. The separate why/detail/lookFor
-  // paragraphs and the trailing meta line this replaces were four blocks
-  // saying what the mock says in two.
+  // body. The separate why/detail/lookFor paragraphs and the trailing meta
+  // line this replaces were four blocks saying what the mock says in two.
   const head = document.createElement('div');
   head.className = 'hub-decide-card-head';
   const badge = document.createElement('span');

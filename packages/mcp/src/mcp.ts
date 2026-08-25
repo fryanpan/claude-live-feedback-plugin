@@ -249,19 +249,25 @@ const server = new Server(
  * not ask for something, do not pass `review`, and your comment stays out of
  * the queue.
  *
- * `headline` and `why` are the two lines of the row. Their character budgets
- * are aims, not gates: over-running one wraps the row and comes back as
- * advice on the 200, because refusing bounced honest asks two words over
- * budget at the exact moment an agent was routing one to the queue instead of
- * to chat. What still refuses is a MISSING or multi-line headline/why — the
- * row cannot be built without them, and clipping one is exactly the
- * unreadable row this replaces. Write them like a ticket title, not like the
- * first sentence of the explanation.
+ * A TITLE AND A DETAIL, and nothing else. `why` and `lookFor` were part of
+ * this schema until 2026-08-25; Bryan, having asked twice for their removal:
+ * *"It imposes a structure that's too rigid and leaves not enough room to
+ * manouevwd. Title and detail is enough."* An old bundle still sending them is
+ * NOT refused — their text is folded into the body server-side, so no word an
+ * author typed is lost by their session being the one that has not restarted.
+ *
+ * `headline` is the row. Its character budget is an aim, not a gate:
+ * over-running it wraps the row and comes back as advice on the 200, because
+ * refusing bounced honest asks two words over budget at the exact moment an
+ * agent was routing one to the queue instead of to chat. What still refuses is
+ * a MISSING or multi-line headline — the row cannot be built without it, and
+ * clipping one is exactly the unreadable row this replaces. Write it like a
+ * ticket title, not like the first sentence of the explanation.
  */
 const REVIEW_ITEM_SCHEMA = {
   type: 'object',
   description:
-    "Declares this a Review Item, putting it on the reviewer's Home queue. Omit it for ordinary comments — status notes and closing remarks are not review items. headline and why are the two lines of the row; missing or multi-line is refused, over-long files anyway with advice.",
+    "Declares this a Review Item, putting it on the reviewer's Home queue. Omit it for ordinary comments — status notes and closing remarks are not review items. headline is the row title; missing or multi-line is refused, over-long files anyway with advice. Everything else goes in detail, in whatever shape the ask wants to read.",
   properties: {
     review_type: {
       type: 'string',
@@ -278,18 +284,10 @@ const REVIEW_ITEM_SCHEMA = {
       description:
         'Name what needs deciding, in words someone who has not seen this work would use. One line.',
     },
-    why: {
-      type: 'string',
-      description: 'What is blocked, or what is at stake, plainly. One line.',
-    },
-    lookFor: {
-      type: 'string',
-      description: 'What you want them to look at or weigh up. One line.',
-    },
     detail: {
       type: 'string',
       description:
-        'The context the reader does not have. Write it for someone reading on a phone, away from the work: spell out names and acronyms the first time, and prefer a plain sentence to a compressed one. Markdown and inline links welcome.',
+        'Everything the reader needs and does not have — what is at stake, what to look at, the context behind it — in whatever order the ask reads best. No prescribed structure. Write it for someone reading on a phone, away from the work: spell out names and acronyms the first time, and prefer a plain sentence to a compressed one. Markdown and inline links welcome.',
     },
     options: {
       type: 'array',
@@ -315,7 +313,7 @@ const REVIEW_ITEM_SCHEMA = {
       },
     },
   },
-  required: ['headline', 'why'],
+  required: ['headline'],
 } as const;
 
 /**
@@ -334,7 +332,7 @@ const REVIEW_ITEM_SCHEMA = {
 const TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
   description:
-    'A review item on this ticket — the question, with its own blurb above its own options. A ticket can carry several open at once, so the title keeps naming the work while headline and why name what is being asked. Same payload and same refusals as a comment-borne declaration.',
+    'A review item on this ticket — the question, with its own blurb above its own options. A ticket can carry several open at once, so the ticket title keeps naming the work while headline names what is being asked. Same payload and same refusals as a comment-borne declaration.',
 } as const;
 
 /**
@@ -347,7 +345,7 @@ const TASK_REVIEW_ITEM_SCHEMA = {
 const NEW_TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
   description:
-    'A question about the work this row creates — for when you are filing the work and the question together. If the question came up while working a task that already exists, hang it there with add_review_item instead, so the ask keeps the context of the work that raised it. The ticket title names the work; headline/why name the ask.',
+    'A question about the work this row creates — for when you are filing the work and the question together. If the question came up while working a task that already exists, hang it there with add_review_item instead, so the ask keeps the context of the work that raised it. The ticket title names the work; headline names the ask.',
 } as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
