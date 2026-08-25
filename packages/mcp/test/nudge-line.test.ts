@@ -87,6 +87,101 @@ describe('readyIdleLine', () => {
   });
 });
 
+/**
+ * The line has to state its DENOMINATOR, for the same reason the presence
+ * strip says "(1 checked)" rather than nothing.
+ *
+ * A bare "1 task has been ready" reads identically on a board with one row and
+ * on a board with nine whose other eight are all waiting on Bryan — and the
+ * second is the board where the reader most needs to know not to go looking
+ * for more work. And a wake that could not read part of the board must not be
+ * reported as one that read all of it and found it fine: "I looked and saw
+ * nothing" and "I could not look" returning the same answer is the failure
+ * this whole change was measured into existence by.
+ */
+describe('readyIdleLine states what the pass examined', () => {
+  it('says how many rows were considered when some were held back', () => {
+    const line = readyIdleLine({
+      ...IDLE,
+      readyCount: 1,
+      consideredCount: 5,
+      held: { 'awaiting-person': 2, parked: 1, blocked: 1 },
+    });
+    expect(line).toContain('5 open rows checked');
+    expect(line).toContain('2 awaiting-person');
+    expect(line).toContain('1 parked');
+    expect(line).toContain('1 blocked');
+  });
+
+  it('still states the denominator when nothing was held', () => {
+    // The count on its own is the honest part. Omitting it whenever it equals
+    // `readyCount` would make a stated denominator indistinguishable from an
+    // absent one exactly on the boards where it agrees.
+    const line = readyIdleLine({ ...IDLE, readyCount: 3, consideredCount: 3 });
+    expect(line).toContain('3 open rows checked');
+  });
+
+  it('reads as one row rather than "1 open rows"', () => {
+    expect(readyIdleLine({ ...IDLE, readyCount: 1, consideredCount: 1 })).toContain(
+      '1 open row checked',
+    );
+  });
+
+  it('says nothing about a denominator a server too old to send one omitted', () => {
+    const line = readyIdleLine(IDLE);
+    expect(line).not.toContain('checked');
+    expect(line).not.toContain('undefined');
+    expect(line).not.toContain('NaN');
+    // Positive control: the rest of the sentence is intact.
+    expect(line).toContain('3 tasks have been ready');
+  });
+
+  it('names the rows it could not evaluate, and says they are not counted ready', () => {
+    const line = readyIdleLine({
+      ...IDLE,
+      readyCount: 2,
+      consideredCount: 4,
+      undetermined: { count: 1, reasons: ['review-items-unreadable'] },
+    });
+    expect(line).toContain('1 could NOT be evaluated');
+    expect(line).toContain('review-items-unreadable');
+    // The reader has to know which way the uncertainty falls, or an
+    // unevaluable row reads as one more thing already handled.
+    expect(line).toContain('not counted ready');
+  });
+
+  it('reads as an evaluation failure, not as a queue, when nothing could be read', () => {
+    // The frame the server sends only for this case: no ready rows at all, so
+    // there is no "start with" and no queue to take. A line that still said
+    // "0 tasks have been ready … take the top of the queue" would send its
+    // reader to an empty queue and teach them the wake means nothing.
+    const line = readyIdleLine({
+      readyCount: 0,
+      consideredCount: 3,
+      undetermined: { count: 3, reasons: ['owner-kind-unreadable', 'review-items-unreadable'] },
+    });
+    expect(line).toContain('[workspace.ready_idle]');
+    expect(line).toContain('3 of 3');
+    expect(line).toContain('owner-kind-unreadable');
+    expect(line).toContain('review-items-unreadable');
+    expect(line).not.toContain('next_tasks');
+    expect(line).not.toContain('undefined');
+    expect(line).not.toContain('NaN');
+  });
+
+  it('keeps the instruction last when there IS work to take', () => {
+    const line = readyIdleLine({
+      ...IDLE,
+      consideredCount: 6,
+      held: { parked: 2 },
+      undetermined: { count: 1, reasons: ['review-items-unreadable'] },
+    });
+    expect(line.endsWith('Take the top of the queue with next_tasks / task_transition.')).toBe(
+      true,
+    );
+  });
+});
+
 describe('reviewAnsweredLine', () => {
   it('names the answered task and tells the lead to act on the answer', () => {
     const line = reviewAnsweredLine({ taskId: 't-a1', title: 'Ship the search revamp' });
