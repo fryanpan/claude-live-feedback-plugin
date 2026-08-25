@@ -12,6 +12,8 @@ import {
   anchors,
   checkReviewPayload,
   contentKind,
+  emailIdentityId,
+  isEmailLike,
   readReviewPayload,
   reviewGapAdvice,
   reviewIdOf,
@@ -21,7 +23,7 @@ import {
 } from '@feedback/core';
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
-import { classifyActor } from './activity.ts';
+import { classifyActor, registerOwnerIdentity } from './activity.ts';
 import {
   AgentWatches,
   SHARED_AGENT_IDS,
@@ -2234,6 +2236,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const emailCodes = new EmailCodes();
   const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
+  // Teach the owner check the owner's email identity. Without this the check
+  // keeps matching only `known-bryan` / "Bryan", and the day the owner's
+  // identity becomes `user-<hash>` the owner-activity view quietly reads
+  // empty with nothing anywhere reporting it. See activity.ts.
+  if (opts.ownerEmail && isEmailLike(opts.ownerEmail)) {
+    registerOwnerIdentity(emailIdentityId(opts.ownerEmail));
+    // Named so the identity exists in the roster before its first write,
+    // rather than appearing the first time the owner happens to log in.
+    identities.upsertByEmail(opts.ownerEmail);
+  } else if (opts.ownerEmail) {
+    console.error(`[identities] CW_OWNER_EMAIL is not an address: ${opts.ownerEmail}`);
+  }
   let emailSessionKeyCache: string | null = null;
   const emailSessionKey = (): string => {
     emailSessionKeyCache ??= deriveSessionKey(cookieKey());
@@ -2416,12 +2430,49 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         };
 
         /**
-         * The author to attribute a write to. On the tailnet the body is
-         * trusted (it's Bryan's browser or his own agents). From a share
-         * visitor it is NOT: their claimed identity is rewritten into the
-         * `guest-` namespace so nobody can post as a member of the fleet.
+         * The identity this request has PROVEN, resolved at most once.
+         *
+         * Lazy because most requests never ask, and memoized because a write
+         * route can call `authorFor` more than once and each call would
+         * otherwise re-verify an HMAC.
+         */
+        let provenIdentity: IdentityRecord | null | undefined;
+        const provenIdentityFor = (): IdentityRecord | null => {
+          if (provenIdentity === undefined) provenIdentity = sessionIdentityFor(req);
+          return provenIdentity;
+        };
+
+        /**
+         * The author to attribute a write to.
+         *
+         * Until this commit the tailnet body was simply trusted — the comment
+         * here said so — which meant `?as=bryan` on any URL minted
+         * `known-bryan`, and `kind: 'known'` only ever meant "typed a name".
+         * Now, when a request carries a VERIFIED session, the server's own
+         * verdict outranks whatever the body claims. A caller may still say
+         * who they are; they no longer get to say it about someone else.
+         *
+         * Order matters and each rung has a reason:
+         *
+         *  1. A proven identity, when email identity is in effect. It
+         *     outranks the body precisely because the body is the thing it
+         *     exists to stop being authoritative.
+         *  2. A share visitor with nothing proven stays a `guest-` — that
+         *     path is the template this work copies, not a thing it replaces,
+         *     and link mode keeps minting guests.
+         *  3. Otherwise the claimed body, exactly as today. This is the rung
+         *     every agent, every MCP call and every un-authenticated browser
+         *     lands on, so a request with no session behaves identically
+         *     whichever way the flag is set.
+         *
+         * Rung 1 is behind `CW_REQUIRE_EMAIL_AUTH` (default off), so with the
+         * flag off this function is byte-for-byte what it was.
          */
         const authorFor = (claimed: unknown): User | undefined => {
+          if (requireEmailAuth) {
+            const proven = provenIdentityFor();
+            if (proven) return userForIdentity(proven);
+          }
           if (visitor) {
             return sanitizeVisitorAuthor(claimed, {
               // The SHARE, not the doc: two links to the same doc are two
