@@ -983,6 +983,16 @@ body.hub-body {
   gap: 6px;
   padding: 8px 0 0;
 }
+/* The presence island owns a wrapper of its own inside the strip — Preact
+   must never share a container with vanilla code. `display: contents` keeps
+   that wrapper out of layout entirely, so the circles and the drift notes stay
+   DIRECT flex items of `.hub-presence`: the gap, the nowrap fit at 430px, and
+   the `flex: 1 0 100%` that gives a notice its own line are all written
+   against that relationship. Without this the whole strip would collapse into
+   a single flex item. */
+.hub-presence > [data-preact-island] {
+  display: contents;
+}
 .hub-presence-chip {
   display: inline-flex;
   align-items: center;
