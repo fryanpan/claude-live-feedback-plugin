@@ -15935,7 +15935,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "get_unfiled_ask_count",
-      description: 'Read your own unfiled-ask count — asks that appeared in your chat without a matching filed review item, as the daily chat audit last counted them. This is the self-correction half of the "no unfiled asks" rule: query it at session start or before standing down, and if the number is above zero, the drift is yours to fix by filing review items instead of chat asks. HONEST LIMITS, read them: the server cannot see chat, so this is NOT a live measurement — the number is whatever the daily audit (which mines transcripts) last published via publish_chat_audit, and `today: null` means no audit has covered today yet, which is a real answer. `latest: null` means no audit has ever published about you — not innocence. Counts are keyed by display name (CW_AGENT_NAME); pass `agent` to read a different agent\'s number (a lead following up on the audit).',
+      description: "Read your own unfiled-ask count — asks that appeared in your chat with no matching filed review item. Query it at session start or before standing down; above zero is drift to fix by filing review items instead. Not a live measurement: the server cannot see chat, so the number is whatever the daily audit last published. `today: null` means no audit covered today and `latest: null` means none ever covered you — neither is innocence.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15948,7 +15948,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "publish_chat_audit",
-      description: "FOR THE DAILY CHAT AUDIT: publish per-agent unfiled-ask counts so each session can read its own back via get_unfiled_ask_count. The audit's number and the number a session self-queries are the same stored row — one heuristic, one implementation — so reference these counts in the audit report rather than recomputing. Each entry: {agent (display name / CW_AGENT_NAME), unfiledAsks (asks in chat without a matching filed review item), totalAsks?, sessionId?, note? (evidence pointer)}. `day` is the audited day (YYYY-MM-DD, defaults to today on the server's clock). Publishing again for the same agent supersedes — latest wins, history kept (append-only). The bare name 'agent' is refused: counts belong to somebody.",
+      description: "For the daily chat audit: publish per-agent unfiled-ask counts so each session can read its own back with get_unfiled_ask_count. Both numbers are the same stored row, so reference these counts in the audit report rather than recomputing them. Publishing again for the same agent supersedes — latest wins, history kept. The bare name 'agent' is refused: counts belong to somebody.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15958,11 +15958,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: "object",
               properties: {
-                agent: { type: "string" },
-                unfiledAsks: { type: "number" },
+                agent: {
+                  type: "string",
+                  description: "Display name (CW_AGENT_NAME) the count belongs to."
+                },
+                unfiledAsks: {
+                  type: "number",
+                  description: "Asks that appeared in that agent's chat with no matching filed review item."
+                },
                 totalAsks: { type: "number" },
                 sessionId: { type: "string" },
-                note: { type: "string" }
+                note: { type: "string", description: "Evidence pointer." }
               },
               required: ["agent", "unfiledAsks"]
             }
