@@ -268,7 +268,6 @@ export function projectTask(
     ...(task.quote !== undefined ? { quote: task.quote } : {}),
     ...(task.answer !== undefined ? { answer: task.answer } : {}),
     ...(task.triagedAgainst !== undefined ? { triagedAgainst: task.triagedAgainst } : {}),
-    ...(task.triagePendingTs !== undefined ? { triagePendingTs: task.triagePendingTs } : {}),
     // Nobody has named this task's band, and since when. Projected so the
     // board and the queue can say the sentence out loud without new plumbing
     // — a field only the store can see is the "flag nobody renders" bug.
@@ -622,7 +621,6 @@ export class TaskProjection {
         .listTasks(workspaceId, { includeArchived: true })
         .map((t) => [t.id, projectTask(t, this.commentCount(t.id), ownerKindOf(t))]),
     );
-    const pendingBucket = this.tasks.getPendingBucketReview(workspaceId);
     // Each band rides out decorated with its goal ROW's status (and done
     // attribution), read through the store's public API. The board renders
     // bands from this array and nothing else, so a status only the store can
@@ -678,24 +676,6 @@ export class TaskProjection {
       // without anything having to clear it.
       ...(ws.retiredAt !== undefined ? { retiredAt: ws.retiredAt } : {}),
       ...(ws.retiredReason !== undefined ? { retiredReason: ws.retiredReason } : {}),
-      // A new goal band nobody has re-looked at the bucket against. Its own
-      // key for the same reason it has its own sidecar: the two asks have
-      // different baselines and different answers, so folding it into the
-      // one above would let a board render "a goal edit is waiting" for
-      // something no set_task_goal on those tasks would settle. Trimmed the
-      // same way — band TITLES rather than the two full goal lists, since
-      // the board already carries the list.
-      ...(pendingBucket
-        ? {
-            pendingBucketReview: {
-              batchId: pendingBucket.batchId,
-              taskIds: pendingBucket.taskIds,
-              bandTitles: pendingBucket.newBands.map((b) => b.title),
-              ts: pendingBucket.ts,
-              byName: pendingBucket.actor.name,
-            },
-          }
-        : {}),
       createdAt: ws.createdAt,
     };
     room.ydoc.transact(() => {

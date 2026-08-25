@@ -15,8 +15,6 @@
  * read its source. Order and drained state are not things source-reading can
  * check.
  */
-import { TASK_REVIEW_SKILL } from './triage-line.ts';
-
 export interface DeclareLeadDeps {
   http: (method: string, path: string, body?: unknown) => Promise<unknown>;
   /** `open` — the SSE stream is actually live, so events reach this session
@@ -55,12 +53,6 @@ interface AttachResponse {
     ts: number;
   }>;
   lead?: boolean;
-  pendingBucketReview?: {
-    batchId: string;
-    newBands: Array<{ id: string; title: string }>;
-    taskIds: string[];
-  };
-  taskReviews?: Array<{ taskId: string; trigger: string; actor?: unknown; ts: number }>;
   /** This board has been stood down — no new work, not ranked. */
   retired?: { since: number; reason?: string; notice: string };
   /** This agent leads another LIVE board with the same name. */
@@ -97,12 +89,11 @@ export async function declareWorkspaceLead(
       processId: deps.processId,
     })) as AttachResponse;
 
-    // 2. SUBSCRIBE BEFORE THE SEAT CHANGE. setLeadAgent re-delivers a waiting
-    //    re-triage / bucket review / task review to a live lead over the
-    //    WORKSPACE CHANNEL, and CLEARS it on success. Subscribing afterwards
-    //    would let that first delivery land on a stream nobody had opened yet
-    //    — cleared server-side, never seen here, and no surface anywhere
-    //    reporting the loss. That is this ticket's own bug, one layer down.
+    // 2. SUBSCRIBE BEFORE THE SEAT CHANGE. A seat change is announced on the
+    //    WORKSPACE CHANNEL. Subscribing afterwards would let that first
+    //    delivery land on a stream nobody had opened yet — gone server-side,
+    //    never seen here, and no surface anywhere reporting the loss. That is
+    //    this ticket's own bug, one layer down.
     //    The watch is persisted through the agent-watches machinery, so a
     //    respawn re-wires this single `ws:<id>` key and the board's docs come
     //    with it.
@@ -189,7 +180,7 @@ export async function declareWorkspaceLead(
     // `attachAgent` claims an EMPTY seat only, so on a takeover it answers
     // `lead: false` — which used to ship next to `leadAgentId: <me>` in the
     // same payload, and `lead` is the field the skills teach an agent to
-    // branch on for "is the goal-edit re-triage addressed to me".
+    // branch on for "does this board's work land on me".
     lead: settledLead === deps.self.id,
     ...(res.declined === 'lead-held'
       ? {
@@ -223,9 +214,5 @@ export async function declareWorkspaceLead(
       text: q.text,
       ts: q.ts,
     })),
-    ...(a.pendingBucketReview ? { pendingBucketReview: a.pendingBucketReview } : {}),
-    ...(a.taskReviews !== undefined && a.taskReviews.length > 0
-      ? { taskReviews: a.taskReviews, taskReviewContract: TASK_REVIEW_SKILL }
-      : {}),
   };
 }

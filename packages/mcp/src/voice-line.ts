@@ -20,7 +20,7 @@
  * saying the opposite thing about what to do with it.
  *
  * Kept out of mcp.ts — which exports nothing, being a bundle entry point —
- * for the same reason `triage-line.ts` is: the wording is a decision, and
+ * for the same reason `nudge-line.ts` is: the wording is a decision, and
  * inline in a 3,000-line switch it is untestable. Composed entirely from
  * fields already on the payload (`route`, `transcript`, `ack`, `context`), so
  * no new event field is needed and the visitor's drop-list stays correct.

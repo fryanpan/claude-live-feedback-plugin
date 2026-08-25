@@ -3,7 +3,7 @@
  *
  * The measured incident: a peer held six docs under `watch_doc` and believed
  * it was listening. It had never attached to the board those docs live on. A
- * voice note and a re-triage request queued SILENTLY, and every probe the
+ * voice note queued SILENTLY, and every probe the
  * agent could run answered confidently — `list_watched_docs` said six watches,
  * all live. Six watches IS the true answer to the question that probe asks.
  * It is the wrong question.
@@ -23,9 +23,6 @@
 
 export interface CoverageQueue {
   queuedVoice: number;
-  /** 0 or 1 — the pending bucket re-look is a single coalesced ask. */
-  pendingBucketReview: number;
-  taskReviews: number;
 }
 
 /** One `ws:<id>` key in this session's watch set, as the server resolved it. */
@@ -126,8 +123,6 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function describeQueue(q: CoverageQueue): string {
   const parts: string[] = [];
   if (q.queuedVoice > 0) parts.push(plural(q.queuedVoice, 'voice note'));
-  if (q.pendingBucketReview > 0) parts.push(plural(q.pendingBucketReview, 'bucket review'));
-  if (q.taskReviews > 0) parts.push(plural(q.taskReviews, 'task review'));
   return parts.join(', ');
 }
 
