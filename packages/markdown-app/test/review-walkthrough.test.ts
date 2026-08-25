@@ -1367,4 +1367,68 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
     expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
     expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
   });
+
+  /**
+   * Bryan, 2026-08-24: "Site is still buggy when I'm reviewing home queue.
+   * When I expand a task, it collapses a second later."
+   *
+   * The card repaints on every `thread.*` / `task.transitioned` event — on a
+   * busy board that is every second or two — and a repaint is
+   * `replaceChildren()`. So an expansion that lives ONLY in the DOM is thrown
+   * away by the next background event, with nothing the reader did to cause
+   * it. `keepFields`/`restoreFields` already carry the drafts across that
+   * swap; the reader's decision to open something has to travel the same way.
+   */
+  it('stays expanded across the repaint a background event fires', () => {
+    const q = queueOf(longItem());
+    renderReviewWalkthrough(root, q, 0, walk());
+    (root.querySelector('.hub-walk-body-expand') as HTMLButtonElement).click();
+    // The board event lands: same queue, same position, a fresh card.
+    renderReviewWalkthrough(root, q, 0, walk());
+    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    expect(body.classList.contains('hub-walk-body-clamp')).toBe(false);
+    expect(root.querySelector('.hub-walk-body-expand')).toBeNull();
+  });
+
+  // The clamp is per-item, so moving on must not carry the last card's
+  // expansion onto the next one — that would unclamp a body nobody opened.
+  it('does not carry one card’s expansion onto the next item', () => {
+    const first = longItem();
+    const second = threadItem({
+      threadId: 'th-2',
+      commentId: 'c-2',
+      review: { shape: 'review', headline: 'And this one?', detail: longDetail },
+    });
+    const q = queueOf(first, second);
+    renderReviewWalkthrough(root, q, 0, walk());
+    (root.querySelector('.hub-walk-body-expand') as HTMLButtonElement).click();
+    renderReviewWalkthrough(root, q, 1, walk());
+    const body = root.querySelector('.hub-walk-body') as HTMLElement;
+    expect(body.classList.contains('hub-walk-body-clamp')).toBe(true);
+    expect(root.querySelector('.hub-walk-body-expand')).not.toBeNull();
+  });
+});
+
+/**
+ * The other expansion on the card — "Tell me more", which opens the
+ * ask-for-what's-missing box on a decision. Same failure, same fix: the open
+ * state lived in the DOM a repaint replaces, and survived only when the
+ * textarea underneath happened to hold a draft or the focus. On iOS the
+ * programmatic focus is the part that is not guaranteed, so opening the box
+ * and reading the question for a second was enough to lose it.
+ */
+describe('renderReviewWalkthrough — "Tell me more" survives a repaint', () => {
+  it('stays open across a repaint with nothing typed and no focus', () => {
+    const q = q0([decision({ title: 'Ship now or wait?' })]);
+    renderReviewWalkthrough(root, q, 0, walk());
+    const more = root.querySelector('.hub-walk-more') as HTMLButtonElement;
+    more.click();
+    expect((root.querySelector('.hub-walk-info') as HTMLElement).classList).not.toContain('hidden');
+    // Nothing typed, and the focus is elsewhere — the reader is reading.
+    (document.activeElement as HTMLElement | null)?.blur();
+    renderReviewWalkthrough(root, q, 0, walk());
+    const info = root.querySelector('.hub-walk-info') as HTMLElement;
+    expect(info.classList.contains('hidden')).toBe(false);
+    expect(root.querySelector('.hub-walk-more')?.getAttribute('aria-expanded')).toBe('true');
+  });
 });
