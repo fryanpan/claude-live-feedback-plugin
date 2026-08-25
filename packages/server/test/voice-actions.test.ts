@@ -180,8 +180,6 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
       review: {
         shape: 'review',
         headline,
-        why: 'Blocks the rollout; the wording is yours.',
-        lookFor: 'Whether the shorter clause still reads as a rule.',
       },
     });
     const payload = (await r.json()) as { thread?: { id: string }; error?: string };

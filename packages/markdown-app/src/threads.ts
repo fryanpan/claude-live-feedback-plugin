@@ -750,8 +750,8 @@ export class ThreadPanel {
     head.append(meta);
     card.append(head);
 
-    // ONE body: why + lookFor + detail composed as markdown, same join as
-    // every other surface (`reviewItemBodyMarkdown`).
+    // ONE body, markdown-rendered — the payload's `detail`, via the same
+    // `reviewItemBodyMarkdown` every other surface asks.
     const bodyMarkdown = reviewItemBodyMarkdown(review);
     if (bodyMarkdown !== '') {
       const body = div('thread-item-body');
@@ -898,12 +898,17 @@ function participantsRow(p: Participants): HTMLElement {
 }
 
 /**
- * The two-line header a declared Review Item carries, or null.
+ * The header a declared Review Item carries, or null.
  *
- * Plain text on both lines: they are agent-supplied, and unlike the comment
- * BODY they are not markdown — the API takes them as single-line strings and
- * refuses anything else, so rendering them as markup would interpret
- * characters the author was told would be literal.
+ * Kind and headline — the second line was the payload's `why`, and the field
+ * went with the structure it imposed (2026-08-25). Whatever an author wrote
+ * there is in the body now; a header that quoted the first sentence of it back
+ * would be the reader's own words twice.
+ *
+ * Plain text: the headline is agent-supplied, and unlike the comment BODY it
+ * is not markdown — the API takes it as a single-line string and refuses
+ * anything else, so rendering it as markup would interpret characters the
+ * author was told would be literal.
  */
 function reviewHeader(review: Comment['review']): HTMLElement | null {
   if (!review) return null;
@@ -912,9 +917,7 @@ function reviewHeader(review: Comment['review']): HTMLElement | null {
   kind.textContent = review.shape === 'decision' ? 'Decision' : 'Question';
   const headline = div('comment-review-headline');
   headline.textContent = review.headline;
-  const why = div('comment-review-why');
-  why.textContent = review.why;
-  box.append(kind, headline, why);
+  box.append(kind, headline);
   return box;
 }
 

@@ -137,7 +137,6 @@ describe('triageThread', () => {
         review: {
           shape: 'decision',
           headline: 'Which banner placement ships?',
-          why: 'Both screens exist; the choice is yours.',
         },
       } as Partial<Comment>),
     ]);
@@ -155,7 +154,7 @@ describe('resolvable', () => {
   const skim = thread([comment('Two options and neither is obviously better.')]);
   const declaredReceipt = thread([
     comment('Done — both screens are built.', AGENT, {
-      review: { shape: 'decision', headline: 'Which one?', why: 'Your call.' },
+      review: { shape: 'decision', headline: 'Which one?' },
     } as Partial<Comment>),
   ]);
 

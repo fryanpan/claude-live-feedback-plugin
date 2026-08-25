@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { createServer } from '../src/server.ts';
 import { ThreadSummarizer } from '../src/summarize.ts';
 
-const PERSON = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
+const PERSON = { id: 'known-riley', name: 'Riley', kind: 'known', color: '#2e7dd7' };
 const AGENT = { id: 'agent-harbor', name: 'Harbor Agent', kind: 'known', color: '#888888' };
 
 interface HomePayload {
@@ -73,7 +73,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
     rmSync(h.dataDir, { recursive: true, force: true });
   });
 
-  const home = async (user = 'Bryan'): Promise<HomePayload> => {
+  const home = async (user = 'Riley'): Promise<HomePayload> => {
     const res = await h.local(`/api/workspaces/${ws}/home?user=${encodeURIComponent(user)}`);
     expect(res.status).toBe(200);
     return (await res.json()) as HomePayload;
@@ -81,7 +81,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
 
   it('GET requires a user and a real workspace', async () => {
     expect((await h.local(`/api/workspaces/${ws}/home`)).status).toBe(400);
-    expect((await h.local('/api/workspaces/w-none/home?user=Bryan')).status).toBe(404);
+    expect((await h.local('/api/workspaces/w-none/home?user=Riley')).status).toBe(404);
   });
 
   it('a fresh reader gets the deterministic brief with the queue denominator, never generating', async () => {
@@ -120,7 +120,7 @@ describe('home routes — deterministic server (no summarizer)', () => {
   });
 
   it('mark caught up moves the marker per PERSON, the brief covers from it, and undo restores', async () => {
-    // Jordan marking read must not move Bryan's marker.
+    // Jordan marking read must not move Riley's marker.
     const jordan = await h.post(`/api/workspaces/${ws}/home/read`, {
       author: { name: 'Jordan' },
     });
@@ -230,7 +230,7 @@ describe('home brief queue count — blockers are not review items', () => {
   });
 
   const briefLine = async (): Promise<string> => {
-    const res = await h.local(`/api/workspaces/${ws}/home?user=Bryan`);
+    const res = await h.local(`/api/workspaces/${ws}/home?user=Riley`);
     expect(res.status).toBe(200);
     return ((await res.json()) as HomePayload).brief.markdown;
   };
@@ -307,7 +307,7 @@ describe('home routes — generated brief (stub summarizer)', () => {
   });
 
   const home = async (): Promise<HomePayload> => {
-    const res = await h.local(`/api/workspaces/${ws}/home?user=Bryan`);
+    const res = await h.local(`/api/workspaces/${ws}/home?user=Riley`);
     return (await res.json()) as HomePayload;
   };
 
@@ -425,7 +425,7 @@ describe('the queue count matches what Home places — thread rows', () => {
   });
 
   const briefLine = async (): Promise<string> => {
-    const res = await h.local(`/api/workspaces/${ws}/home?user=Bryan`);
+    const res = await h.local(`/api/workspaces/${ws}/home?user=Riley`);
     expect(res.status).toBe(200);
     return ((await res.json()) as HomePayload).brief.markdown;
   };
@@ -458,7 +458,7 @@ describe('the queue count matches what Home places — thread rows', () => {
     expect(opened.status).toBe(200);
     const threadId = ((await opened.json()) as { thread: { id: string } }).thread.id;
     const asked = await h.post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
-      text: 'Bryan — should the sweep also purge the staging dir?',
+      text: 'Riley — should the sweep also purge the staging dir?',
       author: AGENT,
     });
     expect(asked.status).toBe(200);
@@ -486,7 +486,6 @@ describe('the queue count matches what Home places — thread rows', () => {
       review: {
         shape: 'review',
         headline: 'Pick the sweep schedule',
-        why: 'The cron line ships with this change.',
       },
     });
     expect(declared.status).toBe(200);

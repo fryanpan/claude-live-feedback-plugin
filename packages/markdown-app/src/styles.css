@@ -1563,8 +1563,8 @@ body.hub-body {
   overflow-wrap: anywhere;
 }
 /* (`.hub-walk-why`, `.hub-walk-ctx`, `.hub-walk-lookfor-text` and
-   `.hub-walk-review-detail` are gone: the one-card anatomy renders why +
-   lookFor + detail as a single markdown `.hub-walk-body`, and the who/when
+   `.hub-walk-review-detail` are gone: the one-card anatomy renders the
+   payload's one body as a single markdown `.hub-walk-body`, and the who/when
    moved into the head's `.hub-walk-wait` meta.) */
 /* The ask, tinted so it is the thing the eye lands on (mockup `.ask`). */
 .hub-walk-askbox {
@@ -3619,10 +3619,10 @@ a.hub-link-chip:hover {
   overflow-wrap: anywhere;
   max-width: 72ch;
 }
-/* The card's ONE body: why + lookFor + detail composed as markdown. This is
-   where the links to the thing under review live, so it reads as prose with
-   real links rather than as a trailing clause. Unclamped for the same reason
-   the headline is — nothing on this card truncates authored words. */
+/* The card's ONE body, rendered as markdown. This is where the links to the
+   thing under review live, so it reads as prose with real links rather than
+   as a trailing clause. Unclamped for the same reason the headline is —
+   nothing on this card truncates authored words. */
 .hub-decide-body {
   margin: 0 0 12px;
   font-family: var(--prose);
@@ -4063,13 +4063,6 @@ a.hub-link-chip:hover {
   font-size: 14px;
   font-weight: 650;
   line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-.hub-comment-review-why {
-  margin: 1px 0 4px;
-  font-size: 12.5px;
-  line-height: 1.4;
-  color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
 .hub-comment-body {
@@ -5938,12 +5931,6 @@ body.threads-resizing {
   font-size: 13.5px;
   font-weight: 650;
   line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-.comment-review-why {
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--fg-muted);
   overflow-wrap: anywhere;
 }
 /* The FULL review-item interface, rendered first in the expanded thread that

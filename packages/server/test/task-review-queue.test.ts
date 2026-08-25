@@ -36,7 +36,6 @@ const DECISION_BODY =
 const REVIEW: ReviewPayload = {
   shape: 'decision',
   headline: 'Which cache do we keep?',
-  why: 'Blocks the storage cleanup; both paths are built.',
   options: [
     { id: 'o-7f3a', label: 'Keep disk' },
     { id: 'o-4b2e', label: 'Keep memory' },

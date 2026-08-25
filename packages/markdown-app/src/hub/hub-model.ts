@@ -938,7 +938,16 @@ export interface ReviewItem {
   title: string;
   /** The ask itself, one line. Empty for a decision whose body is the ask. */
   ask: string;
-  /** Why it sits where it does; the item's second line. */
+  /**
+   * Why it sits where it does; the row's DERIVED second line.
+   *
+   * Not the payload's — that field is gone (2026-08-25). This has always been
+   * the queue's own sentence: a decision's blocking line, or the provenance
+   * of the comment that raised it. A declared row used to substitute the
+   * author's `why` here; it now takes the same provenance line every other
+   * thread row gets, and the author's words are read where they were written,
+   * in the card's one body.
+   */
   why: string;
   since: number;
   /** Set on a decision — the row the answer form and the blocks line need. */
@@ -1200,8 +1209,10 @@ export function reviewQueue(
           title: t.title,
           ask: t.ask,
           review: t.review,
-          // The authored second line, exactly as a declared thread row reads.
-          why: t.review.why ?? '',
+          // Nothing derives a second line for a ticket-borne item: it has no
+          // comment to quote the provenance of, and the row renders title +
+          // askedMeta regardless. Empty rather than invented.
+          why: '',
           since: t.since,
           thread: t,
         },
@@ -1243,15 +1254,13 @@ export function reviewQueue(
         // The run can start days before the ask — status, status, then a
         // question — and quoting the run's start there tells the reader they
         // have been sitting on something they were handed minutes ago.
-        // A declared item's second line is the one its author WROTE — why it
-        // matters, in their words. The derived line ("Name posted 3d ago")
-        // describes the comment rather than the ask, which is all there is to
-        // say when nobody declared anything.
-        why: declared
-          ? (t.review?.why ?? '')
-          : t.direct
-            ? `${t.askedBy} asked you ${timeAgo(t.askedAt ?? t.since, now)} · ${where}`
-            : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
+        // The derived provenance line, for declared and inferred rows alike.
+        // A declared row used to substitute its author's `why` here; that
+        // field is gone, and its words are in the card's one body, which is
+        // where a reader opening the row reads them.
+        why: t.direct
+          ? `${t.askedBy} asked you ${timeAgo(t.askedAt ?? t.since, now)} · ${where}`
+          : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
         since: t.since,
         thread: t,
       },

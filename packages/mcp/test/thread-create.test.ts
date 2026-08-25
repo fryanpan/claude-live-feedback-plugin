@@ -65,7 +65,6 @@ describe('threadCreateRequest — the review declaration', () => {
   const REVIEW = {
     shape: 'decision',
     headline: 'Where should the trial banner live?',
-    why: 'Blocks the onboarding rework.',
     options: [
       { id: 'above', label: 'Keep above' },
       { id: 'below', label: 'Move below' },

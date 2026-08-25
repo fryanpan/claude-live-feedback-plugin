@@ -20,8 +20,6 @@ function decision(over: Partial<ReviewPayload> = {}): unknown {
   return {
     shape: 'decision',
     headline: 'Should a resolved thread stay visible inline?',
-    why: 'Blocks the inline-comments branch; two callers already disagree.',
-    lookFor: 'Whether hiding it loses the audit trail.',
     detail:
       'Threads resolve often and the list gets long, but a hidden reply is a reply nobody sees.',
     options: [
@@ -36,8 +34,6 @@ function review(over: Partial<ReviewPayload> = {}): unknown {
   return {
     shape: 'review',
     headline: 'Read the new onboarding copy',
-    why: 'Ships with the next release; nobody outside the team has read it.',
-    lookFor: 'Whether the second screen explains the trial.',
     detail: 'Three screens of copy. The second one is the one I am least sure about.',
     ...over,
   };
@@ -72,13 +68,12 @@ describe('checkReviewPayload — what refuses', () => {
     expect(checkReviewPayload(decision({ headline: '   ' })).ok).toBe(false);
   });
 
-  it('refuses a one-line field past the sanity ceiling — that is a pasted paragraph', () => {
-    const absurd = 'x'.repeat(REVIEW_LIMITS.lineMaxChars + 1);
-    for (const key of ['headline', 'why', 'lookFor'] as const) {
-      const c = checkReviewPayload(decision({ [key]: absurd }));
-      expect(c.ok).toBe(false);
-      expect(c.errors.join(' ')).toContain(String(REVIEW_LIMITS.lineMaxChars));
-    }
+  it('refuses a headline past the sanity ceiling — that is a pasted paragraph', () => {
+    const c = checkReviewPayload(
+      decision({ headline: 'x'.repeat(REVIEW_LIMITS.lineMaxChars + 1) }),
+    );
+    expect(c.ok).toBe(false);
+    expect(c.errors.join(' ')).toContain(String(REVIEW_LIMITS.lineMaxChars));
   });
 
   it('accepts a one-line field exactly at the ceiling — the boundary is inclusive', () => {
@@ -91,12 +86,6 @@ describe('checkReviewPayload — what refuses', () => {
     const c = checkReviewPayload(decision({ headline: 'Two\nlines' }));
     expect(c.ok).toBe(false);
     expect(c.errors.join(' ')).toContain('single line');
-  });
-
-  it('refuses a missing why', () => {
-    const c = checkReviewPayload(decision({ why: undefined }));
-    expect(c.ok).toBe(false);
-    expect(c.errors.join(' ')).toContain('review.why is required');
   });
 
   it('refuses a decision with fewer than two options', () => {
@@ -176,12 +165,6 @@ describe('checkReviewPayload — what refuses', () => {
 });
 
 describe('checkReviewPayload — what only advises', () => {
-  it('accepts a decision with no lookFor and reports it as a gap', () => {
-    const c = checkReviewPayload(decision({ lookFor: undefined }));
-    expect(c.ok).toBe(true);
-    expect(c.gaps).toContain('lookFor');
-  });
-
   it('accepts a review with no detail and reports it as a gap', () => {
     const c = checkReviewPayload(review({ detail: undefined }));
     expect(c.ok).toBe(true);
@@ -190,38 +173,18 @@ describe('checkReviewPayload — what only advises', () => {
 });
 
 // The row budgets used to REFUSE, and in one measured 24-hour window that
-// bounced six honest filings whose `why` ran 92–102 characters against a
-// 90-character budget — each one at the moment an agent was routing an ask to
-// the queue instead of to chat, and each one costing a retry to shave two
-// words. A budget is a rendering fact, not a correctness one: the row wraps,
-// which is worse than a tight line and far better than the ask never being
-// filed. So they advise, exactly as the detail target has since #299.
+// bounced six honest filings running 92–102 characters against a 90-character
+// budget — each one at the moment an agent was routing an ask to the queue
+// instead of to chat, and each one costing a retry to shave two words. A
+// budget is a rendering fact, not a correctness one: the row wraps, which is
+// worse than a tight line and far better than the ask never being filed. So
+// they advise, exactly as the detail target has since #299.
 describe('checkReviewPayload — a length over a row budget advises, it does not refuse', () => {
-  it('files a why 60 characters past its budget and reports the gap', () => {
-    const long =
-      'The two callers already disagree about this and the branch behind it cannot land until somebody picks one.';
-    expect(long.length).toBeGreaterThan(REVIEW_LIMITS.why);
-    const c = checkReviewPayload(decision({ why: long }));
+  it('files an over-long headline and reports the gap', () => {
+    const c = checkReviewPayload(decision({ headline: 'x'.repeat(REVIEW_LIMITS.headline + 1) }));
     expect(c.errors).toEqual([]);
     expect(c.ok).toBe(true);
-    expect(c.gaps).toContain('whyLength');
-  });
-
-  it('files an over-long headline and an over-long lookFor', () => {
-    const headline = checkReviewPayload(
-      decision({ headline: 'x'.repeat(REVIEW_LIMITS.headline + 1) }),
-    );
-    expect(headline.ok).toBe(true);
-    expect(headline.gaps).toContain('headlineLength');
-
-    const lookFor = checkReviewPayload(
-      decision({ lookFor: 'x'.repeat(REVIEW_LIMITS.lookFor + 1) }),
-    );
-    expect(lookFor.ok).toBe(true);
-    expect(lookFor.gaps).toContain('lookForLength');
-    // Over-long is not the same gap as absent, or the advice tells the author
-    // to write a field they already wrote.
-    expect(lookFor.gaps).not.toContain('lookFor');
+    expect(c.gaps).toContain('headlineLength');
   });
 
   it('files a four-word option label — the reported shape of the refusal', () => {
@@ -272,16 +235,19 @@ describe('checkReviewPayload — a length over a row budget advises, it does not
     // The positive control for the block above: loosening the budgets must not
     // have loosened the structural rules that share the same code path.
     const c = checkReviewPayload(
-      decision({ headline: 'x'.repeat(REVIEW_LIMITS.headline + 1), why: undefined }),
+      decision({
+        headline: 'x'.repeat(REVIEW_LIMITS.headline + 1),
+        options: [{ id: 'a', label: 'Only one' }],
+      }),
     );
     expect(c.ok).toBe(false);
-    expect(c.errors.join(' ')).toContain('review.why is required');
+    expect(c.errors.join(' ')).toContain('at least 2 options');
   });
 });
 
 describe('reviewPayloadMessage', () => {
   it('quotes every refusal so a retrying model can act on the text alone', () => {
-    const c = checkReviewPayload(decision({ headline: undefined, why: undefined }));
+    const c = checkReviewPayload(decision({ headline: undefined, shape: 'links' as never }));
     const msg = reviewPayloadMessage(c);
     for (const e of c.errors) expect(msg).toContain(e);
     expect(c.errors.length).toBeGreaterThan(1);
@@ -298,36 +264,28 @@ describe('reviewGapAdvice — the advice half, which nothing used to read', () =
   });
 
   // Both directions, because either alone passes against a helper that names
-  // one field unconditionally — mutation-tested: making the lookFor branch
+  // one field unconditionally — mutation-tested: making the detail branch
   // unconditional survives the first of these and is killed by the second.
-  it('names the missing field, and only the missing one', () => {
-    const advice = reviewGapAdvice(checkReviewPayload(decision({ lookFor: undefined })).gaps);
-    expect(advice).toContain('review.lookFor');
-    expect(advice).not.toContain('review.detail');
-  });
-
-  it('names only detail when only detail is missing', () => {
+  it('names the missing body when the body is what is missing', () => {
     const advice = reviewGapAdvice(checkReviewPayload(review({ detail: undefined })).gaps);
     expect(advice).toContain('review.detail');
-    expect(advice).not.toContain('review.lookFor');
+    expect(advice).not.toContain('review.headline');
   });
 
-  it('names both when both are absent', () => {
-    const gaps = checkReviewPayload(decision({ lookFor: undefined, detail: undefined })).gaps;
-    const advice = reviewGapAdvice(gaps) ?? '';
-    expect(advice).toContain('review.lookFor');
-    expect(advice).toContain('review.detail');
+  it('says nothing about the body when the body is there', () => {
+    const advice = reviewGapAdvice(checkReviewPayload(decision()).gaps);
+    expect(advice).toBeUndefined();
   });
 
   it('names an over-long field, and says it FILED', () => {
     // The advice a length gap produces has one job the thin-field advice does
     // not: an author who reads it as a refusal retries a write that already
     // succeeded and files the ask twice.
-    const advice = reviewGapAdvice(['whyLength']) ?? '';
-    expect(advice).toContain('review.why');
+    const advice = reviewGapAdvice(['headlineLength']) ?? '';
+    expect(advice).toContain('review.headline');
     expect(advice).toContain('Filed.');
     expect(advice).not.toContain('cannot be filed');
-    expect(advice).not.toContain('review.headline');
+    expect(advice).not.toContain('review.detail');
   });
 
   it('says both halves when a payload is thin AND over-long', () => {
@@ -525,15 +483,13 @@ describe('reviewFromDecisionTask — one spelling, derived mechanically from the
     expect(p.answeredWith).toBeUndefined();
   });
 
-  // THE asymmetry assertion. The derivation is deliberately NOT routed through
-  // checkReviewPayload: no legacy decision task ever authored a `why`, and
-  // inventing one would fabricate exactly the clipped-prose row this whole
-  // change deletes. So the output has to satisfy the READER and need not
-  // satisfy the WRITER's gate.
-  it('produces a payload the reader accepts even though the writer’s gate would refuse it', () => {
+  // This derivation invents NOTHING. It used to have to fabricate one thing —
+  // a `why` of '', because the payload required a second line and no legacy
+  // decision task ever authored one — and that hole closed when the field did.
+  // The output is now a payload the writer's own gate accepts.
+  it('invents no field the task never had', () => {
     const p = reviewFromDecisionTask(decisionTask());
-    expect(p.why).toBe('');
-    expect(checkReviewPayload(p).ok).toBe(false);
+    expect(checkReviewPayload(p).ok).toBe(true);
     expect(readReviewPayload(p)).toEqual(p);
   });
 
@@ -685,10 +641,10 @@ describe('isReviewItemOpen — several can be open on one ticket at once', () =>
 describe('the writer’s gate is exactly as strict as it was', () => {
   // Positive controls for the whole commit: adding a derivation path that
   // bypasses checkReviewPayload must not have loosened checkReviewPayload.
-  it('still refuses a decision with a headline and no why', () => {
-    const c = checkReviewPayload({ shape: 'decision', headline: 'x' });
+  it('still refuses a decision with no headline', () => {
+    const c = checkReviewPayload({ shape: 'decision', detail: 'x' });
     expect(c.ok).toBe(false);
-    expect(c.errors.join(' ')).toContain('review.why is required');
+    expect(c.errors.join(' ')).toContain('review.headline is required');
   });
 
   it('still refuses a one-option decision', () => {
@@ -697,11 +653,11 @@ describe('the writer’s gate is exactly as strict as it was', () => {
     expect(c.errors.join(' ')).toContain('at least 2 options');
   });
 
-  it('still only ADVISES about a missing lookFor', () => {
-    const c = checkReviewPayload(decision({ lookFor: undefined }));
+  it('still only ADVISES about a missing detail', () => {
+    const c = checkReviewPayload(decision({ detail: undefined }));
     expect(c.ok).toBe(true);
     expect(c.errors).toEqual([]);
-    expect(c.gaps).toContain('lookFor');
+    expect(c.gaps).toContain('detail');
   });
 });
 
@@ -722,7 +678,6 @@ describe('pendingDeclaration', () => {
   const ask = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
     shape: 'review',
     headline: 'Read the stall rota before Thursday',
-    why: 'The rota goes out Thursday and nobody has checked it',
     ...over,
   });
   const open = (comments: Array<{ id: string; ts: number; review?: ReviewPayload }>) => ({
@@ -819,5 +774,111 @@ describe('pendingDeclaration', () => {
 
   it('tolerates a thread with no comments array at all', () => {
     expect(pendingDeclaration({ status: 'open' })).toBeNull();
+  });
+});
+
+// Bryan, twice, on the card's shape: *"I asked to get rid of this. It imposes
+// a structure that's too rigid and leaves not enough room to manouevwd. Title
+// and detail is enough."* So `why` and `lookFor` are gone from the payload —
+// not made optional, not renamed. Two things have to survive their removal,
+// and both are about words somebody already wrote:
+//
+//  - an OLD BUNDLE still sends them. This is the shared server's REST surface
+//    and a session that has not restarted keeps calling it, so the write must
+//    succeed rather than 400 — and must not drop the text on the floor.
+//  - thousands of payloads are already STORED with them populated. A read that
+//    ignored them would silently shorten every card written before today.
+//
+// One mechanism answers both, which is why there is no separate migration:
+// `readReviewPayload` is the single funnel — the write path runs it before
+// storing, every read path runs it on the way out — and it folds the legacy
+// text into `detail`, in the order the card used to render it.
+describe('why / lookFor are gone from the payload, and their words are not', () => {
+  const legacy = {
+    shape: 'decision',
+    headline: 'Should a resolved thread stay visible inline?',
+    why: 'Blocks the inline-comments branch.',
+    lookFor: 'Whether hiding it loses the audit trail.',
+    detail: 'Threads resolve often and the list gets long.',
+    options: [
+      { id: 'hide', label: 'Hide them' },
+      { id: 'dim', label: 'Keep dimmed' },
+    ],
+  };
+
+  it('accepts a payload that still carries both — an unrestarted caller is not refused', () => {
+    const c = checkReviewPayload(legacy);
+    expect(c.errors).toEqual([]);
+    expect(c.ok).toBe(true);
+  });
+
+  it('no longer refuses a payload with no why at all', () => {
+    const c = checkReviewPayload({
+      shape: 'review',
+      headline: 'Read the new onboarding copy',
+      detail: 'Three screens of copy.',
+    });
+    expect(c.errors).toEqual([]);
+    expect(c.ok).toBe(true);
+    // The positive control: the same call still refuses what it always did, so
+    // an empty `errors` here is a judgement about this payload rather than a
+    // checker that stopped checking.
+    expect(checkReviewPayload({ shape: 'review', detail: 'x' }).ok).toBe(false);
+  });
+
+  it('folds both legacy fields into detail, in the order the card rendered them', () => {
+    const p = readReviewPayload(legacy);
+    expect(p).toBeDefined();
+    expect(p?.detail).toBe(
+      'Blocks the inline-comments branch.\n\nWhether hiding it loses the audit trail.\n\nThreads resolve often and the list gets long.',
+    );
+    // Gone from the shape, not merely absent from the type.
+    expect(Object.hasOwn(p as object, 'why')).toBe(false);
+    expect(Object.hasOwn(p as object, 'lookFor')).toBe(false);
+  });
+
+  it('folds a legacy field even when there is no detail to fold it into', () => {
+    expect(
+      readReviewPayload({ shape: 'review', headline: 'H', why: 'The rota goes out Thursday.' })
+        ?.detail,
+    ).toBe('The rota goes out Thursday.');
+  });
+
+  it('leaves a modern payload exactly as written', () => {
+    expect(
+      readReviewPayload({ shape: 'review', headline: 'H', detail: 'Just the body.' })?.detail,
+    ).toBe('Just the body.');
+  });
+
+  it('reads a stored payload whose why is empty or absent', () => {
+    // `reviewFromDecisionTask` has always produced `why: ''`, and ~168 stored
+    // docs carry it. An empty legacy field contributes no paragraph, and its
+    // emptiness must not drop the item.
+    expect(
+      readReviewPayload({ shape: 'decision', headline: 'H', why: '', detail: 'B' })?.detail,
+    ).toBe('B');
+    expect(readReviewPayload({ shape: 'decision', headline: 'H' })).toBeDefined();
+  });
+
+  it('drops the advice that nagged for a lookFor', () => {
+    // A title and a detail is now a COMPLETE payload — nothing left to nag
+    // about. The old checker reported a `lookFor` gap on exactly this input.
+    const c = checkReviewPayload({ shape: 'review', headline: 'H', detail: 'B' });
+    expect(c.gaps).toEqual([]);
+    expect(reviewGapAdvice(c.gaps)).toBeUndefined();
+    // Still says the one thing it has left to say.
+    expect(reviewGapAdvice(['detail'])).toContain('review.detail');
+  });
+
+  it('stops publishing budgets for fields that no longer exist', () => {
+    expect(Object.hasOwn(REVIEW_LIMITS, 'why')).toBe(false);
+    expect(Object.hasOwn(REVIEW_LIMITS, 'lookFor')).toBe(false);
+  });
+
+  it('derives a legacy decision task without inventing a why', () => {
+    const p = reviewFromDecisionTask({ title: 'Pick a rota', body: 'Two people are free.' });
+    expect(p.headline).toBe('Pick a rota');
+    expect(p.detail).toBe('Two people are free.');
+    expect(Object.hasOwn(p, 'why')).toBe(false);
   });
 });
