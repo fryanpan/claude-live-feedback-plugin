@@ -249,15 +249,60 @@ export function wordCount(text: string): number {
   return trimmed.split(/\s+/).length;
 }
 
+/**
+ * Ids that mean the fleet owner.
+ *
+ * Seeded with the two spellings that predate email identity — the id is the
+ * browser identity, the name is what a REST/MCP caller sends, and both are
+ * load-bearing. `registerOwnerIdentity` adds the owner's `user-<hash>` once
+ * the server knows which address is theirs.
+ *
+ * WHY A MODULE-LEVEL REGISTRY AND NOT A PARAMETER. `isOwnerActor` is called
+ * from three places (`rooms.ts` twice, `activity-backfill.ts` twice) that sit
+ * far below any request and hold no configuration to thread through. The
+ * alternative — an options bag pushed down four call layers — buys nothing a
+ * registry does not, and the registry is set exactly once, at server
+ * construction.
+ */
+const OWNER_IDS = new Set<string>(['known-bryan']);
+/** Matched EXACTLY, case included: widening it here would change who counts
+ *  as the owner on the existing corpus, which is not what this fixes. */
+const OWNER_NAMES = new Set<string>(['Bryan']);
+
+/**
+ * Teach the owner check an identity id — the owner's email identity.
+ *
+ * Without this, the moment the owner's identity becomes `user-<hash>` the
+ * check below stops matching and fails SILENTLY: no error, no warning, just
+ * an owner-activity view that quietly reads empty and a weekly review that
+ * under-counts. It is the same shape of drift `agentIdForName` exists to
+ * prevent, and it fails the same way — by answering "no" forever.
+ */
+export function registerOwnerIdentity(id: string): void {
+  const trimmed = id.trim();
+  if (trimmed) OWNER_IDS.add(trimmed);
+}
+
+/** What the owner check currently recognizes — for a boot log and for tests. */
+export function ownerIdentityIds(): string[] {
+  return [...OWNER_IDS];
+}
+
+/** Back to the built-in spellings. A test seam: the registry is process-wide,
+ *  so a test that registers one must be able to put it back. */
+export function resetOwnerIdentities(): void {
+  OWNER_IDS.clear();
+  OWNER_IDS.add('known-bryan');
+}
+
 /** Bryan is the doc owner / known person on this single-user fleet. A person
- *  whose author id resolves to the known Bryan identity is the owner. */
+ *  whose author id resolves to a known owner identity is the owner. */
 export function isOwnerActor(author: unknown): boolean {
   // Same normalization as `classifyActor`, for the same reason: a legacy
   // string author naming the owner IS the owner, and `author.id` on a null
-  // author throws. Both spellings below are load-bearing — the id is the
-  // browser identity, the name is what a REST/MCP caller sends.
-  const { id, name } = authorFields(author);
-  return id === 'known-bryan' || name === 'Bryan';
+  // author throws.
+  const { id = '', name = '' } = authorFields(author);
+  return OWNER_IDS.has(id) || OWNER_NAMES.has(name);
 }
 
 const repoCache = new Map<string, EventDocRepo | null>();
