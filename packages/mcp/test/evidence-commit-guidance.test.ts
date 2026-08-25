@@ -65,7 +65,7 @@ describe('the commit field carries its own guidance', () => {
   it('says it once, so the two tools cannot drift apart', () => {
     // Two hand-written copies is how one of them ends up stale. The constant
     // is the single spelling; assert there is exactly one literal.
-    const literals = SRC.match(/A commit sha that will STILL RESOLVE/g) ?? [];
+    const literals = SRC.match(/A commit sha that will still resolve/g) ?? [];
     expect(literals).toHaveLength(1);
   });
 
@@ -73,11 +73,11 @@ describe('the commit field carries its own guidance', () => {
     // "Use a good sha" would have prevented none of the four bad values. What
     // an agent needs is WHY the obvious action is wrong: the sha it would
     // naturally record is the one the squash-merge throws away.
-    const guidance = SRC.slice(SRC.indexOf('A commit sha that will STILL RESOLVE'));
+    const guidance = SRC.slice(SRC.indexOf('A commit sha that will still resolve'));
     expect(guidance.slice(0, 1200)).toMatch(/squash-merge/);
     expect(guidance.slice(0, 1200)).toMatch(/not the branch commit/);
     // Where a PR number goes — two of the four bad values were PR numbers.
-    expect(guidance.slice(0, 1200)).toMatch(/PR number is NOT a commit/);
+    expect(guidance.slice(0, 1200)).toMatch(/PR number is not a commit/);
     // And the path for work that has not merged yet, which is the case that
     // produced the live-branch-sha value.
     expect(guidance.slice(0, 1200)).toMatch(/amend_evidence/);
@@ -87,7 +87,7 @@ describe('the commit field carries its own guidance', () => {
     // The field description is only read by a caller that opens the schema.
     // The prose is what every agent sees at the moment it closes a task.
     const decl = declarationFor('task_transition');
-    expect(decl).toMatch(/branch sha is discarded by the squash-merge/);
+    expect(decl).toMatch(/still resolves after a squash-merge/);
   });
 });
 
@@ -97,10 +97,10 @@ describe('the committed bundle peers load carries it', () => {
     // bundle read returned something useless, this fails rather than letting
     // the assertions below pass vacuously.
     expect(BUNDLE).toContain('list_attachments');
-    expect(BUNDLE).toContain('The SINGLE gate for task status changes');
+    expect(BUNDLE).toContain('The single gate for status changes');
 
     // The guidance itself reached the artifact.
-    expect(BUNDLE).toContain('A commit sha that will STILL RESOLVE');
+    expect(BUNDLE).toContain('A commit sha that will still resolve');
     expect(BUNDLE).toContain('squash-merge');
 
     // And it is attached to the FIELD in both tools, not merely present in

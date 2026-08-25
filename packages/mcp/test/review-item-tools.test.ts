@@ -359,7 +359,7 @@ describe('what the tool schemas tell an agent', () => {
 
   it('found the advertised tools (the assertions below are otherwise vacuous)', () => {
     expect(tools.length).toBeGreaterThan(20);
-    expect(byName('create_tasks').description).toContain('LIST');
+    expect(byName('create_tasks').description).toContain('takes a list');
   });
 
   it("the create_tasks row's `review` field says the blurb is not the ticket title", () => {
@@ -368,8 +368,10 @@ describe('what the tool schemas tell an agent', () => {
     };
     const review = rows?.items?.properties?.review;
     expect(review, 'no `review` on a create_tasks row').toBeTruthy();
-    expect(review?.description?.toLowerCase()).toContain('not the ticket title');
-    expect(review?.description?.toLowerCase()).toContain('several');
+    expect(review?.description?.toLowerCase()).toContain('the ticket title names the work');
+    // And where the ask goes when the work already exists — the half nothing
+    // used to say, which is how an ask arrived severed from its work.
+    expect(review?.description?.toLowerCase()).toContain('add_review_item');
     // Same payload, not a second one: the shape came from the shared schema.
     const shared = byName('create_thread').inputSchema.properties?.review as {
       properties?: Record<string, unknown>;
@@ -420,17 +422,17 @@ describe('the shipped guidance describes the entity, not the old model', () => {
   );
 
   it('add_review_item teaches the 0..n cardinality in its own description', () => {
-    expect(SRC).toContain('A ticket carries 0..n review items and SEVERAL can be open at once');
+    expect(SRC).toContain('A ticket carries several at once, each answered on its own');
     // And it reaches a peer, who loads the BUNDLE and never the source.
-    expect(bundle).toContain('A ticket carries 0..n review items and SEVERAL can be open at once');
+    expect(bundle).toContain('A ticket carries several at once, each answered on its own');
   });
 
   it('answer_review_item says what makes several open questions answerable apart', () => {
     expect(SRC).toContain(
-      'Naming `reviewItemId` is what makes several open questions on one ticket answerable independently',
+      'Naming reviewItemId is what keeps several open questions on one ticket independently answerable',
     );
     expect(bundle).toContain(
-      'Naming `reviewItemId` is what makes several open questions on one ticket answerable independently',
+      'Naming reviewItemId is what keeps several open questions on one ticket independently answerable',
     );
   });
 
@@ -444,6 +446,10 @@ describe('the shipped guidance describes the entity, not the old model', () => {
   it('no retired skill is named anywhere in the shipped surface', () => {
     // A tool description or a surviving skill that still points at a deleted
     // directory tells an agent to go read something that is not installed.
+    const lead = readFileSync(
+      join(HERE, '../../plugin/skills/leading-a-workspace/SKILL.md'),
+      'utf8',
+    );
     for (const gone of [
       'running-a-workspace-hub',
       'handling-a-goal-change',
@@ -451,9 +457,12 @@ describe('the shipped guidance describes the entity, not the old model', () => {
     ]) {
       expect(SRC).not.toContain(gone);
       expect(board).not.toContain(gone);
+      expect(lead).not.toContain(gone);
     }
     // POSITIVE CONTROL: the same probe finds a skill that DOES ship, so a
-    // green run above means "absent", not "the haystack was empty".
-    expect(SRC).toContain('claude-workspaces:leading-a-workspace');
+    // green run above means "absent", not "the haystack was empty". The
+    // control moved off `SRC` when the descriptions stopped naming skills —
+    // a cross-reference between two skills is now the only live instance.
+    expect(lead).toContain('claude-workspaces:working-in-a-workspace');
   });
 });

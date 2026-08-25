@@ -97,7 +97,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.104';
+const PLUGIN_VERSION = '0.1.105';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -130,7 +130,7 @@ const PROCESS_ID = randomUUID();
  * counted as proof today and dead the moment its branch lands.
  */
 const COMMIT_EVIDENCE_DESCRIPTION =
-  'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
+  'A commit sha that will still resolve after this work merges — the one on the default branch, not the branch commit you are on now. A squash-merge discards branch commits, so a branch sha resolves for you and for nobody afterwards while the row still reads as proven. Not merged yet? Record what you have and call `amend_evidence` later. A PR number is not a commit; put it in `note`.';
 
 const server = new Server(
   {
@@ -261,39 +261,35 @@ const server = new Server(
 const REVIEW_ITEM_SCHEMA = {
   type: 'object',
   description:
-    "Declares this comment as a Review Item, putting it on the reviewer's Home queue. Omit for ordinary comments — status notes and closing remarks must NOT declare. Refused (400, naming the field) only if headline/why are missing or multi-line. A field over its character budget FILES and comes back with advice — send the ask you have rather than a retry that shaves two words off it.",
+    "Declares this a Review Item, putting it on the reviewer's Home queue. Omit it for ordinary comments — status notes and closing remarks are not review items. headline and why are the two lines of the row; missing or multi-line is refused, over-long files anyway with advice.",
   properties: {
     review_type: {
       type: 'string',
       enum: ['decision', 'question'],
       description:
-        "'decision' offers named options to pick between (2-6 required). 'question' asks someone to read or look at something and answer in their own words — use it for a short doc, a mockup, or a set of links, all of which are the same ask.",
+        "'decision' offers named options to pick between (2-6 required). 'question' asks someone to read or look at something and answer in their own words.",
     },
     shape: {
       type: 'string',
       enum: ['decision', 'review'],
-      description:
-        "Legacy spelling of `review_type` ('review' = 'question'). Accepted forever so old callers keep working; new calls should send `review_type`.",
     },
     headline: {
       type: 'string',
       description:
-        'Line 1: WHAT needs review, as a ticket title. One line; aim for ≤70 chars so it holds its line on a phone. Longer files and is reported back as a gap.',
+        'Name what needs deciding, in words someone who has not seen this work would use. One line.',
     },
     why: {
       type: 'string',
-      description:
-        'Line 2: why it matters / what is blocked on it. One line; aim for ≤90 chars. Longer files and is reported back as a gap — never trim a real reason to fit.',
+      description: 'What is blocked, or what is at stake, plainly. One line.',
     },
     lookFor: {
       type: 'string',
-      description:
-        'What to look for — shown on the opened card, not on the row. Aim for ≤90 chars. Omitting it, or running long, files and is reported back as a gap.',
+      description: 'What you want them to look at or weigh up. One line.',
     },
     detail: {
       type: 'string',
       description:
-        'The body, markdown, inline links welcome. Send the context you actually have — the card renders ALL of it, so never park the real ask in the thread and a compressed copy here. Aim for ~50 words on a decision, ~150 on a question; only an absurd length (>2000 words — a pasted document) is refused.',
+        'The context the reader does not have. Write it for someone reading on a phone, away from the work: spell out names and acronyms the first time, and prefer a plain sentence to a compressed one. Markdown and inline links welcome.',
     },
     options: {
       type: 'array',
@@ -308,11 +304,11 @@ const REVIEW_ITEM_SCHEMA = {
           label: {
             type: 'string',
             description:
-              'This is the button. Aim for 1-3 words and ≤28 chars; a fourth word files and is reported back as a gap.',
+              'The button the reader taps, in their words rather than yours — one to three words, ≤28 chars.',
           },
           detail: {
             type: 'string',
-            description: 'What choosing it costs or buys. Aim for ≤50 words; longer still files.',
+            description: 'What choosing it costs or buys, in a plain sentence. Aim for ≤50 words.',
           },
         },
         required: ['id', 'label'],
@@ -338,7 +334,20 @@ const REVIEW_ITEM_SCHEMA = {
 const TASK_REVIEW_ITEM_SCHEMA = {
   ...REVIEW_ITEM_SCHEMA,
   description:
-    'A review item ON THIS TICKET — the question, with its own blurb above its own options. A ticket can carry SEVERAL, and more than one can be open at a time, so the blurb lives on the item and NOT the ticket title: the title names the work, `headline`/`why` name what is being asked. Same limits and the same refusals as a comment-borne declaration, because it is the same payload.',
+    'A review item on this ticket — the question, with its own blurb above its own options. A ticket can carry several open at once, so the title keeps naming the work while headline and why name what is being asked. Same payload and same refusals as a comment-borne declaration.',
+} as const;
+
+/**
+ * The same payload again, on a row this call is CREATING. It differs only in
+ * saying where a question belongs: filed with the work when both arrive
+ * together, hung on the existing ticket with add_review_item when the question
+ * came up mid-work. Nothing anywhere used to say that, and the ask arriving
+ * severed from the work that raised it is the failure it exists to prevent.
+ */
+const NEW_TASK_REVIEW_ITEM_SCHEMA = {
+  ...REVIEW_ITEM_SCHEMA,
+  description:
+    'A question about the work this row creates — for when you are filing the work and the question together. If the question came up while working a task that already exists, hang it there with add_review_item instead, so the ask keeps the context of the work that raised it. The ticket title names the work; headline/why name the ask.',
 } as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -385,7 +394,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'post_reply',
       description:
-        'Post a reply to an existing thread (as the configured author). Pass `review` when this reply is asking a person to decide or look at something — that is what puts it on their Home queue as a Review Item. Without it the reply is an ordinary comment and does NOT enter the queue, which is correct for status notes and closing remarks. The response carries `threadUrl`, the absolute link that opens where this thread lives (the task on its board, or the doc under review) — hand THAT to a peer instead of retyping the report into a chat message.',
+        'Reply to an existing thread. Pass review when the reply is asking a person to decide or look; without it, it is an ordinary comment and does not enter the queue, which is right for status notes. Returns threadUrl, the link to hand a peer.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -400,7 +409,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_thread',
       description:
-        'Open a new comment thread on a doc, seeded with an initial comment from the configured author. Use when the agent has editorial notes / suggestions that should land as durable threads (instead of one-shot chat messages) — e.g. running `/edit` on a blog draft and leaving anchored feedback at six different places. Pass `find` to anchor the thread to that text; disambiguation works the same as `find_and_replace` (`contextBefore`/`contextAfter` or `occurrence` if the text appears more than once). OMIT `find` to open a thread about the doc AS A WHOLE — this is how you discuss a hub task, whose body doc is `task:<taskId>` and is often still empty: `create_thread(docId="task:t-abc", text="...")`. A subject thread never orphans. Pass `review` when you are asking a person to decide or look at something — that is what puts the thread on their Home queue as a Review Item; leave it off for notes you are recording rather than asking about. Returns `{ thread }` with `thread.id` for follow-up `post_reply` calls, and fires the same `thread.created` event the editor uses, so watchers see it immediately. It also returns `threadUrl` — the absolute link that opens where the thread lives (the task on its board, or the doc under review). That is what you hand a peer who asked you for a report: post the report here, send them the link, and skip the chat paste.',
+        'Open a comment thread on a doc. Pass find to anchor it to a phrase; omit find entirely for a thread about the doc as a whole — that is how you comment on a task, whose body doc is task:<taskId> and is often empty. Pass review when you are asking a person to decide or look; leave it off for notes you are recording. Returns threadUrl — hand that to a peer instead of pasting the report into chat.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -437,7 +446,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'summarize_thread',
       description:
-        "Generate the two summary lines (topic + discussion) shown on a thread's collapsed card, and store them on the thread so every open browser picks them up immediately. Normally you do NOT need this: the server generates a summary automatically ~3s after any thread change. Reach for it when you want a summary right now — e.g. you just posted a long reply and want the card to read correctly before you hand the review URL to someone. A thread whose stored summary already matches its current state is returned as-is with cached:true and costs nothing; pass force:true to regenerate anyway. Two expected failures come back as tool ERRORS, not as a result field — the error text carries the HTTP status. A 503 (summaries disabled) means no API key is configured or CW_SUMMARIES=0; the card keeps its deterministic lines, nothing is broken, and retrying will not help. A 409 (thread changed during generation) means a reply landed mid-call and the summary would have described the older thread — just call it again.",
+        "Regenerate a thread's collapsed-card summary lines now. Normally unnecessary — the server does it automatically about 3s after any change — so reach for it only when you need the card correct before handing someone the URL. A 503 means summaries are disabled and retrying will not help; a 409 means a reply landed mid-call, so just call again.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -467,7 +476,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'get_doc',
       description:
-        'Read the current state of a review doc: plain-text body, block structure (heading/paragraph/list hints), and thread summary. The plain text is the target surface for find_and_replace and reflects concurrent user edits. On a big doc this result is BODY-SIZED (real docs have returned 320KB, past tool-result caps) — when you only need health/shape ("is it bound, is it wedged, how big, what is pending"), call doc_status instead and read the body only if you actually need the text.',
+        "Read a doc's plain text and block structure. The plain text is the surface find_and_replace matches against and reflects concurrent edits. The result is body-sized and has run to 320KB on a real doc — if the question is health or shape rather than text, call doc_status.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -477,7 +486,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'doc_status',
       description:
-        "Cheap doc health check — the doc's metadata and counts WITHOUT any of the body (no plainText, no blocks, no thread text), a few hundred bytes where get_doc can run to hundreds of KB. Returns {docId, type, title?, bound, path?, syncError?, lastActivityAt?, textLength, blockCount, threads: {open, resolved}, pendingSuggestions}. Use it before/instead of get_doc when the question is about the doc rather than its text: is it still bound to disk and where (`bound`/`path`), did the last sync wedge (`syncError` — read it, it names the conflict), how big is what get_doc would return (`textLength`), is anything waiting (`threads.open`, `pendingSuggestions`). Answers 404 for an unknown docId.",
+        'Cheap doc health check — metadata and counts, no body, a few hundred bytes where get_doc can run to hundreds of KB. Use it to ask whether a doc is still bound and where, whether the last sync wedged (syncError), how big get_doc would be, and whether anything is waiting.',
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -487,14 +496,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_review_doc',
       description:
-        "Create a markdown review doc backed by a file on disk. The server reads the file, parses it into the live editor, and sets up bidirectional sync — every edit (from the browser, the agent, or the widget) writes back to the .md within ~1 second, and external edits to the file (VS Code, git pull) flow into the live doc within ~1 second via fs.watch. Note: the disk→doc sync races against the doc→disk write-back; if you Write/Edit a bound .md while LF has any pending state, your file edit can be silently clobbered by the next flush. Route programmatic edits through the LF tools once a doc is bound — `find_and_replace` / `rewrite_thread_region` for targeted edits, `set_doc_content` for a whole-doc rewrite — and call `reparse_from_disk(docId)` only to force-pull an edit that already happened externally. `path` should be absolute; relative paths resolve against the server's cwd. The file must exist (create it first if it doesn't). Pass `setId` to group multiple docs for one review session — docs sharing a setId show up in each other's sidebar in the markdown editor, so the reviewer can hop between related files. The caller is auto-subscribed to thread events for this doc (`watch_doc`) on creation so comments arrive as channel messages without a separate call; pass `subscribe: false` for the rare drive-by case where another agent will own the review. Returns the MINTED docId (the doc's permanent address — store that, not the name you passed), the review URL, and the attach result.",
+        'Bring a markdown file under live review: the server parses it into the editor and keeps file and doc in sync both ways, within about a second. The file must already exist and path should be absolute. Once bound, never Write/Edit that file — route edits through find_and_replace or set_doc_content, or the next flush silently overwrites them. Returns the minted docId — store that, not the name you passed — plus the review URL. Auto-subscribes you to its comments.',
       inputSchema: {
         type: 'object',
         properties: {
           docId: {
             type: 'string',
             description:
-              "A readable NAME for the doc, not its address. The server mints the doc's id and returns it; the name you pass becomes an alias that resolves to it, so both spellings work in URLs and in every tool that takes a docId. Use the RETURNED docId when you store or share the address — it never changes, while a name can be superseded. Passing a name that already resolves reuses that doc rather than making a second one. Names starting `task:`, `ws:` or `goal:` are refused: those namespaces are the server's.",
+              "A readable name for the doc, not its address — the server mints the real id and returns it, and the name becomes an alias that also works. Store the returned id. Reusing a name reuses that doc. `task:`, `ws:` and `goal:` are the server's namespaces and are refused.",
           },
           path: { type: 'string' },
           title: { type: 'string' },
@@ -503,7 +512,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this doc under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the doc still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. Filing it later with attach_doc moves it out of Unfiled.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
           producedBy: {
             type: 'object',
@@ -521,7 +530,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_doc_content',
       description:
-        "Replace the WHOLE document with new markdown — the safe path for a comprehensive rewrite/restructure. Applies as a block-level diff on the live doc: blocks you didn't change keep their identity, so comment threads anchored to them survive, connected editors update live, and the result flushes to the bound .md within ~1s like any other edit. Use this INSTEAD of Write-ing the bound file (then reparse_from_disk) or the delete_doc → Write → create_review_doc dance — both race the write-back and have clobbered files in practice, and the latter orphans every comment thread. On a `task:<taskId>` docId (a task's description) this now does everything `rewrite_task` does except retitle — preserves the row's original words into `quote` and records an attributed `task.body_edited` — so it no longer silently erases a capture; prefer `rewrite_task` anyway, since it also retitles, carries a reason, and hands back the `quote` it preserved. Returns ok:false with error 'unsupported' (code/diff docs are read-only), 'empty' (won't wipe a doc to nothing — use delete_doc if you mean that), 'parse-failed', or 'not-found'.",
+        'Replace a whole doc with new markdown — the safe path for a comprehensive rewrite. Applies as a block-level diff, so untouched blocks keep their comment threads. Use this rather than writing the bound file or deleting and re-creating the doc; both race the write-back and both have destroyed content. On a task body prefer rewrite_task, which also retitles and carries a reason. Refuses an empty document.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -534,7 +543,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reparse_from_disk',
       description:
-        "Force-pull the bound .md file from disk into the live doc, replacing the doc's current content with a fresh parse of the file. Recovery tool for when an external edit (Write/Edit/git pull) didn't propagate — e.g. the file watcher went stale after an editor's rename-based save, or a prior reconcile failed. Bypasses the lastWritten / serialized-match guards that normally suppress redundant reparses. DESTRUCTIVE: any un-flushed live edits are overwritten by disk content, and thread anchors in replaced regions may orphan (auto-reanchor re-attaches the common case). Use it when get_doc returns stale content or a `syncError`. Returns ok:false with error 'no-binding' (doc isn't file-backed), 'missing' (file gone/empty), or 'not-found' (unknown docId).",
+        'Force-pull a bound file from disk into the live doc — recovery for when an external edit did not propagate. Destructive: un-flushed live edits are overwritten and anchors in replaced regions can orphan. Reach for it when get_doc returns stale content or a syncError, not routinely.',
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -544,7 +553,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'delete_doc',
       description:
-        "PERMANENTLY delete a review doc — a purge, which removes the .ydoc the activity analyses are rebuilt from. Reach for archive_doc instead unless you specifically mean to destroy the record: it retires the doc the same way (off the home page, off any board, rooms stopped) while keeping the file, and unarchive_doc puts it back. This one drops the live doc, cancels its sync, and removes the persisted state so it won't reload — but leaves the bound SOURCE .md file on disk untouched (only the review session is removed). Most review docs are short-lived: you bind one, get feedback for ~30 minutes, and then it's obsolete — retire it rather than letting it linger in list_docs forever. GUARDRAIL: refuses with ok:false, error:'has-open-threads' (+ openThreads count) if the doc still has OPEN comment threads, since that means someone is still waiting on that feedback — resolve_thread the threads first, or pass force:true to delete anyway. Also returns error:'not-found' for an unknown docId. Safe to call on a doc bound to a now-deleted file.",
+        'Permanently delete a review doc, including the record the activity analyses are rebuilt from. Reach for archive_doc instead unless you mean to destroy it — that retires the doc the same way and unarchive_doc reverses it. The source .md on disk is untouched either way. Refuses while open threads remain unless you pass force.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -560,14 +569,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bind_mock',
       description:
-        "Bind an HTML mockup to a docId AND serve it. `sourceHtmlPath` is an absolute path to an HTML file (typically one the agent just wrote, embedding `<claude-feedback-widget doc-id=\"...\">`). The server reads the file at that path on each request and streams it as HTML at `/mockup/<docId>` — no symlinking into the plugin's `demos/` directory required. Returns `meta.reviewUrl` pointing at the served URL; hand that to a human. Also auto-subscribes the caller to thread events on the doc (same as `create_review_doc`). Pass `subscribe: false` to skip the auto-watch (rare). Idempotent — calling twice with the same docId is safe: the name resolves to the doc it already made and the bound source path is updated, rather than a second doc being minted. Single-file mockups only: HTML that references sibling CSS/JS via relative paths won't resolve through this route since we don't serve the source directory. For multi-file mockups, drop the directory into the plugin's `demos/` and use `/demos/<dirname>/` as before.",
+        'Serve an HTML mockup at /mockup/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.',
       inputSchema: {
         type: 'object',
         properties: {
           docId: {
             type: 'string',
             description:
-              "A readable NAME for the doc, not its address. The server mints the doc's id and returns it; the name you pass becomes an alias that resolves to it, so both spellings work in URLs and in every tool that takes a docId. Use the RETURNED docId when you store or share the address — it never changes, while a name can be superseded. Passing a name that already resolves reuses that doc rather than making a second one. Names starting `task:`, `ws:` or `goal:` are refused: those namespaces are the server's.",
+              "A readable name for the doc, not its address — the server mints the real id and returns it, and the name becomes an alias that also works. Store the returned id. Reusing a name reuses that doc. `task:`, `ws:` and `goal:` are the server's namespaces and are refused.",
           },
           sourceHtmlPath: { type: 'string' },
           title: { type: 'string' },
@@ -575,7 +584,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this mockup under — the id `create_workspace` returned, NOT a folder-bind review id. Omit it and the mockup still lands in a workspace: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
         },
         required: ['docId', 'sourceHtmlPath'],
@@ -584,7 +593,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'bind_folder',
       description:
-        'Alias for create_diff_review WITHOUT a base: binds a folder/worktree as a BROWSE workspace. One entry doc binds eagerly (README preferred; markdown opens editable); every other file appears in the all-files sidebar and opens lazily on click — no eager per-file binds, no file-count cap. Prefer create_diff_review directly: pass base to ALSO get the PR-style changed-files diff on top of browsing. Returns the workspace id (the review), the hub workspace it was filed on (hubWorkspaceId — the board, so the bind is discoverable without the URL), root, scan fileCount, and the entry file.',
+        'Bind a folder or worktree as a browsable workspace — an alias for create_diff_review with no base. The reviewer picks files from the menu under the filename in the topbar — they open lazily, and markdown opens editable. Prefer create_diff_review directly: passing a base gets you the changed-files diff on top of browsing.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -599,7 +608,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this bind under — the id `create_workspace` returned, and deliberately NOT `workspaceId` above, which is the GROUPING id this bind creates for its own member files. Omit it and the bind still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. The whole bind is ONE row on the board, never one per file.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
           title: { type: 'string' },
           include: { type: 'array', items: { type: 'string' } },
@@ -621,7 +630,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_diff_review',
       description:
-        "Create a GitHub-PR-style review of a git diff: point it at a local repo and a base ref, and the server creates one review doc per changed file, grouped as one review — the reviewer gets a file tree with per-file A/M/D/R + line-count badges, a unified diff view with old/new line numbers and collapsed unchanged regions, a per-file Diff ↔ whole-File toggle, and line-anchored comment threads in both views. DEFAULT MODE (no `target`): diff base → the WORKING TREE, i.e. the folder as it is right now, uncommitted edits and untracked files included. The docs bind to the live files on disk, so as you keep editing the code the reviewer's diff re-renders within ~1s — this is the live-loop mode. Comments stay anchored to their lines through edits (snippet-based auto-reanchor); if an anchored line disappears, the thread lands in the existing Orphaned/outdated section where the reviewer can re-anchor it. Once the review EXISTS, prefer refresh_review(setId) over re-running this tool: it re-reads the diff from the stored base (no need to remember the ref), picks up files that changed since, and flags members whose change was reverted — all without re-minting a docId. Re-running this tool is still idempotent (same docIds, threads survive). PINNED MODE (pass `target`): content is frozen at the target commit; anchors can never drift; same reviewId with a different range is rejected. `repo` is an absolute path to a local checkout/worktree; `base`/`target` are any refs git can resolve (hashes, branches, HEAD~2). Binary files and files over 512 KB are skipped and reported in skipped[]. Pass `exclude` (path prefixes, e.g. ['src/main/assets/vendored-repo']) to keep vendored or generated directories out of the review. GUARDRAIL: more than `maxFiles` (default 300) changed files → error 'too-many-files'; narrow with `exclude` or raise `maxFiles`. The caller is auto-subscribed to thread events on every file doc (pass subscribe:false to skip). Returns {reviewId (also as setId), hubWorkspaceId, entryUrl, files[{docId, relPath, status, additions, deletions, reviewUrl}], skipped[]} — `hubWorkspaceId` is the board the whole review was filed on as ONE row, so a reviewer can find it without the URL — hand `entryUrl` to the human (the file tree navigates to the rest). Clean up with delete_review(setId) when the review is done. Comments on DELETED lines aren't supported yet — ask the reviewer to comment on an adjacent kept line.",
+        'Review a git diff PR-style: one doc per changed file, unified diffs with line-anchored comments. By default it diffs base against the working tree and re-renders within a second as you keep editing — the live-loop mode; pass target to freeze it at a commit, or omit base to browse a folder with no diff. Once the review exists prefer refresh_review, which re-reads without re-minting docIds. Hand the human entryUrl. Narrow a large repo with exclude before raising maxFiles.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -644,7 +653,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           hubWorkspaceId: {
             type: 'string',
             description:
-              'Optional hub workspace (board) to file this review under — the id `create_workspace` returned, and deliberately NOT `reviewId` above, which is the GROUPING id holding the review\'s member files. Omit it and the review still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went. The whole review is ONE row on the board, never one per changed file. Filing is sticky — re-running this tool without `hubWorkspaceId` leaves a review on the board it is already on.',
+              'Optional board to file this under — the id `create_workspace` returned, not a grouping/review id. Omit it and it still lands on a board: the server files it under the default "Unfiled" board and returns `hubWorkspaceId` so you know where it went.',
           },
           title: { type: 'string' },
           exclude: {
@@ -655,7 +664,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           groups: {
             type: 'array',
             description:
-              'Logical file groups for the sidebar — organize the changed files by INTENT, the way you would split a branch into reviewable commits. First group is read first. Each path matches a changed file EXACTLY or as a DIRECTORY PREFIX (e.g. "src/foo" claims every file under src/foo/), so you need not enumerate every file. First group (in array order) to claim a file wins; unlisted files fall into an "Other" group ranked last. Array order is the sidebar order. Optional per-group `details` is a short "chapter intro" rendered under the group title. It is capped at 500 characters and a longer value is REJECTED, not truncated — this is deliberate: write a curated 1–2 sentence summary of what the group does, do NOT paste the commit body or a diff summary. If a call is rejected for over-long details, shorten the intro and retry. Omit `groups` to fall back to the Tests/Docs/Build + top-level-module heuristic.',
+              'Split the changed files by intent, the way you would split a branch into commits; first group is read first. A path matches a file exactly or as a directory prefix, first group wins, unlisted files land in "Other". Optional `details` is a 1–2 sentence intro under the group title, capped at 500 characters — a longer one is rejected, not truncated. Omit `groups` for the built-in heuristic.',
             items: {
               type: 'object',
               properties: {
@@ -684,7 +693,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'delete_review',
       description:
-        "Retire a REVIEW as ONE unit — a diff review from create_diff_review, or a folder bound with bind_folder. It now ARCHIVES by default rather than destroying: every member's persisted state moves to the server's archive, the live rooms stop syncing, the review leaves the home page and any board row, and the SOURCE files on disk are untouched. unarchive_review puts it all back. Pass purge:true — and only when you mean it — for the old destructive behaviour, which removes the .ydoc files the activity analyses are rebuilt from. The guardrail is unchanged and ALL-OR-NOTHING: without force, if ANY member file still has OPEN comment threads, nothing happens and it returns ok:false, error:'has-open-threads' with files:[{docId, openThreads}]. Prefer archive_review, which takes a reason and does not need force. error:'not-found' means no review exists under that id — including a board id, which this tool deliberately cannot touch (use delete_workspace for a board).",
+        'Retire a whole review — a diff review or a folder bind — as one unit. It archives by default: rooms stop, the review drops off the workspace listing and any board, source files are untouched, and unarchive_review reverses it. Prefer archive_review, which takes a reason and needs no force. purge: true is the destructive path; it removes the records the activity analyses are rebuilt from. Refuses all-or-nothing while any member has open threads.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -708,7 +717,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'archive_review',
       description:
-        "RETIRE a finished review without deleting anything — the verb to reach for when the work a diff review covered has merged. Every member doc's persisted state moves into the server's archive: the review disappears from the home page and from any board it was linked to, its rooms stop syncing and stop costing a file poll, and it stops presenting its unresolved threads forever. Nothing is destroyed — the .ydoc files stay on disk, the activity analyses still read every comment in them, and unarchive_review restores the whole review (threads included) to exactly where it was, board links and all. Open threads do NOT block it; that is the point. Pass a `reason` — it is recorded with your agent name and replayed on list_archived_reviews, and it is usually the PR that merged. Returns {ok:true, archived:<docs>, docIds, manifest}. error:'not-found' means no review is bound under that id. error:'archive-collision' means an older snapshot of one of these docIds is already in the archive: nothing moved, and the colliding ids are listed — unarchive that one first rather than writing over it.",
+        'Retire a finished review without deleting anything — the verb for when the work a diff review covered has merged. Members drop off the workspace listing and stop costing a poll; nothing is destroyed, and unarchive_review restores the whole thing, threads and board links included. Open threads do not block it; that is the point. Pass a reason — usually the PR that merged.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -727,11 +736,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'unarchive_review',
       description:
-        "Bring an archived review back: every member doc returns to the live server with its comment threads intact, its file bindings re-armed, and its row back on whatever boards it was linked to when it was archived. This is what makes archive_review safe to call — nothing about retiring a review has to be right the first time. Returns {ok:true, restored:<docs>, docIds, manifest}. error:'not-found' means nothing is archived under that id (list_archived_reviews shows what is). error:'restore-collision' means one of the docIds has been re-minted live while the review was away: nothing moved, and restoring would have destroyed the newer doc.",
+        'Bring an archived review back: every member returns with its threads, its file bindings and its board rows intact. This is what makes archive_review safe to call. restore-collision means a docId was re-minted while it was away and nothing moved.',
       inputSchema: {
         type: 'object',
         properties: {
-          setId: { type: 'string', description: 'The archived review id.' },
+          setId: { type: 'string' },
         },
         required: ['setId'],
       },
@@ -739,11 +748,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'archive_doc',
       description:
-        "RETIRE ONE finished doc without deleting anything — a markdown doc you bound with create_review_doc, or a mockup from bind_mock, whose review is over. Its persisted state moves into the server's archive: the doc leaves the home page and any board row, its room stops syncing and stops costing a file poll, and the bound SOURCE file on disk is untouched. Nothing is destroyed — the .ydoc stays on disk, the activity analyses still read every comment in it, and unarchive_doc restores it (threads, board links and all). Prefer this over delete_doc, which purges. Open threads do NOT block it. Pass a `reason` — it is recorded with your agent name and replayed on list_archived_reviews. Returns {ok:true, docId, manifest}. error:'not-found' means no doc is bound under that id. error:'review-member' (with the setId) means the doc belongs to a review — use archive_review on that setId, which retires the whole thing. error:'hub-owned' means it is a task body or a board room, which the hub owns and nobody archives. error:'archive-collision' means an older snapshot of this docId is already in the archive: nothing moved — unarchive that one first rather than writing over it.",
+        'Retire one finished doc — a bound markdown doc or a mockup — without deleting anything. It drops off the workspace listing and any board and stops costing a poll; the source file and the record are untouched, and unarchive_doc restores it. Prefer this over delete_doc, which purges. Use archive_review instead if the doc belongs to a review; task bodies and board rooms cannot be archived.',
       inputSchema: {
         type: 'object',
         properties: {
-          docId: { type: 'string', description: 'The doc to retire.' },
+          docId: { type: 'string' },
           reason: {
             type: 'string',
             description: 'Why this doc is finished — e.g. "draft published".',
@@ -755,11 +764,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'unarchive_doc',
       description:
-        "Bring an archived doc back: it returns to the live server with its comment threads intact, its file binding re-armed, and its row back on whatever boards it was linked to when it was archived. This is what makes archive_doc safe to call — retiring a doc does not have to be right the first time. Returns {ok:true, docId, manifest}. error:'not-found' means nothing is archived under that id (list_archived_reviews shows what is). error:'restore-collision' means the docId has been re-minted live while it was away: nothing moved, and restoring would have destroyed the newer doc.",
+        'Bring an archived doc back with its threads, file binding and board rows intact. This is what makes archive_doc safe to call.',
       inputSchema: {
         type: 'object',
         properties: {
-          docId: { type: 'string', description: 'The archived doc id.' },
+          docId: { type: 'string' },
         },
         required: ['docId'],
       },
@@ -767,13 +776,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_archived_reviews',
       description:
-        'Everything currently archived on this server, newest first, in TWO keys. `archived` is the reviews — setId, when it was archived, by whom, the reason given, its member docIds and the boards it will return to; the input to unarchive_review. `docs` is the single free-standing docs archived with archive_doc — docId, when, by whom, the reason, title and the boards it will return to; the input to unarchive_doc. Read-only. This is the answer to "what can I bring back".',
+        'Everything archived on this server, newest first, in two keys: archived for whole reviews (feed to unarchive_review) and docs for single docs (feed to unarchive_doc). Each carries when, by whom, the reason, and the boards it will return to. This is the answer to "what can I bring back".',
       inputSchema: { type: 'object', properties: {} },
     },
     {
       name: 'delete_workspace',
       description:
-        "Permanently delete a WORKSPACE — the board created by create_workspace — along with all of its tasks, its board room, every per-task body room, its event log and its persisted state, so a board minted for a short experiment doesn't become permanent. The guardrail counts OPEN TASKS: without force it refuses with error:'has-open-tasks' and openTasks:<count>, so finish or close them first, or pass force:true. Docs and reviews ATTACHED to the board are deliberately left alive at their own URLs — attaching is a link, not ownership. error:'not-found' means no board exists under that id. On success returns {ok:true, deletedTasks:<count>}. Passing a REVIEW id still retires that review, because that is what this tool used to mean and older sessions still call it that way — but it now ARCHIVES it rather than destroying it (add purge:true for the old behaviour, and see archive_review). New callers should use delete_review or archive_review, neither of which can touch a board.",
+        'Permanently delete a board and all of its tasks, rooms and history. Reach for retire_workspace instead in almost every case — this one cannot be undone. Refuses while open tasks remain unless you pass force. Docs attached to the board survive: attaching is a link, not ownership.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -794,7 +803,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'refresh_review',
       description:
-        "Re-reconcile a review against what's on disk RIGHT NOW, WITHOUT re-minting any docId — so every existing comment thread survives. Use this instead of re-running create_diff_review / bind_folder when the review already exists and the files have moved under it. For a DIFF review it re-runs the diff from the stored base, so files you changed after creating the review join it and per-file status/line counts refresh; a member whose change you reverted is marked stale rather than deleted (its comments are still someone's feedback, and the change may come back). For a BROWSE review members bind lazily, so what refresh adds is the reverse sweep: members whose file was deleted or renamed away get marked stale. Stale is always reversible — the next refresh that finds the file clears it and lists it under restored. PINNED diff reviews (created with a `target`) are refused with error:'pinned': their content is a commit, so there is nothing to re-read. The review's bind-time `exclude`, `groups` and `maxFiles` are replayed automatically, so a refresh never widens the scope you set or scatters new files into heuristic buckets. Returns {ok, kind:'diff'|'browse', added[], stale[{docId, relPath, openThreads}], restored[], fileCount}. Read `stale` after a rename: those threads are now stranded on a file nobody will open, so re-anchor or resolve them. Errors: 'too-many-files' (the review outgrew its cap — re-run the bind with a higher maxFiles, or narrow it with exclude), 'not-found' (nothing bound under that id — including a folder that was bound while EMPTY, which creates no docs; re-run bind_folder, it derives the same id so shares and threads survive), 'root-missing' (the folder itself is gone).",
+        'Re-reconcile an existing review against what is on disk now, without re-minting any docId — so every comment thread survives. Use it instead of re-running the bind when files have moved under the review. Files you changed since join it; a file reverted, deleted or renamed away is marked stale rather than removed. Read stale after a rename — those threads are stranded on a file nobody will open. Pinned reviews are refused; their content is a commit.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -809,7 +818,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_review_groups',
       description:
-        "Re-group an EXISTING diff review's sidebar in place — same grouping model as create_diff_review's `groups`, but applied to a review that already has comments on it, so you don't have to tear the review down (and lose every thread) just to organize it better. A group's `paths` claim a file exactly or as a directory prefix, first group in the array wins, and anything unclaimed lands in an \"Other\" group listed last (returned in `ungrouped` so you can see what you missed). Optional per-group `details` renders as a short intro under the group title; over 500 chars is REJECTED, not truncated — write a 1–2 sentence intro, don't paste a commit body. Re-setting a group WITHOUT details clears the old one. Pass an EMPTY groups array to fall back to the built-in Tests/Docs/Build + module heuristic. Returns {ok, groups:[{title, fileCount}], ungrouped:[relPath]}. Errors: 'bad-groups' (a group is missing a title or paths — nothing is written, the review is untouched), 'not-found' (no such review), 'no-diff-members' (a browse review has no changed files to group — groups organize a diff), 'group-details-too-long'.",
+        'Re-group an existing diff review\'s file list in place, so you can organise it without tearing the review down and losing its comments. Groups claim files by exact path or directory prefix, first group wins, and anything unclaimed lands in "Other". Pass an empty array to fall back to the built-in heuristic. Optional per-group details is a one- or two-sentence intro; over 500 chars is rejected.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -837,7 +846,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'find_and_replace',
       description:
-        "Replace a string of plain text in the doc with another string. `find` must match the doc's plain text content (no markdown syntax — marks like bold/italic are preserved automatically). Use `contextBefore` / `contextAfter` to disambiguate repeated phrases. If the match is still ambiguous the tool returns a list of candidates. A no-match comes back with a near-miss `hint` when the doc contains the text up to letter case (`kind: 'case'`) or up to whitespace runs (`kind: 'whitespace'` — double spaces, NBSP, newlines); the hint's `preview` quotes the doc's ACTUAL characters — real newlines included, never flattened to spaces — so copy the find from it and re-issue rather than guessing (or, never, editing the bound file on disk); if the quoted span crosses a paragraph break (contains `\n\n`), the re-issue reports `cross-node` because the break is not editable text — split the edit per block instead. Use `occurrence` (1-indexed) to pick one explicitly, or pass `replaceAll: true` to replace every occurrence in one call — the right tool for a mechanical sweep (the same stale SHA or renamed identifier in dozens of places), which must NEVER be done by writing the bound file on disk. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replace` as marks on the inserted text instead of literal characters — required when adding a labeled link or other inline mark to text that doesn't already have one. Runs as a single Yjs transaction so it merges cleanly with concurrent user edits. Pass `suggest: true` to propose the change instead of applying it directly — the match is marked as a pending suggestion (visible in the live doc, attributed to this agent) instead of edited outright; disk and every other agent's read stay on the ACCEPTED state until a human (or `accept_suggestion`) accepts it. Returns `{ suggestionId }` when `suggest` is set. Use this for judgment-call edits where a one-tap human approval is better than a silent rewrite; use the plain edit for mechanical fixes.",
+        "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -850,7 +859,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           replaceAll: {
             type: 'boolean',
             description:
-              'Replace every occurrence in one call — one Yjs transaction, marks carried per site. Use for mechanical sweeps (the same stale SHA in 44 places) instead of looping occurrence-by-occurrence or, worse, editing the bound file on disk. Returns { replaced } (and skippedCrossNode when a match straddled formatting boundaries and was left alone). Mutually exclusive with occurrence and with suggest.',
+              'Replace every occurrence in one call, marks carried per site — for a mechanical sweep, instead of looping occurrence by occurrence. Mutually exclusive with `occurrence` and with `suggest`.',
           },
           parseInlineMarks: { type: 'boolean' },
           suggest: {
@@ -865,7 +874,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'rewrite_thread_region',
       description:
-        "Rewrite the text a thread is anchored to. Primary path for comment-driven edits: the user commented, the agent fixes the exact range they commented on. Immune to concurrent user edits because the anchor is a Y.RelativePosition, resolved to current offsets at apply time. Pass `parseInlineMarks: true` to interpret `[label](url)` / `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` in `replacement` as marks on the inserted text instead of literal characters. Returns `anchor-orphaned` if the user deleted the anchored text — fall back to find_and_replace in that case. Pass `suggest: true` to propose the rewrite instead of applying it directly — same semantics as find_and_replace's `suggest` flag: marked pending, attributed to this agent, invisible to disk until accepted. Returns `{ suggestionId }` when `suggest` is set.",
+        'Rewrite the text a thread is anchored to — the primary path for comment-driven edits, where a person commented and you are fixing exactly the range they commented on. Immune to concurrent edits, since the anchor resolves at apply time. Returns anchor-orphaned if they deleted the text; fall back to find_and_replace.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -885,7 +894,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_suggestions',
       description:
-        'List every pending suggestion (from any author — human or agent) on a doc, in doc order. Each entry has `sid`, `author` ({id,name,color}), `kind` (insert/delete/replace), a human-readable `snippet` (inserted text, deleted text, or "old → new"), `blockContext` (the accepted-state text of the containing block), and `ts` (creation time, epoch ms). Use before `accept_suggestion` / `reject_suggestion` to find the sid, or to check whether your own earlier `suggest: true` proposal is still pending.',
+        'List every pending suggestion on a doc, from any author, in doc order. Use it to find a sid before accepting or rejecting, or to check whether your own suggest: true proposal is still pending.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -897,7 +906,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'accept_suggestion',
       description:
-        'Accept a pending suggestion by sid: it becomes real content and flows to disk via the normal debounced write-back within ~1s. Missing sid → an error (also the correct outcome for a double-accept race — someone else already resolved it).',
+        'Accept a pending suggestion by sid: it becomes real content and flushes to disk within about a second. A missing sid errors, which is also the right outcome when somebody else already resolved it.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -951,7 +960,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_after_thread',
       description:
-        "Insert one or more new block elements (paragraphs, headings, lists, blockquotes, code blocks) AFTER the block that contains the thread's anchor. Accepts markdown: `# heading`, `## sub`, `- bullet`, `1. numbered`, `> quote`, ```code blocks```, and `---` for a horizontal rule. Blank lines separate paragraphs. Use this for 'add a section', 'add a paragraph below', 'insert a bullet list here'. If the anchor sits inside a list item, the default placement nests the new blocks under that item — pass placement 'top-level' to insert after the entire list instead.",
+        'Insert new blocks — paragraphs, headings, lists, quotes, code — after the block holding a thread\'s anchor. Takes markdown. Use it for "add a section" or "add a paragraph below"; insert_after_thread is the inline sibling. An anchor inside a list item nests the new blocks under that item unless you pass placement top-level.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -962,7 +971,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['after-block', 'top-level'],
             description:
-              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table.",
           },
         },
         required: ['docId', 'threadId', 'markdown'],
@@ -971,7 +980,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_anchor',
       description:
-        'Mint a private agent-side anchor at a specific text location and get back an anchor id. The anchor survives concurrent user edits just like a thread anchor, so you can pin 3 spots now and rewrite each later without worrying about offsets shifting. Uses the same find/context/occurrence disambiguation as find_and_replace.',
+        'Mint a private anchor at a text location and get back an id. It survives concurrent edits, so you can pin several spots now and rewrite each later without offsets shifting under you. Same disambiguation as find_and_replace.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -988,7 +997,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'edit_at_anchor',
       description:
-        "Apply an INLINE edit at a previously-created agent anchor. `op.kind` is 'replace' (rewrite the anchored range) or 'insert_after' (insert text right after the anchor's end). The text stays inside the anchor's block — use this for prose tweaks, not for adding new headings/paragraphs/lists/tables. For new blocks, use insert_blocks_at_anchor (which routes through the markdown parser so `## Heading` becomes a real heading element, not literal text). Runs as a Yjs transaction; merges cleanly with concurrent user edits.",
+        "Apply an inline edit at an anchor — replace the anchored range or insert_after it. The text stays inside the anchor's block, so use it for prose, not new structure. For headings, paragraphs, lists or tables use insert_blocks_at_anchor, or you get a literal ## Heading instead of a heading.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1009,7 +1018,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'insert_blocks_at_anchor',
       description:
-        "Parse markdown and insert the resulting blocks (headings, paragraphs, lists, blockquotes, code blocks, tables, horizontal rules) immediately AFTER the block that contains the agent anchor. Use this — not edit_at_anchor — for adding new sections / sub-headings / tables. edit_at_anchor with insert_after does a character-level insert that keeps the new text trapped inside the anchor's block, producing literal `## Heading` text instead of a heading element. CAUTION: an anchor inside a list item nests everything under that item by default — pass placement 'top-level' to insert after the whole list.",
+        'Parse markdown and insert the resulting blocks after the block holding an anchor. This is the one for new sections, sub-headings and tables; edit_at_anchor keeps text trapped inside the block. An anchor inside a list item nests under that item unless you pass placement top-level.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1020,7 +1029,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['after-block', 'top-level'],
             description:
-              "Where to splice. Default 'after-block' inserts after the anchor's innermost block — when the anchor sits inside a list item, that NESTS everything under the item. Pass 'top-level' to insert after the whole containing list/table/blockquote instead (\"add a section after this list\").",
+              "Where to splice. Default 'after-block' inserts after the anchor's innermost block, which nests under a list item when the anchor sits in one. Pass 'top-level' to insert after the whole containing list or table.",
           },
         },
         required: ['docId', 'anchorId', 'markdown'],
@@ -1038,7 +1047,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'delete_block_at_anchor',
       description:
-        "Delete the entire block (paragraph, heading, blockquote, list item, table cell — whichever block contains the anchor) the anchor points at. Pass exactly one of `threadId` (a comment thread's anchor) or `anchorId` (an agent anchor minted via create_anchor). Use this when find_and_replace with an empty replacement isn't enough — empty-string find_and_replace empties the block's text but leaves a blank block element behind that the editor still renders. This removes the block entirely. NOTE: for an anchor inside a list item or table cell, only the innermost containing block (the list item's paragraph, the cell's paragraph) goes away — the list item / cell shell remains. Use delete_section or delete_blocks_in_range for whole-list / whole-section deletion.",
+        "Delete the whole block an anchor points at. Use it when an empty find_and_replace is not enough — that empties a block's text but leaves the empty block rendering. For an anchor inside a list item or table cell only the innermost block goes; for a whole list or section use delete_blocks_in_range or delete_section.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1052,7 +1061,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'delete_blocks_in_range',
       description:
-        'Delete every TOP-LEVEL block from the one containing `startFind` through the one containing `endFind`. Block-INCLUSIVE: a partial-string match still removes the entire containing block — this is intentional ("blow away the section that contains this string"). Use for trailing template cruft or any contiguous span where no heading bounds the area. Both finds use the same disambiguation as find_and_replace; pass `contextBefore` / `contextAfter` for shared disambiguation, or `startOccurrence` / `endOccurrence` (1-indexed) when the same string repeats. Errors: `no-match`, `ambiguous` (with `candidates` tagged `start` / `end`), `inverted-range` (end before start). For "delete this whole section" prefer delete_section, which is heading-aware.',
+        'Delete every top-level block from the one containing startFind through the one containing endFind. Block-inclusive on purpose: a partial match removes the entire containing block. Use it for trailing cruft or a span no heading bounds; for "delete this section" prefer delete_section, which is heading-aware.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1070,7 +1079,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'delete_section',
       description:
-        'Delete a heading block plus every subsequent top-level block until the next heading at level ≤ the start heading\'s level (or end of doc). The highest-leverage tool for "delete the X section" — what a single call replaces in one go would otherwise take a dozen find_and_replace calls and still leave empty-paragraph residue. `heading` is the exact heading text (whitespace-trimmed); pass `level` (1..6) to disambiguate when the same text appears at multiple heading levels, `occurrence` (1-indexed) for repeats at the same level. Returns the heading that ended the run (or null if the section ran to the end of the doc) so you can confirm what was kept. Errors: `no-match`, `ambiguous`, `not-a-heading` (string matched body text, not a heading block).',
+        'Delete a heading and everything under it, down to the next heading at the same level or above. The tool for "delete the X section" — a dozen find_and_replace calls in one, without the empty blocks they leave behind. Pass level or occurrence when the heading text repeats. Returns the heading that ended the run, so you can confirm what was kept.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1095,7 +1104,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'watch_doc',
       description:
-        "Start pushing live feedback events for this doc into the current Claude Code session as <channel source='claude-workspaces' …> messages. Every thread.created / thread.replied / thread.resolved / thread.reopened on the doc arrives as a channel event until you call unwatch_doc. NOTE: this is normally redundant — `create_review_doc`, `bind_mock`, and most other docId-bearing tools auto-subscribe the caller on first touch. Use `watch_doc` explicitly when you want to subscribe to a doc you haven't otherwise interacted with (e.g., a peer's doc you only want to observe). Idempotent. DURABLE: the watch is also recorded on the server under this agent's identity (CW_AGENT_NAME), so a session respawn re-wires it without a call from you — the response says `persisted: false` when it could not be (no stable identity, or the server was unreachable), which means a restart WILL drop it.",
+        "Subscribe this session to a doc's comment events, delivered as channel messages. Usually unnecessary — create_review_doc, bind_mock and most docId-bearing tools subscribe you already, and set_workspace_lead covers every doc on your board. Reach for it for a doc you have not otherwise touched, such as a peer's review you only want to observe. persisted: false means a restart will drop it.",
       inputSchema: {
         type: 'object',
         properties: { docId: { type: 'string' } },
@@ -1115,13 +1124,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_watched_docs',
       description:
-        "Return the docIds this session is currently subscribed to for channel events, WITH PROVENANCE: `restore.status` says whether this session re-wired its set from the server after a respawn ('restored'), never had a server set to restore ('restored' with an empty list), could not reach the server ('failed', with the error — retry by calling again), or has no stable identity so nothing survives a restart ('session-only'). An empty `watching` list therefore no longer means both 'never watched' and 'watched, then respawned' — read `restore` to tell them apart. Also answers the question that actually goes wrong — not 'what am I watching' but 'what am I MISSING'. `coverage.workspaces` resolves each `ws:<id>` key you hold (hub BOARD or review GROUPING; for a board, whether you are attached, whether your heartbeat is fresh, and whether you hold the lead seat), and `coverage.unattachedBoards` names boards you follow — through a watched doc OR through the board's own `ws:` key — where you have no LIVE attachment, each with what is queued for that board's lead (`queuedVoice`) plus who holds the seat (`leadAgentId`, `leadLive`) and which clock lapsed on your own record (`attached: true, heartbeatFresh: false`). Watching a doc is not attaching, and an attachment the server has stopped OBSERVING is not attached either — a delivery gate asks for recent observed work, a heartbeat or a tool call whichever is later, plus an open channel; liveness is observed, never self-reported. A row there means real work is queuing that will never reach you. Note the two clocks differ: `heartbeatFresh` is the shorter displayed active/away label, `live` is the delivery gate, and a working session can be `heartbeatFresh: false` and still be reached — which is why rows are selected on `live`. The remedy depends on who is there: `set_workspace_lead(workspaceId)` when the seat is empty or its holder is gone, `heartbeat(workspaceId)` when the seat is already yours and you have simply gone quiet, and `attach_agent(workspaceId)` when a live peer leads it — taking that seat would evict them, and is refused. `coverage` is ABSENT rather than empty when the server did not answer (older server, no stable identity, unreachable); absent means unknown, never all-clear.",
+        'What this session is subscribed to — and, more usefully, what it is missing. coverage.unattachedBoards names boards you follow but are not live on, with what is queued for their lead and the remedy for each: set_workspace_lead when the seat is empty, heartbeat when it is yours and you went quiet, attach_agent when a live peer holds it. restore.status tells an empty list apart from a failed restore. coverage absent means unknown, never all-clear.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
       name: 'share_workspace',
       description:
-        "Publish a BOARD behind a Cloudflare Access gate, so external reviewers can browse everything filed on it — file tree, every member doc, cross-doc links, and per-file comment threads. A BOARD IS THE UNIT OF SHARING: neither a single doc nor a folder bind / diff review grouping can be shared on its own, so file the thing on a board (attach_doc, or the hubWorkspaceId that bind_folder / create_diff_review returns) and share that board id — a grouping id is refused with 410 grouping_sharing_removed. Everything on the board is then available to everyone the share reaches, so check what else is filed there BEFORE sharing; a board created by create_workspace for this one review is the tight scope. Returns { share: {...} }. Read .claude/claude-workspaces.json's `share.defaultAllowDomains` first; if a repo has no config, ASK THE USER which domain(s) to allow before calling — never default to 'anyone'. Default ttlSeconds is 72h. Visitors can read, comment on, and co-edit members through the live editor — but cannot delete docs, replace a doc wholesale, reparse from disk, list other workspaces or docs, open files outside the workspace root, or manage shares.",
+        "Publish a board behind a Cloudflare Access gate so named external reviewers can read, comment and co-edit. A board is the unit of sharing — file a doc or review on one first; a review id is refused. Everything on that board travels with the share, so check what else is filed there, or give the review its own board. Read .claude/claude-workspaces.json's share.defaultAllowDomains; if there is none, ask which domains to allow — never default to anyone. Default TTL 72h.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1144,7 +1153,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'share_link',
       description:
-        "Publish a BOARD as an UNGUESSABLE LINK — no sign-in, no Cloudflare Access, no email allow-list. Anyone holding the URL can read, comment, and co-edit until it expires; the scope is identical to an Access share (that board and what is filed on it — no doc enumeration, no deleting, no wholesale rewrite, no share administration). This is the default way to share with someone outside the tailnet. A BOARD IS THE UNIT OF SHARING: there is no docId argument and no entry doc, and a folder bind / diff review GROUPING id is refused with 410 grouping_sharing_removed. File the review on a board and pass the board id — create_diff_review and bind_folder already return it as hubWorkspaceId, and create_workspace makes a fresh empty one in about a second when this review deserves its own. The link opens the board itself (/workspaces/<id>). Default TTL is one week; pass ttlSeconds to change it, or set_share_ttl later. Returns { share: { shareId, url, slug, expiresAt, ... } } — give the human the bare `url` on its own line. Because the link IS the credential, treat it like a password: don't post it anywhere durable, and prefer a short ttlSeconds for anything sensitive. Use share_workspace instead when you need verified identities, per-person revocation, or attribution.",
+        'Publish a board as an unguessable link — no sign-in, the default way to share outside the tailnet. Same scope as an Access share, and a board is still the unit. The link is the credential: treat it like a password, keep the TTL short for anything sensitive, and give the person the bare URL on its own line. Use share_workspace when you need verified identities, per-person revocation, or attribution. Default TTL one week.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1191,7 +1200,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_sharing_enabled',
       description:
-        'Master switch for ALL external access. Turning it off makes every share host and link host answer 403 before authentication, and hangs up websockets and SSE streams that are already open — one call, rather than revoking shares individually. Existing shares are preserved and resume when it is turned back on. The local/tailnet surface is unaffected. Call with no argument to just read the current state. Refuses with env_locked when CW_SHARING_DISABLED is set in the service environment.',
+        'Master switch for all external access. Off makes every share and link answer 403 and hangs up open connections — one call instead of revoking shares individually. Existing shares are preserved and resume when it is back on; the local and tailnet surface is unaffected. Call with no argument to read the current state.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1205,7 +1214,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_workspace',
       description:
-        "Create a WORKSPACE — a goal board + task board + the docs and reviews filed on it, the unit a reviewer opens at /workspaces/<id>. A folder bind or diff review is CONTENT in one, not another workspace; file one with attach_doc. A board starts with no goals; write them with set_goal_list, which is where a workspace's aims live — there is no separate north-star field. YOU become the workspace's LEAD AGENT — the addressee for anything the board needs a responsible party for — unless you pass a different `leadAgentId`; hand it over later with set_workspace_lead. Auto-subscribes this session to the workspace's event channel (task.*, decision.answered, workspace.goals_changed, …); pass subscribe:false to skip. Returns { workspaceId, leadAgentId } — the id is crypto-random because URLs hang off it.",
+        'Create a board: goals, tasks, and the docs and reviews filed on it, opened at /workspaces/<id>. You become its lead agent unless you pass leadAgentId. A board starts with no goals — write them with set_goal_list. A folder bind or diff review is content to file on a board, not another board.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1223,7 +1232,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'rename_workspace',
       description:
-        'Rename a hub board. The name was set once at creation and nothing could change it, which is how two live boards end up sharing one — and the name is how an agent picks which board to work. Nothing else moves: same id, same URL, same tasks, same docs; every link already in the field keeps working. Renaming INTO a name another live board already has is allowed (you may be halfway through a cleanup) and is never silent — the response carries `sameName` naming the other boards, so a collision you just made comes back to you instead of to whoever reads the board next week. Use retire_workspace instead when the right answer is that one of the two is over.',
+        "Change a board's name. Nothing else moves — same id, same URL, same tasks, so every existing link keeps working. Renaming into a name another live board holds is allowed; the response names the collision in sameName. Use retire_workspace when the answer is that one of the two is over.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1236,7 +1245,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'retire_workspace',
       description:
-        "Stand a hub board down — REVERSIBLY. This is what to call when a board is superseded, finished, or a duplicate: it stops ranking on the workspace list (it folds into a counted 'Retired' section rather than vanishing), it refuses new tasks, and it tells any agent that reads it or attaches to it that it is retired and why. It DESTROYS NOTHING — every task, goal, doc, thread and event survives, the board still opens at its URL, and in-flight tasks can still be transitioned so nothing gets stranded. unretire_workspace puts it back exactly as it was. This is deliberately NOT delete_workspace, which removes the tasks sidecar and the events log and is not reversible; reach for that essentially never. Pass a `reason` — it is replayed verbatim in every refusal and notice an agent sees, and it is usually the name of the board that replaced this one, which is the only thing that makes the refusal actionable.",
+        'Stand a board down reversibly, when it is superseded, finished, or a duplicate. It stops ranking, refuses new tasks, and tells anyone who reads it why — but destroys nothing, and unretire_workspace reverses it. This is the one to reach for; delete_workspace is not reversible. Pass a reason; it is replayed in every refusal, and it is usually the board that replaced this one.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1263,7 +1272,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_workspace_lead',
       description:
-        "DECLARE YOURSELF LEAD of a workspace — one call, and from then on you receive everything on this board: task and decision events, thread events on every doc filed here INCLUDING docs created later, and voice notes. Call it with just `workspaceId` at session start; there is no per-surface subscribe to remember, and a respawn re-wires the subscription AND re-attaches you (both are persisted against your agent identity). STAYING LIVE IS NOT AUTOMATIC ON A QUIET SESSION: every lead-addressed delivery — voice notes above all — is gated on the server having OBSERVED you recently, which means a heartbeat or a tool call, whichever came last, plus an open channel. Work on the board refreshes it for you, so a busy session stays live on its own; a session that stops touching this server for a stretch goes quiet on every board it holds, including ones it is not actively working. Call heartbeat(workspaceId) then, and use `list_watched_docs` → `coverage` to check rather than assume. It replaces a pile of watch_doc calls, and it is what closes the gap those calls leave: a doc watch is not an attachment, so an agent watching six docs still misses every voice note and every board event, silently — a queue nobody is draining looks exactly like a queue nobody filled. Because it attaches you, it also DRAINS whatever was waiting for the seat and hands it back on this same response, in attach_agent's own field names: `queuedVoice` (act on each transcript verbatim), plus `gating` and `untriaged`. `subscribed` on the response is the answer to \"am I actually listening?\" — the question an agent otherwise cannot answer from the inside — and it is MEASURED, not asserted: it reports whether the event stream really opened, so `subscribed: false` with a `subscriptionWarning` is a real outcome to retry rather than a field you can skim past. `subscriptionPersisted: false` is the separate failure — the watch will not survive a respawn, usually because this session has no stable agent name. The lead is a STANDING assignment, not a session fact, so a board's asks wait for you even while you are away rather than going to whoever happens to be connected. Pass `leadAgentId` ONLY to hand the board to somebody else: that is a pure handover — it moves the seat and nothing more, because attaching or subscribing on an absent agent's behalf would make the board report a live lead that is not there.",
+        'Declare yourself lead of a board. One call at session start and everything on it reaches you — task, decision and thread events on every doc filed there, plus voice notes — and it drains whatever queued while the seat was empty. Staying live is separate: delivery is gated on the server having observed you recently, so a quiet session drops out. Call heartbeat, and check list_watched_docs rather than assuming. Pass leadAgentId to hand the board to somebody else.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1271,12 +1280,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           leadAgentId: {
             type: 'string',
             description:
-              'The agent id taking responsibility. OMIT IT to declare yourself — that is the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else; naming your own id is the same as omitting it, so callers built against the older required-field form keep their exact meaning.',
+              'The agent id taking responsibility. Omit it to declare yourself — the common case, and the only form that also attaches and subscribes you. Naming another agent hands the seat over and does nothing else.',
           },
           takeover: {
             type: 'boolean',
             description:
-              'Take the seat even though a DIFFERENT agent holds it and is live. Default false, and the default is the point: declaring yourself on a board a working peer leads would evict them silently, and every lead-addressed delivery would start routing to you while they keep working. Without this you get `declined: "lead-held"` and `previousLeadAgentId` naming the incumbent — you are still attached and subscribed, so nothing on the board is hidden from you; only the seat stays put. Coordinate with them first, and pass this when you mean it.',
+              'Take the seat from a different agent that currently holds it and is live — it evicts them silently and reroutes every lead-addressed delivery, so coordinate first. Default false: without it you get `declined: "lead-held"` naming the incumbent, and you stay attached either way.',
           },
         },
         required: ['workspaceId'],
@@ -1285,7 +1294,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_doc',
       description:
-        "Link an EXISTING review doc, diff review, or folder bind to a hub workspace so it shows in the hub's docs sidebar. A link only — the doc keeps its own URL and metadata, nothing is migrated. `docId` may be a doc id or a diff-review/folder workspaceId (the whole review attaches as one unit). Idempotent. Returns the workspace's updated docIds.",
+        "File an existing doc, diff review or folder bind onto a board, so its open comment threads reach that board's Home queue. A link only — the doc keeps its own URL and nothing is migrated. docId also accepts a review id, which attaches the whole review as one unit. Idempotent.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1298,7 +1307,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_tasks',
       description:
-        'THE way to create tasks — always takes a LIST, and a single task is a one-row list, so reach for this one whether you have one idea or fifteen. Filing 24 things one at a time costs 78s against 13s for the same rows in one call, and that gap is a tooling choice rather than a floor. It is the ONLY create verb — the single-row form it replaced is gone, so there is no second way to file work that skips the batch and the placement report. Every rule applies PER ROW: an omitted `assignee` means YOU own that row, an omitted `goal` leaves that row UNPLACED at the bottom of Backlog for the lead to place, an explicit `order` places it. A row may name another row of the SAME batch in `after` / `afterEnforce` — by index (`0`) or by a `key` another row declares (`"#seed"`) — so a burst with internal ordering no longer needs a follow-up set_task_dependencies. Returns the created tasks IN BOARD ORDER — the ranking you just produced, without a second read — plus `failures: [{index, title, error, message}]` for any row that didn\'t land, plus `placement` when any row went in unplaced (the unplaced task ids and the ordered goal bands, so you can set_task_goal without reading the board first). A bad row NEVER rejects the batch: its neighbours are created and it comes back by index, so you fix and re-send that one row. The whole call is refused only when nothing could have landed anyway (unknown workspace, no rows).\n\nEVERY ROW YOU FILE LANDS IN THE `triage` STATUS, because you are an agent and nobody has vetted it yet. It is on the board, in its band, in its order — but next_tasks does not return it, so filing work is not the same as queueing it. Somebody moves it out with task_transition (to `todo` or straight to `in-progress`) and it is ordinary work again. Do not file a row and then expect to pick it up on your next queue read; if the row is yours to start and the decision is yours to make, transition it yourself and the trail records that you did. A person filing the same row through the board skips triage entirely.\n\nThe `triage` STATUS and being UNPLACED are two different things: the status is about whether the work is agreed to, placement is about which goal band a row sits under. A row can be in either, both, or neither.',
+        "File work on a board. Always takes a list; one task is a one-row list, so this is the only create verb. Per row: omit assignee and you own it, omit goal and it lands unplaced at the bottom of Backlog. Rows you file land in triage — on the board, but not in anyone's queue until somebody moves them out with task_transition. A bad row never rejects the batch; it comes back in failures by index.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1306,7 +1315,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tasks: {
             type: 'array',
             description:
-              'The rows, at most 100 — an oversized batch is refused WHOLE rather than truncated, and a tracker that big belongs in import_tasks_markdown. Each row is {title, body?, key?, assignee?, assigneeKind?, needs?, options?, review?, goal?, order?, after?, afterEnforce?, dueAt?, links?, quote?} — the per-field rules are on the row schema below, and they are the same rules the removed single-row create carried. `title` is the only required field — but write a `body` on every row you are not doing yourself within the hour: a bare title is not pickup-able by an agent that was not in the conversation. `key` is an optional label THIS batch uses to reference the row; it must be unique in the batch and must not be all digits or start with "#". Rows are created in the order given, so a row can only depend on a row ABOVE it — a forward reference is refused rather than silently dropped, and so is a reference to a row that failed (a task carrying a dependency that never blocks it is worse than a refusal). An entry with no "#" is still an existing task id, exactly as before.',
+              'The rows, at most 100 — an oversized batch is refused whole; a tracker that big belongs in import_tasks_markdown. `title` is the only required field. `key` labels a row so a later row in the same batch can reference it: unique in the batch, not all digits, no leading "#". Rows are created in order, so a row can only depend on one above it; a forward reference is refused.',
             // The row contract used to live on the single-row create verb's
             // declaration, and `tasks` merely pointed at it. Removing that
             // tool would have removed every field description with it — the
@@ -1322,12 +1331,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 title: {
                   type: 'string',
                   description:
-                    'The row\'s one-line name, and the thing a person scanning thirty rows actually reads. The standard: `<persona> can <do x> so that <goal y>` — ONE persona (Agent, Bryan, Collaborator), 20 words or less so it fits every screen. e.g. "Bryan can review across tasks faster so that review sessions stay short", "Agent can reorder goals so that the board\'s priority stays current". The failure this exists to stop is a title that states an OBSERVATION — "A decision-answered event promises a link checklist" names something somebody noticed, so ten of them in a column give no sense of the plan and the board cannot be prioritised. Never REFUSED: a rough capture still lands — every placed create is routed to the workspace lead for a shape review (§2 of the `claude-workspaces:leading-a-workspace` skill), so file what you have.',
+                    "One line naming the work, in the form `<persona> can <do x> so that <goal y>` — one persona (Agent, Bryan, Collaborator), 20 words or less. A title that states an observation rather than an outcome gives a column of rows nothing to prioritise by. Never refused; the lead's shape review is where a rough one gets rewritten.",
                 },
                 body: {
                   type: 'string',
                   description:
-                    "The description. Not schema-required — but WRITE ONE ANYWAY, on every row: a bare title is not pickup-able by an agent that was not in the conversation, and reconstructing intent from a title is how the wrong thing gets built. Shape it as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent / Bryan / Collaborator) — and add falsifiable \"done when\" criteria for anything handed to someone else or parked beyond today. Proportionate: work you will finish within the hour needs the story line and nothing more. Markdown; it renders on the task itself and comes back whole from next_tasks, so do not create a separate doc to hold it.\n\nWhen `needs` is 'decision' this is REQUIRED and has a different shape — the question in one line, what is at stake in two or three, the options with what each one costs, then what is blocked until it is answered. A row with no question in it is REFUSED, because the failure this catches is filing a progress report as a decision: the field is populated, every check passes, and the person asked to decide has nothing to decide from. The other three parts come back as advisory `shapeGaps` on a successful create. A thin or story-less description is never REFUSED either — the lead's shape review pass is where it gets rewritten or questioned, not the write path.",
+                    'What the row is for, as a compact user story — `<persona> can <do x> so that <goal y>`, one persona (Agent, Bryan, Collaborator) — plus "done when" criteria for anything you hand over or park. Markdown; it comes back whole from next_tasks. On a `needs:\'decision\'` row this is required and must contain the actual question, the stakes, and what each option costs; a body with no question in it is refused.',
                 },
                 key: {
                   type: 'string',
@@ -1337,27 +1346,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 assignee: {
                   type: 'string',
                   description:
-                    "Who owns this row: 'human' for work only a person can do, or a named identity (another agent, a person). Omit it and YOU own it — the API records your own name. It REFUSES a row whose owner comes out as the bare word 'agent', because that names a category rather than somebody, and a board of tasks owned by \"agent\" cannot answer who is doing what. If you get that refusal, your session was launched without CW_AGENT_NAME.",
+                    "Who owns this row: 'human', or a named person or agent. Omit it and you own it. The bare word 'agent' is refused — it names a category rather than somebody; that refusal means your session was launched without CW_AGENT_NAME.",
                 },
                 assigneeKind: {
                   type: 'string',
                   enum: ['person', 'agent'],
                   description:
-                    'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand a row to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+                    "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
                 },
                 needs: {
                   type: 'string',
                   enum: ['action', 'decision'],
                   description:
-                    "Only meaningful when assignee is a human. 'decision' makes the ticket ITSELF one decision (answer_decision records the verbatim answer), which is the older model: the title doubles as the question and a second open question has nowhere to go. A decision REQUIRES a decision-shaped `body` — see that field. Pass `review` instead when you can: a ticket carries 0..n review items, several of them possibly open at once, each with its own blurb.",
+                    "Only meaningful when assignee is a human. 'decision' makes the ticket itself one decision, answered verbatim through answer_decision; it requires a decision-shaped `body`. The `review` field lets the ticket carry several separately-answered questions alongside the work.",
                 },
                 options: {
                   type: 'array',
                   description:
-                    "Candidate answers for the row's ONE embedded decision: [{label, detail?}]. `label` is the text recorded VERBATIM as the answer if it is picked; `detail` is what picking it costs. They are a SHORTCUT, never a closed set: writing a different answer and asking for more information stay available next to them, so do not pad the list to look exhaustive. Two or more, or don't bother.\n\nPREFER `review` when you have a choice. This field hangs the question off the ticket itself, so the TITLE has to double as the question and a second open question has nowhere to go — a ticket can carry SEVERAL review items, and several of them can be open at once. It is kept because callers already send it and it still works exactly as it did.",
+                    "Candidate answers for this row's one decision: [{label, detail?}]. `label` is recorded verbatim as the answer if picked; `detail` is what picking it costs. Two or more. They are a shortcut, not a closed set — writing a different answer stays available, so do not pad the list.",
                   items: { type: 'object' },
                 },
-                review: TASK_REVIEW_ITEM_SCHEMA,
+                review: NEW_TASK_REVIEW_ITEM_SCHEMA,
                 goal: {
                   type: 'string',
                   description:
@@ -1374,7 +1383,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   type: 'array',
                   items: { type: 'string' },
                   description:
-                    'Subset of `after` that hard-blocks transitions while open. Every entry here MUST also appear in `after` — the gate walks `after` and reads this as a lookup set, so an entry in this array alone would gate nothing; the row is refused rather than silently widening `after`.',
+                    'Subset of `after` that hard-blocks transitions while open. Every entry must also appear in `after`, or the row is refused rather than silently widening the gate.',
                 },
                 dueAt: {
                   type: 'number',
@@ -1383,7 +1392,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 links: {
                   type: 'array',
                   description:
-                    "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Backlinks are computed. Use `url` for anything outside this server — a pull request, a decision page, a dashboard; http(s) only, since a ref is rendered as a clickable chip. Refs are NOT existence-checked, so a link that points nowhere is accepted and harmless. A malformed ref does not fail the row: it is dropped and returned in `ignoredLinks`, and the task is still created.",
+                    "Refs this task mentions: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. Use `url` for anything outside this server; http(s) only. A malformed ref is dropped into `ignoredLinks` rather than failing the row.",
                   items: { type: 'object' },
                 },
                 quote: {
@@ -1403,7 +1412,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'promote_to_task',
       description:
-        "Promote a comment thread into a task. Captures the origin ref (the thread backlinks to the task automatically), the latest HUMAN comment as the verbatim `quote` (agent replies never become the quote), and drafts a title + body from the quote when you don't supply them. Same goal semantics as create_tasks: omit `goal` to leave it UNPLACED at the bottom of Backlog. Returns { taskId, title, goal, order, quote } — trimmed.",
+        "Turn a comment thread into a task. Captures the backlink and the latest human comment as the verbatim quote, and drafts a title and body from it when you don't supply them. This is the verb for thread-born asks; create_tasks is for everything else.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1413,7 +1422,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           title: {
             type: 'string',
             description:
-              'Override the drafted title. Worth sending: the drafted one is a clip of somebody\u2019s comment, so it names what was SAID rather than what will be done. The standard is `<persona> can <do x> so that <goal y>`, one persona, 20 words or less.',
+              'Override the drafted title \u2014 worth sending, since the draft is a clip of a comment and names what was said rather than what will be done. `<persona> can <do x> so that <goal y>`, 20 words or less.',
           },
           body: { type: 'string', description: 'Override the drafted body.' },
           assignee: {
@@ -1425,7 +1434,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['person', 'agent'],
             description:
-              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+              "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
           goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
@@ -1438,7 +1447,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'get_workspace',
       description:
-        'Read a hub workspace: the ORDERED goal list with per-goal task counts (todo / in-progress / done), parent goals followed by their subgoals, Backlog last. Order IS priority — the first row is the highest band. Call this before deciding what to work on; without it goal order is invisible (list_tasks returns goal IDS only) and you will work the wrong band. Deliberately cheap — goals and counts, no tasks: pair it with next_tasks, which carries the tasks and their full descriptions. Each row carries `depth` (0 = top-level, 1 = subgoal), `parent` on subgoals, and `reorderable` — the three fields reorder_goals needs, so read here then reorder there with ids alone. `reorderable: false` marks the rows that are APPENDED rather than ordered (Backlog, and a goal id left behind on a done task): they look exactly like a band, and sending them back is a 400, so scope a reorder as "the rows at my scope where reorderable is true", never "every depth-0 row". ',
+        "Read a board's goals in priority order, with per-goal task counts. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
       inputSchema: {
         type: 'object',
         properties: { workspaceId: { type: 'string' } },
@@ -1448,7 +1457,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'next_tasks',
       description:
-        'The work queue: what to pick up next, in priority order (goal band, then task order), already filtered to what you can actually DO. A row in the `triage` status is NEVER here, including with includeBlocked — an agent filed it and nobody has vetted it, so it is not yet agreed to be work. That is the answer to "I filed a task and my queue does not show it": read it with list_tasks(status:"triage"), and clear it with task_transition if the call is yours to make. TAKE THE WHOLE READY SET, NOT THE TOP ROW — starting every ready row that does not collide with another is the default, and holding one task while the rest of the queue waits is the slowest way to work a board. Each row carries its FULL description, which is what tells you whether two tasks touch the same code and therefore have to be sequenced; that judgment is made from the text, not from a field. Also on each row: `blockedBy` (open dependencies — only `enforce` ones hold a task back) and `ready`. Hard-blocked rows are omitted unless includeBlocked. Pass assignee to get just your own queue.\n\nSKIP A ROW CARRYING `parked`. It means somebody deliberately deferred this task to a date (`parked.until`, with `parked.reason` saying what it is waiting for) — it is listed rather than hidden so you can see the deferral and disagree with it, not so you can pick it up. Nothing else about the row says so: it is still `todo`, still unblocked, still owned, because parking is not a status. If the reason no longer holds, un-park it with park_task(taskId, until: null) and say why on the task; do not just start it. When the date passes the field disappears on its own and the row is ordinary work again. Make this call at the top of a work session and again whenever a line of work finishes — priorities move while you work.\n\nREAD `bodyWrittenAt` AND `premise` BEFORE YOU TRUST A DESCRIPTION. A body is a measurement taken on the day it was filed and rendered ever after in the present tense, on a codebase that moves several times a day — so `bodyWrittenAt` (on every row) tells you how old the claim is. `premise` appears only when that description has stood still for over a day while somebody kept commenting on the task, and it carries those comments VERBATIM in `notes`. That is where a previous reader wrote down what they found when they reproduced it: five times in one week a task claimed something was missing that had already shipped, twice within hours of the task being filed, and each time the correction existed as a comment nobody on the pickup path could see. Read the notes first — they may already have done the reproducing for you, and they routinely change the SIZE of the work. `premise` says NOTHING about whether the task is done; it never appears on a done task, and most rows carrying it still have real work left. It clears itself when the description is rewritten (rewrite_task), which is the right move once you know what is actually true — attribute and date the correction, and keep what the body originally claimed, since the original measurement is evidence about when it was taken rather than a mistake to erase.\n\nCHECK WHO IS ALREADY ON A ROW BEFORE YOU TAKE IT. Two fields, present only when a session can be named: `ownerSession` — the session behind the row\'s OWNER — and `claimedBy` — the session that last moved the row into in-progress, plus `at`, when it did. `claimedBy` is the one that exists on a row nobody assigned, because a transition never touches `assignee`: an owner-keyed read on an unassigned row names whoever FILED the ticket, not whoever is working it. Both carry `state` (active | unresponsive | away), `lastHeartbeat` and `lastToolCallAt`.\n\n`state: "active"` on a session that is not you means DO NOT START THAT ROW. Message that session over claude-hive, agree which of you has it, and take a different row if they do — starting it anyway is how two sessions each build a complete answer to one task and neither finds out until a PR. Nothing refuses a second taker, here or at task_transition, because two agents on one row is sometimes right; it just has to be a decision rather than a collision neither side can see. `away` is an owner in name only and `unresponsive` is a wedged session somebody probably SHOULD take over from — neither is a live claim. These are recency reads, never content identity: a session that thinks for an hour produces no commit and still holds the row, so absence of new work is not evidence the row is free.',
+        'The work queue: what to pick up next, in priority order, filtered to what you can actually do. Take the whole ready set, not the top row. Each row carries its full description, blockedBy, ready, and bodyWrittenAt — descriptions age, so check that date before trusting one. Skip any row carrying parked (somebody deferred it deliberately) and any row whose claimedBy is an active session that is not you. Triage rows are never returned; read those with list_tasks(status:"triage").',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1471,7 +1480,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_tasks',
       description:
-        'List a hub workspace\'s tasks, optionally filtered by goal / status / assignee / needs. Rows are trimmed (no body, no transition history — get specifics via the task board or the links routes). needs:"decision" + status filters give you the open-decisions strip; assignee:"human" is half of the "what needs a person" computation. On a big board the default rows still run large (reviews with their quotes and answers, infoRequests, options, evidence ride on every row — a real board hit 122KB); pass `fields` to pick exactly the keys you need.\n\nArchived (soft-deleted) rows are NOT listed unless you pass `includeArchived: true` — that is how you find what somebody archived and what they said about it.',
+        "List a board's tasks, filtered by goal / status / assignee / needs. Rows are trimmed — no body, no transition history. Pass fields to narrow further; the default rows run large on a big board. Archived rows need includeArchived: true.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1481,7 +1490,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['triage', 'todo', 'in-progress', 'done'],
             description:
-              'status:"triage" is the sweep for rows an agent filed that nobody has vetted. Those rows are in their goal band like any other, but next_tasks never returns them, so this filter is the only way to enumerate what is waiting on a look.',
+              'status:"triage" is the sweep for rows an agent filed that nobody has vetted. next_tasks never returns them, so this filter is the only way to enumerate what is waiting on a look.',
           },
           assignee: { type: 'string' },
           needs: { type: 'string', enum: ['action', 'decision'] },
@@ -1489,7 +1498,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              "Project each row to just these keys (`id` always included; keys a row lacks are omitted). Use for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB. 'transitionCount' is computable here without hauling transitions. Omit (or pass []) for the historical default trim.",
+              "Project each row to just these keys (`id` always included). Use it for board-wide sweeps so heavy per-row fields — reviews, infoRequests, options, evidence — don't overflow the result: fields:['title','status','assignee'] answers most triage questions in a few KB.",
           },
           includeArchived: {
             type: 'boolean',
@@ -1503,7 +1512,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        'The SINGLE gate for task status changes (triage | todo | in-progress | done) — attributed to this agent, appended to the task\'s audit trail.\n\nTHIS IS ALSO HOW A TRIAGE ROW IS CLEARED, and there is no other verb for it. A task an agent files starts in `triage`: it sits in its goal band like any other row, but no dispatch read returns it, so nothing picks it up until somebody moves it out. Moving it to `todo` or to `in-progress` clears it — both count, and the trail entry this call writes (who, when, from `triage`) IS the record that it was vetted. Moving a row back TO `triage` is allowed and is the honest way to say "this was taken up too early"; it is a backward move, so it is never blocked.\n\nAttach `evidence` ({commit} and/or {threadRef}) on forward moves or the move is flagged `unproven` (allowed, shaded on the board) — and read the `commit` field\'s own description before you fill it, because the obvious value is the wrong one: a branch sha is discarded by the squash-merge, after which the row still reads as proven and points at nothing. If the evidence was missing or WRONG, do not re-send this call — it refuses with `same-status` — use `amend_evidence`, which appends a correction to the move that already happened. Open `after` dependencies come back in `blockers` — an edge marked enforce REFUSES the transition (HTTP 409) until the blocking task closes; read the blocker message, it names what to unblock. `usage` ({inputTokens, outputTokens}) reports what the task cost at done. Moving back to todo is never blocked.',
+        "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Attach evidence on forward moves or the move is flagged unproven — and the commit must be one that still resolves after a squash-merge, not the branch sha you are sitting on. Wrong or missing evidence is fixed with amend_evidence; re-sending this call refuses.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1531,7 +1540,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'amend_evidence',
       description:
-        "Attach evidence to a transition that ALREADY happened — the answer to 'the move was right, the proof was wrong or missing'. Two cases, both real: the `evidence` object never reached the server (the move landed `unproven` and the board shades it), or it arrived and was FALSE — a commit sha written from memory that resolves to nothing, which reads as proof and is worse. Re-sending task_transition fixes neither; it refuses with `same-status`. This APPENDS: the original row keeps saying what it said (with the bad sha struck through, not deleted), and your correction sits beside it with your name and the time. The `unproven` shading clears, because the move now has proof; that it arrived late stays visible in the row. Defaults to the most recent transition — pass `transitionTs` (a ts from the task's transitions) to correct an earlier one. Evidence that claims nothing is refused, so a correction can never blank the proof it was sent to fix. NOT validated: whether the sha resolves — evidence is a bare commit with no repo attached and this server has no checkout to look it up in, so getting it right is on you.",
+        'Attach or correct evidence on a transition that already happened — for when the move was right and the proof was missing or false. Re-sending task_transition refuses, so this is the only route. It appends rather than overwrites: the original stays, struck through, with your correction beside it. Defaults to the most recent transition.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1560,7 +1569,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'assign_task',
       description:
-        "Hand a task to somebody: 'human' (it needs Bryan), or a named identity — a person, or the agent's own name. NOT the bare word 'agent': that names a category rather than somebody, so the board cannot say who is doing this and next_tasks?assignee=<me> matches nothing; the API refuses it. This is the hand-off gesture — use it the moment you discover a task is not yours to finish, rather than leaving it parked in your column: an unassigned blocker looks like work in flight to everyone reading the board. Status is untouched (re-assigning is not progress), and the move is recorded as task.assigned with both ends, so the direction of every hand-off is reviewable.",
+        "Hand a task to somebody: 'human', a person, or an agent's name. Use it the moment you find a task is not yours to finish — an unassigned blocker looks like work in flight to everyone reading the board. Refuses the bare word 'agent', which names a category rather than somebody. Status is untouched.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1574,7 +1583,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             enum: ['person', 'agent'],
             description:
-              'Declares whether `assignee` is a person or an agent — \'person\' | \'agent\'. Say it whenever you hand work to a NAME that is not your own: the board cannot tell "Bryan" from an agent called "Bryan" by looking, and it refuses to guess, so an undeclared named owner shows as "not recorded" and stays out of every surface built around what a person owes. You never need it for yourself (your own writes are already classified) or for \'human\' (already a person). An agent that has attached to the workspace is known to be an agent regardless of what anyone declares.',
+              "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
           },
         },
         required: ['taskId', 'assignee'],
@@ -1583,7 +1592,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'park_task',
       description:
-        'Defer a task to a date: "not now, and here is when". THIS IS THE VERB FOR WORK YOU HAVE DECIDED TO COME BACK TO — use it instead of the three things leads did before it existed, every one of which made the board say something untrue. Moving the row to in-progress claims work nobody is doing. Inventing an `after` edge asserts a dependency that does not exist. Assigning it to \'human\' says a person is being asked for something when nobody is. All three were done to stop the ready-work nudger re-surfacing a row that had been deliberately put off, and one measured board fired four identical wakes at one deferred row, each costing a full-context turn.\n\nWhat parking does NOT do is move the task. The row stays `todo`, stays unblocked, stays owned by you, and keeps its place in its goal band — parking is not a status, which is the entire point. What changes is that the wake stops treating it as work nobody got to, and every surface that lists it says it is parked and why. It stays in next_tasks, carrying `parked: {until, reason}`: a deferral you can see and argue with is the thing being built here, so a row that vanished from the queue would be the same invisibility in a different place.\n\nNothing expires it and nothing has to. When the date passes the row simply counts as ready again on the next sweep — no second call, no event, no cleanup. Un-park early by passing `until: null`.\n\nWrite a `reason`. The date alone says a decision was made and not what it was waiting for, and the reason is the half whoever reads the board three weeks from now acts on.',
+        'Defer a task to a date: "not now, and here is when". Reach for it instead of moving the row to in-progress or inventing a dependency to quiet the ready-work nudge — both make the board say something untrue. The row does not move: still todo, still owned, still in next_tasks, now carrying parked: {until, reason}. Pass until: null to un-park early. Write a reason — the date says a decision was made, not what it was waiting for.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1596,7 +1605,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           reason: {
             type: 'string',
             description:
-              'Why, in one line — e.g. "waiting on the index rebuild" or "revisit after the launch". Replaced, not merged, whenever the date moves: a reason written about the old date is not a claim about the new one, so restate it if it still holds.',
+              'Why, in one line — e.g. "waiting on the index rebuild". Replaced rather than merged whenever the date moves, so restate it if it still holds.',
           },
         },
         required: ['taskId', 'until'],
@@ -1605,7 +1614,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'archive_task',
       description:
-        'Take a task OFF the board without destroying it — the soft delete, and the only removal a task has. THIS IS THE VERB FOR "that row should not be there": a duplicate, something the goal moved past, a capture that turned out to be two lines of thinking rather than work. Reach for it freely; it is cheap and it is reversible.\n\nSOFT, and the word is literal. Three fields land on the row (`archivedAt` / `archivedBy` / `archiveReason`) and nothing else happens. The task id keeps resolving, its body doc and every comment thread on it stay readable, links pointing at it keep working, and `after` edges naming it still name it. Nothing moves on disk, so `unarchive_task` is a field clear rather than a restore — there is no window in which the record is half-gone, and nothing to fail half-way.\n\nWhat DOES change is what lists it: the row leaves the board lanes, `next_tasks`, and the ready-work wake, and `list_tasks` stops returning it unless you pass `includeArchived: true`. That is the point — an archived row costs nobody a read.\n\nARCHIVING IS NOT COMPLETING. `done` says the work happened; archiving says it is not going to, and the two must not be confused, because a board whose completion count includes abandoned rows is a board that flatters itself. If the work happened, transition it to done instead.\n\nWrite a `reason`. Whoever finds the row in the archived list three weeks from now sees only your sentence, and "archived" on its own says a decision was made without saying what it was.',
+        'Take a task off the board without destroying it — the soft delete, and the only removal a task has. Reach for it freely for a duplicate, a row the goal moved past, or a capture that turned out not to be work. It writes three fields and nothing else, so unarchive_task is a field clear rather than a restore. Archiving is not completing — if the work happened, use done. Write a reason.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1622,7 +1631,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'unarchive_task',
       description:
-        'Put an archived task back on the board. The undo half of `archive_task`, and the reason archiving is safe to reach for: everything the archive did was write three fields, so this clears them and the row rejoins its goal band at the position, status and owner it always had. Nothing is reconstructed and nothing can come back wrong.\n\nUse it when an archive was a mistake, or when a row you put aside turns out to matter again. To FIND what was archived, call `list_tasks` with `includeArchived: true` — the archived rows come back carrying `archivedAt`, `archivedBy` and `archiveReason`.\n\nA row that was not archived is not an error: the call answers `changed: false` and does nothing.',
+        'Put an archived task back — it rejoins its band at the position, status and owner it always had. Find archived rows with list_tasks(includeArchived: true). A row that was not archived answers changed: false rather than erroring.',
       inputSchema: {
         type: 'object',
         properties: { taskId: { type: 'string' } },
@@ -1632,7 +1641,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'rewrite_task',
       description:
-        "Rewrite a task's TITLE, its BODY, or both, in ONE attributed call — the write half of the task-shape review, and the fix for a task filed thin or named by a machine-clipped fragment. Pass whichever halves you are changing and a `reason` saying why; the reason rides the audit row verbatim, so the trail says more than \"rewrote\". Body is a whole-body replace (send the FULL markdown; no partial edit), written through the task's live body doc as a block-level diff so comment threads on untouched paragraphs keep their anchors and the board updates live. A body+title call records ONE task.body_edited carrying both titles; a title-only call records task.retitled with both names — either way the activity feed renders the OLD name, the only one the person who filed the row would recognise. The row's ORIGINAL words are preserved to `quote` automatically on the first body rewrite, so a rewrite is never the only record of what was said; a quote already there (a dictated transcript) is never overwritten. Judgment about WHETHER to rewrite belongs to §2 of the `claude-workspaces:leading-a-workspace` skill: rewrite when you have the context to do it well, and when the words are a human's deliberate phrasing, ask them on the task instead of silently replacing it. Refuses a call with neither half, and refuses an empty body — blanking a description is not an edit; if the task should not exist, say so on it instead.",
+        "Rewrite a task's title, body, or both, with a reason that rides the audit trail. Body is a whole-body replace — send the full markdown. The row's original words are preserved to quote automatically, so a rewrite is never the only record of what was said. When the words are a person's deliberate phrasing, ask on the task instead of replacing them.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1659,7 +1668,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_task_goal',
       description:
-        "Place a task under a goal (or subgoal) at an exact position — pick the spot, not just the bucket. Stamps triagedAgainst with the goal text judged against and clears the row's unplaced mark; every move is recorded and fires task.regrouped, so regroup freely — the safety is the record, not asking first. When a move would cross a human's earlier placement, leave a task comment referencing it. `position` is fractional — there is always room between two tasks; omitted = bottom of the goal.",
+        'Place a task under a goal at an exact position — pick the spot, not just the bucket. position is fractional, so there is always room between two rows; omit it for the bottom of the band. Every move is recorded, so regroup freely. When your move crosses a placement a person made, say why in a comment on the task.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1678,7 +1687,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_goal_list',
       description:
-        'Replace a workspace\'s ORDERED goal list — use this to ADD or REMOVE a goal. Submitting a list means "these are my bands, in this order". GOAL IDS ARE GENERATED AND PERMANENT: to ADD a band, send the entry with NO `id` at all and the server mints an opaque one, returned in `created` (that is the only way to learn it — get_workspace also shows it). To KEEP a band, send its `id` exactly as get_workspace reports it. An `id` this board does not hold is REFUSED with error "unknown-goal-id" naming it, because that is how a re-key arrives: there is no input here that gives an existing band a different id, and no input that lets you choose a new one. To RENAME, use rename_goal (title only, cannot move a task). To only change PRIORITY ORDER, use reorder_goals: permutation-only, cannot lose a goal. Each entry: {id?, title, dueAt?, subgoals?: [{id?, title, dueAt?}]} — one subgoal level max. "chores" is reserved (always rendered last, never in the list). DESTRUCTIVE EDGE, still GATED: this is a full REPLACE, so any id you leave out is removed — and if that id still holds tasks the call is REFUSED with error "would-strand-tasks", naming each band with its open and done counts. Nothing is written on a refusal. Removing a band that holds work therefore takes a second, deliberate call listing its id in `drop`; removing an EMPTY one needs no ceremony. On success the result reports created (new bands with their minted ids, in submission order), movedToChores (open tasks swept to the bottom of Backlog — re-place each with set_task_goal rather than leaving them piled) and strandedDone (done tasks still pointing at the removed id, which is what leaves a bare row in get_workspace). ADDING a band also asks the workspace\'s LEAD AGENT to re-look at the unknown-goal bucket, since a task nobody could place may have a home now: `bucketReview.taskIds` is that bucket, `requested` says the ask reached the lead live and `queued` says it is waiting for their next attach_agent. Nothing is placed by this call — the ask is to LOOK, and leaving a task unplaced stays a valid answer. A reorder or a retitle reveals no new band and asks nothing.',
+        "Add or remove a goal by submitting the board's whole ordered list. Send an entry with no id to add a band (the server mints it); send an existing id exactly as get_workspace reports it to keep one. Use rename_goal to retitle and reorder_goals to re-prioritise — both are safer, because this is a full replace and any id you leave out is removed. Removing a band that still holds tasks is refused until you name it in drop.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1691,7 +1700,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 id: {
                   type: 'string',
                   description:
-                    'OMIT to create this band — the server mints an opaque id and returns it in `created`. Include it, exactly as get_workspace reports it, to keep a band you already have. An id this board does not hold is refused.',
+                    'Omit to create this band — the server mints an opaque id and returns it in `created`. Include it, exactly as get_workspace reports it, to keep a band you already have. Goal ids are generated and permanent; an id this board does not hold is refused as `unknown-goal-id`.',
                 },
                 title: { type: 'string' },
                 dueAt: { type: 'number' },
@@ -1718,7 +1727,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              'Goal/subgoal ids you INTEND to remove even though they still hold tasks — the acknowledgement that turns the refusal into the removal. Send it only after reading what the refusal said each band holds; a caller working from a stale list cannot name a band it never saw, which is exactly the accident this gate exists to catch. Ids that are not actually being removed are ignored, so it can never widen the replace.',
+              'Goal/subgoal ids you intend to remove even though they still hold tasks — the acknowledgement that turns the refusal into the removal. Read what the refusal said each band holds first. Ids that are not actually being removed are ignored.',
           },
         },
         required: ['workspaceId', 'goals'],
@@ -1727,7 +1736,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'rename_goal',
       description:
-        "Change a goal's or subgoal's TITLE in place, by id — the safe way to rename a band. Use this instead of set_goal_list whenever the id is staying the same, which is now ALWAYS: set_goal_list is a full replace keyed by id, so renaming through it means restating every other band from a list that may have moved — and giving the band a NEW id there is not a rename at all, it is refused as \"unknown-goal-id\", because goal ids are generated and permanent. Nothing can move here: a task's band IS its goal id, and no input to this call changes an id. `dueAt` is optional — a number sets it, null clears it, omitting it leaves it alone. Fires the same workspace.goals_changed edit the board and activity feed already render. `chores` is refused: its label is fixed.",
+        "Change a goal's or subgoal's title in place, by id. The id never moves, so no task moves. Use this rather than set_goal_list, which would make you restate every other band. dueAt is optional: a number sets it, null clears it, omitting it leaves it alone.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1736,7 +1745,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'The goal or subgoal id to retitle. Get it from get_workspace.',
           },
-          title: { type: 'string', description: 'The new title.' },
+          title: { type: 'string' },
           dueAt: {
             type: ['number', 'null'],
             description: 'Epoch ms to set, null to clear, omit to leave unchanged.',
@@ -1748,7 +1757,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reorder_goals',
       description:
-        'Change the PRIORITY ORDER of a workspace\'s goals — order IS priority, so this is the gesture for "work 2.1 before 1.2". PERMUTATION ONLY: `order` must be exactly the goal ids already at one scope (the top-level list, or the subgoals of `parent`) — same ids, same count, no titles. Nothing is created, renamed, removed or reparented, and no task can move. An order that omits, repeats or invents an id is REFUSED with 400 naming the offending ids, so a list that another writer has changed since you read it makes you re-read rather than silently dropping a goal — which is exactly what set_goal_list does with the same mistake (its omissions dump that goal\'s open tasks into Backlog). Get the ids from get_workspace and send back every row at your scope whose `reorderable` is true — that one filter is the whole rule, and it covers both kinds of row that are marked false (Backlog, and a goal id left behind on a done task). Including either is a 400: `chores` comes back in `reservedIds` because it is a permanent bucket you simply drop, an orphaned id comes back in `unknownIds` because the goal really was removed. Reach for set_goal_list only when you actually mean to add or remove a goal (a new band goes in with no `id`; the server mints it).',
+        "Change the priority order of a board's goals — order is priority. Permutation only: order must be exactly the ids already at one scope, so nothing can be created, renamed or lost. Take the ids from get_workspace and send every row at your scope whose reorderable is true. Use set_goal_list only when you actually mean to add or remove a band.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1771,7 +1780,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'add_review_item',
       description:
-        "Hang a question on an EXISTING ticket: its own headline and why, its own options, answered on its own. A ticket carries 0..n review items and SEVERAL can be open at once, which is the whole point — the ticket title names the WORK, and the item's `headline`/`why` name what is being asked, so a second question no longer needs a second ticket or a rewritten title. Use it whenever a question comes up mid-work on a row that already exists (file it with the ticket instead via `review` on a create_tasks row). It lands on the owner's Home queue exactly like a comment-borne declaration, and comes back with `reviewAdvice` naming any part of the shape that is thin. Answer it with answer_review_item, ask back with request_more_info.",
+        'Hang a question on a ticket that already exists — the verb for a question that came up while working it, so the ask stays attached to the work that raised it. A ticket carries several at once, each answered on its own, so the title keeps naming the work and a second question needs no second ticket. When you are filing the work and the question together, use review on a create_tasks row instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1784,7 +1793,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'answer_review_item',
       description:
-        "Record the VERBATIM answer to one of a ticket's review items on the human's behalf — use when they told you in chat/voice and you're writing it down; in the UI they answer directly. Pass their exact words as `text`, never a paraphrase. Naming `reviewItemId` is what makes several open questions on one ticket answerable independently. Returns the task's links — a ready-made propagation checklist: act on or create a task for each, and prioritize them right away. Does NOT transition the ticket; close it with task_transition once the propagation is handled.",
+        "Record a person's verbatim answer to one review item on their behalf, for when they told you in chat or voice — in the UI they answer directly. Pass their exact words, never a paraphrase. Naming reviewItemId is what keeps several open questions on one ticket independently answerable. Does not transition the ticket; close it with task_transition once you have acted on the returned links.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1792,13 +1801,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           reviewItemId: {
             type: 'string',
             description:
-              "Which item is being answered (from list_tasks / the ticket's `reviews`). OMIT it on a ticket that is itself an old-style decision (needs:'decision' with embedded `options` and no review items of its own) — the answer then lands on that decision, which is the same place the one derived item points.",
+              "Which item is being answered (from list_tasks / the ticket's `reviews`). Omit it on a ticket that is itself a decision — the answer then lands on that decision.",
           },
           text: { type: 'string', description: "The human's verbatim answer." },
           answeredWith: {
             type: 'string',
             description:
-              "The id of the option they picked, when they picked one. The answer is STILL `text` — pass the option's label as the text; this only records which candidate the words came from. Omit when they answered in their own words.",
+              "The id of the option they picked, if they picked one. The answer is still `text` — pass the option's label as the text. Omit when they answered in their own words.",
           },
         },
         required: ['taskId', 'text'],
@@ -1825,7 +1834,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'answer_decision',
       description:
-        "Record the VERBATIM answer to a decision task (needs:'decision') on the human's behalf — use when they told you their answer in chat/voice and you're writing it down; in the UI they answer directly. Pass their exact words as `text`, never a paraphrase. Emits decision.answered carrying the answer plus the task's links — a ready-made propagation checklist: act on or create a task for each item, and prioritize them right away. Does NOT transition the task — close it with task_transition once the propagation is handled. This is the older, one-question-per-ticket verb and it keeps working unchanged; on a ticket carrying several review items, name the one being answered with `reviewItemId` or reach for answer_review_item.",
+        "Record a person's verbatim answer to a decision task on their behalf, for when they told you in chat or voice — in the UI they answer directly. Pass their exact words, never a paraphrase. This answers the ticket's own decision; answer_review_item answers one of the items hanging on a ticket. Neither transitions the ticket — close it with task_transition once you have acted on the returned links.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1834,7 +1843,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           optionId: {
             type: 'string',
             description:
-              "The id of the option they picked, when they picked one (from list_tasks / the task's `options`). The answer is STILL `text` — pass the option's label as the text; this only records which candidate the words came from. Omit when they answered in their own words.",
+              "The id of the option they picked, if they picked one. The answer is still `text` — pass the option's label as the text. Omit when they answered in their own words.",
           },
           reviewItemId: {
             type: 'string',
@@ -1848,7 +1857,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_task_dependencies',
       description:
-        'Set what a task waits on, AFTER it was created. `after` lists the task ids it depends on; `afterEnforce` is the subset whose open state hard-blocks its transitions. Replaces the whole edge set — pass the full list you want, and an empty `after` clears the edges.\n\nUse it the moment you discover a task is waiting on an open decision: name that decision in the blocked task\'s `after`. That edge is the ONLY record of "this decision is blocking work now" — the board derives a decision\'s urgency from what depends on it, and there is deliberately no urgency field to set by hand, because a hand-set one would be set at creation, the moment its author knows least. A decision nothing points at reads as parked, however loudly its body says otherwise.',
+        'Set what a task waits on after it was created. after lists the ids it depends on; afterEnforce is the subset that hard-blocks its transitions. Replaces the whole edge set, so pass the full list. Reach for it the moment you find a task waiting on an open decision — that edge is the only record that the decision is blocking work.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1872,7 +1881,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'import_tasks_markdown',
       description:
-        "Import a hand-maintained markdown task tracker (group headings + status tables) into a hub workspace — adoption is not re-keying. THE DEFAULT IS A DRY-RUN: it returns the mapping (headings → board goals, table rows → tasks with normalized todo/in-progress/done status, plus what was skipped and which columns were ignored) and creates NOTHING. Review the mapping with the human, then call again with apply:true. Apply appends the new goals (existing goals matched by title are reused, never clobbered), creates the tasks as explicit placements (nothing lands unplaced), walks imported statuses through the transition gate, and STAMPS the source file with a banner + hub link so the old tracker cannot quietly stay a second source of truth — a stamped file refuses re-import (409). Headings map to goals; rows before any heading land in Backlog; a leading H1 is the document title, not a group. In the DRY-RUN, a mapped goal that does not exist yet carries a readable PLACEHOLDER id: goal ids are minted at apply time, so read the dry run for its titles and structure, and take the real ids from the apply result's goalsCreated.",
+        'Move a hand-maintained markdown tracker (headings + status tables) onto a board. Defaults to a dry run — it returns the mapping and creates nothing, so review that with the human, then call again with apply: true. Apply stamps the source file with a banner and a link so the old tracker cannot quietly stay a second source of truth, and a stamped file refuses re-import.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1889,12 +1898,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'link_refs',
       description:
-        "Link a task to a doc, thread, another task, or a diff review. Stored one way on the task; the reverse direction is computed, so doc and thread payloads grow task chips automatically. ref shapes: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId}. Idempotent — `changed:false` means it was already linked. Target existence is not checked (a dangling annotation is visible and harmless).",
+        'Link a task to a doc, thread, another task, a diff review, or a URL. Stored one way; the reverse direction is computed, so doc and thread payloads grow task chips automatically. Target existence is not checked — a dangling ref is visible and harmless.',
       inputSchema: {
         type: 'object',
         properties: {
           taskId: { type: 'string' },
-          ref: { type: 'object', description: 'The ref to link.' },
+          ref: { type: 'object' },
         },
         required: ['taskId', 'ref'],
       },
@@ -1915,7 +1924,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'list_backlinks',
       description:
-        "Which tasks point at this ref — across every workspace, since refs cross workspace boundaries. Same ref shapes as link_refs: {kind:'doc',docId} | {kind:'thread',docId,threadId} | {kind:'task',taskId} | {kind:'diff',workspaceId} | {kind:'url',url}. This is the question a url ref exists to answer: paste a pull request or a dashboard link and find out what work already cites it, before filing something that duplicates it. Counts a task's stored `links` AND its promotion `origin`, so a task promoted from a thread comes back for that thread without anyone having linked it by hand. Returns task chips (id, title, status, assignee), oldest first. An empty list means nobody points at it — a malformed ref is refused instead, so an empty answer is always a real one.",
+        "Which tasks point at this ref, across every board. This is what a url ref is for: paste a pull request or a dashboard link and find what work already cites it before filing a duplicate. Counts a promotion's origin too, so a task promoted from a thread comes back for that thread without anyone linking it by hand.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1927,7 +1936,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'attach_agent',
       description:
-        "Register this session as an agent attached to a hub workspace (§4). Defaults: agentId = this agent's identity, runtime = claude-code-local. The result is the fresh-context briefing: a one-line summary of open gating decisions ('2 open decisions gating 3 tasks'), the untriaged task ids to sweep — and sweeping one means SHAPING it, not only filing it: read the row's own words, decide whether it is zero / one / several tasks (an instruction about neighbouring text is zero), rewrite each with rewrite_task into a title and a story-shaped body, then set_task_goal. A capture arrives with a machine-clipped title and its raw utterance for a body, and this is the only step that turns it into work. Then, if you LEAD this workspace, queuedVoice — voice change-requests that arrived while no lead was live (lead-only: a bystander's attach leaves the queue for the seat); act on each transcript verbatim, EXCEPT where the row carries `applied`: that names what the voice fast path already did to the board on the speaker's behalf, so pick up only whatever the utterance asked for beyond it rather than redoing it. All of these are drained by this call. Also auto-subscribes to the workspace event channel — from then on the board's own events (task.*, workspace.goals_changed, decision.answered) are what tell you a row needs shaping, placing or re-ranking; there is no separate ask queued for you. STAY LIVE: call heartbeat every few minutes — lead-addressed deliveries only reach attachments the server has observed recently (a heartbeat or a tool call, whichever is later), and after ~5 minutes of silence the hub shows you as away.",
+        'Register this session on a board without taking the lead seat — for a peer or subagent picking up work. The response is your fresh-context briefing: open gating decisions, the untriaged rows to shape, and, if you lead the board, the voice notes that queued while nobody was live. It auto-subscribes you to board events. Call heartbeat every few minutes; after about five minutes of silence you show as away.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1951,7 +1960,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'heartbeat',
       description:
-        'Prove this attached agent is alive (and, implicitly, working — the call stamps lastToolCallAt now unless you pass an explicit earlier toolCallAt). Call every few minutes while attached to a workspace; a stale heartbeat (~5 min) marks you away, though what actually parks a lead-addressed delivery is the server not having observed you at all — no heartbeat AND no tool call — and a fresh heartbeat with a 30-min-old toolCallAt renders as "process up, agent unresponsive".',
+        'Prove this attached session is alive. Call it every few minutes while attached — after about five minutes you show as away, and lead-addressed deliveries only reach sessions the server has observed recently. Ordinary tool calls count too, so this matters most during a long stretch of thinking or a long-running command.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1968,13 +1977,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'request_plugin_refresh',
       description:
-        "Ask this machine to fetch the newest claude-workspaces plugin from the marketplace. Call it when the board's presence strip says agents are running an older bundle than the one released — that notice and this tool are the two halves of the same thing. It REQUESTS rather than forces: the update rewrites a version-keyed cache, so no running session is interrupted and every peer (including you) picks the new version up at its own next restart. Safe to call from any session; concurrent asks collapse into one fetch. The result reports the cache version BEFORE and AFTER, read from disk rather than from the CLI's own success message, because `claude plugin update` reports success when it copies nothing. `changed: false` with matching versions means the cache was already current, which is a real answer and not a failure.",
+        "Ask this machine to fetch the newest plugin from the marketplace. Call it when a board's settings panel says sessions are running an older bundle. It requests rather than forces — the update rewrites a version-keyed cache, so nothing running is interrupted and each session picks it up at its next restart. changed: false with matching versions means the cache was already current.",
       inputSchema: { type: 'object', properties: {} },
     },
     {
       name: 'get_unfiled_ask_count',
       description:
-        'Read your own unfiled-ask count — asks that appeared in your chat without a matching filed review item, as the daily chat audit last counted them. This is the self-correction half of the "no unfiled asks" rule: query it at session start or before standing down, and if the number is above zero, the drift is yours to fix by filing review items instead of chat asks. HONEST LIMITS, read them: the server cannot see chat, so this is NOT a live measurement — the number is whatever the daily audit (which mines transcripts) last published via publish_chat_audit, and `today: null` means no audit has covered today yet, which is a real answer. `latest: null` means no audit has ever published about you — not innocence. Counts are keyed by display name (CW_AGENT_NAME); pass `agent` to read a different agent\'s number (a lead following up on the audit).',
+        'Read your own unfiled-ask count — asks that appeared in your chat with no matching filed review item. Query it at session start or before standing down; above zero is drift to fix by filing review items instead. Not a live measurement: the server cannot see chat, so the number is whatever the daily audit last published. `today: null` means no audit covered today and `latest: null` means none ever covered you — neither is innocence.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1988,7 +1997,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'publish_chat_audit',
       description:
-        "FOR THE DAILY CHAT AUDIT: publish per-agent unfiled-ask counts so each session can read its own back via get_unfiled_ask_count. The audit's number and the number a session self-queries are the same stored row — one heuristic, one implementation — so reference these counts in the audit report rather than recomputing. Each entry: {agent (display name / CW_AGENT_NAME), unfiledAsks (asks in chat without a matching filed review item), totalAsks?, sessionId?, note? (evidence pointer)}. `day` is the audited day (YYYY-MM-DD, defaults to today on the server's clock). Publishing again for the same agent supersedes — latest wins, history kept (append-only). The bare name 'agent' is refused: counts belong to somebody.",
+        "For the daily chat audit: publish per-agent unfiled-ask counts so each session can read its own back with get_unfiled_ask_count. Both numbers are the same stored row, so reference these counts in the audit report rather than recomputing them. Publishing again for the same agent supersedes — latest wins, history kept. The bare name 'agent' is refused: counts belong to somebody.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1998,11 +2007,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: 'object',
               properties: {
-                agent: { type: 'string' },
-                unfiledAsks: { type: 'number' },
+                agent: {
+                  type: 'string',
+                  description: 'Display name (CW_AGENT_NAME) the count belongs to.',
+                },
+                unfiledAsks: {
+                  type: 'number',
+                  description:
+                    "Asks that appeared in that agent's chat with no matching filed review item.",
+                },
                 totalAsks: { type: 'number' },
                 sessionId: { type: 'string' },
-                note: { type: 'string' },
+                note: { type: 'string', description: 'Evidence pointer.' },
               },
               required: ['agent', 'unfiledAsks'],
             },

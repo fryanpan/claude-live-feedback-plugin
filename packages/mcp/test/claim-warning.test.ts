@@ -168,30 +168,45 @@ function declarationFor(tool: string): string {
  * Source-read rather than behavioral, like tool-wiring.test.ts: mcp.ts is a
  * bundle entry point and exports nothing.
  */
+/**
+ * The presence guidance now lives in the `working-in-a-workspace` SKILL rather
+ * than in the `next_tasks` description. It is the same knowledge, moved to the
+ * surface that loads on demand instead of the one every session pays for on
+ * every turn — so this suite reads the skill, and `next_tasks` only has to
+ * point at the field.
+ */
 describe('the queue tells an agent who is already on a row', () => {
   const decl = declarationFor('next_tasks');
+  const SKILL = readFileSync(
+    join(HERE, '../../plugin/skills/working-in-a-workspace/SKILL.md'),
+    'utf8',
+  );
+
+  it('the queue itself still names the field a picker has to check', () => {
+    expect(decl).toContain('claimedBy');
+  });
 
   it('names both presence fields', () => {
-    expect(decl).toContain('ownerSession');
-    expect(decl).toContain('claimedBy');
+    expect(SKILL).toContain('ownerSession');
+    expect(SKILL).toContain('claimedBy');
   });
 
   // The fields without the instruction are two more keys to skim. What has to
   // reach the reader is what a live claim MEANS.
   it('says not to start a row a live session holds, and to use hive instead', () => {
-    expect(decl).toContain('DO NOT START THAT ROW');
-    expect(decl).toContain('claude-hive');
+    expect(SKILL).toContain('DO NOT START THAT ROW');
+    expect(SKILL).toContain('claude-hive');
   });
 
   it('says the presence read refuses nobody, so it does not read as a gate', () => {
-    expect(decl).toContain('Nothing refuses a second taker');
+    expect(SKILL).toContain('Nothing refuses a second taker');
   });
 
-  // `away` / `unresponsive` are not live claims, and a description that
-  // treated any presence as a hold would stop pickups it should not.
+  // `away` / `unresponsive` are not live claims, and guidance that treated any
+  // presence as a hold would stop pickups it should not.
   it('distinguishes an active session from an away or wedged one', () => {
-    expect(decl).toContain('away');
-    expect(decl).toContain('unresponsive');
+    expect(SKILL).toContain('away');
+    expect(SKILL).toContain('unresponsive');
   });
 });
 
@@ -239,8 +254,10 @@ describe('the built bundle carries it', () => {
   });
 
   it('ships the next_tasks guidance', () => {
-    expect(BUNDLE).toContain('DO NOT START THAT ROW');
-    expect(BUNDLE).toContain('Nothing refuses a second taker');
+    // The queue's own share of it: the field a picker has to read, and the
+    // instruction to skip a row a live session already holds. The rest is in
+    // the skill, asserted above against the file that ships alongside this.
+    expect(BUNDLE).toContain('claimedBy is an active session that is not you');
   });
 
   it('ships the claim-time warning', () => {
