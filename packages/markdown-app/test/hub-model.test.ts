@@ -633,17 +633,43 @@ describe('presenceChips', () => {
     // meant a reload came back as a stranger: a new row, a rebuilt node, and
     // a `followedKey` pointing at a connection that no longer exists.
     const chips = presenceChips(
-      [{ clientId: 7, name: 'Jordan', surface: 'hub', lastActive: NOW }],
+      [{ clientId: 7, userId: 'anon-jj', name: 'Jordan', surface: 'hub', lastActive: NOW }],
       [],
       NOW,
     );
     const afterReload = presenceChips(
-      [{ clientId: 9814, name: 'Jordan', surface: 'hub', lastActive: NOW }],
+      [{ clientId: 9814, userId: 'anon-jj', name: 'Jordan', surface: 'hub', lastActive: NOW }],
+      [],
+      NOW,
+    );
+    expect(chips[0]?.key).toBe('p-anon-jj');
+    expect(afterReload[0]?.key).toBe(chips[0]?.key);
+  });
+
+  it('keeps two people who share a display name apart', () => {
+    // A name is not an identity. Folding on it would merge two humans into
+    // one chip, and following either would sometimes land on the other's doc.
+    const chips = presenceChips(
+      [
+        { clientId: 1, userId: 'anon-a', name: 'Alex', surface: 'hub', lastActive: NOW },
+        { clientId: 2, userId: 'anon-b', name: 'Alex', surface: 'hub', lastActive: NOW },
+      ],
+      [],
+      NOW,
+    );
+    expect(chips).toHaveLength(2);
+    expect(new Set(chips.map((c) => c.key)).size).toBe(2);
+  });
+
+  it('falls back to the name for a tab whose bundle sends no id', () => {
+    // An older tab is no worse off than the strip left everybody until now —
+    // it just cannot be told apart from a namesake.
+    const chips = presenceChips(
+      [{ clientId: 1, name: 'Jordan', surface: 'hub', lastActive: NOW }],
       [],
       NOW,
     );
     expect(chips[0]?.key).toBe('p-Jordan');
-    expect(afterReload[0]?.key).toBe(chips[0]?.key);
   });
 
   it('folds one person’s several tabs into one chip, reading from the live one', () => {
@@ -651,20 +677,28 @@ describe('presenceChips', () => {
     // drew the same person twice and burned two of the four circle slots.
     const chips = presenceChips(
       [
-        { clientId: 1, name: 'Jordan', surface: 'hub', lastActive: NOW - 600_000, self: true },
+        {
+          clientId: 1,
+          userId: 'anon-jj',
+          name: 'Jordan',
+          surface: 'hub',
+          lastActive: NOW - 600_000,
+          self: true,
+        },
         {
           clientId: 2,
+          userId: 'anon-jj',
           name: 'Jordan',
           surface: 'doc',
           docId: 'doc-live',
           lastActive: NOW - 5_000,
         },
-        { clientId: 3, name: 'Ana', surface: 'hub', lastActive: NOW },
+        { clientId: 3, userId: 'anon-ana', name: 'Ana', surface: 'hub', lastActive: NOW },
       ],
       [],
       NOW,
     );
-    expect(chips.map((c) => c.key)).toEqual(['p-Ana', 'p-Jordan']);
+    expect(chips.map((c) => c.key)).toEqual(['p-anon-ana', 'p-anon-jj']);
     const jordan = chips[1];
     // The most recently active tab is where they actually are…
     expect(jordan?.where).toBe('doc-live');

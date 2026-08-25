@@ -62,6 +62,7 @@ import {
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
+  presenceIdentity,
   refreshReviewItems,
   reviewQueue,
   reviewReplyRequest,
@@ -1421,14 +1422,20 @@ async function main(): Promise<void> {
     const people: PresencePerson[] = [];
     client.awareness.getStates().forEach((aw, clientId) => {
       const s = aw as {
-        user?: { name?: string };
+        user?: { id?: string; name?: string };
         surface?: string;
         docId?: string;
         lastActive?: number;
       };
+      // A nameless entry draws no chip at all. Left exactly as it was — it is
+      // a separate question from this migration, and worth its own ticket.
       if (!s?.user?.name) return;
       people.push({
         clientId,
+        // Absent from a tab still running a bundle that predates this line;
+        // `presenceIdentity` falls back to the name there, which is what the
+        // strip did for everybody until now.
+        userId: s.user.id,
         name: s.user.name,
         surface: s.surface ?? 'hub',
         docId: s.docId,
@@ -2082,7 +2089,13 @@ async function main(): Promise<void> {
   });
 
   client.awareness.setLocalState({
-    user: { name: user.name, color: user.color },
+    // `id` rides along because the presence strip has to know WHO, and a
+    // display name cannot answer that — two people called Alex would be one
+    // chip, and following either would sometimes land on the other. `User.id`
+    // is the stable per-browser id (localStorage, or a known user's own), so
+    // it is the same across this person's tabs and different for anybody else:
+    // exactly the two things the strip's row key must get right.
+    user: { id: user.id, name: user.name, color: user.color },
     surface: 'hub',
     lastActive: Date.now(),
   });
@@ -2090,14 +2103,15 @@ async function main(): Promise<void> {
     renderPresenceRegion();
     // Follow (§2.7): when the followed person's surface moves, ours does too.
     // The key names the PERSON now, not one of their connections, so the
-    // follow is resolved back through awareness by name and lands on whichever
-    // of their tabs moved most recently. That also means a follow survives the
-    // followed person reloading — under the old `p-<clientId>` key their new
-    // connection was a stranger, and the follow went quiet without saying so.
+    // follow is resolved back through awareness by identity and lands on
+    // whichever of their tabs moved most recently. That also means a follow
+    // survives the followed person reloading — under the old `p-<clientId>`
+    // key their new connection was a stranger, and the follow went quiet
+    // without ever saying so.
     if (state.followedKey?.startsWith('p-')) {
-      const name = state.followedKey.slice(2);
+      const identity = state.followedKey.slice(2);
       const [moved] = peopleFromAwareness()
-        .filter((p) => p.name === name && p.docId)
+        .filter((p) => presenceIdentity(p) === identity && p.docId)
         .sort((a, b) => b.lastActive - a.lastActive);
       if (moved?.docId) location.assign(`/review/${encodeURIComponent(moved.docId)}`);
     }
