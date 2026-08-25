@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  type ReviewStripHandlers,
+  homeReviewData,
+  mountHomeReviewIsland,
+} from '../src/hub/home-review-island.tsx';
+import {
   CHORES_ID,
   type HubTask,
   type ReviewItem,
@@ -9,11 +14,6 @@ import {
   reviewQueue,
   walkPosition,
 } from '../src/hub/hub-model.ts';
-import {
-  type ReviewStripHandlers,
-  homeReviewData,
-  mountHomeReviewIsland,
-} from '../src/hub/home-review-island.tsx';
 import {
   type WalkthroughHandlers,
   renderReviewWalkthrough,

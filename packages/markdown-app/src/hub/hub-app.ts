@@ -19,6 +19,7 @@ import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
+import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
   ACTIVITY_REFRESH_EVENTS,
   type ActivityEvent,
@@ -92,7 +93,6 @@ import {
   renderUnplacedStrip,
   renderWorkspaceIdentity,
 } from './hub-render.ts';
-import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
 import { mountPushToggle } from './push-toggle.ts';

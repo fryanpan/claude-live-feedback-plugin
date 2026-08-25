@@ -15,12 +15,12 @@
  *     renderHomeReview tests from hub-render.test.ts, re-aimed at the island.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { ReviewItem, ReviewQueue } from '../src/hub/hub-model.ts';
 import {
   type ReviewStripHandlers,
   homeReviewData,
   mountHomeReviewIsland,
 } from '../src/hub/home-review-island.tsx';
+import type { ReviewItem, ReviewQueue } from '../src/hub/hub-model.ts';
 
 const NOW = 1_700_000_000_000;
 
