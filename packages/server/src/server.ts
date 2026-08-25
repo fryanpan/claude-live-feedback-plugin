@@ -1773,6 +1773,86 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
 
   /**
+   * The same three questions as `hubWorkspacesHolding` / `hubBoardsForDoc` /
+   * `resolveWorkspaceForDoc`, answered for a WHOLE LISTING from one pass over
+   * the workspaces instead of one pass per row.
+   *
+   * The per-id versions above allocate a fresh array of every board and scan
+   * each one's `docIds`. That is the right shape for a single lookup and the
+   * wrong shape for a listing. `GET /api/docs` asked twice per row — once for
+   * the doc, once for the review-id fallback — so the work grew with the
+   * SQUARE of the doc count, and docs no board holds paid for both halves —
+   * which, once a server accumulates diff-review members, is most of them.
+   *
+   * That matters more than a slow response suggests, because Bun runs JS on
+   * one thread: a listing that takes tens of seconds is tens of seconds in
+   * which the server answers nothing else — no page, no board, no MCP call.
+   * Nor does anything report it, since the process stays alive and stays
+   * BOUND the whole time. A supervisor that asks whether the port is
+   * listening, as the bind-health watchdog in `scripts/serve.ts` does, sees
+   * a healthy server; it never asks whether the server answers.
+   *
+   * These read the same `taskStore` state the per-id versions read and are
+   * kept beside them deliberately — two answers to one question drift, and
+   * the drift here would be a wrong URL rather than a slow one.
+   */
+  function boardIndexForListing(): Map<string, string[]> {
+    const index = new Map<string, string[]>();
+    for (const w of taskStore.listWorkspaces()) {
+      for (const id of w.docIds) {
+        const boards = index.get(id);
+        if (boards) boards.push(w.id);
+        else index.set(id, [w.id]);
+      }
+    }
+    return index;
+  }
+
+  /**
+   * `hubWorkspacesHolding` against a prebuilt index.
+   *
+   * `task:` ids are deliberately absent from the index and fall through to
+   * `workspaceOfDoc`, exactly as the per-id version routes them: a task room
+   * is looked up by id rather than scanned for, and is never in any board's
+   * `docIds` to begin with.
+   */
+  function heldByIndexed(index: Map<string, string[]>, attachmentId: string): string[] {
+    if (attachmentId.startsWith('task:')) {
+      const w = taskStore.workspaceOfDoc(attachmentId);
+      return w ? [w] : [];
+    }
+    return index.get(attachmentId) ?? [];
+  }
+
+  /** `hubBoardsForDoc` against a prebuilt index. The caller already holds the
+   *  row's meta, so the review id is read from it rather than re-fetched. */
+  function hubBoardsForDocIndexed(index: Map<string, string[]>, meta: DocMeta): Set<string> {
+    const boards = new Set(heldByIndexed(index, meta.docId));
+    const reviewId = reviewIdOf(meta);
+    if (reviewId) for (const board of heldByIndexed(index, reviewId)) boards.add(board);
+    return boards;
+  }
+
+  /**
+   * `resolveWorkspaceForDoc` against a prebuilt index.
+   *
+   * Mirrors `backTargetFor`'s `pick(a) ?? pick(b)` exactly, including that a
+   * first board which fails the `getWorkspace` check does NOT fall through to
+   * a second board holding the same id — it falls through to the review-id
+   * lookup. (In practice the check cannot fail: `getWorkspace` reads the very
+   * map `listWorkspaces` was built from. It is kept so this stays a
+   * transcription of the original rather than a judgement about it.)
+   */
+  function homeForDocIndexed(index: Map<string, string[]>, meta: DocMeta): string | null {
+    const pick = (id: string | undefined): string | null =>
+      id && taskStore.getWorkspace(id) ? id : null;
+    return (
+      pick(heldByIndexed(index, meta.docId)[0]) ??
+      pick(heldByIndexed(index, reviewIdOf(meta) ?? '')[0])
+    );
+  }
+
+  /**
    * What is waiting for this board's lead, COUNTED WITHOUT DRAINING.
    *
    * The reader here is the non-destructive one: `listQueuedVoice`, not
@@ -3291,13 +3371,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const workspaceId = url.searchParams.get('workspaceId');
           const setId = url.searchParams.get('setId');
           const all = rooms.list();
+          // ONE pass over the workspaces for the whole listing. Both the
+          // board filter and the reviewUrl below used to run their own scan
+          // per row, which is what made an unscoped listing quadratic — and
+          // on Bun's single JS thread a quadratic listing stops the server
+          // answering anything else while it runs. See `boardIndexForListing`.
+          const boardIndex = boardIndexForListing();
           const byWorkspace = workspaceId
             ? all.filter(
-                (m) => m.workspaceId === workspaceId || hubBoardsForDoc(m.docId).has(workspaceId),
+                (m) =>
+                  m.workspaceId === workspaceId ||
+                  hubBoardsForDocIndexed(boardIndex, m).has(workspaceId),
               )
             : all;
           const docs = setId ? byWorkspace.filter((m) => reviewIdOf(m) === setId) : byWorkspace;
-          return j(200, { docs: docs.map(withReviewUrl) });
+          return j(200, {
+            docs: docs.map((m) => withReviewUrl(m, homeForDocIndexed(boardIndex, m))),
+          });
         }
 
         // --- REST: workspaces (hub create OR folder bind) ---
@@ -6848,6 +6938,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // for us to serve.
   function withReviewUrl<T extends { docId: string; type: DocType; sourceUrl?: string }>(
     meta: T,
+    /**
+     * The doc's board, when the caller already knows it. A LISTING knows it:
+     * it resolves every row's board from one shared index (see
+     * `homeForDocIndexed`) instead of paying `resolveWorkspaceForDoc`'s
+     * per-row scan. `undefined` means "not supplied" and keeps the original
+     * behaviour; `null` is a real answer meaning no board holds this doc, so
+     * the two cannot be collapsed.
+     */
+    precomputedHome?: string | null,
   ): T & { reviewUrl?: string } {
     const base = externalBaseUrl();
     // The ONE place a resource URL is minted, which is why the whole fleet's
@@ -6855,7 +6954,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // workspace holding it; a doc nothing holds keeps the old address, which
     // still answers — better a working legacy URL than a link into a
     // workspace that does not exist.
-    const home = resolveWorkspaceForDoc(meta.docId);
+    const home =
+      precomputedHome !== undefined ? precomputedHome : resolveWorkspaceForDoc(meta.docId);
     const ws = home ? `${base}/workspaces/${encodeURIComponent(home)}` : null;
     const id = encodeURIComponent(meta.docId);
     if (contentKind(meta.type) !== 'none') {
