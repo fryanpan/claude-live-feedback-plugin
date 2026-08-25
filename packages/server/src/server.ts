@@ -78,6 +78,7 @@ import {
   isAllowedBrowserOrigin,
 } from './middleware/browser-origin.ts';
 import { type CfAccessOptions, createCfAccessVerifier } from './middleware/cf-access.ts';
+import { clientAddressKey } from './middleware/client-address.ts';
 import {
   type ShareTarget,
   classifyHost,
@@ -2255,6 +2256,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   /**
+   * Which client the login rate limits count this request against.
+   *
+   * NOT `server.requestIP(req)` on its own: both of this deployment's reverse
+   * proxies run on this machine and dial the server over loopback, so that
+   * call answers `127.0.0.1` for every remote reviewer and collapsed all of
+   * them into one shared budget. See middleware/client-address.ts for the
+   * measurements and for why the header is read only from a loopback socket
+   * and only from its rightmost entry.
+   */
+  const clientKeyFor = (req: Request): string =>
+    clientAddressKey({
+      socketAddress: server.requestIP(req)?.address,
+      forwardedFor: req.headers.get('x-forwarded-for'),
+    });
+
+  /**
    * Whether this request really reached us over https.
    *
    * Read off `policyFor`, which is the ONE place that derives a scheme from
@@ -2672,7 +2689,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (pathname === '/api/auth/start' && req.method === 'POST') {
           const body = await safeJson(req);
           const email = typeof body?.email === 'string' ? body.email : '';
-          const peer = server.requestIP(req)?.address ?? 'unknown';
+          const peer = clientKeyFor(req);
           const started = emailCodes.start(email, peer);
           if (!started.ok) {
             if (started.error === 'rate_limited') {
@@ -2726,7 +2743,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const body = await safeJson(req);
           const email = typeof body?.email === 'string' ? body.email : '';
           const code = typeof body?.code === 'string' ? body.code : '';
-          const peer = server.requestIP(req)?.address ?? 'unknown';
+          const peer = clientKeyFor(req);
           const result = emailCodes.verify(email, code, peer);
           if (!result.ok) {
             if (result.error === 'rate_limited') {
