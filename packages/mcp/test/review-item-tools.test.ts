@@ -231,8 +231,6 @@ describe('a ticket carries review items, and the tools reach them', () => {
   const review = {
     shape: 'decision',
     headline: 'Pick the cache eviction policy',
-    why: 'The latency work is blocked until this is answered',
-    lookFor: 'Whether a 300ms cold-start stall is acceptable',
     options: [
       { id: 'o-7f3a', label: 'LRU', detail: '8MB steady, up to 300ms on a cold query' },
       { id: 'o-4b2e', label: 'One per index', detail: '40MB steady, no stall' },
@@ -406,7 +404,7 @@ describe('what the tool schemas tell an agent', () => {
 
   it('reuses ONE review-item schema in the source rather than declaring a second', () => {
     expect(SRC).toContain('...REVIEW_ITEM_SCHEMA');
-    expect(SRC.match(/required: \['headline', 'why'\]/g)?.length).toBe(1);
+    expect(SRC.match(/required: \['headline'\]/g)?.length).toBe(1);
   });
 });
 

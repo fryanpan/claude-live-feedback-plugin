@@ -167,7 +167,7 @@ describe('reviewRowTitle', () => {
     kind: 'task-thread',
     title: 'Ship the widget',
     ask: '',
-    why: 'why',
+    why: 'Reviewer asked you 2m ago · on this task',
     since: NOW,
     ...over,
   });

@@ -93,7 +93,6 @@ const isShown = (el: HTMLElement): boolean => !el.classList.contains('hidden');
 const decisionPayload: ReviewPayload = {
   shape: 'decision',
   headline: 'Pick a cache strategy',
-  why: 'The rollout is blocked on it',
   options: [
     { id: 'a', label: 'Write through' },
     { id: 'b', label: 'Write behind' },

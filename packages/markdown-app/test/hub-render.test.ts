@@ -2637,7 +2637,7 @@ describe('renderTaskDetail — discussion', () => {
             review: {
               shape: 'review' as const,
               headline: 'Rename the catch-all band',
-              why: 'Two bands answer to the same word and the picker shows both.',
+              detail: 'Two bands answer to the same word and the picker shows both.',
             },
           }),
         ],
@@ -2647,8 +2647,8 @@ describe('renderTaskDetail — discussion', () => {
     );
     expect(root.querySelector('.hub-detail-title')?.textContent).toBe('Rename the catch-all band');
     expect(root.querySelector('.hub-decide-headline')).toBeNull();
-    // Nothing was swallowed with it: the card still carries the why, which is
-    // the condition the drop is gated on.
+    // Nothing was swallowed with it: the card still carries the body, which
+    // is the condition the drop is gated on.
     expect(root.querySelector('.hub-decide-body')?.textContent).toContain('Two bands answer');
   });
 
@@ -2666,7 +2666,6 @@ describe('renderTaskDetail — discussion', () => {
             review: {
               shape: 'review' as const,
               headline: 'Call it Backlog, or something narrower?',
-              why: 'Two bands answer to the same word and the picker shows both.',
             },
           }),
         ],
@@ -2732,9 +2731,8 @@ describe('renderTaskDetail — discussion', () => {
   const declared = (over: Record<string, unknown> = {}) => ({
     shape: 'review' as const,
     headline: 'The rollup query is ready to look at',
-    why: 'It blocks the nightly job, which is paused until someone signs off.',
-    lookFor: 'Whether the join drops rows when a session has no events.',
-    detail: 'The change is in [the rollup PR](https://example.test/pr/12) — two files.',
+    detail:
+      'It blocks the nightly job, which is paused until someone signs off.\n\nWhether the join drops rows when a session has no events.\n\nThe change is in [the rollup PR](https://example.test/pr/12) — two files.',
     ...over,
   });
 
@@ -2751,17 +2749,17 @@ describe('renderTaskDetail — discussion', () => {
     const card = root.querySelector('.hub-decide-card');
     expect(card).toBeTruthy();
     expect(card?.querySelector('.hub-decide-headline')?.textContent).toContain('rollup query');
-    // ONE body (approved design): why, lookFor and detail composed as
-    // markdown, no labelled sub-sections and none of the old paragraphs.
+    // ONE body (approved design): the payload's `detail`, markdown-rendered,
+    // no labelled sub-sections and none of the old paragraphs.
     expect(card?.querySelector('.hub-decide-why')).toBeNull();
     expect(card?.querySelector('.hub-decide-lookfor')).toBeNull();
     expect(card?.querySelector('.hub-decide-detail')).toBeNull();
     const body = card?.querySelector('.hub-decide-body') as HTMLElement;
     const text = body.textContent ?? '';
-    const why = text.indexOf('blocks the nightly job');
-    const look = text.indexOf('drops rows when a session has no events');
-    expect(why).toBeGreaterThanOrEqual(0);
-    expect(look).toBeGreaterThan(why);
+    const first = text.indexOf('blocks the nightly job');
+    const second = text.indexOf('drops rows when a session has no events');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThan(first);
     // The detail is markdown, so the link to the thing under review is a real
     // link rather than bracket soup — the reason the detail exists at all.
     const link = body.querySelector('a') as HTMLAnchorElement | null;
@@ -2786,7 +2784,6 @@ describe('renderTaskDetail — discussion', () => {
             threadId: 'th-9',
             review: declared({
               shape: 'decision',
-              lookFor: undefined,
               options: [
                 { id: 'keep', label: 'Keep threading', detail: 'Costs a migration.' },
                 { id: 'drop', label: 'Drop threading' },
@@ -2907,7 +2904,6 @@ describe('renderTaskDetail — discussion', () => {
               review: {
                 shape: 'decision',
                 headline: 'Where should the trial banner live?',
-                why: 'Blocks the rework; both screens are built either way.',
               },
             },
           ],
@@ -3953,14 +3949,14 @@ describe('the panel’s review queue', () => {
         decisionBlurb('## Ship it Thursday?\n\nThe rework is blocked either way.\n\n- Yes\n- No'),
       ).toEqual({
         headline: 'Ship it Thursday?',
-        why: 'The rework is blocked either way.',
+        body: 'The rework is blocked either way.',
       });
     });
 
     it('drops the option list rather than repeating it as prose', () => {
       // The card renders the options as buttons; a copy of them in the blurb
       // is the "crammed" complaint one layer up.
-      expect(decisionBlurb('Which one?\n1. Blue\n2. Green').why).toBe('');
+      expect(decisionBlurb('Which one?\n1. Blue\n2. Green').body).toBe('');
     });
 
     it('drops the label that introduced the dropped list, and keeps other colons', () => {
@@ -3981,7 +3977,7 @@ describe('the panel’s review queue', () => {
         '',
         'Blocked until answered: the rework cannot merge.',
       ].join('\n');
-      expect(decisionBlurb(body).why).toBe(
+      expect(decisionBlurb(body).body).toBe(
         'Both screens are built. Blocked until answered: the rework cannot merge.',
       );
     });
@@ -3989,9 +3985,9 @@ describe('the panel’s review queue', () => {
     it('says nothing rather than inventing a question from a body with none', () => {
       expect(decisionBlurb('Just a note about the index.')).toEqual({
         headline: '',
-        why: 'Just a note about the index.',
+        body: 'Just a note about the index.',
       });
-      expect(decisionBlurb(undefined)).toEqual({ headline: '', why: '' });
+      expect(decisionBlurb(undefined)).toEqual({ headline: '', body: '' });
     });
   });
 
@@ -4029,7 +4025,7 @@ describe('the panel’s review queue', () => {
         ask({
           threadId: 'th-declared',
           since: NOW - 10_000,
-          review: { shape: 'review', headline: 'Read the redline', why: 'It changes the API.' },
+          review: { shape: 'review', headline: 'Read the redline' },
         }),
       ]);
       expect(q.map((i) => i.id)).toEqual([
@@ -4072,7 +4068,6 @@ describe('the panel’s review queue', () => {
                 review: {
                   shape: 'decision',
                   headline: 'Where should the banner live?',
-                  why: 'Blocks the rework.',
                   answeredAt: NOW - 3_600_000,
                   answeredBy: 'Jordan',
                   answerText: 'Keep it above the fold',
@@ -4107,7 +4102,7 @@ describe('the panel’s review queue', () => {
                 text: 'Asked here.',
                 ts: NOW - 7_200_000,
                 // Unanswered declaration: the asks row already carries it.
-                review: { shape: 'review', headline: 'Read this', why: 'Ships Friday.' },
+                review: { shape: 'review', headline: 'Read this', detail: 'Ships Friday.' },
               },
               { id: 'c-2', author: 'Jordan', text: 'Reading now.', ts: NOW - 3_600_000 },
             ],
@@ -4130,7 +4125,7 @@ describe('the panel’s review queue', () => {
           review: {
             shape: 'decision' as const,
             headline: 'Where should the banner live?',
-            why: 'Blocks the rework.',
+            detail: 'Blocks the rework.',
             answeredAt: NOW - 3_600_000,
             answeredBy: 'Jordan',
             answerText: 'Keep it **above** the fold',

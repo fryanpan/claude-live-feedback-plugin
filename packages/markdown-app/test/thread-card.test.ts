@@ -489,7 +489,7 @@ describe('thread card — a declared Review Item', () => {
   const declared = (over: Partial<Comment['review']> = {}): Comment['review'] => ({
     shape: 'review',
     headline: 'Read the new onboarding copy',
-    why: 'Ships Tuesday and nobody outside the team has read it.',
+    detail: 'Ships Tuesday and nobody outside the team has read it.',
     ...over,
   });
 
@@ -559,9 +559,8 @@ describe('thread card — a thread that carries a review item IS the review item
   const asked = (over: Partial<NonNullable<Comment['review']>> = {}): Comment['review'] => ({
     shape: 'review',
     headline: 'Read the stall rota',
-    why: 'It goes out **Thursday**.',
-    lookFor: 'Ordering and missing stalls.',
-    detail: 'Draft at [the doc](https://example.test/rota).',
+    detail:
+      'It goes out **Thursday**. Ordering and missing stalls. Draft at [the doc](https://example.test/rota).',
     ...over,
   });
   const declaredComment = (review: Comment['review']): Comment => ({
@@ -599,7 +598,7 @@ describe('thread card — a thread that carries a review item IS the review item
     expect(chip.classList.contains('thread-item-k-review')).toBe(true);
     expect(text(card.querySelector('.thread-item-headline'))).toBe('Read the stall rota');
     expect(text(card.querySelector('.thread-item-meta'))).toMatch(/^Asked by Bob .+ ago$/);
-    // why + lookFor + detail, composed into ONE body, rendered as markdown.
+    // The ONE body, rendered as markdown.
     const body = card.querySelector('.thread-item-body') as HTMLElement;
     expect(text(body)).toContain('Ordering and missing stalls.');
     expect(body.querySelector('strong')?.textContent).toBe('Thursday');

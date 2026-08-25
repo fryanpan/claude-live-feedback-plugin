@@ -85,7 +85,6 @@ function opts(extra?: Partial<ChromeOpts>): ChromeOpts {
 const ask = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
   shape: 'review',
   headline: 'Read the stall rota',
-  why: 'It goes out Thursday.',
   ...over,
 });
 

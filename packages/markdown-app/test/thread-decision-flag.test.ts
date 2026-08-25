@@ -40,7 +40,6 @@ function thread(comments: Comment[], over: Partial<Thread> = {}): Thread {
 const decisionPayload = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
   shape: 'decision',
   headline: 'Pick a cache strategy',
-  why: 'The rollout is blocked on it',
   options: [
     { id: 'a', label: 'Write through' },
     { id: 'b', label: 'Write behind' },
@@ -80,7 +79,7 @@ describe('the decision flag', () => {
   });
 
   it('is absent from a thread carrying a plain question', () => {
-    const question: ReviewPayload = { shape: 'review', headline: 'Read this', why: 'It matters' };
+    const question: ReviewPayload = { shape: 'review', headline: 'Read this' };
     expect(flagOf(render(thread([comment('Have a look', question)])))).toBe(null);
   });
 

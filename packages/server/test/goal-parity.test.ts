@@ -184,7 +184,6 @@ describe('a goal is at parity with a task: description + comments', () => {
         review: {
           shape: 'decision',
           headline: 'Does "ten teams" mean ten that renew?',
-          why: 'The second is a much longer goal and changes what we build first.',
           asks: PERSON.name,
           options: [
             { id: 'used', label: 'Ten that have used it' },

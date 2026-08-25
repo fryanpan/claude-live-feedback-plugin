@@ -4114,9 +4114,12 @@ export interface PanelReviewItem {
   /** The comment carrying the declaration, so the answer is written against
    *  the right one on a thread that declared twice. */
   commentId?: string;
-  /** The item DECLARED what it wants (a `review` payload), which is what
-   *  makes the answer route legal for it. An inferred item answers by
-   *  replying and nothing else. */
+  /** An agent DECLARED this — it carries a `review` payload — rather than the
+   *  queue inferring it from who spoke last. It ranks above an inferred item,
+   *  and it is half of what makes the answer route legal; the other half is a
+   *  `commentId` to write the stamp on, which the caller checks for itself
+   *  (`hub-app`), because a declaration with nowhere to record an answer is
+   *  still a declaration and still ranks as one. */
   declared?: boolean;
   /**
    * Whether the head meta may say "Asked by". True for the task's own
@@ -4260,10 +4263,7 @@ export function panelReviewQueue(
       threadId: a.threadId,
       docId: a.docId,
       ...(a.commentId !== undefined ? { commentId: a.commentId } : {}),
-      // `declared` is the pair the answer route needs, not the payload alone:
-      // it records the answer against a COMMENT, so a declaration with no
-      // comment id has nothing to write on and answers by replying instead.
-      declared: r !== undefined && a.commentId !== undefined,
+      declared: r !== undefined,
       // A declaration is an ask; an inferred item only measured one.
       asked: r !== undefined || a.direct === true,
     });
@@ -4291,7 +4291,7 @@ export function panelReviewQueue(
         threadId: t.id,
         docId: task.bodyDocId,
         ...(c.id !== undefined ? { commentId: c.id } : {}),
-        declared: c.id !== undefined,
+        declared: true,
         asked: true,
         answered: {
           ...(r.answeredBy !== undefined ? { by: r.answeredBy } : {}),
@@ -4306,9 +4306,9 @@ export function panelReviewQueue(
     }
   }
   // Declared before inferred. This asked `why !== ''` while the payload had a
-  // required `why` and an inferred item had none — a proxy for `declared`,
-  // which the row now carries outright. Same ordering, stated rather than
-  // inferred from a field's emptiness.
+  // required `why` and an inferred item had none — a proxy for exactly this,
+  // which the row now states outright. Same ordering, no longer inferred from
+  // a field's emptiness.
   const rank = (i: PanelReviewItem): number =>
     i.answered
       ? 3

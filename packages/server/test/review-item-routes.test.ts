@@ -35,8 +35,6 @@ const SNIPPET = 'trial banner';
 const DECISION: ReviewPayload = {
   shape: 'decision',
   headline: 'Where should the trial banner live?',
-  why: 'Blocks the onboarding rework; both screens are built either way.',
-  lookFor: 'Whether moving it below the fold hides the price.',
   detail: 'Above the fold it competes with the sign-up button. Below it, fewer people see it.',
   options: [
     { id: 'above', label: 'Keep above', detail: 'Seen by everyone, competes with sign-up.' },
@@ -162,7 +160,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
   // card came out thinner than the author meant, and the response said
   // nothing. A field nobody reads is not a feature — so this asserts on the
   // RESPONSE the writer gets, which is the only place advice can reach them.
-  const THIN = { ...DECISION, lookFor: undefined, detail: undefined };
+  const THIN = { ...DECISION, detail: undefined };
 
   it('rides the 200 from POST /threads/:id/comments', async () => {
     const docId = await mkdoc();
@@ -174,7 +172,6 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
     });
     expect(res.status).toBe(200);
     const payload = await res.json();
-    expect(payload.reviewAdvice).toContain('review.lookFor');
     expect(payload.reviewAdvice).toContain('review.detail');
     // It FILED — the advice is not a soft refusal, and a reader of this test
     // should not be able to confuse the two.
@@ -191,7 +188,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
       review: THIN,
     });
     expect(byFind.status).toBe(200);
-    expect((await byFind.json()).reviewAdvice).toContain('review.lookFor');
+    expect((await byFind.json()).reviewAdvice).toContain('review.detail');
 
     const seeded = await firstThread(docId);
     const onSubject = await post(`/api/docs/${docId}/threads`, {
@@ -201,7 +198,7 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
       review: THIN,
     });
     expect(onSubject.status).toBe(200);
-    expect((await onSubject.json()).reviewAdvice).toContain('review.lookFor');
+    expect((await onSubject.json()).reviewAdvice).toContain('review.detail');
   });
 
   // The absence assertion, which is why the three above are not vacuous: a
@@ -220,12 +217,14 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
     expect(payload.thread).toBeDefined();
   });
 
-  // The bug this pins: a `why` two words over budget used to 400 the whole
-  // filing, six times in one measured day, each at the moment an agent was
-  // routing an ask to the queue instead of to chat. It files now, and the 200
-  // carries the advice — asserted through the ROUTE because the core check
-  // passing proves nothing about what a caller receives.
-  it('files an over-long why and names it in reviewAdvice rather than 400ing', async () => {
+  // THE compatibility obligation, asserted where it actually has to hold.
+  // `why` and `lookFor` left the payload on 2026-08-25, but this is the shared
+  // server's REST surface: an old plugin bundle keeps calling it from a
+  // session nobody can restart, and it must neither be refused nor have its
+  // author's words dropped on the floor. Asserted through the ROUTE because
+  // the core check passing proves nothing about what a caller receives — and
+  // on the STORED payload, because that is what every reader renders from.
+  it('accepts a legacy payload and folds its why and lookFor into the body', async () => {
     const docId = await mkdoc();
     const seeded = await seedThread(docId);
     const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
@@ -233,13 +232,22 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
       text: 'Both screens are built.',
       review: {
         ...DECISION,
-        why: 'Blocks the onboarding rework and the pricing test behind it, and both screens are already built either way.',
+        why: 'The pricing test starts Monday and both screens are built.',
+        lookFor: 'Whether moving it below the fold hides the price.',
       },
     });
     expect(res.status).toBe(200);
-    expect((await res.json()).reviewAdvice).toContain('review.why');
+
     const stored = await firstThread(docId);
-    expect(stored.comments[1]?.review?.why).toContain('pricing test');
+    const review = stored.comments[1]?.review;
+    // Neither retired name survives the write…
+    expect(review).toBeDefined();
+    expect(Object.hasOwn(review as object, 'why')).toBe(false);
+    expect(Object.hasOwn(review as object, 'lookFor')).toBe(false);
+    // …and not one word of what the author typed is missing from the body.
+    expect(review?.detail).toBe(
+      `The pricing test starts Monday and both screens are built.\n\nWhether moving it below the fold hides the price.\n\n${DECISION.detail}`,
+    );
   });
 
   it('says nothing on an ordinary comment that declared nothing', async () => {
@@ -259,7 +267,6 @@ describe('a malformed declaration is refused at the door, not truncated', () => 
     ['no headline', { ...DECISION, headline: undefined }],
     ['a headline past the sanity ceiling', { ...DECISION, headline: 'x'.repeat(900) }],
     ['a multi-line headline', { ...DECISION, headline: 'Two\nlines' }],
-    ['no why', { ...DECISION, why: undefined }],
     ['a decision with one option', { ...DECISION, options: [{ id: 'a', label: 'Only' }] }],
     ['a review carrying options', { ...DECISION, shape: 'review' }],
     ['an unknown shape', { ...DECISION, shape: 'links' }],

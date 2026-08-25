@@ -75,7 +75,7 @@ function threadItem(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
     review: {
       shape: 'review',
       headline: 'Green or blue?',
-      why: 'The mockup shows one and the build ships the other.',
+      detail: 'The mockup shows one and the build ships the other.',
     },
     ...over,
   };
@@ -1175,16 +1175,15 @@ describe('advanceWalk — landing on the NEXT request, not the one after it', ()
 describe('renderReviewWalkthrough — a declared review item', () => {
   const queueOf = (...items: ReviewThreadItem[]) => reviewQueue([], items, NOW);
 
-  /** The full shape: both header lines, both optional blocks, two options. */
+  /** The full shape: a headline, a body of several paragraphs, two options. */
   const declared = (over: Partial<ReviewThreadItem> = {}) =>
     threadItem({
       ask: 'Where should the trial banner live?',
       review: {
         shape: 'decision',
         headline: 'Where should the trial banner live?',
-        why: 'Blocks the onboarding rework; both screens are built either way.',
-        lookFor: 'Whether moving it below the fold hides the price.',
-        detail: 'Above the fold it competes with the **sign-up** button.',
+        detail:
+          'Blocks the onboarding rework; both screens are built either way.\n\nWhether moving it below the fold hides the price.\n\nAbove the fold it competes with the **sign-up** button.',
         options: [
           { id: 'above', label: 'Keep above', detail: 'Seen by everyone.' },
           { id: 'below', label: 'Move below', detail: 'Cleaner header.' },
@@ -1194,8 +1193,10 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     });
 
   // ONE anatomy (approved design, review-flow-mock-v1): head row, then one
-  // markdown body composed of why + lookFor + detail — no labelled
-  // sub-sections, no separate why line, no provenance block.
+  // markdown body — no labelled sub-sections, no separate why line, no
+  // provenance block. Since 2026-08-25 the payload carries one body field
+  // rather than three, so the card renders what the author wrote, in the
+  // order they wrote it, and nothing reorders or labels it.
   it('renders head row plus one markdown body — no labelled sub-blocks', () => {
     renderReviewWalkthrough(root, queueOf(declared()), 0, walk());
     expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
@@ -1206,16 +1207,15 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     expect(root.querySelector('.hub-walk-ctx')).toBeNull();
     expect(root.querySelector('.hub-walk-lookfor')).toBeNull();
     expect(root.querySelector('.hub-walk-review-detail')).toBeNull();
-    // One body, markdown-rendered, holding all three authored parts in order:
-    // why, then lookFor, then detail.
+    // One body, markdown-rendered, in the author's own order.
     const body = root.querySelector('.hub-walk-body') as HTMLElement;
     const text = body.textContent ?? '';
-    const why = text.indexOf('Blocks the onboarding rework');
-    const look = text.indexOf('Whether moving it below the fold hides the price.');
-    const detail = text.indexOf('it competes with the sign-up button');
-    expect(why).toBeGreaterThanOrEqual(0);
-    expect(look).toBeGreaterThan(why);
-    expect(detail).toBeGreaterThan(look);
+    const first = text.indexOf('Blocks the onboarding rework');
+    const second = text.indexOf('Whether moving it below the fold hides the price.');
+    const third = text.indexOf('it competes with the sign-up button');
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThan(first);
+    expect(third).toBeGreaterThan(second);
     // Markdown, not glued text — the detail's bold survives.
     expect(body.querySelector('strong')?.textContent).toBe('sign-up');
     // The rest of the walkthrough pattern is untouched: options, composer,
@@ -1251,15 +1251,20 @@ describe('renderReviewWalkthrough — a declared review item', () => {
     );
   });
 
-  // The parts are optional and the body composes only what the author wrote:
-  // an absent `lookFor` leaves no gap and no placeholder.
-  it('composes the body from the parts the author actually wrote', () => {
+  // The body is optional and nothing is invented in its place: a headline
+  // with no detail leaves no gap and no placeholder.
+  it('renders only what the author actually wrote', () => {
     const bare = threadItem({
-      review: { shape: 'review', headline: 'Read the copy', why: 'It ships Tuesday.' },
+      review: { shape: 'review', headline: 'Read the copy', detail: 'It ships Tuesday.' },
     });
     renderReviewWalkthrough(root, queueOf(bare), 0, walk());
-    const body = root.querySelector('.hub-walk-body') as HTMLElement;
-    expect(body.textContent).toBe('It ships Tuesday.');
+    expect((root.querySelector('.hub-walk-body') as HTMLElement).textContent).toBe(
+      'It ships Tuesday.',
+    );
+
+    const nothing = threadItem({ review: { shape: 'review', headline: 'Read the copy' } });
+    renderReviewWalkthrough(root, queueOf(nothing), 0, walk());
+    expect(root.querySelector('.hub-walk-body')).toBeNull();
   });
 
   // One reply path. A tap and typed words must reach the thread the same way,
@@ -1294,9 +1299,7 @@ describe('renderReviewWalkthrough — a declared review item', () => {
   // is not a lesser card, it is the same card with one way to answer.
   it('keeps the free-text answer when the author offered no options', () => {
     const onReply = vi.fn();
-    const queue = queueOf(
-      threadItem({ review: { shape: 'review', headline: 'Read the copy', why: 'Ships Tuesday.' } }),
-    );
+    const queue = queueOf(threadItem({ review: { shape: 'review', headline: 'Read the copy' } }));
     renderReviewWalkthrough(root, queue, 0, walk({ onReply }));
     expect(root.querySelectorAll('.hub-walk-option')).toHaveLength(0);
     const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
@@ -1310,7 +1313,7 @@ describe('renderReviewWalkthrough — a declared review item', () => {
   // question away here.
   it('does not clip an authored headline at its first full stop', () => {
     const item = threadItem({
-      review: { shape: 'decision', headline: 'Ship v2 now. Or wait for the rebuild?', why: 'w' },
+      review: { shape: 'decision', headline: 'Ship v2 now. Or wait for the rebuild?' },
     });
     renderReviewWalkthrough(root, queueOf(item), 0, walk());
     expect((root.querySelector('.hub-walk-title') as HTMLElement).textContent).toBe(
@@ -1336,7 +1339,6 @@ describe('renderReviewWalkthrough — a long detail clamps with an explicit expa
       review: {
         shape: 'review',
         headline: 'Read the migration write-up',
-        why: 'It gates the cutover.',
         detail: longDetail,
       },
     });

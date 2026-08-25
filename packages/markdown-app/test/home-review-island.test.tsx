@@ -43,7 +43,7 @@ function item(over: Partial<ReviewItem> = {}): ReviewItem {
     kind: 'task-thread',
     title: `Some task ${seq}`,
     ask: `Question ${seq}?`,
-    why: 'The next commit depends on it.',
+    why: `Reviewer asked you 2m ago · on this task`,
     since: NOW - 2 * 86_400_000,
     thread: {
       kind: 'task-thread',
@@ -60,7 +60,6 @@ function item(over: Partial<ReviewItem> = {}): ReviewItem {
     review: {
       shape: 'review',
       headline: `Question ${seq}?`,
-      why: 'The next commit depends on it.',
     },
     ...over,
   };

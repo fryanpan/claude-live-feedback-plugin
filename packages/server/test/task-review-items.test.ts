@@ -37,8 +37,6 @@ function payload(over: Partial<ReviewPayload> = {}): ReviewPayload {
   return {
     shape: 'decision',
     headline: 'Which cache do we keep?',
-    why: 'The rollout is blocked until one of them goes.',
-    lookFor: 'Whether the memory ceiling still holds at peak.',
     detail: 'Both caches answer the same reads; keeping both doubles the invalidation paths.',
     options: [
       // 1–3 words each: the shared gate refuses a longer button face.
@@ -257,7 +255,7 @@ describe('review items on a task', () => {
       const task = seedDecision();
       const res = store.addReviewItem(
         task.id,
-        { shape: 'decision', headline: 'No why here' },
+        { shape: 'decision', detail: 'No headline here' } as unknown as ReviewPayload,
         {
           actor: AGENT,
         },
@@ -265,18 +263,16 @@ describe('review items on a task', () => {
       expect(res.ok).toBe(false);
       if (res.ok) return;
       expect(res.error).toBe('bad-review');
-      expect(res.message).toContain('review.why is required');
+      expect(res.message).toContain('review.headline is required');
     });
 
     it('returns the gate GAPS as advice on a thin but acceptable item', () => {
       const task = seedDecision();
       const thin = payload();
-      thin.lookFor = undefined;
       thin.detail = undefined;
       const res = store.addReviewItem(task.id, thin, { actor: AGENT });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
-      expect(res.advice).toContain('review.lookFor is missing');
       expect(res.advice).toContain('review.detail is missing');
     });
 

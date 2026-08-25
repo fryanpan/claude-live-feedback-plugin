@@ -32,8 +32,6 @@ const AGENT = {
 const FULL_DECISION = {
   shape: 'decision',
   headline: 'Cache size for the rebuild',
-  why: 'The nightly rebuild stalls until this is settled.',
-  lookFor: 'Whether the smaller cache still covers one full pass.',
   detail: 'A full pass reads the index once. A smaller cache makes it read twice.',
   options: [
     { id: 'o-7f3a', label: 'Keep it', detail: 'costs 2GB of disk' },
@@ -45,7 +43,6 @@ const FULL_DECISION = {
 const THIN_DECISION = {
   shape: 'decision',
   headline: 'Retry budget for the poller',
-  why: 'Two agents are waiting on the answer.',
   options: [
     { id: 'o-9c11', label: 'Three tries' },
     { id: 'o-2d40', label: 'Give up once' },
@@ -158,29 +155,56 @@ describe('task review-item routes', () => {
       expect(new Set(ids)).toEqual(new Set([first.item.id, second.item.id]));
     });
 
-    it('400s a payload with no `why` and quotes the writer the field back', async () => {
+    // This route 400'd a payload with no `why` until 2026-08-25. The field is
+    // gone and so is the refusal — but the route must still refuse what it
+    // always did, or the removal loosened the gate rather than shortening it.
+    it('400s a payload with no headline and quotes the writer the field back', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
-      const { why: _dropped, ...noWhy } = FULL_DECISION;
+      const { headline: _dropped, ...noHeadline } = FULL_DECISION;
       const r = await post(`/api/tasks/${task.id}/review-items`, {
-        review: noWhy,
+        review: noHeadline,
         author: AGENT,
       });
       expect(r.status).toBe(400);
       const body = (await r.json()) as { error: string; message?: string };
       expect(body.error).toBe('bad-review');
-      expect(body.message ?? '').toContain('review.why');
+      expect(body.message ?? '').toContain('review.headline');
       // …and nothing was filed.
       expect((await queueRows(wsId)).some((r2) => r2.taskId === task.id)).toBe(false);
     });
 
-    it('200s a thin-but-valid payload and names lookFor in reviewAdvice', async () => {
+    // The ticket-borne half of the compatibility obligation. An unrestarted
+    // bundle reaches this route too, and its words must survive the same way.
+    it('accepts a legacy payload here too, folding why and lookFor into the body', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId);
+      const created = await jj<{ item: { id: string; review: Record<string, unknown> } }>(
+        await post(`/api/tasks/${task.id}/review-items`, {
+          review: {
+            ...FULL_DECISION,
+            why: 'The rebuild is blocked on this.',
+            lookFor: 'Whether the smaller cache still covers one full pass.',
+          },
+          author: AGENT,
+        }),
+      );
+      const review = created.item.review;
+      expect(Object.hasOwn(review, 'why')).toBe(false);
+      expect(Object.hasOwn(review, 'lookFor')).toBe(false);
+      expect(review.detail).toBe(
+        `The rebuild is blocked on this.\n\nWhether the smaller cache still covers one full pass.\n\n${FULL_DECISION.detail}`,
+      );
+      expect((await queueRows(wsId)).some((r) => r.reviewItemId === created.item.id)).toBe(true);
+    });
+
+    it('200s a thin-but-valid payload and names detail in reviewAdvice', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string }; reviewAdvice?: string }>(
         await post(`/api/tasks/${task.id}/review-items`, { review: THIN_DECISION, author: AGENT }),
       );
-      expect(created.reviewAdvice ?? '').toContain('lookFor');
+      expect(created.reviewAdvice ?? '').toContain('review.detail');
       // Advice is not a refusal: the item is on the queue all the same.
       expect((await queueRows(wsId)).some((r) => r.reviewItemId === created.item.id)).toBe(true);
     });
@@ -188,14 +212,14 @@ describe('task review-item routes', () => {
     // The second entry path for the same payload, and it has to agree with the
     // comment-borne one: an over-long row field files here too. A four-word
     // option label is the other half of the measured bounces.
-    it('200s an over-long why and a four-word option label, advising on both', async () => {
+    it('200s an over-long headline and a four-word option label, advising on both', async () => {
       const wsId = await seedWorkspace();
       const task = await seedTask(wsId);
       const created = await jj<{ item: { id: string }; reviewAdvice?: string }>(
         await post(`/api/tasks/${task.id}/review-items`, {
           review: {
             ...FULL_DECISION,
-            why: 'Blocks the nightly rebuild and the cache work behind it, and either size ships without further changes.',
+            headline: `Cache size for the rebuild, ${'x'.repeat(80)}`,
             options: [
               { id: 'small', label: 'Keep the small cache' },
               { id: 'big', label: 'Grow it' },
@@ -204,7 +228,7 @@ describe('task review-item routes', () => {
           author: AGENT,
         }),
       );
-      expect(created.reviewAdvice ?? '').toContain('review.why');
+      expect(created.reviewAdvice ?? '').toContain('review.headline');
       expect(created.reviewAdvice ?? '').toContain('option label');
       expect((await queueRows(wsId)).some((r) => r.reviewItemId === created.item.id)).toBe(true);
     });
@@ -389,7 +413,7 @@ describe('task review-item routes', () => {
           review: THIN_DECISION,
         }),
       );
-      expect(created.reviewAdvice ?? '').toContain('lookFor');
+      expect(created.reviewAdvice ?? '').toContain('review.detail');
     });
 
     it('refuses the whole create on a malformed review — an option nobody was offered is not a partial success', async () => {
