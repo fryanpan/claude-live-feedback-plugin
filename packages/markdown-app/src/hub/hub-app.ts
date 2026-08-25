@@ -93,6 +93,7 @@ import {
 } from './hub-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountPushToggle } from './push-toggle.ts';
+import { createRepaintGuard } from './repaint-guard.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
 
 interface HubState {
@@ -853,7 +854,10 @@ async function main(): Promise<void> {
     // REST-fed region: "the request did not complete" is not "there is
     // nothing here".
     if (res) state.home = res;
-    renderHomeRegion();
+    // Through the guard: the generating-brief poll below re-runs this every
+    // 1.5s, and Home is exactly the surface whose option buttons a mid-press
+    // repaint was eating.
+    repaintGuard.schedule(renderHomeRegion);
     // Poll while the server says a generation is actually queued, so the
     // generated brief lands without a manual reload. The flag is grounded in
     // a queued call; the cap stops a wedged payload from polling forever.
@@ -1897,18 +1901,38 @@ async function main(): Promise<void> {
     return true;
   }
 
+  // ── Repaints wait for the reader's finger ───────────────────────────────
+  //
+  // Reported from the iPad, 2026-08-25: answering a decision review item
+  // often took two taps — the first one vanished. Every one of the repaint
+  // doors below rebuilds its region with `replaceChildren()`, and iOS Safari
+  // drops the synthetic click when the element under the finger is replaced
+  // between touchstart and touchend — so a background event landing mid-press
+  // ate the tap. The guard parks background-triggered repaints during a press
+  // and flushes them (coalesced, latest state wins) once the tap completes.
+  // The reader's OWN renders are never deferred: the click that carries them
+  // ends the window before their handlers run. Sibling of `discussionIsBusy`,
+  // which holds the discussion reload the same way for typing.
+  const repaintGuard = createRepaintGuard({ dom: document, win: window });
+  /** The three regions the tasks projection and the review-items list feed —
+   *  every closure here is a STABLE reference, which is what lets the guard
+   *  coalesce a burst of events during one press into one repaint. */
+  const repaintQueueRegions = (): void => {
+    renderBoardRegion();
+    renderHomeRegion();
+    renderDetail();
+  };
+
   async function loadReviewItems(): Promise<void> {
     await refreshReviewItems(state, () =>
       fetchJson<{ items: ReviewThreadItem[] }>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/review-items`,
       ),
     );
-    renderBoardRegion();
-    renderHomeRegion();
     // The task panel's review queue is handed down from this same list, so it
-    // is stale until this runs — which is why answering a card in the panel
-    // repainted nothing at all before it was here.
-    renderDetail();
+    // is stale until this repaint runs — which is why answering a card in the
+    // panel repainted nothing at all before it was here.
+    repaintGuard.schedule(repaintQueueRegions);
   }
 
   async function loadAgents(): Promise<void> {
@@ -1955,10 +1979,16 @@ async function main(): Promise<void> {
     // every load, because `agent.heartbeat` arrives constantly and a board
     // re-render would close a picker somebody is reading.
     if (knownAgentIds().join('\n') !== before) {
-      renderBoardRegion();
-      renderDetail();
+      repaintGuard.schedule(repaintBoardAndDetail);
     }
   }
+
+  /** The agent-set repaint, held off the reader's finger like every other
+   *  background repaint (stable reference — see `repaintQueueRegions`). */
+  const repaintBoardAndDetail = (): void => {
+    renderBoardRegion();
+    renderDetail();
+  };
 
   async function loadEvents(): Promise<void> {
     const res = await fetchJson<{ events: ActivityEvent[]; uptime: UptimeReport | null }>(
@@ -1966,25 +1996,34 @@ async function main(): Promise<void> {
     );
     state.events = applyRefresh(state.events, res, (r) => r.events ?? []);
     state.uptime = applyRefresh(state.uptime, res, (r) => r.uptime ?? null);
+    repaintGuard.schedule(repaintActivityRegions);
+  }
+
+  /** Activity arrives on every board event, and the open panel re-reads the
+   *  same rows — so this repaint fires constantly and must queue behind an
+   *  in-flight tap. The conditions run at paint time, deliberately: what is
+   *  showing when the repaint lands is what decides what it touches. */
+  const repaintActivityRegions = (): void => {
     if (state.view === 'activity') renderActivityRegion();
     // The ticket's own Activity tab reads the same rows, so a refresh that
     // repainted only the workspace view left an open panel showing the
     // history as it stood when it opened.
     if (state.detailTaskId || state.detailGoalId) renderDetail();
-  }
+  };
 
   // ── Wiring ──────────────────────────────────────────────────────────────
+  // Both observers read the projection at once (state must be current the
+  // moment the ydoc moves) but paint through the guard: a peer's transition
+  // arriving over the ydoc rebuilds the same regions the SSE path does, and
+  // was eating taps the same way.
   tasksMap.observeDeep(() => {
     readProjection();
-    renderBoardRegion();
-    // The Home queue is computed from the same tasks — without this the
-    // first projection lands after Home's first paint and the queue stays
-    // empty while the board banner (painted by renderBoardRegion) counts it.
-    renderHomeRegion();
-    renderDetail();
+    // Home rides along with the board — without it the first projection lands
+    // after Home's first paint and the queue stays empty while the board
+    // banner (painted by renderBoardRegion) counts it.
+    repaintGuard.schedule(repaintQueueRegions);
   });
-  wsMap.observeDeep(() => {
-    readProjection();
+  const repaintWorkspaceRegions = (): void => {
     renderLead();
     renderBoardRegion();
     renderHomeRegion();
@@ -1992,6 +2031,10 @@ async function main(): Promise<void> {
     // not the tasks map — an open goal panel repaints here or shows a peer's
     // rename never.
     if (state.detailGoalId) renderDetail();
+  };
+  wsMap.observeDeep(() => {
+    readProjection();
+    repaintGuard.schedule(repaintWorkspaceRegions);
   });
 
   client.awareness.setLocalState({
