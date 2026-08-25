@@ -31,6 +31,8 @@ Then **place it**: the right goal, in the right position relative to the rows al
 
 Staff the top of the queue, in parallel where the rows don't collide, and keep going until the **goal** is met — not until the batch drains.
 
+**Every dispatch prompt states the final-message contract.** A dispatched agent reports to you as a final message, so the cap is what keeps that report a pointer instead of a paste: the agent posts its full report as a task comment first, then writes 150 words or less — the outcome in a line, that comment's `threadUrl`, and any blocker. The same three parts and the same 150 words bind the message you write to the primary user at the end of a batch.
+
 ## 4. Registering as Lead
 
 ```
