@@ -30,6 +30,25 @@ export interface NudgePayload {
   title?: string;
   /** How many rows were ready when the wake fired. Idle nudges only. */
   readyCount?: number;
+  /**
+   * How many OPEN ROWS the pass examined to arrive at `readyCount` — the
+   * denominator. Idle nudges only, and absent from a server older than the
+   * dependency-state gate, in which case the line simply does not claim one.
+   */
+  consideredCount?: number;
+  /** What the pass withheld and why — `{ 'awaiting-person': 2, parked: 1 }`.
+   *  Absent rather than empty when nothing was held. */
+  held?: Record<string, number>;
+  /**
+   * Rows the pass could NOT evaluate. Its presence is the whole signal, so it
+   * is absent on the ordinary wake rather than sent as a zero.
+   *
+   * A frame carrying this with `readyCount: 0` is the one case where the
+   * board wakes its lead with no work to hand over: the pass could not
+   * establish that the board is quiet, and that is a different message from
+   * a quiet board — which is a message it does not send at all.
+   */
+  undetermined?: { count?: number; reasons?: string[] };
   /** How long the board had stood still. Idle nudges only. */
   idleMs?: number;
   /** The answered row's own links. Answer nudges only, and routinely EMPTY —
@@ -69,16 +88,73 @@ function namedTask(p: NudgePayload): string | null {
   return title ?? p.taskId ?? null;
 }
 
+/** How many rows the pass could not read, or 0 — tolerant of a `count` a
+ *  server omitted while sending reasons, which would otherwise render as a
+ *  present-but-silent field. */
+function undeterminedCount(p: NudgePayload): number {
+  const u = p.undetermined;
+  if (!u) return 0;
+  if (typeof u.count === 'number' && u.count > 0) return u.count;
+  return u.reasons && u.reasons.length > 0 ? u.reasons.length : 0;
+}
+
+/** The reasons as one clause, or a placeholder — never an empty parenthesis. */
+function reasonsClause(p: NudgePayload): string {
+  const reasons = p.undetermined?.reasons ?? [];
+  return reasons.length > 0 ? reasons.join(', ') : 'reason not reported';
+}
+
 /**
- * Render `workspace.ready_idle` — ready work nobody has picked up.
+ * The parenthetical that stops "1 task is ready" from meaning two different
+ * boards.
+ *
+ * Absent entirely when the server sent no denominator — a line that invented
+ * one, or wrote "unknown", would be worse than one that does not claim to
+ * know. Present whenever it was sent, even when it equals `readyCount`,
+ * because a stated denominator that agrees and an omitted one are exactly
+ * what a reader must be able to tell apart.
+ */
+function denominatorClause(p: NudgePayload): string {
+  if (p.consideredCount === undefined) return '';
+  const parts = [`${p.consideredCount} open ${p.consideredCount === 1 ? 'row' : 'rows'} checked`];
+  const held = Object.entries(p.held ?? {})
+    .filter(([, n]) => typeof n === 'number' && n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([reason, n]) => `${n} ${reason}`);
+  if (held.length > 0) parts.push(`held: ${held.join(', ')}`);
+  const unread = undeterminedCount(p);
+  // Spelled loudly, and with which way the uncertainty falls. A row nobody
+  // could read that reads as "already handled" is the exact swap this clause
+  // exists to prevent.
+  if (unread > 0) {
+    parts.push(`${unread} could NOT be evaluated (${reasonsClause(p)}) and is not counted ready`);
+  }
+  return ` (${parts.join('; ')})`;
+}
+
+/**
+ * Render `workspace.ready_idle` — ready work nobody has picked up, or the one
+ * case where the board could not tell whether there is any.
  *
  * Ordered so the two facts that decide whether to act come first (how much is
- * waiting, how long it has waited), the row to start with second, and the
- * tool to start with last. The count is spelled out even at one, because a
- * lone row and a queue are different asks and a bare title says neither.
+ * waiting, how long it has waited), the denominator that says what those
+ * numbers are OUT OF next, the row to start with after that, and the tool to
+ * start with last. The count is spelled out even at one, because a lone row
+ * and a queue are different asks and a bare title says neither.
+ *
+ * The zero-ready branch is a different sentence rather than the same one with
+ * a zero in it. The server sends that frame ONLY when rows could not be
+ * evaluated — a genuinely quiet board is silence — so telling its reader to
+ * "take the top of the queue" would send them to an empty queue and teach
+ * them, correctly, that the wake carries no information.
  */
 export function readyIdleLine(p: NudgePayload): string {
   const count = p.readyCount;
+  const unread = undeterminedCount(p);
+  if (count === 0 && unread > 0) {
+    const of = p.consideredCount === undefined ? `${unread}` : `${unread} of ${p.consideredCount}`;
+    return `[workspace.ready_idle] nothing is ready to hand over, and this pass could not establish that the board is quiet: ${of} open row(s) could not be evaluated (${reasonsClause(p)}). Read them with list_tasks before treating this board as clear.`;
+  }
   const one = count === 1;
   const subject =
     count === undefined ? 'ready work has' : `${count} ${one ? 'task has' : 'tasks have'}`;
@@ -86,7 +162,7 @@ export function readyIdleLine(p: NudgePayload): string {
   const nobody = count !== undefined && !one ? 'them' : 'it';
   const top = namedTask(p);
   const start = top ? ` Start with ${top}.` : '';
-  return `[workspace.ready_idle] ${subject} been ready${stood} with nobody on ${nobody}.${start} Take the top of the queue with next_tasks / task_transition.`;
+  return `[workspace.ready_idle] ${subject} been ready${stood} with nobody on ${nobody}${denominatorClause(p)}.${start} Take the top of the queue with next_tasks / task_transition.`;
 }
 
 /**

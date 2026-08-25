@@ -39,6 +39,13 @@ function board(over: Partial<ReadyWorkSnapshot> = {}): ReadyWorkSnapshot {
     leadAgentId: 'agent-cartographer',
     retired: false,
     ready: [{ id: 't-1', title: 'Rank results by recency' }],
+    // The gate's own report of the pass that produced `ready`. Required on the
+    // snapshot rather than defaulted, deliberately: a producer that forgets to
+    // say what it examined would report every board as fully evaluated, which
+    // is the reading this whole feature exists to stop being free.
+    considered: 1,
+    held: {},
+    undetermined: [],
     lastActivityAt: 0,
     ...over,
   };
@@ -52,6 +59,7 @@ function harness(opts: { idleMs?: number; stampFile?: string; world?: World } = 
     reachable: new Set<string>(['agent-cartographer']),
   };
   const sent: Sent[] = [];
+  const reported: string[] = [];
   const nudger = new ReadyWorkNudger({
     now: () => world.now,
     snapshot: () => world.boards,
@@ -61,10 +69,11 @@ function harness(opts: { idleMs?: number; stampFile?: string; world?: World } = 
       sent.push({ workspaceId, agentId, frame });
       return 1;
     },
+    report: (line) => reported.push(line),
     ...(opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {}),
     ...(opts.stampFile !== undefined ? { stampFile: opts.stampFile } : {}),
   });
-  return { world, sent, nudger };
+  return { world, sent, reported, nudger };
 }
 
 interface World {
@@ -221,6 +230,371 @@ describe('boards that must never be woken', () => {
     world.boards = [board({ lastActivityAt: world.now - 20 * MIN })];
     nudger.tick();
     expect(sent).toHaveLength(2);
+  });
+});
+
+describe('a wake states what the pass examined, not just what it found', () => {
+  it('carries the denominator and the held breakdown onto the frame', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      considered: 5,
+      held: { 'awaiting-person': 2, parked: 1, blocked: 1 },
+    });
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+    const frame = sent[0]!.frame;
+    expect(frame.readyCount).toBe(1);
+    // Without this, "1 task is ready" is indistinguishable on a board with one
+    // row and on a board with five whose other four are waiting on Bryan.
+    expect(frame.consideredCount).toBe(5);
+    expect(frame.held).toEqual({ 'awaiting-person': 2, parked: 1, blocked: 1 });
+    expect(frame.undetermined).toBeUndefined();
+  });
+
+  it('omits the held breakdown rather than sending an empty one', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.lastActivityAt = world.now - 20 * MIN;
+
+    nudger.tick();
+
+    expect(sent[0]!.frame.held).toBeUndefined();
+    expect(sent[0]!.frame.consideredCount).toBe(1);
+  });
+});
+
+describe('a pass that could not evaluate a row says so', () => {
+  const unreadable = (over: Partial<ReadyWorkSnapshot> = {}) =>
+    board({
+      ready: [],
+      considered: 1,
+      undetermined: [{ id: 't-9', reason: 'review-items-unreadable' }],
+      ...over,
+    });
+
+  it('wakes the lead about a board it could not read, even with nothing ready', () => {
+    // The failure this closes: `ready.length === 0` used to mean "quiet
+    // board, say nothing" whether the gate had read every row and found them
+    // all healthy, or had failed to read any of them. Those two must not
+    // arrive as the same silence.
+    const { world, sent, nudger } = harness();
+    world.boards[0] = unreadable({ lastActivityAt: world.now - 20 * MIN });
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+    const frame = sent[0]!.frame;
+    expect(frame.readyCount).toBe(0);
+    expect(frame.undetermined).toEqual({
+      count: 1,
+      reasons: ['review-items-unreadable'],
+    });
+    // No subject to start with — the frame must not invent one.
+    expect(frame.taskId).toBeUndefined();
+  });
+
+  it('still says nothing when the pass read every row and found none ready', () => {
+    // The positive control for the test above: silence has to remain the
+    // answer on a board that was fully evaluated, or the new clause turns
+    // every quiet board into a wake.
+    const { world, sent, nudger } = harness();
+    world.boards[0] = board({ ready: [], considered: 3, held: { claimed: 3 } });
+    world.boards[0]!.lastActivityAt = world.now - 20 * MIN;
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(0);
+  });
+
+  it('does not repeat itself while the unreadable set is unchanged', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0] = unreadable({ lastActivityAt: world.now - 20 * MIN });
+
+    nudger.tick();
+    world.now += 20 * MIN;
+    nudger.tick();
+    world.now += 20 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('fires again when a DIFFERENT row becomes unreadable', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0] = unreadable({ lastActivityAt: world.now - 20 * MIN });
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.boards[0] = unreadable({
+      lastActivityAt: world.now - 20 * MIN,
+      undetermined: [{ id: 't-11', reason: 'owner-kind-unreadable' }],
+    });
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+
+  it('reports the condition even when the lead is off the wire', () => {
+    // A wake that reached nobody is the case where the frame proves nothing.
+    // A monitor with no reader is indistinguishable from no monitor, so the
+    // condition has to land somewhere a person can still find it.
+    const { world, sent, reported, nudger } = harness();
+    world.boards[0] = unreadable({ lastActivityAt: world.now - 20 * MIN });
+    world.reachable.clear();
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(0);
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain('w-search');
+    expect(reported[0]).toContain('review-items-unreadable');
+  });
+
+  it('reports once per condition rather than once per tick', () => {
+    // The other half of the same lesson: an archiver that logged 395
+    // identical hourly failures had a reader, and the reader had learned
+    // there was nothing to read.
+    const { world, reported, nudger } = harness();
+    world.boards[0] = unreadable({ lastActivityAt: world.now - 20 * MIN });
+    world.reachable.clear();
+
+    nudger.tick();
+    world.now += 20 * MIN;
+    nudger.tick();
+    world.now += 20 * MIN;
+    nudger.tick();
+
+    expect(reported).toHaveLength(1);
+  });
+
+  it('names the rows it could read alongside the one it could not', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      considered: 2,
+      undetermined: [{ id: 't-9', reason: 'owner-kind-unreadable' }],
+    });
+
+    nudger.tick();
+
+    const frame = sent[0]!.frame;
+    expect(frame.taskId).toBe('t-1');
+    expect(frame.readyCount).toBe(1);
+    expect(frame.undetermined).toEqual({ count: 1, reasons: ['owner-kind-unreadable'] });
+  });
+});
+
+/**
+ * The instrument that can kill this feature.
+ *
+ * The stopping rule "if the gate suppresses everything, delete the nudge"
+ * cannot fire on its own, because nobody notices a nudge that stopped
+ * appearing — it would sit in forever on the grounds that nothing disproved
+ * it. That is the same failure the gate itself was built out of: a checker
+ * that ran 22 times with 116 unread RED lines, an archiver that logged 395
+ * identical hourly failures. A stopping rule with no instrument is not a
+ * stopping rule.
+ *
+ * So both outcomes are counted, per condition, and the verdict FIRES ITSELF
+ * rather than waiting to be looked up.
+ */
+describe('the nudge counts what it suppressed and what it delivered', () => {
+  const DAY = 24 * 60 * 60_000;
+
+  it('counts a delivered nudge as passed', () => {
+    const { world, nudger } = harness();
+    world.boards[0]!.lastActivityAt = world.now - 20 * MIN;
+
+    nudger.tick();
+
+    expect(nudger.tally().passed).toBe(1);
+    expect(nudger.tally().suppressed).toEqual({});
+  });
+
+  it('counts the rows it withheld, by condition', () => {
+    const { world, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      ready: [],
+      considered: 4,
+      held: { 'awaiting-person': 2, parked: 1, blocked: 1 },
+    });
+
+    nudger.tick();
+
+    // "4 suppressed, all parked" and "4 suppressed across three conditions"
+    // are different findings, so the breakdown is what is kept.
+    expect(nudger.tally().suppressed).toEqual({ 'awaiting-person': 2, parked: 1, blocked: 1 });
+    expect(nudger.tally().passed).toBe(0);
+  });
+
+  it('counts a row it could not evaluate as its own condition', () => {
+    const { world, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      ready: [],
+      considered: 1,
+      undetermined: [{ id: 't-9', reason: 'review-items-unreadable' }],
+    });
+
+    nudger.tick();
+
+    expect(nudger.tally().suppressed).toEqual({ undetermined: 1 });
+  });
+
+  it('counts one board state once, not once per tick', () => {
+    // The tick runs every 60 seconds forever. Counting per tick would make
+    // "suppressed 1,440" a statement about the clock rather than about the
+    // board, which is the exact confusion this whole change removes.
+    const { world, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      ready: [],
+      considered: 1,
+      held: { parked: 1 },
+    });
+
+    nudger.tick();
+    world.now += 20 * MIN;
+    nudger.tick();
+    world.now += 20 * MIN;
+    nudger.tick();
+
+    expect(nudger.tally().suppressed).toEqual({ parked: 1 });
+  });
+
+  it('counts again once the board has actually moved', () => {
+    const { world, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      ready: [],
+      considered: 1,
+      held: { parked: 1 },
+    });
+    nudger.tick();
+
+    world.boards[0] = board({
+      lastActivityAt: world.now - 10 * MIN,
+      ready: [],
+      considered: 1,
+      held: { parked: 1 },
+    });
+    world.now += 20 * MIN;
+    nudger.tick();
+
+    expect(nudger.tally().suppressed).toEqual({ parked: 2 });
+  });
+
+  it('declares the nudge deletable after seven days of suppressing and never firing', () => {
+    const { world, reported, nudger } = harness();
+    world.boards[0] = board({
+      lastActivityAt: world.now - 20 * MIN,
+      ready: [],
+      considered: 1,
+      held: { parked: 1 },
+    });
+    nudger.tick();
+    expect(reported).toHaveLength(0);
+
+    world.now += 7 * DAY;
+    nudger.tick();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain('suppressed');
+    expect(reported[0]).toContain('never fired');
+    expect(reported[0]).toContain('delete');
+    // The window rolls, so the next seven days are measured fresh rather than
+    // re-announcing the same verdict every tick forever.
+    expect(nudger.tally().passed).toBe(0);
+    expect(nudger.tally().suppressed).toEqual({});
+  });
+
+  it('says nothing at the seven-day mark when the nudge has actually fired', () => {
+    // The positive control for the verdict: a nudge that delivers must not be
+    // declared dead, or the instrument recommends deleting every feature.
+    const { world, reported, nudger } = harness();
+    world.boards[0]!.lastActivityAt = world.now - 20 * MIN;
+    nudger.tick();
+    expect(nudger.tally().passed).toBe(1);
+
+    world.now += 7 * DAY;
+    nudger.tick();
+
+    expect(reported).toHaveLength(0);
+  });
+
+  it('says nothing at the seven-day mark when it has suppressed nothing either', () => {
+    // An idle install proves nothing in either direction. Declaring it dead
+    // would be a verdict reached from no evidence, which is the shape of
+    // reasoning this instrument exists to replace.
+    const { world, reported, nudger } = harness();
+    world.boards = [];
+
+    world.now += 7 * DAY;
+    nudger.tick();
+
+    expect(reported).toHaveLength(0);
+  });
+
+  it('keeps the seven-day window running across a restart', () => {
+    // Prod restarts at every merge — several times a day. A window that began
+    // again at each start would never close, so the stopping rule would be
+    // unreachable by construction and nobody would ever know.
+    const dir = mkdtempSync(join(tmpdir(), 'nudge-tally-'));
+    const stampFile = join(dir, 'stamps.json');
+    try {
+      const first = harness({ stampFile });
+      first.world.boards[0] = board({
+        lastActivityAt: first.world.now - 20 * MIN,
+        ready: [],
+        considered: 1,
+        held: { parked: 1 },
+      });
+      first.nudger.tick();
+      const since = first.nudger.tally().since;
+
+      const second = harness({
+        stampFile,
+        world: {
+          now: first.world.now + 7 * DAY,
+          boards: [
+            board({
+              lastActivityAt: first.world.now - 20 * MIN,
+              ready: [],
+              considered: 1,
+              held: { parked: 1 },
+            }),
+          ],
+          reachable: new Set<string>(['agent-cartographer']),
+        },
+      });
+      expect(second.nudger.tally().since).toBe(since);
+      expect(second.nudger.tally().suppressed).toEqual({ parked: 1 });
+
+      second.nudger.tick();
+      expect(second.reported).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('starts a fresh window rather than throwing on a stamp file that predates the tally', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nudge-tally-old-'));
+    const stampFile = join(dir, 'stamps.json');
+    try {
+      writeFileSync(stampFile, JSON.stringify({ version: 1, stamps: { 'w-search': '0|t-1' } }));
+      const { world, nudger } = harness({ stampFile });
+
+      // The stamps still load — a format bump must not cost every board its
+      // arming and bill each lead a duplicate wake.
+      expect(nudger.armedCount()).toBe(1);
+      expect(nudger.tally().since).toBe(world.now);
+      expect(nudger.tally().passed).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
