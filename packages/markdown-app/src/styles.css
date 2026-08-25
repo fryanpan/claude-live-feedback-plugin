@@ -3652,8 +3652,12 @@ a.hub-link-chip:hover {
   text-align: left;
   cursor: pointer;
 }
-.hub-decide-option:hover {
-  border-color: var(--accent, #2e7dd7);
+/* Hover only where hover exists — on touch the accent border would stick to
+   the last-tapped option and read as a recorded choice. */
+@media (hover: hover) {
+  .hub-decide-option:hover {
+    border-color: var(--accent, #2e7dd7);
+  }
 }
 .hub-decide-option-label {
   font-weight: 600;
@@ -6019,8 +6023,12 @@ body.threads-resizing {
   text-align: left;
   cursor: pointer;
 }
-.thread-item-option:hover {
-  border-color: var(--accent, #2e7dd7);
+/* Same hover guard as .hub-decide-option — a tap must not leave the accent
+   border stuck on an option nobody chose. */
+@media (hover: hover) {
+  .thread-item-option:hover {
+    border-color: var(--accent, #2e7dd7);
+  }
 }
 .thread-item-option-label {
   font-weight: 600;
