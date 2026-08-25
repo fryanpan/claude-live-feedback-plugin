@@ -2177,6 +2177,15 @@ body.hub-body {
   text-decoration-color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
   color: var(--fg-muted);
 }
+/* The board island owns a wrapper of its own inside `#hub-board` — Preact
+   must never share a container with vanilla code. `display: contents` keeps
+   that wrapper out of layout entirely, so the sections stay DIRECT children
+   of `.hub-board`: the column's spacing is written against that, and so is
+   the drag preview's `.closest('.hub-section')` walk, which must not have an
+   extra box to climb through. */
+.hub-board > [data-preact-island] {
+  display: contents;
+}
 /* --- the board's meta line: what is true of the LIST, above the first goal ---
    One quiet line, drawn only when it has something to say. It is where the
    archived count lives, and it is NOT a nav item: the phone rail has exactly
