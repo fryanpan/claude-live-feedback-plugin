@@ -87,6 +87,7 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
+import { injectWidget } from './mockup-widget.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
@@ -2126,7 +2127,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   const isMockupDoc = (docId: string): boolean => rooms.get(docId)?.meta.type === 'mockup';
 
-  /** A mockup's own HTML, streamed from the file the room is bound to. */
+  /**
+   * A mockup's own HTML, streamed from the file the room is bound to — with
+   * the comment widget added on the way out.
+   *
+   * The embed is attached HERE rather than written into the file, so a page
+   * that a build step generates, or that git tracks, never has to carry review
+   * scaffolding to be reviewable. See mockup-widget.ts for the incident that
+   * moved it. A page that embeds the widget itself is served untouched.
+   */
   const serveMockup = (docId: string): Response => {
     const notFound = () =>
       new Response(renderMockupNotFound(docId), {
@@ -2135,7 +2144,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       });
     const room = rooms.get(docId);
     if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) return notFound();
-    return serveStatic(room.meta.sourceUrl) ?? notFound();
+    const res = serveStatic(room.meta.sourceUrl);
+    if (!res) return notFound();
+    // Only HTML gets rewritten; a mockup bound to anything else is served as-is.
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.startsWith('text/html')) return res;
+    return new Response(injectWidget(readFileSync(room.meta.sourceUrl, 'utf8'), room.meta.docId), {
+      headers: res.headers,
+    });
   };
 
   /**
