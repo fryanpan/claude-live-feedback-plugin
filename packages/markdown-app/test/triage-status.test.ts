@@ -17,7 +17,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
   CHORES_ID,
@@ -27,7 +27,7 @@ import {
   TASK_STATUS_ORDER,
   boardSections,
 } from '../src/hub/hub-model.ts';
-import { type BoardHandlers, renderBoard } from '../src/hub/hub-render.ts';
+import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
 const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
 
@@ -90,6 +90,9 @@ beforeEach(() => {
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
+// The board is a mounted island now, not a call that returns; every mount
+// holds a live subscription to the module-level signal until it is disposed.
+afterEach(disposeBoards);
 
 describe('a triage row on the board', () => {
   it('is listed in its band, in its order — triage is a status, not a section', () => {
