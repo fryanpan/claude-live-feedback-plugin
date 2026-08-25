@@ -628,6 +628,52 @@ describe('presenceChips', () => {
     expect(chips[1]?.title).toContain('40s ago');
   });
 
+  it('keys a person on WHO they are, not on the connection they arrived over', () => {
+    // A Yjs clientId is minted fresh on every connect, so keying rows on it
+    // meant a reload came back as a stranger: a new row, a rebuilt node, and
+    // a `followedKey` pointing at a connection that no longer exists.
+    const chips = presenceChips(
+      [{ clientId: 7, name: 'Jordan', surface: 'hub', lastActive: NOW }],
+      [],
+      NOW,
+    );
+    const afterReload = presenceChips(
+      [{ clientId: 9814, name: 'Jordan', surface: 'hub', lastActive: NOW }],
+      [],
+      NOW,
+    );
+    expect(chips[0]?.key).toBe('p-Jordan');
+    expect(afterReload[0]?.key).toBe(chips[0]?.key);
+  });
+
+  it('folds one person’s several tabs into one chip, reading from the live one', () => {
+    // Two tabs are two awareness entries and one human. Left unfolded they
+    // drew the same person twice and burned two of the four circle slots.
+    const chips = presenceChips(
+      [
+        { clientId: 1, name: 'Jordan', surface: 'hub', lastActive: NOW - 600_000, self: true },
+        {
+          clientId: 2,
+          name: 'Jordan',
+          surface: 'doc',
+          docId: 'doc-live',
+          lastActive: NOW - 5_000,
+        },
+        { clientId: 3, name: 'Ana', surface: 'hub', lastActive: NOW },
+      ],
+      [],
+      NOW,
+    );
+    expect(chips.map((c) => c.key)).toEqual(['p-Ana', 'p-Jordan']);
+    const jordan = chips[1];
+    // The most recently active tab is where they actually are…
+    expect(jordan?.where).toBe('doc-live');
+    expect(jordan?.docId).toBe('doc-live');
+    expect(jordan?.title).toContain('5s ago');
+    // …and being idle in one of your own tabs must not stop you being you.
+    expect(jordan?.label).toBe('Jordan (you)');
+  });
+
   it('surfaces the unresponsive state label on agent chips', () => {
     const chips = presenceChips(
       [],
