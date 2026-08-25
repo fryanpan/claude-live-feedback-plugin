@@ -50,8 +50,8 @@ describe('set_goal_list declares the generated-id contract', () => {
 
   it('says how to create, how to keep, and what happens to an id the board lacks', () => {
     const decl = declarationFor('set_goal_list');
-    expect(decl).toMatch(/GOAL IDS ARE GENERATED AND PERMANENT/);
-    expect(decl).toMatch(/NO `id` at all/);
+    expect(decl).toMatch(/Goal ids are generated and permanent/);
+    expect(decl).toMatch(/no id to add a band/);
     expect(decl).toMatch(/unknown-goal-id/);
     expect(decl).toMatch(/created/);
   });
@@ -60,7 +60,7 @@ describe('set_goal_list declares the generated-id contract', () => {
     // rename_goal used to explain that renaming through set_goal_list "is a
     // removal plus an addition" — true then, wrong now, and a description that
     // describes a gesture the server refuses sends the agent to do it anyway.
-    expect(declarationFor('rename_goal')).toMatch(/generated and permanent/);
+    expect(declarationFor('rename_goal')).toMatch(/The id never moves/);
   });
 });
 
@@ -78,7 +78,7 @@ describe('the committed bundle peers load carries all of it', () => {
     // so a bundle read that returned something useless fails here rather than
     // passing the assertions below vacuously.
     expect(BUNDLE).toContain('list_attachments');
-    expect(BUNDLE).toContain('GOAL IDS ARE GENERATED AND PERMANENT');
+    expect(BUNDLE).toContain('Goal ids are generated and permanent');
     expect(BUNDLE).toContain('unknown-goal-id');
     expect(BUNDLE).toContain('created: res.created');
   });

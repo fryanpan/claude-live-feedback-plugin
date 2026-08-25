@@ -48,7 +48,7 @@ describe('create_tasks is the canonical create verb', () => {
     // The steering has to be in the description, because the description is
     // the only thing an agent reads at the moment it is about to file work.
     const decl = declarationFor('create_tasks');
-    expect(decl).toMatch(/THE way to create tasks/);
+    expect(decl).toMatch(/the only create verb/);
     expect(decl).toMatch(/one-row list/);
   });
 
@@ -62,14 +62,14 @@ describe('create_tasks is the canonical create verb', () => {
     expect(decl).toMatch(/<persona> can <do x> so that <goal y>/); // the body rule
     expect(decl).toMatch(/bare word 'agent'/); // the owner refusal
     expect(decl).toMatch(/decision-shaped `body`|REQUIRED and has a different shape/);
-    expect(decl).toMatch(/MUST also appear in `after`/); // the afterEnforce subset rule
+    expect(decl).toMatch(/must also appear in `after`/); // the afterEnforce subset rule
   });
 
   it('documents the batch-local dependency reference on the row schema', () => {
     const decl = declarationFor('create_tasks');
-    expect(decl).toMatch(/key\?/); // the row field that makes a reference possible
+    expect(decl).toMatch(/`key` labels a row/); // the row field that makes a reference possible
     expect(decl).toMatch(/#seed/); // the spelling
-    expect(decl).toMatch(/ABOVE it/); // and the direction rule
+    expect(decl).toMatch(/depend on one above it/); // and the direction rule
   });
 });
 
@@ -88,7 +88,7 @@ describe('the committed bundle peers load carries all of it', () => {
     // so a bundle read that returned something useless fails here rather than
     // passing the assertions below vacuously.
     expect(BUNDLE).toContain('list_attachments');
-    expect(BUNDLE).toContain('THE way to create tasks');
+    expect(BUNDLE).toContain('the only create verb');
     expect(BUNDLE).toContain('/tasks/batch');
     expect(BUNDLE).toContain('placement');
   });
