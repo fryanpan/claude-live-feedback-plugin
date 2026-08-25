@@ -14299,7 +14299,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.103";
+var PLUGIN_VERSION = "0.1.104";
 var PROCESS_ID = randomUUID();
 var COMMIT_EVIDENCE_DESCRIPTION = 'A commit sha that will STILL RESOLVE after this work merges — i.e. the commit on the default branch, not the branch commit you are currently sitting on. A squash-merge replaces a branch\'s commits with one new commit and discards the originals, so a sha taken from the branch resolves for you now and for nobody afterwards, while the row goes on reading as proven. If the work has not merged yet, record what you have and come back with `amend_evidence` once it does — an amendment is cheap and keeps the row honest, where a stale branch sha silently stops pointing at anything. A PR number is NOT a commit: put "PR #123" in `note` (or attach a `threadRef`), because this field is stored verbatim and nothing validates it.';
 var server = new Server({
@@ -15931,6 +15931,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {} }
     },
     {
+      name: "get_unfiled_ask_count",
+      description: 'Read your own unfiled-ask count — asks that appeared in your chat without a matching filed review item, as the daily chat audit last counted them. This is the self-correction half of the "no unfiled asks" rule: query it at session start or before standing down, and if the number is above zero, the drift is yours to fix by filing review items instead of chat asks. HONEST LIMITS, read them: the server cannot see chat, so this is NOT a live measurement — the number is whatever the daily audit (which mines transcripts) last published via publish_chat_audit, and `today: null` means no audit has covered today yet, which is a real answer. `latest: null` means no audit has ever published about you — not innocence. Counts are keyed by display name (CW_AGENT_NAME); pass `agent` to read a different agent\'s number (a lead following up on the audit).',
+      inputSchema: {
+        type: "object",
+        properties: {
+          agent: {
+            type: "string",
+            description: "Display name to read; defaults to this session's own (CW_AGENT_NAME)."
+          }
+        }
+      }
+    },
+    {
+      name: "publish_chat_audit",
+      description: "FOR THE DAILY CHAT AUDIT: publish per-agent unfiled-ask counts so each session can read its own back via get_unfiled_ask_count. The audit's number and the number a session self-queries are the same stored row — one heuristic, one implementation — so reference these counts in the audit report rather than recomputing. Each entry: {agent (display name / CW_AGENT_NAME), unfiledAsks (asks in chat without a matching filed review item), totalAsks?, sessionId?, note? (evidence pointer)}. `day` is the audited day (YYYY-MM-DD, defaults to today on the server's clock). Publishing again for the same agent supersedes — latest wins, history kept (append-only). The bare name 'agent' is refused: counts belong to somebody.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          day: { type: "string", description: "Audited day, YYYY-MM-DD. Defaults to today." },
+          entries: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                agent: { type: "string" },
+                unfiledAsks: { type: "number" },
+                totalAsks: { type: "number" },
+                sessionId: { type: "string" },
+                note: { type: "string" }
+              },
+              required: ["agent", "unfiledAsks"]
+            }
+          }
+        },
+        required: ["entries"]
+      }
+    },
+    {
       name: "list_attachments",
       description: "List the agents attached to a hub workspace with their derived state: active, 'process up, agent unresponsive' (fresh heartbeat, stale tool calls), or 'away — requests queue'. The ambient-awareness read: who is where, and is anyone wedged.",
       inputSchema: {
@@ -16900,6 +16938,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (agentId === undefined || agentId === AUTHOR.id)
           markAttached(workspaceId);
         return ok({ workspaceId, agentId: agentId ?? AUTHOR.id, state: res.attachment?.state });
+      }
+      case "get_unfiled_ask_count": {
+        const { agent } = a;
+        const who = agent?.trim() || AUTHOR.name;
+        return ok(await http("GET", `/api/chat-audit/${encodeURIComponent(who)}`));
+      }
+      case "publish_chat_audit": {
+        const { day, entries } = a;
+        return ok(await http("POST", "/api/chat-audit", {
+          ...day !== undefined ? { day } : {},
+          auditor: AUTHOR.name,
+          entries
+        }));
       }
       case "request_plugin_refresh": {
         return ok(await http("POST", "/api/plugin/refresh"));
