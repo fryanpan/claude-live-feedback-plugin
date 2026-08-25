@@ -3078,6 +3078,13 @@ body.hub-body {
 .hub-detail {
   position: fixed;
   inset: 0;
+  /* End above whatever iOS is covering the bottom of the window with. The
+     panel's height is derived from this box (see `max-height` below), so
+     shortening the box is what moves the composer — and its Comment button —
+     back into view. `--kb-bottom` is published by `wireKeyboardInset`, which
+     the hub calls at boot; with the keyboard down it is 0 and this is
+     `inset: 0` exactly as before. */
+  bottom: var(--kb-bottom, 0px);
   background: rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: flex-start;
@@ -3106,7 +3113,13 @@ body.hub-body {
      two hand-kept copies of a width is how a panel edge ends up a few pixels
      over the content it was supposed to clear. */
   width: min(var(--hub-detail-w), 100%);
-  max-height: 92vh;
+  /* `92vh` alone cannot see the keyboard: `vh` counts rows iOS is covering,
+     so the panel's box ran under the accessory bar, the composer was the last
+     thing in it, and the panel was already scrolled to its end — which is
+     what "can't scroll far enough" is. `100%` is the overlay's content box,
+     which DOES move, and `min` keeps the 92vh look everywhere the keyboard is
+     down, since the two are equal there (4vh of padding at each end). */
+  max-height: min(92vh, 100%);
   overflow: auto;
   background: var(--bg);
   border-radius: var(--radius);
@@ -4599,7 +4612,11 @@ a.hub-link-chip:hover {
      ends above, the same way `#hub-root` already ends above it. */
   .hub-detail {
     padding: 0;
-    bottom: calc(var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px));
+    /* Three separate things can own the bottom of a phone screen: the app's
+       own bar, the home indicator, and the keyboard. They stack — the
+       keyboard does not replace the bar — so the sheet ends above their
+       sum. */
+    bottom: calc(var(--hub-bottom-bar, 0px) + var(--safe-bottom, 0px) + var(--kb-bottom, 0px));
   }
   .hub-detail-panel {
     max-height: 100%;
