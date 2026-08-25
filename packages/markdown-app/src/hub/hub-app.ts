@@ -19,6 +19,7 @@ import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
+import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
 import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
   ACTIVITY_REFRESH_EVENTS,
@@ -81,7 +82,6 @@ import {
   discussionIsBusy,
   renderActivity,
   renderArchivedList,
-  renderBoardForPane,
   renderGoalDetail,
   renderHomeBrief,
   renderLeadStrip,
@@ -382,6 +382,7 @@ function buildShell(root: HTMLElement, name: string): void {
         <div id="hub-quick" class="hub-quick"></div>
         <div id="hub-unplaced" class="hub-unplaced hidden"></div>
         <div id="hub-board" class="hub-board"></div>
+        <div id="hub-archived" class="hub-board hidden"></div>
         <div id="hub-activity" class="hub-activity hidden"></div>
       </section>
     </div>
@@ -601,7 +602,7 @@ async function main(): Promise<void> {
   const taskList = () => [...state.tasks.values()];
   const titleOf = (taskId: string) => state.tasks.get(taskId)?.title ?? taskId;
 
-  const boardHandlers = {
+  const boardHandlers: BoardHandlers = {
     onStatusSet: (task: HubTask, to: HubTask['status']) => void transitionTask(task, to),
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
     onGoalAdd: (title: string, after?: string) => void addGoal(title, after),
@@ -732,54 +733,46 @@ async function main(): Promise<void> {
       doneWindow: state.doneWindow,
       now: Date.now(),
     };
-    // Every render replaces the rows, so whatever had focus is destroyed with
-    // them. That is fatal to keyboard reordering specifically: the move
-    // re-renders the board, and without this the second Alt+Arrow has nothing
-    // to act on — the shortcut works exactly once and then silently stops.
-    const active = document.activeElement as HTMLElement | null;
-    const focusedRow = active?.closest?.('.hub-task-row') as HTMLElement | null;
-    const focusedTaskId = focusedRow?.dataset.taskId;
-    const focusedHandle = active?.classList.contains('hub-drag-handle') ?? false;
-    // `state.pane`, not an unconditional render: Home hides the board column
-    // outright, and a row built into it is a node with listeners that nobody
-    // can see and no repaint reaches. Everything below this line still runs on
-    // Home — the walkthrough is Home's own, and the strip and banner are one
-    // element each.
+    // No focus save/restore here any more. It used to bracket this whole
+    // function — snapshot the focused row's task id and whether the drag
+    // handle held it, then find the row again afterwards by scanning every
+    // `.hub-task-row` — because the vanilla renderer replaced every row on
+    // every paint and keyboard reordering died after one press. The rows are
+    // keyed Preact now: an unchanged row is the identical node, so a repaint
+    // leaves focus where it was without anyone asking. What the keyed diff
+    // still does is MOVE a reordered row, and re-inserting a node blurs it in
+    // WebKit and Blink — that one case is handled inside the island, on the
+    // node itself (see `Board`'s focus effect), which is a re-focus of a
+    // reference rather than a search for a replacement.
     const archived = archivedTasks(taskList());
-    if (state.pane === 'board' && state.showArchived) {
-      renderArchivedList(el('hub-board'), archived, {
+    const showArchived = state.pane === 'board' && state.showArchived;
+    // The restore list is still a vanilla renderer, so it gets its OWN
+    // container: no vanilla code may `replaceChildren` a node holding a live
+    // island, and `#hub-board` is the island's host for the life of the page.
+    el('hub-board').classList.toggle('hidden', showArchived);
+    el('hub-archived').classList.toggle('hidden', !showArchived);
+    if (showArchived) {
+      renderArchivedList(el('hub-archived'), archived, {
         onRestore: (task) => void restoreTask(task),
         onOpenTask: (task) => boardHandlers.onOpenTask(task),
         onBack: () => setShowArchived(false),
       });
-    } else {
-      renderBoardForPane(
-        el('hub-board'),
-        state.pane,
-        boardSections(state.info?.goals ?? [], taskList(), filters),
-        // Read at render time, not once at wiring time: attachments arrive
-        // after the first paint and change while the board is open, and a
-        // picker built from a stale list offers agents who have left.
-        {
-          ...boardHandlers,
-          knownAgentIds: knownAgentIds(),
-          archivedCount: archived.length,
-          onShowArchived: () => setShowArchived(true),
-        },
-      );
     }
-    if (focusedTaskId) {
-      // By scan, not by attribute selector: a task id is server-generated but
-      // it is still untrusted text to a selector parser, and CSS.escape is
-      // one more thing to be missing.
-      const row = Array.from(document.querySelectorAll<HTMLElement>('.hub-task-row')).find(
-        (r) => r.dataset.taskId === focusedTaskId,
-      );
-      const back = focusedHandle
-        ? (row?.querySelector<HTMLElement>('.hub-drag-handle') ?? row)
-        : row;
-      back?.focus();
-    }
+    // The island's one input. `pane` rides along rather than gating the write:
+    // Home hides the board column outright, and a row built into it is a node
+    // with listeners nobody can see — but the signal is still the only place
+    // the board's state lives, so the island is what decides to draw nothing.
+    // The agent list is read HERE, at paint time, for the same reason it
+    // always was: attachments arrive after the first paint and change while
+    // the board is open, and a picker built from a stale list offers agents
+    // who have left.
+    boardData.value = {
+      sections: boardSections(state.info?.goals ?? [], taskList(), filters),
+      pane: state.pane,
+      showArchived,
+      knownAgentIds: knownAgentIds(),
+      archivedCount: archived.length,
+    };
     // Counted over EVERY task, not over the sections just rendered: the tab
     // and done-window filters decide what is worth looking at right now, and
     // a bucket that empties itself when you switch to "My Tasks" is a reading
@@ -970,7 +963,7 @@ async function main(): Promise<void> {
     // Everything the task list is made of hides with it. Activity used to be
     // a button that swapped ONE div, so the capture box and the unplaced
     // strip stayed on screen over a feed they have nothing to do with.
-    for (const id of ['hub-quick', 'hub-unplaced', 'hub-decisions']) {
+    for (const id of ['hub-quick', 'hub-unplaced', 'hub-decisions', 'hub-archived']) {
       el(id).classList.toggle('hub-hidden-by-view', state.view === 'activity');
     }
     if (state.view === 'activity') {
@@ -2382,6 +2375,20 @@ async function main(): Promise<void> {
   // surface.
   const deepLinkTask = new URLSearchParams(location.search).get('task');
   if (deepLinkTask) state.detailTaskId = deepLinkTask;
+
+  // The board itself — bands and rows. Same island contract as the two above,
+  // mounted once, and the one thing to keep in mind at this call site is that
+  // `#hub-board` is the island's host from here on: nothing vanilla may write
+  // into it. That is why the restore list moved to `#hub-archived` next door.
+  //
+  // These are the STABLE callbacks; everything that changes per paint
+  // (sections, the agent list, the archived count, which pane is showing)
+  // arrives through `boardData` in renderBoardRegion, which `renderAll` below
+  // is about to call for the first time.
+  mountBoardIsland(el('hub-board'), {
+    ...boardHandlers,
+    onShowArchived: () => setShowArchived(true),
+  });
 
   // First paint from REST (the ydoc syncs in behind it), then the
   // REST-backed regions.

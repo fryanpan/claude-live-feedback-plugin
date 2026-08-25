@@ -10,7 +10,7 @@
  *
  * All fixtures are synthetic — invented names, invented agent ids.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type BoardFilters,
   CHORES_ID,
@@ -25,7 +25,7 @@ import {
   reviewQueue,
   taskVisible,
 } from '../src/hub/hub-model.ts';
-import { type BoardHandlers, renderBoard } from '../src/hub/hub-render.ts';
+import { type ShimHandlers as BoardHandlers, disposeBoards, renderBoard } from './support/board.ts';
 
 const NOW = 1_700_000_000_000;
 
@@ -76,6 +76,9 @@ beforeEach(() => {
   root = document.createElement('div');
   document.body.replaceChildren(root);
 });
+// The board is a mounted island now, not a call that returns; every mount
+// holds a live subscription to the module-level signal until it is disposed.
+afterEach(disposeBoards);
 
 describe('ownerKind', () => {
   it('reads an absent field as unknown, never as a person', () => {
