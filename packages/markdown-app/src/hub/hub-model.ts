@@ -1941,8 +1941,8 @@ export interface PresencePerson {
   clientId: number;
   /** WHO this is — `User.id`, which is stable per browser (localStorage) or
    *  is the known user's own id. Optional because a tab running a bundle that
-   *  predates it sends no id; `presenceIdentity` falls back to the display
-   *  name there, which is what the strip used for everybody until then. */
+   *  predates it sends no id; `presenceIdentity` falls back to the CONNECTION
+   *  there, never to the name — see the reasoning on that function. */
   userId?: string;
   name: string;
   surface: string;
