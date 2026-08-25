@@ -84,17 +84,23 @@ board task that proposed it; what follows is the operating rule.
   acceptance criteria must include "review ticket body (and mocks, for UI)
   with Bryan before implementing", surfaced as a review item when the task
   comes up for dispatch. Small/obvious tasks run without the gate.
-- **Never go dark — but never poll.** *"No polling in the agent session
-  please"* (Bryan, 2026-08-22, superseding the ~20-min periodic self-wakeup
-  this bullet used to prescribe; six consecutive no-op wakes prompted the
-  correction). Every resume source already pushes on its own — board nudges
-  and channel events, agent reports, task notifications, Bryan typing — so
-  when genuinely blocked with nothing ready, end the turn plainly and wait
-  to be woken. A timed re-read re-loads the whole context to discover that
-  nothing changed. What "never go dark" still forbids is the original sin:
-  standing agents down with asks that exist only in chat. File the review
-  items naming the blockage first; a blocked session with its asks filed is
-  the correct state, not a stall.
+- **Never go dark — and never poll FOR WORK.** (Bryan, 2026-08-22, then
+  narrowed 2026-08-25: *"Narrow it."*) Every resume source already pushes,
+  so when blocked with nothing ready, end the turn and wait to be woken; a
+  timed re-read reloads the whole context to learn nothing changed. What
+  "never go dark" forbids is standing agents down with asks that exist only
+  in chat — file the review items naming the blockage first.
+  - **Verifying a channel is alive is NOT work-polling**, and the old
+    absolute banned it by accident. Work-polling asks *"is there anything
+    for me?"* and reloads context to find out; a channel check asks *"did
+    anything at all arrive?"* and needs no reading of the work. Assert
+    end-to-end **delivery**, never process liveness — a dead push channel
+    reports itself healthy.
+  - **Elapsed silence is not a liveness signal.** A ~20-min quiet window
+    sits above the median gap of healthy work, and 40% of provably-active
+    minutes read as dead; not tunable. Key a stall check on dependency
+    state, never the clock.
+  - **Every watcher names who reads it**, or it is decoration.
 - **Watchdog every dispatch.** An idle notification without a report is the
   known harness bug that drops a subagent's final message (measured at 41% of
   one day's dispatches) — nudge immediately; recovery is ~30s. Probe every
