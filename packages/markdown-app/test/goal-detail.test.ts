@@ -139,7 +139,12 @@ describe('renderGoalDetail', () => {
     expect(h.onStatusSet).toHaveBeenCalledWith('g-pr', 'done');
   });
 
-  it('attributes a declared done, and the counts say where the work is', () => {
+  // Attribution stays: a done goal is somebody's claim and the claim names
+  // its author. The per-status breakdown does NOT — *"how many tasks are in
+  // triage/todo/in-progress/done is just not useful information"* (Bryan,
+  // 2026-08-24, reviewing the live panel). The band header on the board still
+  // counts; this panel is where the number was noise rather than news.
+  it('attributes a declared done, and no longer breaks its tasks down by status', () => {
     renderGoalDetail(
       root,
       sectionWith({ status: 'done', doneAt: NOW, doneBy: { name: 'Jordan', kind: 'person' } }, [
@@ -150,31 +155,30 @@ describe('renderGoalDetail', () => {
       handlers(),
     );
     const text = (root.querySelector('.hub-detail-panel') as HTMLElement).textContent ?? '';
+    // The positive half first — without it every assertion below passes on a
+    // panel that never rendered, which is the same shape as the feature
+    // working.
     expect(text).toContain('Declared by Jordan');
-    expect(text).toContain('1 to do');
-    expect(text).toContain('1 in progress');
-    expect(text).toContain('1 done');
+    expect(text).not.toContain('1 to do');
+    expect(text).not.toContain('1 in progress');
+    // The field is GONE, not merely emptied — an empty `Tasks` row would still
+    // spend a line of the panel's scarcest axis.
+    const keys = [...root.querySelectorAll('.hub-detail-field-k')].map((n) => n.textContent);
+    expect(keys).toContain('Status');
+    expect(keys).not.toContain('Tasks');
   });
 
-  // The advisory, straight from the approved mock: open children never block
-  // a done declaration (enforce:false on the server), but the panel SAYS what
-  // the declaration leaves open. An already-done goal gets no advisory, and
-  // neither does an open goal with nothing open in it.
-  it('advises what a done declaration leaves open — only while that is true', () => {
+  // The "marking this goal done leaves N open tasks" advisory is gone in the
+  // same pass. It was never a gate — the server has always accepted a done
+  // declaration over open children (`enforce:false`) — so removing it changes
+  // what the panel SAYS, not what anyone is allowed to do.
+  it('no longer warns about what a done declaration would leave open', () => {
     renderGoalDetail(root, sectionWith({}, [task(), task({ status: 'in-progress' })]), handlers());
-    const advisory = root.querySelector('.hub-goal-advisory') as HTMLElement;
-    expect(advisory).not.toBeNull();
-    expect(advisory.textContent).toContain('2 open');
-    renderGoalDetail(root, sectionWith({}, [task({ status: 'done' })]), handlers());
+    const panel = root.querySelector('.hub-detail-panel') as HTMLElement;
+    const text = panel.textContent ?? '';
+    expect(text).toContain('1. Get the PR out');
     expect(root.querySelector('.hub-goal-advisory')).toBeNull();
-    renderGoalDetail(
-      root,
-      sectionWith({ status: 'done', doneAt: NOW, doneBy: { name: 'Jordan', kind: 'person' } }, [
-        task(),
-      ]),
-      handlers(),
-    );
-    expect(root.querySelector('.hub-goal-advisory')).toBeNull();
+    expect(text).not.toContain('open task');
   });
 
   it('draws the owner as a vacancy until the projection says otherwise, and the due date', () => {
