@@ -40,7 +40,6 @@ import {
   type HubWorkspaceInfo,
   type PluginRelease,
   type PresenceAgent,
-  type PresenceChip,
   type PresencePerson,
   type ReorderTarget,
   type ReviewItem,
@@ -63,6 +62,7 @@ import {
   parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
+  presenceIdentity,
   refreshReviewItems,
   reviewQueue,
   reviewReplyRequest,
@@ -85,7 +85,6 @@ import {
   renderGoalDetail,
   renderHomeBrief,
   renderLeadStrip,
-  renderPresence,
   renderQuickAdd,
   renderReviewBanner,
   renderReviewWalkthrough,
@@ -95,6 +94,12 @@ import {
 } from './hub-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
+import {
+  driftData,
+  mountDriftIsland,
+  mountPresenceIsland,
+  presenceData,
+} from './presence-island.tsx';
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
@@ -482,6 +487,35 @@ async function main(): Promise<void> {
     onOpen: (item) => openReviewItem(item),
     onWalkthrough: () => startWalkthrough(),
   });
+
+  // The presence strip, in both places it renders: who is here in the
+  // top-right cluster, and the drift notices in the settings panel. Same
+  // contract, and mounted once for the same reason — the strip repaints on
+  // every awareness update and a 30s tick, and a rebuilt circle used to drop
+  // the long-press running on it.
+  mountPresenceIsland(
+    el('hub-people'),
+    {
+      onTap: (chip) => {
+        if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
+      },
+      onLongPress: (chip) => {
+        state.followedKey = state.followedKey === chip.key ? null : chip.key;
+        showToast(
+          state.followedKey
+            ? `Following ${chip.label} — long-press again to stop`
+            : 'Stopped following',
+        );
+        renderPresenceRegion();
+      },
+      // The "+N" circle's names have to reach a touch screen, where a title
+      // attribute never shows. A toast is enough: it answers "who else".
+      onOverflow: (hiddenChips) =>
+        showToast(`Also here: ${hiddenChips.map((c) => c.label).join(', ')}`),
+    },
+    { compact: true },
+  );
+  mountDriftIsland(el('hub-drift'));
 
   // ── The description, edited in place ────────────────────────────────────
   //
@@ -1388,14 +1422,20 @@ async function main(): Promise<void> {
     const people: PresencePerson[] = [];
     client.awareness.getStates().forEach((aw, clientId) => {
       const s = aw as {
-        user?: { name?: string };
+        user?: { id?: string; name?: string };
         surface?: string;
         docId?: string;
         lastActive?: number;
       };
+      // A nameless entry draws no chip at all. Left exactly as it was — it is
+      // a separate question from this migration, and worth its own ticket.
       if (!s?.user?.name) return;
       people.push({
         clientId,
+        // Absent from a hub tab still running a bundle that predates this
+        // line. `presenceIdentity` falls back to that tab's own connection
+        // there, so it keeps its own row and folds with nobody.
+        userId: s.user.id,
         name: s.user.name,
         surface: s.surface ?? 'hub',
         docId: s.docId,
@@ -1407,12 +1447,10 @@ async function main(): Promise<void> {
   }
 
   /**
-   * The presence strip renders in TWO places now, from one function called
-   * twice: who is here goes in the top-right cluster, and the drift notices
-   * go in the settings panel. Same renderer, so every existing assertion
-   * about how a notice looks still describes what ships — and `renderPresence`
-   * already handles chips-with-no-notices and notices-with-no-chips, which is
-   * what makes the split free.
+   * The presence strip renders in TWO places: who is here goes in the
+   * top-right cluster, and the drift notices go in the settings panel. Two
+   * islands, one loader — this function is the whole vanilla half of the
+   * bridge, and it is a pair of signal writes.
    *
    * A notice in a closed panel is an alarm nobody sees, so the settings button
    * carries a dot whenever something in there is asking for attention. The
@@ -1420,31 +1458,19 @@ async function main(): Promise<void> {
    * design, and an always-on dot is one nobody reads.
    */
   function renderPresenceRegion(): void {
-    const chips = presenceChips(peopleFromAwareness(), state.agents, Date.now());
-    const handlers = {
-      onTap: (chip: PresenceChip) => {
-        if (chip.docId) location.assign(`/review/${encodeURIComponent(chip.docId)}`);
-      },
-      onLongPress: (chip: PresenceChip) => {
-        state.followedKey = state.followedKey === chip.key ? null : chip.key;
-        showToast(
-          state.followedKey
-            ? `Following ${chip.label} — long-press again to stop`
-            : 'Stopped following',
-        );
-        renderPresenceRegion();
-      },
-      // The "+N" circle's names have to reach a touch screen, where a title
-      // attribute never shows. A toast is enough: it answers "who else".
-      onOverflow: (hiddenChips: PresenceChip[]) =>
-        showToast(`Also here: ${hiddenChips.map((c) => c.label).join(', ')}`),
+    // Two signal writes, not two render calls: the islands mounted above own
+    // the DOM from here on, and they re-render themselves keyed on the
+    // participant — so a repaint that changes one person leaves everybody
+    // else's circle as the identical node, mid-press and all.
+    presenceData.value = {
+      chips: presenceChips(peopleFromAwareness(), state.agents, Date.now()),
+      followedKey: state.followedKey,
     };
-    renderPresence(el('hub-people'), chips, state.followedKey, handlers, [], true);
     const notices = [
       pluginDriftNotice(state.pluginRelease),
       clientDriftNotice(state.clientRelease, Date.now()),
     ];
-    renderPresence(el('hub-drift'), [], null, handlers, notices);
+    driftData.value = notices;
     renderSettingsAlarm(notices);
   }
 
@@ -2063,17 +2089,31 @@ async function main(): Promise<void> {
   });
 
   client.awareness.setLocalState({
-    user: { name: user.name, color: user.color },
+    // `id` rides along because the presence strip has to know WHO, and a
+    // display name cannot answer that — two people called Alex would be one
+    // chip, and following either would sometimes land on the other. `User.id`
+    // is the stable per-browser id (localStorage, or a known user's own), so
+    // it is the same across this person's tabs and different for anybody else:
+    // exactly the two things the strip's row key must get right.
+    user: { id: user.id, name: user.name, color: user.color },
     surface: 'hub',
     lastActive: Date.now(),
   });
   client.awareness.on('update', () => {
     renderPresenceRegion();
     // Follow (§2.7): when the followed person's surface moves, ours does too.
+    // The key names the PERSON now, not one of their connections, so the
+    // follow is resolved back through awareness by identity and lands on
+    // whichever of their tabs moved most recently. That also means a follow
+    // survives the followed person reloading — under the old `p-<clientId>`
+    // key their new connection was a stranger, and the follow went quiet
+    // without ever saying so.
     if (state.followedKey?.startsWith('p-')) {
-      const clientId = Number(state.followedKey.slice(2));
-      const aw = client.awareness.getStates().get(clientId) as { docId?: string } | undefined;
-      if (aw?.docId) location.assign(`/review/${encodeURIComponent(aw.docId)}`);
+      const identity = state.followedKey.slice(2);
+      const [moved] = peopleFromAwareness()
+        .filter((p) => presenceIdentity(p) === identity && p.docId)
+        .sort((a, b) => b.lastActive - a.lastActive);
+      if (moved?.docId) location.assign(`/review/${encodeURIComponent(moved.docId)}`);
     }
   });
   let lastActivePush = 0;
