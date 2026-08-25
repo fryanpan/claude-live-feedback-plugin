@@ -97,7 +97,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.102';
+const PLUGIN_VERSION = '0.1.103';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -2916,6 +2916,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
           shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
           reviewAdvice?: Array<{ taskId: string; advice: string }>;
+          visibility?: Array<{ taskId: string; note: string }>;
           placement?: { unplaced: string[]; goals: unknown[] };
         };
         const gapsFor = (taskId: string) =>
@@ -2926,6 +2927,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // for callers nobody here can restart, so both are forwarded.
         const adviceFor = (taskId: string) =>
           res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
+        // The row's ACTUAL visibility, stated plainly per row: a triage row
+        // is returned by no dispatch read until transitioned, and a filed
+        // review item is on the addressee's Home queue regardless of the
+        // row's status. Forwarded verbatim — a success-shaped response for an
+        // invisible ask is the defect this field exists to close.
+        const visibilityFor = (taskId: string) =>
+          res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
         const droppedFor = (taskId: string) =>
           res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
         const unplaced = new Set(res.placement?.unplaced ?? []);
@@ -2937,6 +2945,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             title: t.title,
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
             ...(adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {}),
+            ...(visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}),
           })),
           // Always present, even when empty: a caller that has to check for
           // the KEY before checking the count reads "no failures" as "the
