@@ -518,8 +518,8 @@ const ROOT_ALIASED_ASSETS = new Set([
  *
  * `list_watched_docs` answers "what am I watching", and the measured incident
  * is that the true answer to that question — six docs, all live — reads as an
- * all-clear while a voice note and a re-triage request queue silently for a
- * board the agent never attached to. An agent cannot tell deafness from
+ * all-clear while a voice note queues silently for a board the agent never
+ * attached to. An agent cannot tell deafness from
  * silence, so it never thinks to ask.
  *
  * These types are what the watches route reports back so it can. Additive:
@@ -528,9 +528,6 @@ const ROOT_ALIASED_ASSETS = new Set([
  */
 export interface CoverageQueue {
   queuedVoice: number;
-  /** 0 or 1 — the pending bucket re-look is a single coalesced ask. */
-  pendingBucketReview: number;
-  taskReviews: number;
 }
 
 /** One `ws:<id>` key in the agent's watch set, resolved. */
@@ -978,69 +975,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const { type, ...rest } = ev;
     sse.broadcast(`ws~${ev.workspaceId}`, { event: type, ...rest });
   });
-  // The real triage-delivery bridge (§3.4, grounded-pending): a request
-  // counts as delivered ONLY when the workspace has a live attachment to act
-  // on it — that check is what earns the task its triagePendingTs. The
-  // request rides the workspace SSE channel (the MCP watch transport) but
-  // deliberately NOT the store's emit: §3.6's table is the exhaustive
-  // subscriber/audit contract and has no triage.requested row, so requests
-  // never reach events.jsonl (they're a delivery, not a change).
-  //
-  // A bucket-review is addressed to the workspace's LEAD agent specifically:
-  // deciding which band a pile of unplaced work belongs under is a
-  // board-wide ranking judgment, and "whoever happened to be connected" is
-  // how such a request reached nobody accountable. A task-review —
-  // "this row's name or story falls short, judge it against the project" —
-  // is lead-addressed for the same reason: the reviewer needs the project
-  // context, and Bryan named the lead (or its subagent) as the reviewer
-  // (task t-hUyldnoHbj_c, 2026-08-17). A task placement stays
-  // any-live-agent: a new task can be placed by whoever is home.
-  // Undelivered lead-addressed requests are not lost either way; the store
-  // persists each for the lead's next attach.
-  taskStore.setTriageDelivery((req) => {
-    const live =
-      req.kind === 'bucket-review' || req.kind === 'task-review'
-        ? taskStore.hasLiveLeadAttachment(req.workspaceId)
-        : taskStore.hasLiveAttachment(req.workspaceId);
-    if (!live) return false;
-    // The WHOLE request goes on the wire, deliberately: the MCP renders its
-    // channel line straight off this frame, so a field trimmed here cannot be
-    // rendered no matter what the renderer does — and the lead who is HERE
-    // would get less than the one who was away and picks the same ask up as
-    // `pendingBucketReview` on attach. Pinned by a test that reads this frame.
-    const frame = { event: 'triage.requested', ...req } as const;
-    // Addressed kinds go to ONE agent; only shape-and-place is open to
-    // whoever is there. The addressing used to be done at the receiver, in
-    // prose — the frame went to every sink on the channel and the MCP
-    // rendered "Act only if that is you". An agent can obey a sentence.
-    // Bryan's browser cannot: it rendered his own rename back at him as
-    // something for him to review, which is what he saw (2026-08-21). And
-    // every non-lead agent on the board paid a whole turn to read a message
-    // and conclude it was not theirs.
-    if (req.kind === 'bucket-review' || req.kind === 'task-review') {
-      // No addressee in the payload means the seat is empty, and an empty
-      // seat cannot be delivered to — the liveness gate above already said
-      // no in that case, so this is belt-and-braces rather than a path.
-      if (req.leadAgentId === undefined) return false;
-      // Report what the send actually reached. The gate above can pass with
-      // the lead holding no stream (its clock is fresh and SOMEBODY is on
-      // the wire), and a `true` there would mark the task triage-pending
-      // against a delivery that never happened. 0 is a real answer: the ask
-      // parks and the lead drains it on their next attach. And `> 0` can
-      // still lie — a socket that died without the server noticing doesn't
-      // throw on enqueue — which is why sendToAgent also buffers the frame:
-      // the lead's reconnect replays it (or gets an honest replay.gap)
-      // instead of a clean-looking stream missing the one addressed message.
-      return sse.sendToAgent(`ws~${req.workspaceId}`, req.leadAgentId, frame) > 0;
-    }
-    sse.broadcast(`ws~${req.workspaceId}`, frame);
-    return true;
-  });
   // The second half of the liveness gate, and the half a time window cannot
-  // supply: a request is DELIVERED by broadcasting on `ws~<workspaceId>`, so
-  // if nobody holds that stream the delivery lands nowhere. An agent that
-  // died thirty seconds after its last write is still inside every freshness
-  // window and is already gone; only the open socket knows.
+  // supply: a delivery rides `ws~<workspaceId>`, so if nobody holds that
+  // stream it lands nowhere. An agent that died thirty seconds after its last
+  // write is still inside every freshness window and is already gone; only
+  // the open socket knows.
   //
   // This can only ever make the gate MORE conservative — the store ANDs it
   // with observed freshness, so a subscriber alone never counts as live.
@@ -1265,9 +1204,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   };
 
   onDocRoomEvent = (docId, payload) => {
-    const taskId = taskIdOfBodyDoc(docId);
-    if (taskId) {
-      const workspaceId = taskStore.getTask(taskId)?.workspaceId;
+    const rowId = taskIdOfBodyDoc(docId);
+    if (rowId) {
+      // A `task:` room belongs to a task OR to a goal — one prefix, two kinds
+      // of row (see `ensureGoalBody`). Asking only `getTask` returned
+      // undefined for every goal and took the early return, so a comment on a
+      // goal reached nobody: no board broadcast, no agent watching the
+      // workspace, no projection refresh to update the count.
+      const workspaceId =
+        taskStore.getTask(rowId)?.workspaceId ?? taskStore.getGoalRow(rowId)?.workspaceId;
       if (!workspaceId) return;
       const rows = queueCommentRows(workspaceId, docId, payload);
       sse.broadcast(`ws~${workspaceId}`, payload, (who) => {
@@ -1326,6 +1271,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // one route that answers "what is waiting on me"; before it, a board of
         // nothing but open decisions answered with an empty list.
         reviews: taskStore.listReviewItems(t.id),
+      })),
+      // Goals queue their discussions the same way. Without this a review
+      // item declared on a goal — "does 'ten teams' mean ten that renew?" —
+      // sits in a thread nothing tells the reader about, which is the whole
+      // failure the queue exists to prevent, on the row that matters most.
+      // No `reviews`: that array is a task field and a goal row has none.
+      goals: taskStore.listGoalRows(workspace.id).map((g) => ({
+        id: g.id,
+        title: g.title,
+        bodyDocId: taskBodyDocId(g.id),
+        done: g.status === 'done',
       })),
       docs: workspace.docIds.map((docId) => {
         const meta = rooms.get(docId)?.meta;
@@ -1700,21 +1656,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   /**
    * What is waiting for this board's lead, COUNTED WITHOUT DRAINING.
    *
-   * Every reader here is the non-destructive one: `listQueuedVoice` (not
-   * `drainVoiceQueue`), and the three `getPending*` reads, which prune rows
-   * whose task has gone away but never hand anything over or clear it. That
-   * is not incidental. A probe that delivered while reporting would be right
-   * exactly once and would then have consumed the items the attach it was
-   * warning about was supposed to receive — this ticket's own silent-loss
-   * bug, wearing the costume of the fix.
+   * The reader here is the non-destructive one: `listQueuedVoice`, not
+   * `drainVoiceQueue`. That is not incidental. A probe that delivered while
+   * reporting would be right exactly once and would then have consumed the
+   * items the attach it was warning about was supposed to receive — this
+   * ticket's own silent-loss bug, wearing the costume of the fix.
    */
   const queuedForLead = (workspaceId: string): CoverageQueue => ({
     queuedVoice: taskStore.listQueuedVoice(workspaceId).length,
-    pendingBucketReview: taskStore.getPendingBucketReview(workspaceId) ? 1 : 0,
-    taskReviews: taskStore.getPendingTaskReviews(workspaceId)?.length ?? 0,
   });
-  const queueTotal = (q: CoverageQueue): number =>
-    q.queuedVoice + q.pendingBucketReview + q.taskReviews;
+  const queueTotal = (q: CoverageQueue): number => q.queuedVoice;
 
   /**
    * The coverage readout for one agent's watch set.
@@ -3121,11 +3072,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               workspace.goals,
               taskStore.listGoalRows(workspaceId),
             ),
-            // A new goal band the lead has not re-looked at the bucket
-            // against. Read-only here: only an attach drains it. Surfaced so
-            // "nobody has picked this up" is visible work on the board rather
-            // than a silent gap.
-            pendingBucketReview: taskStore.getPendingBucketReview(workspaceId),
             // The board has been stood down. Present only when it has, and
             // carrying prose rather than a flag, because the reader is
             // usually an agent deciding whether to work here and a boolean
@@ -3749,7 +3695,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // the rows that need naming are the unplaced ones, so those are what
           // it names.
           const unplaced: string[] = [];
-          const triageDelivered: string[] = [];
           // Batch-local dependency references. Keys are read once, up front,
           // so an ambiguous one is refused where it is DECLARED rather than
           // at every site that reads it; `idByIndex` fills in as rows land,
@@ -3823,7 +3768,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             createdIds.add(res.task.id);
             idByIndex.set(index, res.task.id);
             if (!res.placement.placed) unplaced.push(res.task.id);
-            if (res.placement.triageDelivered) triageDelivered.push(res.task.id);
             if (parsed.ignoredLinks.length > 0) {
               ignoredLinks.push({ taskId: res.task.id, ignored: parsed.ignoredLinks });
             }
@@ -3851,7 +3795,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ? {
                   placement: {
                     unplaced,
-                    triageDelivered,
                     goals: placeableGoals(taskStore.getWorkspace(workspaceId)?.goals ?? []),
                   },
                 }

@@ -960,16 +960,6 @@ body.hub-body {
 .hub-lead-select {
   max-width: 100%;
 }
-/* A goal edit nobody has picked up yet. Sits next to the lead because that is
-   who owes it — and it is loudest when there is no lead at all. */
-.hub-lead-pending {
-  padding: 2px 8px;
-  border: 1px solid var(--yellow);
-  border-radius: 10px;
-  color: var(--yellow);
-  font-size: 12px;
-}
-
 /* --- presence strip (§2.7) --- */
 .hub-presence {
   display: flex;
@@ -2436,18 +2426,6 @@ body.hub-body {
   font-size: 11px;
   color: var(--fg-muted);
 }
-/* The open-children advisory, from the approved mock: a quiet amber note,
-   never a blocker — the server reports open children and does not enforce
-   them. */
-.hub-goal-advisory {
-  margin: 14px 0 0;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--warn, #b58900) 45%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--warn, #b58900) 10%, transparent);
-  font-size: 13px;
-  line-height: 1.45;
-}
 .hub-goal-done-note {
   margin: 14px 0 0;
   font-size: 13px;
@@ -2991,9 +2969,6 @@ body.hub-body {
 .hub-badge-parked {
   border-color: color-mix(in srgb, var(--fg-muted) 55%, var(--border));
   background: color-mix(in srgb, var(--fg-muted) 8%, transparent);
-}
-.hub-badge-triage {
-  font-style: italic;
 }
 /* --- activity view (exactly two filters — §3.9) --- */
 /* Uptime banner (deploy readiness — §3.12 commit 11): the 99% target

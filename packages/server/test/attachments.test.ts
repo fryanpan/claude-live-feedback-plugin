@@ -259,11 +259,11 @@ describe('TaskStore attachment registry', () => {
 
   it('attach returns the untriaged Backlog tasks so the agent can sweep them (§3.4)', () => {
     const ws = store.createWorkspace('sweep-hub');
-    // No attachment yet → this create emits no triage request and no marker;
-    // it just sits in Backlog, untriaged.
+    // Nothing is emitted to ask anyone to place it; it just sits in Backlog,
+    // marked unplaced, until a lead reads this list.
     const t = store.createTask(ws.id, { title: 'Landed while nobody was attached' });
     if (!t.ok) throw new Error('fixture');
-    expect(t.task.triagePendingTs).toBeUndefined();
+    expect(t.task.unplacedSince).toBeGreaterThan(0);
     const res = store.attachAgent(ws.id, { agentId: 'lead', runtime: 'claude-code-local' });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -415,7 +415,7 @@ function listen(res: Response): {
 
 const settle = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 
-describe('attachment routes + triage bridge', () => {
+describe('attachment routes + lead-addressed delivery', () => {
   let handle: ServerHandle;
   let dataDir: string;
   let base: string;
@@ -571,27 +571,28 @@ describe('attachment routes + triage bridge', () => {
     }
   });
 
-  it('the triage bridge grounds pending markers: live attachment → request delivered + marker; none → neither', async () => {
-    // NO attachment: the task lands plainly in Backlog, no marker, and the
-    // SSE stream sees no triage.requested (absence proven against the
-    // presence below on the same stream shape).
+  it('an unplaced create asks nobody to place it — no triage.requested, attached or not', async () => {
+    // The flow that used to fire here was removed on 2026-08-24: the lead is
+    // woken by the board's own events, so there is no second ask to deliver.
+    // Both conditions are checked because the OLD behaviour differed between
+    // them — a cold board never emitted, a live one always did — so a
+    // cold-only assertion would pass against the code this replaces.
     const coldWs = await makeWorkspace('cold-hub');
     const coldSse = listen(await local(`/events/workspace/${coldWs}`));
     const cold = await post(`/api/workspaces/${coldWs}/tasks`, {
       author: PERSON,
       title: 'Nobody home',
     });
-    const coldTask = ((await cold.json()) as { task: { id: string; triagePendingTs?: number } })
-      .task;
+    const coldTask = ((await cold.json()) as { task: { id: string; unplacedSince?: number } }).task;
     await settle();
     coldSse.stop();
-    expect(coldTask.triagePendingTs).toBeUndefined();
-    expect(coldSse.events).not.toContain('triage.requested');
-    // Positive control on that stream: it did see the create.
+    expect(coldTask.unplacedSince).toBeGreaterThan(0);
+    // POSITIVE CONTROL FIRST: this stream CAN see a frame. Without it the
+    // absence below is equally true of a stream nobody wired up.
     expect(coldSse.events).toContain('task.created');
+    expect(coldSse.events).not.toContain('triage.requested');
 
-    // LIVE attachment: same create → the request rides the workspace channel
-    // and the marker is stamped (grounded-pending, §3.4).
+    // LIVE attachment: the condition the removed flow fired under.
     const hotWs = await makeWorkspace('hot-hub');
     await post(`/api/workspaces/${hotWs}/attachments`, {
       agentId: 'lead',
@@ -602,20 +603,15 @@ describe('attachment routes + triage bridge', () => {
       author: PERSON,
       title: 'Somebody home',
     });
-    const hotTask = ((await hot.json()) as { task: { id: string; triagePendingTs?: number } }).task;
+    const hotTask = ((await hot.json()) as { task: { id: string; unplacedSince?: number } }).task;
     await settle();
     hotSse.stop();
-    expect(hotTask.triagePendingTs).toBeGreaterThan(0);
-    expect(hotSse.events).toContain('triage.requested');
-    const reqLine = hotSse.data.find(
-      (d) => d.includes('"triage.requested"') || d.includes('triage.requested'),
-    );
-    if (!reqLine) throw new Error('triage.requested data line missing');
-    expect(reqLine).toContain(hotTask.id);
-    // Deliberately NOT in the audit log: §3.6's table is the exhaustive
-    // subscriber contract and has no triage.requested row.
+    expect(hotTask.unplacedSince).toBeGreaterThan(0);
+    expect(hotSse.events).toContain('task.created');
+    expect(hotSse.events).not.toContain('triage.requested');
+    // And nothing reaches the audit log either — the same absence, one layer
+    // down, with the create as its control.
     expect(readAudit(dataDir, hotWs).filter((l) => l.event === 'triage.requested')).toHaveLength(0);
-    // Positive control: the same log has the create.
     expect(readAudit(dataDir, hotWs).filter((l) => l.event === 'task.created')).toHaveLength(1);
   });
 
@@ -726,31 +722,7 @@ describe('attachment routes + triage bridge', () => {
     expect(body.ack).not.toContain('queued');
   });
 
-  it('after declaring, a new goal band asks for a bucket review instead of parking it', async () => {
-    const wsId = await makeWorkspace('goal-declare-hub', 'agent-away');
-    await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'An open row' });
-    await declareSelf(wsId, 'agent-self');
-
-    const sse = listen(await local(`/events/workspace/${wsId}?agentId=agent-self`));
-    const r = await put(`/api/workspaces/${wsId}/goals`, {
-      goals: [{ title: 'Cut token usage per session in half' }],
-      author: PERSON,
-    });
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      bucketReview: { requested: boolean; queued: boolean; taskIds: string[] };
-    };
-    await settle();
-    sse.stop();
-    expect(body.bucketReview.requested).toBe(true);
-    expect(body.bucketReview.queued).toBe(false);
-    expect(body.bucketReview.taskIds).toHaveLength(1);
-    // The ask actually rode the channel a declared lead is now subscribed to
-    // — "requested" is only true because somebody could hear it.
-    expect(sse.events).toContain('triage.requested');
-  });
-
-  it('POSITIVE CONTROL — naming an UNREACHABLE agent as lead still queues voice and the bucket review', async () => {
+  it('POSITIVE CONTROL — naming an UNREACHABLE agent as lead still queues voice', async () => {
     // The asymmetry that keeps delivery honest. Handing the seat to an agent
     // who is not on the wire must NOT forge its liveness: otherwise the
     // board would report a live lead, voice would route to 'agent', and the
@@ -763,7 +735,6 @@ describe('attachment routes + triage bridge', () => {
     // lead, and unreachable, which is exactly the case queuing exists for.
     // The seat starts with a seeded lead so the attach cannot claim it.
     const wsId = await makeWorkspace('third-party-hub', 'agent-original');
-    await post(`/api/workspaces/${wsId}/tasks`, { author: PERSON, title: 'An open row' });
     await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: 'agent-elsewhere',
       runtime: 'claude-code-local',
@@ -790,15 +761,6 @@ describe('attachment routes + triage bridge', () => {
     expect(voice.route).toBe('agent-queued');
     expect(voice.ack).toContain('queued');
 
-    const goal = (await (
-      await put(`/api/workspaces/${wsId}/goals`, {
-        goals: [{ title: 'Cut token usage per session in half' }],
-        author: PERSON,
-      })
-    ).json()) as { bucketReview: { requested: boolean; queued: boolean } };
-    expect(goal.bucketReview.requested).toBe(false);
-    expect(goal.bucketReview.queued).toBe(true);
-
     // And the queued note is still there for whoever does show up — the
     // whole point of refusing to fake the delivery.
     const drain = (await (
@@ -808,11 +770,9 @@ describe('attachment routes + triage bridge', () => {
       })
     ).json()) as {
       queuedVoice: Array<{ transcript: string }>;
-      pendingBucketReview?: { taskIds: string[] };
     };
     expect(drain.queuedVoice.map((v) => v.transcript)).toEqual([
       'make cutting token usage the top goal',
     ]);
-    expect(drain.pendingBucketReview?.taskIds).toHaveLength(1);
   });
 });

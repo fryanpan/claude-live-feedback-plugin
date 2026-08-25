@@ -23,7 +23,7 @@
  * server has heard from that session lately.
  *
  * Kept out of mcp.ts — a bundle entry point that exports nothing — for the
- * same reason `nudge-line.ts` and `triage-line.ts` are: the wording is a
+ * same reason `nudge-line.ts` and `voice-line.ts` are: the wording is a
  * decision, and inline in a 3,000-line switch it cannot be asserted.
  */
 

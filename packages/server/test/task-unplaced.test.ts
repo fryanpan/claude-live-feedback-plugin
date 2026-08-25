@@ -17,11 +17,10 @@
  *    though its placement is precisely what stopped being named.
  *
  * And the distinction was not durable at all: `placed` lives only in the
- * create RESPONSE, and `triagePendingTs` is deliberately cleared on hydrate,
- * so after a restart an unplaced task and a deliberate chore were identical.
- * `unplacedSince` is the persisted form, and it SURVIVES hydrate — the
- * contrast with `triagePendingTs` is the whole point: that marker promises an
- * in-flight request a restart killed, this one records a review still owed.
+ * create RESPONSE, so after a restart an unplaced task and a deliberate chore
+ * were identical. `unplacedSince` is the persisted form, and it SURVIVES
+ * hydrate — which is the whole point, since a restart does not place
+ * anything.
  *
  * All fixtures are synthetic. The repo is public.
  */
@@ -80,17 +79,13 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       expect(res.task.unplacedSince).toBeUndefined();
     });
 
-    it('it does NOT depend on a triage request being delivered — the review is owed either way', () => {
-      // The grain that `triagePendingTs` gets right and this field must not
-      // copy: delivery decides whether a request went out, never whether a
-      // placement was named. With no attachment at all the create still
-      // named no goal.
+    it('it does NOT depend on anyone being attached — the placement is owed either way', () => {
+      // With no attachment at all, and nothing emitted to ask for one, the
+      // create still named no goal — so the mark still lands.
       const ws = store.createWorkspace('board');
-      store.setTriageDelivery(() => false);
       const res = store.createTask(ws.id, { title: 'nobody is listening' });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
-      expect(res.task.triagePendingTs).toBeUndefined(); // positive control: undelivered
       expect(res.task.unplacedSince).toBeGreaterThan(0);
     });
   });
@@ -241,12 +236,11 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
   });
 
   describe('durability — the owed review outlives the process', () => {
-    it('unplacedSince persists to the sidecar and SURVIVES hydrate, unlike triagePendingTs', () => {
+    it('unplacedSince persists to the sidecar and SURVIVES hydrate', () => {
       const ws = store.createWorkspace('board');
-      store.setTriageDelivery(() => true);
       const res = store.createTask(ws.id, { title: 'still owed after a restart' });
       if (!res.ok) throw new Error('create failed');
-      expect(res.task.triagePendingTs).toBeGreaterThan(0); // positive control
+      expect(res.task.unplacedSince).toBeGreaterThan(0); // positive control
       store.flush();
 
       const raw = JSON.parse(readFileSync(tasksSidecarPath(dataDir, ws.id), 'utf8')) as {
@@ -257,9 +251,7 @@ describe('unplacedSince — the bucket remembers that nobody named a goal', () =
       const reloaded = new TaskStore({ dataDir, debounceMs: 5 });
       try {
         const after = reloaded.getTask(res.task.id);
-        // The in-flight promise dies with the process...
-        expect(after?.triagePendingTs).toBeUndefined();
-        // ...the owed review does not. That contrast is the design.
+        // The owed placement outlives the process. That is the design.
         expect(after?.unplacedSince).toBeGreaterThan(0);
         expect(reloaded.listUntriaged(ws.id).map((t) => t.id)).toContain(res.task.id);
       } finally {
