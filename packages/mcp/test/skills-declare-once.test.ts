@@ -123,8 +123,12 @@ describe('the lead skill states the seat contract', () => {
     expect(flatten(LEAD)).toMatch(/deliberately not repeated/);
   });
 
-  it('claims the task-review ask for the seat', () => {
-    expect(LEAD).toMatch(/task-review/);
+  it('claims checking every task against the standard for the seat, off the events it already gets', () => {
+    // The server no longer addresses a per-row ask at the lead; the duty is
+    // continuous and its trigger is the ordinary event stream. A skill that
+    // said only "check every task" would leave an agent waiting to be asked.
+    expect(LEAD).toMatch(/every task you \*see\*/);
+    expect(flatten(LEAD)).toMatch(/task\.created/);
   });
 });
 
@@ -178,8 +182,8 @@ describe('positive controls — guidance that must survive the edit', () => {
   });
 
   it('the retired skills are gone and nothing still points at them', () => {
-    // `reviewing-task-shape` was absorbed by the lead seat's §2, which already
-    // claimed the task-review ask outright. `handling-a-goal-change` went
+    // `reviewing-task-shape` was absorbed by the lead seat's §2, which owns
+    // checking every row against the standard. `handling-a-goal-change` went
     // because the operations do the task movement themselves — removing a band
     // sweeps its tasks, a reorder carries them, and `set_goal_list` refuses a
     // removal that would strand work. `running-a-workspace-hub` went because

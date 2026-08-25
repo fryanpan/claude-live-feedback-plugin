@@ -49,10 +49,10 @@ describe('the text-goal tool is off the surface', () => {
       expect(text, `${name}: retriaged`).not.toContain('workspace.retriaged');
       expect(text, `${name}: pendingRetriage`).not.toContain('pendingRetriage');
       expect(text, `${name}: goal-retriage`).not.toContain('goal-retriage');
-      // …while the asks that DID survive are still carried, so an agent that
-      // stops hearing about re-triage has not stopped hearing about triage.
-      expect(text, `${name}: lost pendingBucketReview`).toContain('pendingBucketReview');
-      expect(text, `${name}: lost taskReviews`).toContain('taskReviews');
+      // …while what DID survive is still carried, so an agent that stops
+      // hearing about re-triage has not stopped hearing about the board.
+      expect(text, `${name}: lost queuedVoice`).toContain('queuedVoice');
+      expect(text, `${name}: lost untriaged`).toContain('untriaged');
     }
   });
 
