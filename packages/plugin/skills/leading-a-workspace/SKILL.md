@@ -19,6 +19,8 @@ Goals describe **real-world outcomes** and say what is in scope. Ambitious, spec
 
 Every task you create — and every task you *see* — is yours to check against the standard in the general skill. Where the standard is not met, rewrite it with `rewrite_task`, or add a review item asking the primary user what they meant. Nothing asks you to do this row by row: the `task.created` events you already receive are the trigger, and `attach_agent` hands you the rows still waiting for a goal.
 
+A rough row is never refused at the write path — this pass is where it gets fixed, which is why the pass has to happen. The shape that most needs your eye is a title stating an **observation** rather than an outcome: ten of those in a column name things somebody noticed, give no sense of the plan, and cannot be ranked against each other. `rewrite_task` preserves the row's original words to quote, so a rewrite is never the only record of what was said — but when the words are the primary user's deliberate phrasing, ask on the task instead of replacing them.
+
 Then **place it**: the right goal, in the right position relative to the rows already there. `after` on a `create_tasks` row for a new one, `set_task_goal` for an existing one.
 
 **Avoid duplicates or subtasks.** If you see an existing ticket that covers the same goal and solution, merge the tickets.
@@ -46,3 +48,9 @@ Everything on the board then reaches you:
 - If you disconnect, events that happen in the meantime will remain queued for when you reconnect
 
 Call `heartbeat(workspaceId)` every few minutes. The server only sends work to agents it has seen recently, so a session that goes quiet stops getting anything.
+
+One call covers the whole board, which is why you do not need `watch_doc` per document — including for docs that do not exist yet. Reach for `watch_doc` only for something outside your board, such as a peer's review you want to observe.
+
+**Do not assume delivery — check it.** `list_watched_docs` reports what this session is subscribed to and, more usefully, what it is missing: `coverage.unattachedBoards` names boards you follow but are not live on, with the remedy for each — take the seat when it is empty, heartbeat when it is yours and you went quiet, `attach_agent` when a live peer holds it. `coverage` being absent means unknown, never all-clear.
+
+If a different agent holds the seat and is live, the call comes back `declined: "lead-held"` naming the incumbent, and you stay attached either way — nothing on the board is hidden from you, only the seat stays put. `takeover: true` evicts them silently and reroutes every lead-addressed delivery, so agree with them first.

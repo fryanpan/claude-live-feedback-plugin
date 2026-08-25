@@ -31,9 +31,16 @@ outdated-comments section where the reviewer (or you, via the reanchor route)
 can re-attach it.
 
 - One review doc per changed file, grouped as a workspace (`reviewId`).
-- Re-running the tool is idempotent (same docIds, threads survive) and
-  **refreshes the file list and badges** — do it after you change a file that
-  wasn't part of the diff before, so it appears in the tree.
+- Once the review exists, **`refresh_review(setId)` is the way to bring it up to
+  date** — it re-reads from the stored base, so you don't have to remember the
+  ref, and it re-mints no docId, so every comment thread survives. Files you
+  changed since join the review; a file that was reverted, deleted or renamed
+  away is marked `stale` rather than removed. **Read `stale` after a rename** —
+  those threads are stranded on a file nobody will open again. Stale is always
+  reversible. Pinned reviews are refused: their content is a commit.
+- Re-running `create_diff_review` is idempotent too (same docIds, threads
+  survive), but prefer `refresh_review` — it needs no arguments you have to
+  reconstruct.
 - Per-file **Diff ↔ File** toggle shows the whole file as it is on disk, also
   commentable.
 
@@ -55,7 +62,12 @@ Order matters (first group = read first). A path entry may be a DIRECTORY —
 enumerate them. Unlisted changed files land in an automatic "Other" group.
 If you omit `groups`, a heuristic groups by module/tests/docs/config —
 acceptable, but your semantic grouping is better. Re-binding without
-`groups` preserves whatever grouping the review already has.
+`groups` preserves whatever grouping the review already has, and
+`set_review_groups(setId, groups)` re-organises an existing review in place —
+reach for it rather than tearing the review down and losing its comments.
+Each group takes an optional `details`, a one- or two-sentence intro under its
+title, capped at 500 characters; a longer one is **rejected, not truncated**,
+so write a summary rather than pasting a commit body.
 
 **Pinned mode** — pass `target: "<ref>"` to freeze the review at a commit
 (reviewing merged/finished work). Anchors can never drift there; the same
