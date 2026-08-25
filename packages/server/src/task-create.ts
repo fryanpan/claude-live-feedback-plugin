@@ -208,6 +208,44 @@ function batchRefIn(raw: unknown): string | undefined {
     | undefined;
 }
 
+/**
+ * What the caller can actually SEE of the row it just created — stated
+ * plainly, per row, on the create response.
+ *
+ * The defect this closes: an agent filed a row with `assignee: <person>` plus
+ * a decision review item in one call, got back `placed: true`, and nothing
+ * said the row itself would be returned by no dispatch read (`triage` status)
+ * — a success-shaped response for work whose visibility the caller had no way
+ * to know about. `placed` answers a different question (goal placement), so
+ * this is its own sentence: a triage row names the transition that makes it
+ * dispatchable, and a row that filed a review item states where the ask
+ * already is — since 2026-08-24 a review item reaches the addressee's Home
+ * queue whatever the carrying row's status, and saying so is what makes
+ * "file the ask and keep working" trustworthy.
+ *
+ * Undefined when there is nothing to warn about (a person-filed row with no
+ * review item is ordinarily visible): a note that is always there is a note
+ * nobody reads.
+ */
+export function createdVisibility(status: string, hasReview: boolean): string | undefined {
+  const triage = status === 'triage';
+  if (!triage && !hasReview) return undefined;
+  const parts: string[] = [];
+  if (triage) {
+    parts.push(
+      'This row is in triage: no dispatch read returns it until task_transition moves it to todo or in-progress.',
+    );
+  }
+  if (hasReview) {
+    parts.push(
+      triage
+        ? "Its review item IS on the addressee's Home review queue already — the ask is visible even while the row is unvetted."
+        : "Its review item is on the addressee's Home review queue now.",
+    );
+  }
+  return parts.join(' ');
+}
+
 export type TaskCreateParse =
   | {
       ok: true;

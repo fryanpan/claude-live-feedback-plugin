@@ -113,6 +113,7 @@ import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
 import {
   BAD_OPTIONS_ERROR,
   BAD_REF_ERROR,
+  createdVisibility,
   parseLinks,
   parseNeeds,
   parseOptions,
@@ -134,6 +135,7 @@ import { clipToWordBoundary } from './task-title.ts';
 import {
   type GoalListEntry,
   type HubWorkspace,
+  LEGACY_REVIEW_ITEM_ID,
   type Ref,
   type Task,
   type TaskStatus,
@@ -1323,12 +1325,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * count that still included them pointed the brief ("queued below") at a
    * queue that renders nothing.
    *
-   * TICKET-borne rows (`kind: 'task-review'`) are shipped by the route and
-   * deliberately NOT counted here. No browser surface places one yet — the
-   * task detail panel owns that half and it is not in this change — so
-   * counting them prints "something needs you" above a list that shows
-   * nothing and offers no control to answer it. The route still carries them,
-   * which is where agents and the MCP verbs read them from.
+   * TICKET-borne rows (`kind: 'task-review'`) count too — Home places them
+   * now (`reviewQueue` in hub-model.ts), which closed the measured gap where
+   * a review item filed with `create_tasks` / `add_review_item` was shipped
+   * by the route and rendered by nothing. The one exception is the DERIVED
+   * `r-legacy` row: its legacy decision is already counted from the tasks
+   * below, and the browser skips that row for the same reason, so counting
+   * it here would say one question twice.
    *
    * The open-decision term is counted from the TASKS rather than from `items`,
    * even though `items` also carries a derived `r-legacy` row per open
@@ -1336,14 +1339,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * rows, and it reads `needs`/`answer` off the projection. Counting the
    * derived rows instead would tie this number to a row Home does not read.
    * A decision is therefore counted once, never twice.
-   *
-   * When Home learns to place a ticket-borne row, the `kind` filter and this
-   * paragraph go together — not one without the other.
    */
   const homeQueueTotal = (workspace: HubWorkspace, items: ReviewItemRow[]): number => {
     const open = taskStore.listTasks(workspace.id).filter((t) => t.status !== 'done');
     const decisions = open.filter((t) => t.needs === 'decision' && !t.answer);
-    const rendered = items.filter((i) => i.kind !== 'task-review');
+    const rendered = items.filter(
+      (i) => i.kind !== 'task-review' || i.reviewItemId !== LEGACY_REVIEW_ITEM_ID,
+    );
     return rendered.length + decisions.length;
   };
 
@@ -3630,6 +3632,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
             ...(parsed.reviewAdvice !== undefined ? { reviewAdvice: parsed.reviewAdvice } : {}),
+            // The row's ACTUAL visibility, stated plainly — `placed` above
+            // answers goal placement, not whether any dispatch read returns
+            // the row or where a filed ask went. See `createdVisibility`.
+            ...(() => {
+              const note = createdVisibility(res.task.status, parsed.review !== undefined);
+              return note !== undefined ? { visibility: note } : {};
+            })(),
           });
         }
         /**
@@ -3687,6 +3696,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           /** Per row, because a burst files many tickets and "which one came
            *  out thin" is the only useful form of the answer. */
           const reviewAdvice: Array<{ taskId: string; advice: string }> = [];
+          /** Each row's actual visibility, stated plainly — a triage row is
+           *  returned by no dispatch read, and a filed review item is on the
+           *  addressee's Home queue regardless. See `createdVisibility`. */
+          const visibility: Array<{ taskId: string; note: string }> = [];
           /** Did any row attach a review item? The projection refresh those
            *  need happens once after the loop; see below. */
           let attachedReview = false;
@@ -3765,6 +3778,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (parsed.reviewAdvice !== undefined) {
               reviewAdvice.push({ taskId: res.task.id, advice: parsed.reviewAdvice });
             }
+            {
+              const note = createdVisibility(res.task.status, parsed.review !== undefined);
+              if (note !== undefined) visibility.push({ taskId: res.task.id, note });
+            }
             createdIds.add(res.task.id);
             idByIndex.set(index, res.task.id);
             if (!res.placement.placed) unplaced.push(res.task.id);
@@ -3802,6 +3819,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(ignoredLinks.length > 0 ? { ignoredLinks } : {}),
             ...(shapeGaps.length > 0 ? { shapeGaps } : {}),
             ...(reviewAdvice.length > 0 ? { reviewAdvice } : {}),
+            // Absent when every row is ordinarily visible — a note that is
+            // always there is a note nobody reads.
+            ...(visibility.length > 0 ? { visibility } : {}),
           });
         }
         // The single gate for status changes: attributed, evidence-stamped,
