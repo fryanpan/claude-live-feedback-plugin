@@ -92,6 +92,7 @@ import {
   renderWorkspaceIdentity,
 } from './hub-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
+import { mountIslandProbe } from './island-probe.tsx';
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
@@ -455,6 +456,11 @@ async function main(): Promise<void> {
   );
   if (initial) state.info = initial.workspace;
   buildShell(root, state.info?.name ?? workspaceId);
+  // The Preact proving island (hidden; owns its own wrapper under root).
+  // buildShell wrote root.innerHTML just above, so this mounts AFTER the last
+  // vanilla wipe of root — the contract is that no vanilla code wipes a
+  // container while an island lives in it.
+  mountIslandProbe(root);
   // The REST read above already knows whether this board is retired, and the
   // board room's first sync can be a second away on a cold connection. Paint
   // it now so nobody reads a retired board as live in that window.
