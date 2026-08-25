@@ -2438,7 +2438,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          */
         let provenIdentity: IdentityRecord | null | undefined;
         const provenIdentityFor = (): IdentityRecord | null => {
-          if (provenIdentity === undefined) provenIdentity = sessionIdentityFor(req);
+          if (provenIdentity !== undefined) return provenIdentity;
+          // Cloudflare Access first. It has already verified a signed claim
+          // from an identity provider, which is a STRONGER proof than a code
+          // we mailed — so an Access visitor skips the code entirely and
+          // mints the same `user-<hash>` the code path would have. Composing
+          // here rather than building a second verifier is the whole point:
+          // the email was already being extracted (cf-access.ts) and thrown
+          // away after authorizing, so the person stayed anonymous on a
+          // surface that knew exactly who they were.
+          if (accessEmail && isEmailLike(accessEmail)) {
+            const rec = identities.upsertByEmail(accessEmail);
+            provenIdentity = rec.status === 'active' ? rec : null;
+            return provenIdentity;
+          }
+          provenIdentity = sessionIdentityFor(req);
           return provenIdentity;
         };
 
@@ -2508,6 +2522,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         /** The share that authorized this request, stamped onto any websocket
          *  it upgrades so revocation can find and close it later. */
         let visitorShareId: string | null = null;
+        /**
+         * The email Cloudflare Access verified for this request, if any.
+         *
+         * Every branch below that runs a verifier fills this in, and nothing
+         * reads it unless `CW_REQUIRE_EMAIL_AUTH` is on. A verified claim is
+         * an identity; ABSENT it, the visitor stays a `guest-` exactly as
+         * before — never unattributed, and never a fallback to whatever the
+         * body claimed, because a share visitor's body is the thing the guest
+         * namespace exists to distrust.
+         */
+        let accessEmail: string | null = null;
         {
           const decision = classifyHost(req.headers.get('host'), {
             // Cached (60s TTL) — this used to spawn `tailscale status` on
@@ -2568,6 +2593,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             const result = await cfAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
+            accessEmail = result.email ?? null;
             // Authenticated for THIS share — but Access only proves the
             // visitor's email domain, not what they may touch. Scope them to
             // the shared board: no doc enumeration, no workspace/diff
@@ -2608,6 +2634,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             const result = await collabAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
+            accessEmail = result.email ?? null;
             // Access proves an identity Bryan admitted, not what they may
             // touch. `collabScope` is `shareScopeAllows` with the path's own
             // workspace as the target, so every operator verb a share visitor
@@ -2628,6 +2655,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // and stays unauthenticated.)
             const result = await cfAccessVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
+            accessEmail = result.email ?? null;
           }
         }
 
