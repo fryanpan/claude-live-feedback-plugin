@@ -238,6 +238,24 @@ const GROUPING_SHARING_REMOVED = {
   hint: 'A board is the unit of sharing. A folder bind or diff review cannot be shared on its own — file it on a board and share the board instead. Use the hubWorkspaceId that create_diff_review / bind_folder returns, or make a fresh board with create_workspace.',
 } as const;
 
+/**
+ * The refusal a share route gives when handed the UNFILED board.
+ *
+ * Decided on the board: refuse. The Unfiled board is where every review
+ * created WITHOUT naming a board lands — one shared catch-all for every
+ * agent's strays. Sharing it would hand a visitor every stray review from
+ * everyone, so the mint routes refuse it outright.
+ *
+ * 403 rather than 410: nothing was removed — the board exists and the route
+ * works — this share is simply never allowed. The hint has to name the fix,
+ * because the caller usually got here by binding without a hubWorkspaceId
+ * and then sharing whatever id came back.
+ */
+const UNFILED_SHARING_REFUSED = {
+  error: 'unfiled_board_not_shareable',
+  hint: 'The Unfiled board collects every review bound without a board, from every agent — sharing it would share them all. So: file the review on a real board first, then share that board. Pass hubWorkspaceId when you bind (create_diff_review / bind_folder), or make a board with create_workspace and attach_doc the review to it.',
+} as const;
+
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
 function anchorSnippetText(anchor: Anchor): string | undefined {
@@ -2548,7 +2566,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // for; a review is what only `rooms` knows about. They arrive in
           // the SAME field — unlike the per-doc removal above, no shape of
           // the payload separates them — so the lookup IS the discriminator.
-          if (!taskStore.getWorkspace(workspaceId)) {
+          const linkBoard = taskStore.getWorkspace(workspaceId);
+          if (!linkBoard) {
             if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
               return j(410, GROUPING_SHARING_REMOVED);
             }
@@ -2556,6 +2575,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // "this exists and is no longer shareable" rather than becoming
             // the answer to every unrecognised id.
             return j(404, { error: 'workspace not found', workspaceId });
+          }
+          // And never the UNFILED board. Matched by NAME, because that is
+          // how `defaultHubWorkspaceId()` itself finds it on every call —
+          // the id is never cached, and any board answering that lookup can
+          // receive other agents' stray reviews.
+          if (linkBoard.name === DEFAULT_HUB_WORKSPACE_NAME) {
+            return j(403, UNFILED_SHARING_REFUSED);
           }
           // A board share opens the board. There is no entry doc to choose,
           // and an older bundle sharing a board sends this key undefined,
@@ -2609,11 +2635,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Same board-only rule as the link route, and for the same reason:
           // the two modes differ only in how a visitor is authorized, never
           // in what may be shared.
-          if (!taskStore.getWorkspace(workspaceId)) {
+          const accessBoard = taskStore.getWorkspace(workspaceId);
+          if (!accessBoard) {
             if (rooms.list().some((m) => m.workspaceId === workspaceId)) {
               return j(410, GROUPING_SHARING_REMOVED);
             }
             return j(404, { error: 'workspace not found', workspaceId });
+          }
+          // Same Unfiled refusal as the link route — see there for why the
+          // predicate is the board's name.
+          if (accessBoard.name === DEFAULT_HUB_WORKSPACE_NAME) {
+            return j(403, UNFILED_SHARING_REFUSED);
           }
           if (body?.entryDocId) {
             return j(400, {
