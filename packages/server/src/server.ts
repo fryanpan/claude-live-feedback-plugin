@@ -30,7 +30,8 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from './agent-watches.ts';
-import { EmailCodes } from './auth/email-code.ts';
+import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
+import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
 import {
   SESSION_COOKIE,
   clearedSessionCookieHeader,
@@ -361,6 +362,13 @@ export interface ServerOptions {
    * keeps it matching. See activity.ts.
    */
   ownerEmail?: string;
+  /**
+   * Delivers login codes. Defaults to the log sender — the code prints to the
+   * server log, which is what makes the flow exercisable end to end before a
+   * provider is picked. A sender that rejects becomes a 502, never a silent
+   * 200. See auth/code-sender.ts.
+   */
+  codeSender?: CodeSender;
   /**
    * How long an attachment stays `live` without a heartbeat (default five
    * minutes, `HEARTBEAT_FRESH_MS`). A test seam: the whole away-lead half of
@@ -2224,6 +2232,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     console.error(`[identities] ${identities.loadError}`);
   }
   const emailCodes = new EmailCodes();
+  const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
   let emailSessionKeyCache: string | null = null;
   const emailSessionKey = (): string => {
@@ -2604,10 +2613,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             return j(400, { error: 'invalid_email' });
           }
-          // Delivery is the next commit's subject. Until then the code goes
-          // to the server log, which is what makes the flow testable end to
-          // end without an email provider.
-          console.log(`[auth] login code for ${started.email}: ${started.code}`);
+          try {
+            await codeSender.send({
+              to: started.email,
+              code: started.code,
+              expiresInMinutes: Math.round(CODE_TTL_MS / 60_000),
+            });
+          } catch (err) {
+            // 502 and NOT a silent 200. Answering ok here would put the
+            // reviewer in front of a code box for a code that does not exist,
+            // and the only evidence anywhere would be a log line nobody
+            // reads. The challenge stays live — a retry re-sends rather than
+            // stranding them — and the rate limit still counted this attempt,
+            // which is what stops a broken provider becoming a retry loop.
+            console.error(
+              `[auth] could not send a login code via "${codeSender.name}": ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return j(502, { error: 'code_send_failed' });
+          }
           // NEVER the code. The response is read by whoever made the request,
           // and the whole point of mailing a code is that those are different
           // people until one proves otherwise.
