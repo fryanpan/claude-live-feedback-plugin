@@ -630,7 +630,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_diff_review',
       description:
-        'Review a git diff PR-style: one doc per changed file, a file tree with status badges, unified diffs with line-anchored comments. By default it diffs base against the working tree as it is right now, uncommitted edits included, and re-renders within about a second as you keep editing — that is the live-loop mode. Pass target to freeze it at a commit instead. Omit base entirely to browse a folder with no diff. Once the review exists, prefer refresh_review, which re-reads from the stored base without re-minting docIds. Hand the human entryUrl; hubWorkspaceId is the board it was filed on. Narrow a large repo with exclude before you raise maxFiles.',
+        'Review a git diff PR-style: one doc per changed file, unified diffs with line-anchored comments. By default it diffs base against the working tree and re-renders within a second as you keep editing — the live-loop mode; pass target to freeze it at a commit, or omit base to browse a folder with no diff. Once the review exists prefer refresh_review, which re-reads without re-minting docIds. Hand the human entryUrl. Narrow a large repo with exclude before raising maxFiles.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -803,7 +803,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'refresh_review',
       description:
-        'Re-reconcile an existing review against what is on disk now, without re-minting any docId — so every comment thread survives. Use it instead of re-running the bind when files have moved under the review. Files you changed since join it; a file that was reverted, deleted or renamed away is marked stale rather than removed, and stale is always reversible. Read stale after a rename — those threads are stranded on a file nobody will open. Pinned reviews are refused; their content is a commit.',
+        'Re-reconcile an existing review against what is on disk now, without re-minting any docId — so every comment thread survives. Use it instead of re-running the bind when files have moved under the review. Files you changed since join it; a file reverted, deleted or renamed away is marked stale rather than removed. Read stale after a rename — those threads are stranded on a file nobody will open. Pinned reviews are refused; their content is a commit.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -846,7 +846,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'find_and_replace',
       description:
-        "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to interpret markdown in replace as real marks, and suggest: true to propose the edit instead of applying it — for judgment calls, not mechanical fixes.",
+        "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1272,7 +1272,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_workspace_lead',
       description:
-        'Declare yourself lead of a board. One call at session start, and everything on it reaches you — task and decision events, thread events on every doc filed there including ones created later, and voice notes. It survives a respawn, and it drains whatever queued while the seat was empty, handing it back on this same response. Staying live is separate: delivery is gated on the server having observed you recently, so a quiet session drops out — call heartbeat, and check with list_watched_docs rather than assuming. Pass leadAgentId only to hand the board to somebody else.',
+        'Declare yourself lead of a board. One call at session start and everything on it reaches you — task, decision and thread events on every doc filed there, plus voice notes — and it drains whatever queued while the seat was empty. Staying live is separate: delivery is gated on the server having observed you recently, so a quiet session drops out. Call heartbeat, and check list_watched_docs rather than assuming. Pass leadAgentId to hand the board to somebody else.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1307,7 +1307,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_tasks',
       description:
-        "File work on a board. Always takes a list; one task is a one-row list, so this is the only create verb. Per row: omit assignee and you own it, omit goal and it lands unplaced at the bottom of Backlog, and a row can depend on an earlier row of the same batch by index or key. Rows you file land in triage — on the board, but not in anyone's queue until somebody moves them out with task_transition. A bad row never rejects the batch; it comes back in failures by index.",
+        "File work on a board. Always takes a list; one task is a one-row list, so this is the only create verb. Per row: omit assignee and you own it, omit goal and it lands unplaced at the bottom of Backlog. Rows you file land in triage — on the board, but not in anyone's queue until somebody moves them out with task_transition. A bad row never rejects the batch; it comes back in failures by index.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1512,7 +1512,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'task_transition',
       description:
-        "The single gate for status changes (triage | todo | in-progress | done), attributed to you and appended to the task's trail. It is also the only way to clear a triage row, and moving one to todo or in-progress both count. Attach evidence on forward moves or the move is flagged unproven — and the commit must be one that still resolves after a squash-merge, not the branch sha you are sitting on. Wrong or missing evidence is fixed with amend_evidence; re-sending this call refuses.",
+        "The single gate for status changes (triage | todo | in-progress | done), attributed to you on the task's trail. It is also the only way to clear a triage row. Attach evidence on forward moves or the move is flagged unproven — and the commit must be one that still resolves after a squash-merge, not the branch sha you are sitting on. Wrong or missing evidence is fixed with amend_evidence; re-sending this call refuses.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1592,7 +1592,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'park_task',
       description:
-        'Defer a task to a date: "not now, and here is when". Use it instead of moving the row to in-progress, inventing a dependency, or assigning it to a person to quiet the ready-work nudge — all three make the board say something untrue. The row does not move: still todo, still owned, still in next_tasks, now carrying parked: {until, reason}. Nothing expires it; pass until: null to un-park early. Write a reason — the date says a decision was made, not what it was waiting for.',
+        'Defer a task to a date: "not now, and here is when". Reach for it instead of moving the row to in-progress or inventing a dependency to quiet the ready-work nudge — both make the board say something untrue. The row does not move: still todo, still owned, still in next_tasks, now carrying parked: {until, reason}. Pass until: null to un-park early. Write a reason — the date says a decision was made, not what it was waiting for.',
       inputSchema: {
         type: 'object',
         properties: {
