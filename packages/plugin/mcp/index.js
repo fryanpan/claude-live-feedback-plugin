@@ -15677,7 +15677,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               properties: {
                 id: {
                   type: "string",
-                  description: "OMIT to create this band — the server mints an opaque id and returns it in `created`. Include it, exactly as get_workspace reports it, to keep a band you already have. An id this board does not hold is refused."
+                  description: "Omit to create this band — the server mints an opaque id and returns it in `created`. Include it, exactly as get_workspace reports it, to keep a band you already have. Goal ids are generated and permanent; an id this board does not hold is refused as `unknown-goal-id`."
                 },
                 title: { type: "string" },
                 dueAt: { type: "number" },

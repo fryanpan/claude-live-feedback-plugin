@@ -50,15 +50,22 @@ size of the work. It says nothing about whether the task is done. Clear it by
 rewriting the body once you know what is true, dating and attributing the
 correction and keeping what the row originally claimed.
 
-**Check who is already on a row.** `claimedBy` names the session that last moved
-it to in-progress — the field that exists even on a row nobody assigned, since a
-transition never touches `assignee`. `state: "active"` on a session that is not
-you means do not start that row: agree over the peer channel who has it and take
-something else if they do. Nothing refuses a second taker, because two agents on
-one row is occasionally right; it just has to be a decision rather than a
-collision neither side can see. `away` is an owner in name only and
-`unresponsive` is a wedged session somebody probably should take over from.
-These are recency reads: a session that thinks for an hour still holds its row.
+**Check who is already on a row.** Two fields carry it: `ownerSession`, the
+session behind the row's owner, and `claimedBy`, the session that last moved it
+to in-progress. `claimedBy` is the one that exists on a row nobody assigned,
+since a transition never touches `assignee` — read the owner instead and you
+learn who FILED the ticket, not who is working it.
+
+`state: "active"` on a session that is not you means DO NOT START THAT ROW.
+Message that session over claude-hive, agree which of you has it, and take
+something else if they do — starting it anyway is how two sessions each build a
+complete answer to one task and neither finds out until a PR.
+Nothing refuses a second taker, because two agents on one row is occasionally
+right; it just has to be a decision rather than a collision neither side can
+see. `away` is an
+owner in name only and `unresponsive` is a wedged session somebody probably
+should take over from. These are recency reads, never identity: a session that
+thinks for an hour produces nothing and still holds its row.
 
 **Skip a row carrying `parked`.** It is listed rather than hidden so you can see
 the deferral and disagree with it, not so you can pick it up — nothing else
