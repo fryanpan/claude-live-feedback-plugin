@@ -355,3 +355,48 @@ decision); a reviewer workflow where the first-edit diff noise blocks review
 (e.g. diff-review over a bound doc where +26/-47 buries the real change); or
 the table-under-bullet flatten hitting real docs often enough that the
 parse-side fix pays for itself.
+
+## 2026-08-25 — Unfiled-ask counter: the audit's published number, not a live measurement
+
+Task t-8NQpdf6_KPan asked for a per-session number an agent can query about
+itself: asks that appeared in chat without a matching filed review item. Two
+open questions were left to the implementer; both calls below are reversible.
+
+**Where the counter lives: server-side, as published audit output.** The
+server cannot see chat — chat happens in each session's terminal, and the
+server sees only MCP tool calls and browser events. The only party that can
+judge "an ask appeared in chat without a matching review item" is the daily
+chat audit, an agent that mines `~/.claude/projects/**/*.jsonl` transcripts.
+So the audit is the single writer (`publish_chat_audit` →
+`POST /api/chat-audit`) and a session's self-query
+(`get_unfiled_ask_count` → `GET /api/chat-audit/<agent>`) reads the same
+stored row back. One number, one implementation — the done criterion "the
+daily audit references the same number" is satisfied structurally, because
+there is no second computation to drift. The honest cost, stated in the tool
+description rather than hidden: freshness is audit cadence, not real time,
+and `today: null` means "no audit has covered today yet".
+
+A live server-side counter was rejected as a fiction: it would require the
+server to read host-local transcript files and classify asks — a new NLP
+layer the task explicitly ruled out, coupled to one machine's paths, and
+still blind to compacted sessions.
+
+**What counts as an ask: the audit's current heuristic, unchanged.** The
+server validates shape (non-negative integer, a real agent name, YYYY-MM-DD
+day) and stores what the audit judged. No server-side ask classifier exists
+or is planned.
+
+**Mechanics.** Append-only JSONL at `<dataDir>/chat-audit.jsonl`
+(`packages/server/src/chat-audit.ts`), matching the activity.jsonl pattern:
+corrections are new rows, latest row per agent wins, nothing is rewritten —
+soft-delete compliant. Rows are keyed by display name (CW_AGENT_NAME),
+normalized case/whitespace-insensitively, because that is the one identity
+the transcript-reading audit and the env-reading MCP session both hold; the
+bare name "agent" is refused, same as task ownership. `day` uses the
+server's local calendar (audit, sessions, and server share one machine).
+
+**What would change the decision:** the audit gaining a code heuristic (then
+the server could run it and the counter could go live-ish); a fleet spanning
+machines (then per-machine local-day and transcript paths both break); or
+per-session attribution mattering more than per-agent (rows already carry an
+optional `sessionId` — the read would grow a filter, not a new store).
