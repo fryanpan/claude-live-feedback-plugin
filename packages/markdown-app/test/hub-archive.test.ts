@@ -11,9 +11,9 @@ import {
   type ArchivedViewHandlers,
   type DetailHandlers,
   renderArchivedList,
-  renderTaskDetail,
 } from '../src/hub/hub-render.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
+import { renderTaskDetail } from './support/task-detail.ts';
 
 // The board is a mounted island now, not a call that returns; every mount
 // holds a live subscription to the module-level signal until it is disposed.
