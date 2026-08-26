@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { linkIdentity } from './activity.ts';
+import { replaceIdentityLinks } from './activity.ts';
 
 /**
  * `<dataDir>/identity-links.json` — explicit "this actor id IS that identity"
@@ -82,14 +82,23 @@ function pairsFrom(links: unknown): { pairs: Array<[string, string]>; badShape: 
  */
 export function loadIdentityLinks(dataDir: string): LoadIdentityLinksResult {
   const path = identityLinksPath(dataDir);
-  if (!existsSync(path)) return { loaded: 0 };
+  // Every exit below REPLACES the registry, including the empty ones. The map
+  // describes one data dir, and a load that left the previous dir's links in
+  // place would attribute its actors while reading this one. See
+  // `replaceIdentityLinks`.
+  if (!existsSync(path)) {
+    replaceIdentityLinks([]);
+    return { loaded: 0 };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch (err) {
+    replaceIdentityLinks([]);
     return { loaded: 0, error: `${path}: unreadable (${(err as Error).message})` };
   }
   if (!isRecord(parsed)) {
+    replaceIdentityLinks([]);
     return { loaded: 0, error: `${path}: expected a JSON object` };
   }
   // A bare map at the top level is accepted too — it is what somebody writes
@@ -98,13 +107,12 @@ export function loadIdentityLinks(dataDir: string): LoadIdentityLinksResult {
   const links = 'links' in parsed ? parsed.links : parsed;
   const { pairs, badShape } = pairsFrom(links);
   if (badShape) {
+    replaceIdentityLinks([]);
     return { loaded: 0, error: `${path}: "links" must be an object map or an array of {from,to}` };
   }
-  let loaded = 0;
-  for (const [from, to] of pairs) {
-    if (!from.trim() || !to.trim() || from.trim() === to.trim()) continue;
-    linkIdentity(from, to);
-    loaded++;
-  }
-  return { loaded };
+  const usable = pairs.filter(
+    ([from, to]) => from.trim() && to.trim() && from.trim() !== to.trim(),
+  );
+  replaceIdentityLinks(usable);
+  return { loaded: usable.length };
 }

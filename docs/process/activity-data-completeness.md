@@ -131,14 +131,40 @@ own** — a link governs rows written from then on.
 
 ```
 bun run activity:repair-owner ./data           # dry run: what would change
+# stop the server for this data dir first — see below
 bun run activity:repair-owner ./data --write   # rewrite, keeping a .bak
 ```
+
+**`--write` requires the server for that data dir to be stopped, and verifies
+it.** The log is append-only and the server appends on every comment and every
+read session, so a rewrite that overlapped one would replace a file the server
+was still writing into. The server holds `<dataDir>/activity-writer.lock` for
+as long as it is up; `--write` refuses unless it can take that lock, and names
+the pid holding it. A dry run ignores the lock — reading is not writing.
+
+```
+launchctl kill SIGTERM gui/$(id -u)/com.fryanpan.claude-workspaces   # stop
+bun run activity:repair-owner ./data --write
+launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces   # start
+```
+
+The lock is per data dir, so a staging server on its own throwaway dir never
+blocks a repair of prod's. It is advisory for the server — a leftover lock file
+must not be able to stop the server booting — and a lock whose recorded pid is
+gone is reclaimed as stale, so a crash does not disable the tool that the crash
+made necessary.
 
 It recomputes `isOwner` on every row from the row's own `actorId` / `actorName`
 and writes nothing else — `eventId`, `actorId` and the recorded name are left
 alone, because the link says whose id that is, not that the stream observed
-something different. Idempotent, and it copies the log to a timestamped `.bak`
-before rewriting.
+something different. Idempotent.
+
+The rewrite moves the log aside with `rename` — atomic, and the move IS the
+backup, so there is no window in which the append target and the backup are two
+different files. `appendActivity` opens the path by name each time, so any
+writer that ignored the lock creates a fresh `activity.jsonl` rather than
+writing into the file being replaced; if one appears before the swap its rows
+are spliced onto the end and counted in `splicedRows`, never clobbered.
 
 **A backfill re-run is not a substitute.** `activity:backfill` rebuilds only
 the comment family from `.ydoc` snapshots; `read_session` and `doc_open` never

@@ -206,3 +206,68 @@ describe('the emitters honour the links', () => {
     expect(isOwnerActor({ id: 'anon-fixture1', name: 'Owner Fullname' })).toBe(true);
   });
 });
+
+/**
+ * P2: the registry is process-wide and `loadIdentityLinks` used only to ADD.
+ * Two consequences, both silent — a second load for a different data dir kept
+ * the first dir's links, so an actor could be treated as the owner while
+ * processing a directory that never named them; and a file that went missing
+ * or malformed kept every link from the load before it, which is the opposite
+ * of what an unreadable config should mean.
+ */
+describe('each load REPLACES the registry rather than accumulating', () => {
+  test('links from a previous data dir do not survive the next load', () => {
+    const a = scratchDir();
+    const b = scratchDir();
+    writeFileSync(
+      identityLinksPath(a),
+      JSON.stringify({ links: { 'anon-fixture1': 'known-bryan' } }),
+    );
+    writeFileSync(
+      identityLinksPath(b),
+      JSON.stringify({ links: { 'anon-fixture2': 'known-bryan' } }),
+    );
+    loadIdentityLinks(a);
+    expect(isOwnerActor({ id: 'anon-fixture1', name: 'Owner Fullname' })).toBe(true);
+    loadIdentityLinks(b);
+    expect(isOwnerActor({ id: 'anon-fixture1', name: 'Owner Fullname' })).toBe(false);
+    expect(isOwnerActor({ id: 'anon-fixture2', name: 'Owner Fullname' })).toBe(true);
+  });
+
+  test('a data dir with no link file clears what the previous one loaded', () => {
+    const a = scratchDir();
+    const bare = scratchDir();
+    writeFileSync(
+      identityLinksPath(a),
+      JSON.stringify({ links: { 'anon-fixture1': 'known-bryan' } }),
+    );
+    loadIdentityLinks(a);
+    expect(loadIdentityLinks(bare)).toEqual({ loaded: 0 });
+    expect(identityLinks()).toEqual({});
+    expect(isOwnerActor({ id: 'anon-fixture1', name: 'Owner Fullname' })).toBe(false);
+  });
+
+  test('a malformed file clears rather than silently keeping the old links', () => {
+    const a = scratchDir();
+    const broken = scratchDir();
+    writeFileSync(
+      identityLinksPath(a),
+      JSON.stringify({ links: { 'anon-fixture1': 'known-bryan' } }),
+    );
+    loadIdentityLinks(a);
+    writeFileSync(identityLinksPath(broken), '{ not json');
+    expect(loadIdentityLinks(broken).error).toBeTruthy();
+    expect(identityLinks()).toEqual({});
+  });
+
+  test('reloading the SAME dir twice is stable, not cumulative', () => {
+    const a = scratchDir();
+    writeFileSync(
+      identityLinksPath(a),
+      JSON.stringify({ links: { 'anon-fixture1': 'known-bryan' } }),
+    );
+    loadIdentityLinks(a);
+    expect(loadIdentityLinks(a)).toEqual({ loaded: 1 });
+    expect(identityLinks()).toEqual({ 'anon-fixture1': 'known-bryan' });
+  });
+});

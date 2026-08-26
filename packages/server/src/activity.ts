@@ -347,6 +347,22 @@ export function resetIdentityLinks(): void {
 }
 
 /**
+ * Replace the whole map with exactly these pairs.
+ *
+ * The registry is process-wide while the FILE is per data dir, so a load has
+ * to be a replacement rather than an addition. Adding was wrong in two silent
+ * ways: a second `createServer` on a different data dir kept the first dir's
+ * links, so an actor could be read as the owner while processing a directory
+ * that never named them; and a file that went missing or stopped parsing kept
+ * every link from the load before it — the opposite of what an unreadable
+ * config should mean.
+ */
+export function replaceIdentityLinks(pairs: Iterable<readonly [string, string]>): void {
+  IDENTITY_LINKS.clear();
+  for (const [from, to] of pairs) linkIdentity(from, to);
+}
+
+/**
  * Follow an id's links to the identity it stands for. An unlinked id resolves
  * to itself, so this is safe to call on every actor.
  */
