@@ -72,6 +72,7 @@ import {
   type LandingWorkspaceRow,
   buildLandingModel,
 } from './landing.ts';
+import { linkTitlesFor } from './link-titles.ts';
 import {
   LOOPBACK_HOSTS,
   corsHeadersFor,
@@ -4503,6 +4504,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // and the first one reads as "nothing points at this PR".
           if (!isValidRef(ref)) return j(400, { error: BAD_REF_ERROR });
           return j(200, { ref, tasks: taskStore.backlinksFor(ref).map(taskChip) });
+        }
+        // Titles for pasted workspace URLs — the comment renderer's lookup.
+        // Batched (one call per render burst, not one per link) and read-only.
+        // Members only: the share-scope middleware above never whitelists this
+        // path, so a share visitor's client falls back to raw URLs rather
+        // than reading titles across the whole server.
+        if (pathname === '/api/links/titles' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const urls = body?.urls;
+          if (!Array.isArray(urls)) return j(400, { error: 'urls: string[] required' });
+          return j(200, {
+            titles: linkTitlesFor(
+              urls.filter((u): u is string => typeof u === 'string'),
+              {
+                docMeta: (docId) => rooms.get(docId)?.meta,
+                taskTitle: (taskId) => taskStore.getTask(taskId)?.title,
+                workspaceName: (workspaceId) => taskStore.getWorkspace(workspaceId)?.name,
+              },
+            ),
+          });
         }
         if (taskLinksMatch && (req.method === 'POST' || req.method === 'DELETE')) {
           const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
