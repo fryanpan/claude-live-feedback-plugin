@@ -203,6 +203,12 @@ function workspaceIdFromPath(): string {
   return m?.[1] ? decodeURIComponent(m[1]) : '';
 }
 
+/** How long an armed ?walk=1 handoff waits for the board to produce a queue
+ *  before concluding it is genuinely clear. Generous against a slow ydoc
+ *  sync; short enough that a truly cleared board hands off while the reader
+ *  is still looking at it. */
+const WALK_HANDOFF_DEADLINE_MS = 4000;
+
 /**
  * The shareable address of one task. It is the board's own URL plus `?task=`,
  * which is the deep link the app already reads at start-up — so the link a
@@ -1443,6 +1449,12 @@ async function main(): Promise<void> {
   // holding items. Null until boot wires it; no-op without a chain.
   let chainWalkDrain: (() => void) | null = null;
 
+  // Also filled in at boot: re-checks an armed ?walk=1 handoff when the task
+  // projection arrives. Decisions ride the ydoc, not the REST review-items
+  // list, so the first load can resolve before the board has synced — the
+  // observer below gives the walk another look at the queue then.
+  let autoWalkTick: (() => void) | null = null;
+
   async function finishWalkItem(
     item: ReviewItem | null,
     next: ReviewItem | null,
@@ -2115,6 +2127,7 @@ async function main(): Promise<void> {
     // after Home's first paint and the queue stays empty while the board
     // banner (painted by renderBoardRegion) counts it.
     repaintGuard.schedule(repaintQueueRegions);
+    autoWalkTick?.();
   });
   const repaintWorkspaceRegions = (): void => {
     renderLead();
@@ -2434,16 +2447,27 @@ async function main(): Promise<void> {
   let pendingWalk = handoff.walk && state.pane === 'home';
   const maybeAutoWalk = (): void => {
     if (!pendingWalk) return;
+    // An empty queue does NOT burn the flag: on a cold connection the ydoc
+    // task projection (which carries the decisions) can land after the first
+    // review-items load, and a one-shot consumed here would skip a queue
+    // that was seconds from existing. The projection observer and every
+    // review-items load call back in; only the deadline below gives up.
+    if (currentQueue().items.length === 0) return;
     pendingWalk = false;
-    if (currentQueue().items.length > 0) {
-      startWalkthrough();
-      return;
-    }
-    // Nothing waiting here after all (someone answered it since the page
-    // rendered) — go straight to the next board holding items, if any.
-    const next = walkNextUrl(handoff.chain);
-    if (next) location.href = next;
+    startWalkthrough();
   };
+  autoWalkTick = maybeAutoWalk;
+  if (pendingWalk) {
+    // Still nothing by now and the sync has had its chance: the board is
+    // genuinely clear (someone answered since the landing page rendered).
+    // Hop to the next board holding items, or stand down on Home.
+    setTimeout(() => {
+      if (!pendingWalk) return;
+      pendingWalk = false;
+      const next = walkNextUrl(handoff.chain);
+      if (next) location.href = next;
+    }, WALK_HANDOFF_DEADLINE_MS);
+  }
   chainWalkDrain = () => {
     // The sitting for THIS board is over; hand the reader to the next board
     // in the chain rather than dead-ending on the cleared card.
