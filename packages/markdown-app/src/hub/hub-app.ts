@@ -1423,26 +1423,8 @@ async function main(): Promise<void> {
           closeWalkthrough();
           renderWalkthrough();
         },
-        contextLabel: walkContextLabel,
       },
     };
-  }
-
-  /**
-   * The card's project chip.
-   *
-   * The mockup's Home spans several projects and chips each card with one.
-   * This Home is per-workspace, so the workspace name would be the same word
-   * on every card — the honest within-workspace answer to "which body of work
-   * is this" is the GOAL. Null where there is no task to read one off (a doc
-   * comment), which renders no chip rather than a placeholder.
-   */
-  function walkContextLabel(item: ReviewItem): string | null {
-    const taskId = reviewRow(item)?.task.id ?? item.thread?.taskId;
-    if (!taskId) return null;
-    const task = taskList().find((t) => t.id === taskId);
-    if (!task) return null;
-    return goalLabel(state.info?.goals ?? [], task.goal);
   }
 
   /**

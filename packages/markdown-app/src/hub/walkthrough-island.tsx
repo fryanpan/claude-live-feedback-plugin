@@ -85,10 +85,6 @@ export interface WalkthroughHandlers {
   /** Move to another position in the queue (skip forward, step back). */
   onStep: (index: number) => void;
   onClose: () => void;
-  /** What body of work this one belongs to — the mockup's project chip. Home
-   *  is per-workspace, so the honest within-workspace answer is the goal;
-   *  null renders no chip rather than a placeholder. */
-  contextLabel?: (item: ReviewItem) => string | null;
 }
 
 /**
@@ -365,16 +361,15 @@ function AdvancedBanner(props: { last: ReviewItem; handlers: WalkthroughHandlers
 }
 
 /**
- * The mockup's card head, in its order: kind badge, the question, the chip
- * saying which body of work it belongs to, and how long it has waited.
- *
- * The badge and the chip carry the same `.k` shape in the mockup and the same
- * one here, so a new kind cannot arrive looking like a different component.
+ * The mockup's card head, in its order: kind badge, the question, and how
+ * long it has waited. The goal chip that sat between them is gone (Bryan,
+ * 2026-08-26: "remove the goal showing in the top right, it takes up too
+ * much space") — within one workspace it named the same few goals over and
+ * over, and the card's Task line already points at the work.
  */
-function WalkCardHead(props: { item: ReviewItem; handlers: WalkthroughHandlers; now: number }) {
-  const { item, handlers, now } = props;
+function WalkCardHead(props: { item: ReviewItem; now: number }) {
+  const { item, now } = props;
   const badge = reviewItemBadge(item);
-  const context = handlers.contextLabel?.(item);
   return (
     <div class="hub-walk-card-head">
       <span class={`hub-walk-k hub-walk-k-${badge.tone}`}>{badge.label}</span>
@@ -384,9 +379,6 @@ function WalkCardHead(props: { item: ReviewItem; handlers: WalkthroughHandlers; 
           clipping it at the first sentence terminator is what "Ship v2 now. Or
           wait?" cannot survive. */}
       <h3 class="hub-walk-title">{reviewCardHeadline(item)}</h3>
-      {context !== null && context !== undefined && context.trim() !== '' && (
-        <span class="hub-walk-k hub-walk-k-count">{context}</span>
-      )}
       {/* The head's top-right meta is the card's ONE provenance line — who
           asked and how long ago — replacing both the bare wait chip and the old
           left-bordered context block (approved design, review-flow-mock-v1). */}
@@ -558,7 +550,7 @@ function WalkCard(props: {
       {progress.last && <AdvancedBanner last={progress.last} handlers={handlers} />}
       {/* ONE anatomy (approved design): head row — kind badge, headline, goal
           chip, asked-by meta — then one markdown body. */}
-      <WalkCardHead item={item} handlers={handlers} now={now} />
+      <WalkCardHead item={item} now={now} />
       {/* The same pointer out on every kind. Answering here is the point —
           going through the queue must not mean leaving the queue on every
           item — but a comment sometimes only makes sense in place. */}
