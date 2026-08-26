@@ -10,6 +10,7 @@ export * from './suggest.ts';
 export * from './thread-summary.ts';
 export * from './ui-shared.ts';
 export * from './ws-client.ts';
+export * from './ws-link.ts';
 export * as anchors from './anchor/index.ts';
 export * as prose from './prose.ts';
 export * as suggestOps from './suggest-ops.ts';
