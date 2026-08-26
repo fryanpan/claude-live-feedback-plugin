@@ -6137,7 +6137,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   user,
                   text,
                   folded.optionId,
-                  { generate: !visitor },
+                  // Conditional on the item STILL being pending, re-checked
+                  // inside the same synchronous stretch as the stamp. The read
+                  // above is a claim about a moment already past; an
+                  // unconditional write here would let a reply folded on that
+                  // stale claim displace an answer somebody had meanwhile
+                  // given, and displace it into history where nobody looks.
+                  { generate: !visitor, onlyIfUnanswered: true },
                 );
                 if (res.ok) {
                   t = res.thread;
@@ -6150,9 +6156,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                     readyNudger.reviewAnswered({ workspaceId: foldedHome, actorId: user.id });
                   }
                 }
-                // A refusal here is a race (someone answered between the read
-                // above and this write), never a reason to drop the words:
-                // fall through and post the reply as an ordinary comment.
+                // A refusal here is the loser of that race, never a reason to
+                // drop the words: fall through and post the reply as the
+                // ordinary comment it always was.
               }
               if (!t) {
                 t = await rooms.postComment(docId, threadId, user, text, undefined, {
