@@ -18,7 +18,7 @@ import {
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
-import { installStaleClientNotice } from '../stale-client.ts';
+import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
 import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
@@ -2126,6 +2126,33 @@ async function main(): Promise<void> {
     if (state.detailTaskId || state.detailGoalId) renderDetail();
   };
 
+  // ── Sentry (t-scWMQmOZcpu1) ─────────────────────────────────────────────
+  // Errors + tracing, but only when the served shell carries the DSN meta —
+  // box config, never the repo. Dynamic import: the hub entry builds with
+  // splitting on, so an unconfigured page fetches zero Sentry bytes and
+  // makes zero external requests. The build id doubles as the release, so
+  // Sentry can say which deploy a regression arrived with.
+  let sentry: typeof import('@sentry/browser') | null = null;
+  const sentryDsn = document
+    .querySelector('meta[name="sentry-dsn"]')
+    ?.getAttribute('content')
+    ?.trim();
+  if (sentryDsn) {
+    void import('@sentry/browser')
+      .then((S) => {
+        S.init({
+          dsn: sentryDsn,
+          release: BUILD_ID || undefined,
+          integrations: [S.browserTracingIntegration()],
+          // Low-traffic internal tool: sample everything rather than guess
+          // at a rate that would drop the one slow iPad load that matters.
+          tracesSampleRate: 1.0,
+        });
+        sentry = S;
+      })
+      .catch(() => {});
+  }
+
   // ── Load report (t-scWMQmOZcpu1) ────────────────────────────────────────
   // One line per page load, POSTed to /load-reports so "the board was slow"
   // is a recorded fact with phase attribution: msToBoot is the REST first
@@ -2154,6 +2181,17 @@ async function main(): Promise<void> {
         decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
       }),
     }).catch(() => {});
+    // Same numbers onto the pageload trace, best-effort: if the SDK loaded
+    // and the transaction is still open they land as measurements; if not,
+    // the posted report above is still the durable record.
+    try {
+      sentry?.setMeasurement('ms_to_boot', msToBoot, 'millisecond');
+      if (msToFirstProjection !== null) {
+        sentry?.setMeasurement('ms_to_first_projection', msToFirstProjection, 'millisecond');
+      }
+    } catch {
+      // The recorder never breaks the page it measures.
+    }
   };
   // The ydoc's initial sync is the phase boundary, not the first tasksMap
   // mutation: an empty workspace's sync changes no task and would otherwise

@@ -358,6 +358,14 @@ export interface ServerOptions {
    */
   requireEmailAuth?: boolean;
   /**
+   * Sentry DSN for the BROWSER apps (`CW_SENTRY_DSN`). Server config on the
+   * box, never the public repo: a DSN is a public client key, but committing
+   * it invites drive-by event spam and couples the repo to one org. Reaches
+   * the browser as a meta tag in the served shells; absent means the client
+   * never loads the Sentry SDK at all.
+   */
+  sentryDsn?: string;
+  /**
    * The address whose email identity is the fleet OWNER (`CW_OWNER_EMAIL`).
    *
    * `isOwnerActor` is otherwise hardcoded to the two spellings that predate
@@ -6709,7 +6717,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
           }
           return new Response(
-            renderHubShell(workspace.id, workspace.name, { feedback: !visitor }),
+            renderHubShell(workspace.id, workspace.name, {
+              feedback: !visitor,
+              ...(opts.sentryDsn ? { sentryDsn: opts.sentryDsn } : {}),
+            }),
             { headers: { 'content-type': 'text/html; charset=utf-8' } },
           );
         }
@@ -7307,10 +7318,13 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
 function renderHubShell(
   workspaceId: string,
   name: string,
-  opts: { feedback: boolean } = { feedback: false },
+  opts: { feedback: boolean; sentryDsn?: string } = { feedback: false },
 ): string {
   const safeName = escape(name);
   const safeId = escape(workspaceId);
+  const sentryMeta = opts.sentryDsn
+    ? `\n    <meta name="sentry-dsn" content="${escape(opts.sentryDsn)}" />`
+    : '';
   // Deliberately NOT rendered for a share visitor. Every peer on a Yjs doc
   // syncs the whole doc, so one shared feedback doc would hand every hub
   // visitor every other workspace's feedback threads — including the hub
@@ -7334,7 +7348,7 @@ function renderHubShell(
          Screen install is what makes push available at all. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="theme-color" content="#2e7dd7" />
+    <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
     <link rel="stylesheet" href="/app/styles.css" />
   </head>
   <body class="hub-body">
