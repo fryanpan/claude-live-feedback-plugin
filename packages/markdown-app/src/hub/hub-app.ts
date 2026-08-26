@@ -2126,6 +2126,36 @@ async function main(): Promise<void> {
     if (state.detailTaskId || state.detailGoalId) renderDetail();
   };
 
+  // ── Load report (t-scWMQmOZcpu1) ────────────────────────────────────────
+  // One line per page load, POSTed to /load-reports so "the board was slow"
+  // is a recorded fact with phase attribution: msToBoot is the REST first
+  // paint, msToFirstProjection is when the ydoc's task projection actually
+  // arrived (the payload the iPad spent its 10 seconds on). Both are ms from
+  // navigation start — performance.now()'s zero — so they compare across
+  // loads. Sent once, when both phases are in, or at the fallback deadline
+  // if the ydoc never syncs (that slow load is the one most worth recording).
+  let msToBoot = 0;
+  let msToFirstProjection: number | null = null;
+  let loadReportSent = false;
+  const sendLoadReport = (): void => {
+    if (loadReportSent) return;
+    loadReportSent = true;
+    // What the network actually moved: "slow because big" and "slow because
+    // far" need different fixes, and the report should tell them apart.
+    const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+    void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        msToBoot,
+        ...(msToFirstProjection !== null ? { msToFirstProjection } : {}),
+        resourceCount: resources.length,
+        transferBytes: resources.reduce((sum, r) => sum + (r.transferSize || 0), 0),
+        decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
+      }),
+    }).catch(() => {});
+  };
+
   // ── Wiring ──────────────────────────────────────────────────────────────
   // Both observers read the projection at once (state must be current the
   // moment the ydoc moves) but paint through the guard: a peer's transition
@@ -2138,6 +2168,12 @@ async function main(): Promise<void> {
     // banner (painted by renderBoardRegion) counts it.
     repaintGuard.schedule(repaintQueueRegions);
     autoWalkTick?.();
+    if (msToFirstProjection === null) {
+      msToFirstProjection = Math.round(performance.now());
+      // The observer can fire before the boot block below stamps msToBoot
+      // (the ydoc syncs concurrently) — only send once boot has painted.
+      if (msToBoot > 0) sendLoadReport();
+    }
   });
   const repaintWorkspaceRegions = (): void => {
     renderLead();
@@ -2503,6 +2539,11 @@ async function main(): Promise<void> {
   // REST-backed regions.
   readProjection();
   renderAll();
+  msToBoot = Math.round(performance.now());
+  if (msToFirstProjection !== null) sendLoadReport();
+  // Fallback: a load whose ydoc never syncs is the slowest kind and must
+  // still get recorded — report boot-only after 15s rather than never.
+  setTimeout(sendLoadReport, 15_000);
   void loadAgents();
   // No loadEvents here: the Activity view and the detail panel — the only
   // readers — each fetch the log on their own open, and boot fetching ~590KB

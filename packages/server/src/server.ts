@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import {
   type Anchor,
@@ -3783,6 +3783,55 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // read back as rows. This is the surface where the after-the-fact
         // 80/95 review happens, built on the same file every subscriber saw
         // (§3.6: the audit log can never disagree with what subscribers saw).
+        // Board load reports (t-scWMQmOZcpu1): one line per browser boot,
+        // appended by the client after its first paint, read back newest-first
+        // so "how slow was the board, and in which phase" is a recorded fact
+        // rather than a memory of watching a spinner. No external service —
+        // the report is a JSON object the client shaped, stamped here with
+        // when it arrived and what sent it.
+        const wsLoadMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/load-reports$/);
+        if (wsLoadMatch) {
+          const workspaceId = decodeURIComponent(wsLoadMatch[1] ?? '');
+          if (!taskStore.getWorkspace(workspaceId)) {
+            return j(404, { error: 'workspace not found' });
+          }
+          const logPath = join(dataDir, 'workspaces', `${workspaceId}.load-reports.jsonl`);
+          if (req.method === 'POST') {
+            const body = await safeJson(req);
+            if (!body || typeof body !== 'object') return j(400, { error: 'report required' });
+            const row = {
+              ts: Date.now(),
+              ...(req.headers.get('user-agent') ? { ua: req.headers.get('user-agent') } : {}),
+              ...body,
+            };
+            // The sidecar flush that normally creates this dir is debounced,
+            // so a report can arrive before it exists (same guard every other
+            // writer in tasks.ts carries).
+            mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
+            appendFileSync(logPath, `${JSON.stringify(row)}\n`);
+            return j(200, { ok: true });
+          }
+          if (req.method === 'GET') {
+            let reports: unknown[] = [];
+            if (existsSync(logPath)) {
+              reports = readFileSync(logPath, 'utf8')
+                .split('\n')
+                .filter((line) => line.trim().length > 0)
+                .flatMap((line) => {
+                  try {
+                    return [JSON.parse(line)];
+                  } catch {
+                    // Same rule as the events log: a torn tail line must not
+                    // take the whole read down.
+                    return [];
+                  }
+                });
+            }
+            // Newest first, capped — the file grows, the read does not.
+            reports = reports.slice(-50).reverse();
+            return j(200, { workspaceId, reports });
+          }
+        }
         const wsAuditMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/events$/);
         if (wsAuditMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(wsAuditMatch[1] ?? '');
