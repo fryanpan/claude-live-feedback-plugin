@@ -3,6 +3,7 @@ import {
   REVIEW_LIMITS,
   type ReviewPayload,
   type TaskReviewItem,
+  answerFromReply,
   checkReviewPayload,
   isReviewItemOpen,
   pendingDeclaration,
@@ -880,5 +881,78 @@ describe('why / lookFor are gone from the payload, and their words are not', () 
     expect(p.headline).toBe('Pick a rota');
     expect(p.detail).toBe('Two people are free.');
     expect(Object.hasOwn(p, 'why')).toBe(false);
+  });
+});
+
+/**
+ * Whether a plain reply counts as the answer.
+ *
+ * Measured over this project's stored docs before this existed: 152
+ * comment-borne declarations, 123 answered, and 12 unanswered ones with a
+ * person's reply directly underneath. Four of the twelve offered no options —
+ * those are the ones this reads as answers. The other eight are prose under a
+ * decision, and they stay unanswered on purpose: a rule that guessed which
+ * option prose meant is the one that once let small talk retire a decision.
+ */
+describe('answerFromReply', () => {
+  const question: ReviewPayload = { shape: 'review', headline: 'Does the copy read right?' };
+  const decisionWithOptions: ReviewPayload = {
+    shape: 'decision',
+    headline: 'Where should the banner live?',
+    options: [
+      { id: 'above', label: 'Keep above' },
+      { id: 'below', label: 'Move below' },
+    ],
+  };
+
+  it('reads prose as the answer when nothing was offered', () => {
+    expect(answerFromReply(question, 'Cut the second sentence.')).toEqual({});
+  });
+
+  it('picks the option whose label was typed, trimmed and case-folded', () => {
+    expect(answerFromReply(decisionWithOptions, '  move below ')).toEqual({ optionId: 'below' });
+  });
+
+  it('answers nothing when prose lands on a decision', () => {
+    // A question asked back reads exactly like this, which is why the words
+    // are left as a comment rather than turned into a pick.
+    expect(answerFromReply(decisionWithOptions, 'Why is it above the fold at all?')).toBeNull();
+  });
+
+  it('answers nothing on empty words', () => {
+    expect(answerFromReply(question, '   ')).toBeNull();
+  });
+
+  it('answers nothing when two options normalize to the same label', () => {
+    // Trimming and case-folding is what lets a person type a label back, and
+    // it is also what can make two DIFFERENT options indistinguishable. Taking
+    // the first match would record a pick the reader never made and could not
+    // see was wrong — a coin toss stamped as their answer. Refusing leaves the
+    // words as a comment and the item where the reader can still answer it.
+    const ambiguous: ReviewPayload = {
+      shape: 'decision',
+      headline: 'Ship it?',
+      options: [
+        { id: 'yes-now', label: 'Yes' },
+        { id: 'yes-later', label: ' yes ' },
+      ],
+    };
+    expect(answerFromReply(ambiguous, 'yes')).toBeNull();
+    // The unambiguous option on the same payload still answers, so the refusal
+    // is about the collision and not about the payload carrying one.
+    const mixed: ReviewPayload = {
+      ...ambiguous,
+      options: [...(ambiguous.options ?? []), { id: 'no', label: 'No' }],
+    };
+    expect(answerFromReply(mixed, 'No')).toEqual({ optionId: 'no' });
+  });
+
+  it('reads prose as the answer on a decision that offered no options', () => {
+    // Keyed on what was OFFERED, not on the authored shape: with no options
+    // there is no vocabulary to type back, so prose is the only answer it
+    // could ever receive.
+    expect(
+      answerFromReply({ shape: 'decision', headline: 'Which way?' }, 'The second one'),
+    ).toEqual({});
   });
 });
