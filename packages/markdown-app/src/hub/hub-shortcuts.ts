@@ -40,6 +40,13 @@ export function hubShortcutKeydown(deps: HubShortcutDeps): (ev: KeyboardEvent) =
   const { state } = deps;
   return (ev) => {
     if (typingInPath(eventPath(ev))) return;
+    // A meta/ctrl/alt chord belongs to the browser or the OS. None of these
+    // shortcuts is a chord, so every one of them passes through untouched —
+    // and it must, because `c` is also Cmd+C: the capture box stole the copy
+    // out from under a selection in a task, focusing itself and calling
+    // preventDefault(), which left nothing selected and nothing copied.
+    // Shift is deliberately not a bail — `?` is Shift+/ on most layouts.
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
     if (ev.key === '?') {
       deps.helpEl().classList.toggle('hidden');
       return;
