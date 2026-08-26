@@ -268,7 +268,15 @@ export function projectTask(
     ...(task.origin !== undefined ? { origin: task.origin } : {}),
     ...(task.quote !== undefined ? { quote: task.quote } : {}),
     ...(task.answer !== undefined ? { answer: task.answer } : {}),
-    ...(task.triagedAgainst !== undefined ? { triagedAgainst: task.triagedAgainst } : {}),
+    // Narrowed to the declared shape, never spread: the pre-fix writer
+    // stamped the ENTIRE workspace goal text into this marker, and 187 rows
+    // on the live hub board still carry ~3KB each — 546KB of the board ydoc
+    // shipped to every reader on every open (t-scWMQmOZcpu1). The store
+    // keeps whatever the sidecar recorded; the wire gets { goalId, ts } —
+    // same precedent as `evidence` two fields down.
+    ...(task.triagedAgainst !== undefined
+      ? { triagedAgainst: { goalId: task.triagedAgainst.goalId, ts: task.triagedAgainst.ts } }
+      : {}),
     // Nobody has named this task's band, and since when. Projected so the
     // board and the queue can say the sentence out loud without new plumbing
     // — a field only the store can see is the "flag nobody renders" bug.
