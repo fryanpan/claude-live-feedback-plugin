@@ -42,6 +42,13 @@ const DECISION: ReviewPayload = {
   ],
 };
 
+/** An open question — the other shape, the one with no buttons to tap. */
+const QUESTION: ReviewPayload = {
+  shape: 'review',
+  headline: 'Does the new banner copy read right?',
+  detail: 'Two sentences, both about the trial. Anything you would cut?',
+};
+
 let handle: ServerHandle;
 let dataDir: string;
 let base: string;
@@ -408,6 +415,142 @@ describe('POST /threads/:id/answer', () => {
     });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe('not-a-review-item');
+  });
+});
+
+describe("a person's plain reply answers the item it lands on", () => {
+  // The measured failure this closes: across this project's stored docs, 152
+  // comment-borne declarations, 123 answered, and 12 unanswered ones with a
+  // person's reply sitting under them. The answer path was not unused — it
+  // loses on the doors that post a plain comment (the task panel's discussion
+  // composer, the board's thread reply, MCP `post_reply`, the widget, any
+  // older bundle), because only the three surfaces that render an Answer
+  // composer route to `/answer`. Everywhere else a person answers in words
+  // and the item stays queued.
+
+  it('stamps an open question from a plain reply on /comments', async () => {
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Cut the second sentence — the first says it.',
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const stored = await firstThread(docId);
+    // The reply is an ordinary reply, unchanged…
+    expect(stored.comments[1]?.text).toContain('Cut the second sentence');
+    // …and the declaration now carries the same four stamps `/answer` writes,
+    // which is what takes the row off every queue.
+    const review = stored.comments[0]?.review;
+    expect(review?.answeredBy).toBe(PERSON.name);
+    expect(review?.answerText).toBe('Cut the second sentence — the first says it.');
+    expect(typeof review?.answeredAt).toBe('number');
+    // Nothing was picked, because nothing was offered.
+    expect(review?.answeredWith).toBeUndefined();
+  });
+
+  it("does not stamp an agent's reply", async () => {
+    // The addressee is a person. An agent posting a closing note under its own
+    // question must not answer it on the reader's behalf — the whole point of
+    // the row is that only a person can retire it.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: AGENT,
+      text: 'Bumping this — still waiting on a read.',
+    });
+    expect(res.status).toBe(200);
+    const review = (await firstThread(docId)).comments[0]?.review;
+    expect(review?.answeredAt).toBeUndefined();
+    expect(review?.answeredBy).toBeUndefined();
+  });
+
+  it('leaves a decision unanswered when the words match no option', async () => {
+    // A decision's options are the answer's vocabulary. Prose under one is
+    // as often a question back as an answer ("is there a reason to trigger
+    // it?"), and inferring a pick from it is the exact regression that once
+    // let a line of small talk retire a decision and delete its card.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, DECISION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Why is it above the fold at all?',
+    });
+    expect(res.status).toBe(200);
+    const stored = await firstThread(docId);
+    expect(stored.comments[1]?.text).toContain('above the fold at all');
+    const review = stored.comments[0]?.review;
+    expect(review?.answeredAt).toBeUndefined();
+    expect(review?.answeredWith).toBeUndefined();
+  });
+
+  it('answers a decision when the reply IS an option label', async () => {
+    // Typing the label is how a person picks on a surface with no buttons —
+    // a phone keyboard, a widget, an agent relaying the words. Matched on the
+    // trimmed, case-folded label and nothing looser: a rule that guessed
+    // would be the inference this deliberately does not make.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, DECISION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: '  move below  ',
+    });
+    expect(res.status).toBe(200);
+    const review = (await firstThread(docId)).comments[0]?.review;
+    expect(review?.answeredWith).toBe('below');
+    expect(review?.answeredBy).toBe(PERSON.name);
+    // Verbatim, as posted — the answer is always the person's own words.
+    expect(review?.answerText).toBe('  move below  ');
+  });
+
+  it('leaves a standing answer alone when the conversation continues', async () => {
+    // Once answered there is nothing pending, so the follow-up is just a
+    // follow-up. Without this, every later remark would displace the recorded
+    // answer into `answerHistory` and rewrite who answered.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Cut the second sentence.',
+    });
+    await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Actually, reading it again on the phone now.',
+    });
+    const review = (await firstThread(docId)).comments[0]?.review;
+    expect(review?.answerText).toBe('Cut the second sentence.');
+    expect(review?.answerHistory).toBeUndefined();
+  });
+
+  it('does not answer the pending item with a reply that asks its own question', async () => {
+    // A reply carrying its own declaration is a new ask, not an answer to the
+    // old one. Both would otherwise be true of the same comment.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Before I read it — which draft is current?',
+      review: { shape: 'review', headline: 'Which draft is current?' },
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const stored = await firstThread(docId);
+    expect(stored.comments[0]?.review?.answeredAt).toBeUndefined();
+    expect(stored.comments[1]?.review?.headline).toBe('Which draft is current?');
+  });
+
+  it('still leaves an ordinary thread an ordinary thread', async () => {
+    // The positive control for the negatives above: a thread that declared
+    // nothing takes a plain reply and gains no review payload from anywhere.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Agreed.',
+    });
+    expect(res.status).toBe(200);
+    const stored = await firstThread(docId);
+    expect(stored.comments).toHaveLength(2);
+    expect(stored.comments[0]?.review).toBeUndefined();
   });
 });
 

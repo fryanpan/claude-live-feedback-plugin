@@ -6,14 +6,17 @@ import {
   type DocType,
   type ReviewPayload,
   type TaskReviewItem,
+  type Thread,
   type User,
   type WebhookPayload,
   agentIdCandidates,
   anchors,
+  answerFromReply,
   checkReviewPayload,
   contentKind,
   emailIdentityId,
   isEmailLike,
+  pendingDeclaration,
   readReviewPayload,
   reviewGapAdvice,
   reviewIdOf,
@@ -6100,11 +6103,64 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (!user || !text) return j(400, { error: 'author + text required' });
               const declared = reviewFromBody(body?.review);
               if (!declared.ok) return j(400, { error: declared.error });
-              const t = await rooms.postComment(docId, threadId, user, text, undefined, {
-                // A share visitor must not be able to spend the API key.
-                generate: !visitor,
-                ...(declared.review ? { review: declared.review } : {}),
-              });
+              // A person's plain reply IS the answer to the ask it lands on.
+              //
+              // Three surfaces render an Answer composer and post at
+              // `/answer`; every other door a reply comes through — a task
+              // panel's discussion composer, the widget, MCP `post_reply`, an
+              // older bundle — arrives here. Measured across this project's
+              // stored docs, that gap left 12 declarations unanswered with a
+              // person's reply sitting under each one, which is what made the
+              // queue read as ignored while the reader had in fact answered.
+              //
+              // `pendingDeclaration` and `answerFromReply` are core's, shared
+              // with the queue and the doc panel, so what counts as pending
+              // and what counts as an answer are decided in one place. A
+              // reply that DECLARES its own ask is skipped: that is a new
+              // question, not an answer to the old one.
+              const priorThread = declared.review ? null : rooms.getThread(docId, threadId);
+              const pending = priorThread ? pendingDeclaration(priorThread) : null;
+              const folded =
+                pending?.review && classifyActor(user) === 'person'
+                  ? answerFromReply(pending.review, text)
+                  : null;
+              let t: Thread | null = null;
+              if (pending && folded) {
+                // The whole answer path, exactly as the explicit route uses
+                // it — the stamps, the displaced-answer history, the reply,
+                // the events. A second writer here is how the two spellings
+                // of "answered" would drift.
+                const res = await rooms.answerReviewItem(
+                  docId,
+                  threadId,
+                  pending.id,
+                  user,
+                  text,
+                  folded.optionId,
+                  { generate: !visitor },
+                );
+                if (res.ok) {
+                  t = res.thread;
+                  // Same nudge the explicit answer fires: an answer on a
+                  // COMMENT moves no task row, so `decision.answered` never
+                  // fires for it and the lead would otherwise not hear that
+                  // the thing it was blocked on came back.
+                  const foldedHome = resolveWorkspaceForDoc(docId);
+                  if (foldedHome) {
+                    readyNudger.reviewAnswered({ workspaceId: foldedHome, actorId: user.id });
+                  }
+                }
+                // A refusal here is a race (someone answered between the read
+                // above and this write), never a reason to drop the words:
+                // fall through and post the reply as an ordinary comment.
+              }
+              if (!t) {
+                t = await rooms.postComment(docId, threadId, user, text, undefined, {
+                  // A share visitor must not be able to spend the API key.
+                  generate: !visitor,
+                  ...(declared.review ? { review: declared.review } : {}),
+                });
+              }
               if (t && declared.review) announceThreadReview(docId, t.id, declared.review, user);
               const handoff = threadUrl(docId, Boolean(visitor));
               return t
