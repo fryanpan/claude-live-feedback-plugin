@@ -65,6 +65,11 @@ export interface QueueRow {
    *  into these titles by hand, so deriving a second numbering here would
    *  let the two disagree. Falls back to the raw id for an unknown goal. */
   goalTitle: string;
+  /** False when `goal` matches no ranked goal or subgoal — the reserved
+   *  `chores` id first of all. Such a row is formal backlog: listed, ranked
+   *  last, and never auto-dispatched, which is what the ready gate reads
+   *  this field for. */
+  inGoalBand: boolean;
   status: TaskStatus;
   assignee: string;
   needs?: 'action' | 'decision';
@@ -125,6 +130,14 @@ export interface QueueOpts {
 /** Sort key for a goal id: `[band, sub]`. A goal is `[i, 0]`, its j-th
  *  subgoal `[i, j+1]`; anything unknown (including the reserved `chores`)
  *  sorts after every listed goal rather than disappearing. */
+/** Whether a goal id names a ranked goal or subgoal on this board. A board
+ *  that declares NO goals has no bands, so nothing on it is backlog — the
+ *  never-dispatch rule ranks rows against the goal list, and with no list
+ *  there is nothing to be outside of. */
+export function inGoalBand(goals: WorkspaceGoal[], goalId: string): boolean {
+  return goals.length === 0 || goalRank(goals, goalId)[0] < goals.length;
+}
+
 function goalRank(goals: WorkspaceGoal[], goalId: string): [number, number] {
   for (let i = 0; i < goals.length; i++) {
     const g = goals[i];
@@ -221,6 +234,7 @@ export function buildQueue(
       body: task.body?.trim() ?? '',
       goal: task.goal,
       goalTitle: goalTitleOf(goals, task.goal),
+      inGoalBand: inGoalBand(goals, task.goal),
       status: task.status,
       assignee: task.assignee,
       ...(task.needs !== undefined ? { needs: task.needs } : {}),
