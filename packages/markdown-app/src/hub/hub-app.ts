@@ -74,6 +74,8 @@ import {
   tabForNav,
   unplacedNotice,
   voiceHubContext,
+  walkHandoff,
+  walkNextUrl,
   walkPosition,
 } from './hub-model.ts';
 import {
@@ -1436,6 +1438,11 @@ async function main(): Promise<void> {
    * queue moves and nothing recorded it, which is the one failure this flow
    * cannot afford.
    */
+  // Filled in at boot from the landing-page handoff (see walkHandoff below):
+  // when the queue drains mid-sitting, this hops to the next workspace still
+  // holding items. Null until boot wires it; no-op without a chain.
+  let chainWalkDrain: (() => void) | null = null;
+
   async function finishWalkItem(
     item: ReviewItem | null,
     next: ReviewItem | null,
@@ -1450,6 +1457,9 @@ async function main(): Promise<void> {
     const queue = currentQueue();
     state.walkIndex = advanceWalk(queue, state.walkIndex, item.key, next?.key ?? null);
     state.walkKey = queue.items[state.walkIndex]?.key ?? null;
+    // This board's queue just drained: if the landing page handed over more
+    // boards (?then=), continue the sitting there instead of dead-ending.
+    if (queue.items.length === 0) chainWalkDrain?.();
     renderWalkthrough();
     renderHomeRegion();
     return ok;
@@ -2415,6 +2425,32 @@ async function main(): Promise<void> {
   const deepLinkTask = new URLSearchParams(location.search).get('task');
   if (deepLinkTask) state.detailTaskId = deepLinkTask;
 
+  // Deep link from the landing page's review chip / "Review all" bar:
+  // ?walk=1 opens the walkthrough once the queue arrives, and ?then= names
+  // the workspaces to visit after this one drains (walkNextUrl hops there).
+  // One-shot — SSE-driven reloads must not re-open a walkthrough the reader
+  // closed, so the flag burns on first use.
+  const handoff = walkHandoff(location.search);
+  let pendingWalk = handoff.walk && state.pane === 'home';
+  const maybeAutoWalk = (): void => {
+    if (!pendingWalk) return;
+    pendingWalk = false;
+    if (currentQueue().items.length > 0) {
+      startWalkthrough();
+      return;
+    }
+    // Nothing waiting here after all (someone answered it since the page
+    // rendered) — go straight to the next board holding items, if any.
+    const next = walkNextUrl(handoff.chain);
+    if (next) location.href = next;
+  };
+  chainWalkDrain = () => {
+    // The sitting for THIS board is over; hand the reader to the next board
+    // in the chain rather than dead-ending on the cleared card.
+    const next = walkNextUrl(handoff.chain);
+    if (next) location.href = next;
+  };
+
   // The board itself — bands and rows. Same island contract as the two above,
   // mounted once, and the one thing to keep in mind at this call site is that
   // `#hub-board` is the island's host from here on: nothing vanilla may write
@@ -2435,7 +2471,7 @@ async function main(): Promise<void> {
   renderAll();
   void loadAgents();
   void loadEvents();
-  void loadReviewItems();
+  void loadReviewItems().then(maybeAutoWalk);
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
 }
