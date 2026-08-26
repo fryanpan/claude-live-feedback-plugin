@@ -256,4 +256,23 @@ describe('the landing page says which workspaces are waiting on the owner (t-DA4
     const html = await landing();
     expect(html.split('class="allbar"').length - 1).toBe(1);
   });
+
+  it('retiring a workspace takes it out of the bar and the chain', async () => {
+    // Retiring is the owner saying "get this out of my way" — the bar
+    // steering Review all through a retired board contradicts the act.
+    // The retired row itself may still render (in its own fold) — only the
+    // bar and chain must forget it.
+    await fetch(`${base}/api/workspaces/${encodeURIComponent(waitingId)}/retired`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ retired: true, author: AGENT, reason: 'superseded in test' }),
+    });
+    const html = await landing();
+    // Only the quiet-turned-waiting board remains: no "across N", no chain.
+    expect(html).not.toContain('across 2 workspaces');
+    expect(html).toMatch(
+      new RegExp(`class="allgo" href="/workspaces/${encodeURIComponent(quietId)}/home\\?walk=1"`),
+    );
+    expect(html).not.toContain(`then=${encodeURIComponent(waitingId)}`);
+  });
 });
