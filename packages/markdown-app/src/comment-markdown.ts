@@ -9,7 +9,16 @@
  * Supported: **bold**, *italic* / _italic_, `code`, ~~strike~~,
  * [label](url) (http/https/mailto only), `-`/`*` bullet lists, `#` headings,
  * and line breaks.
+ *
+ * Plus one convenience: a BARE workspace URL (a pasted board / task / doc /
+ * mockup address — see `parseWorkspaceLink` in @feedback/core) becomes a link
+ * whose text is the resource's title once `link-titles.ts` has resolved it,
+ * and the raw URL until then. Display-only: the stored comment keeps the raw
+ * URL. An explicit [label](url) is untouched — the author chose that text —
+ * and non-workspace URLs stay plain text.
  */
+import { parseWorkspaceLink } from '@feedback/core';
+import { cachedLinkTitle, scheduleLinkTitleHydration } from './link-titles.ts';
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (ch) =>
@@ -54,7 +63,69 @@ function inline(escaped: string): string {
       ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`
       : m;
   });
+  out = linkifyWorkspaceUrls(out);
   return out;
+}
+
+/**
+ * A bare-URL candidate in ESCAPED text: an absolute http(s) URL, or a
+ * root-relative path in one of the workspace shapes. Whitespace and parens
+ * end a URL (raw `<>"'` cannot appear — they are entities by now).
+ */
+const BARE_URL = /(?:https?:\/\/[^\s()]+|(?<=^|[\s(])\/(?:workspaces|review|mockup)\/[^\s()]+)/g;
+
+/** Trailing characters that read as punctuation AFTER a pasted URL, entity
+ *  spellings included — `see http://…/docs/x.` must not eat the period. */
+function trimUrlTail(s: string): string {
+  let out = s;
+  for (;;) {
+    const next = out.replace(/(?:&(?:lt|gt|quot|amp|#39);|[.,;:!?])$/, '');
+    if (next === out) return out;
+    out = next;
+  }
+}
+
+/**
+ * Turn bare workspace URLs in already-rendered inline HTML into title links.
+ *
+ * Runs AFTER the explicit-link pass, over a tag-split of the string: only
+ * text outside every tag, outside `<a>` (an author-chosen label stays the
+ * author's) and outside `<code>` (code is literal) is considered. The tags
+ * present were all emitted by this module, so the split is over known-safe
+ * markup, and the text segments are still escape-first.
+ */
+function linkifyWorkspaceUrls(html: string): string {
+  if (!/https?:\/\/|\/(?:workspaces|review|mockup)\//.test(html)) return html;
+  let anchorDepth = 0;
+  let codeDepth = 0;
+  let sawPending = false;
+  const parts = html.split(/(<[^>]+>)/).map((seg) => {
+    if (seg.startsWith('<')) {
+      if (/^<a[\s>]/.test(seg)) anchorDepth++;
+      else if (seg === '</a>') anchorDepth = Math.max(0, anchorDepth - 1);
+      else if (/^<code[\s>]/.test(seg)) codeDepth++;
+      else if (seg === '</code>') codeDepth = Math.max(0, codeDepth - 1);
+      return seg;
+    }
+    if (anchorDepth > 0 || codeDepth > 0) return seg;
+    return seg.replace(BARE_URL, (m) => {
+      const trimmed = trimUrlTail(m);
+      const tail = m.slice(trimmed.length);
+      // The segment is escaped text; the URL itself needs `&` back to parse.
+      const url = trimmed.replace(/&amp;/g, '&');
+      if (!parseWorkspaceLink(url)) return m;
+      const title = cachedLinkTitle(url);
+      if (title === undefined) sawPending = true;
+      const attrs =
+        `href="${escapeHtml(url)}" class="ws-link" data-ws-link="${escapeHtml(url)}"` +
+        `${title === undefined ? ' data-ws-pending=""' : ''} target="_blank" rel="noopener noreferrer"`;
+      // Title text via escapeHtml (server data is not markup); the raw-URL
+      // fallback is `trimmed`, which is already escaped text.
+      return `<a ${attrs}>${title ? escapeHtml(title) : trimmed}</a>${tail}`;
+    });
+  });
+  if (sawPending) scheduleLinkTitleHydration();
+  return parts.join('');
 }
 
 /**
