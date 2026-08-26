@@ -192,10 +192,42 @@ export function ComposerForm(props: ComposerSpec & { className: string; hint?: s
   );
 }
 
-/** The task's Discussion: ONE chronological sequence of comments, and ONE
- *  composer at the bottom. The rows hold no state, so they are rebuilt on
- *  every paint into an `<ol>` Preact owns and never reaches into; the
- *  composer beneath them keeps its node, which is what keeps the draft. */
+/**
+ * The task's Discussion: ONE chronological sequence of comments, and ONE
+ * composer at the bottom.
+ *
+ * This is the whole point of the panel for a reviewer: the board used to
+ * offer a LINK to the task doc and nothing else, so disagreeing with a task
+ * cost a navigation — which in practice meant saying it in chat instead,
+ * where it reaches nobody the task reaches.
+ *
+ * Three rounds of the same complaint got it here, each removing a layer of
+ * threading from the SURFACE. First there were N + 1 composers — a reply box
+ * inside every thread plus a new-thread box under them all. Then one composer,
+ * with each thread still drawn as its own bordered box. Then one stream of
+ * rows, but with a Reply button per conversation, a "Replying below" state and
+ * a "New thread" button. Bryan, 2026-08-18, on that last one: *"Mocks still
+ * show threaded comments design. I explicitly asked for that to be removed."*
+ *
+ * So there is now no threading affordance at all: no reply target to choose,
+ * nothing naming a thread, no way to start one by hand. What a reader sees is
+ * what they were promised — *"a single sequence of comments with clearer
+ * separation, authorship and timing"* — and the composer's destination is
+ * DERIVED (`composerTarget`) rather than picked.
+ *
+ * Storage did not move, and deliberately: threads remain exactly as
+ * `create_thread` writes them (34 of 37 on the live board carry a text anchor
+ * into the description) and `resolve_thread` still means "this point is
+ * handled". Flattening the render is reversible; flattening the store would
+ * destroy the anchors and redefine an MCP verb that has callers. Nothing in
+ * this render reads a thread's identity except `data-thread-id`, which is data
+ * rather than presentation — it is how a reply reaches the agent watching that
+ * conversation.
+ *
+ * The rows hold no state, so they are rebuilt on every paint into an `<ol>`
+ * Preact owns and never reaches into; the composer beneath them keeps its
+ * node, which is what keeps the draft.
+ */
 export function Discussion(props: {
   /** The row the comments belong to — a task id or a goal id. */
   rowId: string;

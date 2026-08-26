@@ -21,6 +21,7 @@ import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
+import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
 import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
   ACTIVITY_REFRESH_EVENTS,
@@ -82,7 +83,6 @@ import {
   discussionIsBusy,
   renderActivity,
   renderArchivedList,
-  renderGoalDetail,
   renderHomeBrief,
   renderLeadStrip,
   renderQuickAdd,
@@ -519,6 +519,7 @@ async function main(): Promise<void> {
   // `taskDetailData` — they close over the task, the review rows and the clock
   // this paint resolved.
   mountTaskDetailIsland(el('hub-detail'));
+  mountGoalDetailIsland(el('hub-goal-detail'));
 
   // The presence strip, in both places it renders: who is here in the
   // top-right cluster, and the drift notices in the settings panel. Same
@@ -1075,7 +1076,6 @@ async function main(): Promise<void> {
           const active = document.activeElement;
           detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
         }
-        const freshOpen = renderedGoalId !== section.id;
         // The goal's comments, fetched the same lazy way a task's are and
         // guarded by the same id — one fetch per open, and the guard is what
         // stops the fetch's own re-render from looping back through here.
@@ -1089,10 +1089,10 @@ async function main(): Promise<void> {
         // The task panel closes first: the two share the screen, never the
         // container, so nothing else empties the island's host any more.
         closeTaskPanel(true);
-        renderGoalDetail(
-          el('hub-goal-detail'),
+        goalDetailData.value = {
           section,
-          {
+          discussion: goalDiscussion,
+          handlers: {
             onClose: () => {
               state.detailGoalId = null;
               renderDetail();
@@ -1101,28 +1101,25 @@ async function main(): Promise<void> {
             onStatusSet: (goalId, to) => void transitionGoal(goalId, to),
             onComment: (goalId, text, threadId) =>
               postRowComment({ id: goalId, bodyDocId: goalBodyDocId(section) }, text, threadId),
+            // The goal's description is a live room like a task's, so the SAME
+            // editor host drives it — one mount at a time, which is what makes
+            // "a body editor left mounted by the last open row" impossible
+            // rather than something this branch has to remember to tear down.
+            // The panel reports its own slot: a signal write does not paint
+            // synchronously, so nothing out here can know when the slot exists.
+            onBodySlot: (row, slot) =>
+              bodyEditor.sync(
+                row === null ? null : { id: row.id, bodyDocId: goalBodyDocId(row) },
+                slot,
+              ),
             ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
             now: Date.now(),
           },
-          goalDiscussion,
-        );
-        // The goal's description is a live room like a task's, so the SAME
-        // editor host drives it — one mount at a time, which is what makes
-        // "a body editor left mounted by the last open row" impossible rather
-        // than something this branch has to remember to tear down.
-        bodyEditor.sync(
-          { id: section.id, bodyDocId: goalBodyDocId(section) },
-          el('hub-goal-detail').querySelector<HTMLElement>('.hub-detail-body-slot'),
-        );
+        };
         renderedGoalId = section.id;
         renderedDetailId = null;
         detailEventsFor = null;
         syncTaskParam(null);
-        // Fresh opens take focus like the task panel does (that is what puts
-        // Escape and hold-Space inside the dialog); repaints leave the
-        // keyboard where the reader has it.
-        if (freshOpen)
-          el('hub-goal-detail').querySelector<HTMLElement>('.hub-detail-panel')?.focus();
         return;
       }
       // The goal left the board under us (removed from the list, or the
@@ -1131,11 +1128,10 @@ async function main(): Promise<void> {
     }
     // Past this point the goal panel is not what is showing, and its container
     // is its own — so it has to be told to close rather than being replaced.
-    renderGoalDetail(el('hub-goal-detail'), null, {
-      onClose: () => {},
-      onTitleCommit: () => {},
-      onStatusSet: () => {},
-    });
+    goalDetailData.value = {
+      section: null,
+      handlers: { onClose: () => {}, onTitleCommit: () => {}, onStatusSet: () => {} },
+    };
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
     if (task && renderedDetailId === null) {
       const active = document.activeElement;

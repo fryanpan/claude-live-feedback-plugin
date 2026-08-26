@@ -3790,7 +3790,8 @@ a.hub-link-chip:hover {
   font-size: 13px;
 }
 /* The description's slot — the one node a repaint never rebuilds, because the
-   live editor is mounted into it (see `keptBodySlot` in hub-render.ts). The
+   live editor is mounted into it (the detail islands render it childless, so
+   Preact never diffs inside it). The
    fallback text and the editor both live here, so the box has to look the
    same either way: no jump when the editor lands a moment after the panel. */
 .hub-detail-body-slot {

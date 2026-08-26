@@ -5,7 +5,8 @@ import {
   type HubTask,
   boardSections,
 } from '../src/hub/hub-model.ts';
-import { type GoalDetailHandlers, renderGoalDetail } from '../src/hub/hub-render.ts';
+import type { GoalDetailHandlers } from '../src/hub/hub-render.ts';
+import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
 
 /**
  * The goal DETAIL panel — the surface a goal row's tap opens (decision 4:
@@ -81,6 +82,7 @@ function sectionWith(
 
 let root: HTMLElement;
 beforeEach(() => {
+  disposeGoalDetail();
   document.body.replaceChildren();
   document.body.className = '';
   root = document.createElement('div');
