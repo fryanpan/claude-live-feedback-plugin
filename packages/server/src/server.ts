@@ -65,6 +65,7 @@ import {
   taskDeepLink,
 } from './home-brief.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
+import { loadIdentityLinks } from './identity-links.ts';
 import {
   type LandingModel,
   type LandingProjectLink,
@@ -2366,6 +2367,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const identities = new Identities({ dataDir });
   if (identities.loadError) {
     console.error(`[identities] ${identities.loadError}`);
+  }
+  // Teach the owner check which anonymous session ids belong to a known
+  // person. Logged either way: a link file that failed to parse and one that
+  // was never written both leave the map empty, and the difference is
+  // invisible everywhere downstream — it shows up only as an activity stream
+  // that under-attributes, months later. See identity-links.ts.
+  const identityLinkLoad = loadIdentityLinks(dataDir);
+  if (identityLinkLoad.error) {
+    console.error(`[identities] ${identityLinkLoad.error}`);
+  } else if (identityLinkLoad.loaded > 0) {
+    console.log(`[identities] ${identityLinkLoad.loaded} identity link(s) loaded`);
   }
   const emailCodes = new EmailCodes();
   const codeSender = opts.codeSender ?? createLogCodeSender();
