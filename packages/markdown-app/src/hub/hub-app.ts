@@ -2095,7 +2095,17 @@ async function main(): Promise<void> {
     renderDetail();
   };
 
+  /** The activity log has a reader on screen. Only the Activity view and an
+   *  open detail panel render `state.events` — everything else on the board
+   *  lives off the projection — so with neither up, fetching ~1000 audit
+   *  rows (~590KB on the live hub board) buys nothing. The SSE listeners
+   *  keep calling in; this gate is what makes those calls free until one of
+   *  the two readers opens, whose open paths already load on their own. */
+  const eventsConsumerActive = (): boolean =>
+    state.view === 'activity' || state.detailTaskId !== null || state.detailGoalId !== null;
+
   async function loadEvents(): Promise<void> {
+    if (!eventsConsumerActive()) return;
     const res = await fetchJson<{ events: ActivityEvent[]; uptime: UptimeReport | null }>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/events`,
     );
@@ -2115,6 +2125,49 @@ async function main(): Promise<void> {
     // history as it stood when it opened.
     if (state.detailTaskId || state.detailGoalId) renderDetail();
   };
+
+  // ── Load report (t-scWMQmOZcpu1) ────────────────────────────────────────
+  // One line per page load, POSTed to /load-reports so "the board was slow"
+  // is a recorded fact with phase attribution: msToBoot is the REST first
+  // paint, msToFirstProjection is when the ydoc's task projection actually
+  // arrived (the payload the iPad spent its 10 seconds on). Both are ms from
+  // navigation start — performance.now()'s zero — so they compare across
+  // loads. Sent once, when both phases are in, or at the fallback deadline
+  // if the ydoc never syncs (that slow load is the one most worth recording).
+  let msToBoot = 0;
+  let msToFirstProjection: number | null = null;
+  let loadReportSent = false;
+  const sendLoadReport = (): void => {
+    if (loadReportSent) return;
+    loadReportSent = true;
+    // What the network actually moved: "slow because big" and "slow because
+    // far" need different fixes, and the report should tell them apart.
+    const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+    void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        msToBoot,
+        ...(msToFirstProjection !== null ? { msToFirstProjection } : {}),
+        resourceCount: resources.length,
+        transferBytes: resources.reduce((sum, r) => sum + (r.transferSize || 0), 0),
+        decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
+      }),
+    }).catch(() => {});
+  };
+  // The ydoc's initial sync is the phase boundary, not the first tasksMap
+  // mutation: an empty workspace's sync changes no task and would otherwise
+  // report boot-only after the fallback, and any later peer edit would be
+  // mistaken for the initial load (codex review on PR 384). onReady fires
+  // once, after sync-step-2 lands — empty doc included.
+  client.onReady(() => {
+    if (msToFirstProjection === null) {
+      msToFirstProjection = Math.round(performance.now());
+      // onReady can beat the boot block below (the ydoc syncs concurrently)
+      // — only send once boot has painted and stamped msToBoot.
+      if (msToBoot > 0) sendLoadReport();
+    }
+  });
 
   // ── Wiring ──────────────────────────────────────────────────────────────
   // Both observers read the projection at once (state must be current the
@@ -2493,8 +2546,17 @@ async function main(): Promise<void> {
   // REST-backed regions.
   readProjection();
   renderAll();
+  msToBoot = Math.round(performance.now());
+  if (msToFirstProjection !== null) sendLoadReport();
+  // Fallback: a load whose ydoc never syncs is the slowest kind and must
+  // still get recorded — report boot-only after 15s rather than never.
+  setTimeout(sendLoadReport, 15_000);
   void loadAgents();
-  void loadEvents();
+  // No loadEvents here: the Activity view and the detail panel — the only
+  // readers — each fetch the log on their own open, and boot fetching ~590KB
+  // nobody is looking at was a measured slice of the iPad's 10-second load
+  // (t-scWMQmOZcpu1). loadEvents itself is gated on a visible reader too,
+  // so the SSE refresh calls it safely.
   void loadReviewItems().then(maybeAutoWalk);
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
