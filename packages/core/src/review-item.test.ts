@@ -923,6 +923,30 @@ describe('answerFromReply', () => {
     expect(answerFromReply(question, '   ')).toBeNull();
   });
 
+  it('answers nothing when two options normalize to the same label', () => {
+    // Trimming and case-folding is what lets a person type a label back, and
+    // it is also what can make two DIFFERENT options indistinguishable. Taking
+    // the first match would record a pick the reader never made and could not
+    // see was wrong — a coin toss stamped as their answer. Refusing leaves the
+    // words as a comment and the item where the reader can still answer it.
+    const ambiguous: ReviewPayload = {
+      shape: 'decision',
+      headline: 'Ship it?',
+      options: [
+        { id: 'yes-now', label: 'Yes' },
+        { id: 'yes-later', label: ' yes ' },
+      ],
+    };
+    expect(answerFromReply(ambiguous, 'yes')).toBeNull();
+    // The unambiguous option on the same payload still answers, so the refusal
+    // is about the collision and not about the payload carrying one.
+    const mixed: ReviewPayload = {
+      ...ambiguous,
+      options: [...(ambiguous.options ?? []), { id: 'no', label: 'No' }],
+    };
+    expect(answerFromReply(mixed, 'No')).toEqual({ optionId: 'no' });
+  });
+
   it('reads prose as the answer on a decision that offered no options', () => {
     // Keyed on what was OFFERED, not on the authored shape: with no options
     // there is no vocabulary to type back, so prose is the only answer it

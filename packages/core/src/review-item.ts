@@ -286,7 +286,16 @@ export function answerFromReply(review: ReviewPayload, text: string): { optionId
   // none offers no vocabulary, so prose is the only answer it could ever get.
   const options = review.options ?? [];
   if (options.length === 0) return {};
-  const picked = options.find((o) => o.label.trim().toLowerCase() === words.toLowerCase());
+  // EXACTLY one, never the first of several. Trimming and case-folding is what
+  // lets a person type a label back, and it is also what can make two DIFFERENT
+  // options ("Yes" and " yes ") indistinguishable from the words typed. Taking
+  // the first would stamp a coin toss as the reader's answer, on the one field
+  // they cannot see is wrong. Zero matches and two matches are the same state
+  // here — nothing was picked — and the words stay a comment on an item the
+  // reader can still answer.
+  const wanted = words.toLowerCase();
+  const matches = options.filter((o) => o.label.trim().toLowerCase() === wanted);
+  const picked = matches.length === 1 ? matches[0] : undefined;
   return picked ? { optionId: picked.id } : null;
 }
 

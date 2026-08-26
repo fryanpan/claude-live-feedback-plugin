@@ -538,6 +538,69 @@ describe("a person's plain reply answers the item it lands on", () => {
     expect(stored.comments[1]?.review?.headline).toBe('Which draft is current?');
   });
 
+  it('does not let a second folded reply displace the answer already recorded', async () => {
+    // The write has to be conditioned on the declaration STILL being pending,
+    // not merely on it having been pending when the request was read.
+    // `answerReviewItem` treats a second answer as a legitimate re-answer and
+    // moves the standing one into `answerHistory` — right for a person tapping
+    // Answer again, wrong for a reply that was only ever folded because the
+    // item looked open. Called directly, because a race is what this guards
+    // and a race is exactly what a request pair cannot be relied on to stage.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    const commentId = seeded.comments[0]?.id ?? '';
+    const first = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Cut the second sentence.',
+    });
+    expect(first.status).toBe(200);
+    // The loser of the race: it read the item as pending, and by the time it
+    // writes, it is not. Addressed by the room's PRIMARY id — `answerReviewItem`
+    // takes the resolved id the routes hand it, and a readable alias reaches no
+    // room from in here. Resolved rather than assumed, because a miss would
+    // return `no-doc` and this test would pass without ever reaching the guard.
+    const roomId = handle.rooms.get(docId)?.docId ?? docId;
+    const late = await handle.rooms.answerReviewItem(
+      roomId,
+      seeded.id,
+      commentId,
+      { ...PERSON, id: 'known-sam', name: 'Sam' },
+      'Leave it as it is.',
+      undefined,
+      { onlyIfUnanswered: true },
+    );
+    expect(late.ok).toBe(false);
+    // Named, not merely falsy: `no-doc` from a mis-addressed call is also
+    // `ok: false`, and it would let this test pass having tested nothing.
+    expect(late.ok === false ? late.error : '').toBe('already-answered');
+    const review = (await firstThread(docId)).comments[0]?.review;
+    expect(review?.answerText).toBe('Cut the second sentence.');
+    expect(review?.answeredBy).toBe(PERSON.name);
+    // Nothing was displaced, because nothing was written.
+    expect(review?.answerHistory).toBeUndefined();
+  });
+
+  it('still lets a person answer again on purpose', async () => {
+    // The positive control for the guard above: the explicit answer path is
+    // unconditional, so changing your mind still works and still keeps the
+    // displaced answer as history rather than dropping it.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Cut the second sentence.',
+    });
+    const again = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+      author: PERSON,
+      text: 'On reflection, keep both.',
+      commentId: seeded.comments[0]?.id,
+    });
+    expect(again.status, await again.clone().text()).toBe(200);
+    const review = (await firstThread(docId)).comments[0]?.review;
+    expect(review?.answerText).toBe('On reflection, keep both.');
+    expect(review?.answerHistory?.[0]?.answerText).toBe('Cut the second sentence.');
+  });
+
   it('still leaves an ordinary thread an ordinary thread', async () => {
     // The positive control for the negatives above: a thread that declared
     // nothing takes a plain reply and gains no review payload from anywhere.
