@@ -2,19 +2,24 @@
  * Bare workspace URLs pasted into a comment render as the linked resource's
  * TITLE, not the raw address (render-time only — the stored comment text is
  * never rewritten). All ids/hosts are synthetic fixtures; the repo is public.
+ *
+ * Only SAME-ORIGIN URLs (and relative paths) qualify: a foreign-origin URL
+ * that merely matches a workspace path shape must stay raw text, or a trusted
+ * title would dress up an attacker's href.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { renderCommentMarkdown } from '../src/comment-markdown.ts';
 import { _resetLinkTitlesForTest, hydrateLinkTitles, primeLinkTitle } from '../src/link-titles.ts';
 
-const DOC_URL = 'http://reviewhost.example:8787/workspaces/w-abc123/docs/doc-1';
+// happy-dom's page origin — the one origin the renderer may trust.
+const DOC_URL = `${location.origin}/workspaces/w-abc123/docs/doc-1`;
 
 beforeEach(() => {
   _resetLinkTitlesForTest();
 });
 
 describe('renderCommentMarkdown — bare workspace URLs', () => {
-  it('turns a bare workspace URL into an anchor marked for title hydration', () => {
+  it('turns a bare same-origin workspace URL into an anchor marked for title hydration', () => {
     const out = renderCommentMarkdown(`see ${DOC_URL} for details`);
     expect(out).toContain(`<a href="${DOC_URL}"`);
     expect(out).toContain('data-ws-link=');
@@ -46,6 +51,24 @@ describe('renderCommentMarkdown — bare workspace URLs', () => {
     const out = renderCommentMarkdown('https://github.com/owner/repo/pull/1');
     expect(out).not.toContain('<a ');
     expect(out).toContain('https://github.com/owner/repo/pull/1');
+  });
+
+  it('leaves a FOREIGN-origin URL raw even when its path matches a workspace shape', () => {
+    // The spoofing path: a valid doc id on an attacker host. Linkifying it
+    // and hydrating the trusted title would label a phishing href "Q3 Plan".
+    const spoof = 'https://attacker.example/review/doc-1';
+    primeLinkTitle(spoof, 'Q3 Plan'); // even a poisoned cache must not render
+    const out = renderCommentMarkdown(`see ${spoof} now`);
+    expect(out).not.toContain('<a ');
+    expect(out).not.toContain('Q3 Plan');
+    expect(out).toContain(spoof);
+  });
+
+  it('treats a same-host different-port URL as foreign', () => {
+    const otherPort = 'http://localhost:9999/review/doc-1';
+    const out = renderCommentMarkdown(otherPort);
+    expect(out).not.toContain('<a ');
+    expect(out).toContain(otherPort);
   });
 
   it('leaves a URL inside inline code untouched', () => {
@@ -103,10 +126,10 @@ describe('hydrateLinkTitles', () => {
   });
 
   it('resolves distinct URLs in one batch', async () => {
-    const taskUrl = 'http://reviewhost.example:8787/workspaces/w-abc123?task=t-42fixture';
+    const taskUrl = `${location.origin}/workspaces/w-abc123?task=t-42fixture`;
     const el = mount(`${DOC_URL}\n\n${taskUrl}`);
     let requested: string[] = [];
-    const fetcher = async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const fetcher = async (_url: string, init?: RequestInit) => {
       requested = (JSON.parse(String(init?.body)) as { urls: string[] }).urls;
       return new Response(
         JSON.stringify({ titles: { [DOC_URL]: 'Redline Design', [taskUrl]: 'Ship the widget' } }),
@@ -118,5 +141,30 @@ describe('hydrateLinkTitles', () => {
     const texts = [...el.querySelectorAll('a')].map((a) => a.textContent);
     expect(texts).toContain('Redline Design');
     expect(texts).toContain('Ship the widget');
+  });
+
+  it('keeps batching past the 100-URL cap until every pending link is resolved', async () => {
+    // 120 distinct links: more than one batch. Anchors are built directly —
+    // this is the hydrator's contract, not the renderer's.
+    const el = document.createElement('div');
+    const urls = Array.from({ length: 120 }, (_, i) => `/review/bulk-${i}`);
+    el.innerHTML = urls
+      .map((u) => `<a href="${u}" data-ws-link="${u}" data-ws-pending="">${u}</a>`)
+      .join(' ');
+    document.body.appendChild(el);
+    const batches: number[] = [];
+    const fetcher = async (_url: string, init?: RequestInit) => {
+      const asked = (JSON.parse(String(init?.body)) as { urls: string[] }).urls;
+      batches.push(asked.length);
+      const titles = Object.fromEntries(asked.map((u) => [u, `Title ${u}`]));
+      return new Response(JSON.stringify({ titles }), { status: 200 });
+    };
+    await hydrateLinkTitles(el, fetcher);
+    expect(batches).toEqual([100, 20]);
+    const pending = el.querySelectorAll('a[data-ws-pending]');
+    expect(pending.length).toBe(0);
+    expect(el.querySelector(`a[data-ws-link="/review/bulk-119"]`)?.textContent).toBe(
+      'Title /review/bulk-119',
+    );
   });
 });

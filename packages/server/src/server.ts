@@ -4514,12 +4514,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const body = await safeJson(req);
           const urls = body?.urls;
           if (!Array.isArray(urls)) return j(400, { error: 'urls: string[] required' });
+          // One board index per REQUEST, built only if a board-scoped doc URL
+          // actually needs it — the membership question is the same one the
+          // /api/docs listing answers, asked through the same index.
+          let boardIndex: Map<string, string[]> | null = null;
           return j(200, {
             titles: linkTitlesFor(
               urls.filter((u): u is string => typeof u === 'string'),
               {
                 docMeta: (docId) => rooms.get(docId)?.meta,
-                taskTitle: (taskId) => taskStore.getTask(taskId)?.title,
+                docInWorkspace: (docId, workspaceId) => {
+                  const meta = rooms.get(docId)?.meta;
+                  if (!meta) return false;
+                  if (meta.workspaceId === workspaceId) return true;
+                  boardIndex ??= boardIndexForListing();
+                  return hubBoardsForDocIndexed(boardIndex, meta).has(workspaceId);
+                },
+                task: (taskId) => {
+                  const t = taskStore.getTask(taskId);
+                  return t ? { title: t.title, workspaceId: t.workspaceId } : undefined;
+                },
                 workspaceName: (workspaceId) => taskStore.getWorkspace(workspaceId)?.name,
               },
             ),
