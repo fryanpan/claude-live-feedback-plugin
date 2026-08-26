@@ -27,6 +27,7 @@ function row(over: Partial<GateRow> = {}): GateRow {
     title: 'Rank results by recency',
     status: 'todo',
     ready: true,
+    inGoalBand: true,
     ...over,
   };
 }
@@ -221,5 +222,47 @@ describe('the verdict states its own denominator', () => {
     );
 
     expect(verdict.ready.map((r) => r.id)).toEqual(['t-first', 't-second', 't-third']);
+  });
+});
+
+describe('the backlog band is never dispatched, so it is never a reason to wake', () => {
+  // Bryan, 2026-08-22: "above all else go in priority order" — rows whose
+  // goal is not on the workspace's ranked goal list (the reserved `chores`
+  // id first of all) are formal backlog and are not auto-dispatched. A wake
+  // that counts them says "39 ready" over a board whose dispatchable set is
+  // zero — measured three times in one hour on a real board (t-X_Rkt8fA9HIY).
+  it('withholds a backlog row and names the reason', () => {
+    const verdict = evaluateReadyWork([row({ inGoalBand: false })], probes());
+
+    expect(verdict.ready).toEqual([]);
+    expect(verdict.held).toEqual({ backlog: 1 });
+    expect(verdict.considered).toBe(1);
+  });
+
+  it('reports a parked backlog row as backlog — the band settles it alone', () => {
+    // Parked expires; backlog does not. The stronger, non-expiring fact is
+    // the one the held count should carry.
+    const verdict = evaluateReadyWork(
+      [row({ inGoalBand: false, parked: { until: Date.now() + 60_000 } })],
+      probes(),
+    );
+
+    expect(verdict.held).toEqual({ backlog: 1 });
+  });
+
+  it('still names the goal-band row standing next to a wall of backlog', () => {
+    // The positive control for this describe: a gate that held everything
+    // out-of-band AND in-band would pass the two tests above.
+    const verdict = evaluateReadyWork(
+      [
+        row({ id: 't-b1', inGoalBand: false }),
+        row({ id: 't-b2', inGoalBand: false }),
+        row({ id: 't-g', title: 'Ship the fix' }),
+      ],
+      probes(),
+    );
+
+    expect(verdict.ready).toEqual([{ id: 't-g', title: 'Ship the fix' }]);
+    expect(verdict.held).toEqual({ backlog: 2 });
   });
 });

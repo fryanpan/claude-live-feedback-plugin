@@ -54,6 +54,10 @@ export type HoldReason =
   | 'parked'
   /** Owned by a person. An agent wake unblocks nothing there. */
   | 'awaiting-person'
+  /** Outside every ranked goal band — formal backlog, never auto-dispatched
+   *  (Bryan, 2026-08-22: "above all else go in priority order"). Not a
+   *  deferral and not a block: the band itself is the verdict. */
+  | 'backlog'
   /** Owned by nobody the board can name. There is no session to wake. */
   | 'unowned'
   /** An open review item — a question put to a person that nobody has
@@ -75,6 +79,10 @@ export interface GateRow {
   status: string;
   /** False when an open ENFORCED dependency holds the row (`QueueRow.ready`). */
   ready: boolean;
+  /** False when the row's goal is not on the workspace's ranked goal list —
+   *  the reserved `chores` id first of all. Such a row is formal backlog and
+   *  the dispatch rule would never start it, so a wake must not count it. */
+  inGoalBand: boolean;
   /** Present only while the row is deferred, computed against `now` by the
    *  caller — an expired park simply arrives absent. */
   parked?: { until: number; reason?: string };
@@ -152,6 +160,12 @@ export function evaluateReadyWork(
     // row carries itself, so none of them can fail to be readable.
     if (row.status !== 'todo') {
       hold('claimed');
+      continue;
+    }
+    // Before `parked`, deliberately: a park expires, the band does not, and
+    // the held count should carry the fact that will still be true tomorrow.
+    if (!row.inGoalBand) {
+      hold('backlog');
       continue;
     }
     if (row.parked !== undefined) {
