@@ -900,6 +900,16 @@ export class Rooms {
    * Refuses an unknown option rather than recording a dangling id — the card
    * renders the label by looking the id up, so a stale one would render as a
    * blank choice on a decision that reads as answered.
+   *
+   * `onlyIfUnanswered` makes the write CONDITIONAL on the item still being
+   * pending, re-checked here rather than by the caller. Answering twice is
+   * legitimate for a person who changed their mind — that is the unconditional
+   * default, and the displaced answer becomes history. It is not legitimate for
+   * a reply that was folded into an answer only because the item looked open
+   * when the request was read: that caller's whole claim is "nobody has
+   * answered this", and it must lose the race rather than overwrite the winner.
+   * The caller then posts the words as an ordinary comment, which is what they
+   * were.
    */
   async answerReviewItem(
     docId: string,
@@ -908,7 +918,7 @@ export class Rooms {
     author: User,
     text: string,
     optionId?: string,
-    opts?: { generate?: boolean },
+    opts?: { generate?: boolean; onlyIfUnanswered?: boolean },
   ): Promise<{ ok: true; thread: Thread } | { ok: false; error: string }> {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'no-doc' };
@@ -917,6 +927,13 @@ export class Rooms {
     if (!target?.review) return { ok: false, error: 'not-a-review-item' };
     if (optionId !== undefined && !target.review.options?.some((o) => o.id === optionId)) {
       return { ok: false, error: `unknown option '${optionId}'` };
+    }
+    // Read in the same synchronous stretch as the write below, so nothing can
+    // land between the check and the stamp. The caller's own read is not enough
+    // — it is one `await` away from being stale, and this is the layer that
+    // knows what is stored.
+    if (opts?.onlyIfUnanswered && reviewAnswered(target.review)) {
+      return { ok: false, error: 'already-answered' };
     }
     // Stamped BEFORE the reply so the payload is already current when
     // `thread.replied` reaches a watching agent — otherwise the event that
