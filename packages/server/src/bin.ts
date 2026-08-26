@@ -64,6 +64,7 @@ const clientReleaseRootDir = arg('client-release-root') ?? null;
 // default rather than disabling the wake by accident — an idle window of 0
 // would nudge on every tick, which is the one behaviour the feature exists to
 // avoid.
+const sentryDsn = readRenamedEnv(process.env, 'CW_SENTRY_DSN')?.trim();
 const readyNudgeMinutes = Number(readRenamedEnv(process.env, 'CW_READY_NUDGE_MINUTES') ?? '');
 const readyNudgeIdleMs =
   Number.isFinite(readyNudgeMinutes) && readyNudgeMinutes > 0
@@ -300,6 +301,8 @@ for (let i = 0; i < 20 && !handle; i++) {
       sharingEnvLocked,
       requireEmailAuth,
       ...(ownerEmail ? { ownerEmail } : {}),
+      // Browser Sentry DSN — box config, never the repo (see ServerOptions).
+      ...(sentryDsn ? { sentryDsn } : {}),
       cfAccess,
       share,
       summarizer,
