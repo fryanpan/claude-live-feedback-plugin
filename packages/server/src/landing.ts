@@ -55,6 +55,13 @@ export interface LandingWorkspaceInput {
    * acts differently on each.
    */
   retired?: boolean;
+  /**
+   * Open review items waiting on a person in this workspace — the count the
+   * row's chip shows. Computed by the caller from the SAME builder Home's
+   * queue reads (`reviewItemsFor` + `homeQueueTotal`), so the number on `/`
+   * can never disagree with the queue behind the tap. Absent means zero.
+   */
+  waiting?: number;
 }
 
 /** One row of the page: a place to go, not its contents. */
