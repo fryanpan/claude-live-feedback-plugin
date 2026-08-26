@@ -17,6 +17,7 @@ import {
 } from '../connection-state.ts';
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
+import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
@@ -427,6 +428,13 @@ async function main(): Promise<void> {
   const root = document.getElementById('hub-root');
   const workspaceId = workspaceIdFromPath();
   if (!root || !workspaceId) return;
+
+  // Publish `--kb-bottom` before anything is drawn. The doc surface has done
+  // this since its composer first went under the keyboard; the hub is a
+  // separate entry point and did not, so every bottom-docked thing here — the
+  // task panel's Comment button most visibly — sat under the iOS keyboard and
+  // its accessory bar with no scroll left to reach it.
+  wireKeyboardInset();
 
   const user: User = await ensureUserIdentity(new URLSearchParams(location.search).get('as'), {
     get: (k) => localStorage.getItem(k),
