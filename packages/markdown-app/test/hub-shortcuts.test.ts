@@ -70,8 +70,18 @@ function fixture(detailTaskId: string | null) {
 
 /** Dispatch a real bubbling keydown from the currently focused element so the
  *  handler sees a populated composedPath, exactly as it would live. */
-function press(key: string, handler: (ev: KeyboardEvent) => void): KeyboardEvent {
-  const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, composed: true });
+function press(
+  key: string,
+  handler: (ev: KeyboardEvent) => void,
+  mods: KeyboardEventInit = {},
+): KeyboardEvent {
+  const ev = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    ...mods,
+  });
   document.addEventListener('keydown', handler as EventListener, { once: true });
   (document.activeElement ?? document.body).dispatchEvent(ev);
   return ev;
@@ -191,5 +201,62 @@ describe('hub row shortcuts with the detail panel focused (the #250 focus steal)
     f.panel.focus();
     press('Escape', f.handler);
     expect(f.closedCount()).toBe(1);
+  });
+});
+
+// A modifier chord belongs to the browser or the OS, not to this board. The
+// bug this pins: Cmd+C on a selection inside a task ran the `c` capture
+// shortcut, which focused the quick-capture box and preventDefault()'d — so
+// the selection was gone and nothing reached the clipboard. Nothing here
+// deliberately owns a meta/ctrl/alt chord, so every one of them passes
+// through untouched. Shift is NOT a bail: `?` is Shift+/ on most layouts.
+describe('modifier chords pass through (the Cmd+C steal)', () => {
+  it('Cmd+C neither focuses the capture box nor preventDefaults', () => {
+    const f = fixture(null);
+    const box = document.createElement('textarea');
+    box.className = 'hub-quick-input';
+    document.body.append(box);
+    f.rows[0]?.focus();
+
+    const ev = press('c', f.handler, { metaKey: true });
+    expect(document.activeElement).toBe(f.rows[0]);
+    expect(ev.defaultPrevented).toBe(false);
+
+    // Positive control: bare `c` still opens capture, so the assertion above
+    // is measuring the modifier and not a missing box.
+    const bare = press('c', f.handler);
+    expect(document.activeElement).toBe(box);
+    expect(bare.defaultPrevented).toBe(true);
+  });
+
+  it('Ctrl+C is left alone too', () => {
+    const f = fixture(null);
+    const box = document.createElement('textarea');
+    box.className = 'hub-quick-input';
+    document.body.append(box);
+    f.rows[0]?.focus();
+    press('c', f.handler, { ctrlKey: true });
+    expect(document.activeElement).toBe(f.rows[0]);
+  });
+
+  it('Cmd+A still selects all instead of focusing the assignee picker', () => {
+    const f = fixture(null);
+    f.rows[0]?.focus();
+    const ev = press('a', f.handler, { metaKey: true });
+    expect(document.activeElement).toBe(f.rows[0]);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('Cmd+E does not archive', () => {
+    const f = fixture(null);
+    f.rows[0]?.focus();
+    press('e', f.handler, { metaKey: true });
+    expect(f.archived).toEqual([]);
+  });
+
+  it('Shift is not a modifier bail — ? still opens help', () => {
+    const f = fixture(null);
+    press('?', f.handler, { shiftKey: true });
+    expect(f.help.classList.contains('hidden')).toBe(false);
   });
 });
