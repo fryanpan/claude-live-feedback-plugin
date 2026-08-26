@@ -23,6 +23,7 @@ import {
 } from '@feedback/core';
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
+import { acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
 import { classifyActor, registerOwnerIdentity } from './activity.ts';
 import {
   AgentWatches,
@@ -2373,6 +2374,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // was never written both leave the map empty, and the difference is
   // invisible everywhere downstream — it shows up only as an activity stream
   // that under-attributes, months later. See identity-links.ts.
+  // Advertise that this process appends to `<dataDir>/activity.jsonl`, so the
+  // repair tool can verify the log has no live writer instead of trusting an
+  // operator to have stopped us. BEST EFFORT on purpose: a leftover lock file
+  // must never be able to stop the server from booting — that would turn a
+  // stray file into an outage. The refusal lives on the repair side, where
+  // refusing means "changed nothing". See activity-lock.ts.
+  const activityLock = acquireActivityLock(dataDir, 'server');
+  if (!activityLock.ok) {
+    console.error(
+      `[activity] ${activityLock.path} is held by pid ${activityLock.heldBy?.pid} ` +
+        `(${activityLock.heldBy?.holder}); starting anyway. A repair running now cannot see us.`,
+    );
+  }
   const identityLinkLoad = loadIdentityLinks(dataDir);
   if (identityLinkLoad.error) {
     console.error(`[identities] ${identityLinkLoad.error}`);
@@ -7094,6 +7108,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     webhookLog,
     stop: async () => {
       if (shareSweep) clearInterval(shareSweep);
+      // Release before anything else can fail: a lock left behind by a clean
+      // shutdown would make the next repair refuse for no reason. It is
+      // reclaimed as stale on a crash either way, but only after a pid check
+      // somebody has to trust.
+      releaseActivityLock(activityLock);
       // Before anything else that tears state down: a tick mid-shutdown
       // would read a store that is being flushed and wake a lead about a
       // server that is going away.

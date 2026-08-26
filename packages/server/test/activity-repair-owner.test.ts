@@ -8,10 +8,18 @@
  * without disturbing anything else in a file that is the only copy of them.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { activityLogPath, resetOwnerIdentities } from '../src/activity';
+import { acquireActivityLock, activityLockPath, releaseActivityLock } from '../src/activity-lock';
 import { repairActivityOwner } from '../src/activity-repair-owner';
 import { identityLinksPath } from '../src/identity-links';
 
@@ -143,5 +151,92 @@ describe('repairActivityOwner', () => {
     const dir = mkdtempSync(join(tmpdir(), 'activity-repair-'));
     tmpDirs.push(dir);
     expect(repairActivityOwner({ dataDir: dir, write: true }).rows).toBe(0);
+  });
+});
+
+/**
+ * The rewrite must be impossible to interleave with the server's appends, not
+ * merely detected afterwards — a `read_session` row lost to a clobbered
+ * rename exists nowhere else. See activity-lock.ts.
+ */
+describe('the repair will not write while the log has a live writer', () => {
+  test('REFUSES --write while the lock is held, and changes nothing', () => {
+    const dir = seedDir([linkedRead], { links: { 'anon-fixture1': 'known-bryan' } });
+    const server = acquireActivityLock(dir, 'server');
+    try {
+      const stats = repairActivityOwner({ dataDir: dir, write: true });
+      expect(stats.refusedLockHeldBy?.holder).toBe('server');
+      expect(stats.backupPath).toBeUndefined();
+      // Untouched: a refusal has to mean nothing happened.
+      expect(readRows(dir)[0].isOwner).toBe(false);
+    } finally {
+      releaseActivityLock(server);
+    }
+  });
+
+  test('a DRY RUN still reports while the lock is held — reading is not writing', () => {
+    const dir = seedDir([linkedRead], { links: { 'anon-fixture1': 'known-bryan' } });
+    const server = acquireActivityLock(dir, 'server');
+    try {
+      const stats = repairActivityOwner({ dataDir: dir });
+      expect(stats.falseToTrue).toBe(1);
+      expect(stats.refusedLockHeldBy).toBeUndefined();
+    } finally {
+      releaseActivityLock(server);
+    }
+  });
+
+  test('positive control: the same run succeeds once the writer releases', () => {
+    const dir = seedDir([linkedRead], { links: { 'anon-fixture1': 'known-bryan' } });
+    const server = acquireActivityLock(dir, 'server');
+    expect(repairActivityOwner({ dataDir: dir, write: true }).refusedLockHeldBy).toBeTruthy();
+    releaseActivityLock(server);
+    expect(repairActivityOwner({ dataDir: dir, write: true }).falseToTrue).toBe(1);
+    expect(readRows(dir)[0].isOwner).toBe(true);
+  });
+
+  test('releases the lock when it is done, and after a failure', () => {
+    const dir = seedDir([linkedRead], { links: { 'anon-fixture1': 'known-bryan' } });
+    repairActivityOwner({ dataDir: dir, write: true });
+    expect(existsSync(activityLockPath(dir))).toBe(false);
+    // A second server can take it straight afterwards.
+    const after = acquireActivityLock(dir, 'server');
+    expect(after.ok).toBe(true);
+    releaseActivityLock(after);
+  });
+
+  test('a rogue append during the rewrite is SPLICED ON, never discarded', () => {
+    const dir = seedDir([linkedRead], { links: { 'anon-fixture1': 'known-bryan' } });
+    const rogue = { ...knownOwner, eventId: 'rogue-1' };
+    // The repair renames the log aside before writing, so an appender that
+    // ignored the lock creates a fresh `activity.jsonl` rather than writing
+    // into the file being replaced. `onBeforeSwap` stands in for that writer,
+    // firing in exactly the window the old size check could only detect.
+    const stats = repairActivityOwner({
+      dataDir: dir,
+      write: true,
+      onBeforeSwap: () => appendFileSync(activityLogPath(dir), `${JSON.stringify(rogue)}\n`),
+    });
+    expect(stats.splicedRows).toBe(1);
+    const rows = readRows(dir);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].isOwner).toBe(true);
+    expect(rows[1].eventId).toBe('rogue-1');
+  });
+
+  test('the backup survives a rogue append too', () => {
+    const dir = seedDir([linkedRead], { links: { 'anon-fixture1': 'known-bryan' } });
+    const stats = repairActivityOwner({
+      dataDir: dir,
+      write: true,
+      onBeforeSwap: () =>
+        appendFileSync(
+          activityLogPath(dir),
+          `${JSON.stringify({ ...knownOwner, eventId: 'r' })}\n`,
+        ),
+    });
+    expect(readFileSync(stats.backupPath as string, 'utf8')).toBe(
+      `${JSON.stringify(linkedRead)}\n`,
+    );
   });
 });
