@@ -7,6 +7,7 @@ import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
+import { wireKeyboardInset } from './keyboard-inset.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
@@ -48,37 +49,6 @@ interface Selection {
 
 interface LegacyDocs {
   docs: SetDoc[];
-}
-
-/**
- * iOS Safari puts `position:fixed` elements on the LAYOUT viewport, which
- * doesn't shrink when the keyboard appears — so bottom:16px ends up
- * behind the keyboard. Track the visual viewport and publish a
- * --kb-bottom CSS variable that every bottom-docked UI element rises by.
- */
-function wireKeyboardInset(): void {
-  const vv = window.visualViewport;
-  // iOS shows a form-accessory bar (^ v ✓) ABOVE the keyboard whenever a
-  // text input is focused. visualViewport doesn't account for it — its
-  // height only excludes the keyboard itself — so bottom-docked UI pinned
-  // to --kb-bottom sits UNDER that bar. Pad --kb-bottom by its typical
-  // height (~46px) whenever the keyboard is open so the composer clears
-  // both the keyboard AND the accessory bar.
-  const IOS_ACCESSORY = 46;
-  const apply = () => {
-    let kb = 0;
-    if (vv) {
-      kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    }
-    if (kb > 0) kb += IOS_ACCESSORY;
-    document.documentElement.style.setProperty('--kb-bottom', `${Math.round(kb)}px`);
-  };
-  apply();
-  if (vv) {
-    vv.addEventListener('resize', apply);
-    vv.addEventListener('scroll', apply);
-  }
-  window.addEventListener('orientationchange', () => setTimeout(apply, 120));
 }
 
 /**
