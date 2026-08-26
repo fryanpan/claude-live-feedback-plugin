@@ -15,8 +15,9 @@
  * own chunk.
  *
  * Lifecycle is keyed on (task, slot). The panel repaints on every ydoc change
- * and keeps the slot element in place for a live description (see
- * `keptBodySlot` in hub-render.ts) — so a repaint with the same task and the
+ * and keeps the slot element in place for a live description (the detail
+ * islands render it childless, so Preact never reaches inside it and never
+ * replaces it) — so a repaint with the same task and the
  * same slot is a no-op here, and only a different task, a rebuilt slot, or a
  * closed panel tears the editor down. That is what lets a reader keep typing
  * through their own snapshot landing in the projection.
