@@ -7794,13 +7794,14 @@ function renderLanding(model: LandingModel): string {
       : `<details class="fold"><summary>Review docs by project <span class="count">${model.projects.length}</span></summary>
 <ul>${model.projects.map(renderLandingProjectLink).join('')}</ul></details>`;
   // Every row with a waiting count, page order (active first, then the
-  // folds — an item on a quiet board still waits). The bar totals them and
-  // "Review all" starts the walkthrough in the most recently active one,
+  // quiet fold — an item on a quiet board still waits). The bar totals them
+  // and "Review all" starts the walkthrough in the most recently active one,
   // handing the rest over via ?then= so the client chains the queues
-  // without coming back here between boards.
-  const waitingRows = [...model.active, ...model.inactive, ...model.retired].filter(
-    (w) => (w.waiting ?? 0) > 0,
-  );
+  // without coming back here between boards. Retired boards are OUT:
+  // retiring is the owner saying "get this out of my way", and the bar
+  // steering Review all through one contradicts the act (its own row still
+  // shows the chip inside the retired fold for whoever goes looking).
+  const waitingRows = [...model.active, ...model.inactive].filter((w) => (w.waiting ?? 0) > 0);
   const waitingTotal = waitingRows.reduce((sum, w) => sum + (w.waiting ?? 0), 0);
   const firstWaiting = waitingRows[0];
   const allHref = firstWaiting
