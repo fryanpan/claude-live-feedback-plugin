@@ -99,3 +99,79 @@ bun run activity:backfill ./data --dry-run   # stats only, no writes
 
 Idempotent: deterministic `eventId`s mean a re-run produces the same lines, so
 WR can dedupe by `eventId` if the backfill is appended more than once.
+
+## Owner attribution: identity links
+
+`isOwner` on each row comes from `isOwnerActor`, which recognises the identity
+id `known-bryan`, the exact name `Bryan`, and any email identity registered
+from `CW_OWNER_EMAIL`. An anonymous browser session matches none of those: it
+arrives with a minted `anon-*` id and whatever name the person typed. Measured
+on the live stream, six such ids carried 1,120 events that were all recorded
+`isOwner: false`, so every owner-activity read was low by that much and nothing
+reported it.
+
+The fix is an explicit id-to-identity link, not a second name literal. A name
+is a claim the browser makes about itself and nothing verifies it — matching a
+looser one would start attributing somebody else's rows to the owner, which is
+worse than the under-count, because nothing downstream can tell it happened.
+
+Links live in `<dataDir>/identity-links.json` (gitignored: the real file names
+a person's session ids, and this repo is public). Add one with:
+
+```
+bun run identity:link <actorId> <identityId> --note "which device / when"
+bun run identity:link --list
+```
+
+The server reads the file at construction, so a new link takes effect at the
+next restart. **Nothing already written to `activity.jsonl` changes on its
+own** — a link governs rows written from then on.
+
+### Repairing rows already written
+
+```
+bun run activity:repair-owner ./data           # dry run: what would change
+# stop the server for this data dir first — see below
+bun run activity:repair-owner ./data --write   # rewrite, keeping a .bak
+```
+
+**`--write` requires the server for that data dir to be stopped, and verifies
+it.** The log is append-only and the server appends on every comment and every
+read session, so a rewrite that overlapped one would replace a file the server
+was still writing into. The server holds `<dataDir>/activity-writer.lock` for
+as long as it is up; `--write` refuses unless it can take that lock, and names
+the pid holding it. A dry run ignores the lock — reading is not writing.
+
+```
+launchctl kill SIGTERM gui/$(id -u)/com.fryanpan.claude-workspaces   # stop
+bun run activity:repair-owner ./data --write
+launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces   # start
+```
+
+The lock is per data dir, so a staging server on its own throwaway dir never
+blocks a repair of prod's. It is advisory for the server — a leftover lock file
+must not be able to stop the server booting — and a lock whose recorded pid is
+gone is reclaimed as stale, so a crash does not disable the tool that the crash
+made necessary.
+
+It recomputes `isOwner` on every row from the row's own `actorId` / `actorName`
+and writes nothing else — `eventId`, `actorId` and the recorded name are left
+alone, because the link says whose id that is, not that the stream observed
+something different. Idempotent.
+
+The rewrite moves the log aside with `rename` — atomic, and the move IS the
+backup, so there is no window in which the append target and the backup are two
+different files. `appendActivity` opens the path by name each time, so any
+writer that ignored the lock creates a fresh `activity.jsonl` rather than
+writing into the file being replaced; if one appears before the swap its rows
+are spliced onto the end and counted in `splicedRows`, never clobbered.
+
+**A backfill re-run is not a substitute.** `activity:backfill` rebuilds only
+the comment family from `.ydoc` snapshots; `read_session` and `doc_open` never
+existed in a CRDT and are not reconstructable at all. On the measured corpus
+those two types are 711 of the 1,120 affected rows, so a re-run repairs under
+half of them. The backfill also appends, leaving two rows with one `eventId`
+and letting the reader's dedupe policy decide which wins.
+
+`activity:backfill` does load the same link file, so rows it emits from here on
+carry the corrected attribution.
