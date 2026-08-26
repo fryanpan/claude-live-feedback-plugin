@@ -74,6 +74,25 @@ function inline(escaped: string): string {
  */
 const BARE_URL = /(?:https?:\/\/[^\s()]+|(?<=^|[\s(])\/(?:workspaces|review|mockup)\/[^\s()]+)/g;
 
+/**
+ * Only a link to THIS page's own server may earn a trusted title. A foreign
+ * origin whose path merely matches a workspace shape must stay raw text:
+ * `https://attacker.example/review/<real-doc-id>` would otherwise render as
+ * the real doc's title while navigating to the attacker — a trusted label on
+ * a phishing href. Relative paths are same-origin by definition. The cost of
+ * strictness is that a URL pasted under one advertised host (tailnet) and
+ * read under another (localhost) stays raw — raw is the safe direction.
+ */
+function isSameOriginWorkspaceUrl(url: string): boolean {
+  if (url.startsWith('/')) return true;
+  if (typeof window === 'undefined') return false;
+  try {
+    return new URL(url).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 /** Trailing characters that read as punctuation AFTER a pasted URL, entity
  *  spellings included — `see http://…/docs/x.` must not eat the period. */
 function trimUrlTail(s: string): string {
@@ -113,7 +132,7 @@ function linkifyWorkspaceUrls(html: string): string {
       const tail = m.slice(trimmed.length);
       // The segment is escaped text; the URL itself needs `&` back to parse.
       const url = trimmed.replace(/&amp;/g, '&');
-      if (!parseWorkspaceLink(url)) return m;
+      if (!isSameOriginWorkspaceUrl(url) || !parseWorkspaceLink(url)) return m;
       const title = cachedLinkTitle(url);
       if (title === undefined) sawPending = true;
       const attrs =

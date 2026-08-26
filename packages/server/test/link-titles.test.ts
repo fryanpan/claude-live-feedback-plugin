@@ -16,6 +16,7 @@ describe('POST /api/links/titles', () => {
   let handle: ServerHandle;
   let base: string;
   let wsId = '';
+  let otherWsId = '';
   let taskId = '';
   let docId = '';
 
@@ -48,6 +49,8 @@ describe('POST /api/links/titles', () => {
 
     const ws = await post('/api/workspaces', { name: 'Link Titles Board', goal: 'Ship.' });
     wsId = ((await ws.json()) as { workspace: { id: string } }).workspace.id;
+    const other = await post('/api/workspaces', { name: 'Unrelated Board', goal: 'Else.' });
+    otherWsId = ((await other.json()) as { workspace: { id: string } }).workspace.id;
 
     const t = await post(`/api/workspaces/${wsId}/tasks`, {
       title: 'Ship the widget',
@@ -65,6 +68,10 @@ describe('POST /api/links/titles', () => {
       title: 'Redline Design',
     });
     docId = ((await doc.json()) as { docId: string }).docId;
+    // File the doc on the board, so the board-scoped address is truthful —
+    // the route refuses to resolve a doc through a board it isn't on.
+    const attach = await post(`/api/workspaces/${wsId}/docs`, { docId });
+    expect(attach.status).toBe(200);
   });
 
   afterAll(async () => {
@@ -100,6 +107,17 @@ describe('POST /api/links/titles', () => {
     expect(titles[ghostDoc]).toBeNull();
     expect(titles[ghostWs]).toBeNull();
     expect(titles[external]).toBeNull();
+  });
+
+  it('refuses to resolve a resource through a workspace it does not belong to', async () => {
+    // A valid id under the WRONG board must not leak its title — the URL is
+    // lying about where the resource lives. Positive controls for both ids
+    // are the resolving tests above.
+    const docWrongWs = `${base}/workspaces/${otherWsId}/docs/${encodeURIComponent(docId)}`;
+    const taskWrongWs = `${base}/workspaces/${otherWsId}?task=${taskId}`;
+    const titles = await titlesFor([docWrongWs, taskWrongWs]);
+    expect(titles[docWrongWs]).toBeNull();
+    expect(titles[taskWrongWs]).toBeNull();
   });
 
   it('refuses a malformed body', async () => {
