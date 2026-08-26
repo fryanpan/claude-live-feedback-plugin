@@ -288,11 +288,76 @@ export function ownerIdentityIds(): string[] {
   return [...OWNER_IDS];
 }
 
-/** Back to the built-in spellings. A test seam: the registry is process-wide,
- *  so a test that registers one must be able to put it back. */
+/** Back to the built-in spellings, links cleared. A test seam: both
+ *  registries are process-wide, so a test that adds to one must be able to
+ *  put it back — and a link that leaked between tests would silently make an
+ *  unrelated actor the owner. */
 export function resetOwnerIdentities(): void {
   OWNER_IDS.clear();
   OWNER_IDS.add('known-bryan');
+  resetIdentityLinks();
+}
+
+/**
+ * Explicit "this actor id IS that identity" links, actor id -> identity id.
+ *
+ * WHY THIS EXISTS. An anonymous browser session gets an `anon-*` id and
+ * whatever name the person types. Measured on the live stream, six such ids
+ * typed the owner's full name across 1,120 events and every one recorded
+ * `isOwner: false`, because the name check above matches one exact spelling.
+ *
+ * WHY NOT JUST ADD THE OTHER SPELLING. A name is a claim the browser makes
+ * about itself and nothing verifies it, so a looser name match starts
+ * attributing SOMEBODY ELSE's rows to the owner. That error is worse than the
+ * under-count it replaces, because nothing downstream can tell it happened.
+ * A link is evidence a person entered once, about one id.
+ *
+ * The map is populated from `<dataDir>/identity-links.json` at server
+ * construction and at the top of a backfill run — see identity-links.ts. It
+ * is data rather than literals because the population that needs it grows: a
+ * new browser profile mints a new id, and that must be a one-line edit to a
+ * file, not a code change and a release.
+ */
+const IDENTITY_LINKS = new Map<string, string>();
+
+/** How many hops `resolveIdentityId` will follow before giving up. A cycle in
+ *  a hand-edited file must terminate, not hang the boot that reads it. */
+const MAX_LINK_HOPS = 8;
+
+/**
+ * Record that `fromId` is the same person as `toId`. Blank ends and
+ * self-links are ignored — neither says anything, and a self-link would spin
+ * the resolver.
+ */
+export function linkIdentity(fromId: string, toId: string): void {
+  const from = fromId.trim();
+  const to = toId.trim();
+  if (!from || !to || from === to) return;
+  IDENTITY_LINKS.set(from, to);
+}
+
+/** What the link map currently holds — for a boot log and for tests. */
+export function identityLinks(): Record<string, string> {
+  return Object.fromEntries(IDENTITY_LINKS);
+}
+
+/** Drop every link. The test seam for the process-wide map. */
+export function resetIdentityLinks(): void {
+  IDENTITY_LINKS.clear();
+}
+
+/**
+ * Follow an id's links to the identity it stands for. An unlinked id resolves
+ * to itself, so this is safe to call on every actor.
+ */
+export function resolveIdentityId(id: string): string {
+  let current = id;
+  for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
+    const next = IDENTITY_LINKS.get(current);
+    if (next === undefined || next === current) return current;
+    current = next;
+  }
+  return current;
 }
 
 /** Bryan is the doc owner / known person on this single-user fleet. A person
@@ -302,7 +367,10 @@ export function isOwnerActor(author: unknown): boolean {
   // string author naming the owner IS the owner, and `author.id` on a null
   // author throws.
   const { id = '', name = '' } = authorFields(author);
-  return OWNER_IDS.has(id) || OWNER_NAMES.has(name);
+  // The id is resolved through the link map first, so a linked `anon-*`
+  // session is recognized by the SAME owner-id check as every other identity
+  // — the link widens who is known, never how loosely a name is matched.
+  return OWNER_IDS.has(resolveIdentityId(id)) || OWNER_NAMES.has(name);
 }
 
 const repoCache = new Map<string, EventDocRepo | null>();

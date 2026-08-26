@@ -15,6 +15,7 @@ import {
   toUtcIso,
   wordCount,
 } from './activity.ts';
+import { loadIdentityLinks } from './identity-links.ts';
 import { readPrivateMeta } from './private-meta.ts';
 
 /**
@@ -51,6 +52,10 @@ export interface BackfillStats {
   /** person comment+reply events whose ts falls in [Apr17, Jun13]. */
   personCommentsValidationWindow: number;
   skippedBeforeWindow: number;
+  /** How many `identity-links.json` entries were in force for this run.
+   *  Reported so a run that silently loaded none is visible in its own
+   *  output rather than only in the rows it wrote. */
+  identityLinksLoaded: number;
 }
 
 function emptyStats(): BackfillStats {
@@ -62,6 +67,7 @@ function emptyStats(): BackfillStats {
     personComments: 0,
     personCommentsValidationWindow: 0,
     skippedBeforeWindow: 0,
+    identityLinksLoaded: 0,
   };
 }
 
@@ -173,6 +179,14 @@ export interface BackfillOptions {
  */
 export function runBackfill(opts: BackfillOptions): BackfillStats {
   const stats = emptyStats();
+  // The backfill runs standalone as often as it runs inside the server, and
+  // `isOwnerActor` reads a process-wide registry. Without this the rebuilt
+  // rows come out with the links UNAPPLIED — indistinguishable from a correct
+  // rebuild, and silently re-writing the very under-attribution the rerun was
+  // meant to repair. Registering twice is a no-op.
+  const links = loadIdentityLinks(opts.dataDir);
+  if (links.error) console.error(`[backfill] ${links.error}`);
+  stats.identityLinksLoaded = links.loaded;
   const valStart = CLEAN_DATA_START_MS;
   const valEnd = Date.parse('2026-06-13T23:59:59.999Z');
   for (const path of ydocFiles(opts.dataDir)) {
