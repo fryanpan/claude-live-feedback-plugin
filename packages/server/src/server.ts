@@ -3799,10 +3799,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (req.method === 'POST') {
             const body = await safeJson(req);
             if (!body || typeof body !== 'object') return j(400, { error: 'report required' });
+            // Body first, stamps last: ts and ua are the server's own record
+            // of when the report arrived and what sent it, and a body that
+            // claims its own must not be able to overwrite them.
             const row = {
+              ...body,
               ts: Date.now(),
               ...(req.headers.get('user-agent') ? { ua: req.headers.get('user-agent') } : {}),
-              ...body,
             };
             // The sidecar flush that normally creates this dir is debounced,
             // so a report can arrive before it exists (same guard every other
