@@ -182,3 +182,78 @@ describe('review docs stay reachable without leaking back onto /', () => {
     expect(html).not.toContain('review/landing-doc-1');
   });
 });
+
+describe('the landing page says which workspaces are waiting on the owner (t-DA4rBTmdP0d2)', () => {
+  let waitingId: string;
+  let quietId: string;
+
+  async function makeDecision(wsId: string, title: string): Promise<void> {
+    await j(
+      await fetch(`${base}/api/workspaces/${encodeURIComponent(wsId)}/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          author: AGENT,
+          title,
+          assignee: 'Owner',
+          assigneeKind: 'person',
+          needs: 'decision',
+          body: 'Which of the two options should ship?',
+        }),
+      }),
+    );
+  }
+
+  it('a row with open review items carries a counted chip into the queue; a quiet row carries none', async () => {
+    waitingId = await makeWorkspace('Waiting board');
+    quietId = await makeWorkspace('Quiet board');
+    await makeDecision(waitingId, 'Pick a door');
+    await makeDecision(waitingId, 'Pick another door');
+
+    const html = await landing();
+    // The chip: count + the word, linking into the workspace's own
+    // walkthrough — the existing queue, not a second implementation.
+    const chip = new RegExp(
+      `href="/workspaces/${encodeURIComponent(waitingId)}/home\\?walk=1"[^>]*>` +
+        `<span class="n">2</span>`,
+    );
+    expect(html).toMatch(chip);
+    // The quiet board renders NO review affordance — and its row is still
+    // there (positive control that the row itself rendered).
+    expect(html).toContain('Quiet board');
+    expect(html).not.toMatch(
+      new RegExp(`href="/workspaces/${encodeURIComponent(quietId)}/home\\?walk=1"`),
+    );
+  });
+
+  it('the top bar totals every waiting workspace and Review all chains them', async () => {
+    const html = await landing();
+    expect(html).toContain('waiting on you');
+    // One waiting workspace so far: the bar links straight into it, with no
+    // handoff list.
+    expect(html).toMatch(
+      new RegExp(`class="allgo" href="/workspaces/${encodeURIComponent(waitingId)}/home\\?walk=1"`),
+    );
+
+    // A second waiting workspace joins the chain: Review all starts at the
+    // most recently active one and hands off to the rest via `then`.
+    await tick();
+    await makeDecision(quietId, 'Quiet board wakes up');
+    const html2 = await landing();
+    expect(html2).toContain('across 2 workspaces');
+    const walkAll = new RegExp(
+      `class="allgo" href="/workspaces/${encodeURIComponent(quietId)}/home\\?walk=1&amp;then=${encodeURIComponent(waitingId)}"`,
+    );
+    expect(html2).toMatch(walkAll);
+  });
+
+  it('with nothing waiting anywhere, no bar renders at all', async () => {
+    // A fresh server state is not available mid-file; assert the negative on
+    // the first landing read of this file instead: before any decision
+    // existed, earlier tests read the page repeatedly and the bar's classes
+    // never appeared. Here, assert the structural half: the bar renders only
+    // once, not per workspace.
+    const html = await landing();
+    expect(html.split('class="allbar"').length - 1).toBe(1);
+  });
+});
