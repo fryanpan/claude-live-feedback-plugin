@@ -112,6 +112,57 @@ describe('the Cloudflare login-code sender', () => {
     expect(message).toContain('400');
     expect(message).toContain('bad request');
   });
+
+  /**
+   * The test above only proves we do not ADD the secrets ourselves. This one
+   * covers the case that actually leaks: the provider quoting our own request
+   * back at us. Cloudflare receives the code in both the subject and the body,
+   * so any validation error that echoes a rejected field carries a live login
+   * code into a string that gets logged, pasted into a ticket, and quoted in
+   * chat. Whatever comes back over the wire is untrusted text, not a message.
+   */
+  it('redacts the code when the provider echoes it back in its own error', async () => {
+    const sender = createCloudflareCodeSender({
+      ...config,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            errors: [{ message: 'subject rejected: "428550 is your sign-in code"' }],
+          }),
+          { status: 422 },
+        ),
+    });
+    let message = '';
+    try {
+      await sender.send(req);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).not.toContain('428550');
+    expect(message).toContain('[redacted]');
+    // Still says which field the provider objected to.
+    expect(message).toContain('subject rejected');
+    expect(message).toContain('422');
+  });
+
+  it('redacts the token when a non-JSON body echoes the authorization header', async () => {
+    const sender = createCloudflareCodeSender({
+      ...config,
+      fetch: async () =>
+        new Response('Unauthorized: bearer tok-secret is not valid for this account', {
+          status: 401,
+        }),
+    });
+    let message = '';
+    try {
+      await sender.send(req);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).not.toContain('tok-secret');
+    expect(message).toContain('[redacted]');
+    expect(message).toContain('401');
+  });
 });
 
 /**

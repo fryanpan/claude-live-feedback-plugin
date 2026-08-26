@@ -21,7 +21,9 @@
  *   one is a live credential sitting somewhere nobody treats as secret, and a
  *   token in one is worse. The error says what the provider said and what
  *   status it said it with — enough to act on, and nothing that grants
- *   access.
+ *   access. Note that holding this rule takes more than declining to write
+ *   the code down: the provider is handed the code and can quote it back, so
+ *   its reply is redacted rather than trusted.
  */
 import { type CodeSender, loginCodeSubject, loginCodeText } from './code-sender.ts';
 
@@ -42,10 +44,33 @@ function endpoint(accountId: string): string {
   return `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/email/sending/send`;
 }
 
+/**
+ * Strike the live secrets out of text we did not write.
+ *
+ * Not writing the code into an error ourselves is the easy half. The half
+ * that actually leaks is the provider quoting our own request back: it
+ * receives the code in both the subject and the body, so any validation error
+ * naming the field it rejected carries a working login code into a string
+ * that gets logged, pasted into a ticket, and quoted in chat. A response body
+ * is untrusted text, so it is filtered rather than trusted to behave.
+ *
+ * Over-redaction is the safe direction. If a six-digit code happens to appear
+ * inside an unrelated id, that id comes back partly starred and the error is
+ * still actionable; the other way round hands out a credential.
+ */
+function redact(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (!secret) continue; // replaceAll('') would splice the marker between every character.
+    out = out.split(secret).join('[redacted]');
+  }
+  return out;
+}
+
 /** What the provider said, reduced to something safe to write down. A body
  *  we cannot parse is truncated rather than dropped: "400" on its own has
  *  never once been enough to fix anything. */
-function providerMessage(status: number, body: string): string {
+function providerMessage(status: number, body: string, secrets: readonly string[]): string {
   let detail = body.trim().slice(0, 300);
   try {
     const parsed = JSON.parse(body) as { errors?: Array<{ message?: string }> };
@@ -56,7 +81,7 @@ function providerMessage(status: number, body: string): string {
   } catch {
     // Not JSON. The truncated body is still the most useful thing available.
   }
-  return `Cloudflare refused the login code (HTTP ${status}): ${detail}`;
+  return `Cloudflare refused the login code (HTTP ${status}): ${redact(detail, secrets)}`;
 }
 
 export function createCloudflareCodeSender(config: CloudflareCodeSenderConfig): CodeSender {
@@ -82,7 +107,7 @@ export function createCloudflareCodeSender(config: CloudflareCodeSenderConfig): 
         body,
       });
       if (!res.ok) {
-        throw new Error(providerMessage(res.status, await res.text()));
+        throw new Error(providerMessage(res.status, await res.text(), [req.code, config.token]));
       }
     },
   };
