@@ -58,4 +58,17 @@ describe('hub-app wires the handoff', () => {
   it('chains to walkNextUrl when the queue drains', () => {
     expect(src).toContain('walkNextUrl(');
   });
+
+  // Decisions ride the ydoc task projection, not the REST review-items list,
+  // so on a cold connection the first load can resolve before the board has
+  // synced. An empty queue must NOT burn the one-shot flag — the walk retries
+  // when the projection lands, and only a deadline concludes the board is
+  // genuinely clear (hopping the chain instead of opening on nothing).
+  it('retries the auto-walk when the task projection arrives', () => {
+    expect(src).toMatch(/tasksMap\.observeDeep\([\s\S]{0,500}autoWalkTick\?\.\(\)/);
+  });
+
+  it('an empty queue leaves the flag armed until the deadline', () => {
+    expect(src).toContain('WALK_HANDOFF_DEADLINE_MS');
+  });
 });
