@@ -268,3 +268,24 @@ describe('summarizeGoals', () => {
     expect(orphan !== undefined && 'status' in orphan).toBe(false);
   });
 });
+
+describe('buildQueue — which rows are in a goal band', () => {
+  // The ready gate reads `inGoalBand` to keep backlog out of wakes: a row
+  // outside every ranked band is never auto-dispatched (Bryan, 2026-08-22),
+  // so counting it "ready" wakes a lead over work the dispatch rule would
+  // never start.
+  it('marks goal and subgoal rows in-band, and chores out', () => {
+    const rows = buildQueue(
+      [task({ goal: 'g-ship-loop' }), task({ goal: 'g-reach' }), task({ goal: 'chores' })],
+      GOALS,
+    );
+    expect(rows.map((r) => r.inGoalBand)).toEqual([true, true, false]);
+  });
+
+  it('treats every row as in-band when the board declares no goals', () => {
+    // No bands means the never-dispatch-backlog rule has nothing to rank
+    // against; a goalless personal board must not lose its wakes entirely.
+    const rows = buildQueue([task({ goal: 'chores' })], []);
+    expect(rows.map((r) => r.inGoalBand)).toEqual([true]);
+  });
+});
