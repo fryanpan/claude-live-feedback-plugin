@@ -74,6 +74,8 @@ import {
   tabForNav,
   unplacedNotice,
   voiceHubContext,
+  walkHandoff,
+  walkNextUrl,
   walkPosition,
 } from './hub-model.ts';
 import {
@@ -200,6 +202,12 @@ function workspaceIdFromPath(): string {
   const m = location.pathname.match(/\/workspaces\/([^/?#]+)/);
   return m?.[1] ? decodeURIComponent(m[1]) : '';
 }
+
+/** How long an armed ?walk=1 handoff waits for the board to produce a queue
+ *  before concluding it is genuinely clear. Generous against a slow ydoc
+ *  sync; short enough that a truly cleared board hands off while the reader
+ *  is still looking at it. */
+const WALK_HANDOFF_DEADLINE_MS = 4000;
 
 /**
  * The shareable address of one task. It is the board's own URL plus `?task=`,
@@ -1436,6 +1444,17 @@ async function main(): Promise<void> {
    * queue moves and nothing recorded it, which is the one failure this flow
    * cannot afford.
    */
+  // Filled in at boot from the landing-page handoff (see walkHandoff below):
+  // when the queue drains mid-sitting, this hops to the next workspace still
+  // holding items. Null until boot wires it; no-op without a chain.
+  let chainWalkDrain: (() => void) | null = null;
+
+  // Also filled in at boot: re-checks an armed ?walk=1 handoff when the task
+  // projection arrives. Decisions ride the ydoc, not the REST review-items
+  // list, so the first load can resolve before the board has synced — the
+  // observer below gives the walk another look at the queue then.
+  let autoWalkTick: (() => void) | null = null;
+
   async function finishWalkItem(
     item: ReviewItem | null,
     next: ReviewItem | null,
@@ -1450,6 +1469,9 @@ async function main(): Promise<void> {
     const queue = currentQueue();
     state.walkIndex = advanceWalk(queue, state.walkIndex, item.key, next?.key ?? null);
     state.walkKey = queue.items[state.walkIndex]?.key ?? null;
+    // This board's queue just drained: if the landing page handed over more
+    // boards (?then=), continue the sitting there instead of dead-ending.
+    if (queue.items.length === 0) chainWalkDrain?.();
     renderWalkthrough();
     renderHomeRegion();
     return ok;
@@ -2105,6 +2127,7 @@ async function main(): Promise<void> {
     // after Home's first paint and the queue stays empty while the board
     // banner (painted by renderBoardRegion) counts it.
     repaintGuard.schedule(repaintQueueRegions);
+    autoWalkTick?.();
   });
   const repaintWorkspaceRegions = (): void => {
     renderLead();
@@ -2415,6 +2438,43 @@ async function main(): Promise<void> {
   const deepLinkTask = new URLSearchParams(location.search).get('task');
   if (deepLinkTask) state.detailTaskId = deepLinkTask;
 
+  // Deep link from the landing page's review chip / "Review all" bar:
+  // ?walk=1 opens the walkthrough once the queue arrives, and ?then= names
+  // the workspaces to visit after this one drains (walkNextUrl hops there).
+  // One-shot — SSE-driven reloads must not re-open a walkthrough the reader
+  // closed, so the flag burns on first use.
+  const handoff = walkHandoff(location.search);
+  let pendingWalk = handoff.walk && state.pane === 'home';
+  const maybeAutoWalk = (): void => {
+    if (!pendingWalk) return;
+    // An empty queue does NOT burn the flag: on a cold connection the ydoc
+    // task projection (which carries the decisions) can land after the first
+    // review-items load, and a one-shot consumed here would skip a queue
+    // that was seconds from existing. The projection observer and every
+    // review-items load call back in; only the deadline below gives up.
+    if (currentQueue().items.length === 0) return;
+    pendingWalk = false;
+    startWalkthrough();
+  };
+  autoWalkTick = maybeAutoWalk;
+  if (pendingWalk) {
+    // Still nothing by now and the sync has had its chance: the board is
+    // genuinely clear (someone answered since the landing page rendered).
+    // Hop to the next board holding items, or stand down on Home.
+    setTimeout(() => {
+      if (!pendingWalk) return;
+      pendingWalk = false;
+      const next = walkNextUrl(handoff.chain);
+      if (next) location.href = next;
+    }, WALK_HANDOFF_DEADLINE_MS);
+  }
+  chainWalkDrain = () => {
+    // The sitting for THIS board is over; hand the reader to the next board
+    // in the chain rather than dead-ending on the cleared card.
+    const next = walkNextUrl(handoff.chain);
+    if (next) location.href = next;
+  };
+
   // The board itself — bands and rows. Same island contract as the two above,
   // mounted once, and the one thing to keep in mind at this call site is that
   // `#hub-board` is the island's host from here on: nothing vanilla may write
@@ -2435,7 +2495,7 @@ async function main(): Promise<void> {
   renderAll();
   void loadAgents();
   void loadEvents();
-  void loadReviewItems();
+  void loadReviewItems().then(maybeAutoWalk);
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
 }

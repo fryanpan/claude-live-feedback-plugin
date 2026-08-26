@@ -1408,6 +1408,41 @@ export function advanceWalk(
   return Math.min(Math.max(index, 0), queue.items.length);
 }
 
+// ── Landing-page walk handoff ──────────────────────────────────────────────
+
+/**
+ * What the landing page's review chip and "Review all" bar hand this app:
+ * `?walk=1` means open the walkthrough as soon as the queue is loaded, and
+ * `&then=<id,id>` names the workspaces still holding items, to visit after
+ * this board's queue drains. Server side of the contract: the landing
+ * renderer in `packages/server/src/server.ts` (t-DA4rBTmdP0d2).
+ */
+export interface WalkHandoff {
+  walk: boolean;
+  /** The remaining workspaces to visit, in order. Rides in the URL as
+   *  `then=` but is named `chain` here — an object with a `then` property
+   *  is a thenable, and `await` would try to call it. */
+  chain: string[];
+}
+
+export function walkHandoff(search: string): WalkHandoff {
+  const params = new URLSearchParams(search);
+  const walk = params.get('walk') === '1';
+  const chain = (params.get('then') ?? '')
+    .split(',')
+    .map((id) => decodeURIComponent(id).trim())
+    .filter(Boolean);
+  return { walk, chain: walk ? chain : [] };
+}
+
+/** The next hop of the chain, or null when there is nowhere left to go. */
+export function walkNextUrl(chain: string[]): string | null {
+  const [next, ...rest] = chain;
+  if (!next) return null;
+  const tail = rest.length ? `&then=${rest.map(encodeURIComponent).join(',')}` : '';
+  return `/workspaces/${encodeURIComponent(next)}/home?walk=1${tail}`;
+}
+
 // ── Quick capture ──────────────────────────────────────────────────────────
 
 /** Longer than this and the line stops being a title. Chosen to fit a phone
