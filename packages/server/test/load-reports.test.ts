@@ -59,6 +59,23 @@ describe('board load reports', () => {
     expect(typeof body.reports[0]?.ts).toBe('number');
   });
 
+  it('the server stamp wins over a forged ts/ua in the body', async () => {
+    // The row spreads the body FIRST so the server's ts and ua land last —
+    // a client claiming { ts: 0, ua: 'fake' } must not be able to rewrite
+    // when the report arrived or what sent it (codex review on PR 384).
+    const before = Date.now();
+    const post = await fetch(`${base}/api/workspaces/${wsId}/load-reports`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': 'RealPad/2.0' },
+      body: JSON.stringify({ msToBoot: 9, ts: 0, ua: 'forged' }),
+    });
+    expect(post.status).toBe(200);
+    const got = await fetch(`${base}/api/workspaces/${wsId}/load-reports`);
+    const body = (await got.json()) as { reports: Array<{ ts: number; ua?: string }> };
+    expect(body.reports[0]?.ua).toBe('RealPad/2.0');
+    expect(body.reports[0]?.ts).toBeGreaterThanOrEqual(before);
+  });
+
   it('refuses a report for a workspace that does not exist', async () => {
     const res = await fetch(`${base}/api/workspaces/w-nope/load-reports`, {
       method: 'POST',

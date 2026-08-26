@@ -23,10 +23,13 @@ describe('the board reports its own load time (t-scWMQmOZcpu1)', () => {
 
   it('measures boot paint and first projection separately', () => {
     // msToBoot is stamped right after the boot renderAll; msToFirstProjection
-    // on the first tasksMap observer fire — the two phases the diagnosis
-    // actually needed to tell apart (REST paint vs ydoc sync).
+    // on the client's initial-sync callback — NOT the tasksMap observer,
+    // which never fires for an empty workspace and fires for any later
+    // mutation (codex review on PR 384).
     expect(src).toMatch(/msToBoot = Math.round\(performance\.now\(\)\)/);
-    expect(src).toMatch(/msToFirstProjection = Math.round\(performance\.now\(\)\)/);
+    expect(src).toMatch(
+      /client\.onReady\(\(\) => \{\s*\n\s*if \(msToFirstProjection === null\) \{\s*\n\s*msToFirstProjection = Math.round\(performance\.now\(\)\)/,
+    );
   });
 
   it('includes what the network actually moved', () => {

@@ -2155,6 +2155,19 @@ async function main(): Promise<void> {
       }),
     }).catch(() => {});
   };
+  // The ydoc's initial sync is the phase boundary, not the first tasksMap
+  // mutation: an empty workspace's sync changes no task and would otherwise
+  // report boot-only after the fallback, and any later peer edit would be
+  // mistaken for the initial load (codex review on PR 384). onReady fires
+  // once, after sync-step-2 lands — empty doc included.
+  client.onReady(() => {
+    if (msToFirstProjection === null) {
+      msToFirstProjection = Math.round(performance.now());
+      // onReady can beat the boot block below (the ydoc syncs concurrently)
+      // — only send once boot has painted and stamped msToBoot.
+      if (msToBoot > 0) sendLoadReport();
+    }
+  });
 
   // ── Wiring ──────────────────────────────────────────────────────────────
   // Both observers read the projection at once (state must be current the
@@ -2168,12 +2181,6 @@ async function main(): Promise<void> {
     // banner (painted by renderBoardRegion) counts it.
     repaintGuard.schedule(repaintQueueRegions);
     autoWalkTick?.();
-    if (msToFirstProjection === null) {
-      msToFirstProjection = Math.round(performance.now());
-      // The observer can fire before the boot block below stamps msToBoot
-      // (the ydoc syncs concurrently) — only send once boot has painted.
-      if (msToBoot > 0) sendLoadReport();
-    }
   });
   const repaintWorkspaceRegions = (): void => {
     renderLead();
