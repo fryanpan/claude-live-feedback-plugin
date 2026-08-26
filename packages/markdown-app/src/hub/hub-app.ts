@@ -2095,7 +2095,17 @@ async function main(): Promise<void> {
     renderDetail();
   };
 
+  /** The activity log has a reader on screen. Only the Activity view and an
+   *  open detail panel render `state.events` — everything else on the board
+   *  lives off the projection — so with neither up, fetching ~1000 audit
+   *  rows (~590KB on the live hub board) buys nothing. The SSE listeners
+   *  keep calling in; this gate is what makes those calls free until one of
+   *  the two readers opens, whose open paths already load on their own. */
+  const eventsConsumerActive = (): boolean =>
+    state.view === 'activity' || state.detailTaskId !== null || state.detailGoalId !== null;
+
   async function loadEvents(): Promise<void> {
+    if (!eventsConsumerActive()) return;
     const res = await fetchJson<{ events: ActivityEvent[]; uptime: UptimeReport | null }>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/events`,
     );
@@ -2494,7 +2504,11 @@ async function main(): Promise<void> {
   readProjection();
   renderAll();
   void loadAgents();
-  void loadEvents();
+  // No loadEvents here: the Activity view and the detail panel — the only
+  // readers — each fetch the log on their own open, and boot fetching ~590KB
+  // nobody is looking at was a measured slice of the iPad's 10-second load
+  // (t-scWMQmOZcpu1). loadEvents itself is gated on a visible reader too,
+  // so the SSE refresh calls it safely.
   void loadReviewItems().then(maybeAutoWalk);
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
