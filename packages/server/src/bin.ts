@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRenamedEnv } from '@feedback/core/env-names';
+import { resolveCloudflareCodeSender } from './auth/cloudflare-code-sender.ts';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
@@ -214,6 +215,16 @@ const share = shareConfig
 // key. An absent key or CW_SUMMARIES=0 makes every call on it a no-op.
 const summarizer = new ThreadSummarizer();
 
+// The ONLY place a real email sender is constructed, for the same reason the
+// summarizer is: `createServer` defaults to the log sender, so nothing that
+// merely spins a server up — every test, every embedded use — can reach the
+// network or the Keychain. Resolving never throws; a partial setup keeps the
+// log sender and says which piece is missing, because during setup that is
+// the normal state rather than an error.
+const codeSenderChoice = resolveCloudflareCodeSender(process.env, readKeychainPassword);
+if (codeSenderChoice.reason) console.log(`[auth] ${codeSenderChoice.reason}`);
+else console.log('[auth] login codes send via Cloudflare Email Sending');
+
 // The ONLY place the real voice fast-path completer is constructed — the
 // same seam rule (and the same dedicated-key consent) as the summarizer.
 // Absent key → null → the fast path is off and voice routes to the agent.
@@ -292,6 +303,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       cfAccess,
       share,
       summarizer,
+      ...(codeSenderChoice.sender ? { codeSender: codeSenderChoice.sender } : {}),
       ...(readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
