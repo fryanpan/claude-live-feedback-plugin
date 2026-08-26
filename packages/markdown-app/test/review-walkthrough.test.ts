@@ -436,18 +436,14 @@ describe('the walkthrough matches the approved mockup', () => {
     expect((root.querySelector('.hub-walk-skip') as HTMLElement).textContent).toBe('›');
   });
 
-  it('badges the kind, chips the context, and puts the asked-by meta in the head', () => {
-    renderReviewWalkthrough(
-      root,
-      blockingDecision(),
-      0,
-      walk({ contextLabel: () => 'Home pane' }),
-      { cleared: 0, last: null },
-      NOW,
-    );
+  it('badges the kind and puts the asked-by meta in the head — no goal chip', () => {
+    renderReviewWalkthrough(root, blockingDecision(), 0, walk(), { cleared: 0, last: null }, NOW);
     const badge = root.querySelector('.hub-walk-k-decision') as HTMLElement;
     expect(badge.textContent).toBe('Decision');
-    expect((root.querySelector('.hub-walk-k-count') as HTMLElement).textContent).toBe('Home pane');
+    // The goal chip is gone (Bryan, 2026-08-26: "remove the goal showing in
+    // the top right, it takes up too much space") — the head is badge,
+    // headline, meta, nothing else.
+    expect(root.querySelector('.hub-walk-k-count')).toBeNull();
     // The head's top-right meta is the one provenance line the card carries:
     // "Asked by <who> N days ago" — never the bare "waiting" wording.
     const wait = root.querySelector('.hub-walk-wait') as HTMLElement;
@@ -462,9 +458,6 @@ describe('the walkthrough matches the approved mockup', () => {
     // is 'Question' since Bryan's 2026-08-21 rename; the tone token (and so
     // the class name) deliberately stays 'review'.
     expect((root.querySelector('.hub-walk-k-review') as HTMLElement).textContent).toBe('Question');
-    // The chip is left out rather than filled with a placeholder when there
-    // is no body of work to name.
-    expect(root.querySelector('.hub-walk-k-count')).toBeNull();
   });
 
   it('says Send and Skip for now, on both card kinds', () => {

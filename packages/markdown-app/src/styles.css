@@ -1547,16 +1547,6 @@ body.hub-body {
   color: var(--accent);
   background: var(--accent-wash, rgba(59, 111, 212, 0.07));
 }
-/* The project chip is an outline, not a fill — it names context rather than
-   classifying the card, and two filled pills side by side read as two
-   competing labels. */
-.hub-walk-k-count {
-  background: transparent;
-  border: 1px solid var(--border);
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 600;
-}
 /* The head's top-right meta — "Asked by Harbor agent 2 days ago". A
    SENTENCE now, not the bare duration it replaced, so it must be allowed to
    wrap: nowrap pushed it out of a 430px head row. */
