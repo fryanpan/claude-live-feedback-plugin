@@ -83,6 +83,20 @@ describe('hub UI routes (plan §3.12 commit 7)', () => {
       expect(html).toContain('<title>a&lt;b workspace · Workspaces</title>');
     });
 
+    // The Open Props trial layer: tokens.css must load AFTER styles.css —
+    // both define the same `:root` custom properties at equal specificity,
+    // so document order is what lets the mapping layer win. A shell that
+    // links them the other way round silently reverts the whole trial.
+    it('links tokens.css after styles.css', async () => {
+      const wsId = await seedWorkspace('token order');
+      const html = await (await fetch(`${base}/workspaces/${wsId}`)).text();
+      const styles = html.indexOf('/app/styles.css');
+      const tokens = html.indexOf('/app/tokens.css');
+      expect(styles).toBeGreaterThan(-1);
+      expect(tokens).toBeGreaterThan(-1);
+      expect(tokens).toBeGreaterThan(styles);
+    });
+
     // Every hub carries the widget, and every hub's widget writes to the SAME
     // doc — feedback on the hub UI is about the product, not about whichever
     // workspace you were standing in, so it must reach one place from all of
