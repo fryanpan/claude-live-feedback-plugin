@@ -309,12 +309,17 @@ function anchorSnippetText(anchor: Anchor): string | undefined {
  * `advice` is the non-refusing half: a payload that filed successfully but
  * left the card thin. It rides back on the 200 rather than being dropped
  * here, because an author who is never told writes the same thin item again.
+ *
+ * `text` is the comment the declaration arrived on. The checker needs it to
+ * see a card whose links stayed behind in the comment — the reader acts from
+ * the Home card, and the comment is not on it.
  */
 function reviewFromBody(
   raw: unknown,
+  text?: string,
 ): { ok: true; review?: ReviewPayload; advice?: string } | { ok: false; error: string } {
   if (raw === undefined || raw === null) return { ok: true };
-  const check = checkReviewPayload(raw);
+  const check = checkReviewPayload(raw, { text });
   if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
   const advice = reviewGapAdvice(check.gaps);
   // Stored via the reader so the agent-facing spellings (`review_type`,
@@ -3776,7 +3781,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // `ownerSession` for a while and this route did not, so the read
           // existed and was one call away from every dispatcher who needed
           // it — which on 2026-08-17 is how two sessions each built a
-          // complete answer to `t-K69wxtRLCn2a` (#186 merged, #190 thrown
+          // complete answer to the same board task (#186 merged, #190 thrown
           // away) with neither able to detect the other.
           //
           // Two fields because they answer two questions and the whole
@@ -3821,7 +3826,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // read back as rows. This is the surface where the after-the-fact
         // 80/95 review happens, built on the same file every subscriber saw
         // (§3.6: the audit log can never disagree with what subscribers saw).
-        // Board load reports (t-scWMQmOZcpu1): one line per browser boot,
+        // Board load reports: one line per browser boot,
         // appended by the client after its first paint, read back newest-first
         // so "how slow was the board, and in which phase" is a recorded fact
         // rather than a memory of watching a spinner. No external service —
@@ -6170,7 +6175,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const user = authorFor(body?.author);
               const text = body?.text as string | undefined;
               if (!user || !text) return j(400, { error: 'author + text required' });
-              const declared = reviewFromBody(body?.review);
+              const declared = reviewFromBody(body?.review, text);
               if (!declared.ok) return j(400, { error: declared.error });
               // A person's plain reply IS the answer to the ask it lands on.
               //
@@ -6421,7 +6426,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller that wrote it has to be the one that hears about it.
             const anchorCheck = anchors.validateAnchor(anchor);
             if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
-            const declared = reviewFromBody(body?.review);
+            const declared = reviewFromBody(body?.review, text);
             if (!declared.ok) return j(400, { error: declared.error });
             const t = await rooms.postComment(docId, null, user, text, anchor, {
               generate: !visitor,
@@ -6445,7 +6450,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!author || !text || find.length === 0) {
               return j(400, { error: 'author + text + find required' });
             }
-            const declared = reviewFromBody(body?.review);
+            const declared = reviewFromBody(body?.review, text);
             if (!declared.ok) return j(400, { error: declared.error });
             const res = await rooms.createThreadByFind(
               docId,
