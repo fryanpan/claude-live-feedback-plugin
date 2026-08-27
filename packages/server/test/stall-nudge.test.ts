@@ -24,8 +24,8 @@ import {
   STALL_EVENT,
   STALL_REPEAT_DEFAULT_MS,
   type StallNudgeFrame,
-  type StallSnapshot,
   StallNudger,
+  type StallSnapshot,
 } from '../src/stall-nudge.ts';
 
 const MIN = 60_000;
@@ -47,7 +47,9 @@ function board(over: Partial<StallSnapshot> = {}): StallSnapshot {
     workspaceId: 'w-atlas',
     leadAgentId: 'agent-cartographer',
     retired: false,
-    stalled: [{ id: 't-1', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 45 * MIN }],
+    stalled: [
+      { id: 't-1', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 45 * MIN },
+    ],
     unfiled: [],
     considered: 4,
     undetermined: [],
@@ -231,7 +233,12 @@ describe('rows waiting on a person with nothing filed', () => {
     const { world, sent, nudger } = harness();
     world.boards[0]!.stalled = [];
     world.boards[0]!.unfiled = [
-      { id: 't-9', title: 'Pick a retention window', bucket: 'blocked-on-owner-unfiled', quietMs: 2 * 60 * MIN },
+      {
+        id: 't-9',
+        title: 'Pick a retention window',
+        bucket: 'blocked-on-owner-unfiled',
+        quietMs: 2 * 60 * MIN,
+      },
     ];
 
     nudger.tick();

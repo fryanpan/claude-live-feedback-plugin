@@ -133,6 +133,8 @@ import type { Share, ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
+import { type StallVerdict, evaluateStalls } from './stall-gate.ts';
+import { STALL_NUDGE_STAMP_FILENAME, StallNudger, type StallSnapshot } from './stall-nudge.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import { indexBatchKeys, resolveRowRefs } from './task-batch-refs.ts';
 import {
@@ -165,6 +167,7 @@ import {
   type TaskStatus,
   TaskStore,
   eventsLogPath,
+  flattenGoals,
   isAttachmentRuntime,
   isRetired,
   isValidRef,
@@ -462,6 +465,21 @@ export interface ServerOptions {
    * against a wall-clock gap a test cannot wait out.
    */
   readyNudgeIdleMs?: number;
+  /**
+   * How long a row may go untouched before the board tells its lead it has
+   * stalled (default `STALL_QUIET_DEFAULT_MS`, thirty minutes;
+   * `CW_STALL_NUDGE_MINUTES` sets it on the box). A test seam for the same
+   * reason `readyNudgeIdleMs` is one — the feature is a comparison against a
+   * wall-clock gap no test can wait out.
+   */
+  stallNudgeQuietMs?: number;
+  /**
+   * How long a row must stay stalled before the wake says it AGAIN (default
+   * `STALL_REPEAT_DEFAULT_MS`, four hours). Test seam only: there is no
+   * operator knob, because the escalation cadence is a product decision rather
+   * than a deployment one.
+   */
+  stallNudgeRepeatMs?: number;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
   /** Absolute path to the built markdown-app dist dir. */
@@ -709,6 +727,9 @@ export interface ServerHandle {
   /** One pass of the ready-work wake (ready-nudge.ts). Runs on a 60s
    *  interval; exposed so tests exercise the real pass. */
   nudgeReadyWork: () => void;
+  /** One pass of the stall wake (stall-nudge.ts). Runs on a 60s interval;
+   *  exposed so tests exercise the real pass. */
+  nudgeStalls: () => void;
   /**
    * The wake's own falsifiability counter — what it suppressed, by condition,
    * against what it actually delivered.
@@ -1200,6 +1221,156 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Prod restarts at every merge, so without this each deploy re-fired one
     // wake per idle board over facts their leads had already been told.
     stampFile: join(dataDir, READY_NUDGE_STAMP_FILENAME),
+  });
+
+  /**
+   * One board as the stall loop reads it: which rows have stopped moving, which
+   * are waiting on a person nobody has actually asked, and which could not be
+   * read at all.
+   *
+   * The classification is `evaluateStalls` → `classifyOpenTasks`, the same
+   * function the keep-moving report runs. That sharing is the point rather
+   * than a convenience: the report is how this project decides whether the
+   * keep-moving protocol is working, and a loop that judged "stalled"
+   * differently would be measured by an instrument that disagreed with it.
+   *
+   * Four things have to be assembled here because they need the store:
+   *
+   *  - **Activity per row.** The classifier takes an event list and derives
+   *    each row's last movement from it. The board's own `/events` feed has
+   *    measurably MISSED row edits, so what is fed in is the rows' own
+   *    timestamps — `updatedAt`, `bodyWrittenAt`, `titleWrittenAt` — which are
+   *    written by every path that changes a row. That is a superset of what
+   *    the feed would have carried, and it needs no file read per tick.
+   *  - **Open questions.** `reviewState` reports open items AND unparseable
+   *    ones separately, and this is a caller that ACTS on the difference: a
+   *    ticket whose questions cannot be read is exactly the ticket whose
+   *    unreadable question might have explained its silence, so it goes to the
+   *    gate as unreadable rather than as clear.
+   *  - **Who owns the row**, from the projection's roster reader, so the
+   *    answer is the one the board draws rather than a guess from a name.
+   *  - **Which goals dispatch.** The decisions band is the owner's own queue
+   *    by its own description; everything else in the ranked list dispatches,
+   *    and a goal outside the list is formal backlog that the dispatch rule
+   *    would never start.
+   *
+   * Comments are resolved in a SECOND pass, and only over rows the first pass
+   * called stuck. A comment is the row moving — a ticket whose whole decision
+   * conversation is live on its thread is not quiet — but reading every board's
+   * every thread once a minute would be the one expensive thing in this loop,
+   * and the rows that would benefit are precisely the handful about to be
+   * reported.
+   */
+  const stallVerdict = (workspace: HubWorkspace): StallVerdict => {
+    const tasks = taskStore.listTasks(workspace.id);
+    const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
+    const goals = flattenGoals(workspace.goals);
+    // Matching on the owner's NAME would be wrong — it appears in ordinary
+    // goal titles. Only the decisions band is his queue.
+    const ownerBand = new Set(
+      goals.filter((g) => /decision/i.test(`${g.id} ${g.title}`)).map((g) => g.id),
+    );
+    // A board that declares NO goals has no bands, so nothing on it is
+    // backlog — `inGoalBand` in task-queue.ts states the same rule, and the
+    // never-dispatch rule ranks rows against the goal list, so with no list
+    // there is nothing to be outside of. Without this every row on a
+    // goal-less board reads as unranked backlog and the loop goes silent over
+    // exactly the boards that have no ranking to hide behind.
+    const dispatchable =
+      goals.length === 0
+        ? new Set(tasks.map((t) => t.goal))
+        : new Set(goals.map((g) => g.id).filter((id) => !ownerBand.has(id)));
+
+    const rows = tasks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status as string,
+      goal: t.goal,
+      after: t.after,
+      createdAt: t.createdAt,
+      transitions: t.transitions,
+      ownerKind: ownerKindOf(t) as string,
+      updatedAt: t.updatedAt,
+      ...(t.bodyWrittenAt !== undefined ? { bodyWrittenAt: t.bodyWrittenAt } : {}),
+      ...(t.titleWrittenAt !== undefined ? { titleWrittenAt: t.titleWrittenAt } : {}),
+      ...(t.parkedUntil !== undefined ? { parkedUntil: t.parkedUntil } : {}),
+      ...(t.parkedReason !== undefined ? { parkedReason: t.parkedReason } : {}),
+    }));
+    // Every row timestamp as an activity tick. Deliberately unfiltered by
+    // actor: the question this feeds is "did anything touch this row", and an
+    // unattributed tick beats a false silence.
+    const events: Array<{ taskId: string; ts: number }> = [];
+    for (const t of tasks) {
+      for (const ts of [t.updatedAt, t.bodyWrittenAt, t.titleWrittenAt]) {
+        if (typeof ts === 'number' && ts > 0) events.push({ taskId: t.id, ts });
+      }
+    }
+    const reviewItems: Array<{ taskId: string; askedAt?: number }> = [];
+    const unreadableReviewTaskIds = new Set<string>();
+    for (const t of tasks) {
+      const state = taskStore.reviewState(t.id);
+      // Absent means the row vanished between the list and this read. Treated
+      // as unreadable rather than as clear, for the same reason a throw is:
+      // the one thing that could exonerate the row is the thing we do not have.
+      if (!state) {
+        unreadableReviewTaskIds.add(t.id);
+        continue;
+      }
+      if (state.unreadable > 0) unreadableReviewTaskIds.add(t.id);
+      if (state.open > 0) reviewItems.push({ taskId: t.id });
+    }
+
+    const now = Date.now();
+    const input = {
+      tasks: rows,
+      events,
+      reviewItems,
+      bands: { dispatchable, ownerBand },
+      unreadableReviewTaskIds,
+      now,
+      ...(opts.stallNudgeQuietMs !== undefined ? { quietMs: opts.stallNudgeQuietMs } : {}),
+    };
+    const first = evaluateStalls(input);
+    const suspect = [...first.stalled, ...first.unfiled];
+    if (suspect.length === 0) return first;
+    // Second pass over the handful the first pass named. A room that was never
+    // opened holds no threads and answers nothing, which is the right answer:
+    // a row with no discussion has no comment activity to find.
+    const threadActivity = new Map<string, number>();
+    for (const row of suspect) {
+      let newest = 0;
+      for (const thread of rooms.listThreads(taskBodyDocId(row.id))) {
+        if (thread.lastActivity > newest) newest = thread.lastActivity;
+      }
+      if (newest > 0) threadActivity.set(row.id, newest);
+    }
+    return threadActivity.size > 0 ? evaluateStalls({ ...input, threadActivity }) : first;
+  };
+  const stallSnapshot = (workspace: HubWorkspace): StallSnapshot => {
+    const verdict = stallVerdict(workspace);
+    return {
+      workspaceId: workspace.id,
+      ...(workspace.leadAgentId !== undefined ? { leadAgentId: workspace.leadAgentId } : {}),
+      retired: workspace.retiredAt !== undefined,
+      stalled: verdict.stalled,
+      unfiled: verdict.unfiled,
+      considered: verdict.considered,
+      undetermined: verdict.undetermined,
+    };
+  };
+  const stallNudger = new StallNudger({
+    snapshot: () => taskStore.listWorkspaces().map(stallSnapshot),
+    // Addressed, never broadcast, and `agentsOn` rather than `count` for the
+    // same reason the ready-work wake uses it: `count` cannot tell an agent
+    // from an open browser tab, and a wake fanned out to every peer is the
+    // cost addressed delivery exists to remove.
+    canReach: (workspaceId, agentId) => sse.agentsOn(`ws~${workspaceId}`).has(agentId),
+    send: (workspaceId, agentId, frame) =>
+      sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
+    ...(opts.stallNudgeRepeatMs !== undefined ? { repeatMs: opts.stallNudgeRepeatMs } : {}),
+    // Prod restarts at every merge; without this each deploy would re-fire one
+    // wake per board over rows their leads had already been told about.
+    stampFile: join(dataDir, STALL_NUDGE_STAMP_FILENAME),
   });
   // Its own subscription rather than a branch inside the SSE bridge above,
   // and the ordering is the reason: the bridge is installed before this
@@ -7236,6 +7407,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // or an embedded one should behave the same way. `start` unrefs its own
   // timer, so this can never keep a process alive.
   readyNudger.start();
+  stallNudger.start();
 
   return {
     port: server.port ?? port,
@@ -7249,6 +7421,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // `sweepDeadShares` is: a test drives the real thing rather than a
     // re-implementation of it.
     nudgeReadyWork: () => readyNudger.tick(),
+    // Same contract as `nudgeReadyWork`: a test drives the real loop rather
+    // than a re-implementation of what it is believed to do.
+    nudgeStalls: () => stallNudger.tick(),
     readyNudgeTally: () => readyNudger.tally(),
     sharingGate,
     webhookLog,
@@ -7263,6 +7438,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // would read a store that is being flushed and wake a lead about a
       // server that is going away.
       readyNudger.stop();
+      stallNudger.stop();
       uptimeMonitor.stop();
       // Flush pending body snapshots into the store BEFORE the store's own
       // flush, so the last keystrokes in a task body reach the sidecar.
