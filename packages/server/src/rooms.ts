@@ -2953,7 +2953,7 @@ export class Rooms {
    * response — surfaces the party who just LOST content (whoever ran the
    * `git stash` whose bytes now exist only in clobber-backups/, or saved in
    * an editor) never touches. Watching sessions do, so the loss is announced
-   * where the watchers already are (board ticket t-3bFI5h-F9qRW).
+   * where the watchers already are (proposed on a board ticket, 2026-08).
    */
   private recordSyncError(
     room: DocRoom,
