@@ -93,6 +93,36 @@ CI enforces the dangerous half: `bun run check:plugin-version` fails the build
 when a PR touches `packages/plugin/**` without moving the version forward, or
 when the two manifests disagree.
 
+### Version numbers collide silently between branches
+
+Three branches independently pushed 0.1.46 on 2026-08-17 with main at 0.1.45,
+and nothing went red — neither half an oversight. Identical strings merge
+clean, because a conflict requires disagreement; and `check:plugin-version`
+compared against the *fork point*, which stays frozen however many times the
+job re-runs.
+
+- **The stale-number half was fixed first**: the gate now compares against
+  `origin/main`'s TIP (see learnings.md, "A gate that compares against the
+  merge-base is green precisely when the regression is largest").
+- **The concurrent half is checked too.** A plugin-touching PR asks GitHub
+  what every *other open PR* declares (`scripts/collect-open-pr-versions.ts`,
+  ambient `GITHUB_TOKEN`) and goes red when one of them already claims its
+  version. The tie-break is **the lowest PR number holds the number**, chosen
+  because each PR computes it alone from inputs both of them see — so of any
+  colliding pair exactly one goes red, and resolving it needs no coordinator.
+  If the PR holding your number is abandoned, close it; an open PR keeps
+  reserving what it declares.
+- **A failed lookup SKIPS LOUDLY and does not fail the build.** A network
+  flake must not take an unrelated PR red — but a skipped check and a clean
+  one share an exit code, so read the log: `concurrent-version check SKIPPED`
+  means nobody asked, not that nobody has your number.
+- **Still a narrowing, not a closure.** CI runs at push time, so a sibling
+  can push your number between your last green run and the merge; what shrank
+  is the window. Merge in ascending version order — an order that steps the
+  number backwards leaves peers silently un-updated, because `claude plugin
+  update` copies nothing when the string has not moved forward and reports
+  success anyway.
+
 ## Two bundles, two completely different mechanisms
 
 Do not conflate these. They fail differently and are fixed differently.

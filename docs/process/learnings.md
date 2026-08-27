@@ -3182,3 +3182,71 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
 
 ## Merge conflict resolution
 - **`git checkout --ours <file>` during a merge discards the AUTO-MERGED hunks too, not just the conflicted ones.** Resolving PR #272's version-string conflict this way on `packages/mcp/src/mcp.ts` silently reverted #276's entire SSE-reconnect implementation (Last-Event-ID cursor, deliverThenCommit, replay.gap handling) — those hunks had auto-merged cleanly and carried no conflict markers, so a grep for `<<<<<<<` showed only the version line and everything looked trivial. The file-level command then replaced the whole auto-merged file with the branch's copy, CI stayed green (the orphaned `sse-cursor.ts` still passed its isolated tests — no test drove its call site), and 0.1.74 shipped to the field without reconnect replay. Caught only because the NEXT branch to merge main (#280) built on the deleted path and its agent diffed both sides before resolving. The rule: `checkout --ours/--theirs` is for generated artifacts you are about to rebuild (`packages/plugin/mcp/index.js`); for SOURCE files, edit only the conflict hunks — and after any merge touching a file main also changed, grep the merged result for a literal from main's side of that file as a positive control. Restored by #280 (d480829).
+
+## Soft delete mechanics — which verb archives, which destroys, and why the `.ydoc` is the record
+
+- **The `.ydoc` is the durable record, not a cache.** `data/activity.jsonl` is
+  a DERIVED index that `activity-backfill.ts` rebuilds from the ydocs, and
+  `docs/process/activity-data-completeness.md` states the Weekly Review
+  agent's guarantee as valid *"for every doc whose `.ydoc` still exists (live
+  data dir + archive)"*. A hard delete does not merely remove a document — it
+  silently truncates the historical window an analysis depends on, and no
+  surface anywhere reports that it happened. `reopen` / `read_session` /
+  `doc_open` events are live-capture only and not reconstructable at all, so
+  that log must not be pruned per-doc either. That is the reason behind
+  Bryan's project-wide rule (2026-08-17): *"Generally don't do hard delete.
+  Use soft delete."*
+- **`data/_archive/` works because `hydrateFromDisk` reads only the top level
+  of the data dir** (an archived doc stops loading, stops costing memory and
+  a poll) **while `activity-backfill.ts` explicitly scans `_archive`** (it
+  still feeds analysis). The writer exists as of 0.1.92: `Rooms.archiveReview`
+  / `unarchiveReview`, reached from `archive_review` / `unarchive_review` /
+  `list_archived_reviews`, moves a whole review's `.ydoc`s and sidecars there
+  and back, recording who and why in `_archive/<setId>.review.json`. Sidecars
+  travel WITH their `.ydoc`; the backfill resolves a sidecar next to the file
+  it just read, falling back to the data dir because ~174 hand-moved ydocs
+  left theirs behind.
+- **0.1.93 adds the single-doc half**: `Rooms.archiveDoc` / `unarchiveDoc`,
+  reached from `archive_doc` / `unarchive_doc`, for the few hundred
+  free-standing docs (a `create_review_doc` markdown doc, a `bind_mock`
+  mockup) that belong to no review and so had no soft path at all. Manifest
+  at `_archive/<docId>.doc.json` — a different suffix from a review's, so
+  each listing enumerates its own kind. It REFUSES a doc that carries a
+  review id (`archive_review` owns those) and a `task:` / `ws:` id.
+  `list_archived_reviews` returns both kinds, under `archived` and `docs`.
+- **`purgePersisted` (`rooms.ts`) is the hard path** — `rmSync` on the
+  `.ydoc` plus the private-meta sidecar. `delete_review` and
+  `delete_workspace(reviewId)` no longer reach it by default: they archive,
+  and only `purge:true` purges. `delete_doc` and a BOARD delete still purge —
+  deliberately unchanged in 0.1.93, because `delete_doc` also covers task
+  bodies, where archiving is the wrong act; narrowing it needs its own
+  compatibility pass. What changed is that a free-standing doc now HAS a soft
+  path, so reaching for `delete_doc` is a choice to destroy rather than the
+  only verb available. Calling it is a decision, never a default.
+- **The rule covers user content and history, not transient files.** Pruning
+  old client releases and cleaning `.tmp`/staging paths are correct hard
+  deletes. Stated in this direction deliberately: a rule read too broadly
+  leaves litter, while one read too narrowly destroys a record nobody can
+  rebuild.
+
+## Width cannot identify a device, because page zoom moves it
+
+- Bryan reviews on an iPad in landscape with the keyboard attachment
+  (1180x820) and on a 430px phone. Until 2026-08-19 the repo's verification
+  rule named only "his phone" and "430px", so the device he actually uses
+  most was the one nothing told anyone to open. It is not a phone and not a
+  desktop: every phone rule sits far below it, and a wide desktop window does
+  not stand in for it, because its scarce axis is HEIGHT (~750px usable,
+  about half a monitor). That is why a 36px header row was worth a complaint
+  there and invisible everywhere else.
+- **Three tiers, and a MacBook is in the middle one with the iPad** (Bryan,
+  2026-08-19): mobile ≤1100, tablet/laptop 1101–1920, 4K above. The middle
+  tier is not a compromise between the other two — it is where almost every
+  screen lands, iPad and laptop alike, and *"anything below 1920px"* gets the
+  space-conserving layout.
+- **A width gate aimed above "every iPad" also excludes real laptops, and a
+  reviewer changes tier by pinching.** A 1366px iPad at 85% zoom reports
+  1607px — wider than a MacBook. Learned by shipping the 1367px gate and
+  watching it fail the same day. Anything that must be true per-device
+  belongs in a stored preference, not a media query; width picks defaults and
+  nothing more. Layout rules per tier: `docs/product/design-mobile.md`.
