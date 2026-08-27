@@ -312,7 +312,15 @@ def load_denylist() -> List[Tuple[str, bool]]:
             if not s or s.startswith("#"):
                 continue
             if s.startswith("/"):
-                out.append((s[1:], True))
+                # Accept both `/pattern` and the delimited `/pattern/` most
+                # entries are written as. Stripping only the leading slash
+                # left a literal trailing `/` on every delimited pattern —
+                # they compiled fine and matched nothing, so the gate
+                # reported clean while its regex entries were blind.
+                body = s[1:]
+                if len(body) > 1 and body.endswith("/") and not body.endswith("\\/"):
+                    body = body[:-1]
+                out.append((body, True))
             else:
                 out.append((s, False))
     return out
