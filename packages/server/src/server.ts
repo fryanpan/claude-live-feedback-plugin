@@ -3787,7 +3787,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // `ownerSession` for a while and this route did not, so the read
           // existed and was one call away from every dispatcher who needed
           // it — which on 2026-08-17 is how two sessions each built a
-          // complete answer to `t-K69wxtRLCn2a` (#186 merged, #190 thrown
+          // complete answer to the SAME ticket (#186 merged, #190 thrown
           // away) with neither able to detect the other.
           //
           // Two fields because they answer two questions and the whole
@@ -3832,7 +3832,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // read back as rows. This is the surface where the after-the-fact
         // 80/95 review happens, built on the same file every subscriber saw
         // (§3.6: the audit log can never disagree with what subscribers saw).
-        // Board load reports (t-scWMQmOZcpu1): one line per browser boot,
+        // Board load reports: one line per browser boot,
         // appended by the client after its first paint, read back newest-first
         // so "how slow was the board, and in which phase" is a recorded fact
         // rather than a memory of watching a spinner. No external service —

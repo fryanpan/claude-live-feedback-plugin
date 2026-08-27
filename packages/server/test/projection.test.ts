@@ -373,7 +373,7 @@ describe('ydoc projection + workspace room', () => {
   });
 
   it('rejects the workspace event stream for an unknown workspace', async () => {
-    const r = await local('/events/workspace/w-does-not-exist');
+    const r = await local('/events/workspace/w-missing');
     expect(r.status).toBe(404);
   });
 
