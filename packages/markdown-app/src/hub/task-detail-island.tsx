@@ -64,7 +64,6 @@ import {
   askedMetaLine,
   blockedNoteLine,
   isTaskArchived,
-  isTaskParked,
   taskActivity,
 } from './hub-model.ts';
 import {
@@ -695,7 +694,6 @@ function TaskDetailPanel(props: {
   });
 
   const archived = isTaskArchived(task);
-  const parked = isTaskParked(task, now);
 
   return (
     <div
@@ -805,20 +803,13 @@ function TaskDetailPanel(props: {
         </div>
       )}
 
-      {/* Deferred on purpose, in a block of its OWN rather than as a fifth cell
-          in the fields row: that row is a pinned four on a panel whose scarcest
-          axis is height, and a park is true of almost no rows. It carries a
-          control anyway, because a field an agent writes and a person cannot
-          correct reads as broken. */}
-      {parked && <ParkedNote task={task} handlers={handlers} />}
-
       {/* Archived, and the panel has to SAY so: a deep link, a search result or
           a restore list can all open a task that is no longer on any board, and
           without this its absence from the lanes reads as a rendering bug
           rather than as something somebody decided. */}
       {archived && (
         <div class="hub-archived-note">
-          <span class="hub-decide-k hub-parked-k">Archived</span>
+          <span class="hub-decide-k hub-archived-k">Archived</span>
           <p>
             {`${task.archivedAt ? new Date(task.archivedAt).toLocaleDateString() : ''}${
               task.archivedBy ? ` by ${task.archivedBy}` : ''
@@ -891,46 +882,6 @@ function TaskDetailPanel(props: {
         )}
       </div>
       <ActivityTab task={task} handlers={handlers} hidden={tab !== 'activity'} />
-    </div>
-  );
-}
-
-/** The parked block: the date and the reason, with one gesture to move or
- *  un-park it. The REASON is read-only here — it is prose that belongs with
- *  the discussion, and clearing the date clears it server-side anyway. */
-function ParkedNote(props: { task: HubTask; handlers: DetailHandlers }) {
-  const { task, handlers } = props;
-  const until = task.parkedUntil as number;
-  const day = new Date(until).toLocaleDateString();
-  const ref = useRef<HTMLInputElement | null>(null);
-  // Local noon both ways, exactly as the Due control does it: `toISOString`
-  // shows yesterday to anyone west of UTC, and `new Date('2026-09-02')` parses
-  // back as UTC midnight, which is the previous day in the same places.
-  const d = new Date(until);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  return (
-    <div class="hub-parked-note">
-      <span class="hub-decide-k hub-parked-k">Parked</span>
-      <p>{task.parkedReason ? `until ${day} — ${task.parkedReason}` : `until ${day}`}</p>
-      <input
-        ref={ref}
-        type="date"
-        class="hub-detail-input hub-parked-until"
-        value={value}
-        aria-label="Parked until — clear the date to un-park"
-        onChange={() => {
-          // An emptied input is an explicit un-park, not a bad value.
-          const v = ref.current?.value ?? '';
-          if (!v) {
-            handlers.onParkSet?.(task, null);
-            return;
-          }
-          const [y, m, dd] = v.split('-').map(Number);
-          if (!y || !m || !dd) return;
-          handlers.onParkSet?.(task, new Date(y, m - 1, dd, 12, 0, 0, 0).getTime());
-        }}
-      />
     </div>
   );
 }

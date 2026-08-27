@@ -1194,7 +1194,6 @@ async function main(): Promise<void> {
         goals: state.info?.goals ?? [],
         onGoalSet: (t, goalId) => void setTaskGoal(t, goalId),
         onDueSet: (t, dueAt) => void setTaskDue(t, dueAt),
-        onParkSet: (t, parkedUntil) => void setTaskPark(t, parkedUntil),
         onArchive: (t) => void archiveTask(t),
         onRestore: (t) => void restoreTask(t),
         onComment: (t, text, threadId) => postRowComment(t, text, threadId),
@@ -1646,16 +1645,6 @@ async function main(): Promise<void> {
     });
     if (!res.ok)
       showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
-  }
-
-  /** The panel's Parked field. `null` un-parks. The row itself never moves —
-   *  parking defers work without claiming it, which is the whole point. */
-  async function setTaskPark(task: HubTask, parkedUntil: number | null): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/park`, 'POST', {
-      parkedUntil,
-      author,
-    });
-    if (!res.ok) showToast(parkedUntil === null ? 'Un-parking failed' : 'Parking the task failed');
   }
 
   /**

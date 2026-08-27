@@ -286,13 +286,18 @@ describe('ACTIVITY_REFRESH_EVENTS', () => {
     // with no Activity row, and a peer's undo leaves both browsers stale —
     // measured for `task.due_set` and `decision.answer_withdrawn` when the
     // list was hand-kept in hub-app and this branch forgot to extend it.
+    //
+    // `task.parked` is deliberately NOT here: nothing emits it since parking
+    // became a move to triage plus a comment (2026-08-27). `describeEvent`
+    // still renders it — the stored trail is full of real ones — but a list
+    // entry for an event with no live emitter is a listener that can never
+    // fire. The retired `task.gate_refused` sits out for the same reason.
     for (const ev of [
       'task.created',
       'task.transitioned',
       'task.assigned',
       'task.retitled',
       'task.due_set',
-      'task.parked',
       'task.regrouped',
       'decision.answered',
       'decision.answer_withdrawn',
@@ -381,7 +386,10 @@ describe('describeEvent', () => {
     expect(cleared).not.toContain(shown(day(2026, 9, 9)));
   });
 
-  it('reads a park three ways, and always says what it is waiting for', () => {
+  // Retired as a WRITE on 2026-08-27; still rendered, because months of real
+  // parks are in the stored trail and a removed case draws them as a raw
+  // event name.
+  it('still reads a stored park three ways, and always says what it was waiting for', () => {
     const park = (over: Record<string, unknown>) =>
       describeEvent(
         {

@@ -40,7 +40,6 @@ import {
   assigneeLabel,
   dropIndexFor,
   dropTarget,
-  isTaskParked,
   ownerInitials,
   ownerKindSuffix,
   ownerMarkKind,
@@ -401,19 +400,6 @@ function TaskBadges(props: { task: HubTask }) {
         class={overdue ? 'hub-badge hub-badge-due hub-badge-overdue' : 'hub-badge hub-badge-due'}
       >
         {`due ${due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
-      </span>,
-    );
-  }
-  // Deferred to a date. This one earns its place where `needs` and the
-  // dependency count did not, and the difference is that it is TRUE OF ALMOST
-  // NO ROWS: without it a parked row is indistinguishable from work nobody has
-  // gotten to. The reason rides `title` rather than the chip text — it is free
-  // prose of any length and the row is one line.
-  if (isTaskParked(task)) {
-    const until = new Date(task.parkedUntil as number);
-    badges.push(
-      <span key="parked" class="hub-badge hub-badge-parked" title={task.parkedReason}>
-        {`parked · ${until.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
       </span>,
     );
   }
