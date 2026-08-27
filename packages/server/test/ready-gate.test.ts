@@ -231,7 +231,7 @@ describe('the backlog band is never dispatched, so it is never a reason to wake'
   // goal is not on the workspace's ranked goal list (the reserved `chores`
   // id first of all) are formal backlog and are not auto-dispatched. A wake
   // that counts them says "39 ready" over a board whose dispatchable set is
-  // zero — measured three times in one hour on a real board (t-X_Rkt8fA9HIY).
+  // zero — measured three times in one hour on a real board.
   it('withholds a backlog row and names the reason', () => {
     const verdict = evaluateReadyWork([row({ inGoalBand: false })], probes());
 
