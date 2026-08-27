@@ -80,56 +80,90 @@ describe('triage status', () => {
       expect(res.task.status).toBe('todo');
     });
 
-    it('never puts a GOAL row in triage — goals are created by people, from the goal list', () => {
+    it('puts a new GOAL row in triage too, on its own rule', () => {
+      // Not this function's rule: a goal is a proposal whoever adds it, so
+      // the person/agent split above does not apply. `syncGoalRows` owns the
+      // goal default, and `goal-triage-default.test.ts` pins both of its
+      // answers — the create one here, and the migration one that must not
+      // inherit it.
       const wsId = ws();
       const res = store.setGoalList(wsId, [{ title: 'Ship the ranker' }], { actor: AGENT });
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       const goalId = res.created[0]?.id as string;
-      expect(store.getGoalRow(goalId)?.status).toBe('todo');
+      expect(store.getGoalRow(goalId)?.status).toBe('triage');
     });
   });
 
   /**
-   * The create half of "a goal is never in triage" is above; this is the other
-   * half, and it is the one that was actually reachable.
+   * A goal HOLDS triage, and it means about a band what it means about a row:
+   * nobody has agreed this is work yet, so nothing under it is dispatched.
    *
-   * The transition gate resolves a goal row as readily as a task (`findRow` —
-   * that is what let a goal move through the existing route without a new
-   * one), and it validates the target against the SHARED status set. So
-   * nothing stopped `POST /api/tasks/:goalId/transition` with `to: 'triage'`,
-   * and the invariant the tests above assert held only until somebody used the
-   * verb the product already ships. Caught by an independent review pass, not
-   * by these tests, because they only ever looked at creation.
+   * This reverses an invariant the gate used to enforce (`goal-not-triageable`,
+   * removed here). The reasoning that refusal rested on — "triage is a claim
+   * that an agent filed this and nobody vetted it, and a goal is neither filed
+   * by an agent nor dispatched" — was right about the first half and wrong
+   * about the second. A goal band IS dispatched, transitively: every task in
+   * it inherits the band's priority, so a band nobody has agreed to is a band
+   * whose tasks get picked up on the strength of an agreement that was never
+   * made. That is the hole triage exists to close, one level up.
+   *
+   * Moving a goal out of triage needs no new verb, exactly as it needs none
+   * for a task: any attributed move through this gate does it, and the trail
+   * the gate already writes is the record of who agreed.
    */
-  describe('a goal row cannot be moved INTO triage', () => {
+  describe('a goal row can be moved INTO triage', () => {
     function goal(wsId: string): string {
       const res = store.setGoalList(wsId, [{ title: 'Ship the ranker' }], { actor: AGENT });
       if (!res.ok) throw new Error('goal list refused');
-      return res.created[0]?.id as string;
+      const id = res.created[0]?.id as string;
+      // Seeded goals arrive in triage now (see `goal-triage-default.test.ts`).
+      // Activate first, so the move under test is genuinely a move INTO triage
+      // rather than a no-op the `same-status` arm would refuse.
+      const up = store.transition(id, 'todo', { actor: PERSON });
+      if (!up.ok) throw new Error(`could not activate seeded goal: ${up.error}`);
+      return id;
     }
 
-    it('refuses the move and says why, without touching the row', () => {
+    it('accepts the move and writes it to the trail', () => {
       const wsId = ws();
       const goalId = goal(wsId);
-      const res = store.transition(goalId, 'triage', { actor: PERSON });
-      expect(res.ok).toBe(false);
-      if (res.ok) return;
-      expect(res.error).toBe('goal-not-triageable');
-      // A gate that only blocks is a dead end: the message has to name the
-      // reason, the way every other refusal on this gate does.
-      expect(res.message ?? '').toContain('Ship the ranker');
-      expect(res.message ?? '').toMatch(/triage/i);
-      // Nothing moved, and nothing was written to the trail.
-      expect(store.getGoalRow(goalId)?.status).toBe('todo');
-      expect(store.getGoalRow(goalId)?.transitions).toEqual([]);
+      const res = store.transition(goalId, 'triage', { actor: PERSON, note: 'not agreed yet' });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(store.getGoalRow(goalId)?.status).toBe('triage');
+      const entry = store.getGoalRow(goalId)?.transitions.at(-1);
+      expect(entry?.from).toBe('todo');
+      expect(entry?.to).toBe('triage');
+      expect(entry?.by).toMatchObject({ name: 'Bryan', kind: 'person' });
+      expect(entry?.note).toBe('not agreed yet');
     });
 
-    it('still lets the goal move everywhere else — the refusal is narrow', () => {
+    it('is a BACKWARD move, so an open child never blocks it', () => {
+      // The mirror of the task rule: undoing an agreement must not be
+      // blockable. A goal's forward moves consult `openChildren`; this one
+      // must not, or a band could never be sent back once work started under
+      // it — which is exactly when somebody discovers it was never agreed.
       const wsId = ws();
       const goalId = goal(wsId);
-      // POSITIVE CONTROL. Without it, "the move was refused" would also be
-      // satisfied by a gate that had stopped moving goals at all.
+      const child = store.createTask(wsId, {
+        title: 'Rebuild the ranker',
+        assignee: PERSON.name,
+        goal: goalId,
+        actor: PERSON,
+      });
+      if (!child.ok) throw new Error('create failed');
+      const res = store.transition(goalId, 'triage', { actor: PERSON });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.blockers).toEqual([]);
+    });
+
+    it('still lets the goal move everywhere else — nothing else about the gate changed', () => {
+      const wsId = ws();
+      const goalId = goal(wsId);
+      // POSITIVE CONTROL. Without it, "triage was accepted" would also be
+      // satisfied by a gate that had stopped checking goal rows at all.
       const moved = store.transition(goalId, 'in-progress', { actor: PERSON });
       expect(moved.ok).toBe(true);
       expect(store.getGoalRow(goalId)?.status).toBe('in-progress');
@@ -137,9 +171,24 @@ describe('triage status', () => {
       expect(done.ok).toBe(true);
     });
 
+    it('refuses a no-op move to triage, the same as any other status', () => {
+      const wsId = ws();
+      const res = store.setGoalList(wsId, [{ title: 'Ship the ranker' }], { actor: AGENT });
+      if (!res.ok) throw new Error('goal list refused');
+      const goalId = res.created[0]?.id as string;
+      // Already in triage from the seed — so the shared `same-status` arm is
+      // what answers, and the removal of the old refusal did not open a path
+      // that writes a duplicate trail entry.
+      const same = store.transition(goalId, 'triage', { actor: PERSON });
+      expect(same.ok).toBe(false);
+      if (same.ok) return;
+      expect(same.error).toBe('same-status');
+      expect(store.getGoalRow(goalId)?.transitions).toEqual([]);
+    });
+
     it('leaves a TASK free to be sent back to triage', () => {
-      // The other half of the same control: the refusal is about goal rows,
-      // not about the value, so a task must still reach it.
+      // Unchanged by any of the above: the value was always legal on a task,
+      // and widening it to goals must not have narrowed it here.
       const wsId = ws();
       const created = store.createTask(wsId, {
         title: 'Rebuild the ranker',
@@ -306,23 +355,21 @@ describe('over the route a goal is already moved through', () => {
       body: JSON.stringify({ to, author: PERSON }),
     });
 
-  it('400s a goal sent to triage, and 200s the same goal sent anywhere else', async () => {
+  it('200s a goal sent to triage, over the same route that moves it anywhere else', async () => {
     const store = handle.tasks;
     const wsId = store.createWorkspace('Board').id;
     const listed = store.setGoalList(wsId, [{ title: 'Ship the ranker' }], { actor: AGENT });
     if (!listed.ok) throw new Error('goal list refused');
     const goalId = listed.created[0]?.id as string;
+    // Seeded goals arrive in triage; activate over the same route so the move
+    // under test is a real transition and not the `same-status` refusal.
+    expect((await transition(goalId, 'todo')).status).toBe(200);
 
-    const refused = await transition(goalId, 'triage');
-    // 400 rather than 409: a 409 is the gate saying "not yet" about something
-    // that could become true, and this never becomes true for a goal.
-    expect(refused.status).toBe(400);
-    const body = (await refused.json()) as { error: string; message?: string };
-    expect(body.error).toBe('goal-not-triageable');
-    expect(body.message ?? '').toContain('Ship the ranker');
-    expect(store.getGoalRow(goalId)?.status).toBe('todo');
+    expect((await transition(goalId, 'triage')).status).toBe(200);
+    expect(store.getGoalRow(goalId)?.status).toBe('triage');
 
-    // POSITIVE CONTROL: the same route, the same goal, a status it may hold.
+    // POSITIVE CONTROL: the same route, the same goal, a different status —
+    // so a 200 above cannot be a route that stopped reading `to` at all.
     expect((await transition(goalId, 'done')).status).toBe(200);
     expect(store.getGoalRow(goalId)?.status).toBe('done');
   });
