@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { READY_IDLE_EVENT, REVIEW_ANSWERED_EVENT } from '../src/ready-nudge.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -521,6 +522,65 @@ describe('the board wakes its lead over the wire', () => {
 
       expect(handle.readyNudgeTally().passed).toBe(1);
       expect(handle.readyNudgeTally().since).toBeGreaterThan(0);
+
+      await lead.stop();
+      await tab.stop();
+    });
+  });
+
+  /**
+   * The nudge, over a board that HAS goals — proving `readyWorkSnapshot`
+   * really forwards `goalRows` into the same `buildQueue` call `next_tasks`
+   * uses, rather than a `buildQueue` call the unit tests can see but the
+   * live wake never reaches.
+   *
+   * `addReadyRow`'s row cannot serve as the positive control here: it carries
+   * no `goal`, and a no-goal row on a board that HAS bands is formal backlog
+   * (`inGoalBand: false`), which the gate holds too — so a silent nudge about
+   * it would prove nothing about triage specifically. The control row below
+   * is moved into the AGREED band before the nudge, so the only way it gets
+   * named is the wake actually reading that band's status as clear.
+   */
+  describe('the wake holds a row whose band is still in triage', () => {
+    it('withholds it as goal-triage, and still names a row in an agreed band', async () => {
+      const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
+
+      // One band left in triage, one agreed — the same two-band shape the
+      // unit tests pin, so a gate that suppressed every band would still be
+      // caught here.
+      const G = await seedGoalsOverHttp(
+        base,
+        workspaceId,
+        [
+          { key: 'pending', title: 'Rebuild the ranker' },
+          { key: 'agreed', title: 'Fix the crawler' },
+        ],
+        PERSON,
+        { leaveInTriage: true },
+      );
+      await jj(
+        await post(`/api/tasks/${G.agreed}/transition`, {
+          to: 'todo',
+          author: PERSON,
+          workspaceId,
+        }),
+      );
+
+      // The board's existing ready row moves under the still-triage band...
+      await jj(await post(`/api/tasks/${taskId}/goal`, { goal: G.pending, author: PERSON }));
+      // ...and a second, genuinely free row moves under the agreed one.
+      const freeId = await addReadyRow(workspaceId, 'Cache the facet counts');
+      await jj(await post(`/api/tasks/${freeId}/goal`, { goal: G.agreed, author: PERSON }));
+      await settle();
+
+      handle.nudgeReadyWork();
+      const got = await waitForFrames(lead.frames, READY_IDLE_EVENT, 1);
+
+      expect(got).toHaveLength(1);
+      expect(got[0]?.data?.taskId).toBe(freeId);
+      expect(got[0]?.data?.readyCount).toBe(1);
+      expect(got[0]?.data?.consideredCount).toBe(2);
+      expect(got[0]?.data?.held).toEqual({ 'goal-triage': 1 });
 
       await lead.stop();
       await tab.stop();

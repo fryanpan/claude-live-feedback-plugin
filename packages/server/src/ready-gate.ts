@@ -55,6 +55,13 @@ export type HoldReason =
    *  (Bryan, 2026-08-22: "above all else go in priority order"). Not a
    *  deferral and not a block: the band itself is the verdict. */
   | 'backlog'
+  /** INSIDE a ranked band, but one still in triage — nobody has agreed the
+   *  goal is work yet, so nothing under it is dispatched. The sibling of
+   *  `backlog`: both are the band answering for the row, and neither is
+   *  anything the row itself can fix. Held rather than dropped so the report
+   *  can name it — Bryan asked for these rows to read as "goal in triage",
+   *  never as a failure. */
+  | 'goal-triage'
   /** Owned by nobody the board can name. There is no session to wake. */
   | 'unowned'
   /** An open review item — a question put to a person that nobody has
@@ -80,6 +87,10 @@ export interface GateRow {
    *  the reserved `chores` id first of all. Such a row is formal backlog and
    *  the dispatch rule would never start it, so a wake must not count it. */
   inGoalBand: boolean;
+  /** True when the row's band has not been agreed to yet (`QueueRow`). Like
+   *  `inGoalBand` this is the BAND's answer about the row, and nothing the
+   *  row carries can override it. */
+  goalInTriage: boolean;
 }
 
 /** The row as a wake needs to name it. */
@@ -158,8 +169,14 @@ export function evaluateReadyWork(
       hold('claimed');
       continue;
     }
+    // The two band verdicts sit together and are mutually exclusive — a row
+    // is either outside every band or inside one that is not agreed to.
     if (!row.inGoalBand) {
       hold('backlog');
+      continue;
+    }
+    if (row.goalInTriage) {
+      hold('goal-triage');
       continue;
     }
     if (!row.ready) {

@@ -1167,7 +1167,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const byId = new Map(tasks.map((t) => [t.id, t]));
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
     const verdict = evaluateReadyWork(
-      buildQueue(tasks, workspace.goals, { includeBlocked: true }),
+      // `goalRows` is what tells the gate which BANDS have been agreed to; a
+      // row under a band still in triage is held (`goal-triage`) rather than
+      // dropped, so the pass can report it instead of going quiet about it.
+      buildQueue(tasks, workspace.goals, {
+        includeBlocked: true,
+        goalRows: taskStore.listGoalRows(workspace.id),
+      }),
       {
         ownerKind: (id) => {
           const task = byId.get(id);
@@ -3778,6 +3784,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 ? { limit: Number(limitRaw) }
                 : {}),
               includeBlocked: url.searchParams.get('includeBlocked') === 'true',
+              // So each row can say whether its BAND has been agreed to. The
+              // row is still listed either way — a lead reading the queue
+              // should see the band and be able to disagree with it.
+              goalRows: taskStore.listGoalRows(workspaceId),
               // The discussion the queue has always dropped. Every one of the
               // five known stale-premise pickups had a comment on the task
               // saying the premise had moved, and none of them reached the
