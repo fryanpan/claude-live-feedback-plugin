@@ -46,7 +46,7 @@ export interface OwnerSession {
  * `ownerSession` is keyed on the owner, and `task_transition` never touches
  * `assignee`: a session that pulls a row off the queue and works it for hours
  * leaves the owner field exactly as it found it. So on 2026-08-17 two sessions
- * built two complete answers to `t-K69wxtRLCn2a` while every owner-keyed read
+ * built two complete answers to the same ticket while every owner-keyed read
  * of that row honestly answered "nobody". This reads the other half — the
  * actor on the row's most recent move INTO `in-progress`, matched against the
  * board's roster.
@@ -263,7 +263,7 @@ export function projectTask(
     // Narrowed to the declared shape, never spread: the pre-fix writer
     // stamped the ENTIRE workspace goal text into this marker, and 187 rows
     // on the live hub board still carry ~3KB each — 546KB of the board ydoc
-    // shipped to every reader on every open (t-scWMQmOZcpu1). The store
+    // shipped to every reader on every open. The store
     // keeps whatever the sidecar recorded; the wire gets { goalId, ts } —
     // same precedent as `evidence` two fields down.
     ...(task.triagedAgainst !== undefined

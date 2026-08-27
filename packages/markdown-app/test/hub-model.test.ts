@@ -1397,7 +1397,7 @@ describe('reviewQueue — a blocker is task state, not a review item (design poi
 
 /**
  * "Always order asks by task priority" (Bryan, 2026-08-18, answering
- * t-vrwyE8YcVD-J). Priority means the BOARD's order — goal band, then the
+ * the ask-ordering ticket). Priority means the BOARD's order — goal band, then the
  * task's position in it — so every case below is built so that the new key
  * and the key it replaced point in OPPOSITE directions. A fixture where they
  * agree cannot tell them apart, which is how the previous version of the

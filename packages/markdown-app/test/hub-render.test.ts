@@ -3562,7 +3562,7 @@ describe('renderUnplacedStrip', () => {
 
   it('says how many and how old, and opens the longest-waiting task', () => {
     const el = host();
-    const old = task({ id: 't-waited-longest', unplacedSince: NOW - 6 * DAY });
+    const old = task({ id: 't-waited', unplacedSince: NOW - 6 * DAY });
     const opened: string[] = [];
     renderUnplacedStrip(el, unplacedNotice([task({ unplacedSince: NOW - HOUR }), old], NOW), {
       onOpenOldest: (id) => opened.push(id),
@@ -3573,7 +3573,7 @@ describe('renderUnplacedStrip', () => {
     const btn = el.querySelector<HTMLButtonElement>('.hub-unplaced-open');
     expect(btn).not.toBeNull();
     btn?.click();
-    expect(opened).toEqual(['t-waited-longest']);
+    expect(opened).toEqual(['t-waited']);
   });
 
   it('informs rather than scolds', () => {

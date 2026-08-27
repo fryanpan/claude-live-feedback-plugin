@@ -1014,7 +1014,7 @@ function compareAsk(a: AskRank, b: AskRank): number {
  * presents as the worst possible bug because nothing is actually lost.
  *
  * **Task priority is the primary key** (Bryan, 2026-08-18, answering
- * t-vrwyE8YcVD-J: *"Always order asks by task priority"*). That question was
+ * on the ask-ordering ticket: *"Always order asks by task priority"*). That question was
  * filed precisely because two sort keys disagreed with no stated tiebreak —
  * a P1 asked five hours ago against a P3 that has waited two days — and the
  * standing lean was the opposite, waiting time first inside a priority band.
@@ -1394,7 +1394,7 @@ export function advanceWalk(
  * `?walk=1` means open the walkthrough as soon as the queue is loaded, and
  * `&then=<id,id>` names the workspaces still holding items, to visit after
  * this board's queue drains. Server side of the contract: the landing
- * renderer in `packages/server/src/server.ts` (t-DA4rBTmdP0d2).
+ * renderer in `packages/server/src/server.ts`.
  */
 export interface WalkHandoff {
   walk: boolean;
@@ -2685,7 +2685,7 @@ export function askedMeta(item: ReviewItem, now: number): string {
  * the banner only exists while items are open (approved design), so an empty
  * queue renders nothing rather than an all-clear box.
  *
- * No count, deliberately (Bryan, 2026-08-18, answering t-0iestDQdJTOZ:
+ * No count, deliberately (Bryan, 2026-08-18, answering the review-queue ticket:
  * "Remove the count. Don't think I need it."). The decision that number was
  * built to make honest — which rows a needs-you COUNT may admit — dissolved
  * with the number itself: the banner says the queue is non-empty, and the
