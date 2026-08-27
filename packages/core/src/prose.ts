@@ -589,7 +589,10 @@ function normCell(s: string): string {
 
 /** Every `table` element in the fragment, in document order (nested tables
  *  included, though the parser only produces top-level ones today). */
-function collectTables(node: Y.XmlFragment | Y.XmlElement, out: Y.XmlElement[] = []): Y.XmlElement[] {
+function collectTables(
+  node: Y.XmlFragment | Y.XmlElement,
+  out: Y.XmlElement[] = [],
+): Y.XmlElement[] {
   for (const child of node.toArray()) {
     if (child instanceof Y.XmlElement) {
       if (child.nodeName === 'table') out.push(child);
