@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeBuildId } from '../src/build-id.ts';
+import { OPEN_PROPS_FILES } from '../src/tokens-manifest.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, '..');
@@ -16,7 +18,7 @@ const isWatch = process.argv.includes('--watch');
  * invisible: the id would not move, and "a new version is available" would
  * stay silent for the one file the browser re-fetches on its own schedule.
  */
-const HASHED = ['app.js', 'hub.js', 'sw.js', 'styles.css', 'index.html'];
+const HASHED = ['app.js', 'hub.js', 'sw.js', 'styles.css', 'tokens.css', 'index.html'];
 
 /**
  * Builds both entries plus the copied assets. Runs TWICE per build: once with
@@ -122,6 +124,17 @@ async function emit(buildId: string): Promise<boolean> {
 
   cpSync(join(pkgRoot, 'index.html'), join(dist, 'index.html'));
   cpSync(join(pkgRoot, 'src', 'styles.css'), join(dist, 'styles.css'));
+  // The Open Props trial layer: the vendored subset (self-hosted — a strict
+  // CSP and offline tailnet use forbid CDN hosts) concatenated with the
+  // mapping in src/tokens.css, served as one file at /app/tokens.css so a
+  // mockup can import the app's palette with a single <link>. Resolved from
+  // this package's node_modules, same as any bundled dependency.
+  const requireFromPkg = createRequire(join(pkgRoot, 'package.json'));
+  const tokensCss = [
+    ...OPEN_PROPS_FILES.map((f) => readFileSync(requireFromPkg.resolve(`open-props/${f}`), 'utf8')),
+    readFileSync(join(pkgRoot, 'src', 'tokens.css'), 'utf8'),
+  ].join('\n');
+  writeFileSync(join(dist, 'tokens.css'), tokensCss);
   // Icons and the web app manifest. Copied wholesale rather than listed, so
   // adding an icon size later needs no build change — and `client-release.ts`
   // copies dist recursively, so they reach production the same way chunks do.
