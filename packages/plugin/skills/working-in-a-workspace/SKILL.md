@@ -30,7 +30,7 @@ The purpose of a workspace is to provide a significantly better agent and human 
       4. Writing the ask
          1. The option label is the contract — the reviewer answers the label, not the reasoning under it. Plain words, phone-readable.
          2. Any link the reviewer needs goes in the payload's `detail` — the Home card renders the payload and nothing around it, so a link in the surrounding comment text never reaches the card.
-      5. Anything the reviewer still owes an answer to when your turn ends is a filed review item on the board, not a line in chat.
+      5. Anything the reviewer still owes an answer to is a filed review item BEFORE your turn ends — answerable where they read, with chat carrying at most a pointer to it. A "still waiting on you" list in chat is the failure mode this rule exists for: audited sessions filed 18 chat-only asks in a day, and 13 died unanswered.
 3. Share progress in the workspace on the most appropriate task or doc using comments
 
 ### What a chat message is
@@ -132,13 +132,30 @@ Someone who was not in the conversation should be able to see a task, know why i
   - `in-progress` when you **start**, not when you report.
   - `done` means **delivered** — all acceptance criteria are met
   - Work sitting in an unmerged PR stays `in-progress`
-  - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — it stays `todo` and the board stops treating it as work nobody got to. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
+  - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — it stays `todo`, carrying when it comes back and why, and the board stops treating it as work nobody got to. The `until` date and `reason` are the contract: an open-ended park is a shelf nobody returns to. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
   - Say what you did in the transition `note` — the PR, what you verified and what you couldn't. The note is the whole of what the trail keeps, so a move with an empty note is a move nobody can read back.
 - Share progress on a task by writing brief comments (100 words or less) in the task when you start, when you hit a blocker, when a PR opens, and when it merges.
 - **Your final message is a pointer, not the report.** Post the full report as a task comment FIRST — the harness drops final messages routinely, so the board comment is the copy that survives — then write the message from the `threadUrl` that comment returns. Three parts, 50 words or less all together:
   1. The outcome, in one line.
   2. The `threadUrl` of the comment holding the full report, formatted for wherever the message lands (below).
   3. Any blocker, in one line.
+
+## When You Are Blocked
+
+A blockage is recorded on the board, never held in your head:
+
+- Blocked on another row → an `after` edge (`set_task_dependencies`), so the
+  queue stops offering the task and offers it again the moment the edge
+  clears.
+- Blocked on a decision or an answer → a review item on the task it blocks,
+  naming exactly what is needed (see "ask for human help" above).
+
+When nothing is ready and every blockage is filed, **end the turn and wait
+to be woken**. Every resume source pushes — replies, new rows, cleared
+edges — so never poll for work: a timed board re-read reloads your whole
+context to learn nothing changed. "Never go dark" does not forbid being
+idle; it forbids standing down with asks that exist only in chat, which the
+filed items prevent.
 
 ## Use Links Effectively
 
