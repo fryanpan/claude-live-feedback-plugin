@@ -51,10 +51,9 @@ bun run lint                    # biome; nothing else formats
 
 Four separate gates; each catches what the others cannot — read this list,
 don't recite it from memory. `bunx biome check --write` fixes formatting;
-pre-existing `noExplicitAny` warnings are warnings, leave them. Per diff,
-additionally: `packages/mcp/src/**` → `bun run build:mcp` + commit the
-bundle; `packages/plugin/**` → version bump (below); touching neither adds
-nothing.
+pre-existing `noExplicitAny` warnings stay. Per diff: `packages/mcp/src/**`
+→ `bun run build:mcp` + commit the bundle; `packages/plugin/**` → version
+bump (below); touching neither adds nothing.
 
 ## Releasing the plugin
 
@@ -102,18 +101,19 @@ doc with un-flushed edits refuses the deploy (`force` accepts the loss).
 ## Staging — review a branch before merge
 
 `bun run staging` from a LINKED worktree (it refuses the primary checkout —
-prod's deploy source): serves :8788 with a throwaway data dir; prod stays on
-8787. Put an agent on it with `FEEDBACK_BASE_URL=http://<host>:8788` at
-launch. Staging data never migrates to prod.
+prod's deploy source): :8788, throwaway data dir; prod stays on 8787. Agent:
+`FEEDBACK_BASE_URL=http://<host>:8788` at launch; data never migrates to prod.
 
 ## Pre-push leak gate (public repo)
 
 `.githooks/pre-push` runs a regex scanner (denylist + registry project names)
-and a Haiku scanner on every push. A missing config source FAILS the push
-(exit 2) — broken install, not absent config. The scanner takes file paths /
-`--diff-range` / `--staged` and ignores stdin (piping scans nothing, exits 0).
-Setup once: `git config core.hooksPath .githooks`. Bypass sparingly:
-`SCRUB_SKIP=1` / `SCRUB_SKIP_HAIKU=1`.
+on every push, and a Haiku scanner only on pushes to fryanpan-owned remotes
+(`SCRUB_HAIKU_FORCE=1` forces it elsewhere). One config source resolving
+without the other FAILS the push (exit 2 — broken install); neither resolving
+skips cleanly (`SCRUB_REQUIRE_SOURCES=1` makes even that hard). The scanner
+takes paths / `--diff-range` / `--staged` and ignores stdin (piping scans
+nothing, exits 0). Setup once: `git config core.hooksPath .githooks`. Bypass
+sparingly: `SCRUB_SKIP=1`, or `SCRUB_SKIP_HAIKU=1` for Haiku alone.
 
 **Linear:** Team Bryan Chan (BRY), team ID
 `01328a7f-d761-4176-8bbf-004a397dc6f7`
