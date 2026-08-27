@@ -326,8 +326,10 @@ const TASK_STATUSES: ReadonlySet<string> = new Set(['triage', 'todo', 'in-progre
  * here (task-owner.ts), so the only caller this covers is a direct in-process
  * create that named nobody, and leaving that visible is the safe half.
  *
- * A GOAL row never comes through here. Goals are created by people, from the
- * goal list, and `syncGoalRows` mints them `todo`.
+ * A GOAL row never comes through here — `syncGoalRows` mints those, and it
+ * decides their status on a different rule (who is adding versus migrating,
+ * not person versus agent). A new goal does start in `triage`, but that is
+ * that method's answer, not this one's.
  */
 export function initialTaskStatus(
   actor: { id: string; name: string; kind?: string } | undefined,
@@ -856,7 +858,7 @@ export type TransitionResult =
   | { ok: true; task: BoardRow; blockers: TransitionBlocker[] }
   | {
       ok: false;
-      error: 'not-found' | 'bad-status' | 'same-status' | 'blocked' | 'goal-not-triageable';
+      error: 'not-found' | 'bad-status' | 'same-status' | 'blocked';
       blockers?: TransitionBlocker[];
       /** Refusal text shaped to land verbatim in an agent's context. */
       message?: string;
@@ -3106,8 +3108,25 @@ export class TaskStore {
    *
    * Subgoals flatten into rows of their own, in the position the board already
    * draws them — it has rendered one flat level all along.
+   *
+   * `mintStatus` is required rather than defaulted, because the two callers
+   * that mint want OPPOSITE answers and a default would silently give one of
+   * them the other's:
+   *
+   *  - `setGoalList` mints `triage`. A goal somebody just added is a proposal,
+   *    and its band is not dispatched until somebody agrees to it (Bryan,
+   *    2026-08-25: "new goals start in triage").
+   *  - the hydrate migration mints `todo`. Every board on disk that predates
+   *    goal rows re-mints its whole list on the next read, and minting those
+   *    `triage` would stop dispatch on every existing board at once — the
+   *    bands were agreed to long ago, and a schema migration is not the event
+   *    that un-agrees them.
+   *
+   * `renameGoal` and `reorderGoals` cannot add an id, so they never reach the
+   * mint at all; they pass `todo` as the answer that would be right if they
+   * somehow did, since a goal already on the list is one somebody placed.
    */
-  private syncGoalRows(state: WorkspaceState): void {
+  private syncGoalRows(state: WorkspaceState, mintStatus: TaskStatus): void {
     const now = Date.now();
     flattenGoals(state.workspace.goals).forEach((g, index) => {
       const existing = state.goalRows.get(g.id);
@@ -3131,9 +3150,11 @@ export class TaskStore {
           title: g.title,
           ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
           order: index,
-          // A migrated goal is open, with an empty trail: the record starts
-          // here rather than fabricating a history nobody wrote.
-          status: 'todo',
+          // The caller's call, and the one thing about a minted row that is
+          // NOT derivable from the goal list — see the `mintStatus` note on
+          // this method. Empty trail either way: the record starts here rather
+          // than fabricating a history nobody wrote.
+          status: mintStatus,
           transitions: [],
           createdAt: now,
           updatedAt: now,
@@ -3165,10 +3186,14 @@ export class TaskStore {
    *
    * Gate semantics, in order:
    *  - unknown task / unknown status / no-op same-status → validation errors.
-   *  - a GOAL row sent to `triage` is refused (`goal-not-triageable`). The
-   *    status is a claim about a task; this gate resolves goals too, so the
-   *    refusal has to live here rather than being implied by how goals are
-   *    created.
+   *  - a GOAL row holds `triage` on the same terms a task does, and this gate
+   *    is the only door into it. It used to be refused here
+   *    (`goal-not-triageable`) on the reasoning that triage is a claim about a
+   *    TASK and a goal is "neither filed by an agent nor dispatched". The
+   *    second half was wrong: a band is dispatched transitively, because every
+   *    task in it inherits its priority — so an un-agreed band hands its rows
+   *    to a dispatcher on the strength of an agreement nobody made. Triage on
+   *    a goal closes that one level up, and `buildQueue` is where it bites.
    *  - moving FORWARD (to in-progress or done) consults `after`: open
    *    dependencies come back as `blockers` in the result; an edge marked
    *    enforce refuses outright. Moving back to todo never consults the gate
@@ -3212,26 +3237,6 @@ export class TaskStore {
     const task = this.findRow(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (!TASK_STATUSES.has(to)) return { ok: false, error: 'bad-status' };
-    // `triage` is a claim about a TASK — an agent filed it and nobody has
-    // vetted it — and a goal is neither filed by an agent nor dispatched, so
-    // the status has no meaning on one. `createTask` is where the default
-    // lands and `syncGoalRows` mints goals `todo`, so nothing MAKES a triage
-    // goal; but this gate resolves a goal row as readily as a task (that is
-    // what let a goal move through the existing route without a new one), and
-    // it validates `to` against one shared set. Without this line the
-    // invariant held only until somebody used the verb the product ships.
-    //
-    // Refused rather than silently coerced: a caller that asked for this
-    // asked for something that cannot be, and answering it with a different
-    // move it did not request is the worse failure — it succeeds, and the
-    // board disagrees with what the caller believes it wrote.
-    if (isGoalRow(task) && to === 'triage') {
-      return {
-        ok: false,
-        error: 'goal-not-triageable',
-        message: `${task.title} is a goal, and triage is a status only a task can hold — it means an agent filed this and nobody has vetted it, which is not a thing a goal can be. Move it to todo, in-progress or done, or if the band itself is in doubt, take that up on the goal list rather than in its status.`,
-      };
-    }
     if (task.status === to) {
       return {
         ok: false,
@@ -4444,7 +4449,9 @@ export class TaskStore {
       kind: classifyActor(opts.actor),
     };
     workspace.goals = goals;
-    this.syncGoalRows(state);
+    // A goal the caller just ADDED is a proposal: it mints in triage, and
+    // its band dispatches nothing until somebody agrees to it.
+    this.syncGoalRows(state, 'triage');
 
     // Open tasks whose goal id disappeared land at the bottom of Backlog.
     // Done tasks stay put — same rule as re-triage (§3.4), their placement
@@ -4628,7 +4635,8 @@ export class TaskStore {
       };
     });
     workspace.goals = newGoals;
-    this.syncGoalRows(state);
+    // A rename never adds an id, so nothing mints here — see `syncGoalRows`.
+    this.syncGoalRows(state, 'todo');
     this.scheduleSave(workspaceId);
 
     this.emit({
@@ -4829,7 +4837,8 @@ export class TaskStore {
       newGoals = order.map((id) => byId.get(id) as WorkspaceGoal);
     }
     workspace.goals = newGoals;
-    this.syncGoalRows(state);
+    // A reorder never adds an id, so nothing mints here — see `syncGoalRows`.
+    this.syncGoalRows(state, 'todo');
     this.scheduleSave(workspaceId);
 
     this.emit({
@@ -6003,7 +6012,11 @@ export class TaskStore {
         // that board is read back. Re-running it is safe by construction — the
         // reconcile refreshes only what the goal LIST owns.
         const state = this.workspaces.get(workspace.id);
-        if (state) this.syncGoalRows(state);
+        // `todo`, NOT the create default: this is the migration, and every
+        // band on an existing board was agreed to long before goal rows
+        // existed. Minting these `triage` would halt dispatch fleet-wide on
+        // the first read after deploy.
+        if (state) this.syncGoalRows(state, 'todo');
       } catch (err) {
         // A corrupt sidecar loses that one workspace, never the server.
         console.error(`[tasks] unreadable sidecar ${entry} — skipped:`, err);
