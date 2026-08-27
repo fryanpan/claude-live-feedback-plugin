@@ -1651,9 +1651,17 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
 }
 
 function splitTableRow(line: string): string[] {
-  // Strip the optional leading/trailing pipe, then split on `|`.
-  const inner = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-  return inner.split('|').map((c) => c.trim());
+  // Strip the optional leading/trailing pipe, then split on UNESCAPED `|`
+  // only: `\|` is cell content — the serializer's escape for a literal
+  // pipe — so honoring it here is what makes parse invert serialize.
+  // Splitting on every `|` shredded such cells into fragments that could
+  // never round-trip or structurally match. The escape is removed from the
+  // cell text; the serializer puts it back on the way out.
+  const inner = line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/(?<!\\)\|$/, '');
+  return inner.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
 }
 
 function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
