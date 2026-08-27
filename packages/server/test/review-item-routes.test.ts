@@ -208,6 +208,37 @@ describe('a thin-but-valid declaration files, and the 200 says it was thin', () 
     expect((await onSubject.json()).reviewAdvice).toContain('review.detail');
   });
 
+  it('advises when the links are in the comment and not in the detail', async () => {
+    // Bryan, 2026-08-27: the Home card described the work and gave no way to
+    // reach it, because the diff and the draft were links in the comment text
+    // while `detail` was prose. The card renders `detail`.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: AGENT,
+      text: 'Diff is at [the review](/review/d-9fQ2) and the draft is [here](/docs/d-4kTx).',
+      review: DECISION,
+    });
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.reviewAdvice).toContain('review.detail');
+    // It FILED — advice, never a refusal.
+    const stored = await firstThread(docId);
+    expect(stored.comments[1]?.review?.headline).toBe(DECISION.headline);
+  });
+
+  it('says nothing when the detail carries the links itself', async () => {
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: AGENT,
+      text: 'Diff is at [the review](/review/d-9fQ2).',
+      review: { ...DECISION, detail: `${DECISION.detail} See [the review](/review/d-9fQ2).` },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).reviewAdvice).toBeUndefined();
+  });
+
   // The absence assertion, which is why the three above are not vacuous: a
   // route that stapled the advice onto every response would pass all of them.
   it('says nothing when the declaration is complete', async () => {

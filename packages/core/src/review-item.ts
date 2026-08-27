@@ -457,12 +457,19 @@ export const REVIEW_LIMITS = {
 /**
  * Something worth telling the author about a payload that WAS filed.
  *
- * Two families, and keeping them distinct is what makes the advice usable: a
- * bare field name means the field is ABSENT ("write one"), a `…Length` gap
- * means the field is there and runs long ("it will wrap"). Told the same way,
- * an author who wrote a 100-character headline would be advised to write one.
+ * Three families, and keeping them distinct is what makes the advice usable:
+ * a bare field name means the field is ABSENT ("write one"), a `…Length` gap
+ * means the field is there and runs long ("it will wrap"), and `detail
+ * Linkless` means the body is there but what it points at is not. Told the
+ * same way, an author who wrote a 100-character headline would be advised to
+ * write one.
  */
-export type ReviewGap = 'detail' | 'headlineLength' | 'optionLabelLength' | 'optionDetailLength';
+export type ReviewGap =
+  | 'detail'
+  | 'detailLinkless'
+  | 'headlineLength'
+  | 'optionLabelLength'
+  | 'optionDetailLength';
 
 export interface ReviewCheck {
   /** No refusal-grade problem. `errors` is empty exactly when this is true. */
@@ -480,6 +487,18 @@ function words(s: string): number {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Does this text give a reader somewhere to go?
+ *
+ * Two forms, because those are the two an agent writes: an inline markdown
+ * link, which is the house style for a workspace path, and a bare absolute
+ * URL. A bare relative path deliberately does NOT count — nothing renders it
+ * as a link, so a reader cannot act on it either.
+ */
+function hasLink(s: string): boolean {
+  return /\[[^\]]*\]\([^)\s]+\)/.test(s) || /https?:\/\/\S/.test(s);
 }
 
 /**
@@ -502,7 +521,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  *   the card thinner or wider than it wants to be; neither makes it
  *   unreadable. Demanding another field for a two-word question is the chore
  *   that gets routed around, and so is bouncing a filing to shave two words
- *   off a row line — measured, six times in one day.
+ *   off a row line — measured, six times in one day. So is a `detail` that
+ *   carries no link while the comment beside it does: the ask is filed and
+ *   answerable, it is only the reader's route to the work that is missing.
+ *
+ * `context.text` is the comment the declaration rode in on, when there was
+ * one. It is the only reason this function can tell a self-contained card
+ * from one whose links stayed behind in the comment; a ticket-borne item
+ * passes none and is judged on the payload alone.
  *
  * As of 2026-08-25 there is exactly ONE required field, because there is
  * exactly one field the row is made of. A payload still carrying the retired
@@ -532,7 +558,7 @@ export function normalizeReviewType(value: unknown): ReviewShape | undefined {
   return undefined;
 }
 
-export function checkReviewPayload(input: unknown): ReviewCheck {
+export function checkReviewPayload(input: unknown, context?: { text?: string }): ReviewCheck {
   const errors: string[] = [];
   const gaps: ReviewGap[] = [];
   const fail = (msg: string) => errors.push(msg);
@@ -593,6 +619,12 @@ export function checkReviewPayload(input: unknown): ReviewCheck {
       fail(
         `review.detail is ${n} words; past ${REVIEW_LIMITS.detailMaxWords} it is a document, not a card. Keep the ask's real context here — the card renders all of it — and link out to anything book-length instead of pasting it.`,
       );
+    }
+    // Links that stayed in the comment. Only ever advised against a comment
+    // that HAS some: an ask with nothing to point at is complete without one,
+    // and advising every linkless detail would be noise on most of them.
+    if (context?.text !== undefined && hasLink(context.text) && !hasLink(detail)) {
+      gaps.push('detailLinkless');
     }
   }
 
@@ -724,9 +756,23 @@ export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
     );
   }
 
+  // The reachability half. A card can be complete prose and still be a
+  // dead end: Bryan, 2026-08-27, on an item whose diff and draft were links
+  // in the comment — "Why wasn't the question content with links in the
+  // review item, and i had to scroll down to the bottom of comments?"
+  const unreachable: string[] = [];
+  if (gaps.includes('detailLinkless')) {
+    unreachable.push(
+      'The comment carries links and review.detail carries none. The reader acts from the Home card, which renders the detail — not the comment under it — so every link they need belongs in review.detail as an inline markdown link.',
+    );
+  }
+
   return [
     ...(thin.length > 0 ? ['Filed. It will be thinner than it needs to be:', ...thin] : []),
     ...(long.length > 0 ? ['Filed. Some of it will not fit where it renders:', ...long] : []),
+    ...(unreachable.length > 0
+      ? ['Filed. Some of it cannot be reached from the card:', ...unreachable]
+      : []),
   ].join(' ');
 }
 
