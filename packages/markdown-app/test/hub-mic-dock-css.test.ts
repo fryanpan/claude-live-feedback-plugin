@@ -151,9 +151,11 @@ describe('the docked mic reads as a control, not as a nav item', () => {
   });
 
   it('keeps both states the mic has always had', () => {
-    // Recording: the same red. The docked background is written `:not(
-    // .voice-active)` so it cannot out-specify the state that matters most.
-    expect(rule('.voice-mic.voice-active')).toMatch(/background:\s*#c53030/);
+    // Recording: the same red — a token since the Open Props trial, so the
+    // hub's quick mic and this dock cannot drift apart literal by literal.
+    // The docked background is written `:not(.voice-active)` so it cannot
+    // out-specify the state that matters most.
+    expect(rule('.voice-mic.voice-active')).toMatch(/background:\s*var\(--red-strong\)/);
     // Insecure origin: dimmed but still PRESSABLE — the press is how the
     // reason gets surfaced, so `disabled` would swallow the explanation.
     expect(rule('.voice-mic.voice-unavailable')).toMatch(/opacity:\s*0\.45/);
