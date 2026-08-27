@@ -29,7 +29,7 @@ The purpose of a workspace is to provide a significantly better agent and human 
          3. Either way the ask carries the context of the work it came from. Ten decisions filed as ten fresh rows, each severed from the work behind it, read as a quiz instead of a plan
       4. Writing the ask
          1. The option label is the contract — the reviewer answers the label, not the reasoning under it. Plain words, phone-readable.
-         2. Any link the reviewer needs goes in the payload's `detail` — the Home card renders the payload and nothing around it, so a link in the surrounding comment text never reaches the card.
+         2. The item has to be actionable on its own. The Home card renders the payload and nothing around it, so every link the reviewer needs goes in the payload's `detail` as an inline markdown link (`[the diff](/review/d-xxxx)`) — a link that lives only in the surrounding comment text never reaches the card, and the reviewer is left scrolling the comments for it.
       5. Anything the reviewer still owes an answer to is a filed review item BEFORE your turn ends — answerable where they read, with chat carrying at most a pointer to it. A "still waiting on you" list in chat is the failure mode this rule exists for: audited sessions filed 18 chat-only asks in a day, and 13 died unanswered.
 3. Share progress in the workspace on the most appropriate task or doc using comments
 
