@@ -6476,6 +6476,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (rest === 'content' && req.method === 'GET') {
             const doc = rooms.getDoc(docId);
             if (!doc) return j(404, { error: 'doc not found' });
+            // `reader` marks this caller's copy of the doc as current-as-of-
+            // now, which is what lets the stale-write guard below judge their
+            // next whole-doc rewrite by order instead of the blunt time
+            // window. Sent by get_doc since 0.1.113; older bundles omit it.
+            const reader = url.searchParams.get('reader');
+            if (reader) rooms.noteAgentRead(docId, reader);
             return j(200, doc);
           }
           // Cheap doc health check — metadata + counts, never the body.
@@ -6502,6 +6508,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const body = await safeJson(req);
             const markdown = String(body?.markdown ?? '');
             if (markdown.length === 0) return j(400, { error: 'markdown is required' });
+            // Stale-write guard (2026-08-26 incident): a whole-doc rewrite
+            // built from a copy that predates a human's live edits destroys
+            // those edits with a 200. The DEFAULT path is the protected one —
+            // an old bundle that omits every new field still gets refused
+            // when a human edited recently; only the explicit confirm field
+            // opens the gate, and even then the backup below has already run.
+            if (body?.confirmOverwriteHumanEdits !== true) {
+              const reader = authorFor(body?.author)?.id;
+              const stale = rooms.staleWriteCheck(docId, reader);
+              if (stale) {
+                return j(409, {
+                  error: 'stale-write',
+                  humanEditedAt: stale.humanEditedAt,
+                  ...(stale.lastReadAt !== undefined ? { lastReadAt: stale.lastReadAt } : {}),
+                  message:
+                    `REFUSED: a human edited this doc at ${new Date(stale.humanEditedAt).toISOString()}` +
+                    (stale.lastReadAt !== undefined
+                      ? `, AFTER your last read at ${new Date(stale.lastReadAt).toISOString()}`
+                      : ', within the last 10 minutes') +
+                    ' — a full rewrite from your in-context copy would destroy their work.' +
+                    ' Re-read the doc with get_doc, re-apply your change onto the CURRENT' +
+                    ' content (prefer a scoped tool: find_and_replace, rewrite_thread_region,' +
+                    ' edit_at_anchor), and only if a whole-doc rewrite is truly needed retry' +
+                    ' set_doc_content with confirmOverwriteHumanEdits: true.',
+                });
+              }
+            }
             // A `task:<id>` doc is a task's DESCRIPTION, not a free-standing
             // document, and rewriting one is an act the board has a name for.
             // Reachable here by anyone who knows the docId convention, so this
