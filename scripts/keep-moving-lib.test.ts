@@ -70,16 +70,18 @@ describe('keep-moving classification', () => {
   });
 });
 
-// The four measured false-FAIL gaps (board task t-heInRFyyCfNs, 2026-08-27).
+// The four measured false-FAIL gaps (2026-08-27).
 // Each failed against the pre-fix logic — the red run is in the PR body.
 describe('keep-moving false-FAIL gaps', () => {
   it('gap 1: a person-owned row is blocked-on-owner, never a dark in-progress row', () => {
-    // Measured: t-Q6DTQn05IMPo (assignee "human", server ownerKind "person")
+    // Measured live: a row with assignee "human" (server ownerKind "person")
     // reported as a dark in-progress row.
+    // Amended for the unfiled-ask round: person-owned WITH a pending item is
+    // legitimately waiting; without one it is an unfiled ask (tested below).
     const rows = classifyOpenTasks(
       [task({ id: 'a', status: 'in-progress', ownerKind: 'person', assignee: 'human' })],
       [],
-      [],
+      [{ taskId: 'a', askedAt: now - H }],
       now,
       4 * H,
       bands,
@@ -89,7 +91,7 @@ describe('keep-moving false-FAIL gaps', () => {
   });
 
   it('gap 2: a fresh comment on the task thread resets the quiet clock', () => {
-    // Measured: t-9Ujf8EcjSpbR flagged 12.4h quiet on a day the whole decision
+    // Measured live: a row flagged 12.4h quiet on a day the whole decision
     // conversation was live on its task:<id> thread.
     const rows = classifyOpenTasks(
       [task({ id: 'a', status: 'in-progress', transitions: [{ ts: now - 20 * H }] })],
@@ -123,7 +125,7 @@ describe('keep-moving false-FAIL gaps', () => {
   });
 
   it('gap 4: a row parked into the future is parked, never stalled', () => {
-    // Measured 07:59Z: t-FbXgQ6m9e-et parked to 2026-08-28 (parkedUntil epoch
+    // Measured live: a row parked into the next day (parkedUntil epoch
     // ms) yet reported "ready-unpicked stalled".
     const rows = classifyOpenTasks(
       [task({ id: 'a', parkedUntil: now + 24 * H })],
@@ -154,7 +156,7 @@ describe('keep-moving false-FAIL gaps', () => {
 // Codex adversarial review of PR #394 — two P2 findings, tests written red-first.
 describe('codex P2 findings', () => {
   it('P2-1: a filed ask outranks a park — blocked-on-owner, not parked', () => {
-    // A parked row with an active ask on Bryan (filed review item, person
+    // A parked row with an active ask on the owner (filed review item, person
     // owner, or owner-band goal) must surface as blocked-on-owner; bucketing
     // it parked hides the ask. Same invariant the first test in this file
     // states: a filed ask outranks everything.
@@ -171,7 +173,13 @@ describe('codex P2 findings', () => {
     );
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId.asked?.bucket).toBe('blocked-on-owner');
-    expect(byId.human?.bucket).toBe('blocked-on-owner');
+    // Amended: P2-1's invariant is that an ACTIVE ask never hides — a PENDING
+    // item outranks a park (row above). A person-owned row with NO pending
+    // item that someone deliberately parked with a date is a documented
+    // deferral, not a hidden ask: it reads parked, and resurfaces as unfiled
+    // when the park expires (measured: a decision the owner explicitly deferred,
+    // parked for exactly that reason, was being nagged as an 8.7d unfiled ask).
+    expect(byId.human?.bucket).toBe('parked');
     expect(byId.asked?.stalled).toBe(false);
     expect(byId.human?.stalled).toBe(false);
   });
@@ -195,5 +203,200 @@ describe('codex P2 findings', () => {
       events,
     );
     expect(agentActivityByHour(events, now, 3, ticks)).toEqual([1, 1, 0]);
+  });
+});
+
+// Round 3 (the owner's review of the "PASS" board): the
+// board hid real failures — 7/10 owner-blocked rows had no filed review item,
+// and one waiting-on-owner blocker had cleared days earlier. Red-first.
+describe('unfiled asks, aging asks, parked presentation, terminal blockers', () => {
+  it('owner-blocked without a pending review item is an unfiled ask and counts toward FAIL', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'filed', ownerKind: 'person' }),
+        task({ id: 'unfiled-person', ownerKind: 'person' }),
+        task({ id: 'unfiled-band', goal: 'decisions' }),
+      ],
+      [],
+      [{ taskId: 'filed', askedAt: now - H }],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.filed?.bucket).toBe('blocked-on-owner');
+    expect(byId.filed?.unfiledAsk).toBe(false);
+    expect(byId['unfiled-person']?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(byId['unfiled-person']?.unfiledAsk).toBe(true);
+    expect(byId['unfiled-band']?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(byId['unfiled-band']?.unfiledAsk).toBe(true);
+  });
+
+  it('a filed ask carries its age, newest pending item wins', () => {
+    // Measured: a row waited on two PRs that had merged days before;
+    // nobody re-verified. Age makes the "re-verify" list possible.
+    const rows = classifyOpenTasks(
+      [task({ id: 'a' })],
+      [],
+      [
+        { taskId: 'a', askedAt: now - 9 * 24 * H },
+        { taskId: 'a', askedAt: now - 8 * 24 * H },
+      ],
+      now,
+      4 * H,
+      bands,
+    );
+    expect(rows[0]?.bucket).toBe('blocked-on-owner');
+    expect(rows[0]?.askAgeMs).toBe(8 * 24 * H);
+  });
+
+  it('a parked row carries its unpark date and reason for presentation', () => {
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', parkedUntil: now + 24 * H, parkedReason: 'waiting on Friday sync' })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    expect(rows[0]?.bucket).toBe('parked');
+    expect(rows[0]?.parkedUntil).toBe(now + 24 * H);
+    expect(rows[0]?.parkedReason).toBe('waiting on Friday sync');
+  });
+
+  it('a dependency chain names its terminal blocker', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['x'] }),
+        task({ id: 'x', after: ['y'], status: 'todo' }),
+        task({ id: 'y', ownerKind: 'person' }),
+        task({ id: 'b', after: ['z'] }),
+        task({ id: 'z', status: 'in-progress' }),
+      ],
+      [],
+      [{ taskId: 'y', askedAt: now - H }],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.terminal).toEqual({ id: 'y', label: 'blocked-on-owner' });
+    expect(byId.a?.unfiledAsk).toBe(false);
+    expect(byId.b?.terminal).toEqual({ id: 'z', label: 'in-progress' });
+  });
+
+  it('a dependency chain ending in an unfiled ask counts as unfiled too', () => {
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', after: ['x'] }), task({ id: 'x', ownerKind: 'person' })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.terminal).toEqual({ id: 'x', label: 'blocked-on-owner-unfiled' });
+    expect(byId.a?.unfiledAsk).toBe(true);
+    expect(byId.x?.unfiledAsk).toBe(true);
+  });
+
+  it('a parked person-owned row without a pending item is parked; an expired park resurfaces it', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'deferred', ownerKind: 'person', parkedUntil: now + 24 * H }),
+        task({ id: 'expired', ownerKind: 'person', parkedUntil: now - H }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.deferred?.bucket).toBe('parked');
+    expect(byId.deferred?.unfiledAsk).toBe(false);
+    expect(byId.expired?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(byId.expired?.unfiledAsk).toBe(true);
+  });
+
+  it('every unmet branch is traversed: a second branch ending unfiled flags the parent', () => {
+    // Codex P1 on #396: only the first unmet dep was inspected, so a later
+    // branch terminating unfiled left the parent unfiledAsk:false — false PASS.
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['x', 'y'] }),
+        task({ id: 'x', status: 'in-progress' }),
+        task({ id: 'y', ownerKind: 'person' }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.unfiledAsk).toBe(true);
+    expect(byId.a?.terminal).toEqual({ id: 'y', label: 'blocked-on-owner-unfiled' });
+  });
+
+  it('an owner-blocked intermediate is the effective blocker, not what lies beyond it', () => {
+    // Codex P2 on #396: the walk skipped through owner-blocked intermediates
+    // and named a deeper task as terminal, suppressing the intermediate's
+    // unfiled ask.
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['x'] }),
+        task({ id: 'x', ownerKind: 'person', after: ['y'] }),
+        task({ id: 'y', status: 'in-progress' }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.terminal).toEqual({ id: 'x', label: 'blocked-on-owner-unfiled' });
+    expect(byId.a?.unfiledAsk).toBe(true);
+  });
+
+  it('a pure dependency cycle is reported AS a cycle, not as its own terminal', () => {
+    // Final review pass on #396: a → b → a used to name one member as its
+    // own "terminal blocker". A cycle has no terminal — the malformed graph
+    // is the finding, so it is reported as the loop itself.
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', after: ['b'] }), task({ id: 'b', after: ['a'] })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.terminal).toBeUndefined();
+    expect(byId.a?.cycle).toEqual(['a', 'b', 'a']);
+    expect(byId.b?.cycle).toEqual(['b', 'a', 'b']);
+  });
+
+  it('a cycle on one branch does not hide a real terminal on another', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['b', 'z'] }),
+        task({ id: 'b', after: ['a'] }),
+        task({ id: 'z', status: 'in-progress' }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.terminal).toEqual({ id: 'z', label: 'in-progress' });
+    expect(byId.a?.cycle).toEqual(['a', 'b', 'a']);
   });
 });
