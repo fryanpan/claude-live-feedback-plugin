@@ -1,0 +1,59 @@
+/* ===== DESIGN TOKENS · OPEN PROPS MAPPING (trial) =====
+   The mapping half of /app/tokens.css. scripts/build.ts prepends the
+   vendored Open Props subset (src/tokens-manifest.ts) and serves the
+   concatenation at /app/tokens.css — which every shell links AFTER
+   styles.css, so these `:root` definitions win over the base values there
+   by document order (same specificity). Removing that one <link> reverts
+   the whole trial; styles.css keeps the full base palette on its own.
+
+   Call sites keep their existing names — this file re-points them at Open
+   Props scale steps, choosing the NEAREST step to the value each token
+   already had (GitHub palette). Each line records old → new so a reviewer
+   can judge the drift without a color picker.
+
+   Deliberately NOT remapped, because Open Props has no faithful step:
+   - --fg-muted (#6e7781, 4.5:1 on white): gray-6 #868e96 fails AA (~3.3:1),
+     gray-7 #495057 is far darker and collapses the fg / fg-muted hierarchy.
+   - --yellow (#bf8700, a 4.5:1 golden text color): yellow-9 #e67700 is
+     orange and ~2.9:1; yellow-10 #b35c00 is brown.
+   - --warn-fg (#b25e09): same story one hue over — orange-9 #d9480f loses
+     the contrast the redline/status text relies on.
+   - --radius-sm 4px / --radius-lg 8px: the Open Props radius scale jumps
+     2px → 5px → 16px, so only the middle 6px token has a neighbor.
+   - --bg #ffffff: Open Props has no white token; gray-0 would tint every
+     page background.
+   - --sans / --serif / --mono / --prose: our stacks are curated (Inter /
+     Charter reading font); --font-sans et al would change rendering on
+     non-Apple platforms for no gain. */
+:root {
+  /* grays */
+  --fg: var(--gray-9); /* #1b1f23 → #212529 */
+  --bg-panel: var(--gray-0); /* #f6f8fa → #f8f9fa */
+  --bg-hover: var(--gray-2); /* #eaeef2 → #e9ecef */
+  --border: var(--gray-4); /* #d1d5da → #ced4da */
+  --border-strong: var(--gray-5); /* #afb8c1 → #adb5bd */
+
+  /* hues */
+  --accent: var(--blue-7); /* #2e7dd7 → #1c7ed6 */
+  --orange: var(--orange-8); /* #e36f1e → #e8590c */
+  --red: var(--red-8); /* #d73a49 → #e03131 */
+  --green: var(--green-8); /* #2da44e → #2f9e44 */
+  --green-strong: var(--green-9); /* #1a7f37 → #2b8a3e */
+  --red-strong: var(--red-9); /* #cf222e → #c92a2a */
+
+  /* shape + depth */
+  --radius: var(--radius-2); /* 6px → 5px */
+  --shadow: var(--shadow-1);
+  /* Open Props depth plus the 1px ring the base --shadow-lg carried — the
+     ring is what gives popovers an edge on white, and no OP shadow has one. */
+  --shadow-lg: var(--shadow-5), 0 0 0 1px rgba(27, 31, 35, 0.08);
+
+  /* Previously fallback-only names (every call site wrote
+     `var(--name, #literal)` and no stylesheet defined the name). Defining
+     them here lands each on the same scale as the token it accompanies —
+     the hub-chrome rationalization half of the trial. */
+  --bg-subtle: var(--gray-0); /* fallback #fafafa → #f8f9fa */
+  --warn-wash: var(--orange-0); /* fallback #fff4e5 → #fff4e6 */
+  --accent-line: var(--blue-1); /* fallback #cfe2f7 → #d0ebff */
+  --accent-subtle: var(--blue-0); /* fallback rgba(46,125,215,.1) → #e7f5ff */
+}

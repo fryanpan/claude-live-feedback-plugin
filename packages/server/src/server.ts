@@ -7478,6 +7478,9 @@ function renderHubShell(
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
     <link rel="stylesheet" href="/app/styles.css" />
+    <!-- Open Props trial layer — after styles.css on purpose; see
+         packages/markdown-app/index.html. -->
+    <link rel="stylesheet" href="/app/tokens.css" />
   </head>
   <body class="hub-body">
     <div id="hub-root" data-workspace-id="${safeId}"></div>

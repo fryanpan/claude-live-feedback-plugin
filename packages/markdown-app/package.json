@@ -38,6 +38,7 @@
     "@tiptap/y-tiptap": "^3.0.3",
     "lib0": "^0.2.117",
     "mermaid": "^11.14.0",
+    "open-props": "^1.7.23",
     "preact": "10.29.8",
     "rehype-stringify": "^10.0.1",
     "remark-gfm": "^4.0.0",
