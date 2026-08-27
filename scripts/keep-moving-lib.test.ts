@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentActivityByHour, classifyOpenTasks } from './keep-moving-lib.ts';
+import { agentActivityByHour, classifyOpenTasks, collectActivityTicks } from './keep-moving-lib.ts';
 
 const H = 3_600_000;
 const now = 100 * H;
@@ -67,5 +67,86 @@ describe('keep-moving classification', () => {
       { ts: now - 90 * 60_000, actor: { kind: 'agent' } },
     ];
     expect(agentActivityByHour(events, now, 3)).toEqual([1, 1, 0]);
+  });
+});
+
+// The four measured false-FAIL gaps (board task t-heInRFyyCfNs, 2026-08-27).
+// Each failed against the pre-fix logic — the red run is in the PR body.
+describe('keep-moving false-FAIL gaps', () => {
+  it('gap 1: a person-owned row is blocked-on-owner, never a dark in-progress row', () => {
+    // Measured: t-Q6DTQn05IMPo (assignee "human", server ownerKind "person")
+    // reported as a dark in-progress row.
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', status: 'in-progress', ownerKind: 'person', assignee: 'human' })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    expect(rows[0]?.bucket).toBe('blocked-on-owner');
+    expect(rows[0]?.stalled).toBe(false);
+  });
+
+  it('gap 2: a fresh comment on the task thread resets the quiet clock', () => {
+    // Measured: t-9Ujf8EcjSpbR flagged 12.4h quiet on a day the whole decision
+    // conversation was live on its task:<id> thread.
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', status: 'in-progress', transitions: [{ ts: now - 20 * H }] })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+      new Map([['a', now - H]]),
+    );
+    expect(rows[0]?.stalled).toBe(false);
+    expect(rows[0]?.sinceActivityMs).toBe(H);
+  });
+
+  it('gap 3: row edits and review filings count as activity the events feed missed', () => {
+    // Measured: Team Lead board read "0/12 hours" across a window with a row
+    // update at 07:19Z that never appeared in /events.
+    const ticks = collectActivityTicks(
+      [task({ id: 'a', updatedAt: now - 30 * 60_000 })],
+      [{ taskId: 'a', askedAt: now - 90 * 60_000 }],
+    );
+    expect(agentActivityByHour([], now, 3, ticks)).toEqual([1, 1, 0]);
+  });
+
+  it('gap 3: identical row timestamps dedupe to one tick', () => {
+    const ticks = collectActivityTicks(
+      [task({ id: 'a', updatedAt: now - H, bodyWrittenAt: now - H, titleWrittenAt: now - 2 * H })],
+      [],
+    );
+    expect(ticks.sort((x, y) => y - x)).toEqual([now - H, now - 2 * H]);
+  });
+
+  it('gap 4: a row parked into the future is parked, never stalled', () => {
+    // Measured 07:59Z: t-FbXgQ6m9e-et parked to 2026-08-28 (parkedUntil epoch
+    // ms) yet reported "ready-unpicked stalled".
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', parkedUntil: now + 24 * H })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    expect(rows[0]?.bucket).toBe('parked');
+    expect(rows[0]?.stalled).toBe(false);
+  });
+
+  it('gap 4: an expired park does not shield the row', () => {
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', parkedUntil: now - H })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    expect(rows[0]?.bucket).toBe('ready-unpicked');
+    expect(rows[0]?.stalled).toBe(true);
   });
 });
