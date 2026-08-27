@@ -189,10 +189,18 @@ async function main(): Promise<void> {
     lines.push('');
     lines.push('## Blocked on dependencies (terminal blocker named)');
     for (const r of deps) {
+      // A loop has no terminal — the malformed graph IS the finding.
+      if (r.cycle && !r.terminal) {
+        lines.push(
+          `- ${r.id} dependency CYCLE: ${r.cycle.join(' → ')} — malformed graph, fix the edges — ${r.title.slice(0, 60)}`,
+        );
+        continue;
+      }
       const chain = r.terminal
         ? `after ${(r.blockers ?? []).join(', ')} → ${r.terminal.id} [${r.terminal.label}]`
         : `after ${(r.blockers ?? []).join(', ')}`;
-      lines.push(`- ${r.id} ${chain} — ${r.title.slice(0, 80)}`);
+      const cycleNote = r.cycle ? ` [also a CYCLE: ${r.cycle.join(' → ')} — fix the edges]` : '';
+      lines.push(`- ${r.id} ${chain}${cycleNote} — ${r.title.slice(0, 80)}`);
     }
   }
   const parkedRows = by('parked');

@@ -363,7 +363,10 @@ describe('unfiled asks, aging asks, parked presentation, terminal blockers', () 
     expect(byId.a?.unfiledAsk).toBe(true);
   });
 
-  it('a dependency cycle terminates and does not hang', () => {
+  it('a pure dependency cycle is reported AS a cycle, not as its own terminal', () => {
+    // Final review pass on #396: a → b → a used to name one member as its
+    // own "terminal blocker". A cycle has no terminal — the malformed graph
+    // is the finding, so it is reported as the loop itself.
     const rows = classifyOpenTasks(
       [task({ id: 'a', after: ['b'] }), task({ id: 'b', after: ['a'] })],
       [],
@@ -374,6 +377,26 @@ describe('unfiled asks, aging asks, parked presentation, terminal blockers', () 
     );
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId.a?.bucket).toBe('blocked-on-dependency');
-    expect(byId.a?.terminal?.id).toBeDefined();
+    expect(byId.a?.terminal).toBeUndefined();
+    expect(byId.a?.cycle).toEqual(['a', 'b', 'a']);
+    expect(byId.b?.cycle).toEqual(['b', 'a', 'b']);
+  });
+
+  it('a cycle on one branch does not hide a real terminal on another', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['b', 'z'] }),
+        task({ id: 'b', after: ['a'] }),
+        task({ id: 'z', status: 'in-progress' }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.terminal).toEqual({ id: 'z', label: 'in-progress' });
+    expect(byId.a?.cycle).toEqual(['a', 'b', 'a']);
   });
 });

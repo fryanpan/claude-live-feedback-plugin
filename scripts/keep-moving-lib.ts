@@ -76,8 +76,14 @@ export interface Classified {
    *  measured: a live row waited on two PRs that had already merged. */
   askAgeMs?: number;
   /** blocked-on-dependency only: the far end of the `after` chain — the row
-   *  the whole chain is actually waiting on, and what state it is in. */
+   *  the whole chain is actually waiting on, and what state it is in. Absent
+   *  when every branch loops (see `cycle`): a cycle has no terminal. */
   terminal?: { id: string; label: string };
+  /** blocked-on-dependency only: a dependency loop found through this row,
+   *  as the id path that closes it (e.g. ['a','b','a']). A cycle is a
+   *  malformed graph — the report names it as such rather than presenting a
+   *  loop member as its own blocker. */
+  cycle?: string[];
   /** TRUE means this row is waiting on the owner with NO pending review item
    *  anywhere on its chain's terminal — an ask that exists only in someone's
    *  head. The owner cannot see it on the Home queue, so it counts toward FAIL
@@ -217,22 +223,27 @@ export function classifyOpenTasks(
     if (r.bucket !== 'blocked-on-dependency') continue;
     const visited = new Set<string>([r.id]);
     const terminals: TaskRow[] = [];
-    let cycleNode: TaskRow | undefined;
-    const walk = (task: TaskRow): void => {
+    let cycle: string[] | undefined;
+    const walk = (task: TaskRow, path: string[]): void => {
       for (const dep of task.after ?? []) {
         const d = byId.get(dep);
         if (d === undefined || d.status === 'done') continue;
         if (visited.has(d.id)) {
-          cycleNode ??= d; // cycle: remember where it loops rather than hanging
+          // Revisited node. An ANCESTOR on the current path is a loop —
+          // record how it closes; a node merely reached via another branch
+          // is ordinary DAG sharing and is not.
+          const idx = path.indexOf(d.id);
+          if (idx >= 0 && cycle === undefined) cycle = [...path.slice(idx), d.id];
           continue;
         }
         visited.add(d.id);
-        if (rowById.get(d.id)?.bucket === 'blocked-on-dependency') walk(d);
+        if (rowById.get(d.id)?.bucket === 'blocked-on-dependency') walk(d, [...path, d.id]);
         else terminals.push(d);
       }
     };
     const rootTask = byId.get(r.id);
-    if (rootTask) walk(rootTask);
+    if (rootTask) walk(rootTask, [r.id]);
+    if (cycle) r.cycle = cycle;
     const bucketOf = (task: TaskRow): Bucket | undefined => rowById.get(task.id)?.bucket;
     const anyUnfiled = terminals.some((d) => bucketOf(d) === 'blocked-on-owner-unfiled');
     // One terminal is displayed; the worst branch wins the slot: an unfiled
@@ -240,10 +251,10 @@ export function classifyOpenTasks(
     const pick =
       terminals.find((d) => bucketOf(d) === 'blocked-on-owner-unfiled') ??
       terminals.find((d) => bucketOf(d) === 'blocked-on-owner') ??
-      terminals[0] ??
-      cycleNode;
-    if (!pick) continue;
-    r.terminal = { id: pick.id, label: bucketOf(pick) ?? pick.status };
+      terminals[0];
+    // A pure cycle sets no terminal: a loop member is not its own blocker,
+    // and `cycle` above is what the report presents instead.
+    if (pick) r.terminal = { id: pick.id, label: bucketOf(pick) ?? pick.status };
     if (anyUnfiled) r.unfiledAsk = true;
   }
   return out.sort((a, b) => b.sinceActivityMs - a.sinceActivityMs);
