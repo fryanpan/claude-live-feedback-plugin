@@ -27,6 +27,10 @@ The purpose of a workspace is to provide a significantly better agent and human 
          1. A question that arose mid-work belongs on the task that raised it — `add_review_item(taskId, review)`
          2. A decision that stands alone as a unit of work may be its own row
          3. Either way the ask carries the context of the work it came from. Ten decisions filed as ten fresh rows, each severed from the work behind it, read as a quiz instead of a plan
+      4. Writing the ask
+         1. The option label is the contract — the reviewer answers the label, not the reasoning under it. Plain words, phone-readable.
+         2. Any link the reviewer needs goes in the payload's `detail` — the Home card renders the payload and nothing around it, so a link in the surrounding comment text never reaches the card.
+      5. Anything the reviewer still owes an answer to when your turn ends is a filed review item on the board, not a line in chat.
 3. Share progress in the workspace on the most appropriate task or doc using comments
 
 ### What a chat message is
@@ -142,3 +146,5 @@ Someone who was not in the conversation should be able to see a task, know why i
 - When you share links in a workspace, use relative URLs and make them inline using appropriate link text instead of the Raw URL
   - e.g. `[this link](/review/board-skill-one-row-per-pass?thread=nsk4yl4m6sqn)`
 - In terminal chat, send the absolute URL bare on its own line, with no markdown around it — autolinkers mangle a wrapped URL.
+- Link the thing under review, not the workspace: hand over the `reviewUrl` / `entryUrl` the tool returned, rewriting only the host to the Tailscale name. Link the workspace only when the workspace itself is the subject.
+- A workspace URL is not a durable address — the embedded workspace id dies when the workspace is recreated. Durable artifacts (committed docs, exports, anything sent onward) cite repo paths or GitHub URLs; live chat, thread replies, and hand-offs use the URL, because it is being clicked now.

@@ -179,6 +179,13 @@ create_review_doc({ docId: "schema-rfc",   path: "/abs/schema-rfc.md",   setId: 
 before using one. Calling `create_review_doc` again on an existing
 docId with a different `setId` re-tags it (handy for rebatching).
 
+**A doc you authored opens with a provenance header:** author and what
+they own; the repo as a GitHub URL (never a filesystem path — unusable
+on a phone); the specific files behind any number or claim; a run id or
+timestamp for pipeline output. Applies to analyses, methodology docs,
+research writeups, and reviews. Skip it for a plan the reviewer
+co-authors.
+
 ## Retiring a doc you're done with
 
 Most review docs are short-lived: you bind a file, get a round of
