@@ -104,7 +104,7 @@ async function main(): Promise<void> {
     if (threadActivity.size > 0)
       rows = classifyOpenTasks(tasks, events, items, now, stallMs, bands, threadActivity);
   }
-  const activity = agentActivityByHour(events, now, 12, collectActivityTicks(tasks, items));
+  const activity = agentActivityByHour(events, now, 12, collectActivityTicks(tasks, items, events));
 
   if (process.argv.includes('--json')) {
     console.log(JSON.stringify({ now, rows, activity }, null, 2));
