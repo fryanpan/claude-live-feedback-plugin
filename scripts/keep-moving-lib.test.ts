@@ -173,9 +173,13 @@ describe('codex P2 findings', () => {
     );
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId.asked?.bucket).toBe('blocked-on-owner');
-    // Person-owned with NO filed item: owner-blocked-unfiled still outranks
-    // the park — the ask is surfaced (and FAILs), not hidden behind 'parked'.
-    expect(byId.human?.bucket).toBe('blocked-on-owner-unfiled');
+    // Amended: P2-1's invariant is that an ACTIVE ask never hides — a PENDING
+    // item outranks a park (row above). A person-owned row with NO pending
+    // item that someone deliberately parked with a date is a documented
+    // deferral, not a hidden ask: it reads parked, and resurfaces as unfiled
+    // when the park expires (t-6KSlEc3s64Bb: naming explicitly deferred,
+    // parked for exactly that reason, was being nagged as an 8.7d unfiled ask).
+    expect(byId.human?.bucket).toBe('parked');
     expect(byId.asked?.stalled).toBe(false);
     expect(byId.human?.stalled).toBe(false);
   });
@@ -296,6 +300,67 @@ describe('unfiled asks, aging asks, parked presentation, terminal blockers', () 
     expect(byId.a?.terminal).toEqual({ id: 'x', label: 'blocked-on-owner-unfiled' });
     expect(byId.a?.unfiledAsk).toBe(true);
     expect(byId.x?.unfiledAsk).toBe(true);
+  });
+
+  it('a parked person-owned row without a pending item is parked; an expired park resurfaces it', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'deferred', ownerKind: 'person', parkedUntil: now + 24 * H }),
+        task({ id: 'expired', ownerKind: 'person', parkedUntil: now - H }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.deferred?.bucket).toBe('parked');
+    expect(byId.deferred?.unfiledAsk).toBe(false);
+    expect(byId.expired?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(byId.expired?.unfiledAsk).toBe(true);
+  });
+
+  it('every unmet branch is traversed: a second branch ending unfiled flags the parent', () => {
+    // Codex P1 on #396: only the first unmet dep was inspected, so a later
+    // branch terminating unfiled left the parent unfiledAsk:false — false PASS.
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['x', 'y'] }),
+        task({ id: 'x', status: 'in-progress' }),
+        task({ id: 'y', ownerKind: 'person' }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.unfiledAsk).toBe(true);
+    expect(byId.a?.terminal).toEqual({ id: 'y', label: 'blocked-on-owner-unfiled' });
+  });
+
+  it('an owner-blocked intermediate is the effective blocker, not what lies beyond it', () => {
+    // Codex P2 on #396: the walk skipped through owner-blocked intermediates
+    // and named a deeper task as terminal, suppressing the intermediate's
+    // unfiled ask.
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['x'] }),
+        task({ id: 'x', ownerKind: 'person', after: ['y'] }),
+        task({ id: 'y', status: 'in-progress' }),
+      ],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.terminal).toEqual({ id: 'x', label: 'blocked-on-owner-unfiled' });
+    expect(byId.a?.unfiledAsk).toBe(true);
   });
 
   it('a dependency cycle terminates and does not hang', () => {
