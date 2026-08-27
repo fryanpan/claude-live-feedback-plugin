@@ -5027,10 +5027,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // already `triage` on the other side of the call.
           const wasStatus = task.status;
           const moved = taskStore.transition(taskId, 'triage', { actor: author });
-          // A goal row cannot hold triage, so it cannot be parked. Refused
-          // rather than half-done: a comment on a row that did not move would
-          // claim a deferral nobody got.
-          if (!moved.ok && moved.error === 'goal-not-triageable') return j(400, moved);
+          // `same-status` is the ordinary case — a second park on a row
+          // already in triage — and it still earns its comment below. Anything
+          // else is refused rather than half-done: a note claiming a deferral
+          // on a row that did not move is worse than no note. (A goal row
+          // cannot reach here at all: `getTask` above resolves tasks only, so
+          // a goal id 404s, which is what this verb has always answered.)
           if (!moved.ok && moved.error !== 'same-status') return j(400, moved);
           const changed = moved.ok;
           // The comment lands either way. It is the whole of what the verb
