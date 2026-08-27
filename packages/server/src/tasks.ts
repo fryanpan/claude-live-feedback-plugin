@@ -268,28 +268,29 @@ export function normalizeWorkspaceName(name: string): string {
 export type TaskStatus = 'triage' | 'todo' | 'in-progress' | 'done';
 
 /**
- * Is this row deferred right now?
+ * The two fields a row carried while `parked` was a state of its own.
  *
- * The ONE reader of `parkedUntil`, deliberately — every surface asks this
- * question rather than comparing the field itself, so "the date has passed"
- * means the same thing to the nudger, the queue, and the browser. Nothing
- * clears the field when the date arrives and nothing should: an expiry
- * sweeper is a second writer that can fall behind or be the thing that is
- * down, and a row silently stuck in "parked" is the failure this feature was
- * filed to remove.
+ * Nothing writes them any more: parking a task moves it to `triage` and posts
+ * a comment recording why and when to come back to it (board ticket,
+ * 2026-08-27 — the state duplicated triage, which already means "nobody is
+ * working this and nobody has agreed it is work"). They survive on disk
+ * because the sidecar round-trips whole objects, and the startup migration is
+ * their one reader: it lifts the pair into a comment, then clears them. Kept
+ * off `Task` so no new writer can reach for them by autocomplete.
  */
-export function isParked(task: { parkedUntil?: number }, now: number = Date.now()): boolean {
-  return task.parkedUntil !== undefined && task.parkedUntil > now;
+export interface LegacyParkFields {
+  parkedUntil?: number;
+  parkedReason?: string;
 }
 
 /**
  * Is this row archived — soft-deleted, off every lane and every queue, and one
  * call from coming back?
  *
- * The ONE reader of `archivedAt`, for the same reason `isParked` is the one
- * reader of `parkedUntil`: "archived" has to mean the same thing to the board,
- * the queue and the nudger, and a second comparison of the field with a
- * different default is how two surfaces come to disagree about the same row.
+ * The ONE reader of `archivedAt`, deliberately: "archived" has to mean the
+ * same thing to the board, the queue and the nudger, and a second comparison
+ * of the field with a different default is how two surfaces come to disagree
+ * about the same row.
  */
 export function isArchived(task: { archivedAt?: number }): boolean {
   return task.archivedAt !== undefined;
@@ -535,37 +536,6 @@ export interface Task {
    *  a blanket refusal rule would block legitimate work). */
   afterEnforce?: string[];
   dueAt?: number;
-  /**
-   * When this row stops being deferred — "not now, and here is when" (ms
-   * epoch). Absent means it is not parked.
-   *
-   * DELIBERATELY NOT A STATUS, which is the whole point of the field. A row
-   * somebody has decided to come back to next week is still `todo` and still
-   * unblocked; nothing about it has moved. Before this there was no honest
-   * spelling for that, and the ready-work nudger kept re-surfacing it — one
-   * measured board fired four identical wakes at one deferred row, each
-   * costing a full-context turn. The three workarounds a lead was left with
-   * all made the board lie: moving it to `in-progress` (nobody is working
-   * it), inventing an `after` edge (nothing is blocking it), or assigning it
-   * to a person (nobody is being asked for anything).
-   *
-   * Nothing EXPIRES it. When the date passes the row simply counts as ready
-   * again, because every reader asks `isParked(task, now)` rather than
-   * reading a flag somebody had to remember to clear. That is what makes "no
-   * event needed, the next sweep picks it up" true instead of aspirational —
-   * a sweeper that unparks rows would be a second writer that can fall behind,
-   * fail, or be the thing that is down.
-   *
-   * The value is kept after it passes rather than cleared, for the same
-   * reason `transitions` are kept: it is the record that somebody deferred
-   * this row and until when.
-   */
-  parkedUntil?: number;
-  /** Why it is parked, in the parker's words. Short free text, and the half a
-   *  reader acts on — a date alone says a decision was made and not what it
-   *  was waiting for. Cleared whenever `parkedUntil` moves without one, since
-   *  a stale reason on a new date is a claim nobody made. */
-  parkedReason?: string;
   /**
    * When this row was archived — the board's ONLY removal, and a soft one.
    *
@@ -1400,30 +1370,6 @@ export interface TaskDueSetEvent {
 }
 
 /**
- * A row deferred to a date, moved to a different one, or un-parked.
- *
- * Shaped like `task.due_set` next door and for the same reasons: both ends
- * ride the row, because "pushed to Friday" and "parked until Friday" read
- * differently to whoever is scanning the trail for what slipped, and
- * `to: null` is an explicit un-park rather than an omission a newer reader
- * could confuse with a row written by an older writer.
- *
- * `reason` is on the event as well as on the task because the trail is where
- * a deferral gets reviewed — a row that says only "parked until the 2nd"
- * cannot be argued with three weeks later.
- */
-export interface TaskParkedEvent {
-  type: 'task.parked';
-  workspaceId: string;
-  taskId: string;
-  from: number | null;
-  to: number | null;
-  reason?: string;
-  actor: TaskActor;
-  ts: number;
-}
-
-/**
  * A row soft-deleted, and the row that came back.
  *
  * Two event types rather than one with a boolean, because the trail is read as
@@ -1688,7 +1634,6 @@ export type TaskStoreEvent =
   | TaskBodyEditedEvent
   | TaskRetitledEvent
   | TaskDueSetEvent
-  | TaskParkedEvent
   | TaskArchivedEvent
   | TaskRestoredEvent
   | TaskRegroupedEvent
@@ -3763,7 +3708,7 @@ export class TaskStore {
    * depends on it", `after` already records that, and `after` could only ever
    * be set at creation — when the decision being waited on often doesn't
    * exist yet. Every decision on the real board therefore had an empty
-   * `after`, and nothing could tell blocking from parked.
+   * `after`, and nothing could tell blocking from merely deferred.
    *
    * Replaces rather than appends, so an edge can be REMOVED — a dependency
    * that turned out not to exist is exactly as misleading as a missing one.
@@ -4041,53 +3986,31 @@ export class TaskStore {
   }
 
   /**
-   * Defer a row to a date, move that date, or un-park it (`null`).
+   * Drop the two fields a row carried while `parked` was a state, once the
+   * startup migration has lifted them into a comment.
    *
-   * The row does not move. Parking is not a status and not a dependency — see
-   * `parkedUntil` on the Task type for why the three things a lead used to do
-   * instead all made the board say something untrue.
+   * The ONLY writer of `LegacyParkFields`, and it only ever unsets them. The
+   * park metadata is not destroyed by this call — the comment the migration
+   * wrote is where it now lives, which is what makes the clear safe to run
+   * and what keeps the project's never-hard-delete rule true for it.
    *
-   * `reason` is REPLACED, not merged, on every call that sets a date: a park
-   * moved to a new date with no reason given carries no reason, because the
-   * old one was about the old date. An un-park clears both.
-   *
-   * An unchanged park emits nothing, the same rule `setDueAt` follows — a
-   * repaint that re-sends what is already on the row is not an edit, and an
-   * audit row per repaint is noise in every feed that reads this log. A
-   * REASON edit on an unchanged date is a change, because the reason is the
-   * half a reader acts on.
+   * Returns what it cleared, so the caller can report a migration honestly
+   * rather than counting rows it hoped it touched.
    */
-  parkTask(
-    taskId: string,
-    parkedUntil: number | null,
-    opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
-  ): SetAssigneeResult {
-    const task = this.getTask(taskId);
-    if (!task) return { ok: false, error: 'not-found' };
-    const from = task.parkedUntil ?? null;
-    const reason = parkedUntil === null ? undefined : normalizeReason(opts.reason);
-    if (from === parkedUntil && (task.parkedReason ?? undefined) === reason) {
-      return { ok: true, task, changed: false };
-    }
-    const ts = Date.now();
+  clearLegacyPark(taskId: string): LegacyParkFields | null {
+    const task = this.getTask(taskId) as (Task & LegacyParkFields) | undefined;
+    if (!task) return null;
+    const had: LegacyParkFields = {
+      ...(task.parkedUntil !== undefined ? { parkedUntil: task.parkedUntil } : {}),
+      ...(task.parkedReason !== undefined ? { parkedReason: task.parkedReason } : {}),
+    };
+    if (had.parkedUntil === undefined && had.parkedReason === undefined) return null;
     // Assignment rather than `delete` (biome noDelete); JSON.stringify drops
-    // an undefined from the sidecar either way, which is what keeps a row
-    // that was never parked free of the key entirely.
-    task.parkedUntil = parkedUntil === null ? undefined : parkedUntil;
-    task.parkedReason = reason;
-    task.updatedAt = ts;
+    // an undefined-valued key entirely, so the sidecar comes back without it.
+    task.parkedUntil = undefined;
+    task.parkedReason = undefined;
     this.scheduleSave(task.workspaceId);
-    this.emit({
-      type: 'task.parked',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      from,
-      to: parkedUntil,
-      ...(reason !== undefined ? { reason } : {}),
-      actor: { id: opts.actor.id, name: opts.actor.name, kind: classifyActor(opts.actor) },
-      ts,
-    });
-    return { ok: true, task, changed: true };
+    return had;
   }
 
   /**

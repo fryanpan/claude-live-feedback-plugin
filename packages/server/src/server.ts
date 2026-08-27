@@ -94,6 +94,12 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { injectWidget } from './mockup-widget.ts';
+import {
+  PARK_MIGRATION_ACTOR,
+  type ParkMigrationResult,
+  migrateParkedRows,
+} from './park-migration.ts';
+import { parkNoteText } from './park-note.ts';
 import type { PluginRefresher } from './plugin-refresh.ts';
 import { agentsBehind, checkableAttachments, readReleasedPluginVersion } from './plugin-release.ts';
 import { localHostnames, publicBaseUrl } from './public-host.ts';
@@ -706,6 +712,16 @@ export interface ServerHandle {
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
   sweepDeadShares: () => void;
+  /**
+   * The startup pass that moves rows off the removed `parked` state onto
+   * triage plus a comment (park-migration.ts).
+   *
+   * A promise rather than a function, because it is fired once at start and
+   * the handle's job is to let a caller AWAIT it. Without that a test — or a
+   * boot-time reader — races a write that is already in flight, and the flake
+   * would look like a migration that sometimes does not run.
+   */
+  parkMigration: Promise<ParkMigrationResult>;
   /** One pass of the ready-work wake (ready-nudge.ts). Runs on a 60s
    *  interval; exposed so tests exercise the real pass. */
   nudgeReadyWork: () => void;
@@ -1141,12 +1157,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *    able from a ticket with nothing outstanding — and this is the one
    *    caller that ACTS on the difference.
    *
-   * The park narrowing lives on this side rather than inside `buildQueue` on
-   * purpose: `next_tasks` keeps LISTING a parked row (with `parked` on it, so
-   * a lead reading the queue sees the deferral and can disagree with it), and
-   * it is only this wake — the surface that spends somebody's turn — that has
-   * to leave it alone. Filtering in the shared builder would have made
-   * "parked" mean "hidden" for every reader.
+   * Nothing here has to filter out deliberately-deferred rows. Parking moves
+   * a row to `triage` and `buildQueue` never lists triage, so a park is
+   * invisible to this wake by construction rather than by a second rule that
+   * could drift from the one `next_tasks` follows.
    */
   const readyWorkSnapshot = (workspace: HubWorkspace): ReadyWorkSnapshot => {
     const tasks = taskStore.listTasks(workspace.id);
@@ -4961,38 +4975,88 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
-        // Defer a row to a date, or un-park it (§3.6 task.parked). The row
-        // stays `todo` — parking is not a status, which is the point: an
-        // unblocked row somebody deliberately deferred had no honest spelling,
-        // so the ready-work nudger kept re-surfacing it.
+        // Park a row: move it to `triage` and leave a comment saying why and
+        // when to come back to it.
+        //
+        // The verb is older than its meaning. Parking used to be a state of
+        // its own (`parkedUntil` on the row) until the owner's 2026-08-27
+        // call that it duplicated triage — both say nobody is working this and
+        // nobody has agreed it is work. The state went; the route stayed,
+        // still on its old payload, because the shared server's REST callers
+        // cannot be restarted (CLAUDE.md: narrowing a verb keeps accepting the
+        // old shape).
+        //
+        // Which makes `parkedUntil: null` the delicate arm. It used to mean
+        // "un-park now", and an old bundle still sends it that way — so it
+        // must not be read as "park with no date", which would shove a live
+        // row an old caller was trying to WAKE back into triage. It answers
+        // 200 and does nothing, and says so. Parking with no date is spelled
+        // by omitting the field, which no old caller does: the old MCP schema
+        // required it.
         const taskParkMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/park$/);
         if (taskParkMatch && req.method === 'POST') {
           const taskId = decodeURIComponent(taskParkMatch[1] ?? '');
           const body = await safeJson(req);
           const author = authorFor(body?.author);
           if (!author) return j(400, { error: 'author required' });
-          // Same refusal the /due route makes, for the same reason: an
-          // unparseable date read as "un-park" would answer 200 while deleting
-          // the deferral the caller meant to move.
+          const task = taskStore.getTask(taskId);
+          if (!task) return j(404, { ok: false, error: 'not-found' });
+          const present = body !== null && typeof body === 'object' && 'parkedUntil' in body;
           const raw = body?.parkedUntil;
-          const parkedUntil =
-            raw === null || raw === undefined
-              ? null
-              : typeof raw === 'number' && Number.isFinite(raw)
-                ? raw
-                : undefined;
-          if (parkedUntil === undefined) {
+          // Same strictness the /due route keeps, and for a sharper reason
+          // now: an unparseable date read as anything at all would move the
+          // row on a request the caller got wrong.
+          if (present && raw !== null && !(typeof raw === 'number' && Number.isFinite(raw))) {
             return j(400, {
-              error: 'parkedUntil must be an epoch-ms number, or null to un-park',
+              error: 'parkedUntil must be an epoch-ms number, or null (the retired un-park)',
             });
           }
-          const res = taskStore.parkTask(taskId, parkedUntil, {
-            actor: author,
-            ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
+          if (present && raw === null) {
+            return j(200, {
+              ok: true,
+              task,
+              changed: false,
+              commented: false,
+              message:
+                'Un-parking is retired — parking is now a move to triage plus a comment, so there is no deferral to lift. Move the row on with a status change when it is ready.',
+            });
+          }
+          const until = present ? (raw as number) : undefined;
+          const reason = typeof body?.reason === 'string' ? body.reason : undefined;
+          // Read BEFORE the move: `task` is the live row, so its status is
+          // already `triage` on the other side of the call.
+          const wasStatus = task.status;
+          const moved = taskStore.transition(taskId, 'triage', { actor: author });
+          // A goal row cannot hold triage, so it cannot be parked. Refused
+          // rather than half-done: a comment on a row that did not move would
+          // claim a deferral nobody got.
+          if (!moved.ok && moved.error === 'goal-not-triageable') return j(400, moved);
+          if (!moved.ok && moved.error !== 'same-status') return j(400, moved);
+          const changed = moved.ok;
+          // The comment lands either way. It is the whole of what the verb
+          // records now, and a row already in triage is exactly the row a
+          // second park has something new to say about.
+          taskProjection.ensureTaskBody(task);
+          const note = await rooms.postComment(
+            taskBodyDocId(taskId),
+            null,
+            author,
+            parkNoteText({
+              ...(until !== undefined ? { until } : {}),
+              ...(reason !== undefined ? { reason } : {}),
+              ...(changed ? { from: wasStatus } : {}),
+            }),
+            { kind: 'subject' },
+            // Machine-written and one line long: not worth an outbound call.
+            { generate: false },
+          );
+          if (!changed) taskProjection.ensureWorkspace(task.workspaceId);
+          return j(200, {
+            ok: true,
+            task: taskStore.getTask(taskId) ?? task,
+            changed,
+            commented: note !== null,
           });
-          if (!res.ok) return j(404, res);
-          if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
-          return j(200, res);
         }
         // Soft-delete a row, and put it back (§3.6 task.archived /
         // task.restored). The board's ONLY removal: three fields on the task,
@@ -7237,6 +7301,50 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // timer, so this can never keep a process alive.
   readyNudger.start();
 
+  // Rows still carrying the removed `parked` state come onto the new spelling
+  // for it here — triage, plus a comment holding the date and the reason. See
+  // park-migration.ts for why the comment is written before the fields are
+  // cleared, and why that makes the pass idempotent.
+  //
+  // Fired without awaiting and with its own catch: a board that cannot write
+  // one comment must still come up. Nothing downstream reads its result, and
+  // an unmigrated row simply stays parked until the next start.
+  const parkMigration = migrateParkedRows({
+    store: taskStore,
+    note: (fields, from) =>
+      parkNoteText({
+        ...(fields.parkedUntil !== undefined ? { until: fields.parkedUntil } : {}),
+        ...(fields.parkedReason !== undefined ? { reason: fields.parkedReason } : {}),
+        ...(from !== 'triage' ? { from } : {}),
+        migrated: true,
+      }),
+    comment: async (task, text) => {
+      taskProjection.ensureTaskBody(task);
+      const posted = await rooms.postComment(
+        taskBodyDocId(task.id),
+        null,
+        { ...PARK_MIGRATION_ACTOR, kind: 'known' } as unknown as User,
+        text,
+        { kind: 'subject' },
+        { generate: false },
+      );
+      return posted !== null;
+    },
+  })
+    .then((res) => {
+      if (res.migrated.length > 0) {
+        console.log(`[tasks] parked → triage: migrated ${res.migrated.length} row(s)`);
+      }
+      for (const s of res.skipped) {
+        console.error(`[tasks] parked → triage: left ${s.taskId} alone — ${s.reason}`);
+      }
+      return res;
+    })
+    .catch((err): ParkMigrationResult => {
+      console.error('[tasks] parked → triage migration failed:', err);
+      return { migrated: [], skipped: [] };
+    });
+
   return {
     port: server.port ?? port,
     rooms,
@@ -7248,6 +7356,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Exactly what the interval does, exposed for the same reason
     // `sweepDeadShares` is: a test drives the real thing rather than a
     // re-implementation of it.
+    // The startup pass that moved rows off the removed `parked` state, so a
+    // test can await the real thing instead of racing it.
+    parkMigration,
     nudgeReadyWork: () => readyNudger.tick(),
     readyNudgeTally: () => readyNudger.tally(),
     sharingGate,

@@ -140,51 +140,21 @@ describe('buildQueue — blockers', () => {
 });
 
 /**
- * A parked row is deferred, not blocked and not claimed — so the queue keeps
- * LISTING it and says so on the row. Hiding it would trade one invisibility
- * for another: the point of the field is that a deliberate deferral becomes
- * something a reader can see and argue with, and a row that silently vanishes
- * from the queue is exactly what "moved it to in-progress so the nudger would
- * stop" already produced.
+ * A deferred row does not appear here at all.
+ *
+ * Parking used to be a field the queue read and marked rows with. It is now a
+ * move to `triage` plus a comment (2026-08-27), and triage is already excluded
+ * from this list — a row nobody has agreed is work is not work you can pick
+ * up. So the deferral is honoured by the exclusion that was already there,
+ * rather than by a second rule beside it.
  */
-describe('buildQueue — parked rows', () => {
-  const NOW = 1_000_000_000;
-  const DAY = 86_400_000;
-
-  it('lists a parked row and marks it, without touching `ready`', () => {
-    const parked = task({
-      parkedUntil: NOW + DAY,
-      parkedReason: 'waiting on the index rebuild',
-    });
-    const rows = buildQueue([parked], GOALS, { now: NOW });
-    expect(rows.map((r) => r.id)).toEqual([parked.id]);
-    expect(rows[0]?.parked).toEqual({ until: NOW + DAY, reason: 'waiting on the index rebuild' });
-    // `ready` is about DEPENDENCIES and stays that way. A parked row has no
-    // open blocker, and overloading the field would silently change what
-    // `includeBlocked` means for every existing caller.
-    expect(rows[0]?.ready).toBe(true);
-  });
-
-  it('says nothing about a park whose date has passed', () => {
-    const expired = task({ parkedUntil: NOW - 1, parkedReason: 'waiting on the rebuild' });
-    const rows = buildQueue([expired], GOALS, { now: NOW });
-    expect(rows[0]?.id).toBe(expired.id); // control: the row is in there
-    // No sweeper cleared the field; the row simply counts as ready again,
-    // which is what makes "when the date passes it comes back" true with no
-    // second writer to fall behind.
-    expect(rows[0]?.parked).toBeUndefined();
-  });
-
-  it('carries the date with no reason when nobody gave one', () => {
-    const parked = task({ parkedUntil: NOW + DAY });
-    expect(buildQueue([parked], GOALS, { now: NOW })[0]?.parked).toEqual({ until: NOW + DAY });
-  });
-
-  it('leaves an un-parked row with no `parked` key at all', () => {
-    const plain = task();
-    const rows = buildQueue([plain], GOALS, { now: NOW });
-    expect(rows[0]?.id).toBe(plain.id); // control
-    expect('parked' in (rows[0] as object)).toBe(false);
+describe('buildQueue — a deferred row is a triage row', () => {
+  it('drops it, and keeps the row beside it', () => {
+    const deferred = task({ id: 't-deferred', status: 'triage' });
+    const live = task({ id: 't-live' });
+    // The positive control is the point: an empty list would pass the first
+    // assertion on its own.
+    expect(buildQueue([deferred, live], GOALS).map((r) => r.id)).toEqual(['t-live']);
   });
 });
 

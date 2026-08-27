@@ -49,9 +49,6 @@ export type HoldReason =
   /** An open ENFORCED dependency. Advisory `after` edges do not appear here,
    *  matching the transition gate rather than inventing a second notion. */
   | 'blocked'
-  /** Deliberately deferred, with a date. Not a status — the row is still
-   *  `todo`, still unblocked, still owned. */
-  | 'parked'
   /** Owned by a person. An agent wake unblocks nothing there. */
   | 'awaiting-person'
   /** Outside every ranked goal band — formal backlog, never auto-dispatched
@@ -83,9 +80,6 @@ export interface GateRow {
    *  the reserved `chores` id first of all. Such a row is formal backlog and
    *  the dispatch rule would never start it, so a wake must not count it. */
   inGoalBand: boolean;
-  /** Present only while the row is deferred, computed against `now` by the
-   *  caller — an expired park simply arrives absent. */
-  parked?: { until: number; reason?: string };
 }
 
 /** The row as a wake needs to name it. */
@@ -139,8 +133,8 @@ export interface ReadyGateVerdict {
  * Sort every open row into ready / held / unevaluable.
  *
  * Checks run cheapest-and-most-certain first, and a row stops at its first
- * verdict. That ordering is why a parked row with a corrupt review array is
- * reported as PARKED rather than as unevaluable: the gate read a state that
+ * verdict. That ordering is why a backlog row with a corrupt review array is
+ * reported as BACKLOG rather than as unevaluable: the gate read a state that
  * settles the question on its own, and raising an alarm about a row nobody
  * was going to be woken for is noise that trains a reader to skip alarms.
  */
@@ -156,20 +150,16 @@ export function evaluateReadyWork(
   };
 
   for (const row of rows) {
-    // Claimed, deferred, or behind an enforced edge — all three are facts the
-    // row carries itself, so none of them can fail to be readable.
+    // Claimed, out of band, or behind an enforced edge — all three are facts
+    // the row carries itself, so none of them can fail to be readable. A row
+    // somebody deliberately deferred does not appear at all: parking moves it
+    // to `triage`, and the queue this gate reads never lists triage rows.
     if (row.status !== 'todo') {
       hold('claimed');
       continue;
     }
-    // Before `parked`, deliberately: a park expires, the band does not, and
-    // the held count should carry the fact that will still be true tomorrow.
     if (!row.inGoalBand) {
       hold('backlog');
-      continue;
-    }
-    if (row.parked !== undefined) {
-      hold('parked');
       continue;
     }
     if (!row.ready) {

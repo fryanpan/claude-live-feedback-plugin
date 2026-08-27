@@ -249,14 +249,6 @@ export function projectTask(
     after: task.after,
     ...(task.afterEnforce !== undefined ? { afterEnforce: task.afterEnforce } : {}),
     ...(task.dueAt !== undefined ? { dueAt: task.dueAt } : {}),
-    // Deferred to a date, and why. Projected because the board is where the
-    // deferral has to be VISIBLE — a park the store knows about and no
-    // surface draws is the same "store has it, surface can't show it" failure
-    // this file has produced before, and here it would be worse than usual:
-    // the row would sit in the queue looking exactly like work nobody had
-    // gotten to.
-    ...(task.parkedUntil !== undefined ? { parkedUntil: task.parkedUntil } : {}),
-    ...(task.parkedReason !== undefined ? { parkedReason: task.parkedReason } : {}),
     // Soft-deleted, by whom, and why. Conditional like everything else here,
     // and the refresh deletes projected keys absent from this object — so a
     // RESTORE removes the keys and the row rejoins its lane with nothing
