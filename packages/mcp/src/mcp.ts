@@ -141,7 +141,15 @@ const server = new Server(
       'for comment-anchored edits, and set_doc_content(docId, markdown) for a',
       'COMPREHENSIVE REWRITE of the whole doc (do NOT Write the file + reparse,',
       'and do NOT delete_doc + Write + re-create — both race the flush and both',
-      'have destroyed content in the field). External edits (VS Code, git pull)',
+      'have destroyed content in the field). NEVER use set_doc_content on a doc a',
+      'human is reviewing or editing: a scoped request (a comment, one section)',
+      'gets a scoped edit — find_and_replace (table rows match in pipe syntax),',
+      'rewrite_thread_region, edit_at_anchor — and a whole-doc rewrite built from',
+      'an earlier read destroys their concurrent edits. The server refuses such a',
+      'write with 409 stale-write naming the human-edit time; re-read with',
+      'get_doc, re-apply your change onto the CURRENT content, and only retry',
+      'with confirmOverwriteHumanEdits: true if a full rewrite is truly needed.',
+      'External edits (VS Code, git pull)',
       'flow back into the live doc via the file poll when LF is idle; if you wrote',
       'to a bound file externally and need to be sure it landed, call',
       'reparse_from_disk(docId) to force-pull from disk. If an edit response or',
@@ -506,12 +514,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'set_doc_content',
       description:
-        'Replace a whole doc with new markdown — the safe path for a comprehensive rewrite. Applies as a block-level diff, so untouched blocks keep their comment threads. Use this rather than writing the bound file or deleting and re-creating the doc; both race the write-back and both have destroyed content. On a task body prefer rewrite_task, which also retitles and carries a reason. Refuses an empty document.',
+        'Replace a whole doc with new markdown — the safe path for a comprehensive rewrite, and a LAST resort while a human is in the doc: a scoped request gets a scoped tool (find_and_replace, rewrite_thread_region, edit_at_anchor), never a full rewrite from your in-context copy. If a human edited after your last read the server refuses with 409 stale-write (their edit time included) — re-read with get_doc, re-apply your change onto the current content, and only then retry with confirmOverwriteHumanEdits: true. Every accepted rewrite first backs up the replaced markdown under the server data dir. Applies as a block-level diff, so untouched blocks keep their comment threads. Use this rather than writing the bound file or deleting and re-creating the doc; both race the write-back and both have destroyed content. On a task body prefer rewrite_task, which also retitles and carries a reason. Refuses an empty document.',
       inputSchema: {
         type: 'object',
         properties: {
           docId: { type: 'string' },
           markdown: { type: 'string', description: 'Full replacement markdown for the doc.' },
+          confirmOverwriteHumanEdits: {
+            type: 'boolean',
+            description:
+              'Acknowledge a 409 stale-write refusal AFTER re-reading the doc and re-applying your change onto its current content. Never pass it pre-emptively — it disables the guard that keeps a stale copy from destroying a human’s concurrent edits.',
+          },
         },
         required: ['docId', 'markdown'],
       },
@@ -822,7 +835,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'find_and_replace',
       description:
-        "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it.",
+        "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Exception: a find that IS pipe-table row syntax (| a | b |) matches table rows structurally, cells compared by text with whitespace ignored, so a row quoted from the .md works; the replace must keep the same row/cell shape. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2225,7 +2238,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case 'get_doc': {
         const { docId } = a as { docId: string };
-        const res = await http('GET', `/api/docs/${encodeURIComponent(docId)}/content`);
+        // `reader` records that THIS session's copy of the doc is current as
+        // of now — the marker the stale-write guard compares against the last
+        // human edit before allowing a set_doc_content from this author.
+        const res = await http(
+          'GET',
+          `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`,
+        );
         return ok(res);
       }
       case 'doc_status': {
@@ -2255,12 +2274,20 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'set_doc_content': {
-        const { docId, markdown } = a as { docId: string; markdown: string };
-        // Sent so a rewrite of a `task:<id>` body room can be attributed the
-        // way `rewrite_task` is; ignored for every other doc.
+        const { docId, markdown, confirmOverwriteHumanEdits } = a as {
+          docId: string;
+          markdown: string;
+          confirmOverwriteHumanEdits?: boolean;
+        };
+        // Author: sent so a rewrite of a `task:<id>` body room can be
+        // attributed the way `rewrite_task` is — and so the stale-write guard
+        // can judge this caller by its own get_doc reads instead of the blunt
+        // 10-minute window. The confirm flag is forwarded only when true:
+        // the default path stays the protected one.
         const res = await http('POST', `/api/docs/${encodeURIComponent(docId)}/content`, {
           markdown,
           author: AUTHOR,
+          ...(confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}),
         });
         return ok(res);
       }
