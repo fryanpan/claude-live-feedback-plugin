@@ -32,6 +32,9 @@ export interface TaskRow {
    * `parkedUntil > now` yourself rather than trusting it.
    */
   parkedUntil?: number | null;
+  /** Why the row was parked — shown in the report so a park reads as a
+   *  decision with a date, not as a stuck row. */
+  parkedReason?: string;
 }
 export interface EventRow {
   taskId?: string;
@@ -47,6 +50,7 @@ export interface ReviewItemRow {
 
 export type Bucket =
   | 'blocked-on-owner'
+  | 'blocked-on-owner-unfiled'
   | 'blocked-on-dependency'
   | 'in-progress'
   | 'ready-unpicked'
@@ -63,8 +67,22 @@ export interface Classified {
   sinceActivityMs: number;
   stalled: boolean;
   blockers?: string[];
-  /** Present on parked rows: when the deferral expires. */
+  /** Present on rows parked into the future: when the deferral expires. */
   parkedUntil?: number;
+  /** Present with parkedUntil: why the row was parked. */
+  parkedReason?: string;
+  /** blocked-on-owner only: ms since the NEWEST pending review item was
+   *  filed. Old asks go on the "re-verify the blocker is still real" list —
+   *  measured: t-BX3kTEZ6M7vY waited on two PRs that had already merged. */
+  askAgeMs?: number;
+  /** blocked-on-dependency only: the far end of the `after` chain — the row
+   *  the whole chain is actually waiting on, and what state it is in. */
+  terminal?: { id: string; label: string };
+  /** TRUE means this row is waiting on the owner with NO pending review item
+   *  anywhere on its chain's terminal — an ask that exists only in someone's
+   *  head. Bryan cannot see it on his Home queue, so it counts toward FAIL
+   *  (7 of 10 "blocked-on-owner" rows on the 08-27 "PASS" board were this). */
+  unfiledAsk: boolean;
 }
 
 /** A ticket's own clock: when it entered its current status. */
@@ -92,11 +110,21 @@ export function classifyOpenTasks(
   threadActivity?: Map<string, number>,
 ): Classified[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const askedTaskIds = new Set(
-    reviewItems
-      .map((r) => r.taskId ?? (r.docId?.startsWith('task:') ? r.docId.slice(5) : undefined))
-      .filter((x): x is string => Boolean(x)),
-  );
+  // Presence in askedTaskIds is what "an ask is FILED" means; newestAskAt
+  // additionally carries the newest pending item's askedAt where one exists,
+  // so old asks can go on the re-verify list.
+  const askedTaskIds = new Set<string>();
+  const newestAskAt = new Map<string, number>();
+  for (const r of reviewItems) {
+    const id = r.taskId ?? (r.docId?.startsWith('task:') ? r.docId.slice(5) : undefined);
+    if (!id) continue;
+    askedTaskIds.add(id);
+    if (
+      typeof r.askedAt === 'number' &&
+      r.askedAt > (newestAskAt.get(id) ?? Number.NEGATIVE_INFINITY)
+    )
+      newestAskAt.set(id, r.askedAt);
+  }
   const lastEventByTask = new Map<string, number>();
   for (const e of events) {
     if (e.taskId && e.ts > (lastEventByTask.get(e.taskId) ?? 0))
@@ -119,14 +147,22 @@ export function classifyOpenTasks(
     const parked = t.parkedUntil != null && t.parkedUntil > now;
     // Owner-blocking is evaluated BEFORE parking: a filed ask outranks every
     // other state (the first test in the suite), so a parked row with an
-    // active ask on Bryan — a review item, a person owner (`ownerKind ===
-    // 'person'`, the server's authoritative call; gap 1: t-Q6DTQn05IMPo), or
-    // an owner-band goal — surfaces as blocked-on-owner rather than having
+    // active ask on Bryan surfaces as blocked-on-owner rather than having
     // the ask hidden behind 'parked'. Neither bucket ever stalls, so the
     // parked guarantee is preserved either way.
+    //
+    // But owner-blocked is only LEGITIMATE waiting when a pending review
+    // item exists — that is what puts the ask on Bryan's Home queue. A
+    // person-owned row (`ownerKind === 'person'`, the server's authoritative
+    // call) or an owner-band row with NO pending item is an ask that exists
+    // nowhere he reads: blocked-on-owner-unfiled, a protocol violation that
+    // counts toward FAIL (Bryan's 08-27 review: 7 of 10 "blocked-on-owner"
+    // rows were invisible on his queue).
+    const hasPendingAsk = askedTaskIds.has(t.id);
     let bucket: Bucket;
-    if (t.ownerKind === 'person' || askedTaskIds.has(t.id) || bands.ownerBand.has(t.goal ?? ''))
-      bucket = 'blocked-on-owner';
+    if (hasPendingAsk) bucket = 'blocked-on-owner';
+    else if (t.ownerKind === 'person' || bands.ownerBand.has(t.goal ?? ''))
+      bucket = 'blocked-on-owner-unfiled';
     else if (parked) bucket = 'parked';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
     else if (t.status === 'in-progress') bucket = 'in-progress';
@@ -148,7 +184,48 @@ export function classifyOpenTasks(
         (bucket === 'in-progress' || bucket === 'ready-unpicked') && sinceActivityMs > stallMs,
       ...(unmet.length > 0 ? { blockers: unmet } : {}),
       ...(parked && t.parkedUntil != null ? { parkedUntil: t.parkedUntil } : {}),
+      ...(parked && t.parkedReason ? { parkedReason: t.parkedReason } : {}),
+      ...(bucket === 'blocked-on-owner' && newestAskAt.has(t.id)
+        ? { askAgeMs: now - (newestAskAt.get(t.id) ?? now) }
+        : {}),
+      unfiledAsk: bucket === 'blocked-on-owner-unfiled',
     });
+  }
+  // Second pass: attribute each dependency chain to its TERMINAL blocker —
+  // the row the whole chain is actually waiting on. "after t-X" is only half
+  // an answer when t-X is itself waiting on Bryan; and a chain that bottoms
+  // out in an UNFILED ask is an unfiled ask for every row behind it too.
+  const rowById = new Map(out.map((r) => [r.id, r]));
+  const firstUnmetOf = (task: TaskRow): TaskRow | undefined => {
+    for (const dep of task.after ?? []) {
+      const d = byId.get(dep);
+      if (d !== undefined && d.status !== 'done') return d;
+    }
+    return undefined;
+  };
+  for (const r of out) {
+    if (r.bucket !== 'blocked-on-dependency') continue;
+    const visited = new Set<string>([r.id]);
+    let cur = byId.get(r.id);
+    let terminalTask: TaskRow | undefined;
+    while (cur) {
+      const next = firstUnmetOf(cur);
+      if (!next) {
+        terminalTask = cur === byId.get(r.id) ? undefined : cur;
+        break;
+      }
+      if (visited.has(next.id)) {
+        terminalTask = next; // cycle: name where it loops rather than hanging
+        break;
+      }
+      visited.add(next.id);
+      cur = next;
+    }
+    if (!terminalTask) continue;
+    const terminalRow = rowById.get(terminalTask.id);
+    const label = terminalRow?.bucket ?? terminalTask.status;
+    r.terminal = { id: terminalTask.id, label };
+    if (terminalRow?.bucket === 'blocked-on-owner-unfiled') r.unfiledAsk = true;
   }
   return out.sort((a, b) => b.sinceActivityMs - a.sinceActivityMs);
 }

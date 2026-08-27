@@ -122,11 +122,19 @@ async function main(): Promise<void> {
     'ready-unpicked',
     'in-progress',
     'blocked-on-owner',
+    'blocked-on-owner-unfiled',
     'blocked-on-dependency',
     'backlog-unranked',
     'parked',
   ] as Bucket[]) {
     const g = by(b);
+    // Parked rows are deliberately deferred to a DATE — quiet-age statistics
+    // ("median 10.0d") read as stuck when every park is legitimate. The
+    // dates and reasons are in the Parked section below instead.
+    if (b === 'parked') {
+      lines.push(`- **parked**: ${g.length}${g.length ? ' (dates below)' : ''}`);
+      continue;
+    }
     const stalledN = g.filter((r) => r.stalled).length;
     lines.push(
       `- **${b}**: ${g.length}` +
@@ -151,10 +159,65 @@ async function main(): Promise<void> {
         `- ${r.id} [${r.bucket}] quiet ${fmt(r.sinceActivityMs)} — ${r.title.slice(0, 90)}`,
       );
   }
+  // Unfiled asks are the protocol violation the 08-27 "PASS" board hid: rows
+  // waiting on the owner with nothing on his Home queue to answer. Includes
+  // dependency chains whose terminal blocker is itself unfiled.
+  const unfiled = rows.filter((r) => r.unfiledAsk);
+  if (unfiled.length) {
+    lines.push('');
+    lines.push('## Unfiled asks (waiting on the owner, NO review item filed)');
+    for (const r of unfiled) {
+      const via =
+        r.bucket === 'blocked-on-dependency' && r.terminal
+          ? ` via after ${(r.blockers ?? []).join(', ')} → ${r.terminal.id} [${r.terminal.label}]`
+          : '';
+      lines.push(`- ${r.id} [${r.bucket}]${via} waiting ${fmt(r.ageMs)} — ${r.title.slice(0, 80)}`);
+    }
+  }
+  // Old filed asks rot: t-BX3kTEZ6M7vY sat "waiting on Bryan" behind two PRs
+  // that had already merged. Visible, but not a verdict failure.
+  const AGING_ASK_MS = 7 * 86_400_000;
+  const aging = rows.filter((r) => (r.askAgeMs ?? 0) > AGING_ASK_MS);
+  if (aging.length) {
+    lines.push('');
+    lines.push('## Aging asks (filed >7d ago — re-verify the blocker is still real)');
+    for (const r of aging)
+      lines.push(`- ${r.id} asked ${fmt(r.askAgeMs ?? 0)} ago — ${r.title.slice(0, 80)}`);
+  }
+  const deps = by('blocked-on-dependency');
+  if (deps.length) {
+    lines.push('');
+    lines.push('## Blocked on dependencies (terminal blocker named)');
+    for (const r of deps) {
+      const chain = r.terminal
+        ? `after ${(r.blockers ?? []).join(', ')} → ${r.terminal.id} [${r.terminal.label}]`
+        : `after ${(r.blockers ?? []).join(', ')}`;
+      lines.push(`- ${r.id} ${chain} — ${r.title.slice(0, 80)}`);
+    }
+  }
+  const parkedRows = by('parked');
+  if (parkedRows.length) {
+    lines.push('');
+    lines.push('## Parked (deferred to a date, not stuck)');
+    const LONG_PARK_MS = 30 * 86_400_000;
+    for (const r of parkedRows
+      .slice()
+      .sort((a, b) => (a.parkedUntil ?? 0) - (b.parkedUntil ?? 0))) {
+      const until = r.parkedUntil ? new Date(r.parkedUntil).toISOString().slice(0, 10) : '?';
+      const reason = (r.parkedReason ?? '').replace(/\s+/g, ' ').slice(0, 70);
+      const flags: string[] = [];
+      if ((r.parkedUntil ?? 0) - now > LONG_PARK_MS) flags.push('>30d out');
+      if (!reason) flags.push('no reason given');
+      lines.push(
+        `- ${r.id} until ${until}${reason ? ` — ${reason}` : ''}${flags.length ? ` [CHECK: ${flags.join('; ')}]` : ''}`,
+      );
+    }
+  }
   const verdict =
-    worst.length === 0
-      ? 'PASS: every open ticket is either moving or blocked for a named reason.'
-      : `FAIL: ${worst.length} unblocked tickets quiet for >${fmt(stallMs)}.`;
+    worst.length === 0 && unfiled.length === 0
+      ? 'PASS: every open ticket is either moving or blocked for a named, FILED reason.'
+      : `FAIL: ${worst.length} unblocked tickets quiet for >${fmt(stallMs)}` +
+        `${unfiled.length ? `; ${unfiled.length} unfiled asks (owner-blocked, nothing on the Home queue)` : ''}.`;
   lines.push('');
   lines.push(`**Verdict: ${verdict}**`);
   console.log(lines.join('\n'));
