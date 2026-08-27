@@ -239,7 +239,7 @@ describe('a wake states what the pass examined, not just what it found', () => {
     world.boards[0] = board({
       lastActivityAt: world.now - 20 * MIN,
       considered: 5,
-      held: { 'awaiting-person': 2, parked: 1, blocked: 1 },
+      held: { 'awaiting-person': 2, backlog: 1, blocked: 1 },
     });
 
     nudger.tick();
@@ -250,7 +250,7 @@ describe('a wake states what the pass examined, not just what it found', () => {
     // Without this, "1 task is ready" is indistinguishable on a board with one
     // row and on a board with five whose other four are waiting on Bryan.
     expect(frame.consideredCount).toBe(5);
-    expect(frame.held).toEqual({ 'awaiting-person': 2, parked: 1, blocked: 1 });
+    expect(frame.held).toEqual({ 'awaiting-person': 2, backlog: 1, blocked: 1 });
     expect(frame.undetermined).toBeUndefined();
   });
 
@@ -419,14 +419,14 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
       lastActivityAt: world.now - 20 * MIN,
       ready: [],
       considered: 4,
-      held: { 'awaiting-person': 2, parked: 1, blocked: 1 },
+      held: { 'awaiting-person': 2, backlog: 1, blocked: 1 },
     });
 
     nudger.tick();
 
-    // "4 suppressed, all parked" and "4 suppressed across three conditions"
+    // "4 suppressed, all backlog" and "4 suppressed across three conditions"
     // are different findings, so the breakdown is what is kept.
-    expect(nudger.tally().suppressed).toEqual({ 'awaiting-person': 2, parked: 1, blocked: 1 });
+    expect(nudger.tally().suppressed).toEqual({ 'awaiting-person': 2, backlog: 1, blocked: 1 });
     expect(nudger.tally().passed).toBe(0);
   });
 
@@ -453,7 +453,7 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
       lastActivityAt: world.now - 20 * MIN,
       ready: [],
       considered: 1,
-      held: { parked: 1 },
+      held: { backlog: 1 },
     });
 
     nudger.tick();
@@ -462,7 +462,7 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
     world.now += 20 * MIN;
     nudger.tick();
 
-    expect(nudger.tally().suppressed).toEqual({ parked: 1 });
+    expect(nudger.tally().suppressed).toEqual({ backlog: 1 });
   });
 
   it('counts again once the board has actually moved', () => {
@@ -471,7 +471,7 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
       lastActivityAt: world.now - 20 * MIN,
       ready: [],
       considered: 1,
-      held: { parked: 1 },
+      held: { backlog: 1 },
     });
     nudger.tick();
 
@@ -479,12 +479,12 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
       lastActivityAt: world.now - 10 * MIN,
       ready: [],
       considered: 1,
-      held: { parked: 1 },
+      held: { backlog: 1 },
     });
     world.now += 20 * MIN;
     nudger.tick();
 
-    expect(nudger.tally().suppressed).toEqual({ parked: 2 });
+    expect(nudger.tally().suppressed).toEqual({ backlog: 2 });
   });
 
   it('declares the nudge deletable after seven days of suppressing and never firing', () => {
@@ -493,7 +493,7 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
       lastActivityAt: world.now - 20 * MIN,
       ready: [],
       considered: 1,
-      held: { parked: 1 },
+      held: { backlog: 1 },
     });
     nudger.tick();
     expect(reported).toHaveLength(0);
@@ -550,7 +550,7 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
         lastActivityAt: first.world.now - 20 * MIN,
         ready: [],
         considered: 1,
-        held: { parked: 1 },
+        held: { backlog: 1 },
       });
       first.nudger.tick();
       const since = first.nudger.tally().since;
@@ -564,14 +564,14 @@ describe('the nudge counts what it suppressed and what it delivered', () => {
               lastActivityAt: first.world.now - 20 * MIN,
               ready: [],
               considered: 1,
-              held: { parked: 1 },
+              held: { backlog: 1 },
             }),
           ],
           reachable: new Set<string>(['agent-cartographer']),
         },
       });
       expect(second.nudger.tally().since).toBe(since);
-      expect(second.nudger.tally().suppressed).toEqual({ parked: 1 });
+      expect(second.nudger.tally().suppressed).toEqual({ backlog: 1 });
 
       second.nudger.tick();
       expect(second.reported).toHaveLength(1);

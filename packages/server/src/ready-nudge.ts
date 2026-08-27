@@ -118,7 +118,7 @@ export interface ReadyWorkSnapshot {
   leadAgentId?: string;
   retired: boolean;
   /** Rows the dependency-state gate cleared, in the board's own priority
-   *  order — unclaimed, agent-owned, unparked, unblocked, and with no open
+   *  order — unclaimed, agent-owned, unblocked, and with no open
    *  question waiting on a person. See `ready-gate.ts`. */
   ready: readonly ReadyRow[];
   /** THE DENOMINATOR: how many open rows the gate examined to produce
@@ -159,7 +159,7 @@ export interface NudgeFrame {
    *  nudges only. Sent even when it equals `readyCount`, because a reader
    *  cannot tell a stated denominator from an omitted one after the fact. */
   consideredCount?: number;
-  /** What the pass withheld and why — `{ 'awaiting-person': 2, parked: 1 }`.
+  /** What the pass withheld and why — `{ 'awaiting-person': 2, backlog: 1 }`.
    *  Absent rather than empty when nothing was held. Idle nudges only. */
   held?: Readonly<Record<string, number>>;
   /**
@@ -229,7 +229,7 @@ export interface ReadyWorkNudgerOptions {
  * alarm. That is worth shipping and it is not worth trusting, so it ships with
  * the instrument that will eventually settle it.
  *
- * `suppressed` is per-condition on purpose: "40 suppressed, all `parked`" and
+ * `suppressed` is per-condition on purpose: "40 suppressed, all `backlog`" and
  * "40 suppressed across five conditions" are different findings, and a single
  * total cannot tell them apart.
  */

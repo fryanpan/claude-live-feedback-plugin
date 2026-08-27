@@ -658,16 +658,24 @@ describe('the board wakes its lead over the wire', () => {
    * this, no way to say so that the board understood — so this pass kept
    * finding the row ready and kept spending a wake turn on it. One measured
    * board fired four identical nudges at one deferred row.
+   *
+   * How it says so changed on 2026-08-27: the row moves to `triage` and the
+   * deferral is written as a comment, rather than a `parkedUntil` field the
+   * gate had to learn about. The guarantee this fixture protects is the same
+   * one, and it now rides on a rule the queue already had.
    */
-  it('stops surfacing a row that has been parked, and resumes when the date passes', async () => {
+  it('stops surfacing a row that has been parked', async () => {
     const { workspaceId, taskId, lead, tab } = await boardWithReadyWork();
 
-    // A park that expires within the test, so the "it comes back" half is the
-    // date arriving rather than a second write pretending to be one.
-    const parkedUntil = Date.now() + 400;
+    // Control: before the park, this board wakes its lead about this row.
+    handle.nudgeReadyWork();
+    await settle();
+    expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(1);
+    lead.frames.length = 0;
+
     await jj(
       await post(`/api/tasks/${taskId}/park`, {
-        parkedUntil,
+        parkedUntil: Date.now() + 7 * 86_400_000,
         reason: 'waiting on the index rebuild',
         author: PERSON,
       }),
@@ -678,26 +686,16 @@ describe('the board wakes its lead over the wire', () => {
 
     expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(0);
 
-    // The row is still `todo` and still unblocked — parking moved nothing.
-    // Without this the silence above would also be satisfied by a park that
-    // had quietly claimed the row.
-    const { tasks } = await jj<{ tasks: Array<{ id: string; status: string; parked?: unknown }> }>(
+    // And it is silent for the stated reason — the row is in triage — rather
+    // than because the wake broke. `next` drops triage rows entirely.
+    const { tasks } = await jj<{ tasks: Array<{ id: string }> }>(
       await fetch(`${base}/api/workspaces/${workspaceId}/next`),
     );
-    const row = tasks.find((t) => t.id === taskId);
-    expect(row?.status).toBe('todo');
-    // …and next_tasks still LISTS it, saying why. A row that vanished from the
-    // queue would be the same invisibility in a different place.
-    expect(row?.parked).toEqual({ until: parkedUntil, reason: 'waiting on the index rebuild' });
-
-    // The date passes. Nothing runs and nothing is cleared — the next sweep
-    // simply finds the row ready again.
-    await settle(500);
-    handle.nudgeReadyWork();
-    await settle();
-
-    expect(nudges(lead.frames, READY_IDLE_EVENT)).toHaveLength(1);
-    expect(nudges(lead.frames, READY_IDLE_EVENT)[0]?.data?.taskId).toBe(taskId);
+    expect(tasks.find((t) => t.id === taskId)).toBeUndefined();
+    const { tasks: all } = await jj<{ tasks: Array<{ id: string; status: string }> }>(
+      await fetch(`${base}/api/workspaces/${workspaceId}/tasks`),
+    );
+    expect(all.find((t) => t.id === taskId)?.status).toBe('triage');
 
     await lead.stop();
     await tab.stop();
