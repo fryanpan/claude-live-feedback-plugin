@@ -243,10 +243,12 @@ describe('ydoc projection + workspace room', () => {
     const goals = room.ydoc.getMap('workspace').get('goals') as ProjectedGoal[];
     expect(goals.map((x) => x.title)).toContain('Ship it faster');
     // The band carries its goal ROW's status, so a board reader can tell a
-    // done band from an open one without a second fetch. Fresh band: open.
+    // done band from an open one — or an un-agreed one — without a second
+    // fetch. Fresh band: triage, since a goal just added is a proposal and
+    // nothing under it dispatches until somebody agrees to it.
     const band = goals.find((x) => x.title === 'Ship it faster');
     if (!band) throw new Error('band missing from projection');
-    expect(band.status).toBe('todo');
+    expect(band.status).toBe('triage');
 
     // Declare the goal done through the one transition gate; the projection
     // re-reads the row and the band arrives marked, with the §3.3 contract
@@ -371,7 +373,7 @@ describe('ydoc projection + workspace room', () => {
   });
 
   it('rejects the workspace event stream for an unknown workspace', async () => {
-    const r = await local('/events/workspace/w-does-not-exist');
+    const r = await local('/events/workspace/w-missing');
     expect(r.status).toBe(404);
   });
 

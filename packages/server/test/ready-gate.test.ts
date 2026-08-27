@@ -28,6 +28,7 @@ function row(over: Partial<GateRow> = {}): GateRow {
     status: 'todo',
     ready: true,
     inGoalBand: true,
+    goalInTriage: false,
     ...over,
   };
 }
@@ -230,7 +231,7 @@ describe('the backlog band is never dispatched, so it is never a reason to wake'
   // goal is not on the workspace's ranked goal list (the reserved `chores`
   // id first of all) are formal backlog and are not auto-dispatched. A wake
   // that counts them says "39 ready" over a board whose dispatchable set is
-  // zero — measured three times in one hour on a real board (t-X_Rkt8fA9HIY).
+  // zero — measured three times in one hour on a real board.
   it('withholds a backlog row and names the reason', () => {
     const verdict = evaluateReadyWork([row({ inGoalBand: false })], probes());
 
@@ -264,5 +265,58 @@ describe('the backlog band is never dispatched, so it is never a reason to wake'
 
     expect(verdict.ready).toEqual([{ id: 't-g', title: 'Ship the fix' }]);
     expect(verdict.held).toEqual({ backlog: 2 });
+  });
+});
+
+describe('a band still in triage is not dispatched either', () => {
+  // The sibling of backlog, one step in: the row IS in a ranked band, but
+  // nobody has agreed the band is work yet. Held rather than dropped, so the
+  // pass can report it — Bryan asked for these to read as "goal in triage"
+  // rather than as a failure, and a row missing from the queue reads as
+  // neither.
+  it('withholds the row and names the reason', () => {
+    const verdict = evaluateReadyWork([row({ goalInTriage: true })], probes());
+
+    expect(verdict.ready).toEqual([]);
+    expect(verdict.held).toEqual({ 'goal-triage': 1 });
+    // Still counted. "One row held because its band is unagreed" and "nothing
+    // on this board" must not reach a reader as the same sentence.
+    expect(verdict.considered).toBe(1);
+  });
+
+  it('reports a parked row in a triage band as goal-triage — the band outlasts the park', () => {
+    // Same ordering rule the backlog case above documents: a park expires,
+    // an unagreed band does not, so the held count carries the durable fact.
+    const verdict = evaluateReadyWork(
+      [row({ goalInTriage: true, parked: { until: Date.now() + 60_000 } })],
+      probes(),
+    );
+
+    expect(verdict.held).toEqual({ 'goal-triage': 1 });
+  });
+
+  it('still names a row in an agreed band standing next to one that is not', () => {
+    // The positive control: a gate that held every row on a board with any
+    // triage band would pass both tests above.
+    const verdict = evaluateReadyWork(
+      [
+        row({ id: 't-t1', goalInTriage: true }),
+        row({ id: 't-t2', goalInTriage: true }),
+        row({ id: 't-g', title: 'Ship the fix' }),
+      ],
+      probes(),
+    );
+
+    expect(verdict.ready).toEqual([{ id: 't-g', title: 'Ship the fix' }]);
+    expect(verdict.held).toEqual({ 'goal-triage': 2 });
+  });
+
+  it('reports an out-of-band row as backlog, not goal-triage', () => {
+    // The two band verdicts are mutually exclusive, and `backlog` is checked
+    // first. A row outside every band has no band to be in triage, so a flag
+    // set on it must not change the answer.
+    const verdict = evaluateReadyWork([row({ inGoalBand: false, goalInTriage: true })], probes());
+
+    expect(verdict.held).toEqual({ backlog: 1 });
   });
 });
