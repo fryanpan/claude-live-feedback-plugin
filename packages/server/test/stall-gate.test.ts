@@ -46,7 +46,9 @@ function evaluate(
     reviewItems: over.reviewItems ?? [],
     bands,
     now,
-    ...(over.unreadableReviewTaskIds ? { unreadableReviewTaskIds: over.unreadableReviewTaskIds } : {}),
+    ...(over.unreadableReviewTaskIds
+      ? { unreadableReviewTaskIds: over.unreadableReviewTaskIds }
+      : {}),
     ...(over.quietMs !== undefined ? { quietMs: over.quietMs } : {}),
   });
 }
@@ -64,7 +66,9 @@ describe('a row that has gone quiet is named', () => {
 
   it('names a todo row that nothing has picked up', () => {
     const verdict = evaluate({
-      tasks: [task({ id: 't-1', status: 'todo', transitions: [{ ts: now - 90 * MIN, to: 'todo' }] })],
+      tasks: [
+        task({ id: 't-1', status: 'todo', transitions: [{ ts: now - 90 * MIN, to: 'todo' }] }),
+      ],
     });
     expect(verdict.stalled[0]?.bucket).toBe('ready-unpicked');
   });
