@@ -105,11 +105,11 @@ describe('readyIdleLine states what the pass examined', () => {
       ...IDLE,
       readyCount: 1,
       consideredCount: 5,
-      held: { 'awaiting-person': 2, parked: 1, blocked: 1 },
+      held: { 'awaiting-person': 2, backlog: 1, blocked: 1 },
     });
     expect(line).toContain('5 open rows checked');
     expect(line).toContain('2 awaiting-person');
-    expect(line).toContain('1 parked');
+    expect(line).toContain('1 backlog');
     expect(line).toContain('1 blocked');
   });
 
@@ -173,7 +173,7 @@ describe('readyIdleLine states what the pass examined', () => {
     const line = readyIdleLine({
       ...IDLE,
       consideredCount: 6,
-      held: { parked: 2 },
+      held: { backlog: 2 },
       undetermined: { count: 1, reasons: ['review-items-unreadable'] },
     });
     expect(line.endsWith('Take the top of the queue with next_tasks / task_transition.')).toBe(
