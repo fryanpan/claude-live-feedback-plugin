@@ -26,6 +26,7 @@
  * unit-tested); this file is the CLI: fetch, format, print.
  *
  * Usage: bun scripts/keep-moving-report.ts [--base URL] [--ws ID] [--json]
+ * The workspace is required: --ws, or FEEDBACK_WORKSPACE_ID in the env.
  * Read-only GETs only. Safe on prod.
  */
 
@@ -54,7 +55,14 @@ async function main(): Promise<void> {
     return i >= 0 ? process.argv[i + 1] : undefined;
   };
   const base = arg('base') ?? 'http://localhost:8787';
-  const ws = arg('ws') ?? 'w-DRa7BgNaZkqh';
+  // No hard-coded board. This repo is public, and a workspace id in a
+  // checked-in default is somebody's live board named in the open.
+  const ws = arg('ws') ?? process.env.FEEDBACK_WORKSPACE_ID;
+  if (!ws) {
+    console.error('pass --ws <workspaceId>, or set FEEDBACK_WORKSPACE_ID');
+    process.exitCode = 2;
+    return;
+  }
   const stallMs = Number(arg('stall-hours') ?? '4') * 3_600_000;
   const now = Date.now();
 
@@ -169,7 +177,7 @@ async function main(): Promise<void> {
       lines.push(`- ${r.id} [${r.bucket}]${via} waiting ${fmt(r.ageMs)} — ${r.title.slice(0, 80)}`);
     }
   }
-  // Old filed asks rot: t-BX3kTEZ6M7vY sat "waiting on Bryan" behind two PRs
+  // Old filed asks rot: one measured row sat "waiting on Bryan" behind two PRs
   // that had already merged. Visible, but not a verdict failure.
   const AGING_ASK_MS = 7 * 86_400_000;
   const aging = rows.filter((r) => (r.askAgeMs ?? 0) > AGING_ASK_MS);
