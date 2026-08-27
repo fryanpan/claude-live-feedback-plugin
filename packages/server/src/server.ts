@@ -1276,6 +1276,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const ownerBand = new Set(
       goals.filter((g) => /decision/i.test(`${g.id} ${g.title}`)).map((g) => g.id),
     );
+    // A band nobody has agreed to yet dispatches nothing under it, so a row
+    // sitting there is idle BY RULE and must not read as stalled — the same
+    // verdict `backlog` carries, and the same one the ready gate reads as
+    // `goal-triage`. The status lives on the goal ROWS; the ordered goal list
+    // does not carry one.
+    const triageGoals = new Set(
+      taskStore
+        .listGoalRows(workspace.id)
+        .filter((g) => g.status === 'triage')
+        .map((g) => g.id),
+    );
     // A board that declares NO goals has no bands, so nothing on it is
     // backlog — `inGoalBand` in task-queue.ts states the same rule, and the
     // never-dispatch rule ranks rows against the goal list, so with no list
@@ -1285,7 +1296,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const dispatchable =
       goals.length === 0
         ? new Set(tasks.map((t) => t.goal))
-        : new Set(goals.map((g) => g.id).filter((id) => !ownerBand.has(id)));
+        : new Set(
+            goals.map((g) => g.id).filter((id) => !ownerBand.has(id) && !triageGoals.has(id)),
+          );
 
     const rows = tasks.map((t) => ({
       id: t.id,

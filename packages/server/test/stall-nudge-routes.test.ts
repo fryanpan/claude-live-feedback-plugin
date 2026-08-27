@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { STALL_EVENT } from '../src/stall-nudge.ts';
+import { seedGoalsOverHttp } from './goal-seed.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
 const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
@@ -345,6 +346,58 @@ describe('the board tells its lead which rows have stopped', () => {
 
     expect(got).toHaveLength(1);
     expect(rowsOf(got[0] as Frame).map((r) => r.id)).toEqual([freeId]);
+
+    await ctx.lead.stop();
+    await ctx.tab.stop();
+  });
+
+  /**
+   * The loop, over a board that HAS goals — and specifically one band nobody
+   * has agreed to yet.
+   *
+   * A band in triage dispatches nothing under it, so a row sitting there is
+   * idle BY RULE and naming it as stalled would tell the lead to go and drive
+   * work the board has not decided to do. The band's status lives on the goal
+   * ROWS; the ordered goal list carries none, so this is the one path that
+   * proves the snapshot goes and reads them.
+   *
+   * The control row is moved into the AGREED band rather than left without
+   * one: on a board that has bands, a row with no goal is formal backlog and
+   * would be withheld too, so a silent pass over it would prove nothing about
+   * triage in particular.
+   */
+  it('leaves a row alone while its goal is still in triage', async () => {
+    const ctx = await boardWithLead();
+    const G = await seedGoalsOverHttp(
+      base,
+      ctx.workspaceId,
+      [
+        { key: 'pending', title: 'Rebuild the ranker' },
+        { key: 'agreed', title: 'Fix the crawler' },
+      ],
+      PERSON,
+      { leaveInTriage: true },
+    );
+    await jj(
+      await post(`/api/tasks/${G.agreed}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId: ctx.workspaceId,
+      }),
+    );
+
+    const pendingId = await addRow(ctx.workspaceId, 'Rank results by recency');
+    await jj(await post(`/api/tasks/${pendingId}/goal`, { goal: G.pending, author: PERSON }));
+    const freeId = await addRow(ctx.workspaceId, 'Cache the facet counts');
+    await jj(await post(`/api/tasks/${freeId}/goal`, { goal: G.agreed, author: PERSON }));
+    await settle();
+
+    handle.nudgeStalls();
+    const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+
+    expect(got).toHaveLength(1);
+    expect(rowsOf(got[0] as Frame).map((r) => r.id)).toEqual([freeId]);
+    expect(got[0]?.data?.consideredCount).toBe(2);
 
     await ctx.lead.stop();
     await ctx.tab.stop();
