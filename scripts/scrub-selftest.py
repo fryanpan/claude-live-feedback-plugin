@@ -64,7 +64,15 @@ projects:
     mentionable: true
 """
 
-DENYLIST = f"# fixture denylist\n{DENY_TOKEN}\n{PUBLIC_TOKEN}\n{NEW_TOKEN}\n"
+DENYLIST = (
+    f"# fixture denylist\n{DENY_TOKEN}\n{PUBLIC_TOKEN}\n{NEW_TOKEN}\n"
+    # Both regex spellings people actually write. The delimited form shipped
+    # broken for weeks: only the LEADING slash was stripped, so every
+    # /pattern/ compiled with a literal trailing `/` and matched nothing —
+    # the gate reported clean while its regex entries were blind.
+    "/zonkey-[0-9]{3}/\n"
+    "/quagga-[0-9]+\n"
+)
 
 failures: list[str] = []
 
@@ -543,6 +551,18 @@ def main() -> int:
 
         r = run([denied], registry, denylist)
         expect("catches a denylist pattern", r.returncode, 1, r.stderr)
+
+        # Regex entries, both spellings. The delimited one is the regression
+        # pin for the trailing-slash bug; the open one proves the regex branch
+        # itself works, so a delimited failure indicts the delimiter handling
+        # and nothing else.
+        regex_delim = fixture("regex-delim.md", "an id like zonkey-742 appears here\n")
+        r = run([regex_delim], registry, denylist)
+        expect("catches a /…/-delimited denylist regex", r.returncode, 1, r.stderr)
+
+        regex_open = fixture("regex-open.md", "an id like quagga-99 appears here\n")
+        r = run([regex_open], registry, denylist)
+        expect("catches a leading-slash-only denylist regex", r.returncode, 1, r.stderr)
 
         # public: true must suppress. Without this the gate fires on nearly
         # every push and trains people into SCRUB_SKIP=1.
