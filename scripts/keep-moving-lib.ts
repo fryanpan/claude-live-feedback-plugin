@@ -73,14 +73,14 @@ export interface Classified {
   parkedReason?: string;
   /** blocked-on-owner only: ms since the NEWEST pending review item was
    *  filed. Old asks go on the "re-verify the blocker is still real" list —
-   *  measured: t-BX3kTEZ6M7vY waited on two PRs that had already merged. */
+   *  measured: a live row waited on two PRs that had already merged. */
   askAgeMs?: number;
   /** blocked-on-dependency only: the far end of the `after` chain — the row
    *  the whole chain is actually waiting on, and what state it is in. */
   terminal?: { id: string; label: string };
   /** TRUE means this row is waiting on the owner with NO pending review item
    *  anywhere on its chain's terminal — an ask that exists only in someone's
-   *  head. Bryan cannot see it on his Home queue, so it counts toward FAIL
+   *  head. The owner cannot see it on the Home queue, so it counts toward FAIL
    *  (7 of 10 "blocked-on-owner" rows on the 08-27 "PASS" board were this). */
   unfiledAsk: boolean;
 }
@@ -142,7 +142,7 @@ export function classifyOpenTasks(
       now -
       Math.max(enteredStatusAt(t), lastEventByTask.get(t.id) ?? 0, threadActivity?.get(t.id) ?? 0);
     // A row parked into the future is deliberately deferred — it must never
-    // read as stalled (measured false-FAIL: t-FbXgQ6m9e-et, parked to
+    // read as stalled (measured false-FAIL: a live row, parked to
     // 2026-08-28, reported "ready-unpicked stalled" at 07:59Z).
     const parked = t.parkedUntil != null && t.parkedUntil > now;
     // Precedence: pending-item owner-block > parked > unfiled owner-block.
@@ -153,16 +153,16 @@ export function classifyOpenTasks(
     // is preserved either way.
     //
     // Owner-blocked is only LEGITIMATE waiting when a pending review item
-    // exists — that is what puts the ask on Bryan's Home queue. A
+    // exists — that is what puts the ask on the owner's Home queue. A
     // person-owned row (`ownerKind === 'person'`, the server's authoritative
     // call) or an owner-band row with NO pending item is an ask that exists
     // nowhere he reads: blocked-on-owner-unfiled, a protocol violation that
-    // counts toward FAIL (Bryan's 08-27 review: 7 of 10 "blocked-on-owner"
+    // counts toward FAIL (the owner's 08-27 review: 7 of 10 "blocked-on-owner"
     // rows were invisible on his queue).
     //
     // But a park OUTRANKS the unfiled bucket: a person-owned row somebody
     // deliberately parked with a date and reason is a documented deferral,
-    // not a hidden ask (t-6KSlEc3s64Bb: naming explicitly deferred 08-18,
+    // not a hidden ask (measured: a decision the owner explicitly deferred,
     // parked for exactly that reason, was being nagged as an unfiled ask
     // forever). Nothing hides permanently — parks require a reason, and an
     // expired park resurfaces the row as unfiled.
@@ -174,7 +174,7 @@ export function classifyOpenTasks(
       bucket = 'blocked-on-owner-unfiled';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
     else if (t.status === 'in-progress') bucket = 'in-progress';
-    // Bryan's rule (2026-08-22): the backlog is NOT auto-dispatched — goal
+    // The standing owner rule (2026-08-22): the backlog is NOT auto-dispatched — goal
     // bands run in priority order, everything else waits for a person to
     // rank it. A ticket in a band the goal list does not name is idle BY
     // RULE, so it must not read as a protocol failure — but the bucket is
@@ -201,7 +201,7 @@ export function classifyOpenTasks(
   }
   // Second pass: attribute each dependency chain to its TERMINAL blocker —
   // the row the whole chain is actually waiting on. "after t-X" is only half
-  // an answer when t-X is itself waiting on Bryan; and a chain that bottoms
+  // an answer when t-X is itself waiting on the owner; and a chain that bottoms
   // out in an UNFILED ask is an unfiled ask for every row behind it too.
   //
   // Two Codex findings on #396 shape the walk:

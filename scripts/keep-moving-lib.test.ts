@@ -70,11 +70,11 @@ describe('keep-moving classification', () => {
   });
 });
 
-// The four measured false-FAIL gaps (board task t-heInRFyyCfNs, 2026-08-27).
+// The four measured false-FAIL gaps (2026-08-27).
 // Each failed against the pre-fix logic — the red run is in the PR body.
 describe('keep-moving false-FAIL gaps', () => {
   it('gap 1: a person-owned row is blocked-on-owner, never a dark in-progress row', () => {
-    // Measured: t-Q6DTQn05IMPo (assignee "human", server ownerKind "person")
+    // Measured live: a row with assignee "human" (server ownerKind "person")
     // reported as a dark in-progress row.
     // Amended for the unfiled-ask round: person-owned WITH a pending item is
     // legitimately waiting; without one it is an unfiled ask (tested below).
@@ -91,7 +91,7 @@ describe('keep-moving false-FAIL gaps', () => {
   });
 
   it('gap 2: a fresh comment on the task thread resets the quiet clock', () => {
-    // Measured: t-9Ujf8EcjSpbR flagged 12.4h quiet on a day the whole decision
+    // Measured live: a row flagged 12.4h quiet on a day the whole decision
     // conversation was live on its task:<id> thread.
     const rows = classifyOpenTasks(
       [task({ id: 'a', status: 'in-progress', transitions: [{ ts: now - 20 * H }] })],
@@ -125,7 +125,7 @@ describe('keep-moving false-FAIL gaps', () => {
   });
 
   it('gap 4: a row parked into the future is parked, never stalled', () => {
-    // Measured 07:59Z: t-FbXgQ6m9e-et parked to 2026-08-28 (parkedUntil epoch
+    // Measured live: a row parked into the next day (parkedUntil epoch
     // ms) yet reported "ready-unpicked stalled".
     const rows = classifyOpenTasks(
       [task({ id: 'a', parkedUntil: now + 24 * H })],
@@ -156,7 +156,7 @@ describe('keep-moving false-FAIL gaps', () => {
 // Codex adversarial review of PR #394 — two P2 findings, tests written red-first.
 describe('codex P2 findings', () => {
   it('P2-1: a filed ask outranks a park — blocked-on-owner, not parked', () => {
-    // A parked row with an active ask on Bryan (filed review item, person
+    // A parked row with an active ask on the owner (filed review item, person
     // owner, or owner-band goal) must surface as blocked-on-owner; bucketing
     // it parked hides the ask. Same invariant the first test in this file
     // states: a filed ask outranks everything.
@@ -177,7 +177,7 @@ describe('codex P2 findings', () => {
     // item outranks a park (row above). A person-owned row with NO pending
     // item that someone deliberately parked with a date is a documented
     // deferral, not a hidden ask: it reads parked, and resurfaces as unfiled
-    // when the park expires (t-6KSlEc3s64Bb: naming explicitly deferred,
+    // when the park expires (measured: a decision the owner explicitly deferred,
     // parked for exactly that reason, was being nagged as an 8.7d unfiled ask).
     expect(byId.human?.bucket).toBe('parked');
     expect(byId.asked?.stalled).toBe(false);
@@ -206,9 +206,9 @@ describe('codex P2 findings', () => {
   });
 });
 
-// Round 3 (Bryan's review of the "PASS" board, task t-7xYQKpXUYV-7): the
+// Round 3 (the owner's review of the "PASS" board): the
 // board hid real failures — 7/10 owner-blocked rows had no filed review item,
-// and one "waiting on Bryan" blocker had cleared days earlier. Red-first.
+// and one waiting-on-owner blocker had cleared days earlier. Red-first.
 describe('unfiled asks, aging asks, parked presentation, terminal blockers', () => {
   it('owner-blocked without a pending review item is an unfiled ask and counts toward FAIL', () => {
     const rows = classifyOpenTasks(
@@ -233,7 +233,7 @@ describe('unfiled asks, aging asks, parked presentation, terminal blockers', () 
   });
 
   it('a filed ask carries its age, newest pending item wins', () => {
-    // Measured: t-BX3kTEZ6M7vY waited on two PRs that had merged days before;
+    // Measured: a row waited on two PRs that had merged days before;
     // nobody re-verified. Age makes the "re-verify" list possible.
     const rows = classifyOpenTasks(
       [task({ id: 'a' })],
