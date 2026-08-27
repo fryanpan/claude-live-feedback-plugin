@@ -305,6 +305,59 @@ describe('reviewGapAdvice — the advice half, which nothing used to read', () =
   });
 });
 
+describe('a review item has to be actionable from the card alone', () => {
+  // Bryan, 2026-08-27: "Why wasn't the question content with links in the
+  // review item, and i had to scroll down to the bottom of comments?" The
+  // agent had put the diff and the draft in the comment text and written
+  // `detail` as prose, so the Home card described work it gave no way to
+  // reach. The card renders `detail`; the comment lives somewhere the reader
+  // has to go looking for.
+  const linked = 'Diff is at [the review](/review/d-9fQ2) and the draft is [here](/docs/d-4kTx).';
+
+  it('advises when every link is in the comment and none in the detail', () => {
+    const c = checkReviewPayload(review(), { text: linked });
+    expect(c.ok).toBe(true);
+    expect(c.gaps).toContain('detailLinkless');
+  });
+
+  it('counts a bare URL in the comment as a link the card is missing', () => {
+    const c = checkReviewPayload(review(), { text: 'Diff: https://example.invalid/review/d-9fQ2' });
+    expect(c.gaps).toContain('detailLinkless');
+  });
+
+  // The absence assertions, which are what make the two above non-vacuous: a
+  // gap pushed unconditionally would satisfy both.
+  it('says nothing when the detail carries the link itself', () => {
+    const c = checkReviewPayload(review({ detail: `Read it. ${linked}` }), { text: linked });
+    expect(c.gaps).toEqual([]);
+  });
+
+  it('says nothing when the comment had no links to move', () => {
+    const c = checkReviewPayload(review(), { text: 'Both screens are built.' });
+    expect(c.gaps).toEqual([]);
+  });
+
+  it('says nothing when no comment accompanied the payload', () => {
+    // A ticket-borne item has no comment text at all, so there is nothing to
+    // compare against and nothing to advise.
+    expect(checkReviewPayload(review()).gaps).toEqual([]);
+  });
+
+  it('asks for a body once, not twice, when the body is missing entirely', () => {
+    // `detail` already says "write one"; adding "and put the links in it"
+    // would be the same instruction in two voices.
+    const c = checkReviewPayload(review({ detail: undefined }), { text: linked });
+    expect(c.gaps).toEqual(['detail']);
+  });
+
+  it('reads as filed, names the field, and says where the reader acts', () => {
+    const advice = reviewGapAdvice(['detailLinkless']) ?? '';
+    expect(advice).toContain('review.detail');
+    expect(advice).toContain('Filed.');
+    expect(advice).not.toContain('cannot be filed');
+  });
+});
+
 describe('readReviewPayload — loose on the way out, so nothing already stored vanishes', () => {
   it('round-trips a full payload', () => {
     const p = decision() as ReviewPayload;
