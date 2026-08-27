@@ -145,25 +145,33 @@ export function classifyOpenTasks(
     // read as stalled (measured false-FAIL: t-FbXgQ6m9e-et, parked to
     // 2026-08-28, reported "ready-unpicked stalled" at 07:59Z).
     const parked = t.parkedUntil != null && t.parkedUntil > now;
-    // Owner-blocking is evaluated BEFORE parking: a filed ask outranks every
-    // other state (the first test in the suite), so a parked row with an
-    // active ask on Bryan surfaces as blocked-on-owner rather than having
-    // the ask hidden behind 'parked'. Neither bucket ever stalls, so the
-    // parked guarantee is preserved either way.
+    // Precedence: pending-item owner-block > parked > unfiled owner-block.
     //
-    // But owner-blocked is only LEGITIMATE waiting when a pending review
-    // item exists — that is what puts the ask on Bryan's Home queue. A
+    // A PENDING review item outranks a park (the P2-1 invariant: an ACTIVE
+    // ask never hides — it surfaces as blocked-on-owner rather than sitting
+    // behind 'parked'). Neither bucket ever stalls, so the parked guarantee
+    // is preserved either way.
+    //
+    // Owner-blocked is only LEGITIMATE waiting when a pending review item
+    // exists — that is what puts the ask on Bryan's Home queue. A
     // person-owned row (`ownerKind === 'person'`, the server's authoritative
     // call) or an owner-band row with NO pending item is an ask that exists
     // nowhere he reads: blocked-on-owner-unfiled, a protocol violation that
     // counts toward FAIL (Bryan's 08-27 review: 7 of 10 "blocked-on-owner"
     // rows were invisible on his queue).
+    //
+    // But a park OUTRANKS the unfiled bucket: a person-owned row somebody
+    // deliberately parked with a date and reason is a documented deferral,
+    // not a hidden ask (t-6KSlEc3s64Bb: naming explicitly deferred 08-18,
+    // parked for exactly that reason, was being nagged as an unfiled ask
+    // forever). Nothing hides permanently — parks require a reason, and an
+    // expired park resurfaces the row as unfiled.
     const hasPendingAsk = askedTaskIds.has(t.id);
     let bucket: Bucket;
     if (hasPendingAsk) bucket = 'blocked-on-owner';
+    else if (parked) bucket = 'parked';
     else if (t.ownerKind === 'person' || bands.ownerBand.has(t.goal ?? ''))
       bucket = 'blocked-on-owner-unfiled';
-    else if (parked) bucket = 'parked';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
     else if (t.status === 'in-progress') bucket = 'in-progress';
     // Bryan's rule (2026-08-22): the backlog is NOT auto-dispatched — goal
@@ -195,37 +203,48 @@ export function classifyOpenTasks(
   // the row the whole chain is actually waiting on. "after t-X" is only half
   // an answer when t-X is itself waiting on Bryan; and a chain that bottoms
   // out in an UNFILED ask is an unfiled ask for every row behind it too.
+  //
+  // Two Codex findings on #396 shape the walk:
+  //  - EVERY unmet branch is traversed (P1): a row with several `after` edges
+  //    is unfiled when ANY branch ends unfiled — inspecting only the first
+  //    branch produced a false PASS.
+  //  - Only a dependency-blocked intermediate is transparent (P2): a dep that
+  //    is itself owner-blocked / unfiled / parked / in-progress IS the
+  //    effective blocker, so the walk stops there instead of naming a deeper
+  //    task and suppressing the intermediate's own state.
   const rowById = new Map(out.map((r) => [r.id, r]));
-  const firstUnmetOf = (task: TaskRow): TaskRow | undefined => {
-    for (const dep of task.after ?? []) {
-      const d = byId.get(dep);
-      if (d !== undefined && d.status !== 'done') return d;
-    }
-    return undefined;
-  };
   for (const r of out) {
     if (r.bucket !== 'blocked-on-dependency') continue;
     const visited = new Set<string>([r.id]);
-    let cur = byId.get(r.id);
-    let terminalTask: TaskRow | undefined;
-    while (cur) {
-      const next = firstUnmetOf(cur);
-      if (!next) {
-        terminalTask = cur === byId.get(r.id) ? undefined : cur;
-        break;
+    const terminals: TaskRow[] = [];
+    let cycleNode: TaskRow | undefined;
+    const walk = (task: TaskRow): void => {
+      for (const dep of task.after ?? []) {
+        const d = byId.get(dep);
+        if (d === undefined || d.status === 'done') continue;
+        if (visited.has(d.id)) {
+          cycleNode ??= d; // cycle: remember where it loops rather than hanging
+          continue;
+        }
+        visited.add(d.id);
+        if (rowById.get(d.id)?.bucket === 'blocked-on-dependency') walk(d);
+        else terminals.push(d);
       }
-      if (visited.has(next.id)) {
-        terminalTask = next; // cycle: name where it loops rather than hanging
-        break;
-      }
-      visited.add(next.id);
-      cur = next;
-    }
-    if (!terminalTask) continue;
-    const terminalRow = rowById.get(terminalTask.id);
-    const label = terminalRow?.bucket ?? terminalTask.status;
-    r.terminal = { id: terminalTask.id, label };
-    if (terminalRow?.bucket === 'blocked-on-owner-unfiled') r.unfiledAsk = true;
+    };
+    const rootTask = byId.get(r.id);
+    if (rootTask) walk(rootTask);
+    const bucketOf = (task: TaskRow): Bucket | undefined => rowById.get(task.id)?.bucket;
+    const anyUnfiled = terminals.some((d) => bucketOf(d) === 'blocked-on-owner-unfiled');
+    // One terminal is displayed; the worst branch wins the slot: an unfiled
+    // ask, else a filed owner-block, else whatever came first.
+    const pick =
+      terminals.find((d) => bucketOf(d) === 'blocked-on-owner-unfiled') ??
+      terminals.find((d) => bucketOf(d) === 'blocked-on-owner') ??
+      terminals[0] ??
+      cycleNode;
+    if (!pick) continue;
+    r.terminal = { id: pick.id, label: bucketOf(pick) ?? pick.status };
+    if (anyUnfiled) r.unfiledAsk = true;
   }
   return out.sort((a, b) => b.sinceActivityMs - a.sinceActivityMs);
 }
