@@ -248,7 +248,8 @@ export interface ReplaceResult {
     | 'cross-node'
     | 'out-of-range'
     | 'occurrence-out-of-range'
-    | 'replace-all-with-occurrence';
+    | 'replace-all-with-occurrence'
+    | 'table-shape-mismatch';
   /** For ambiguous results, a short preview of each candidate's neighbourhood. */
   candidates?: Array<{ docOffset: number; preview: string }>;
   /** replaceAll only: how many occurrences were replaced. */
@@ -467,6 +468,14 @@ export function findAndReplace(
   const { matches, crossNode, plainText } = locateMatches(fragment, opts);
 
   if (matches.length === 0) {
+    // Table-row fallback (2026-08-26 incident): a find string quoted from the
+    // doc's MARKDOWN form — `| Alpha | 2 | … |` — can never match the
+    // flattened text, because pipes and padding are serializer output, not
+    // document content. Match those structurally instead of leaving the
+    // caller a bare no-match whose recorded next move was a whole-doc
+    // rewrite from a stale copy.
+    const tableRes = tryTableRowReplace(doc, fragment, opts);
+    if (tableRes) return tableRes;
     if (crossNode > 0) return { ok: false, error: 'cross-node' };
     const hint = noMatchHint(plainText, opts);
     return hint ? { ok: false, error: 'no-match', hint } : { ok: false, error: 'no-match' };
@@ -544,6 +553,211 @@ export function findAndReplace(
   }, opts.transactionOrigin ?? 'agent');
 
   return { ok: true, ...marksReport(marks.dropped) };
+}
+
+/** Table-row syntax, shared with the parser's heuristics: a line whose
+ *  content sits between a leading and a trailing pipe. */
+const TABLE_ROW_LINE = /^\s*\|.*\|\s*$/;
+const TABLE_SEP_LINE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/;
+
+/** Parse a string as pipe-table row(s): separator lines are dropped, every
+ *  other non-empty line must be a `| … |` row. Returns rows of trimmed
+ *  cells, or null when the string isn't table-shaped at all. */
+function parsePipeRows(s: string): string[][] | null {
+  const lines = s
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return null;
+  const rows: string[][] = [];
+  for (const line of lines) {
+    if (TABLE_SEP_LINE.test(line)) continue;
+    if (!TABLE_ROW_LINE.test(line)) return null;
+    rows.push(splitTableRow(line));
+  }
+  return rows.length > 0 ? rows : null;
+}
+
+/** Whitespace-normalized comparison form for a table cell: the serializer
+ *  pads cells for column alignment, and an agent quoting an older flush (or
+ *  typing the row by hand) pads differently. Runs of whitespace are one
+ *  space; edges are trimmed. */
+function normCell(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/** Every `table` element in the fragment, in document order (nested tables
+ *  included, though the parser only produces top-level ones today). */
+function collectTables(
+  node: Y.XmlFragment | Y.XmlElement,
+  out: Y.XmlElement[] = [],
+): Y.XmlElement[] {
+  for (const child of node.toArray()) {
+    if (child instanceof Y.XmlElement) {
+      if (child.nodeName === 'table') out.push(child);
+      else collectTables(child, out);
+    }
+  }
+  return out;
+}
+
+/** A row's cell elements (tableCell / tableHeader), in order. */
+function rowCells(row: Y.XmlElement): Y.XmlElement[] {
+  return row
+    .toArray()
+    .filter(
+      (c): c is Y.XmlElement =>
+        c instanceof Y.XmlElement && (c.nodeName === 'tableCell' || c.nodeName === 'tableHeader'),
+    );
+}
+
+/** A cell's text without mark syntax — raw delta inserts, recursively. */
+function rawCellText(node: Y.XmlElement): string {
+  let out = '';
+  for (const child of node.toArray()) {
+    if (child instanceof Y.XmlText) {
+      for (const op of child.toDelta() as Array<{ insert?: string }>) {
+        if (typeof op.insert === 'string') out += op.insert;
+      }
+    } else if (child instanceof Y.XmlElement) {
+      out += rawCellText(child);
+    }
+  }
+  return out;
+}
+
+/** Does this live row match one find row? Cell counts must agree, and each
+ *  find cell must equal the live cell's text — either its markdown form
+ *  (`**2**`, what the agent read from disk) or its plain form (`2`, what
+ *  get_doc's plainText shows) — up to whitespace. */
+function rowMatches(row: Y.XmlElement, findCells: string[]): boolean {
+  const cells = rowCells(row);
+  if (cells.length !== findCells.length) return false;
+  return cells.every((cell, i) => {
+    const want = normCell(findCells[i] ?? '');
+    return want === normCell(rawCellText(cell)) || want === normCell(textContent(cell));
+  });
+}
+
+const TABLE_NO_MATCH_WARNING =
+  'The find string looks like a markdown table row, but no row in this doc has ' +
+  'those cells. Do NOT fall back to set_doc_content — a whole-doc rewrite from ' +
+  'your copy destroys concurrent human edits. Re-read the doc with get_doc ' +
+  '(tables come back as blocks in their current form), then re-issue ' +
+  'find_and_replace with the current row, target the cell text alone, or use ' +
+  'edit_at_anchor / insert_blocks_at_anchor / delete_block_at_anchor for ' +
+  'structural changes.';
+
+/**
+ * Structural find/replace for pipe-table rows. Returns null when `find` is
+ * not table-shaped (the caller reports its normal no-match); otherwise a
+ * terminal ReplaceResult.
+ *
+ * Matching compares cells by text, whitespace-normalized, so the caller's
+ * padding never matters. The replacement must keep the find's shape (same
+ * rows, same cells per row) — changed cells are rewritten with inline
+ * markdown parsed, exactly as the table parser treats cell text; untouched
+ * cells keep their content, marks, and anchors.
+ */
+function tryTableRowReplace(
+  doc: Y.Doc,
+  fragment: Y.XmlFragment,
+  opts: {
+    find: string;
+    replace: string;
+    occurrence?: number;
+    replaceAll?: boolean;
+    transactionOrigin?: unknown;
+  },
+): ReplaceResult | null {
+  const findRows = parsePipeRows(opts.find);
+  if (!findRows) return null;
+
+  const replaceRows = parsePipeRows(opts.replace);
+  if (
+    !replaceRows ||
+    replaceRows.length !== findRows.length ||
+    replaceRows.some((r, i) => r.length !== (findRows[i]?.length ?? -1))
+  ) {
+    return {
+      ok: false,
+      error: 'table-shape-mismatch',
+      warning:
+        'The find matched table-row syntax, so the replace must be table rows of ' +
+        'the same shape (same row count, same cells per row). To add or remove ' +
+        'rows/columns use insert_blocks_at_anchor / delete_block_at_anchor — ' +
+        'not set_doc_content.',
+    };
+  }
+
+  // Greedy, non-overlapping scan per table, tables in document order.
+  const found: Array<{ rows: Y.XmlElement[] }> = [];
+  for (const table of collectTables(fragment)) {
+    const rows = table
+      .toArray()
+      .filter((n): n is Y.XmlElement => n instanceof Y.XmlElement && n.nodeName === 'tableRow');
+    let i = 0;
+    while (i + findRows.length <= rows.length) {
+      const span = rows.slice(i, i + findRows.length);
+      if (span.every((row, k) => rowMatches(row, findRows[k] ?? []))) {
+        found.push({ rows: span });
+        i += findRows.length;
+      } else {
+        i++;
+      }
+    }
+  }
+
+  if (found.length === 0) {
+    return { ok: false, error: 'no-match', warning: TABLE_NO_MATCH_WARNING };
+  }
+
+  let chosen: Array<{ rows: Y.XmlElement[] }>;
+  if (opts.replaceAll === true) {
+    chosen = found;
+  } else if (opts.occurrence != null) {
+    if (opts.occurrence < 1 || opts.occurrence > found.length) {
+      return { ok: false, error: 'occurrence-out-of-range' };
+    }
+    chosen = [found[opts.occurrence - 1] as { rows: Y.XmlElement[] }];
+  } else if (found.length > 1) {
+    return {
+      ok: false,
+      error: 'ambiguous',
+      candidates: found.map((m, idx) => ({
+        docOffset: idx,
+        preview: `| ${rowCells(m.rows[0] as Y.XmlElement)
+          .map((c) => normCell(textContent(c)))
+          .join(' | ')} |`,
+      })),
+    };
+  } else {
+    chosen = [found[0] as { rows: Y.XmlElement[] }];
+  }
+
+  doc.transact(() => {
+    for (const match of chosen) {
+      match.rows.forEach((row, r) => {
+        rowCells(row).forEach((cell, c) => {
+          const before = findRows[r]?.[c] ?? '';
+          const after = replaceRows[r]?.[c] ?? '';
+          // An unchanged cell is left alone — its marks and anchors survive.
+          if (normCell(before) === normCell(after)) return;
+          const p = new Y.XmlElement('paragraph');
+          if (after.length > 0) {
+            const t = new Y.XmlText();
+            insertDeltaInto(t, inlineMarksToDelta(after));
+            p.insert(0, [t]);
+          }
+          cell.delete(0, cell.length);
+          cell.insert(0, [p]);
+        });
+      });
+    }
+  }, opts.transactionOrigin ?? 'agent');
+
+  return opts.replaceAll === true ? { ok: true, replaced: chosen.length } : { ok: true };
 }
 
 /**
@@ -1437,9 +1651,17 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
 }
 
 function splitTableRow(line: string): string[] {
-  // Strip the optional leading/trailing pipe, then split on `|`.
-  const inner = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-  return inner.split('|').map((c) => c.trim());
+  // Strip the optional leading/trailing pipe, then split on UNESCAPED `|`
+  // only: `\|` is cell content — the serializer's escape for a literal
+  // pipe — so honoring it here is what makes parse invert serialize.
+  // Splitting on every `|` shredded such cells into fragments that could
+  // never round-trip or structurally match. The escape is removed from the
+  // cell text; the serializer puts it back on the way out.
+  const inner = line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/(?<!\\)\|$/, '');
+  return inner.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
 }
 
 function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {

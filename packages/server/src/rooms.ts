@@ -126,6 +126,15 @@ export interface DocRoom {
   webhookUrl?: string;
   /** incremented per webhook event. */
   seq: number;
+  /**
+   * Wall-clock time of the last prose edit that arrived over a live
+   * websocket — i.e. a person typing in the browser editor (agents write
+   * through HTTP routes, whose transactions carry string origins). Feeds
+   * `staleWriteCheck` so a whole-doc rewrite from an agent's stale
+   * in-context copy is refused instead of silently destroying their work.
+   * In-memory only: after a restart there are no live edits to protect yet.
+   */
+  lastHumanEditAt?: number;
 }
 
 /** A file leaf in the workspace tree (a single bound review doc). */
@@ -268,6 +277,14 @@ export function decideReconcile(args: {
  *  re-enters on its own transaction. */
 const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
 
+/** How long after a human's live edit an UNTRACKED caller's whole-doc
+ *  rewrite is refused (callers with a tracked read are judged by order,
+ *  not the clock). See `Rooms.staleWriteCheck`. */
+const STALE_WRITE_WINDOW_MS = 10 * 60_000;
+
+/** Backups kept per doc by `backupReplacedContent` before rotation. */
+const REPLACE_BACKUP_CAP = 20;
+
 /**
  * Rooms the HUB owns rather than the filesystem: the `ws:<workspaceId>`
  * board room and every `task:<taskId>` body room (§3.3). They are never
@@ -287,6 +304,16 @@ export function isHubOwnedRoom(docId: string): boolean {
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
   private fileBindings = new Map<string, FileBinding>();
+  /**
+   * docId → reader key → last time that reader fetched the doc's content
+   * (GET /api/docs/:id/content?reader=…). Pairs with `lastHumanEditAt` in
+   * `staleWriteCheck`: a reader whose last read predates the last human edit
+   * is holding a stale copy. In-memory, like the marker it is compared to.
+   */
+  private agentReads = new Map<string, Map<string, number>>();
+  /** Monotonic suffix so two backups in the same millisecond keep distinct,
+   *  lexicographically ordered names. */
+  private backupSeq = 0;
   /**
    * Readable alias → the doc id it was minted alongside.
    *
@@ -3058,6 +3085,81 @@ export class Rooms {
    * delete_doc → Write → create_review_doc dance — to approximate, both of
    * which raced the write-back and clobbered (2026-07-15, 2026-08-03).
    */
+  /** Record a human (browser-websocket) prose edit. Called by the wireEvents
+   *  observer; public so tests can pin the window policy without a socket. */
+  noteHumanEdit(docId: string, at: number = Date.now()): void {
+    const room = this.get(docId);
+    if (room) room.lastHumanEditAt = at;
+  }
+
+  /** Record that `reader` fetched this doc's content (their copy is current
+   *  as of `at`). Keyed by the author id the same caller sends on writes. */
+  noteAgentRead(docId: string, reader: string, at: number = Date.now()): void {
+    const key = this.get(docId)?.docId ?? docId;
+    let perDoc = this.agentReads.get(key);
+    if (!perDoc) {
+      perDoc = new Map();
+      this.agentReads.set(key, perDoc);
+    }
+    perDoc.set(reader, at);
+  }
+
+  /**
+   * Would a whole-doc rewrite from this caller clobber a human's recent
+   * edits? Returns `null` when the write is safe, else the evidence for a
+   * structured refusal.
+   *
+   * A caller with a tracked read is judged by ORDER: their last read must be
+   * newer than the last human edit, however long ago either happened. A
+   * caller the server has no read marker for (old bundle, no author) falls
+   * back to a 10-minute window after the last human edit — wide enough to
+   * cover a live co-editing session, narrow enough that routine rewrites of
+   * an idle doc keep working without new payload fields.
+   */
+  staleWriteCheck(
+    docId: string,
+    reader?: string,
+    now: number = Date.now(),
+  ): { humanEditedAt: number; lastReadAt?: number } | null {
+    const room = this.get(docId);
+    const humanEditedAt = room?.lastHumanEditAt;
+    if (humanEditedAt === undefined || !room) return null;
+    const lastReadAt = reader ? this.agentReads.get(room.docId)?.get(reader) : undefined;
+    if (lastReadAt !== undefined) {
+      return lastReadAt >= humanEditedAt ? null : { humanEditedAt, lastReadAt };
+    }
+    return now - humanEditedAt < STALE_WRITE_WINDOW_MS ? { humanEditedAt } : null;
+  }
+
+  /**
+   * Snapshot the markdown a whole-doc rewrite is about to replace into
+   * `<dataDir>/backups/<docId>/<ts>-<seq>.md`, rotating to a cap. Runs on
+   * EVERY accepted set_doc_content — including a confirmed overwrite — so
+   * "the guard was bypassed" is never the same event as "the words are
+   * gone". Backups are transient files: rotation hard-deletes the oldest.
+   * Never throws; the rewrite proceeds either way.
+   */
+  private backupReplacedContent(docId: string, content: string): string | null {
+    try {
+      const safeId = docId.replace(/[^A-Za-z0-9._-]/g, '_');
+      const dir = join(this.cfg.dataDir, 'backups', safeId);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      const seq = String(this.backupSeq++).padStart(6, '0');
+      const file = join(dir, `${Date.now()}-${seq}.md`);
+      writeFileSync(file, content);
+      const entries = readdirSync(dir)
+        .filter((f) => f.endsWith('.md'))
+        .sort();
+      for (const stale of entries.slice(0, Math.max(0, entries.length - REPLACE_BACKUP_CAP))) {
+        rmSync(join(dir, stale), { force: true });
+      }
+      return file;
+    } catch (err) {
+      console.error(`[rooms] set_doc_content backup failed for ${docId}:`, err);
+      return null;
+    }
+  }
+
   setDocContent(
     docId: string,
     markdown: string,
@@ -3076,6 +3178,9 @@ export class Rooms {
     }
     if (blocks.length === 0) return { ok: false, error: 'empty' };
     const fragment = prose.getProseFragment(room.ydoc);
+    // Backup-on-replace: whatever the doc holds right now survives this
+    // rewrite on disk, whoever wrote it and whatever the caller believed.
+    this.backupReplacedContent(docId, prose.serializeFragmentToMarkdown(fragment));
     // A doc-side edit origin (NOT 'file-watch'): the write-back observer must
     // see this and flush it to disk like any other agent edit.
     room.ydoc.transact(() => {
@@ -3828,6 +3933,17 @@ export class Rooms {
     const fragment = prose.getProseFragment(room.ydoc);
     let reanchorTimer: ReturnType<typeof setTimeout> | null = null;
     fragment.observeDeep((_events, tr) => {
+      // A prose transaction whose origin is one of this room's live
+      // websockets is a person typing in the browser editor — every
+      // server-side writer stamps a string origin instead. That marker is
+      // what stops set_doc_content from silently rewriting over them.
+      if (
+        typeof tr.origin === 'object' &&
+        tr.origin !== null &&
+        room.conns.has(tr.origin as FeedbackWs)
+      ) {
+        room.lastHumanEditAt = Date.now();
+      }
       // Don't re-enter on our own re-anchor writes. NOTE: 'file-watch' must
       // NOT be skipped here — a disk reparse is exactly when anchors inside a
       // rewritten block break, and this sweep is what recovers them. Adding

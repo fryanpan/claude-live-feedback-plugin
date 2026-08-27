@@ -14367,7 +14367,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.112";
+var PLUGIN_VERSION = "0.1.113";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -14394,7 +14394,15 @@ var server = new Server({
     "for comment-anchored edits, and set_doc_content(docId, markdown) for a",
     "COMPREHENSIVE REWRITE of the whole doc (do NOT Write the file + reparse,",
     "and do NOT delete_doc + Write + re-create — both race the flush and both",
-    "have destroyed content in the field). External edits (VS Code, git pull)",
+    "have destroyed content in the field). NEVER use set_doc_content on a doc a",
+    "human is reviewing or editing: a scoped request (a comment, one section)",
+    "gets a scoped edit — find_and_replace (table rows match in pipe syntax),",
+    "rewrite_thread_region, edit_at_anchor — and a whole-doc rewrite built from",
+    "an earlier read destroys their concurrent edits. The server refuses such a",
+    "write with 409 stale-write naming the human-edit time; re-read with",
+    "get_doc, re-apply your change onto the CURRENT content, and only retry",
+    "with confirmOverwriteHumanEdits: true if a full rewrite is truly needed.",
+    "External edits (VS Code, git pull)",
     "flow back into the live doc via the file poll when LF is idle; if you wrote",
     "to a bound file externally and need to be sure it landed, call",
     "reparse_from_disk(docId) to force-pull from disk. If an edit response or",
@@ -14687,12 +14695,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "set_doc_content",
-      description: "Replace a whole doc with new markdown — the safe path for a comprehensive rewrite. Applies as a block-level diff, so untouched blocks keep their comment threads. Use this rather than writing the bound file or deleting and re-creating the doc; both race the write-back and both have destroyed content. On a task body prefer rewrite_task, which also retitles and carries a reason. Refuses an empty document.",
+      description: "Replace a whole doc with new markdown — the safe path for a comprehensive rewrite, and a LAST resort while a human is in the doc: a scoped request gets a scoped tool (find_and_replace, rewrite_thread_region, edit_at_anchor), never a full rewrite from your in-context copy. If a human edited after your last read the server refuses with 409 stale-write (their edit time included) — re-read with get_doc, re-apply your change onto the current content, and only then retry with confirmOverwriteHumanEdits: true. Every accepted rewrite first backs up the replaced markdown under the server data dir. Applies as a block-level diff, so untouched blocks keep their comment threads. Use this rather than writing the bound file or deleting and re-creating the doc; both race the write-back and both have destroyed content. On a task body prefer rewrite_task, which also retitles and carries a reason. Refuses an empty document.",
       inputSchema: {
         type: "object",
         properties: {
           docId: { type: "string" },
-          markdown: { type: "string", description: "Full replacement markdown for the doc." }
+          markdown: { type: "string", description: "Full replacement markdown for the doc." },
+          confirmOverwriteHumanEdits: {
+            type: "boolean",
+            description: "Acknowledge a 409 stale-write refusal AFTER re-reading the doc and re-applying your change onto its current content. Never pass it pre-emptively — it disables the guard that keeps a stale copy from destroying a human’s concurrent edits."
+          }
         },
         required: ["docId", "markdown"]
       }
@@ -14975,7 +14987,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "find_and_replace",
-      description: "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it.",
+      description: "Replace plain text in a doc with other plain text. find matches the doc's plain text, not markdown — marks are preserved automatically. Exception: a find that IS pipe-table row syntax (| a | b |) matches table rows structurally, cells compared by text with whitespace ignored, so a row quoted from the .md works; the replace must keep the same row/cell shape. Disambiguate repeats with contextBefore / contextAfter or occurrence, or pass replaceAll for a mechanical sweep. A no-match returns a hint quoting the doc's actual characters; copy the find from that rather than guessing. Pass parseInlineMarks to read markdown in replace as real marks, and suggest: true to propose the edit instead of applying it.",
       inputSchema: {
         type: "object",
         properties: {
@@ -16110,7 +16122,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "get_doc": {
         const { docId } = a;
-        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content`);
+        const res = await http("GET", `/api/docs/${encodeURIComponent(docId)}/content?reader=${encodeURIComponent(AUTHOR.id)}`);
         return ok(res);
       }
       case "doc_status": {
@@ -16133,10 +16145,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case "set_doc_content": {
-        const { docId, markdown } = a;
+        const { docId, markdown, confirmOverwriteHumanEdits } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/content`, {
           markdown,
-          author: AUTHOR
+          author: AUTHOR,
+          ...confirmOverwriteHumanEdits === true ? { confirmOverwriteHumanEdits: true } : {}
         });
         return ok(res);
       }
