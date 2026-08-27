@@ -275,13 +275,13 @@ describe('rows still carrying the removed parked state', () => {
   it('moves them to triage, writes the date and reason into a comment, and clears the fields', async () => {
     seedSidecar([
       {
-        id: 't-legacy-dated',
+        id: 't-dated',
         status: 'todo',
         parkedUntil: Date.UTC(2026, 7, 28),
         parkedReason: 'Re-parked after un-parking prematurely — the reload path is still refused',
       },
-      { id: 't-legacy-bare', status: 'todo', parkedReason: 'below the main flow' },
-      { id: 't-never-parked', status: 'todo' },
+      { id: 't-bare', status: 'todo', parkedReason: 'below the main flow' },
+      { id: 't-plain', status: 'todo' },
     ]);
     const handle = createServer({ port: 0, dataDir });
     const at = `http://localhost:${handle.port}`;
@@ -290,22 +290,22 @@ describe('rows still carrying the removed parked state', () => {
       expect(res.skipped).toEqual([]);
       // The untouched row is the control: a migration that swept every row
       // would pass a bare count assertion.
-      expect(res.migrated.map((m) => m.taskId).sort()).toEqual(['t-legacy-bare', 't-legacy-dated']);
+      expect(res.migrated.map((m) => m.taskId).sort()).toEqual(['t-bare', 't-dated']);
 
       const { tasks } = (await (await fetch(`${at}/api/workspaces/w-legacy/tasks`)).json()) as {
         tasks: Array<Record<string, unknown>>;
       };
       const byId = new Map(tasks.map((t) => [t.id as string, t]));
-      expect(byId.get('t-legacy-dated')?.status).toBe('triage');
-      expect(byId.get('t-legacy-bare')?.status).toBe('triage');
-      expect(byId.get('t-never-parked')?.status).toBe('todo'); // control
+      expect(byId.get('t-dated')?.status).toBe('triage');
+      expect(byId.get('t-bare')?.status).toBe('triage');
+      expect(byId.get('t-plain')?.status).toBe('todo'); // control
       // The state is gone from the row — and it is gone because it moved, not
       // because it was dropped. The comment below is where it went.
-      expect('parkedUntil' in (byId.get('t-legacy-dated') as object)).toBe(false);
-      expect('parkedReason' in (byId.get('t-legacy-dated') as object)).toBe(false);
+      expect('parkedUntil' in (byId.get('t-dated') as object)).toBe(false);
+      expect('parkedReason' in (byId.get('t-dated') as object)).toBe(false);
 
       const { threads } = (await (
-        await fetch(`${at}/api/docs/${encodeURIComponent('task:t-legacy-dated')}/threads`)
+        await fetch(`${at}/api/docs/${encodeURIComponent('task:t-dated')}/threads`)
       ).json()) as { threads: Thread[] };
       const note = threads.flatMap((t) => t.comments.map((c) => c.text)).join('\n');
       // The date this row comes back is the thing a reader must not lose.
@@ -327,7 +327,7 @@ describe('rows still carrying the removed parked state', () => {
       // every note on the board at every restart.
       const { threads } = (await (
         await fetch(
-          `http://localhost:${handle.port}/api/docs/${encodeURIComponent('task:t-legacy-dated')}/threads`,
+          `http://localhost:${handle.port}/api/docs/${encodeURIComponent('task:t-dated')}/threads`,
         )
       ).json()) as { threads: Thread[] };
       expect(threads.flatMap((t) => t.comments).length).toBe(1);
