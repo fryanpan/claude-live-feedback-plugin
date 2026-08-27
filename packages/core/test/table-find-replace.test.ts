@@ -128,6 +128,64 @@ describe('find_and_replace on markdown table rows', () => {
     expect(res.warning).toContain('edit_at_anchor');
   });
 
+  it('matches a row whose cell carries inline marks, quoted in its serialized form', () => {
+    // The primary use case is pasting a row from the .md — and a marked cell
+    // serializes as `**2**` / `[label](url)`, not as its plain text.
+    const doc = mkDoc(
+      [
+        '| Name | Count | Link |',
+        '| --- | --- | --- |',
+        '| Alpha | **2** | [docs](https://x.test) |',
+      ].join('\n'),
+    );
+    const res = findAndReplace(doc, {
+      find: '| Alpha | **2** | [docs](https://x.test) |',
+      replace: '| Alpha | **2** (checked) | [docs](https://x.test) |',
+    });
+    expect(res.ok).toBe(true);
+    const out = serializeFragmentToMarkdown(getProseFragment(doc));
+    expect(out).toContain('**2**');
+    expect(out).toContain('(checked)');
+    expect(out).toContain('[docs](https://x.test)');
+  });
+
+  it('treats \\| as cell content, matching a row with a literal pipe by its on-disk form', () => {
+    // The serializer emits `a \| b` for a cell holding a literal pipe;
+    // splitting on every `|` would shred that into cells that can never
+    // match. Both the doc's own parse and the find/replace rows must honor
+    // the escape.
+    const md = ['| Name | Note |', '| --- | --- |', '| Alpha | a \\| b |'].join('\n');
+    const doc = mkDoc(md);
+    // The parse itself keeps the escaped pipe inside ONE cell…
+    expect(serializeFragmentToMarkdown(getProseFragment(doc))).toContain('a \\| b');
+    // …and a find quoting the serialized row matches it.
+    const res = findAndReplace(doc, {
+      find: '| Alpha | a \\| b |',
+      replace: '| Alpha | a \\| b (ok) |',
+    });
+    expect(res.ok).toBe(true);
+    const out = serializeFragmentToMarkdown(getProseFragment(doc));
+    expect(out).toContain('a \\| b (ok)');
+  });
+
+  it('a replacement can write a NEW literal pipe into a cell and it round-trips escaped', () => {
+    const doc = mkDoc(TABLE_DOC);
+    const res = findAndReplace(doc, {
+      find: '| Beta | 1 | second row |',
+      replace: '| Beta | 1 | x \\| y |',
+    });
+    expect(res.ok).toBe(true);
+    const out = serializeFragmentToMarkdown(getProseFragment(doc));
+    // In the doc the cell holds a literal `x | y`; the serializer escapes it.
+    expect(out).toContain('x \\| y');
+    // And the new serialized form matches on a follow-up find.
+    const again = findAndReplace(doc, {
+      find: '| Beta | 1 | x \\| y |',
+      replace: '| Beta | 1 | second row |',
+    });
+    expect(again.ok).toBe(true);
+  });
+
   it('plain cell-text finds keep working exactly as before', () => {
     const doc = mkDoc(TABLE_DOC);
     const res = findAndReplace(doc, { find: 'second row', replace: 'row two' });
