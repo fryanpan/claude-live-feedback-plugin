@@ -213,7 +213,15 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
   });
 
   it('a get_doc read AFTER the human edit clears the refusal for that reader', async () => {
-    await humanEdit();
+    // The human edit is stamped a full minute in the past — explicitly, not
+    // through the websocket — so the GET's own Date.now() stamp is STRICTLY
+    // newer no matter which millisecond it lands in. Racing two real stamps
+    // here made the test a coin flip on the same-tick boundary, which the
+    // unit suite below owns; this test owns the ROUTE wiring: the reader
+    // param records a read, and that read is what flips 409 to 200.
+    handle.rooms.noteHumanEdit('g1', Date.now() - 60_000);
+    const refused = await setContent({ markdown: '# Pre-read\n\nStale.\n', author: AGENT });
+    expect(refused.status).toBe(409);
     const read = await fetch(`${base}/api/docs/g1/content?reader=${AGENT.id}`);
     expect(read.ok).toBe(true);
     const res = await setContent({
@@ -224,15 +232,17 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
   });
 
   it('a read that PREDATES the human edit still refuses, and names both timestamps', async () => {
-    const read = await fetch(`${base}/api/docs/g1/content?reader=${AGENT.id}`);
-    expect(read.ok).toBe(true);
+    // Explicit distinct timestamps, for the same reason as above: this test
+    // asserts the refusal SHAPE when read < edit, not the clock boundary.
+    const readAt = Date.now() - 120_000;
+    handle.rooms.noteAgentRead('g1', AGENT.id, readAt);
     await humanEdit();
     const res = await setContent({ markdown: '# Stale\n\nOld copy.\n', author: AGENT });
     expect(res.status).toBe(409);
     expect(res.json.error).toBe('stale-write');
     expect(typeof res.json.humanEditedAt).toBe('number');
-    expect(typeof res.json.lastReadAt).toBe('number');
-    expect(res.json.lastReadAt as number).toBeLessThan(res.json.humanEditedAt as number);
+    expect(res.json.lastReadAt).toBe(readAt);
+    expect(readAt).toBeLessThan(res.json.humanEditedAt as number);
   });
 
   it("agent edits through the MCP tools don't trip the guard", async () => {
@@ -312,6 +322,24 @@ describe('Rooms.staleWriteCheck (10-minute fallback window)', () => {
     });
     rooms.noteHumanEdit('d1', now - 11 * 60_000);
     expect(rooms.staleWriteCheck('d1', undefined, now)).toBeNull();
+  });
+
+  it('a same-millisecond read and edit is a TIE — order unknowable — and a tie refuses', () => {
+    // Date.now() has millisecond resolution: a read and a human edit landing
+    // in the same tick carry no order at all. Treating the read as fresh
+    // (the old `>=`) made a human edit in that tick silently overwritable —
+    // and made the boundary a coin flip CI kept losing. The safe verdict for
+    // an unknowable order is refuse; a re-read one tick later clears it.
+    const now = Date.now();
+    rooms.noteAgentRead('d1', 'agent-x', now - 5_000);
+    rooms.noteHumanEdit('d1', now - 5_000);
+    expect(rooms.staleWriteCheck('d1', 'agent-x', now)).toEqual({
+      humanEditedAt: now - 5_000,
+      lastReadAt: now - 5_000,
+    });
+    // One millisecond of provable order is enough.
+    rooms.noteAgentRead('d1', 'agent-x', now - 4_999);
+    expect(rooms.staleWriteCheck('d1', 'agent-x', now)).toBeNull();
   });
 
   it('a tracked reader is judged by read-vs-edit order, not the clock', () => {

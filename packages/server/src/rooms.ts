@@ -3126,7 +3126,12 @@ export class Rooms {
     if (humanEditedAt === undefined || !room) return null;
     const lastReadAt = reader ? this.agentReads.get(room.docId)?.get(reader) : undefined;
     if (lastReadAt !== undefined) {
-      return lastReadAt >= humanEditedAt ? null : { humanEditedAt, lastReadAt };
+      // STRICTLY newer. Date.now() ticks in milliseconds, so a read and an
+      // edit in the same tick carry no order — `>=` called that tie "read is
+      // fresh" and let the write destroy an edit the caller provably never
+      // saw. A tie refuses; the caller's re-read lands a tick later and
+      // clears it. The no-human-edit happy path never reaches this line.
+      return lastReadAt > humanEditedAt ? null : { humanEditedAt, lastReadAt };
     }
     return now - humanEditedAt < STALE_WRITE_WINDOW_MS ? { humanEditedAt } : null;
   }
