@@ -36,7 +36,7 @@ export interface NudgePayload {
    * dependency-state gate, in which case the line simply does not claim one.
    */
   consideredCount?: number;
-  /** What the pass withheld and why — `{ 'awaiting-person': 2, parked: 1 }`.
+  /** What the pass withheld and why — `{ 'awaiting-person': 2, backlog: 1 }`.
    *  Absent rather than empty when nothing was held. */
   held?: Record<string, number>;
   /**
