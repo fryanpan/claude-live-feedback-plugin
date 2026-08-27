@@ -65,6 +65,27 @@ function zip(spec: SeedGoalSpec[], created: Array<{ id: string }>): GoalIds {
   return ids;
 }
 
+/**
+ * Whether the seeded bands come back ACTIVE.
+ *
+ * A goal created through `setGoalList` now lands in `triage`, and a triage
+ * band dispatches nothing under it. Almost every suite that seeds goals is
+ * asking for "a board with working bands" as a premise and then asserting
+ * something else entirely — ordering, blockers, presence — so the default
+ * here activates them. Without it those suites would all fail for a reason
+ * none of them is about, and the fix would be the same three lines copied
+ * into sixteen files.
+ *
+ * `leaveInTriage: true` opts out, for the suites where the triage state IS
+ * the subject. Tests that assert the MINT default itself must not use this
+ * helper at all — a seed that quietly moves the row is no witness to where
+ * the row started. Those call `setGoalList` directly
+ * (`goal-triage-default.test.ts`).
+ */
+export interface SeedGoalOpts {
+  leaveInTriage?: boolean;
+}
+
 /** Seed straight into the store. Throws on refusal — a seed that silently
  *  did nothing is how a suite ends up asserting against an empty board. */
 export function seedGoals(
@@ -72,6 +93,7 @@ export function seedGoals(
   workspaceId: string,
   spec: SeedGoalSpec[],
   actor: { id: string; name: string; kind?: string },
+  opts: SeedGoalOpts = {},
 ): GoalIds {
   const res = store.setGoalList(
     workspaceId,
@@ -79,7 +101,17 @@ export function seedGoals(
     { actor },
   );
   if (!res.ok) throw new Error(`seedGoals: setGoalList refused with ${res.error}`);
-  return zip(spec, res.created);
+  const ids = zip(spec, res.created);
+  if (!opts.leaveInTriage) {
+    for (const id of Object.values(ids)) {
+      const moved = store.transition(id, 'todo', { actor });
+      // Throws rather than ignoring: a seed whose activation silently failed
+      // hands the suite a triage band it believes is active, and every
+      // downstream assertion then fails somewhere far from the cause.
+      if (!moved.ok) throw new Error(`seedGoals: could not activate ${id} — ${moved.error}`);
+    }
+  }
+  return ids;
 }
 
 /** Seed over the real route, for suites that drive HTTP. */
@@ -88,6 +120,7 @@ export async function seedGoalsOverHttp(
   workspaceId: string,
   spec: SeedGoalSpec[],
   author: { id: string; name: string; kind?: string },
+  opts: SeedGoalOpts = {},
 ): Promise<GoalIds> {
   const res = await fetch(`${base}/api/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
     method: 'PUT',
@@ -96,5 +129,18 @@ export async function seedGoalsOverHttp(
   });
   if (!res.ok) throw new Error(`seedGoalsOverHttp: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { created: Array<{ id: string }> };
-  return zip(spec, body.created);
+  const ids = zip(spec, body.created);
+  if (!opts.leaveInTriage) {
+    for (const id of Object.values(ids)) {
+      const moved = await fetch(`${base}/api/tasks/${encodeURIComponent(id)}/transition`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'todo', author }),
+      });
+      if (!moved.ok) {
+        throw new Error(`seedGoalsOverHttp: could not activate ${id} — ${moved.status}`);
+      }
+    }
+  }
+  return ids;
 }

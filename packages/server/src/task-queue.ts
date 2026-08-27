@@ -69,6 +69,19 @@ export interface QueueRow {
    *  last, and never auto-dispatched, which is what the ready gate reads
    *  this field for. */
   inGoalBand: boolean;
+  /**
+   * True when this row's BAND is in triage — nobody has agreed to the goal
+   * yet, so nothing under it is auto-dispatched.
+   *
+   * The row is still listed, exactly as a backlog row is, and for the same
+   * reason: the ready gate has to be able to report it. See this module's
+   * note on why this is not the drop a triage TASK gets.
+   *
+   * False, never absent, and false is also what a caller that supplied no
+   * `goalRows` gets — the queue does not guess at a band's status from the
+   * goal list, which does not carry one.
+   */
+  goalInTriage: boolean;
   status: TaskStatus;
   assignee: string;
   needs?: 'action' | 'decision';
@@ -99,6 +112,20 @@ export interface QueueOpts {
   limit?: number;
   /** Keep hard-blocked rows. Off by default — the queue is what you can DO. */
   includeBlocked?: boolean;
+  /**
+   * The board's goal ROWS (`listGoalRows`), which is where a band's status
+   * lives — `goals` is the ordered LIST and carries none. Supply them and
+   * every row learns whether its band has been agreed to (`goalInTriage`).
+   *
+   * Optional, and an omission marks nothing rather than marking everything.
+   * That direction is deliberate: the failure it produces is work that stays
+   * visible, and the opposite would let one caller's missing argument empty
+   * every queue on the board. It is also why both shipped dispatch reads pass
+   * it and `goal-triage-dispatch.test.ts` asserts they do over the route —
+   * an option nobody passes is a gate that is always off underneath green
+   * unit tests.
+   */
+  goalRows?: readonly GoalRow[];
   /**
    * Comments on a task, by task id. Optional so `buildQueue` stays pure and
    * testable without a room store; a caller that omits it gets rows with no
@@ -156,6 +183,12 @@ export function buildQueue(
   opts: QueueOpts = {},
 ): QueueRow[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  // The bands nobody has agreed to. Built from the goal ROWS because the goal
+  // LIST carries no status; empty when the caller supplied none, which marks
+  // no row rather than every row (see `QueueOpts.goalRows`).
+  const triageGoals = new Set(
+    (opts.goalRows ?? []).filter((g) => g.status === 'triage').map((g) => g.id),
+  );
 
   // Finished work, and work nobody has vetted. `triage` is excluded HERE
   // rather than at the `includeBlocked` filter below, because those are two
@@ -216,6 +249,7 @@ export function buildQueue(
       goal: task.goal,
       goalTitle: goalTitleOf(goals, task.goal),
       inGoalBand: inGoalBand(goals, task.goal),
+      goalInTriage: triageGoals.has(task.goal),
       status: task.status,
       assignee: task.assignee,
       ...(task.needs !== undefined ? { needs: task.needs } : {}),
