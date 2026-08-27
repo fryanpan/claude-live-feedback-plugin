@@ -3,7 +3,14 @@
    (--threads-w, --hub-bottom-bar, --lf-suggest-*) stay with their component —
    only tokens that mean the same thing everywhere live here. New shared
    colors / spacing / radii get defined here, not as literals at the use
-   site. */
+   site.
+
+   Open Props trial (src/tokens.css, served at /app/tokens.css): every shell
+   links that file AFTER this one, and it remaps most of the color/shape
+   tokens below onto Open Props scale steps — so the values here are the
+   BASE the app falls back to without the trial layer, not necessarily what
+   renders. Keep defining tokens here first; add a mapping there only when
+   an Open Props step is faithful to the value. */
 :root {
   --fg: #1b1f23;
   --fg-muted: #6e7781;
@@ -1208,8 +1215,8 @@ body.hub-body {
 /* Recording. Same red as the board-wide dock's mic — one meaning, one colour,
    whichever mic you are holding. */
 .hub-quick-mic.voice-active {
-  background: #c53030;
-  border-color: #c53030;
+  background: var(--red-strong);
+  border-color: var(--red-strong);
   color: #fff;
 }
 .hub-quick-mic.voice-unavailable {
@@ -3010,13 +3017,13 @@ body.hub-body {
   font-size: 14px;
 }
 .hub-uptime-ok {
-  border-color: color-mix(in srgb, #2e8b57 40%, var(--border));
+  border-color: color-mix(in srgb, var(--green-strong) 40%, var(--border));
 }
 .hub-uptime-miss {
-  border-color: color-mix(in srgb, #c0392b 55%, var(--border));
+  border-color: color-mix(in srgb, var(--red-strong) 55%, var(--border));
 }
 .hub-uptime-miss .hub-uptime-label {
-  color: #c0392b;
+  color: var(--red-strong);
 }
 .hub-uptime-detail {
   color: var(--fg-muted);
@@ -4841,8 +4848,8 @@ a.hub-link-chip:hover {
    answer. `review-chrome.ts` no longer sets the class either — it had exactly
    this one consumer. */
 .voice-mic.voice-active {
-  background: #c53030;
-  border-color: #c53030;
+  background: var(--red-strong);
+  border-color: var(--red-strong);
   color: #fff;
 }
 /* Insecure origin: the mic cannot record here. Dimmed so it doesn't read as
