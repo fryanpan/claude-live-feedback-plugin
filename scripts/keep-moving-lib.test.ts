@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentActivityByHour, classifyOpenTasks } from './keep-moving-report.ts';
+import { agentActivityByHour, classifyOpenTasks } from './keep-moving-lib.ts';
 
 const H = 3_600_000;
 const now = 100 * H;
