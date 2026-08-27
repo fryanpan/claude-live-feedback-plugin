@@ -13,123 +13,30 @@
  *   blocked-on-dependency  an `after` edge names an unfinished task
  *   in-progress            picked up; STALLED if no transition/event recently
  *   ready-unpicked         todo, nothing blocking it — the protocol's debt
+ *   parked                 parkedUntil > now — deliberately deferred, never stalled
  *
  * For ready-unpicked it also answers "busy or not spawned": whether agents
  * were producing board events at all during the last hours. Activity
  * elsewhere means capacity was busy; silence means work was not spawned.
  *
+ * Classification/stall logic lives in scripts/keep-moving-lib.ts (pure,
+ * unit-tested); this file is the CLI: fetch, format, print.
+ *
  * Usage: bun scripts/keep-moving-report.ts [--base URL] [--ws ID] [--json]
- * Read-only: two GETs. Safe on prod.
+ * Read-only GETs only. Safe on prod.
  */
 
-export interface TaskRow {
-  id: string;
-  title: string;
-  status: string;
-  goal?: string;
-  after?: string[];
-  createdAt: number;
-  transitions?: Array<{ ts: number; to?: string; by?: { kind?: string; name?: string } }>;
-}
-export interface EventRow {
-  taskId?: string;
-  ts: number;
-  actor?: { kind?: string; name?: string };
-}
-export interface ReviewItemRow {
-  taskId?: string;
-  docId?: string;
-}
+import {
+  type Bucket,
+  type EventRow,
+  type ReviewItemRow,
+  type TaskRow,
+  agentActivityByHour,
+  classifyOpenTasks,
+  collectActivityTicks,
+} from './keep-moving-lib.ts';
 
-export type Bucket =
-  | 'blocked-on-owner'
-  | 'blocked-on-dependency'
-  | 'in-progress'
-  | 'ready-unpicked'
-  | 'backlog-unranked';
-
-export interface Classified {
-  id: string;
-  title: string;
-  bucket: Bucket;
-  /** ms in the current bucket (entered current status, or created). */
-  ageMs: number;
-  /** ms since ANY activity touched it (transition or board event). */
-  sinceActivityMs: number;
-  stalled: boolean;
-  blockers?: string[];
-}
-
-/** A ticket's own clock: when it entered its current status. */
-function enteredStatusAt(t: TaskRow): number {
-  const last = t.transitions?.[t.transitions.length - 1];
-  return last?.ts ?? t.createdAt;
-}
-
-export function classifyOpenTasks(
-  tasks: TaskRow[],
-  events: EventRow[],
-  reviewItems: ReviewItemRow[],
-  now: number,
-  stallMs: number,
-  bands: { dispatchable: Set<string>; ownerBand: Set<string> },
-): Classified[] {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const askedTaskIds = new Set(
-    reviewItems
-      .map((r) => r.taskId ?? (r.docId?.startsWith('task:') ? r.docId.slice(5) : undefined))
-      .filter((x): x is string => Boolean(x)),
-  );
-  const lastEventByTask = new Map<string, number>();
-  for (const e of events) {
-    if (e.taskId && e.ts > (lastEventByTask.get(e.taskId) ?? 0))
-      lastEventByTask.set(e.taskId, e.ts);
-  }
-  const out: Classified[] = [];
-  for (const t of tasks) {
-    if (t.status !== 'todo' && t.status !== 'in-progress') continue;
-    const unmet = (t.after ?? []).filter((dep) => {
-      const d = byId.get(dep);
-      return d !== undefined && d.status !== 'done';
-    });
-    const ageMs = now - enteredStatusAt(t);
-    const sinceActivityMs = now - Math.max(enteredStatusAt(t), lastEventByTask.get(t.id) ?? 0);
-    let bucket: Bucket;
-    if (askedTaskIds.has(t.id) || bands.ownerBand.has(t.goal ?? '')) bucket = 'blocked-on-owner';
-    else if (unmet.length > 0) bucket = 'blocked-on-dependency';
-    else if (t.status === 'in-progress') bucket = 'in-progress';
-    // Bryan's rule (2026-08-22): the backlog is NOT auto-dispatched — goal
-    // bands run in priority order, everything else waits for a person to
-    // rank it. A ticket in a band the goal list does not name is idle BY
-    // RULE, so it must not read as a protocol failure — but the bucket is
-    // reported, because 53 tickets sitting unranked is its own finding.
-    else if (!bands.dispatchable.has(t.goal ?? '')) bucket = 'backlog-unranked';
-    else bucket = 'ready-unpicked';
-    out.push({
-      id: t.id,
-      title: t.title,
-      bucket,
-      ageMs,
-      sinceActivityMs,
-      // A blocked ticket is allowed to be old; only unblocked buckets stall.
-      stalled:
-        (bucket === 'in-progress' || bucket === 'ready-unpicked') && sinceActivityMs > stallMs,
-      ...(unmet.length > 0 ? { blockers: unmet } : {}),
-    });
-  }
-  return out.sort((a, b) => b.sinceActivityMs - a.sinceActivityMs);
-}
-
-/** Agent activity per recent hour — the "busy or not spawned" evidence. */
-export function agentActivityByHour(events: EventRow[], now: number, hours: number): number[] {
-  const buckets = new Array<number>(hours).fill(0);
-  for (const e of events) {
-    if (e.actor?.kind !== 'agent') continue;
-    const h = Math.floor((now - e.ts) / 3_600_000);
-    if (h >= 0 && h < hours) buckets[h] = (buckets[h] ?? 0) + 1;
-  }
-  return buckets; // index 0 = the most recent hour
-}
+export * from './keep-moving-lib.ts';
 
 function fmt(ms: number): string {
   const h = ms / 3_600_000;
@@ -170,8 +77,34 @@ async function main(): Promise<void> {
   const events = ((await eventsRes.json()) as { events: EventRow[] }).events ?? [];
   const items = ((await itemsRes.json()) as { items: ReviewItemRow[] }).items ?? [];
 
-  const rows = classifyOpenTasks(tasks, events, items, now, stallMs, { dispatchable, ownerBand });
-  const activity = agentActivityByHour(events, now, 12);
+  const bands = { dispatchable, ownerBand };
+  let rows = classifyOpenTasks(tasks, events, items, now, stallMs, bands);
+  // Second pass for rows the first pass called stalled: their task:<id>
+  // discussion threads may hold the activity the board events missed (the
+  // per-doc threads route is the only trustworthy source — the /api/docs
+  // listing's lastActivityAt is a .ydoc mtime, poisoned by snapshot rewrites).
+  // Fetching only for already-stalled rows caps the extra calls at the
+  // handful being reported.
+  const stalledIds = rows.filter((r) => r.stalled).map((r) => r.id);
+  if (stalledIds.length > 0) {
+    const threadActivity = new Map<string, number>();
+    await Promise.all(
+      stalledIds.map(async (id) => {
+        try {
+          const res = await fetch(`${base}/api/docs/${encodeURIComponent(`task:${id}`)}/threads`);
+          if (!res.ok) return; // no discussion doc — nothing to reset
+          const body = (await res.json()) as { threads?: Array<{ lastActivity?: number }> };
+          const last = Math.max(0, ...(body.threads ?? []).map((t) => t.lastActivity ?? 0));
+          if (last > 0) threadActivity.set(id, last);
+        } catch {
+          // unreachable doc: leave the first-pass verdict standing
+        }
+      }),
+    );
+    if (threadActivity.size > 0)
+      rows = classifyOpenTasks(tasks, events, items, now, stallMs, bands, threadActivity);
+  }
+  const activity = agentActivityByHour(events, now, 12, collectActivityTicks(tasks, items, events));
 
   if (process.argv.includes('--json')) {
     console.log(JSON.stringify({ now, rows, activity }, null, 2));
@@ -191,6 +124,7 @@ async function main(): Promise<void> {
     'blocked-on-owner',
     'blocked-on-dependency',
     'backlog-unranked',
+    'parked',
   ] as Bucket[]) {
     const g = by(b);
     const stalledN = g.filter((r) => r.stalled).length;
