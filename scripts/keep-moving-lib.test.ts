@@ -76,10 +76,12 @@ describe('keep-moving false-FAIL gaps', () => {
   it('gap 1: a person-owned row is blocked-on-owner, never a dark in-progress row', () => {
     // Measured: t-Q6DTQn05IMPo (assignee "human", server ownerKind "person")
     // reported as a dark in-progress row.
+    // Amended for the unfiled-ask round: person-owned WITH a pending item is
+    // legitimately waiting; without one it is an unfiled ask (tested below).
     const rows = classifyOpenTasks(
       [task({ id: 'a', status: 'in-progress', ownerKind: 'person', assignee: 'human' })],
       [],
-      [],
+      [{ taskId: 'a', askedAt: now - H }],
       now,
       4 * H,
       bands,
@@ -171,7 +173,9 @@ describe('codex P2 findings', () => {
     );
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId.asked?.bucket).toBe('blocked-on-owner');
-    expect(byId.human?.bucket).toBe('blocked-on-owner');
+    // Person-owned with NO filed item: owner-blocked-unfiled still outranks
+    // the park — the ask is surfaced (and FAILs), not hidden behind 'parked'.
+    expect(byId.human?.bucket).toBe('blocked-on-owner-unfiled');
     expect(byId.asked?.stalled).toBe(false);
     expect(byId.human?.stalled).toBe(false);
   });
@@ -195,5 +199,116 @@ describe('codex P2 findings', () => {
       events,
     );
     expect(agentActivityByHour(events, now, 3, ticks)).toEqual([1, 1, 0]);
+  });
+});
+
+// Round 3 (Bryan's review of the "PASS" board, task t-7xYQKpXUYV-7): the
+// board hid real failures — 7/10 owner-blocked rows had no filed review item,
+// and one "waiting on Bryan" blocker had cleared days earlier. Red-first.
+describe('unfiled asks, aging asks, parked presentation, terminal blockers', () => {
+  it('owner-blocked without a pending review item is an unfiled ask and counts toward FAIL', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'filed', ownerKind: 'person' }),
+        task({ id: 'unfiled-person', ownerKind: 'person' }),
+        task({ id: 'unfiled-band', goal: 'decisions' }),
+      ],
+      [],
+      [{ taskId: 'filed', askedAt: now - H }],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.filed?.bucket).toBe('blocked-on-owner');
+    expect(byId.filed?.unfiledAsk).toBe(false);
+    expect(byId['unfiled-person']?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(byId['unfiled-person']?.unfiledAsk).toBe(true);
+    expect(byId['unfiled-band']?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(byId['unfiled-band']?.unfiledAsk).toBe(true);
+  });
+
+  it('a filed ask carries its age, newest pending item wins', () => {
+    // Measured: t-BX3kTEZ6M7vY waited on two PRs that had merged days before;
+    // nobody re-verified. Age makes the "re-verify" list possible.
+    const rows = classifyOpenTasks(
+      [task({ id: 'a' })],
+      [],
+      [
+        { taskId: 'a', askedAt: now - 9 * 24 * H },
+        { taskId: 'a', askedAt: now - 8 * 24 * H },
+      ],
+      now,
+      4 * H,
+      bands,
+    );
+    expect(rows[0]?.bucket).toBe('blocked-on-owner');
+    expect(rows[0]?.askAgeMs).toBe(8 * 24 * H);
+  });
+
+  it('a parked row carries its unpark date and reason for presentation', () => {
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', parkedUntil: now + 24 * H, parkedReason: 'waiting on Friday sync' })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    expect(rows[0]?.bucket).toBe('parked');
+    expect(rows[0]?.parkedUntil).toBe(now + 24 * H);
+    expect(rows[0]?.parkedReason).toBe('waiting on Friday sync');
+  });
+
+  it('a dependency chain names its terminal blocker', () => {
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'a', after: ['x'] }),
+        task({ id: 'x', after: ['y'], status: 'todo' }),
+        task({ id: 'y', ownerKind: 'person' }),
+        task({ id: 'b', after: ['z'] }),
+        task({ id: 'z', status: 'in-progress' }),
+      ],
+      [],
+      [{ taskId: 'y', askedAt: now - H }],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.terminal).toEqual({ id: 'y', label: 'blocked-on-owner' });
+    expect(byId.a?.unfiledAsk).toBe(false);
+    expect(byId.b?.terminal).toEqual({ id: 'z', label: 'in-progress' });
+  });
+
+  it('a dependency chain ending in an unfiled ask counts as unfiled too', () => {
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', after: ['x'] }), task({ id: 'x', ownerKind: 'person' })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.terminal).toEqual({ id: 'x', label: 'blocked-on-owner-unfiled' });
+    expect(byId.a?.unfiledAsk).toBe(true);
+    expect(byId.x?.unfiledAsk).toBe(true);
+  });
+
+  it('a dependency cycle terminates and does not hang', () => {
+    const rows = classifyOpenTasks(
+      [task({ id: 'a', after: ['b'] }), task({ id: 'b', after: ['a'] })],
+      [],
+      [],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.a?.bucket).toBe('blocked-on-dependency');
+    expect(byId.a?.terminal?.id).toBeDefined();
   });
 });
