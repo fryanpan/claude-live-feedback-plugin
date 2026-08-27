@@ -1,6 +1,6 @@
 ---
 name: editing-review-docs
-description: Use whenever you're about to edit a markdown file that might be under live review via the claude-workspaces plugin. Every review doc is backed by a file on disk; edits must flow through the MCP tools so the plugin keeps the live editor and the file in sync.
+description: Use whenever you're about to edit a markdown file that might be under live review via the claude-workspaces plugin, and when an edit tool returned no-match or 409 stale-write and you're deciding what to do next. Every review doc is backed by a file on disk; edits must flow through the MCP tools so the plugin keeps the live editor and the file in sync.
 ---
 
 # Editing files that are under claude-workspaces review
@@ -55,7 +55,10 @@ Pick the smallest tool that does the job:
 
 - **Text edits inside existing prose** → `find_and_replace(docId,
   find, replace, { contextBefore?, contextAfter?, occurrence? })`.
-  Works across all block types including table cells. Use
+  Works across all block types including table cells, and a find that
+  IS pipe-table row syntax (`| a | b |`) matches rows structurally —
+  cells compared by text, whitespace ignored, so a row quoted from the
+  `.md` works; the replace must keep the same row/cell shape. Use
   `contextBefore`/`contextAfter` to disambiguate when the same string
   appears more than once. **Gotcha:** `find_and_replace` operates on
   text, not block structure — if your replacement empties a containing
@@ -70,7 +73,21 @@ Pick the smallest tool that does the job:
   when you're responding to a reviewer's comment — the anchor already
   picks the exact text they pointed at.
 - **Comprehensive rewrite / restructure of the whole doc** →
-  `set_doc_content(docId, markdown)`. Applies as a block-level diff on
+  `set_doc_content(docId, markdown)` — and ONLY that. **Never
+  set_doc_content a doc a human has edited since your last read.** A
+  scoped request — a comment, one section — gets a scoped edit, never a
+  full rewrite: your in-context copy went stale the moment they typed,
+  and a rewrite from it destroys their work (this exact escalation has
+  done so in the field, unrecoverably). A scoped tool returning
+  `no-match` is a signal to re-read with `get_doc` and retry scoped —
+  find_and_replace, `edit_at_anchor`, the block tools below — not a
+  license to escalate. The server backstops this: a rewrite after an
+  untracked human edit gets `409 stale-write` with their edit time;
+  the answer is re-read, re-apply onto the current content, and only
+  if a full rewrite is truly required retry with
+  `confirmOverwriteHumanEdits: true`. Every accepted rewrite first
+  backs up the replaced markdown under the server data dir
+  (`backups/<docId>/`). Applies as a block-level diff on
   the live doc: untouched blocks keep their identity, so comment
   threads on them survive, and the result flushes to the `.md` like
   any other edit. **Never** `Write` the bound file and
