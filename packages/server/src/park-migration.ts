@@ -56,6 +56,12 @@ export async function migrateParkedRows(deps: ParkMigrationDeps): Promise<ParkMi
   const { store, comment, note } = deps;
   const result: ParkMigrationResult = { migrated: [], skipped: [] };
   for (const workspace of store.listWorkspaces()) {
+    // Archived rows are outside `listTasks` by default, and deliberately left
+    // there: an archived row is off every lane, so its deferral is moot and a
+    // comment on it would be a note nobody is going to read. Restoring one
+    // brings back a row with two fields no surface consults — inert, where
+    // moving an archived row to triage would be a status change nobody asked
+    // for.
     for (const row of store.listTasks(workspace.id)) {
       const legacy = row as Task & LegacyParkFields;
       if (legacy.parkedUntil === undefined && legacy.parkedReason === undefined) continue;
