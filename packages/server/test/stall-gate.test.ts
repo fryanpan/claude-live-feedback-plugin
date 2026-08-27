@@ -107,6 +107,34 @@ describe('a row that has gone quiet is named', () => {
   });
 });
 
+describe('the default threshold', () => {
+  /**
+   * Pinned to the NUMBER rather than compared against itself, because the
+   * assertion is about a decision somebody made and not about arithmetic.
+   * The ticket asked for thirty minutes of silence and for stalls to surface
+   * within thirty minutes, which cannot both hold — detection cannot precede
+   * the definition. Twenty is what makes the goal reachable, and a later
+   * change to it should have to come back through this test.
+   */
+  it('is twenty minutes, so a stall surfaces within thirty of going quiet', () => {
+    expect(STALL_QUIET_DEFAULT_MS).toBe(20 * 60_000);
+  });
+
+  it('names a row that has been quiet for longer than the default', () => {
+    const verdict = evaluate({
+      tasks: [task({ id: 't-1', transitions: [{ ts: now - 25 * MIN, to: 'in-progress' }] })],
+    });
+    expect(verdict.stalled.map((r) => r.id)).toEqual(['t-1']);
+  });
+
+  it('leaves a row that has been quiet for less alone', () => {
+    const verdict = evaluate({
+      tasks: [task({ id: 't-1', transitions: [{ ts: now - 15 * MIN, to: 'in-progress' }] })],
+    });
+    expect(verdict.stalled).toHaveLength(0);
+  });
+});
+
 describe('rows the gate refuses to name', () => {
   it('a pending question to a person is correct waiting, not a stall', () => {
     const verdict = evaluate({ reviewItems: [{ taskId: 't-1' }] });
