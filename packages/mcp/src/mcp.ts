@@ -16,7 +16,8 @@ import { decisionAnsweredLine } from './decision-line.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
-import { readyIdleLine, reviewAnsweredLine } from './nudge-line.ts';
+import { readyIdleLine, reviewAnsweredLine, stalledLine } from './nudge-line.ts';
+import type { StalledRowPayload } from './nudge-line.ts';
 import { isSelfAuthoredEvent } from './self-authored.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { projectTaskRows } from './task-projection.ts';
@@ -98,7 +99,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.115';
+const PLUGIN_VERSION = '0.1.116';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4401,6 +4402,12 @@ interface HubEventPayload {
   consideredCount?: number;
   held?: Record<string, number>;
   undetermined?: { count?: number; reasons?: string[] };
+  /** `workspace.stalled` only: how many rows have stopped moving, the rows
+   *  themselves, and the rows waiting on a person nobody has actually asked.
+   *  See stall-nudge.ts and nudge-line.ts. */
+  stalledCount?: number;
+  rows?: StalledRowPayload[];
+  unfiled?: StalledRowPayload[];
   trigger?: string;
   transcript?: string;
   ack?: string;
@@ -4489,6 +4496,13 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
       break;
     case 'workspace.review_answered':
       body = reviewAnsweredLine(p);
+      break;
+    // The third wake, and the one that names work somebody said they were
+    // doing. Its own case rather than a shape shared with ready_idle: the
+    // reader's next act is to drive a named list of rows, not to take the top
+    // of the queue.
+    case 'workspace.stalled':
+      body = stalledLine(p);
       break;
     case 'agent.attached':
     case 'agent.detached':
