@@ -32,6 +32,9 @@ export interface TaskRow {
    * `parkedUntil > now` yourself rather than trusting it.
    */
   parkedUntil?: number | null;
+  /** Why the row was parked — shown in the report so a park reads as a
+   *  decision with a date, not as a stuck row. */
+  parkedReason?: string;
 }
 export interface EventRow {
   taskId?: string;
@@ -47,6 +50,7 @@ export interface ReviewItemRow {
 
 export type Bucket =
   | 'blocked-on-owner'
+  | 'blocked-on-owner-unfiled'
   | 'blocked-on-dependency'
   | 'in-progress'
   | 'ready-unpicked'
@@ -63,8 +67,28 @@ export interface Classified {
   sinceActivityMs: number;
   stalled: boolean;
   blockers?: string[];
-  /** Present on parked rows: when the deferral expires. */
+  /** Present on rows parked into the future: when the deferral expires. */
   parkedUntil?: number;
+  /** Present with parkedUntil: why the row was parked. */
+  parkedReason?: string;
+  /** blocked-on-owner only: ms since the NEWEST pending review item was
+   *  filed. Old asks go on the "re-verify the blocker is still real" list —
+   *  measured: a live row waited on two PRs that had already merged. */
+  askAgeMs?: number;
+  /** blocked-on-dependency only: the far end of the `after` chain — the row
+   *  the whole chain is actually waiting on, and what state it is in. Absent
+   *  when every branch loops (see `cycle`): a cycle has no terminal. */
+  terminal?: { id: string; label: string };
+  /** blocked-on-dependency only: a dependency loop found through this row,
+   *  as the id path that closes it (e.g. ['a','b','a']). A cycle is a
+   *  malformed graph — the report names it as such rather than presenting a
+   *  loop member as its own blocker. */
+  cycle?: string[];
+  /** TRUE means this row is waiting on the owner with NO pending review item
+   *  anywhere on its chain's terminal — an ask that exists only in someone's
+   *  head. The owner cannot see it on the Home queue, so it counts toward FAIL
+   *  (7 of 10 "blocked-on-owner" rows on the 08-27 "PASS" board were this). */
+  unfiledAsk: boolean;
 }
 
 /** A ticket's own clock: when it entered its current status. */
@@ -92,11 +116,21 @@ export function classifyOpenTasks(
   threadActivity?: Map<string, number>,
 ): Classified[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const askedTaskIds = new Set(
-    reviewItems
-      .map((r) => r.taskId ?? (r.docId?.startsWith('task:') ? r.docId.slice(5) : undefined))
-      .filter((x): x is string => Boolean(x)),
-  );
+  // Presence in askedTaskIds is what "an ask is FILED" means; newestAskAt
+  // additionally carries the newest pending item's askedAt where one exists,
+  // so old asks can go on the re-verify list.
+  const askedTaskIds = new Set<string>();
+  const newestAskAt = new Map<string, number>();
+  for (const r of reviewItems) {
+    const id = r.taskId ?? (r.docId?.startsWith('task:') ? r.docId.slice(5) : undefined);
+    if (!id) continue;
+    askedTaskIds.add(id);
+    if (
+      typeof r.askedAt === 'number' &&
+      r.askedAt > (newestAskAt.get(id) ?? Number.NEGATIVE_INFINITY)
+    )
+      newestAskAt.set(id, r.askedAt);
+  }
   const lastEventByTask = new Map<string, number>();
   for (const e of events) {
     if (e.taskId && e.ts > (lastEventByTask.get(e.taskId) ?? 0))
@@ -114,23 +148,39 @@ export function classifyOpenTasks(
       now -
       Math.max(enteredStatusAt(t), lastEventByTask.get(t.id) ?? 0, threadActivity?.get(t.id) ?? 0);
     // A row parked into the future is deliberately deferred — it must never
-    // read as stalled (measured false-FAIL: t-FbXgQ6m9e-et, parked to
+    // read as stalled (measured false-FAIL: a live row, parked to
     // 2026-08-28, reported "ready-unpicked stalled" at 07:59Z).
     const parked = t.parkedUntil != null && t.parkedUntil > now;
-    // Owner-blocking is evaluated BEFORE parking: a filed ask outranks every
-    // other state (the first test in the suite), so a parked row with an
-    // active ask on Bryan — a review item, a person owner (`ownerKind ===
-    // 'person'`, the server's authoritative call; gap 1: t-Q6DTQn05IMPo), or
-    // an owner-band goal — surfaces as blocked-on-owner rather than having
-    // the ask hidden behind 'parked'. Neither bucket ever stalls, so the
-    // parked guarantee is preserved either way.
+    // Precedence: pending-item owner-block > parked > unfiled owner-block.
+    //
+    // A PENDING review item outranks a park (the P2-1 invariant: an ACTIVE
+    // ask never hides — it surfaces as blocked-on-owner rather than sitting
+    // behind 'parked'). Neither bucket ever stalls, so the parked guarantee
+    // is preserved either way.
+    //
+    // Owner-blocked is only LEGITIMATE waiting when a pending review item
+    // exists — that is what puts the ask on the owner's Home queue. A
+    // person-owned row (`ownerKind === 'person'`, the server's authoritative
+    // call) or an owner-band row with NO pending item is an ask that exists
+    // nowhere he reads: blocked-on-owner-unfiled, a protocol violation that
+    // counts toward FAIL (the owner's 08-27 review: 7 of 10 "blocked-on-owner"
+    // rows were invisible on his queue).
+    //
+    // But a park OUTRANKS the unfiled bucket: a person-owned row somebody
+    // deliberately parked with a date and reason is a documented deferral,
+    // not a hidden ask (measured: a decision the owner explicitly deferred,
+    // parked for exactly that reason, was being nagged as an unfiled ask
+    // forever). Nothing hides permanently — parks require a reason, and an
+    // expired park resurfaces the row as unfiled.
+    const hasPendingAsk = askedTaskIds.has(t.id);
     let bucket: Bucket;
-    if (t.ownerKind === 'person' || askedTaskIds.has(t.id) || bands.ownerBand.has(t.goal ?? ''))
-      bucket = 'blocked-on-owner';
+    if (hasPendingAsk) bucket = 'blocked-on-owner';
     else if (parked) bucket = 'parked';
+    else if (t.ownerKind === 'person' || bands.ownerBand.has(t.goal ?? ''))
+      bucket = 'blocked-on-owner-unfiled';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
     else if (t.status === 'in-progress') bucket = 'in-progress';
-    // Bryan's rule (2026-08-22): the backlog is NOT auto-dispatched — goal
+    // The standing owner rule (2026-08-22): the backlog is NOT auto-dispatched — goal
     // bands run in priority order, everything else waits for a person to
     // rank it. A ticket in a band the goal list does not name is idle BY
     // RULE, so it must not read as a protocol failure — but the bucket is
@@ -148,7 +198,64 @@ export function classifyOpenTasks(
         (bucket === 'in-progress' || bucket === 'ready-unpicked') && sinceActivityMs > stallMs,
       ...(unmet.length > 0 ? { blockers: unmet } : {}),
       ...(parked && t.parkedUntil != null ? { parkedUntil: t.parkedUntil } : {}),
+      ...(parked && t.parkedReason ? { parkedReason: t.parkedReason } : {}),
+      ...(bucket === 'blocked-on-owner' && newestAskAt.has(t.id)
+        ? { askAgeMs: now - (newestAskAt.get(t.id) ?? now) }
+        : {}),
+      unfiledAsk: bucket === 'blocked-on-owner-unfiled',
     });
+  }
+  // Second pass: attribute each dependency chain to its TERMINAL blocker —
+  // the row the whole chain is actually waiting on. "after t-X" is only half
+  // an answer when t-X is itself waiting on the owner; and a chain that bottoms
+  // out in an UNFILED ask is an unfiled ask for every row behind it too.
+  //
+  // Two Codex findings on #396 shape the walk:
+  //  - EVERY unmet branch is traversed (P1): a row with several `after` edges
+  //    is unfiled when ANY branch ends unfiled — inspecting only the first
+  //    branch produced a false PASS.
+  //  - Only a dependency-blocked intermediate is transparent (P2): a dep that
+  //    is itself owner-blocked / unfiled / parked / in-progress IS the
+  //    effective blocker, so the walk stops there instead of naming a deeper
+  //    task and suppressing the intermediate's own state.
+  const rowById = new Map(out.map((r) => [r.id, r]));
+  for (const r of out) {
+    if (r.bucket !== 'blocked-on-dependency') continue;
+    const visited = new Set<string>([r.id]);
+    const terminals: TaskRow[] = [];
+    let cycle: string[] | undefined;
+    const walk = (task: TaskRow, path: string[]): void => {
+      for (const dep of task.after ?? []) {
+        const d = byId.get(dep);
+        if (d === undefined || d.status === 'done') continue;
+        if (visited.has(d.id)) {
+          // Revisited node. An ANCESTOR on the current path is a loop —
+          // record how it closes; a node merely reached via another branch
+          // is ordinary DAG sharing and is not.
+          const idx = path.indexOf(d.id);
+          if (idx >= 0 && cycle === undefined) cycle = [...path.slice(idx), d.id];
+          continue;
+        }
+        visited.add(d.id);
+        if (rowById.get(d.id)?.bucket === 'blocked-on-dependency') walk(d, [...path, d.id]);
+        else terminals.push(d);
+      }
+    };
+    const rootTask = byId.get(r.id);
+    if (rootTask) walk(rootTask, [r.id]);
+    if (cycle) r.cycle = cycle;
+    const bucketOf = (task: TaskRow): Bucket | undefined => rowById.get(task.id)?.bucket;
+    const anyUnfiled = terminals.some((d) => bucketOf(d) === 'blocked-on-owner-unfiled');
+    // One terminal is displayed; the worst branch wins the slot: an unfiled
+    // ask, else a filed owner-block, else whatever came first.
+    const pick =
+      terminals.find((d) => bucketOf(d) === 'blocked-on-owner-unfiled') ??
+      terminals.find((d) => bucketOf(d) === 'blocked-on-owner') ??
+      terminals[0];
+    // A pure cycle sets no terminal: a loop member is not its own blocker,
+    // and `cycle` above is what the report presents instead.
+    if (pick) r.terminal = { id: pick.id, label: bucketOf(pick) ?? pick.status };
+    if (anyUnfiled) r.unfiledAsk = true;
   }
   return out.sort((a, b) => b.sinceActivityMs - a.sinceActivityMs);
 }
