@@ -91,7 +91,11 @@ describe('a goal is done only when declared', () => {
     // open is the absence of a roll-up rather than a board that did nothing.
     expect(childIds.every((id) => store.getTask(id)?.status === 'done')).toBe(true);
     expect(store.getGoalRow(goalId)?.status).toBe('todo');
-    expect(store.getGoalRow(goalId)?.transitions).toEqual([]);
+    // Only the seed's own activation (triage -> todo). Closing children added
+    // nothing, which is the absence this test is about.
+    expect(store.getGoalRow(goalId)?.transitions.map((t) => `${t.from}->${t.to}`)).toEqual([
+      'triage->todo',
+    ]);
   });
 
   it('moves only through an explicit transition', () => {
@@ -107,8 +111,9 @@ describe('a goal is done only when declared', () => {
     if (!moved.ok) throw new Error('transition refused');
 
     const trail = store.getGoalRow(goalId)?.transitions ?? [];
-    expect(trail).toHaveLength(1);
-    const entry = trail[0];
+    // Two: the seed's activation, then the declaration under test.
+    expect(trail).toHaveLength(2);
+    const entry = trail.at(-1);
     expect(entry?.from).toBe('todo');
     expect(entry?.to).toBe('done');
     expect(entry?.by.id).toBe('known-jordan');
@@ -122,7 +127,7 @@ describe('a goal is done only when declared', () => {
     const { goalId } = board(0);
     const moved = store.transition(goalId, 'done', { actor: AGENT });
     if (!moved.ok) throw new Error('transition refused');
-    expect(store.getGoalRow(goalId)?.transitions[0]?.by.name).toBe('Search Revamp');
+    expect(store.getGoalRow(goalId)?.transitions.at(-1)?.by.name).toBe('Search Revamp');
   });
 
   it('appends rather than rewrites when a goal is reopened', () => {
@@ -132,7 +137,11 @@ describe('a goal is done only when declared', () => {
     if (!reopened.ok) throw new Error('reopen refused');
 
     const trail = store.getGoalRow(goalId)?.transitions ?? [];
-    expect(trail.map((t) => `${t.from}->${t.to}`)).toEqual(['todo->done', 'done->todo']);
+    expect(trail.map((t) => `${t.from}->${t.to}`)).toEqual([
+      'triage->todo',
+      'todo->done',
+      'done->todo',
+    ]);
     expect(store.getGoalRow(goalId)?.status).toBe('todo');
   });
 
@@ -243,9 +252,9 @@ describe('a goal is done only when declared', () => {
       try {
         const row = reopened.getGoalRow(goalId);
         expect(row?.status).toBe('done');
-        expect(row?.transitions).toHaveLength(1);
-        expect(row?.transitions[0]?.by.name).toBe('Jordan');
-        expect(row?.transitions[0]?.note).toBe('called it');
+        expect(row?.transitions).toHaveLength(2);
+        expect(row?.transitions.at(-1)?.by.name).toBe('Jordan');
+        expect(row?.transitions.at(-1)?.note).toBe('called it');
       } finally {
         reopened.stop();
       }
@@ -270,7 +279,7 @@ describe('a goal is done only when declared', () => {
       const row = store.getGoalRow(goalId);
       expect(row?.status).toBe('done');
       expect(row?.title).toBe('Make review instant');
-      expect(row?.transitions).toHaveLength(1);
+      expect(row?.transitions).toHaveLength(2);
     });
   });
 });
