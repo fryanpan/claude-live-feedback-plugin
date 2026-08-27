@@ -2953,7 +2953,7 @@ export class Rooms {
    * response — surfaces the party who just LOST content (whoever ran the
    * `git stash` whose bytes now exist only in clobber-backups/, or saved in
    * an editor) never touches. Watching sessions do, so the loss is announced
-   * where the watchers already are (board ticket t-3bFI5h-F9qRW).
+   * where the watchers already are (proposed on a board ticket, 2026-08).
    */
   private recordSyncError(
     room: DocRoom,
@@ -3126,7 +3126,12 @@ export class Rooms {
     if (humanEditedAt === undefined || !room) return null;
     const lastReadAt = reader ? this.agentReads.get(room.docId)?.get(reader) : undefined;
     if (lastReadAt !== undefined) {
-      return lastReadAt >= humanEditedAt ? null : { humanEditedAt, lastReadAt };
+      // STRICTLY newer. Date.now() ticks in milliseconds, so a read and an
+      // edit in the same tick carry no order — `>=` called that tie "read is
+      // fresh" and let the write destroy an edit the caller provably never
+      // saw. A tie refuses; the caller's re-read lands a tick later and
+      // clears it. The no-human-edit happy path never reaches this line.
+      return lastReadAt > humanEditedAt ? null : { humanEditedAt, lastReadAt };
     }
     return now - humanEditedAt < STALE_WRITE_WINDOW_MS ? { humanEditedAt } : null;
   }
