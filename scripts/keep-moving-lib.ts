@@ -117,17 +117,17 @@ export function classifyOpenTasks(
     // read as stalled (measured false-FAIL: t-FbXgQ6m9e-et, parked to
     // 2026-08-28, reported "ready-unpicked stalled" at 07:59Z).
     const parked = t.parkedUntil != null && t.parkedUntil > now;
-    // A person-owned row is waiting on its owner, not on agent capacity —
-    // `ownerKind === 'person'` is the server's authoritative call (gap 1:
-    // t-Q6DTQn05IMPo, assignee "human", read as a dark in-progress row).
+    // Owner-blocking is evaluated BEFORE parking: a filed ask outranks every
+    // other state (the first test in the suite), so a parked row with an
+    // active ask on Bryan — a review item, a person owner (`ownerKind ===
+    // 'person'`, the server's authoritative call; gap 1: t-Q6DTQn05IMPo), or
+    // an owner-band goal — surfaces as blocked-on-owner rather than having
+    // the ask hidden behind 'parked'. Neither bucket ever stalls, so the
+    // parked guarantee is preserved either way.
     let bucket: Bucket;
-    if (parked) bucket = 'parked';
-    else if (
-      t.ownerKind === 'person' ||
-      askedTaskIds.has(t.id) ||
-      bands.ownerBand.has(t.goal ?? '')
-    )
+    if (t.ownerKind === 'person' || askedTaskIds.has(t.id) || bands.ownerBand.has(t.goal ?? ''))
       bucket = 'blocked-on-owner';
+    else if (parked) bucket = 'parked';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
     else if (t.status === 'in-progress') bucket = 'in-progress';
     // Bryan's rule (2026-08-22): the backlog is NOT auto-dispatched — goal
@@ -186,29 +186,61 @@ export function agentActivityByHour(
 }
 
 /**
+ * A row timestamp within this of an event for the same task is the SAME
+ * action seen through two lenses, not two actions. Measured skew between an
+ * event's `ts` and the row fields the same handler writes is tens of
+ * milliseconds; 5s covers any debounced flush without swallowing a genuinely
+ * separate edit.
+ */
+const EVENT_TICK_EPSILON_MS = 5_000;
+
+/**
  * Activity timestamps the `/events` feed misses (measured: a Team Lead board
  * row update at 07:19Z never appeared in `/events`, so the histogram read
  * "0/12 hours" across a worked window). Sources, exactly:
  *  - task rows: `updatedAt`, `bodyWrittenAt`, `titleWrittenAt` — deduped per
- *    row (a transition also moves `updatedAt`; double-counting an hour that
- *    events already cover is harmless, a false 0 is not). These fields carry
- *    no actor, so a rare person edit counts too — the histogram's question is
- *    "was the board being worked", and an unattributed tick beats a false 0.
- *  - review items: `askedAt` — filing an ask is agent work.
+ *    row, and emitted ONLY as a fallback: a normal transition moves
+ *    `updatedAt` AND appears in `/events`, so a timestamp within
+ *    EVENT_TICK_EPSILON_MS of any event for the same task is skipped rather
+ *    than counted twice (an unconditional tick inflated the histogram exactly
+ *    when the events feed worked). The dedup compares against ALL events for
+ *    the task, whatever the actor — a person's transition should not re-enter
+ *    as an unattributed tick either. These fields carry no actor, so a rare
+ *    uncovered person edit still counts — the histogram's question is "was
+ *    the board being worked", and an unattributed tick beats a false 0.
+ *  - review items: `askedAt` — filing an ask is agent work; deduped the same
+ *    way against the item's task, should a filing ever start emitting events.
  */
-export function collectActivityTicks(tasks: TaskRow[], reviewItems: ReviewItemRow[]): number[] {
+export function collectActivityTicks(
+  tasks: TaskRow[],
+  reviewItems: ReviewItemRow[],
+  events: EventRow[] = [],
+): number[] {
+  const eventTsByTask = new Map<string, number[]>();
+  for (const e of events) {
+    if (!e.taskId) continue;
+    const list = eventTsByTask.get(e.taskId);
+    if (list) list.push(e.ts);
+    else eventTsByTask.set(e.taskId, [e.ts]);
+  }
+  const coveredByEvent = (taskId: string | undefined, ts: number): boolean => {
+    if (!taskId) return false;
+    const list = eventTsByTask.get(taskId);
+    return list?.some((et) => Math.abs(et - ts) <= EVENT_TICK_EPSILON_MS) ?? false;
+  };
   const ticks: number[] = [];
   for (const t of tasks) {
     const seen = new Set<number>();
     for (const ts of [t.updatedAt, t.bodyWrittenAt, t.titleWrittenAt]) {
-      if (typeof ts === 'number' && ts > 0 && !seen.has(ts)) {
+      if (typeof ts === 'number' && ts > 0 && !seen.has(ts) && !coveredByEvent(t.id, ts)) {
         seen.add(ts);
         ticks.push(ts);
       }
     }
   }
   for (const r of reviewItems) {
-    if (typeof r.askedAt === 'number' && r.askedAt > 0) ticks.push(r.askedAt);
+    if (typeof r.askedAt === 'number' && r.askedAt > 0 && !coveredByEvent(r.taskId, r.askedAt))
+      ticks.push(r.askedAt);
   }
   return ticks;
 }

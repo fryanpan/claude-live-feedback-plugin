@@ -150,3 +150,50 @@ describe('keep-moving false-FAIL gaps', () => {
     expect(rows[0]?.stalled).toBe(true);
   });
 });
+
+// Codex adversarial review of PR #394 — two P2 findings, tests written red-first.
+describe('codex P2 findings', () => {
+  it('P2-1: a filed ask outranks a park — blocked-on-owner, not parked', () => {
+    // A parked row with an active ask on Bryan (filed review item, person
+    // owner, or owner-band goal) must surface as blocked-on-owner; bucketing
+    // it parked hides the ask. Same invariant the first test in this file
+    // states: a filed ask outranks everything.
+    const rows = classifyOpenTasks(
+      [
+        task({ id: 'asked', parkedUntil: now + 24 * H }),
+        task({ id: 'human', parkedUntil: now + 24 * H, ownerKind: 'person' }),
+      ],
+      [],
+      [{ taskId: 'asked' }],
+      now,
+      4 * H,
+      bands,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId.asked?.bucket).toBe('blocked-on-owner');
+    expect(byId.human?.bucket).toBe('blocked-on-owner');
+    expect(byId.asked?.stalled).toBe(false);
+    expect(byId.human?.stalled).toBe(false);
+  });
+
+  it('P2-2: a row edit already reported by /events is not double-counted', () => {
+    // updatedAt advances on a normal transition AND the same action appears
+    // in /events — an unconditional tick counts one action twice, inflating
+    // the histogram exactly when the events feed works.
+    const eventTs = now - 30 * 60_000;
+    const events = [{ taskId: 'a', ts: eventTs, actor: { kind: 'agent' } }];
+    const ticks = collectActivityTicks([task({ id: 'a', updatedAt: eventTs + 1_000 })], [], events);
+    expect(ticks).toEqual([]);
+    expect(agentActivityByHour(events, now, 3, ticks)).toEqual([1, 0, 0]);
+  });
+
+  it('P2-2: an edit no event covers still counts (the gap-3 fix survives)', () => {
+    const events = [{ taskId: 'a', ts: now - 30 * 60_000, actor: { kind: 'agent' } }];
+    const ticks = collectActivityTicks(
+      [task({ id: 'a', updatedAt: now - 90 * 60_000 })], // far from any event
+      [],
+      events,
+    );
+    expect(agentActivityByHour(events, now, 3, ticks)).toEqual([1, 1, 0]);
+  });
+});
