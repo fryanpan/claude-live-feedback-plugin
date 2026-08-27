@@ -52,8 +52,10 @@ describe('goal rows', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('mints one row per goal, open and with an empty trail', () => {
+  it('mints one row per goal, in triage and with an empty trail', () => {
     const ws = store.createWorkspace('Board');
+    // `leaveInTriage` because this test IS the mint: the helper's default
+    // activates what it seeds, which would hide the status being asserted.
     const G = seedGoals(
       store,
       ws.id,
@@ -62,13 +64,16 @@ describe('goal rows', () => {
         { key: 'trust', title: 'Make the board trustworthy' },
       ],
       AGENT,
+      { leaveInTriage: true },
     );
 
     const fast = store.getGoalRow(G.fast);
     expect(fast?.kind).toBe('goal');
     expect(fast?.title).toBe('Make review fast');
-    expect(fast?.status).toBe('todo');
-    // The trail starts at migration — history is never fabricated.
+    // A goal somebody just added is a proposal — nothing under it dispatches
+    // until it is agreed to. See `goal-triage-default.test.ts`.
+    expect(fast?.status).toBe('triage');
+    // The trail starts at the mint — history is never fabricated.
     expect(fast?.transitions).toEqual([]);
     expect(store.getGoalRow(G.trust)?.title).toBe('Make the board trustworthy');
   });
@@ -79,7 +84,8 @@ describe('goal rows', () => {
     const added = store.addGoal(ws.id, { title: 'Ship the widget' }, { actor: PERSON });
     if (!added.ok) throw new Error('addGoal refused');
     expect(store.getGoalRow(added.goal.id)?.title).toBe('Ship the widget');
-    expect(store.getGoalRow(added.goal.id)?.status).toBe('todo');
+    // Same default as any other add — `addGoal` routes through `setGoalList`.
+    expect(store.getGoalRow(added.goal.id)?.status).toBe('triage');
   });
 
   it('follows a rename, so the row and the list cannot drift', () => {
@@ -221,7 +227,9 @@ describe('goal rows', () => {
 
     it('updates an existing row rather than re-minting it', () => {
       const ws = store.createWorkspace('Board');
-      const G = seedGoals(store, ws.id, [{ key: 'fast', title: 'Make review fast' }], AGENT);
+      const G = seedGoals(store, ws.id, [{ key: 'fast', title: 'Make review fast' }], AGENT, {
+        leaveInTriage: true,
+      });
       const before = store.getGoalRow(G.fast);
       expect(before).toBeDefined();
 
@@ -240,6 +248,8 @@ describe('goal rows', () => {
       const after = store.getGoalRow(G.fast);
       expect(after?.title).toBe('Make review instant');
       expect(after?.createdAt).toBe(before?.createdAt as number);
+      // Untouched by the rename. Empty because the seed left the row in
+      // triage — an activation would be real history and belongs in the count.
       expect(after?.transitions).toEqual([]);
     });
   });
@@ -265,6 +275,9 @@ describe('goal rows', () => {
           { key: 'retired', title: 'Retire the old importer' },
         ],
         PERSON,
+        // Left in triage so the only trail entry below is the declaration
+        // this test is about.
+        { leaveInTriage: true },
       );
 
       const declared = store.transition(G.retired, 'done', { actor: PERSON, note: 'shipped it' });
@@ -305,6 +318,9 @@ describe('goal rows', () => {
           { key: 'retired', title: 'Retire the old importer' },
         ],
         PERSON,
+        // Left in triage so the only trail entry below is the declaration
+        // this test is about.
+        { leaveInTriage: true },
       );
       store.transition(G.retired, 'done', { actor: PERSON });
 
@@ -335,7 +351,9 @@ describe('goal rows', () => {
       expect(fresh).not.toBe(G.retired);
 
       expect(store.listGoalRows(ws.id).map((r) => r.id)).toEqual([G.keep, fresh]);
-      expect(store.getGoalRow(fresh)?.status).toBe('todo');
+      // A retyped band is a NEW proposal, not a restore — so it mints in
+      // triage like any other add, and does not inherit what was declared.
+      expect(store.getGoalRow(fresh)?.status).toBe('triage');
       // Nothing was destroyed: the old row still holds what was declared.
       expect(store.getGoalRow(G.retired)?.status).toBe('done');
     });
