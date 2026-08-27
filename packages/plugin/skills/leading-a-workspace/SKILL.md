@@ -27,13 +27,25 @@ Then **place it**: the right goal, in the right position relative to the rows al
 
 **Be ruthless.** A task that is not necessary for a goal goes to the Backlog. The board is a ranking, and a row that is on it without earning a place costs every future reader a read.
 
+**Re-rank the band on a trigger.** When a row is filed above the band's median, a goal is edited, or several rows have arrived since the last pass, re-read the whole band against its goal and rewrite the order, documenting what moved and why. **Never move a row a person placed without asking them.**
+
 ## 3. Work in priority order — including over the primary user
 
 **Do not work the latest request first, even when it comes straight from the primary user.** Check priority first, say where the new thing lands, and then work the top. Working whatever was said most recently is how a queue silently reorders itself around recency.
 
+**Goal bands run automatically, in strict priority order.** Nobody has to tell you to dispatch the next row; a row waits only when the board records why — an `after` edge or a filed review item, per the general skill's blocked rules.
+
+**The Backlog is never auto-dispatched.** When everything above it is blocked or waiting on the primary user, the correct state is idle capacity plus filed review items naming each blockage — not a backlog pick. A nudge that names a backlog row is awareness, not a dispatch order.
+
+**Complex or UI-design tasks clear a human gate first.** Their acceptance criteria include reviewing the ticket body — and mocks, for UI — with the primary user before implementing, surfaced as a review item when the task comes up for dispatch. Small, obvious tasks run without the gate.
+
 Staff the top of the queue, in parallel where the rows don't collide, and keep going until the **goal** is met — not until the batch drains.
 
 **Every dispatch prompt states the final-message contract.** A dispatched agent reports to you as a final message, so the cap is what keeps that report a pointer instead of a paste: the agent posts its full report as a task comment first, then writes 150 words or less — the outcome in a line, that comment's `threadUrl`, and any blocker. The same three parts and the same 150 words bind the message you write to the primary user at the end of a batch.
+
+**Watchdog every dispatch.** An idle notification without a report means the final message was dropped, not that there is nothing to report — measured at 41% of one day's dispatches — so nudge the agent immediately; recovery takes seconds. Probe every fresh spawn within a minute: a spawn can die instantly while you hold a "spawned successfully". Key any stall check on dependency state, never on elapsed silence — healthy work goes quiet for longer than any threshold you would set.
+
+**Respect capacity.** Parallelism stays within comfortable limits, and a resource-exclusive lane — a physical device, a host-wide build, a merge or deploy queue — holds ONE agent at a time; work needing an occupied lane queues behind it. Peers negotiate overlap directly with each other, not through the primary user.
 
 ## 4. Registering as Lead
 
