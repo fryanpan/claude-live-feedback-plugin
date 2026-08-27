@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { readyIdleLine, reviewAnsweredLine } from '../src/nudge-line.ts';
+import { readyIdleLine, reviewAnsweredLine, stalledLine } from '../src/nudge-line.ts';
 
 /**
  * The two wake events exist to make the board the scheduler instead of the
@@ -279,5 +279,95 @@ describe('the channel switch and the shipped bundle both use it', () => {
     expect(BUNDLE.split('Array.isArray(p.links) && p.links.length > 0').length - 1).toBeGreaterThan(
       1,
     );
+  });
+});
+
+/**
+ * The stall wake is the one that names work somebody said they were doing.
+ * Its line has a job the ready-work line does not: the recipient's next act
+ * is to go and drive a specific row, sometimes several, so the line has to
+ * carry enough of the list to start without a lookup — and has to stop short
+ * of pasting a wall of rows into a channel.
+ */
+const STALL = {
+  taskId: 't-b1',
+  title: 'Rank results by recency',
+  stalledCount: 2,
+  consideredCount: 9,
+  rows: [
+    { id: 't-b1', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 95 * 60_000 },
+    { id: 't-b2', title: 'Cache the facet counts', bucket: 'ready-unpicked', quietMs: 40 * 60_000 },
+  ],
+};
+
+describe('stalledLine', () => {
+  it('names the row to start with, by title and id', () => {
+    const line = stalledLine(STALL);
+    expect(line).toContain('Rank results by recency');
+    expect(line).toContain('t-b1');
+  });
+
+  it('says how long the quietest row has been silent', () => {
+    expect(stalledLine(STALL)).toContain('1h 35m');
+  });
+
+  it('states the denominator, so a count cannot mean two different boards', () => {
+    expect(stalledLine(STALL)).toContain('9 open');
+  });
+
+  it('keeps the event slug so the channel stays greppable', () => {
+    expect(stalledLine(STALL)).toContain('[workspace.stalled]');
+  });
+
+  it('lists the other stalled rows rather than only the first', () => {
+    expect(stalledLine(STALL)).toContain('Cache the facet counts');
+  });
+
+  it('summarises the tail rather than pasting a wall of rows', () => {
+    const many = {
+      ...STALL,
+      stalledCount: 9,
+      rows: Array.from({ length: 9 }, (_, i) => ({
+        id: `t-c${i}`,
+        title: `Row number ${i}`,
+        bucket: 'in-progress',
+        quietMs: (90 - i) * 60_000,
+      })),
+    };
+    const line = stalledLine(many);
+    expect(line).toContain('Row number 0');
+    // The list is capped; what is left over is COUNTED rather than dropped,
+    // so the reader can tell a short list from a truncated one.
+    expect(line).not.toContain('Row number 8');
+    expect(line).toContain('4 more');
+  });
+
+  it('tells the lead to file the ask when a row is waiting on a person', () => {
+    const line = stalledLine({
+      stalledCount: 0,
+      consideredCount: 3,
+      unfiled: [
+        {
+          id: 't-d1',
+          title: 'Pick a retention window',
+          bucket: 'blocked-on-owner-unfiled',
+          quietMs: 3 * 60 * 60_000,
+        },
+      ],
+    });
+    expect(line).toContain('Pick a retention window');
+    // The action differs from driving a stalled row, and the line has to say
+    // which one it is asking for.
+    expect(line.toLowerCase()).toContain('file');
+  });
+
+  it('says plainly when the pass could not read some rows', () => {
+    const line = stalledLine({
+      stalledCount: 0,
+      consideredCount: 4,
+      undetermined: { count: 1, reasons: ['review-items-unreadable'] },
+    });
+    expect(line).toContain('could NOT be evaluated');
+    expect(line).toContain('review-items-unreadable');
   });
 });
