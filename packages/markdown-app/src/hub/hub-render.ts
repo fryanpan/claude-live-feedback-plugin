@@ -962,9 +962,6 @@ export interface DetailHandlers {
   onGoalSet?: (task: HubTask, goalId: string) => void;
   /** Set the due date, or clear it with `null`. */
   onDueSet?: (task: HubTask, dueAt: number | null) => void;
-  /** Defer the task to a date, or un-park it with `null`. Never moves the
-   *  row — parking is not a status. */
-  onParkSet?: (task: HubTask, parkedUntil: number | null) => void;
   /**
    * Take the task off the board, reversibly. THE PANEL IS THE ONLY PLACE THIS
    * LIVES (Bryan, on the design thread: *"Detail panel only… It's a secondary

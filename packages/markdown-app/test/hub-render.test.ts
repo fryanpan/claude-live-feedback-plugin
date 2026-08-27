@@ -1934,63 +1934,19 @@ describe('renderTaskDetail — the reorganised panel', () => {
   });
 
   /**
-   * The park's own block, and NOT a fifth cell in the fields row above — that
-   * row is a pinned four on a panel whose scarcest axis is height, and a park
-   * is true of almost no rows, so a permanent fifth control would cost every
-   * task a cell to say nothing.
+   * The park block came out on 2026-08-27 with the state behind it. Parking a
+   * task moves it to `triage` and posts a comment, so the panel has nothing
+   * to draw and no control to offer — the status field and the discussion the
+   * panel already has are the whole of it.
    *
-   * It still carries a control: a field an agent writes and a person cannot
-   * correct reads as broken, and deferring somebody else's work is exactly
-   * the call a reader wants to overturn in one tap.
+   * Pinned as an absence with a positive control, because a panel that failed
+   * to render at all would satisfy the absence on its own.
    */
-  it('shows a parked task its date and reason, with one gesture to move or un-park it', () => {
-    const onParkSet = vi.fn();
-    const NOW_MS = new Date(2026, 7, 1, 12).getTime();
-    renderTaskDetail(root, task(), handlers({ onParkSet, now: NOW_MS }));
-    // Control: the panel rendered, and carries no park block for a row that
-    // is not parked.
-    expect(root.querySelector('.hub-detail-fields')).not.toBeNull();
-    expect(root.querySelector('.hub-parked-note')).toBeNull();
-    expect(keys()).not.toContain('Parked');
-
-    root.replaceChildren();
-    const until = new Date(2026, 7, 20, 12).getTime();
-    renderTaskDetail(
-      root,
-      task({ parkedUntil: until, parkedReason: 'waiting on the index rebuild' }),
-      handlers({ onParkSet, now: NOW_MS }),
-    );
-    const note = root.querySelector('.hub-parked-note') as HTMLElement;
-    expect(note).not.toBeNull();
-    // The reason is read-only here, but it must be READABLE — a date with no
-    // stated cause is a decision nobody can argue with.
-    expect(note.textContent ?? '').toContain('waiting on the index rebuild');
-    expect(note.textContent ?? '').toContain(new Date(until).toLocaleDateString());
-
-    const input = note.querySelector('input') as HTMLInputElement;
-    expect(input.value).toBe('2026-08-20'); // local calendar day, both ways
-    input.value = '2026-09-02';
-    input.dispatchEvent(new Event('change'));
-    const [, ts] = onParkSet.mock.calls[0] ?? [];
-    const back = new Date(ts as number);
-    expect([back.getFullYear(), back.getMonth(), back.getDate()]).toEqual([2026, 8, 2]);
-
-    input.value = '';
-    input.dispatchEvent(new Event('change'));
-    expect(onParkSet).toHaveBeenLastCalledWith(expect.anything(), null);
-  });
-
-  it('drops the park block once the date has passed, without anything clearing it', () => {
-    const until = new Date(2026, 7, 20, 12).getTime();
-    // The task still CARRIES `parkedUntil` — no sweeper wipes it, which is
-    // what keeps "it comes back on its own" free of a second writer.
-    renderTaskDetail(
-      root,
-      task({ parkedUntil: until, parkedReason: 'waiting on the index rebuild' }),
-      handlers({ now: until + 1 }),
-    );
+  it('has no park block and no park control', () => {
+    renderTaskDetail(root, task(), handlers({ now: new Date(2026, 7, 1, 12).getTime() }));
     expect(root.querySelector('.hub-detail-fields')).not.toBeNull(); // control
     expect(root.querySelector('.hub-parked-note')).toBeNull();
+    expect(keys()).not.toContain('Parked');
   });
 
   /**

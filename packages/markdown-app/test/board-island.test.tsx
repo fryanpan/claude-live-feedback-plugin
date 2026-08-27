@@ -443,43 +443,10 @@ describe('renderBoard', () => {
     expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toContain('3');
   });
 
-  // The one badge ADDED back to the row, against a strip that has lost three.
-  // The others labelled the board's shape and so applied to nearly every row;
-  // this one marks the handful somebody deliberately deferred, on a list whose
-  // job is to answer what to work on next. Without it a parked row is
-  // indistinguishable from work nobody got to, which is the confusion the
-  // field exists to end.
-  it('marks a parked row with its date, and says nothing on a park that has expired', () => {
-    const h = handlers();
-    // Real wall-clock offsets: the row badge asks `Date.now()`, the same way
-    // the overdue tint next door does. `NOW` here is a fixed past constant, so
-    // building the fixture from it would test the expired branch twice.
-    const soon = Date.now() + 86_400_000;
-    const parked = task({
-      goal: 'g-pr',
-      parkedUntil: soon,
-      parkedReason: 'waiting on the index rebuild',
-    });
-    // No sweeper clears the field, so an expired park is a row that still
-    // CARRIES `parkedUntil` and must draw as ordinary work.
-    const expired = task({ goal: 'g-pr', parkedUntil: Date.now() - 1, dueAt: NOW + 86_400_000 });
-    renderBoard(root, boardSections(GOALS, [parked, expired], filters), h);
-
-    const row = root.querySelector(`.hub-task-row[data-task-id="${parked.id}"]`);
-    const chip = row?.querySelector('.hub-badge-parked') as HTMLElement | null;
-    expect(chip).not.toBeNull();
-    expect(chip?.textContent ?? '').toContain('parked');
-    expect(chip?.textContent ?? '').toContain(
-      new Date(soon).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-    );
-    // The reason is prose of any length and the row is one line, so it rides
-    // the title. It still has to be REACHABLE from the row.
-    expect(chip?.title).toBe('waiting on the index rebuild');
-
-    const stale = root.querySelector(`.hub-task-row[data-task-id="${expired.id}"]`);
-    expect(stale?.querySelector('.hub-badge-due')).not.toBeNull(); // control: badges render
-    expect(stale?.querySelector('.hub-badge-parked')).toBeNull();
-  });
+  // The parked badge lived here until 2026-08-27. Parking is a move to
+  // `triage` plus a comment now, and a triage row is not in a board lane at
+  // all, so the row has nothing left to mark — the state that needed a chip
+  // is the state that went away.
 
   // Bryan, 2026-08-19, on being shown what it meant: *"That's not helpful.
   // Just don't show it any more."* The count was ambiguous by construction —
