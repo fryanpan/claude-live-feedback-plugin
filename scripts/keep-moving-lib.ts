@@ -26,15 +26,6 @@ export interface TaskRow {
   updatedAt?: number;
   bodyWrittenAt?: number;
   titleWrittenAt?: number;
-  /**
-   * Epoch ms until which the row is deliberately deferred. The API also
-   * carries a possibly-null `parked` convenience field — compare
-   * `parkedUntil > now` yourself rather than trusting it.
-   */
-  parkedUntil?: number | null;
-  /** Why the row was parked — shown in the report so a park reads as a
-   *  decision with a date, not as a stuck row. */
-  parkedReason?: string;
 }
 export interface EventRow {
   taskId?: string;
@@ -54,8 +45,7 @@ export type Bucket =
   | 'blocked-on-dependency'
   | 'in-progress'
   | 'ready-unpicked'
-  | 'backlog-unranked'
-  | 'parked';
+  | 'backlog-unranked';
 
 export interface Classified {
   id: string;
@@ -67,10 +57,6 @@ export interface Classified {
   sinceActivityMs: number;
   stalled: boolean;
   blockers?: string[];
-  /** Present on rows parked into the future: when the deferral expires. */
-  parkedUntil?: number;
-  /** Present with parkedUntil: why the row was parked. */
-  parkedReason?: string;
   /** blocked-on-owner only: ms since the NEWEST pending review item was
    *  filed. Old asks go on the "re-verify the blocker is still real" list —
    *  measured: a live row waited on two PRs that had already merged. */
@@ -147,16 +133,12 @@ export function classifyOpenTasks(
     const sinceActivityMs =
       now -
       Math.max(enteredStatusAt(t), lastEventByTask.get(t.id) ?? 0, threadActivity?.get(t.id) ?? 0);
-    // A row parked into the future is deliberately deferred — it must never
-    // read as stalled (measured false-FAIL: a live row, parked to
-    // 2026-08-28, reported "ready-unpicked stalled" at 07:59Z).
-    const parked = t.parkedUntil != null && t.parkedUntil > now;
-    // Precedence: pending-item owner-block > parked > unfiled owner-block.
-    //
-    // A PENDING review item outranks a park (the P2-1 invariant: an ACTIVE
-    // ask never hides — it surfaces as blocked-on-owner rather than sitting
-    // behind 'parked'). Neither bucket ever stalls, so the parked guarantee
-    // is preserved either way.
+    // A deliberately-deferred row does not reach this loop at all: parking
+    // moves it to `triage` (2026-08-27), and the filter above keeps only
+    // `todo` and `in-progress`. The `parked` bucket that used to sit here
+    // existed to stop such a row reading as stalled — a measured false-FAIL,
+    // a live row deferred to 2026-08-28 reported "ready-unpicked stalled" at
+    // 07:59Z — and the exclusion now does that job one step earlier.
     //
     // Owner-blocked is only LEGITIMATE waiting when a pending review item
     // exists — that is what puts the ask on the owner's Home queue. A
@@ -166,16 +148,9 @@ export function classifyOpenTasks(
     // counts toward FAIL (the owner's 08-27 review: 7 of 10 "blocked-on-owner"
     // rows were invisible on his queue).
     //
-    // But a park OUTRANKS the unfiled bucket: a person-owned row somebody
-    // deliberately parked with a date and reason is a documented deferral,
-    // not a hidden ask (measured: a decision the owner explicitly deferred,
-    // parked for exactly that reason, was being nagged as an unfiled ask
-    // forever). Nothing hides permanently — parks require a reason, and an
-    // expired park resurfaces the row as unfiled.
     const hasPendingAsk = askedTaskIds.has(t.id);
     let bucket: Bucket;
     if (hasPendingAsk) bucket = 'blocked-on-owner';
-    else if (parked) bucket = 'parked';
     else if (t.ownerKind === 'person' || bands.ownerBand.has(t.goal ?? ''))
       bucket = 'blocked-on-owner-unfiled';
     else if (unmet.length > 0) bucket = 'blocked-on-dependency';
@@ -197,8 +172,6 @@ export function classifyOpenTasks(
       stalled:
         (bucket === 'in-progress' || bucket === 'ready-unpicked') && sinceActivityMs > stallMs,
       ...(unmet.length > 0 ? { blockers: unmet } : {}),
-      ...(parked && t.parkedUntil != null ? { parkedUntil: t.parkedUntil } : {}),
-      ...(parked && t.parkedReason ? { parkedReason: t.parkedReason } : {}),
       ...(bucket === 'blocked-on-owner' && newestAskAt.has(t.id)
         ? { askAgeMs: now - (newestAskAt.get(t.id) ?? now) }
         : {}),
@@ -215,7 +188,7 @@ export function classifyOpenTasks(
   //    is unfiled when ANY branch ends unfiled — inspecting only the first
   //    branch produced a false PASS.
   //  - Only a dependency-blocked intermediate is transparent (P2): a dep that
-  //    is itself owner-blocked / unfiled / parked / in-progress IS the
+  //    is itself owner-blocked / unfiled / in-progress IS the
   //    effective blocker, so the walk stops there instead of naming a deeper
   //    task and suppressing the intermediate's own state.
   const rowById = new Map(out.map((r) => [r.id, r]));
@@ -266,7 +239,7 @@ export function classifyOpenTasks(
  * What is counted, exactly:
  *  - every `/events` row whose `actor.kind === 'agent'` — on the live server
  *    that is the task.* family (transitioned, created, regrouped, body_edited,
- *    parked, assigned, retitled, archived, evidence_amended, restored),
+ *    assigned, retitled, archived, evidence_amended, restored),
  *    decision.answered, and workspace.* edits. Rows with no actor
  *    (agent.heartbeat, agent.attached, server.started) are excluded: they are
  *    liveness, not work.

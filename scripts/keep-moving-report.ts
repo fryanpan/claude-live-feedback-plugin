@@ -13,7 +13,10 @@
  *   blocked-on-dependency  an `after` edge names an unfinished task
  *   in-progress            picked up; STALLED if no transition/event recently
  *   ready-unpicked         todo, nothing blocking it — the protocol's debt
- *   parked                 parkedUntil > now — deliberately deferred, never stalled
+ *
+ * A deliberately-deferred row is a TRIAGE row (parking moves it there and
+ * comments why, 2026-08-27), and triage is not classified at all — so a
+ * deferral never reads as stalled without a bucket to hold it.
  *
  * For ready-unpicked it also answers "busy or not spawned": whether agents
  * were producing board events at all during the last hours. Activity
@@ -125,16 +128,8 @@ async function main(): Promise<void> {
     'blocked-on-owner-unfiled',
     'blocked-on-dependency',
     'backlog-unranked',
-    'parked',
   ] as Bucket[]) {
     const g = by(b);
-    // Parked rows are deliberately deferred to a DATE — quiet-age statistics
-    // ("median 10.0d") read as stuck when every park is legitimate. The
-    // dates and reasons are in the Parked section below instead.
-    if (b === 'parked') {
-      lines.push(`- **parked**: ${g.length}${g.length ? ' (dates below)' : ''}`);
-      continue;
-    }
     const stalledN = g.filter((r) => r.stalled).length;
     lines.push(
       `- **${b}**: ${g.length}` +
@@ -201,24 +196,6 @@ async function main(): Promise<void> {
         : `after ${(r.blockers ?? []).join(', ')}`;
       const cycleNote = r.cycle ? ` [also a CYCLE: ${r.cycle.join(' → ')} — fix the edges]` : '';
       lines.push(`- ${r.id} ${chain}${cycleNote} — ${r.title.slice(0, 80)}`);
-    }
-  }
-  const parkedRows = by('parked');
-  if (parkedRows.length) {
-    lines.push('');
-    lines.push('## Parked (deferred to a date, not stuck)');
-    const LONG_PARK_MS = 30 * 86_400_000;
-    for (const r of parkedRows
-      .slice()
-      .sort((a, b) => (a.parkedUntil ?? 0) - (b.parkedUntil ?? 0))) {
-      const until = r.parkedUntil ? new Date(r.parkedUntil).toISOString().slice(0, 10) : '?';
-      const reason = (r.parkedReason ?? '').replace(/\s+/g, ' ').slice(0, 70);
-      const flags: string[] = [];
-      if ((r.parkedUntil ?? 0) - now > LONG_PARK_MS) flags.push('>30d out');
-      if (!reason) flags.push('no reason given');
-      lines.push(
-        `- ${r.id} until ${until}${reason ? ` — ${reason}` : ''}${flags.length ? ` [CHECK: ${flags.join('; ')}]` : ''}`,
-      );
     }
   }
   const verdict =
