@@ -13,6 +13,7 @@
  *   blocked-on-dependency  an `after` edge names an unfinished task
  *   in-progress            picked up; STALLED if no transition/event recently
  *   ready-unpicked         todo, nothing blocking it — the protocol's debt
+ *   parked                 parkedUntil > now — deliberately deferred, never stalled
  *
  * For ready-unpicked it also answers "busy or not spawned": whether agents
  * were producing board events at all during the last hours. Activity
@@ -26,12 +27,13 @@
  */
 
 import {
-  agentActivityByHour,
   type Bucket,
-  classifyOpenTasks,
   type EventRow,
   type ReviewItemRow,
   type TaskRow,
+  agentActivityByHour,
+  classifyOpenTasks,
+  collectActivityTicks,
 } from './keep-moving-lib.ts';
 
 export * from './keep-moving-lib.ts';
@@ -75,8 +77,34 @@ async function main(): Promise<void> {
   const events = ((await eventsRes.json()) as { events: EventRow[] }).events ?? [];
   const items = ((await itemsRes.json()) as { items: ReviewItemRow[] }).items ?? [];
 
-  const rows = classifyOpenTasks(tasks, events, items, now, stallMs, { dispatchable, ownerBand });
-  const activity = agentActivityByHour(events, now, 12);
+  const bands = { dispatchable, ownerBand };
+  let rows = classifyOpenTasks(tasks, events, items, now, stallMs, bands);
+  // Second pass for rows the first pass called stalled: their task:<id>
+  // discussion threads may hold the activity the board events missed (the
+  // per-doc threads route is the only trustworthy source — the /api/docs
+  // listing's lastActivityAt is a .ydoc mtime, poisoned by snapshot rewrites).
+  // Fetching only for already-stalled rows caps the extra calls at the
+  // handful being reported.
+  const stalledIds = rows.filter((r) => r.stalled).map((r) => r.id);
+  if (stalledIds.length > 0) {
+    const threadActivity = new Map<string, number>();
+    await Promise.all(
+      stalledIds.map(async (id) => {
+        try {
+          const res = await fetch(`${base}/api/docs/${encodeURIComponent(`task:${id}`)}/threads`);
+          if (!res.ok) return; // no discussion doc — nothing to reset
+          const body = (await res.json()) as { threads?: Array<{ lastActivity?: number }> };
+          const last = Math.max(0, ...(body.threads ?? []).map((t) => t.lastActivity ?? 0));
+          if (last > 0) threadActivity.set(id, last);
+        } catch {
+          // unreachable doc: leave the first-pass verdict standing
+        }
+      }),
+    );
+    if (threadActivity.size > 0)
+      rows = classifyOpenTasks(tasks, events, items, now, stallMs, bands, threadActivity);
+  }
+  const activity = agentActivityByHour(events, now, 12, collectActivityTicks(tasks, items));
 
   if (process.argv.includes('--json')) {
     console.log(JSON.stringify({ now, rows, activity }, null, 2));
@@ -96,6 +124,7 @@ async function main(): Promise<void> {
     'blocked-on-owner',
     'blocked-on-dependency',
     'backlog-unranked',
+    'parked',
   ] as Bucket[]) {
     const g = by(b);
     const stalledN = g.filter((r) => r.stalled).length;
