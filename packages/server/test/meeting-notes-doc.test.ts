@@ -64,6 +64,28 @@ describe('replaceNotesSection', () => {
     expect(md).toContain('- second write');
   });
 
+  it('a payload with its own level-2 headings still replaces cleanly next write', () => {
+    // The replace span runs heading-to-next-heading at the same level, so a
+    // body heading at the section's own level would end the span early and
+    // every later write would leave the previous body behind, duplicating
+    // the notes once per pause for the length of the meeting.
+    const ydoc = docFrom('# Agenda\n\n## Next steps\n\n- later\n');
+    const v1 = '## Meeting notes\n\n## Decisions\n\n- ship it\n';
+    const v2 = '## Meeting notes\n\n## Decisions\n\n- ship it\n- measure it\n';
+    expect(replaceNotesSection(ydoc, v1).ok).toBe(true);
+    expect(replaceNotesSection(ydoc, v2).mode).toBe('replaced');
+    const md = markdownOf(ydoc);
+    expect(md.split('- ship it').length).toBe(2); // exactly once
+    expect(md).toContain('- measure it');
+    // The body heading survives as structure, demoted below the section
+    // heading so it can never terminate the section's own replace span.
+    expect(md).toContain('### Decisions');
+    expect(md).not.toContain('\n## Decisions');
+    // Neighbours untouched.
+    expect(md).toContain('## Next steps');
+    expect(md).toContain('- later');
+  });
+
   it('refuses an empty payload — blank notes never erase a section', () => {
     const ydoc = docFrom('# Agenda\n\n## Meeting notes\n\n- keep me\n');
     expect(replaceNotesSection(ydoc, '   \n').ok).toBe(false);
