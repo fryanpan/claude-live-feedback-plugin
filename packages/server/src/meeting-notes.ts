@@ -152,6 +152,16 @@ export interface NotesProjectContext {
   taskTitles?: readonly string[];
 }
 
+/** A board task captured from this tick's speech — found or freshly filed —
+ *  offered to the composer as a markdown link it may weave into the notes.
+ *  Shaped here because this seam carries it; the capture pipeline that
+ *  produces them lives in `meeting-task-capture.ts`. */
+export interface NoteTaskLink {
+  title: string;
+  url: string;
+  status: string;
+}
+
 export interface NotesComposeInput {
   docId: string;
   meetingId: string;
@@ -159,6 +169,9 @@ export interface NotesComposeInput {
   /** The notes as previously composed; null on a meeting's first tick. */
   previous: string | null;
   context?: NotesProjectContext;
+  /** Tasks captured from THIS tick's speech. Absent when capture is off,
+   *  found nothing, or failed — the notes compose either way. */
+  taskLinks?: readonly NoteTaskLink[];
 }
 
 export interface NotesComposer {
@@ -205,6 +218,17 @@ export interface MeetingNotesDeps {
    * once per server. Wins over the static `context` when both are present.
    */
   resolveContext?: (docId: string) => NotesProjectContext | undefined;
+  /**
+   * The task-capture pass, run per tick BEFORE the compose so the links it
+   * returns can ride the same compose input. Its failure costs the tick its
+   * links, never its notes — capture is an enhancement on the same terms as
+   * context. Sees the tick's settled turns, carried words included.
+   */
+  captureTasks?: (input: {
+    docId: string;
+    meetingId: string;
+    turns: readonly NotesTurn[];
+  }) => Promise<NoteTaskLink[]>;
   /** Where composed notes go. The doc-writing stage plugs in here. */
   onNotes: (update: NotesUpdate) => void;
   onError?: (message: string) => void;
@@ -252,12 +276,28 @@ export function beginNotesSession(
       const turns = [...carry, ...tick.turns];
       carry = [];
       if (turns.length === 0) return;
+      let taskLinks: NoteTaskLink[] = [];
+      if (deps.captureTasks) {
+        try {
+          taskLinks = await deps.captureTasks({
+            docId: ids.docId,
+            meetingId: ids.meetingId,
+            turns,
+          });
+        } catch (err) {
+          // Unlike a failed compose, nothing is carried: the words still
+          // compose below, and the transcript remains the durable record a
+          // later capture could be rebuilt from.
+          deps.onError?.(err instanceof Error ? err.message : 'task capture failed');
+        }
+      }
       const input: NotesComposeInput = {
         docId: ids.docId,
         meetingId: ids.meetingId,
         tick: { ...tick, turns },
         previous,
         ...(context ? { context } : {}),
+        ...(taskLinks.length > 0 ? { taskLinks } : {}),
       };
       try {
         const notes = await deps.composer.compose(input);

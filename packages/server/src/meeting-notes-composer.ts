@@ -76,6 +76,18 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
   }
   if (ctxLines.length > 0) parts.push(`Project context:\n${ctxLines.join('\n')}`);
 
+  if (input.taskLinks?.length) {
+    parts.push(
+      [
+        'Board tasks captured from this speech. Where a note covers one, cite',
+        'it as a markdown link — [its title](its url), or your own words as',
+        'the label when the note reads better that way. Keep links already in',
+        'the notes.',
+        ...input.taskLinks.map((l) => `- [${l.title}](${l.url}) — ${l.status}`),
+      ].join('\n'),
+    );
+  }
+
   parts.push(
     `Current notes:\n${input.previous ?? '(none yet — this is the first update of the meeting)'}`,
   );

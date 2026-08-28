@@ -391,3 +391,79 @@ describe('notes through the audio socket', () => {
     expect(composed[0]?.context?.docTitle).toBe('planning');
   });
 });
+
+describe('task capture riding the notes session', () => {
+  const ids = { docId: 'doc-c', meetingId: 'm-doc-c-1' };
+
+  it('runs per tick and sees the settled words', async () => {
+    const schedule = new ManualScheduler();
+    const captured: Array<{ docId: string; turns: string[] }> = [];
+    const session = beginNotesSession(
+      {
+        composer: createStubNotesComposer(),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        captureTasks: (input) => {
+          captured.push({ docId: input.docId, turns: input.turns.map((t) => t.text) });
+          return Promise.resolve([]);
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'We should file a ticket for the strip.', final: true });
+    schedule.fire();
+    await session.end();
+    expect(captured).toEqual([
+      { docId: 'doc-c', turns: ['We should file a ticket for the strip.'] },
+    ]);
+  });
+
+  it('links reach the composer, and a capture failure costs links, not notes', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const errors: string[] = [];
+    const updates: NotesUpdate[] = [];
+    const composer: NotesComposer = {
+      name: 'recording-stub',
+      compose(input) {
+        inputs.push(input);
+        return Promise.resolve(`notes ${input.tick.tick}`);
+      },
+    };
+    let calls = 0;
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: (u) => updates.push(u),
+        onError: (m) => errors.push(m),
+        captureTasks: () => {
+          calls++;
+          if (calls === 1) {
+            return Promise.resolve([
+              { title: 'Strip overlaps navbar', url: '/workspaces/w-b?task=t-9', status: 'todo' },
+            ]);
+          }
+          return Promise.reject(new Error('capture refused'));
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'File a ticket for the strip.', final: true });
+    schedule.fire();
+    await Promise.resolve();
+    session.onTurn({ turn: 1, text: 'Moving on.', final: true });
+    await session.end();
+    // Tick 1 carried its captured link into the compose input.
+    expect(inputs[0]?.taskLinks).toEqual([
+      { title: 'Strip overlaps navbar', url: '/workspaces/w-b?task=t-9', status: 'todo' },
+    ]);
+    // Tick 2's capture failed: the notes still composed, linkless, and the
+    // failure was reported rather than swallowed.
+    expect(inputs[1]?.taskLinks).toBeUndefined();
+    expect(updates.map((u) => u.notes)).toEqual(['notes 1', 'notes 2']);
+    expect(errors).toEqual(['capture refused']);
+  });
+});

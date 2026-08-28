@@ -27,7 +27,7 @@
  */
 
 import { readRenamedEnv } from '@feedback/core/env-names';
-import type { NotesTurn } from './meeting-notes.ts';
+import type { NoteTaskLink, NotesTurn } from './meeting-notes.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
 import { clipToWordBoundary } from './task-title.ts';
@@ -272,13 +272,6 @@ export interface RunTaskCaptureInput {
   docId: string;
   docTitle?: string;
   turns: readonly NotesTurn[];
-}
-
-/** What one captured task contributes to the notes: a link and its status. */
-export interface NoteTaskLink {
-  title: string;
-  url: string;
-  status: string;
 }
 
 /**
