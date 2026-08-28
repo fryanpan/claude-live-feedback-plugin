@@ -38,10 +38,10 @@ describe('parseWorkspaceLink', () => {
   });
 
   it('parses a goal deep link (?goal= on the board URL)', () => {
-    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123?goal=t-goalfixture`)).toEqual({
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123?goal=t-goalfix9`)).toEqual({
       kind: 'goal',
       workspaceId: 'w-abc123',
-      goalId: 't-goalfixture',
+      goalId: 't-goalfix9',
     });
     // Task wins over goal, matching the board's own panel rule.
     expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123?task=t-1&goal=t-2`)).toEqual({
