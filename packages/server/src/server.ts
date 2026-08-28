@@ -8103,12 +8103,20 @@ function collectLandingWorkspaces(
         if (thread.lastActivity > last) last = thread.lastActivity;
       }
     }
+    // A retired board contributes NO review items to this page — no chip on
+    // its row, nothing into the bar or the Review-all chain. Retiring is the
+    // owner saying "get this out of my way", and every one of those surfaces
+    // steering the reader back in contradicts the act. Filtered here at the
+    // source, not in the renderer: the count is simply never computed, so no
+    // later consumer of this model can reintroduce it. Un-retiring brings
+    // the items straight back — nothing about them was touched.
+    const waiting = !isRetired(ws) && waitingOf ? waitingOf(ws) : 0;
     return {
       id: ws.id,
       name: ws.name,
       lastActivity: last,
       ...(isRetired(ws) ? { retired: true } : {}),
-      ...(waitingOf && waitingOf(ws) > 0 ? { waiting: waitingOf(ws) } : {}),
+      ...(waiting > 0 ? { waiting } : {}),
     };
   });
 }
@@ -8441,10 +8449,10 @@ function renderLanding(model: LandingModel): string {
   // quiet fold — an item on a quiet board still waits). The bar totals them
   // and "Review all" starts the walkthrough in the most recently active one,
   // handing the rest over via ?then= so the client chains the queues
-  // without coming back here between boards. Retired boards are OUT:
-  // retiring is the owner saying "get this out of my way", and the bar
-  // steering Review all through one contradicts the act (its own row still
-  // shows the chip inside the retired fold for whoever goes looking).
+  // without coming back here between boards. Retired boards are OUT — the
+  // collector never computes a waiting count for one, so they can carry no
+  // chip, no share of the total, and no place in the chain; this filter is
+  // the belt to that suspender.
   const waitingRows = [...model.active, ...model.inactive].filter((w) => (w.waiting ?? 0) > 0);
   const waitingTotal = waitingRows.reduce((sum, w) => sum + (w.waiting ?? 0), 0);
   const firstWaiting = waitingRows[0];
