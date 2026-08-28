@@ -2815,12 +2815,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const emailCodes = new EmailCodes(opts.authCeilings ?? {});
   const sessionRevocations = new SessionRevocations({ dataDir });
   if (sessionRevocations.loadError) {
-    // Loud on purpose: an unreadable revocation file fails CLOSED — every
-    // session is refused until a human restores or deletes the file (which
-    // stays in place as the evidence). See session-revocations.ts.
-    console.error(
-      `[auth] revoked-sessions file was unreadable — REFUSING ALL SESSIONS until it is restored or deleted: ${sessionRevocations.loadError}`,
-    );
+    console.error(`[auth] revoked-sessions file was unreadable: ${sessionRevocations.loadError}`);
+    // Fail closed, then self-heal (Bryan + security review, 2026-08-28): a
+    // revoked id could be hiding in the unreadable file, so end EVERY
+    // outstanding session via the roster watermark — after which an empty
+    // denylist resurrects nothing and the store can restart. Order matters:
+    // the bump must be durable before the store reopens.
+    const bumped = identities.revokeAllSessions();
+    if (sessionRevocations.resetAfterWatermarkBump()) {
+      console.error(
+        `[auth] self-healed: sessions for ${bumped} identities ended via the sessionsValidFrom watermark; denylist restarted empty (broken file kept aside) — everyone signs in again`,
+      );
+    } else {
+      // The broken file would not even move aside. The store stays failed
+      // closed, which sessionIdentityFor turns into "nobody is signed in".
+      console.error(
+        '[auth] could not move the broken revoked-sessions file aside — REFUSING ALL SESSIONS until it is restored or deleted',
+      );
+    }
   }
   const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
@@ -2877,15 +2889,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * caller: no cookie, a cookie that does not verify (or, old format, has
    * expired), an identity the roster does not hold, an identity whose
    * sessions have been revoked or archived, a session that was logged out,
-   * and a revocation list that failed to load. Every one of them means "not
-   * signed in".
+   * and a revocation list in its failed-closed state (unhealable at boot,
+   * or deleted at runtime). Every one of them means "not signed in".
    */
   const sessionIdentityFor = (req: Request): IdentityRecord | null => {
-    // Fail closed on an unreadable revocation list — with it gone, nothing
-    // can tell a live session from a logged-out one. Checked here and not
-    // only inside `isRevoked` because a surviving v1 cookie has no session
-    // id and would skip that call entirely.
-    if (sessionRevocations.loadError !== null) return null;
+    // Fail closed on a broken revocation list — with it gone, nothing can
+    // tell a live session from a logged-out one. Checked here and not only
+    // inside `isRevoked` because a surviving v1 cookie has no session id
+    // and would skip that call entirely.
+    if (sessionRevocations.failedClosed()) return null;
     const claims = verifyEmailSession(
       readCookie(req.headers.get('cookie'), SESSION_COOKIE),
       emailSessionKey(),

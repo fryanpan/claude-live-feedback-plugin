@@ -14,6 +14,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -121,14 +122,66 @@ describe('a denylist that fails to load fails CLOSED (Bryan, 2026-08-28)', () =>
     expect(readFileSync(path, 'utf8')).toBe('not json{{{');
   });
 
-  it('a MISSING file is an ordinary first boot, not a failure', () => {
-    const store = new SessionRevocations({ dataDir: freshDir() });
+  it('a MISSING file is an ordinary first boot, not a failure — and is created eagerly', () => {
+    const dataDir = freshDir();
+    const store = new SessionRevocations({ dataDir });
     expect(store.loadError).toBeNull();
+    // Eager creation is what makes later ABSENCE meaningful: from this
+    // moment on, no file means somebody deleted the denylist.
+    expect(existsSync(join(dataDir, 'revoked-sessions.json'))).toBe(true);
     // Positive control for the fail-closed tests above: the same probe id
     // that a failed store refuses, a clean store accepts.
     expect(store.isRevoked('sid-never-seen')).toBe(false);
     // And the store is fully functional — revocations persist.
     store.revoke('sid-a');
     expect(store.isRevoked('sid-a')).toBe(true);
+  });
+
+  it('a file DELETED at runtime fails closed too, and revoke() does not recreate it', () => {
+    const dataDir = freshDir();
+    const path = join(dataDir, 'revoked-sessions.json');
+    const store = new SessionRevocations({ dataDir });
+    store.revoke('sid-a');
+    expect(store.isRevoked('sid-never-seen')).toBe(false);
+    rmSync(path);
+    // The boot path guarantees the file exists, so its absence now means
+    // the denylist was deleted out from under a running server.
+    expect(store.failedClosed()).toBe(true);
+    expect(store.isRevoked('sid-never-seen')).toBe(true);
+    // A logout during that state must not write a near-empty file back —
+    // that would silently reopen the store minus everything it forgot.
+    store.revoke('sid-b');
+    expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('resetAfterWatermarkBump — the self-heal after a failed load', () => {
+  it('archives the broken file and reopens the store empty', () => {
+    const dataDir = freshDir();
+    const path = join(dataDir, 'revoked-sessions.json');
+    writeFileSync(path, 'not json{{{');
+    const store = new SessionRevocations({ dataDir });
+    expect(store.failedClosed()).toBe(true);
+    expect(store.resetAfterWatermarkBump()).toBe(true);
+    // The evidence survives, moved aside...
+    const aside = readdirSync(dataDir).find((f) => f.includes('corrupt'));
+    expect(aside).toBeTruthy();
+    expect(readFileSync(join(dataDir, aside as string), 'utf8')).toBe('not json{{{');
+    // ...and the store is open and functional again: the caller has already
+    // ended every outstanding session via the roster watermark, so an empty
+    // list resurrects nothing.
+    expect(store.failedClosed()).toBe(false);
+    expect(store.isRevoked('sid-any')).toBe(false);
+    store.revoke('sid-new');
+    expect(new SessionRevocations({ dataDir }).isRevoked('sid-new')).toBe(true);
+  });
+
+  it('is a no-op on a healthy store', () => {
+    const dataDir = freshDir();
+    const store = new SessionRevocations({ dataDir });
+    store.revoke('sid-a');
+    expect(store.resetAfterWatermarkBump()).toBe(true);
+    expect(store.isRevoked('sid-a')).toBe(true);
+    expect(readdirSync(dataDir).filter((f) => f.includes('corrupt'))).toEqual([]);
   });
 });
