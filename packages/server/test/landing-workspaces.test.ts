@@ -183,7 +183,7 @@ describe('review docs stay reachable without leaking back onto /', () => {
   });
 });
 
-describe('the landing page says which workspaces are waiting on the owner (t-DA4rBTmdP0d2)', () => {
+describe('the landing page says which workspaces are waiting on the owner', () => {
   let waitingId: string;
   let quietId: string;
 
@@ -260,8 +260,7 @@ describe('the landing page says which workspaces are waiting on the owner (t-DA4
   it('retiring a workspace takes it out of the bar and the chain', async () => {
     // Retiring is the owner saying "get this out of my way" — the bar
     // steering Review all through a retired board contradicts the act.
-    // The retired row itself may still render (in its own fold) — only the
-    // bar and chain must forget it.
+    // The retired row itself still renders, in its own fold.
     await fetch(`${base}/api/workspaces/${encodeURIComponent(waitingId)}/retired`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -274,5 +273,31 @@ describe('the landing page says which workspaces are waiting on the owner (t-DA4
       new RegExp(`class="allgo" href="/workspaces/${encodeURIComponent(quietId)}/home\\?walk=1"`),
     );
     expect(html).not.toContain(`then=${encodeURIComponent(waitingId)}`);
+  });
+
+  it('a retired row contributes no review items — the chip is gone until un-retired', async () => {
+    // Same act, same consequence: the "N for you" chip on the retired row
+    // launches the walkthrough into a board its owner stood down. The row
+    // stays readable inside the retired fold; the chip must not render.
+    const html = await landing();
+    expect(html).toContain('Waiting board');
+    expect(html).not.toMatch(
+      new RegExp(`href="/workspaces/${encodeURIComponent(waitingId)}/home\\?walk=1"`),
+    );
+
+    // Un-retiring brings the items back: the chip, the bar total, the chain.
+    await fetch(`${base}/api/workspaces/${encodeURIComponent(waitingId)}/retired`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ retired: false, author: AGENT }),
+    });
+    const restored = await landing();
+    expect(restored).toContain('across 2 workspaces');
+    expect(restored).toMatch(
+      new RegExp(
+        `href="/workspaces/${encodeURIComponent(waitingId)}/home\\?walk=1"[^>]*>` +
+          `<span class="n">2</span>`,
+      ),
+    );
   });
 });
