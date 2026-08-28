@@ -71,14 +71,6 @@ export interface HubTask {
   after: string[];
   afterEnforce?: string[];
   dueAt?: number;
-  /** Deferred until this instant — "not now, and here is when". NOT a status:
-   *  the row stays `todo` and unblocked, which is why the board has to draw
-   *  the deferral rather than let it be inferred from where the row sits.
-   *  Never cleared when the date passes, so every reader asks `isTaskParked`
-   *  rather than reading the field. */
-  parkedUntil?: number;
-  /** Why it is parked, in the parker's words. */
-  parkedReason?: string;
   /** Soft-deleted at this instant — off every lane, one tap from coming back.
    *  The row is still PROJECTED while archived (that is what lets the Undo
    *  toast and the restore list draw without a fetch); `taskVisible` is what
@@ -310,25 +302,12 @@ export function ownedByPerson(task: HubTask): boolean {
 }
 
 /**
- * Is this row deferred right now? The browser's copy of the server's
- * `isParked`, and the ONE reader of `parkedUntil` on this side.
- *
- * A park is never cleared when its date arrives — no sweeper, deliberately —
- * so "parked" is always a question about `now`, never a flag. Every surface
- * asks it here so the chip, the panel and the board's own sense of the row
- * cannot disagree about a date that just passed.
- */
-export function isTaskParked(task: HubTask, now: number = Date.now()): boolean {
-  return task.parkedUntil !== undefined && task.parkedUntil > now;
-}
-
-/**
  * Has this row been soft-deleted? The browser's copy of the server's
  * `isArchived`, and the ONE reader of `archivedAt` on this side.
  *
- * Note what it is NOT a question about: `now`. A park expires on its own and
- * so has to be asked about the clock; an archive is a decision that stands
- * until somebody undoes it.
+ * Note what it is NOT a question about: `now`. An archive is a decision that
+ * stands until somebody undoes it, so no surface has to re-ask it as the
+ * clock moves.
  */
 export function isTaskArchived(task: HubTask): boolean {
   return task.archivedAt !== undefined;
@@ -1035,7 +1014,7 @@ function compareAsk(a: AskRank, b: AskRank): number {
  * presents as the worst possible bug because nothing is actually lost.
  *
  * **Task priority is the primary key** (Bryan, 2026-08-18, answering
- * t-vrwyE8YcVD-J: *"Always order asks by task priority"*). That question was
+ * on the ask-ordering ticket: *"Always order asks by task priority"*). That question was
  * filed precisely because two sort keys disagreed with no stated tiebreak —
  * a P1 asked five hours ago against a P3 that has waited two days — and the
  * standing lean was the opposite, waiting time first inside a priority band.
@@ -1415,7 +1394,7 @@ export function advanceWalk(
  * `?walk=1` means open the walkthrough as soon as the queue is loaded, and
  * `&then=<id,id>` names the workspaces still holding items, to visit after
  * this board's queue drains. Server side of the contract: the landing
- * renderer in `packages/server/src/server.ts` (t-DA4rBTmdP0d2).
+ * renderer in `packages/server/src/server.ts`.
  */
 export interface WalkHandoff {
   walk: boolean;
@@ -1913,7 +1892,6 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'task.assigned',
   'task.retitled',
   'task.due_set',
-  'task.parked',
   'task.archived',
   'task.restored',
   'task.regrouped',
@@ -1950,10 +1928,11 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       if (from) return `${actorName(ev)} moved ${title()} from ${from} to ${to}`;
       return `${actorName(ev)} set ${title()} due ${to}`;
     }
+    // Retired 2026-08-27 — parking is a move to triage plus a comment now, so
+    // nothing emits this any more. The line stays because the ACTIVITY LOG
+    // does: months of real deferrals are in it, and a removed case renders
+    // them as a raw event name.
     case 'task.parked': {
-      // The REASON is in the line, not just the date. A deferral is the kind
-      // of decision somebody reads back weeks later asking why the work never
-      // happened, and "parked until the 2nd" cannot be argued with.
       const when = (v: unknown): string =>
         typeof v === 'number' ? new Date(v).toLocaleDateString() : '';
       const to = when(ev.to);
@@ -2706,7 +2685,7 @@ export function askedMeta(item: ReviewItem, now: number): string {
  * the banner only exists while items are open (approved design), so an empty
  * queue renders nothing rather than an all-clear box.
  *
- * No count, deliberately (Bryan, 2026-08-18, answering t-0iestDQdJTOZ:
+ * No count, deliberately (Bryan, 2026-08-18, answering the review-queue ticket:
  * "Remove the count. Don't think I need it."). The decision that number was
  * built to make honest — which rows a needs-you COUNT may admit — dissolved
  * with the number itself: the banner says the queue is non-empty, and the

@@ -91,14 +91,12 @@ owner in name only and `unresponsive` is a wedged session somebody probably
 should take over from. These are recency reads, never identity: a session that
 thinks for an hour produces nothing and still holds its row.
 
-**Skip a row carrying `parked`.** It is listed rather than hidden so you can see
-the deferral and disagree with it, not so you can pick it up — nothing else
-about the row says so, since parking is not a status. If the reason no longer
-holds, un-park it and say why on the task.
-
 **Triage rows never appear here.** That is the answer to "I filed a task and my
 queue does not show it": an agent filed it and nobody has vetted it, so it is
-not yet agreed to be work. Read those with `list_tasks(status: "triage")`.
+not yet agreed to be work — and it is also where a deliberately-deferred row
+sits, since parking a task moves it there. Read those with
+`list_tasks(status: "triage")`, and read the task's comments before picking one
+up: that is where a park says why it was deferred and when to come back.
 
 File a batch of rows in ONE `create_tasks` call rather than one call per row.
 A bad row comes back in `failures` by index instead of rejecting the batch.
@@ -132,7 +130,7 @@ Someone who was not in the conversation should be able to see a task, know why i
   - `in-progress` when you **start**, not when you report.
   - `done` means **delivered** — all acceptance criteria are met
   - Work sitting in an unmerged PR stays `in-progress`
-  - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — it stays `todo`, carrying when it comes back and why, and the board stops treating it as work nobody got to. The `until` date and `reason` are the contract: an open-ended park is a shelf nobody returns to. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
+  - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — the row moves to `triage` and the tool posts a comment saying when to come back and why, so the board stops treating it as work nobody got to. Write the `reason`, and give an `until` date whenever you have one: triage says a decision was made, and that comment is the only place that says what it was waiting for. There is no un-park — move the row on with `task_transition` when it is ready. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
   - Say what you did in the transition `note` — the PR, what you verified and what you couldn't. The note is the whole of what the trail keeps, so a move with an empty note is a move nobody can read back.
 - Share progress on a task by writing brief comments (100 words or less) in the task when you start, when you hit a blocker, when a PR opens, and when it merges.
 - **Your final message is a pointer, not the report.** Post the full report as a task comment FIRST — the harness drops final messages routinely, so the board comment is the copy that survives — then write the message from the `threadUrl` that comment returns. Three parts, 50 words or less all together:

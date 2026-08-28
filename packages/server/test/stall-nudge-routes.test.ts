@@ -328,7 +328,12 @@ describe('the board tells its lead which rows have stopped', () => {
     await ctx.tab.stop();
   });
 
-  it('leaves a deliberately parked row alone', async () => {
+  /**
+   * `park_task` moves the row to triage and records why in a comment, so the
+   * gate never sees it — the deferral is enforced by the status filter rather
+   * than by a bucket of its own. This drives the real route to prove it.
+   */
+  it('leaves a deliberately deferred row alone', async () => {
     const ctx = await boardWithLead();
     const parkedId = await addRow(ctx.workspaceId, 'Redesign the empty state');
     await jj(
