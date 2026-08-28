@@ -307,9 +307,12 @@ export class Shares {
     return s.expiresAt > now ? s : null;
   }
 
-  /** Resolver for the cf-access middleware's `audience` option. */
+  /** Resolver for the cf-access middleware's `audience` option. Live shares
+   *  only — expiry-blind resolution here would let a stale-but-valid Access
+   *  JWT keep matching a lapsed grant, and this runs before classifyHost has
+   *  had any say. */
   audienceResolver = (host: string): string | null => {
-    return this.findByHostname(host)?.audience ?? null;
+    return this.findLiveByHostname(host)?.audience ?? null;
   };
 
   /**
