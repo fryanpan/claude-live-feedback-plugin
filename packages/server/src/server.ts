@@ -3180,7 +3180,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // AHEAD of both auth paths on purpose: while sharing is off, a live
           // Access JWT, an unexpired session cookie and no credential at all
           // must be indistinguishable. Gating after auth would leak which
-          // slugs are real to anyone still holding one.
+          // share links are real to anyone still holding one.
           //
           // Only external hosts pass through here — `local` returned above
           // this point untouched, so the agent's MCP calls over loopback and
