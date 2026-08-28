@@ -295,7 +295,9 @@ describe('a row with a watching builder dispatch is judged by builder silence', 
 
   it('covers a dispatched todo row too — the builder, not the claim, is the promise', () => {
     const verdict = evaluate({
-      tasks: [task({ id: 't-1', status: 'todo', transitions: [{ ts: now - 50 * MIN, to: 'todo' }] })],
+      tasks: [
+        task({ id: 't-1', status: 'todo', transitions: [{ ts: now - 50 * MIN, to: 'todo' }] }),
+      ],
       watchingDispatchTaskIds: watching,
     });
     expect(verdict.stalled.map((r) => r.bucket)).toEqual([BUILDER_SILENT_BUCKET]);
