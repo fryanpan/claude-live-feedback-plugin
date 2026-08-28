@@ -12,7 +12,12 @@
  */
 import { describe, expect, it } from 'bun:test';
 import type { EventRow, ReviewItemRow, TaskRow } from '../src/keep-moving.ts';
-import { STALL_QUIET_DEFAULT_MS, evaluateStalls } from '../src/stall-gate.ts';
+import {
+  BUILDER_SILENT_BUCKET,
+  BUILDER_SILENT_MULTIPLIER_DEFAULT,
+  STALL_QUIET_DEFAULT_MS,
+  evaluateStalls,
+} from '../src/stall-gate.ts';
 
 const MIN = 60_000;
 const now = 1_000 * MIN;
@@ -38,6 +43,9 @@ function evaluate(
     reviewItems?: ReviewItemRow[];
     unreadableReviewTaskIds?: Set<string>;
     quietMs?: number;
+    watchingDispatchTaskIds?: Set<string>;
+    builderSilentMultiplier?: number;
+    threadActivity?: Map<string, number>;
   } = {},
 ) {
   return evaluateStalls({
@@ -50,6 +58,13 @@ function evaluate(
       ? { unreadableReviewTaskIds: over.unreadableReviewTaskIds }
       : {}),
     ...(over.quietMs !== undefined ? { quietMs: over.quietMs } : {}),
+    ...(over.watchingDispatchTaskIds
+      ? { watchingDispatchTaskIds: over.watchingDispatchTaskIds }
+      : {}),
+    ...(over.builderSilentMultiplier !== undefined
+      ? { builderSilentMultiplier: over.builderSilentMultiplier }
+      : {}),
+    ...(over.threadActivity ? { threadActivity: over.threadActivity } : {}),
   });
 }
 
@@ -230,6 +245,84 @@ describe('a row waiting on a person with nothing filed is its own list', () => {
       ],
     });
     expect(verdict.unfiled.map((r) => r.id)).toEqual(['t-1']);
+  });
+});
+
+describe('a row with a watching builder dispatch is judged by builder silence', () => {
+  /** A row quiet for the given minutes, with everything else at the fixture
+   *  defaults — an in-progress, agent-owned, dispatchable-band row. */
+  const quietFor = (minutes: number) =>
+    task({ id: 't-1', transitions: [{ ts: now - minutes * MIN, to: 'in-progress' }] });
+  const watching = new Set(['t-1']);
+
+  it('does not stall inside the doubled window, where an undispatched row would', () => {
+    // 30 minutes: past the ordinary 20-minute window (the control below
+    // proves it), inside the builder's 40. The builder promised work by
+    // existing, and the price of that promise is a longer leash, not a
+    // shorter one.
+    const verdict = evaluate({ tasks: [quietFor(30)], watchingDispatchTaskIds: watching });
+    expect(verdict.stalled).toHaveLength(0);
+    // …and the row was still EXAMINED, not exempted.
+    expect(verdict.considered).toBe(1);
+  });
+
+  it('the same row without the dispatch stalls on today’s clock — the control', () => {
+    const verdict = evaluate({ tasks: [quietFor(30)] });
+    expect(verdict.stalled.map((r) => r.bucket)).toEqual(['in-progress']);
+  });
+
+  it('a builder silent past twice the window is named, as builder-silent', () => {
+    const verdict = evaluate({ tasks: [quietFor(50)], watchingDispatchTaskIds: watching });
+    expect(verdict.stalled).toHaveLength(1);
+    // The distinct name is the point: the lead's remedy for a silent builder
+    // is to probe or replace it, not to find someone to claim the row —
+    // flattened into 'in-progress' the frame would ask for the wrong action.
+    expect(verdict.stalled[0]?.bucket).toBe(BUILDER_SILENT_BUCKET);
+    expect(verdict.stalled[0]?.id).toBe('t-1');
+  });
+
+  it('thread or worktree activity inside the doubled window exonerates it', () => {
+    // The caller merges worktree churn into threadActivity (the server's
+    // exoneration seam); either way the row's last activity is 30 minutes
+    // ago, inside the doubled window.
+    const verdict = evaluate({
+      tasks: [quietFor(200)],
+      watchingDispatchTaskIds: watching,
+      threadActivity: new Map([['t-1', now - 30 * MIN]]),
+    });
+    expect(verdict.stalled).toHaveLength(0);
+  });
+
+  it('covers a dispatched todo row too — the builder, not the claim, is the promise', () => {
+    const verdict = evaluate({
+      tasks: [
+        task({ id: 't-1', status: 'todo', transitions: [{ ts: now - 50 * MIN, to: 'todo' }] }),
+      ],
+      watchingDispatchTaskIds: watching,
+    });
+    expect(verdict.stalled.map((r) => r.bucket)).toEqual([BUILDER_SILENT_BUCKET]);
+  });
+
+  it('honors a multiplier override', () => {
+    const inside = evaluate({
+      tasks: [quietFor(50)],
+      watchingDispatchTaskIds: watching,
+      builderSilentMultiplier: 3,
+    });
+    expect(inside.stalled).toHaveLength(0);
+    const past = evaluate({
+      tasks: [quietFor(70)],
+      watchingDispatchTaskIds: watching,
+      builderSilentMultiplier: 3,
+    });
+    expect(past.stalled.map((r) => r.bucket)).toEqual([BUILDER_SILENT_BUCKET]);
+  });
+
+  /** Pinned to the number, like the quiet default above: the multiplier is a
+   *  decision (one full missed window beyond the ordinary one), and a change
+   *  to it should have to come back through this test. */
+  it('doubles the window by default', () => {
+    expect(BUILDER_SILENT_MULTIPLIER_DEFAULT).toBe(2);
   });
 });
 
