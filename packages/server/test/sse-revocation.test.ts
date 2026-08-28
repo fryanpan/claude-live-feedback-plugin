@@ -111,8 +111,9 @@ describe('a revoked share loses its event stream', () => {
       body: JSON.stringify({ workspaceId: boardId }),
     });
     expect(mint.status).toBe(200);
-    const { share } = (await mint.json()) as { share: { slug: string; shareId: string } };
-    const redeemed = await fetch(`${base}/s/${share.slug}`, {
+    const { share } = (await mint.json()) as { share: { url: string; shareId: string } };
+    const shareUrl = new URL(share.url);
+    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST },
     });

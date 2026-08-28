@@ -317,37 +317,54 @@ describe('a grouping cannot be shared on its own', () => {
       base = `http://localhost:${handle.port}`;
     };
 
-    it('no longer redeems its slug, where a board share on the same server does', async () => {
+    it('no longer redeems, where a board share on the same server does', async () => {
       const board = await local('/api/share/link', { workspaceId: boardId });
       expect(board.status).toBe(200);
-      const boardSlug = ((await board.json()) as { share: Share }).share.slug ?? '';
-      expect(boardSlug).toBeTruthy();
+      const boardUrl = ((await board.json()) as { share: Share }).share.url;
+      expect(boardUrl).toBeTruthy();
 
       const legacySlug = 'e'.repeat(32);
       await restartWith([groupingShare(diffGroupingId, legacySlug, diffMemberDocId)]);
 
-      const redeem = (slug: string) =>
-        fetch(`${base}/s/${slug}`, { headers: { host: PUBLIC_HOST }, redirect: 'manual' });
+      const redeem = (shareUrl: string) => {
+        const u = new URL(shareUrl);
+        return fetch(`${base}${u.pathname}${u.search}`, {
+          headers: { host: PUBLIC_HOST },
+          redirect: 'manual',
+        });
+      };
 
-      // Positive control FIRST: the registry survived the restart and the
-      // redeem route works at all.
-      const ok = await redeem(boardSlug);
+      // Positive control FIRST: the registry — and the signing key, which
+      // lives in the same dataDir — survived the restart and the redeem
+      // route works at all.
+      const ok = await redeem(boardUrl);
       expect(ok.status).toBe(302);
       expect(ok.headers.get('location')).toBe(`/workspaces/${encodeURIComponent(boardId)}`);
 
-      // The grouping slug is indistinguishable from one that never existed —
-      // the same 404 an unknown or expired slug gets. A named 410 here would
-      // tell a stranger holding a leaked link that it was once real.
-      const gone = await redeem(legacySlug);
-      expect(gone.status).toBe(404);
-
-      // And the record is still on disk: this removes a capability, not user
-      // content, so an operator can still see and revoke it.
+      // The record is still on disk (this removes a capability, not user
+      // content, so an operator can still see and revoke it), and the list
+      // serves it a freshly SIGNED url…
       const listed = await fetch(`${base}/api/share`, {
         headers: { host: `localhost:${handle.port}` },
       });
-      const ids = ((await listed.json()) as { shares: Share[] }).shares.map((s) => s.shareId);
-      expect(ids).toContain('legacy02');
+      const legacy = ((await listed.json()) as { shares: Share[] }).shares.find(
+        (s) => s.shareId === 'legacy02',
+      );
+      expect(legacy).toBeDefined();
+
+      // …but even that validly signed url is refused at redemption: the 404
+      // is the board-only rule, not a signature failure, and it is
+      // indistinguishable from a link that never existed. A named 410 here
+      // would tell a stranger holding a leaked link that it was once real.
+      const gone = await redeem(legacy?.url ?? '');
+      expect(gone.status).toBe(404);
+
+      // The retired unsigned form is dead outright, for every record alike.
+      const unsigned = await fetch(`${base}/s/${legacySlug}`, {
+        headers: { host: PUBLIC_HOST },
+        redirect: 'manual',
+      });
+      expect(unsigned.status).toBe(404);
     });
 
     it('stops honouring a session cookie minted before the upgrade', async () => {
@@ -456,7 +473,8 @@ describe('a grouping cannot be shared on its own', () => {
       expect(mint.status).toBe(200);
       const share = ((await mint.json()) as { share: Share }).share;
 
-      const redeemed = await fetch(`${base}/s/${share.slug}`, {
+      const shareUrl = new URL(share.url);
+      const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
         headers: { host: PUBLIC_HOST },
         redirect: 'manual',
       });
@@ -487,7 +505,7 @@ describe('a grouping cannot be shared on its own', () => {
 
     it('creates a review on a fresh board and shares it in one create + one share', async () => {
       // The cost this change lands on the most-used path, measured on the
-      // actual flow rather than asserted. Bryan's ruling on t-o5gm3Hnvot2K:
+      // actual flow rather than asserted. Bryan's ruling on the board ticket:
       // "creating and sharing docs should both still take seconds … workspace
       // setup should normally have already happened … and that should also
       // take seconds to make a blank empty workspace if there isn't one yet."

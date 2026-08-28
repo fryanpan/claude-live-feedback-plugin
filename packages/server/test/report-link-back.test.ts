@@ -195,7 +195,7 @@ describe('a report comes back with the link to hand over', () => {
   it('a doc nobody has heard of gets no link rather than a broken one', async () => {
     // The spread is conditional so an unresolvable doc simply omits the
     // field. A link built anyway would point at a 404 and read as authoritative.
-    const r = await post(`/api/docs/${encodeURIComponent('task:t-does-not-exist')}/threads`, {
+    const r = await post(`/api/docs/${encodeURIComponent('task:t-nothing')}/threads`, {
       author: AGENT,
       text: 'Into the void.',
       anchor: { kind: 'subject' },
@@ -259,8 +259,8 @@ describe('the handoff link is owner-only', () => {
 
     const mint = await post('/api/share/link', { workspaceId: boardId, label: 'a share' });
     expect(mint.status).toBe(200);
-    const slug = ((await mint.json()) as { share: { slug: string } }).share.slug;
-    const redeemed = await fetch(`${base}/s/${slug}`, {
+    const shareUrl = new URL(((await mint.json()) as { share: { url: string } }).share.url);
+    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST },
     });

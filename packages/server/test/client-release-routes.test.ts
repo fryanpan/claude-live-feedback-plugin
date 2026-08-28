@@ -212,8 +212,9 @@ describe('client release over the attachments route', () => {
         headers: { host: `localhost:${port}`, 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
       })
-    ).json()) as { share: { slug: string } };
-    const redeemed = await fetch(`${base}/s/${share.share.slug}`, {
+    ).json()) as { share: { url: string } };
+    const shareUrl = new URL(share.share.url);
+    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
     });

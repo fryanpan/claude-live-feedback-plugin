@@ -427,7 +427,9 @@ if (share) {
   );
 }
 if (share?.config.publicHostname) {
-  console.log(`[feedback]   share-link: https://${share.config.publicHostname}/s/<slug>`);
+  console.log(
+    `[feedback]   share-link: https://${share.config.publicHostname}/share/<id>?exp=…&sig=…`,
+  );
 }
 if (share?.config.baseHostname && share.config.cfAccountId) {
   console.log(
