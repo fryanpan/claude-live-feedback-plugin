@@ -11,6 +11,10 @@ import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-ho
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { ThreadSummarizer } from './summarize.ts';
+import {
+  KEYCHAIN_SERVICE as ASSEMBLYAI_KEYCHAIN_SERVICE,
+  createAssemblyAiEngine,
+} from './transcribe-assemblyai.ts';
 import { haikuVoiceComplete } from './voice.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -243,6 +247,18 @@ else console.log('[auth] login codes send via Cloudflare Email Sending');
 // Absent key → null → the fast path is off and voice routes to the agent.
 const voiceComplete = haikuVoiceComplete();
 
+// The ONLY place a real transcription engine is constructed — same seam rule,
+// and here it is also the difference between a test suite that is free and one
+// that opens a metered streaming session per server it spins up. No key → null
+// → the meeting socket answers `not_configured` and the strip says so.
+const transcription = createAssemblyAiEngine();
+if (!transcription) {
+  console.log(
+    '[meetings] no transcription key; live meetings answer "not configured". ' +
+      `Add one with: security add-generic-password -a "$USER" -s ${ASSEMBLYAI_KEYCHAIN_SERVICE} -w`,
+  );
+}
+
 // The ONLY place a real plugin refresher is constructed — same seam rule as
 // the summarizer above, and here it also means no test run and no `bun run
 // staging` can mutate this machine's plugin cache. A deploy has to be asked
@@ -322,6 +338,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs } : {}),
       ...(stallNudgeQuietMs !== undefined ? { stallNudgeQuietMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
+      ...(transcription ? { transcription } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),
     });
