@@ -815,3 +815,39 @@ describe('an armed stamp survives a restart', () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+describe('a task captured from a meeting wakes the lead immediately', () => {
+  it('fires a ready_idle frame naming the row, without the idle window', () => {
+    const { world, sent, nudger } = harness();
+    nudger.noteActivity('w-search', world.now);
+
+    nudger.taskReady({
+      workspaceId: 'w-search',
+      taskId: 't-cap',
+      taskTitle: 'Strip overlaps navbar on short screens',
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.frame.event).toBe('workspace.ready_idle');
+    expect(sent[0]!.frame.taskId).toBe('t-cap');
+    expect(sent[0]!.frame.title).toBe('Strip overlaps navbar on short screens');
+    expect(sent[0]!.agentId).toBe('agent-cartographer');
+  });
+
+  it('never wakes a retired board or an empty lead seat', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.retired = true;
+    nudger.taskReady({ workspaceId: 'w-search', taskId: 't-cap', taskTitle: 'x' });
+    world.boards[0]!.retired = false;
+    delete world.boards[0]!.leadAgentId;
+    nudger.taskReady({ workspaceId: 'w-search', taskId: 't-cap', taskTitle: 'x' });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('an unreachable lead gets nothing rather than a frame into the void', () => {
+    const { world, sent, nudger } = harness();
+    world.reachable.clear();
+    nudger.taskReady({ workspaceId: 'w-search', taskId: 't-cap', taskTitle: 'x' });
+    expect(sent).toHaveLength(0);
+  });
+});

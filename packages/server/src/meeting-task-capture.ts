@@ -31,7 +31,7 @@ import type { NoteTaskLink, NotesTurn } from './meeting-notes.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
 import { clipToWordBoundary } from './task-title.ts';
-import { CHORES_GOAL_ID, type TaskStatus } from './tasks.ts';
+import { CHORES_GOAL_ID, type CreateTaskOpts, type TaskStatus } from './tasks.ts';
 
 /** One open (or recently closed) board row, as the extractor may see it. */
 export interface TaskCaptureCandidate {
@@ -249,7 +249,7 @@ export interface TaskCaptureBoard {
   }>;
   createTask(
     workspaceId: string,
-    opts: Record<string, unknown>,
+    opts: CreateTaskOpts,
   ): { ok: true; task: { id: string } } | { ok: false; error: string };
   transition(
     taskId: string,

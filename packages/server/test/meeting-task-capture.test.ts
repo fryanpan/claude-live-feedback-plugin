@@ -160,7 +160,7 @@ describe('taskCaptureUrl', () => {
 
 /** A board stub that records every write. */
 function boardStub(over: { failCreate?: boolean } = {}) {
-  const created: Array<Record<string, unknown>> = [];
+  const created: Array<import('../src/tasks.ts').CreateTaskOpts> = [];
   const transitions: Array<{ taskId: string; to: string; actor: unknown }> = [];
   let nextId = 0;
   return {
@@ -168,7 +168,7 @@ function boardStub(over: { failCreate?: boolean } = {}) {
     transitions,
     board: {
       listTasks: () => candidates.map((c) => ({ ...c })),
-      createTask: (_ws: string, opts: Record<string, unknown>) => {
+      createTask: (_ws: string, opts: import('../src/tasks.ts').CreateTaskOpts) => {
         if (over.failCreate) return { ok: false as const, error: 'workspace-retired' };
         created.push(opts);
         nextId++;
@@ -225,17 +225,12 @@ describe('runTaskCapture', () => {
       tickInput,
     );
     expect(created).toHaveLength(1);
-    const opts = created[0] as {
-      actor: { id: string; name: string; kind: string };
-      assignee: string;
-      assigneeKind: string;
-      origin: unknown;
-      goal?: string;
-    };
+    const opts = created[0];
+    if (!opts) throw new Error('no create recorded');
     // Attribution: a named agent identity — never a minted user id, never the
     // bare generic word the owner gate refuses.
     expect(opts.actor).toEqual(MEETING_CAPTURE_ACTOR);
-    expect(opts.actor.id.startsWith('user-')).toBe(false);
+    expect(opts.actor?.id.startsWith('user-')).toBe(false);
     expect(opts.assignee).not.toBe('agent');
     expect(opts.assigneeKind).toBe('agent');
     expect(opts.origin).toEqual({ kind: 'doc', docId: 'doc-m' });
@@ -265,7 +260,7 @@ describe('runTaskCapture', () => {
       },
       tickInput,
     );
-    expect((created[0] as { goal?: string }).goal).toBe('chores');
+    expect(created[0]?.goal).toBe('chores');
     expect(transitions).toEqual([
       { taskId: 't-new1', to: 'todo', actor: MEETING_CAPTURE_ACTOR },
     ]);
@@ -352,7 +347,8 @@ describe('createHaikuTaskCaptureExtractor', () => {
   });
 
   it('an HTTP failure throws and never logs the key', async () => {
-    const impl = (async () => new Response('nope', { status: 500 })) as typeof fetch;
+    const impl = (async (_url: unknown, _init?: RequestInit) =>
+      new Response('nope', { status: 500 })) as typeof fetch;
     const extractor = createHaikuTaskCaptureExtractor({ apiKey: 'k-test', fetchImpl: impl });
     await expect(extractor?.extract({ turns, candidates })).rejects.toThrow('HTTP 500');
   });

@@ -239,9 +239,15 @@ export interface MeetingNotesDeps {
  * optional because the server supplies the real one — the write into the
  * meeting doc itself (see `meeting-notes-doc.ts`). A caller-supplied
  * `onNotes` observes in addition to that write, never instead of it.
+ *
+ * `taskExtractor` is the capture analogue of `composer`: the caller supplies
+ * the LLM seam and the server assembles the board access around it
+ * (`withServerNotesSinks`), the way it already supplies the doc sink. A
+ * caller-supplied `captureTasks` wins over that assembly.
  */
 export type MeetingNotesOptions = Omit<MeetingNotesDeps, 'onNotes'> & {
   onNotes?: (update: NotesUpdate) => void;
+  taskExtractor?: import('./meeting-task-capture.ts').TaskCaptureExtractor | null;
 };
 
 export interface MeetingNotesSession {

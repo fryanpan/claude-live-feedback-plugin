@@ -419,6 +419,42 @@ export class ReadyWorkNudger {
     });
   }
 
+  /**
+   * A row just became ready by an act the board itself performed — today,
+   * a task captured from meeting speech and judged clear enough to start.
+   * Same immediacy contract as `reviewAnswered`, and for the same reason:
+   * the person asked for this out loud seconds ago, so a wake that waits
+   * out the idle window answers a different question than the one asked.
+   * Rides the `ready_idle` event name because that is what it is — ready
+   * work awaiting dispatch — and the frame names the row so the lead can
+   * tell whether the wake was worth the turn.
+   */
+  taskReady(input: { workspaceId: string; taskId: string; taskTitle: string }): void {
+    const ts = this.now();
+    this.noteActivity(input.workspaceId, ts);
+    let board: ReadyWorkSnapshot | undefined;
+    try {
+      board = this.opts.lookup(input.workspaceId);
+    } catch {
+      return;
+    }
+    if (!board || board.retired) return;
+    const lead = board.leadAgentId;
+    if (lead === undefined) return;
+    // This wake IS the stamp's nudge: spend it so the timer does not follow
+    // with a second frame over the same fact. It re-arms on real activity.
+    this.armed.set(input.workspaceId, this.stampFor(board, ts));
+    this.saveStamps();
+    if (!this.reachable(board.workspaceId, lead)) return;
+    this.emit(board.workspaceId, lead, {
+      event: READY_IDLE_EVENT,
+      workspaceId: board.workspaceId,
+      taskId: input.taskId,
+      title: input.taskTitle,
+      ts,
+    });
+  }
+
   /** One pass over every board. Never throws — this runs on a timer. */
   tick(): void {
     let boards: readonly ReadyWorkSnapshot[];

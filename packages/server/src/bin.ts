@@ -7,6 +7,7 @@ import { resolveCloudflareCodeSender } from './auth/cloudflare-code-sender.ts';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
+import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
@@ -270,6 +271,18 @@ if (transcription && !notesComposer) {
   );
 }
 
+// The ONLY place the real task-capture extractor is constructed — the same
+// dedicated-key consent as the notes composer, because the same transcript
+// text leaves the machine. Absent key or CW_MEETING_TASKS=0 → null → the
+// notes still compose, they just never link or file board tasks.
+const taskExtractor = createHaikuTaskCaptureExtractor();
+if (notesComposer && !taskExtractor) {
+  console.log(
+    '[meeting-tasks] task capture off (CW_MEETING_TASKS=0); meetings compose notes ' +
+      'without finding or filing board tasks.',
+  );
+}
+
 // The ONLY place a real plugin refresher is constructed — same seam rule as
 // the summarizer above, and here it also means no test run and no `bun run
 // staging` can mutate this machine's plugin cache. A deploy has to be asked
@@ -351,7 +364,9 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
-      ...(notesComposer ? { meetingNotes: { composer: notesComposer } } : {}),
+      ...(notesComposer
+        ? { meetingNotes: { composer: notesComposer, taskExtractor } }
+        : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),
     });
