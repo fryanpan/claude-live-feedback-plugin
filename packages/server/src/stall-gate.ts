@@ -35,7 +35,9 @@
  * a person with no question filed anywhere they read. Nobody is failing to
  * work it, so it is not a stall, and the remedy is to file the ask rather
  * than to chase the owner. Merging the two would hand the lead one list with
- * two incompatible actions in it.
+ * two incompatible actions in it. It runs on the same clock as `stalled`,
+ * for the reason given where the gate is applied below: an ask that was
+ * created a minute ago is one the lead may well be in the middle of filing.
  *
  * `undetermined` is the load-bearing one, and it is the same argument
  * `ready-gate.ts` makes: a row whose review items cannot be parsed answers
@@ -178,7 +180,20 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
     // also set on rows BEHIND such a row, whose chain bottoms out in it —
     // listing those would hand the lead the same single action several times
     // over, attached to rows where it cannot be performed.
-    else if (row.bucket === 'blocked-on-owner-unfiled') unfiled.push(named);
+    //
+    // And gated on the SAME silence the stalled list runs on. Without the
+    // clock a row counted the moment it was created: an agent files a ticket
+    // for a person, and the wake fires while the turn that filed it is still
+    // running — telling the lead about a gap it is in the middle of closing.
+    // Measured on a live board, that produced six wakes in an evening with
+    // nothing stalled in any of them, its unfiled count walking 1→2→3→2→1.
+    //
+    // This clock belongs to the WAKE and to nothing else. `classifyOpenTasks`
+    // is unchanged, so the keep-moving report still counts every unfiled ask
+    // however fresh — there the question is whether the protocol is being
+    // followed right now, and a young violation is still a violation.
+    else if (row.bucket === 'blocked-on-owner-unfiled' && row.sinceActivityMs > quietMs)
+      unfiled.push(named);
   }
   // `classifyOpenTasks` already sorts by silence, longest first, and both
   // lists inherit that order — the row at the top is the one to start with.

@@ -26,11 +26,21 @@
  *
  * The arming rule is therefore a STAMP rather than a cooldown:
  *
- *     stamp = <row id>:<bucket>:<how many repeat windows it has been quiet>, sorted
+ *     stamp = <how many repeat windows the board's oldest row has been quiet>
+ *             | <row ids, sorted> | <unreadable rows, sorted>
  *
- * A board is woken at most once per stamp. Any change to WHICH rows are stuck,
- * or to what kind of stuck they are, moves the stamp and re-arms the wake; a
- * board where nothing has changed moves nothing and stays silent.
+ * A board is woken when that stamp gets WORSE — a row id that was not stuck
+ * before, a higher escalation bucket, or a row the pass could not read that it
+ * could read last time. A board where nothing has changed says nothing, and so
+ * does a board that has got better.
+ *
+ * That last clause is load-bearing, and it was the first version's bug. The
+ * rule was equality, so a SHRINKING set re-armed the wake exactly as a growing
+ * one did: the lead was woken to file an ask, filed it, the row left the list,
+ * and the next tick woke the lead again to announce its own fix. A wake that
+ * re-arms on the action it asked for cannot extinguish itself — measured on a
+ * live board as six wakes in one evening, none of them naming a stalled row,
+ * the unfiled count walking 1→2→3→2→1. The comparison lives in `growsOn`.
  *
  * ── Why escalation is folded into the stamp ─────────────────────────────
  *
@@ -199,6 +209,26 @@ function reasonsOf(undetermined: readonly StallUndeterminedRow[]): string[] {
   return Array.from(new Set(undetermined.map((u) => u.reason))).sort();
 }
 
+/** One armed stamp, read back apart. A stamp written by an older build simply
+ *  parses into tokens the current one never produces, which reads as all-new
+ *  and costs the board a single wake — see `stampFor`. */
+function parseStamp(stamp: string): {
+  bucket: number;
+  ids: Set<string>;
+  undetermined: Set<string>;
+} {
+  const [bucket = '', ids = '', undetermined = ''] = stamp.split('|');
+  const parsed = Number.parseInt(bucket, 10);
+  return {
+    // A bucket that will not parse must not read as an escalation, so it
+    // floors rather than becoming NaN — every comparison against NaN is false,
+    // which would silently disable the escalation half of the rule.
+    bucket: Number.isFinite(parsed) ? parsed : 0,
+    ids: new Set(ids.split(',').filter((token) => token.length > 0)),
+    undetermined: new Set(undetermined.split(',').filter((token) => token.length > 0)),
+  };
+}
+
 export class StallNudger {
   private readonly opts: StallNudgerOptions;
   private readonly now: () => number;
@@ -305,12 +335,19 @@ export class StallNudger {
       return;
     }
     const stamp = this.stampFor(board);
-    if (this.armed.get(key) === stamp) return;
-    // Named before the reachability check below, and that ordering is the
-    // point: the commonest reason a wake is not delivered is a lead holding no
-    // stream, which is exactly when an unevaluable board would otherwise leave
-    // no trace anywhere.
+    // Named before both the wake decision and the reachability check below,
+    // and that ordering is the point: the commonest reason a wake is not
+    // delivered is a lead holding no stream, which is exactly when an
+    // unevaluable board would otherwise leave no trace anywhere. It dedupes on
+    // the condition itself, so a tick that says nothing costs no line.
     this.reportUnevaluable(board);
+    if (!this.growsOn(this.armed.get(key), stamp)) {
+      // Silent, but RECORDED. A shrink that left the old stamp standing would
+      // keep naming rows that are no longer on the list, and the row coming
+      // back would then read as unchanged and never fire.
+      this.armed.set(key, stamp);
+      return;
+    }
     // Checked LAST, and deliberately not recorded when it says no: a wake that
     // reached nobody must stay owed, or the lead returns to a board that has
     // already decided it told them.
@@ -399,8 +436,14 @@ export class StallNudger {
    */
   private stampFor(board: StallSnapshot): string {
     const rows = [...board.stalled, ...board.unfiled];
+    // Ids alone, without the bucket they used to carry. A row changing bucket
+    // is most often the lead's OWN action landing — dispatching a worker moves
+    // a row from `ready-unpicked` to `in-progress` — and a token that changed
+    // would read as a new row under the growth rule below, waking the lead to
+    // announce what it just did. The frame still carries every row's bucket;
+    // it is the ARMING that must not turn on it.
     const ids = rows
-      .map((row) => `${row.id}:${row.bucket}`)
+      .map((row) => row.id)
       .slice()
       .sort();
     // The oldest row speaks for the board. `0` on a board whose only finding
@@ -413,13 +456,50 @@ export class StallNudger {
       .sort();
     // Still appended only when non-empty, so a board with nothing unreadable —
     // which is almost all of them — keeps computing a stable string from one
-    // process to the next. (The move of the bucket to the front is itself a
-    // format change, so every stored stamp mismatches once on the first tick
-    // after this deploys and each board is billed one extra wake. That is a
-    // one-time cost against a standing one.)
+    // process to the next. (Dropping the per-row bucket is a format change, so
+    // every stored stamp reads as all-new on the first tick after this deploys
+    // and each board is billed one extra wake — the same one-time cost the
+    // move of the escalation bucket to the front paid, against a standing one.)
     return undetermined.length > 0
       ? `${bucket}|${ids.join(',')}|${undetermined.join(',')}`
       : `${bucket}|${ids.join(',')}`;
+  }
+
+  /**
+   * Is the new stamp WORSE than the armed one? The only question that may
+   * spend a lead's turn.
+   *
+   * The rule used to be equality — any different stamp re-armed the wake — and
+   * that made the loop self-sustaining rather than self-extinguishing. A
+   * shrinking set moves the stamp exactly as a growing one does, so the lead
+   * was woken to file an ask, filed it, the row left the unfiled list, and the
+   * next tick woke the lead again over its own remedy. Six wakes in one
+   * evening on a live board, `stalled=0` in all six, the unfiled count walking
+   * 1→2→3→2→1.
+   *
+   * So three things, and only these three, are news:
+   *
+   *  - a row id on the list that was not on it before — a NEW thing stuck;
+   *  - the board's escalation bucket higher than it was — its worst row has
+   *    crossed another repeat window;
+   *  - a row the pass could not read that it could read before.
+   *
+   * Everything else is a board getting better, and a recovery is never
+   * announced: rows leaving lowers the count, and rows leaving also lowers the
+   * oldest quiet time, which is why the bucket is compared for GREATER rather
+   * than for difference.
+   *
+   * An absent stamp is a board this process has never woken, which is news by
+   * definition.
+   */
+  private growsOn(prior: string | undefined, next: string): boolean {
+    if (prior === undefined) return true;
+    const before = parseStamp(prior);
+    const after = parseStamp(next);
+    if (after.bucket > before.bucket) return true;
+    for (const id of after.ids) if (!before.ids.has(id)) return true;
+    for (const row of after.undetermined) if (!before.undetermined.has(row)) return true;
+    return false;
   }
 
   private reachable(workspaceId: string, agentId: string): boolean {

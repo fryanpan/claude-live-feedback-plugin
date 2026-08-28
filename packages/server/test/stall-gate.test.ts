@@ -187,6 +187,50 @@ describe('a row waiting on a person with nothing filed is its own list', () => {
     });
     expect(verdict.unfiled).toHaveLength(0);
   });
+
+  /**
+   * The same clock the stalled list runs on, and for the same reason.
+   *
+   * Without it a row counts the instant somebody creates it — an agent files
+   * a ticket for the owner, and the wake fires before the turn that filed it
+   * has finished, telling the lead about a gap it is in the middle of
+   * closing. Measured on a live board: six wakes in one evening, none of them
+   * naming a stalled row, the unfiled count walking 1→2→3→2→1 as rows were
+   * created and answered.
+   *
+   * This is the WAKE's gate only. The keep-moving report counts every unfiled
+   * ask however fresh, because there the reading is "is the protocol being
+   * followed right now" and a young violation is still a violation.
+   */
+  it('leaves a fresh unfiled ask alone until it has been quiet as long as a stall', () => {
+    const verdict = evaluate({
+      tasks: [
+        task({
+          id: 't-1',
+          status: 'todo',
+          ownerKind: 'person',
+          transitions: [{ ts: now - 5 * MIN, to: 'todo' }],
+        }),
+      ],
+    });
+    expect(verdict.unfiled).toHaveLength(0);
+    // …and it was still examined, so the silence is "one row, accounted for".
+    expect(verdict.considered).toBe(1);
+  });
+
+  it('names the same row once it has been quiet longer than the window', () => {
+    const verdict = evaluate({
+      tasks: [
+        task({
+          id: 't-1',
+          status: 'todo',
+          ownerKind: 'person',
+          transitions: [{ ts: now - 25 * MIN, to: 'todo' }],
+        }),
+      ],
+    });
+    expect(verdict.unfiled.map((r) => r.id)).toEqual(['t-1']);
+  });
 });
 
 describe('a row whose questions cannot be read is named as unread, never as healthy', () => {
