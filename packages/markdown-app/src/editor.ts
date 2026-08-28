@@ -27,6 +27,7 @@ import { SuggestionChips } from './redline/suggestion-chips.ts';
 import type { InlineThreadCard } from './review-surface.ts';
 import { SuggestInput } from './suggest-input.ts';
 import { SuggestDelete, SuggestInsert } from './suggest-marks.ts';
+import { TaskLinkChips } from './task-link-chips.ts';
 import { ThreadDecorations, type ThreadRange, setThreadDecorations } from './thread-decorations.ts';
 
 /**
@@ -129,6 +130,10 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
         field: fragmentName,
       }),
       ThreadDecorations,
+      // Live status chips beside workspace task links — render-time only,
+      // never written into the fragment. In the base list because every
+      // prose surface may hold a task link (meeting notes are the driver).
+      TaskLinkChips,
       ...(opts.extraExtensions ?? []),
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),
