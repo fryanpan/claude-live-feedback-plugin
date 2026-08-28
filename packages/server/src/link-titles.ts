@@ -48,6 +48,14 @@ export function linkInfoFor(url: string, sources: LinkTitleSources): ResolvedLin
       if (!task || task.workspaceId !== link.workspaceId) return { title: null };
       return { title: task.title, status: task.status };
     }
+    // The goal panel's own address shape. Same lookup as a task on purpose:
+    // goals and tasks share the id namespace and the status machine, and the
+    // route's `task` source already reaches both.
+    case 'goal': {
+      const goal = sources.task(link.goalId);
+      if (!goal || goal.workspaceId !== link.workspaceId) return { title: null };
+      return { title: goal.title, status: goal.status };
+    }
     case 'doc':
     case 'mockup': {
       // A task's body room is addressed as `task:<id>` — its title is the
