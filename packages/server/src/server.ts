@@ -481,9 +481,20 @@ export interface ServerOptions {
   stallNudgeQuietMs?: number;
   /**
    * How long a row must stay stalled before the wake says it AGAIN (default
-   * `STALL_REPEAT_DEFAULT_MS`, four hours). Test seam only: there is no
-   * operator knob, because the escalation cadence is a product decision rather
-   * than a deployment one.
+   * `STALL_REPEAT_DEFAULT_MS`, four hours; `CW_STALL_REPEAT_HOURS` sets it on
+   * the box).
+   *
+   * This was a test seam only, on the reasoning that escalation cadence is a
+   * product decision rather than a deployment one. That was wrong about the
+   * cost: a wake is not a notification, it is a lead session's whole turn, so
+   * this number sets the standing token floor a fleet pays for boards where
+   * nothing is changing. That floor has to be tunable at the speed a bill
+   * arrives, which is faster than a release.
+   *
+   * Retuning it re-bills each board at most one wake, because the repeat
+   * window is the divisor behind the arming stamp — a new value lands every
+   * board in a different bucket exactly once. Expect that one-off on the tick
+   * after a change and do not read it as a rate.
    */
   stallNudgeRepeatMs?: number;
   /** Absolute path to the built widget dist dir, or null to skip. */
