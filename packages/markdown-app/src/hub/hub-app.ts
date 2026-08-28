@@ -18,6 +18,7 @@ import {
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
+import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
@@ -2313,6 +2314,9 @@ async function main(): Promise<void> {
   }
   // A task going done takes its discussion out of the queue.
   es.addEventListener('task.transitioned', () => void loadReviewItems());
+  // …and stales every status chip a pasted task/goal link is wearing, so the
+  // chips re-ask on the same push instead of showing the old status forever.
+  es.addEventListener('task.transitioned', () => staleTaskLinkStatuses());
 
   // ── Catching up after the stream could not reach us ────────────────────
   //
