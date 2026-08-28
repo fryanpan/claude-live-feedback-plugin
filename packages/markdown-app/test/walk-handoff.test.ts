@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { walkHandoff, walkNextUrl } from '../src/hub/hub-model';
 
-// The landing page's review chip and "Review all" bar (t-DA4rBTmdP0d2) hand
+// The landing page's review chip and "Review all" bar (the walkthrough
+// handoff ticket) hand
 // the client `?walk=1` (open the walkthrough on arrival) and `&then=<ids>`
 // (workspaces still holding items, to visit after this queue drains). These
 // two pure helpers are the whole contract; hub-app just wires them.
