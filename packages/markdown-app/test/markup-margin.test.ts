@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { type EditorHandle, createEditor } from '../src/editor.ts';
+import { type ComposerEditorModule, setComposerEditorLoader } from '../src/md-composer.ts';
 import { MountScope } from '../src/mount-scope.ts';
 import type { RedlineDeletion } from '../src/redline/live-markup.ts';
 import {
@@ -1484,6 +1485,82 @@ describe('mountMarkupMargin — suggestion chip mobile-only class / 430px', () =
     // rendered, CSS decides visibility" contract as `.lf-del-chip`
     // (live-markup.ts): styles.css, not this test, is what actually hides
     // the balloon column and reveals the chip ≤1100px.
+  });
+});
+
+describe('mountMarkupMargin — a rebuild does not interrupt typing', () => {
+  /* The column rebuilds on any display-relevant change to ANY thread — a
+     peer's reply landing over the websocket while the reader is mid-word.
+     The draft's words were already carried across (pendingReplies); the
+     caret was not, and losing focus dismisses the iPad keyboard and yanks
+     the viewport to wherever it re-settles. */
+  it('keeps focus and draft in a balloon reply box when another thread changes', async () => {
+    // The composer chunk never lands — the plain textarea is the surface
+    // being typed in, and focus is observable via document.activeElement.
+    setComposerEditorLoader(() => new Promise<ComposerEditorModule>(() => {}));
+    try {
+      const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+        '',
+        'Alpha bravo gamma delta echo.\n',
+      );
+      await tick();
+      const t1 = openThreadAt(
+        ydoc,
+        surface.handle.editor,
+        () => surface.getSelectionRel(),
+        { from: 1, to: 6 },
+        'First thread comment.',
+      );
+      const t2 = openThreadAt(
+        ydoc,
+        surface.handle.editor,
+        () => surface.getSelectionRel(),
+        { from: 13, to: 18 },
+        'Second thread comment.',
+      );
+      const margin = mountMarkupMargin({
+        editorEl: parent,
+        view: surface.handle.editor.view,
+        getDeletions: () => [],
+        threads: () => chrome.collectThreads(),
+        chrome,
+        scope,
+      });
+      margin.relayout();
+
+      const balloonTa = (id: string): HTMLTextAreaElement | null =>
+        parent.querySelector<HTMLTextAreaElement>(
+          `.lf-balloon-comment[data-thread-id="${id}"] textarea`,
+        );
+      clickToExpand(
+        parent.querySelector(`.lf-balloon-comment[data-thread-id="${t1.id}"]`) as HTMLElement,
+      );
+      const ta = balloonTa(t1.id) as HTMLTextAreaElement;
+      ta.value = 'half a thought';
+      ta.focus();
+      ta.setSelectionRange(6, 6);
+      expect(document.activeElement, 'focus never landed — the rest is vacuous').toBe(ta);
+
+      // Background event: a reply lands on the OTHER thread.
+      const comments = (ydoc.getMap('threads').get(t2.id) as Y.Map<unknown>).get(
+        'comments',
+      ) as Y.Array<Y.Map<unknown>>;
+      const reply = new Y.Map<unknown>();
+      reply.set('id', 'c-bg');
+      reply.set('author', { id: 'u3', name: 'Cara', kind: 'known', color: '#333' });
+      reply.set('text', 'A background reply.');
+      reply.set('ts', Date.now());
+      comments.push([reply]);
+      margin.relayout();
+
+      const rebuilt = balloonTa(t1.id) as HTMLTextAreaElement;
+      expect(rebuilt).not.toBe(ta); // positive control: the balloon WAS rebuilt
+      expect(rebuilt.value).toBe('half a thought');
+      expect(document.activeElement).toBe(rebuilt);
+      expect(rebuilt.selectionStart).toBe(6);
+    } finally {
+      setComposerEditorLoader(null);
+    }
   });
 });
 

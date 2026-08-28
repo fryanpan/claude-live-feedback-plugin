@@ -12,6 +12,12 @@ import {
   threadSummary,
 } from '@feedback/core';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from './comment-markdown.ts';
+import {
+  keptComposerFocus,
+  keptScrollTops,
+  restoreComposerFocus,
+  restoreScrollTops,
+} from './composer-keep.ts';
 import { askedMetaLine } from './hub/hub-model.ts';
 import { decisionOutcome, threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
@@ -327,6 +333,12 @@ export class ThreadPanel {
       const ta = existing.querySelector<HTMLTextAreaElement>('textarea');
       if (id && ta && ta.value) pendingReplies.set(id, ta.value);
     }
+    // …and the caret and the scroll with it: this render fires on background
+    // events (a peer's reply on ANOTHER thread, a summary landing), and the
+    // rebuild below would otherwise drop focus to body and let the emptied
+    // pane clamp its scrollTop to 0 under whoever is typing.
+    const keptFocus = keptComposerFocus(c);
+    const keptScroll = keptScrollTops(c);
 
     c.innerHTML = '';
     const visible = this.filtered();
@@ -375,6 +387,8 @@ export class ThreadPanel {
         c.appendChild(this.renderThread(t, pendingReplies.get(t.id)));
     }
     sizeThreadSlots(c);
+    if (keptFocus) restoreComposerFocus(c, keptFocus);
+    restoreScrollTops(keptScroll);
     this.lastRenderKey = key;
   }
 
