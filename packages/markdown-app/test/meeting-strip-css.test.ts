@@ -107,6 +107,12 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(strip).toMatch(/font-family:\s*var\(--sans\)/);
   });
 
+  it('gives the only control the documented 36px tap-target minimum', () => {
+    // design-mobile.md: interactive elements are at least 36x36px. The toggle
+    // is the strip's single control and on a phone it sits on the bottom edge.
+    expect(rule('.meeting-toggle', SECTION)).toMatch(/min-height:\s*36px/);
+  });
+
   it('flattens the micro-row so the line reads clock, words, control', () => {
     const wide = block('@media (min-width: 721px)', SECTION);
     expect(wide, 'no wide-mode block for the strip').not.toBe('');

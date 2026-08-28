@@ -5579,7 +5579,8 @@ body.is-reading-width #editor > .ProseMirror {
   font-size: 12px;
   font-weight: 600;
   padding: 4px 11px;
-  min-height: 28px;
+  /* design-mobile.md tap-target floor; the strip's only control. */
+  min-height: 36px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
