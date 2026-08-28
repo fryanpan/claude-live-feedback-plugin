@@ -8,6 +8,7 @@ import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
+import { mountMeetingStrip } from './meeting-strip.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
@@ -251,6 +252,20 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // Interaction-bounded reading-session capture (doc_open + read_session).
   // The #editor element is the scroll container on the markdown surface.
   scope.onCleanup(startReadingTracker({ docId, user, scrollEl: editorMount }));
+
+  // Live-meeting transcript strip along the bottom of the editor pane. Bound
+  // to this scope, so navigating away closes the audio socket and releases the
+  // microphone — a mic left open behind a doc nobody is looking at is the
+  // failure worth designing against.
+  //
+  // Ordinary markdown docs only. A `.md` diff member's File view mounts this
+  // same surface over a companion doc (that is what `navDocId` marks), and a
+  // review of somebody's branch is not a place a meeting is recorded.
+  const meetingStripEl = document.getElementById('meeting-strip');
+  if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
+    const strip = mountMeetingStrip({ docId, root: meetingStripEl });
+    scope.onCleanup(() => strip.destroy());
+  }
 
   // =========================================================================
   // COMMENT PILL — small inline affordance
