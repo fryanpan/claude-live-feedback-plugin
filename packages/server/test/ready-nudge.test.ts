@@ -839,7 +839,8 @@ describe('a task captured from a meeting wakes the lead immediately', () => {
     world.boards[0]!.retired = true;
     nudger.taskReady({ workspaceId: 'w-search', taskId: 't-cap', taskTitle: 'x' });
     world.boards[0]!.retired = false;
-    delete world.boards[0]!.leadAgentId;
+    const { leadAgentId: _seat, ...emptySeat } = world.boards[0]!;
+    world.boards[0] = emptySeat;
     nudger.taskReady({ workspaceId: 'w-search', taskId: 't-cap', taskTitle: 'x' });
     expect(sent).toHaveLength(0);
   });

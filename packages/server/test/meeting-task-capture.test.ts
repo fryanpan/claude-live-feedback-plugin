@@ -11,6 +11,7 @@
  * All fixtures are synthetic. The repo is public.
  */
 import { describe, expect, it } from 'bun:test';
+import type { NotesTurn } from '../src/meeting-notes.ts';
 import {
   MEETING_CAPTURE_ACTOR,
   type TaskCaptureCandidate,
@@ -22,7 +23,6 @@ import {
   taskCaptureUrl,
   tickMentionsCandidate,
 } from '../src/meeting-task-capture.ts';
-import type { NotesTurn } from '../src/meeting-notes.ts';
 
 const candidates: TaskCaptureCandidate[] = [
   { id: 't-pop', title: 'Popover loses anchor while scrolling', status: 'in-progress' },
@@ -141,7 +141,10 @@ describe('the match guards', () => {
   it('requestMatchesCandidate needs two significant words, not one', () => {
     // One shared word ("popover") is a mention, not the same task.
     expect(
-      requestMatchesCandidate('Popover styling looks dated', 'Popover loses anchor while scrolling'),
+      requestMatchesCandidate(
+        'Popover styling looks dated',
+        'Popover loses anchor while scrolling',
+      ),
     ).toBe(false);
     expect(
       requestMatchesCandidate(
@@ -261,9 +264,7 @@ describe('runTaskCapture', () => {
       tickInput,
     );
     expect(created[0]?.goal).toBe('chores');
-    expect(transitions).toEqual([
-      { taskId: 't-new1', to: 'todo', actor: MEETING_CAPTURE_ACTOR },
-    ]);
+    expect(transitions).toEqual([{ taskId: 't-new1', to: 'todo', actor: MEETING_CAPTURE_ACTOR }]);
     expect(wakes).toEqual([
       {
         workspaceId: 'w-board',
@@ -308,7 +309,9 @@ describe('runTaskCapture', () => {
     const links = await runTaskCapture(
       {
         board,
-        extractor: extractorOf([{ kind: 'request', title: 'Anything at all new', actionable: true }]),
+        extractor: extractorOf([
+          { kind: 'request', title: 'Anything at all new', actionable: true },
+        ]),
       },
       tickInput,
     );

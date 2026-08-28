@@ -364,9 +364,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
-      ...(notesComposer
-        ? { meetingNotes: { composer: notesComposer, taskExtractor } }
-        : {}),
+      ...(notesComposer ? { meetingNotes: { composer: notesComposer, taskExtractor } } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),
     });
