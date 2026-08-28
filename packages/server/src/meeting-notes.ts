@@ -145,6 +145,11 @@ export interface NotesProjectContext {
   docPaths?: readonly string[];
   /** The workspace whose board names the work being discussed. */
   workspaceId?: string;
+  /** The meeting doc's own title — the closest thing to a meeting subject. */
+  docTitle?: string;
+  /** Open board task titles — the names of the work under discussion, so the
+   *  composer can hear "the balloons ticket" and know what that is. */
+  taskTitles?: readonly string[];
 }
 
 export interface NotesComposeInput {
@@ -194,10 +199,26 @@ export interface MeetingNotesDeps {
   quietMs?: number;
   schedule?: TickScheduler;
   context?: NotesProjectContext;
+  /**
+   * Resolve the context for THIS meeting's doc, read once at session start —
+   * the doc title and board tasks vary per doc, while these deps are wired
+   * once per server. Wins over the static `context` when both are present.
+   */
+  resolveContext?: (docId: string) => NotesProjectContext | undefined;
   /** Where composed notes go. The doc-writing stage plugs in here. */
   onNotes: (update: NotesUpdate) => void;
   onError?: (message: string) => void;
 }
+
+/**
+ * What a CALLER hands `createServer`: the same deps, except the notes sink is
+ * optional because the server supplies the real one — the write into the
+ * meeting doc itself (see `meeting-notes-doc.ts`). A caller-supplied
+ * `onNotes` observes in addition to that write, never instead of it.
+ */
+export type MeetingNotesOptions = Omit<MeetingNotesDeps, 'onNotes'> & {
+  onNotes?: (update: NotesUpdate) => void;
+};
 
 export interface MeetingNotesSession {
   onTurn(turn: EngineTurn): void;
@@ -219,6 +240,7 @@ export function beginNotesSession(
   deps: MeetingNotesDeps,
   ids: { docId: string; meetingId: string },
 ): MeetingNotesSession {
+  const context = deps.resolveContext?.(ids.docId) ?? deps.context;
   let previous: string | null = null;
   let carry: NotesTurn[] = [];
   let lastTickNo = 0;
@@ -235,7 +257,7 @@ export function beginNotesSession(
         meetingId: ids.meetingId,
         tick: { ...tick, turns },
         previous,
-        ...(deps.context ? { context: deps.context } : {}),
+        ...(context ? { context } : {}),
       };
       try {
         const notes = await deps.composer.compose(input);
