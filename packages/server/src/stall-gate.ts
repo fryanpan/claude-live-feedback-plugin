@@ -25,7 +25,8 @@
  *    goal outside every ranked band. A row only reaches the clock once none of
  *    those can account for it.
  *  - **The threshold is configurable and the default is somebody's decision,
- *    not a measurement.** Thirty minutes is what the ticket specified.
+ *    not a measurement.** Twenty minutes is Bryan's, and the reasoning is in
+ *    the constant below.
  *
  * ── Why the verdict carries three lists ─────────────────────────────────
  *
@@ -51,13 +52,23 @@ import {
 } from './keep-moving.ts';
 
 /**
- * Thirty minutes, from the ticket that asked for this ("no update on the row
- * in the last 30 minutes"). It is a decision rather than a finding — see the
- * header for what is and is not known about elapsed time as a signal — so it
- * is exported, overridable, and the one number to reach for first if the wake
+ * Twenty minutes (Bryan, 2026-08-27: "Detect at 20 minutes").
+ *
+ * The ticket defined a stall as thirty minutes of silence AND asked that
+ * stalls surface within thirty minutes. Those cannot both hold — detection
+ * cannot precede the definition — so shipping the ticket's own number would
+ * have surfaced a stall at about thirty-one minutes and missed the goal by
+ * construction. Twenty is what makes the goal reachable: the wake fires
+ * roughly a minute after the threshold, so a row that goes quiet is named
+ * inside thirty minutes of going quiet.
+ *
+ * It buys that with false positives, and the trade was made knowing so. This
+ * is a decision rather than a finding — see the header for what is and is not
+ * known about elapsed time as a signal — so it is exported, overridable via
+ * `CW_STALL_NUDGE_MINUTES`, and the one number to reach for first if the wake
  * turns out to be noisy.
  */
-export const STALL_QUIET_DEFAULT_MS = 30 * 60_000;
+export const STALL_QUIET_DEFAULT_MS = 20 * 60_000;
 
 /** Why a row could not be evaluated. A closed vocabulary, matching
  *  `ready-gate.ts`, so the rendered line can name the condition rather than
