@@ -857,8 +857,10 @@ body.hub-body {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 32px;
-  height: 32px;
+  /* 36px matches the cluster's icon buttons AND the tap-target floor in
+     design-mobile.md — this chip is the sole sign-in entry point. */
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: none;
   border-radius: 50%;

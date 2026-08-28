@@ -67,4 +67,11 @@ describe('sign-in page css', () => {
     expect(chipMenu).toContain('position: absolute');
     expect(chipMenu).toContain('right: 0');
   });
+
+  it('keeps the identity chip at the 36px tap-target floor (design-mobile.md)', () => {
+    // The chip is the sole sign-in entry point, and it is tapped on an iPad.
+    const chip = rule('.hub-me');
+    expect(chip).toContain('width: 36px');
+    expect(chip).toContain('height: 36px');
+  });
 });
