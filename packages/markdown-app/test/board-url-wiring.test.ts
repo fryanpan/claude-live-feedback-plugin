@@ -84,6 +84,32 @@ describe('the doc surface answers a stale ?thread=', () => {
   });
 });
 
+describe('the card hands off to its item in one history step', () => {
+  // Regression: tapping the card's task link bounced the reader back to Home.
+  // Closing the walkthrough is a 'close' step, which syncBoardUrl unwinds
+  // with history.back() — an ASYNC traversal. Rendering the close before
+  // opening the item queued a back() that landed after the open's pushState;
+  // its popstate re-applied the old ?item= entry, which closed the panel the
+  // tap had just opened. The open must render first — walk → panel is one
+  // push — with the card's own repaint after it.
+  it('renders the open before the walkthrough close', () => {
+    const handler = HUB_APP.match(/onOpenItem: \(item\) => \{[\s\S]*?\n {8}\},\n/)?.[0] ?? '';
+    expect(handler, 'onOpenItem went missing').not.toBe('');
+    const openAt = handler.indexOf('openReviewItem(item)');
+    const closeAt = handler.indexOf('renderWalkthrough()');
+    expect(openAt, 'onOpenItem no longer opens the item').toBeGreaterThan(-1);
+    expect(closeAt, 'the close repaint ran before the open').toBeGreaterThan(openAt);
+  });
+
+  it('skips the close repaint when the item navigates the page away', () => {
+    // The doc jump leaves via location.assign; a close-step history.back()
+    // queued beside it races the navigation. openReviewItem reports whether
+    // it stayed in-app, and only then does the card repaint (and its URL
+    // close-step) run.
+    expect(HUB_APP).toMatch(/if \(openReviewItem\(item\)\) renderWalkthrough\(\)/);
+  });
+});
+
 describe('emitted links are canonical', () => {
   it('the task copy-link goes through the shared share-URL builder', () => {
     expect(HUB_APP).toContain('taskShareUrl(location.origin, workspaceIdFromPath(), taskId)');
