@@ -73,18 +73,17 @@ async function checkGitHubPr(
   deps: ArtifactCheckDeps,
 ): Promise<{ verdict: ArtifactLinkCheck['verdict']; detail?: string }> {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
-  try {
-    const res = await fetchImpl(
-      `https://api.github.com/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`,
-      {
-        headers: {
-          accept: 'application/vnd.github+json',
-          // GitHub refuses anonymous requests without one.
-          'user-agent': 'claude-workspaces-artifact-check',
-        },
-        signal: AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  const ask = (path: string) =>
+    fetchImpl(`https://api.github.com/${path}`, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        // GitHub refuses anonymous requests without one.
+        'user-agent': 'claude-workspaces-artifact-check',
       },
-    );
+      signal: AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    });
+  try {
+    const res = await ask(`repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`);
     if (res.status === 200) {
       const body = (await res.json()) as { state?: unknown; merged_at?: unknown } | null;
       // GitHub keeps merged PRs in `state: closed`; `merged_at` is what
@@ -98,7 +97,19 @@ async function checkGitHubPr(
       return { verdict: 'verified', detail: state };
     }
     if (res.status === 404 || res.status === 410) {
-      return { verdict: 'missing', detail: `GitHub answered ${res.status}` };
+      // Unauthenticated, this alone is ambiguous: an absent PR and a private
+      // repo answer identically. The loud verdict must not fire on an
+      // ambiguous signal — this fleet links private-repo PRs on tasks — so
+      // the repo itself is asked next. Only the 404 path pays this second
+      // request; its failure or timeout lands in the catch below.
+      const repoRes = await ask(`repos/${pr.owner}/${pr.repo}`);
+      if (repoRes.status === 200) {
+        return { verdict: 'missing', detail: `GitHub answered ${res.status}; the repo is public` };
+      }
+      return {
+        verdict: 'unverified',
+        detail: `GitHub answered ${res.status}, and the repo is not visible unauthenticated — private repo and absent PR are indistinguishable`,
+      };
     }
     // 403/429 rate limits and every other surprise: no evidence either way.
     return { verdict: 'unverified', detail: `GitHub answered ${res.status}` };
@@ -167,8 +178,7 @@ export function missingNoteText(result: ArtifactCheck): string | null {
   const tail = rest.length > 0 ? ` Other links: ${rest.join(', ')}.` : '';
   return (
     `**Marked done, but a promised artifact can't be found:**\n\n${lines.join('\n')}\n\n` +
-    'Checked automatically at done — advisory, the status stands. A PR in a ' +
-    `private repo also reads as missing to this unauthenticated check.${tail}`
+    `Checked automatically at done — advisory, the status stands.${tail}`
   );
 }
 

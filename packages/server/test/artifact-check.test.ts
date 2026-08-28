@@ -34,6 +34,8 @@ import { type ArtifactCheck, type Ref, type Task, TaskStore } from '../src/tasks
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 const PR_URL = 'https://github.com/example-org/example-repo/pull/1669';
+const PR_API = 'https://api.github.com/repos/example-org/example-repo/pulls/1669';
+const REPO_API = 'https://api.github.com/repos/example-org/example-repo';
 
 const prRef = (url: string): Ref => ({ kind: 'url', url });
 const docRef = (docId: string): Ref => ({ kind: 'doc', docId });
@@ -55,6 +57,30 @@ const hangingFetch = ((_input: string | URL | Request, init?: RequestInit) =>
   new Promise((_resolve, reject) => {
     init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
   })) as typeof fetch;
+
+/** A fetch stub keyed by URL — for the 404-disambiguation paths, where the
+ *  PR lookup and the repo lookup must answer differently. `'hang'` never
+ *  answers but honors the abort signal; an unrouted URL rejects like a
+ *  network failure. */
+function routedFetchStub(routes: Record<string, { status: number; body: unknown } | 'hang'>): {
+  impl: typeof fetch;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const impl = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(url);
+    const route = routes[url];
+    if (route === undefined) return Promise.reject(new TypeError(`fetch failed: ${url}`));
+    if (route === 'hang') {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+    }
+    return Promise.resolve(new Response(JSON.stringify(route.body), { status: route.status }));
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
 
 describe('classifyArtifactLink', () => {
   it('recognizes a GitHub PR URL and extracts owner/repo/number', () => {
@@ -127,13 +153,57 @@ describe('runArtifactCheck', () => {
     expect(result.links[0]?.detail).toBe('merged');
   });
 
-  it('a 404 is missing — the claim the whole feature exists to catch', async () => {
-    const { impl } = fetchStub(404, { message: 'Not Found' });
+  it('a 404 on a PUBLIC repo is missing — the claim the whole feature exists to catch', async () => {
+    // Unauthenticated, a 404 alone is ambiguous: absent PR or private repo.
+    // Only the repo answering 200 disambiguates it into the loud verdict.
+    const { impl, calls } = routedFetchStub({
+      [PR_API]: { status: 404, body: { message: 'Not Found' } },
+      [REPO_API]: { status: 200, body: { private: false } },
+    });
     const result = await runArtifactCheck([prRef(PR_URL)], {
       fetchImpl: impl,
       docStatus: noDocs,
     });
     expect(result.links[0]?.verdict).toBe('missing');
+    expect(calls).toEqual([PR_API, REPO_API]);
+  });
+
+  it('a 404 whose repo is ALSO invisible is unverified — private repo and absent PR are indistinguishable', async () => {
+    const { impl } = routedFetchStub({
+      [PR_API]: { status: 404, body: { message: 'Not Found' } },
+      [REPO_API]: { status: 404, body: { message: 'Not Found' } },
+    });
+    const result = await runArtifactCheck([prRef(PR_URL)], {
+      fetchImpl: impl,
+      docStatus: noDocs,
+    });
+    expect(result.links[0]?.verdict).toBe('unverified');
+  });
+
+  it('a repo lookup that fails on the network degrades the 404 to unverified', async () => {
+    // Only the PR route exists; the repo confirmation rejects like a
+    // network failure.
+    const { impl } = routedFetchStub({
+      [PR_API]: { status: 404, body: { message: 'Not Found' } },
+    });
+    const result = await runArtifactCheck([prRef(PR_URL)], {
+      fetchImpl: impl,
+      docStatus: noDocs,
+    });
+    expect(result.links[0]?.verdict).toBe('unverified');
+  });
+
+  it('a repo lookup that hangs is cut off by its own budget and reads unverified', async () => {
+    const { impl } = routedFetchStub({
+      [PR_API]: { status: 404, body: { message: 'Not Found' } },
+      [REPO_API]: 'hang',
+    });
+    const result = await runArtifactCheck([prRef(PR_URL)], {
+      fetchImpl: impl,
+      docStatus: noDocs,
+      timeoutMs: 20,
+    });
+    expect(result.links[0]?.verdict).toBe('unverified');
   });
 
   it('a rate limit is unverified, not missing — absence of proof only', async () => {
@@ -263,8 +333,13 @@ describe('ArtifactChecker on a real store', () => {
     return created.task;
   }
 
-  it('a done task with a dead PR link gets a missing verdict AND a visible note', async () => {
-    const checker = install(fetchStub(404, { message: 'Not Found' }).impl);
+  it('a done task with a dead PR link on a public repo gets a missing verdict AND a visible note', async () => {
+    const checker = install(
+      routedFetchStub({
+        [PR_API]: { status: 404, body: { message: 'Not Found' } },
+        [REPO_API]: { status: 200, body: { private: false } },
+      }).impl,
+    );
     const task = doneTask([prRef(PR_URL)]);
     const moved = store.transition(task.id, 'done', { actor: PERSON });
     expect(moved.ok).toBe(true); // advisory: the transition never blocks
@@ -376,15 +451,13 @@ describe('server wiring: REST done-transition triggers the check', () => {
   }
 
   async function withServer(
-    status: number,
-    body: unknown,
+    impl: typeof fetch,
     fn: (ctx: {
       handle: ServerHandle;
       post: (path: string, payload: unknown) => Promise<Response>;
     }) => Promise<void>,
   ): Promise<void> {
     const dataDir = mkdtempSync(join(tmpdir(), 'artifact-wire-'));
-    const { impl } = fetchStub(status, body);
     const handle = createServer({ port: 0, dataDir, artifactCheckFetch: impl });
     const post = (path: string, payload: unknown) =>
       fetch(`http://localhost:${handle.port}${path}`, {
@@ -419,8 +492,12 @@ describe('server wiring: REST done-transition triggers the check', () => {
     return task.id;
   }
 
-  it('a dead PR surfaces as a system comment on the task discussion', async () => {
-    await withServer(404, { message: 'Not Found' }, async ({ handle, post }) => {
+  it('a dead PR on a public repo surfaces as a system comment on the task discussion', async () => {
+    const { impl } = routedFetchStub({
+      [PR_API]: { status: 404, body: { message: 'Not Found' } },
+      [REPO_API]: { status: 200, body: { private: false } },
+    });
+    await withServer(impl, async ({ handle, post }) => {
       const taskId = await doneTaskOver(post);
       const check = await until(() => handle.tasks.getTask(taskId)?.artifactCheck);
       expect(check.links[0]?.verdict).toBe('missing');
@@ -435,7 +512,7 @@ describe('server wiring: REST done-transition triggers the check', () => {
   });
 
   it('a healthy PR records verified and leaves the discussion empty', async () => {
-    await withServer(200, { state: 'open' }, async ({ handle, post }) => {
+    await withServer(fetchStub(200, { state: 'open' }).impl, async ({ handle, post }) => {
       const taskId = await doneTaskOver(post);
       const check = await until(() => handle.tasks.getTask(taskId)?.artifactCheck);
       expect(check.links[0]?.verdict).toBe('verified');
