@@ -56,7 +56,9 @@ export async function signedSharePath(
   key: string,
 ): Promise<string> {
   const exp = String(Math.floor(expiresAtMs / 1000));
-  const sig = hex(await crypto.subtle.sign('HMAC', await hmacKey(key, 'sign'), payload(shareId, exp)));
+  const sig = hex(
+    await crypto.subtle.sign('HMAC', await hmacKey(key, 'sign'), payload(shareId, exp)),
+  );
   return `/share/${encodeURIComponent(shareId)}?exp=${exp}&sig=${sig}`;
 }
 
@@ -75,7 +77,12 @@ export async function verifySignedShare(
 ): Promise<boolean> {
   if (!/^\d{1,15}$/.test(exp) || !/^[0-9a-f]{64}$/.test(sig)) return false;
   if (Number(exp) * 1000 <= nowMs) return false;
-  return crypto.subtle.verify('HMAC', await hmacKey(key, 'verify'), unhex(sig), payload(shareId, exp));
+  return crypto.subtle.verify(
+    'HMAC',
+    await hmacKey(key, 'verify'),
+    unhex(sig),
+    payload(shareId, exp),
+  );
 }
 
 const payload = (shareId: string, exp: string): Uint8Array<ArrayBuffer> =>

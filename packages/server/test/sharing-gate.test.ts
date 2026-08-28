@@ -80,7 +80,7 @@ describe('sharing gate over HTTP', () => {
   let folder: string;
   let base: string;
   let cookie: string;
-  let slug: string;
+  let sharePath: string;
   /** Member docId of the bound folder — `<group>:<relPath>`, so it carries a
    *  colon and every URL below uses the encoded form. */
   let docId: string;
@@ -149,10 +149,11 @@ describe('sharing gate over HTTP', () => {
       method: 'POST',
       body: JSON.stringify({ workspaceId: boardId }),
     }).then((r) => r.json());
-    slug = share.share.slug;
-    expect(slug).toBeTruthy();
+    const shareUrl = new URL(share.share.url);
+    sharePath = `${shareUrl.pathname}${shareUrl.search}`;
+    expect(sharePath).toContain('sig=');
 
-    const redeemed = await fetch(`${base}/s/${slug}`, {
+    const redeemed = await fetch(`${base}${sharePath}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
     });
@@ -175,8 +176,8 @@ describe('sharing gate over HTTP', () => {
     expect((await r.json()).meta.docId).toBe(docId);
   });
 
-  it('CONTROL: a fresh slug redeems while sharing is on', async () => {
-    const r = await fetch(`${base}/s/${slug}`, {
+  it('CONTROL: a fresh signed URL redeems while sharing is on', async () => {
+    const r = await fetch(`${base}${sharePath}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
     });
@@ -190,8 +191,8 @@ describe('sharing gate over HTTP', () => {
     expect((await r.json()).error).toBe('sharing_disabled');
   });
 
-  it('refuses slug redemption once sharing is off', async () => {
-    const r = await fetch(`${base}/s/${slug}`, {
+  it('refuses link redemption once sharing is off', async () => {
+    const r = await fetch(`${base}${sharePath}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
     });

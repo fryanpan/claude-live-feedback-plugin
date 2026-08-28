@@ -132,8 +132,9 @@ describe('share visitors never spend the summary API key', () => {
       body: JSON.stringify({ workspaceId: boardId, label: 'external review' }),
     });
     expect(mk.status).toBe(200);
-    const { share } = (await mk.json()) as { share: { slug: string } };
-    const redeemed = await fetch(`${base}/s/${share.slug}`, {
+    const { share } = (await mk.json()) as { share: { url: string } };
+    const shareUrl = new URL(share.url);
+    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST },
     });
