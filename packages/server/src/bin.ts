@@ -6,11 +6,12 @@ import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolveCloudflareCodeSender } from './auth/cloudflare-code-sender.ts';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
+import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
-import { ThreadSummarizer } from './summarize.ts';
+import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import {
   KEYCHAIN_SERVICE as ASSEMBLYAI_KEYCHAIN_SERVICE,
   createAssemblyAiEngine,
@@ -257,6 +258,18 @@ if (!transcription) {
   );
 }
 
+// The ONLY place the real notes composer is constructed — same seam and the
+// SAME dedicated-key consent as the summarizer, because what it sends off-
+// machine is the meeting transcript itself. Absent key → null → meetings
+// still record transcripts; the notes section simply never appears.
+const notesComposer = createHaikuNotesComposer();
+if (transcription && !notesComposer) {
+  console.log(
+    '[meeting-notes] no summary API key; meetings record transcripts, notes stay off. ' +
+      `Add one with: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`,
+  );
+}
+
 // The ONLY place a real plugin refresher is constructed — same seam rule as
 // the summarizer above, and here it also means no test run and no `bun run
 // staging` can mutate this machine's plugin cache. A deploy has to be asked
@@ -338,6 +351,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
+      ...(notesComposer ? { meetingNotes: { composer: notesComposer } } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),
     });
