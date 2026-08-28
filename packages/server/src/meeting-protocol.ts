@@ -179,6 +179,11 @@ export class MeetingRelay {
       meeting.stop();
       conn.state = 'idle';
       conn.meeting = null;
+      // The socket stays open after `unavailable`, so a client may retry
+      // `start` on this same connection — and audio buffered during THIS
+      // failed handshake must not be replayed into that next meeting's
+      // append-only transcript.
+      conn.pending = [];
       conn.pendingStop = null;
       this.send(ws, {
         type: 'unavailable',
