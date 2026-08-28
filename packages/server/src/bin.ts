@@ -2,7 +2,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRenamedEnv } from '@feedback/core/env-names';
+import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolveCloudflareCodeSender } from './auth/cloudflare-code-sender.ts';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
@@ -63,30 +63,28 @@ const publicBaseUrlOverride =
 // deploy state as their own. Same seam rule as the plugin refresher.
 const clientReleaseRootDir = arg('client-release-root') ?? null;
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+const sentryDsn = readRenamedEnv(process.env, 'CW_SENTRY_DSN')?.trim();
+
 // How long ready, agent-owned work may sit untouched before the board wakes
 // its lead (ready-nudge.ts). Minutes rather than ms because it is a number an
-// operator types; a non-numeric or non-positive value falls back to the
-// default rather than disabling the wake by accident — an idle window of 0
-// would nudge on every tick, which is the one behaviour the feature exists to
-// avoid.
-const sentryDsn = readRenamedEnv(process.env, 'CW_SENTRY_DSN')?.trim();
-const readyNudgeMinutes = Number(readRenamedEnv(process.env, 'CW_READY_NUDGE_MINUTES') ?? '');
-const readyNudgeIdleMs =
-  Number.isFinite(readyNudgeMinutes) && readyNudgeMinutes > 0
-    ? readyNudgeMinutes * 60_000
-    : undefined;
+// operator types.
+const readyNudgeIdleMs = positiveEnvDuration(process.env, 'CW_READY_NUDGE_MINUTES', MINUTE_MS);
 
 // How long a row may go untouched before the board tells its lead it has
 // STALLED (stall-nudge.ts) — a different question from the one above, which
-// asks whether ready work has been picked up. Same guard rails: minutes
-// because it is a number an operator types, and a non-numeric or non-positive
-// value falls back to the default rather than reporting every open row as
-// stalled on every tick.
-const stallNudgeMinutes = Number(readRenamedEnv(process.env, 'CW_STALL_NUDGE_MINUTES') ?? '');
-const stallNudgeQuietMs =
-  Number.isFinite(stallNudgeMinutes) && stallNudgeMinutes > 0
-    ? stallNudgeMinutes * 60_000
-    : undefined;
+// asks whether ready work has been picked up.
+const stallNudgeQuietMs = positiveEnvDuration(process.env, 'CW_STALL_NUDGE_MINUTES', MINUTE_MS);
+
+// How long the board waits before saying the SAME unchanged stall again
+// (stall-nudge.ts). Hours, not minutes, because this one is priced in a
+// woken lead's whole turn rather than in a tick: a wake costs the lead
+// session real tokens whether or not anything changed, so the repeat window
+// is the knob that sets the standing floor on that cost. Tunable without a
+// release for exactly that reason.
+const stallNudgeRepeatMs = positiveEnvDuration(process.env, 'CW_STALL_REPEAT_HOURS', HOUR_MS);
 
 // Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
 // machine's LAN names, and private IPv4 ranges are detected automatically;
@@ -350,6 +348,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(codeSenderChoice.sender ? { codeSender: codeSenderChoice.sender } : {}),
       ...(readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs } : {}),
       ...(stallNudgeQuietMs !== undefined ? { stallNudgeQuietMs } : {}),
+      ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
       ...(notesComposer ? { meetingNotes: { composer: notesComposer } } : {}),

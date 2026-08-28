@@ -205,6 +205,18 @@ describe('the strip at rest', () => {
     expect(h.elapsed()).toBe('00:00');
     expect(h.root.classList.contains('is-live')).toBe(false);
   });
+
+  it("names the feature on its only control, since the visible label is just 'Start'", async () => {
+    // The idle strip is a dot, a clock, and a bare word — nothing on screen
+    // says "meeting" or "transcription". The accessible name has to.
+    const h = mount();
+    expect(h.toggle().getAttribute('aria-label')).toBe('Start meeting transcription');
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
+    expect(h.toggle().getAttribute('aria-label')).toBe('Stop meeting transcription');
+  });
 });
 
 describe('the strip while a meeting runs', () => {

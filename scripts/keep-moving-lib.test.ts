@@ -124,47 +124,38 @@ describe('keep-moving false-FAIL gaps', () => {
     expect(ticks.sort((x, y) => y - x)).toEqual([now - H, now - 2 * H]);
   });
 
-  it('gap 4: a row parked into the future is parked, never stalled', () => {
-    // Measured live: a row parked into the next day (parkedUntil epoch
-    // ms) yet reported "ready-unpicked stalled".
+  it('gap 4: a deliberately-deferred row is never reported stalled', () => {
+    // Measured live: a row deferred into the next day yet reported
+    // "ready-unpicked stalled". Parking is a move to `triage` now
+    // (2026-08-27), so the guarantee rides the status filter rather than a
+    // bucket of its own — and a triage row is not classified at all.
     const rows = classifyOpenTasks(
-      [task({ id: 'a', parkedUntil: now + 24 * H })],
+      [task({ id: 'deferred', status: 'triage' }), task({ id: 'live' })],
       [],
       [],
       now,
       4 * H,
       bands,
     );
-    expect(rows[0]?.bucket).toBe('parked');
-    expect(rows[0]?.stalled).toBe(false);
-  });
-
-  it('gap 4: an expired park does not shield the row', () => {
-    const rows = classifyOpenTasks(
-      [task({ id: 'a', parkedUntil: now - H })],
-      [],
-      [],
-      now,
-      4 * H,
-      bands,
-    );
-    expect(rows[0]?.bucket).toBe('ready-unpicked');
+    // The positive control is the point: an empty classification would pass
+    // the absence on its own.
+    expect(rows.map((r) => r.id)).toEqual(['live']);
     expect(rows[0]?.stalled).toBe(true);
   });
 });
 
 // Codex adversarial review of PR #394 — two P2 findings, tests written red-first.
 describe('codex P2 findings', () => {
-  it('P2-1: a filed ask outranks a park — blocked-on-owner, not parked', () => {
-    // A parked row with an active ask on the owner (filed review item, person
-    // owner, or owner-band goal) must surface as blocked-on-owner; bucketing
-    // it parked hides the ask. Same invariant the first test in this file
-    // states: a filed ask outranks everything.
+  it('P2-1: a filed ask outranks everything — blocked-on-owner', () => {
+    // A row with an active ask on the owner (filed review item, person owner,
+    // or owner-band goal) must surface as blocked-on-owner; any bucket that
+    // outranked it would hide the ask.
+    //
+    // The park half of this finding is gone with the state: a deferred row is
+    // in triage and is not classified, so there is no bucket left for a
+    // pending ask to lose to.
     const rows = classifyOpenTasks(
-      [
-        task({ id: 'asked', parkedUntil: now + 24 * H }),
-        task({ id: 'human', parkedUntil: now + 24 * H, ownerKind: 'person' }),
-      ],
+      [task({ id: 'asked' }), task({ id: 'human', ownerKind: 'person' })],
       [],
       [{ taskId: 'asked' }],
       now,
@@ -173,15 +164,8 @@ describe('codex P2 findings', () => {
     );
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId.asked?.bucket).toBe('blocked-on-owner');
-    // Amended: P2-1's invariant is that an ACTIVE ask never hides — a PENDING
-    // item outranks a park (row above). A person-owned row with NO pending
-    // item that someone deliberately parked with a date is a documented
-    // deferral, not a hidden ask: it reads parked, and resurfaces as unfiled
-    // when the park expires (measured: a decision the owner explicitly deferred,
-    // parked for exactly that reason, was being nagged as an 8.7d unfiled ask).
-    expect(byId.human?.bucket).toBe('parked');
+    expect(byId.human?.bucket).toBe('blocked-on-owner-unfiled');
     expect(byId.asked?.stalled).toBe(false);
-    expect(byId.human?.stalled).toBe(false);
   });
 
   it('P2-2: a row edit already reported by /events is not double-counted', () => {
@@ -209,7 +193,7 @@ describe('codex P2 findings', () => {
 // Round 3 (the owner's review of the "PASS" board): the
 // board hid real failures — 7/10 owner-blocked rows had no filed review item,
 // and one waiting-on-owner blocker had cleared days earlier. Red-first.
-describe('unfiled asks, aging asks, parked presentation, terminal blockers', () => {
+describe('unfiled asks, aging asks, terminal blockers', () => {
   it('owner-blocked without a pending review item is an unfiled ask and counts toward FAIL', () => {
     const rows = classifyOpenTasks(
       [
@@ -250,20 +234,6 @@ describe('unfiled asks, aging asks, parked presentation, terminal blockers', () 
     expect(rows[0]?.askAgeMs).toBe(8 * 24 * H);
   });
 
-  it('a parked row carries its unpark date and reason for presentation', () => {
-    const rows = classifyOpenTasks(
-      [task({ id: 'a', parkedUntil: now + 24 * H, parkedReason: 'waiting on Friday sync' })],
-      [],
-      [],
-      now,
-      4 * H,
-      bands,
-    );
-    expect(rows[0]?.bucket).toBe('parked');
-    expect(rows[0]?.parkedUntil).toBe(now + 24 * H);
-    expect(rows[0]?.parkedReason).toBe('waiting on Friday sync');
-  });
-
   it('a dependency chain names its terminal blocker', () => {
     const rows = classifyOpenTasks(
       [
@@ -302,23 +272,21 @@ describe('unfiled asks, aging asks, parked presentation, terminal blockers', () 
     expect(byId.x?.unfiledAsk).toBe(true);
   });
 
-  it('a parked person-owned row without a pending item is parked; an expired park resurfaces it', () => {
+  it('a person-owned row with no pending item is an unfiled ask, deferred or not', () => {
+    // Parking used to shield such a row from this bucket. It cannot any more,
+    // and does not need to: a deferred row is in triage and is not classified
+    // at all, so the only person-owned rows reaching here are ones somebody
+    // still expects to move.
     const rows = classifyOpenTasks(
-      [
-        task({ id: 'deferred', ownerKind: 'person', parkedUntil: now + 24 * H }),
-        task({ id: 'expired', ownerKind: 'person', parkedUntil: now - H }),
-      ],
+      [task({ id: 'human', ownerKind: 'person' })],
       [],
       [],
       now,
       4 * H,
       bands,
     );
-    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
-    expect(byId.deferred?.bucket).toBe('parked');
-    expect(byId.deferred?.unfiledAsk).toBe(false);
-    expect(byId.expired?.bucket).toBe('blocked-on-owner-unfiled');
-    expect(byId.expired?.unfiledAsk).toBe(true);
+    expect(rows[0]?.bucket).toBe('blocked-on-owner-unfiled');
+    expect(rows[0]?.unfiledAsk).toBe(true);
   });
 
   it('every unmet branch is traversed: a second branch ending unfiled flags the parent', () => {

@@ -344,6 +344,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   function render(): void {
     root.dataset.state = state.kind;
     root.classList.toggle('is-live', state.kind === 'recording');
+    // The visible label is one bare word in a strip that never says what it
+    // is — the accessible name carries the feature's name instead.
+    toggle.setAttribute(
+      'aria-label',
+      `${state.kind === 'recording' ? 'Stop' : 'Start'} meeting transcription`,
+    );
     switch (state.kind) {
       case 'idle':
         status.textContent = 'Paused';

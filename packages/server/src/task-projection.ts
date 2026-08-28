@@ -46,7 +46,7 @@ export interface OwnerSession {
  * `ownerSession` is keyed on the owner, and `task_transition` never touches
  * `assignee`: a session that pulls a row off the queue and works it for hours
  * leaves the owner field exactly as it found it. So on 2026-08-17 two sessions
- * built two complete answers to `t-K69wxtRLCn2a` while every owner-keyed read
+ * built two complete answers to the same ticket while every owner-keyed read
  * of that row honestly answered "nobody". This reads the other half — the
  * actor on the row's most recent move INTO `in-progress`, matched against the
  * board's roster.
@@ -249,14 +249,6 @@ export function projectTask(
     after: task.after,
     ...(task.afterEnforce !== undefined ? { afterEnforce: task.afterEnforce } : {}),
     ...(task.dueAt !== undefined ? { dueAt: task.dueAt } : {}),
-    // Deferred to a date, and why. Projected because the board is where the
-    // deferral has to be VISIBLE — a park the store knows about and no
-    // surface draws is the same "store has it, surface can't show it" failure
-    // this file has produced before, and here it would be worse than usual:
-    // the row would sit in the queue looking exactly like work nobody had
-    // gotten to.
-    ...(task.parkedUntil !== undefined ? { parkedUntil: task.parkedUntil } : {}),
-    ...(task.parkedReason !== undefined ? { parkedReason: task.parkedReason } : {}),
     // Soft-deleted, by whom, and why. Conditional like everything else here,
     // and the refresh deletes projected keys absent from this object — so a
     // RESTORE removes the keys and the row rejoins its lane with nothing
@@ -271,7 +263,7 @@ export function projectTask(
     // Narrowed to the declared shape, never spread: the pre-fix writer
     // stamped the ENTIRE workspace goal text into this marker, and 187 rows
     // on the live hub board still carry ~3KB each — 546KB of the board ydoc
-    // shipped to every reader on every open (t-scWMQmOZcpu1). The store
+    // shipped to every reader on every open. The store
     // keeps whatever the sidecar recorded; the wire gets { goalId, ts } —
     // same precedent as `evidence` two fields down.
     ...(task.triagedAgainst !== undefined
