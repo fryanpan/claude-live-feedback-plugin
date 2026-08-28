@@ -486,6 +486,15 @@ export interface ServerOptions {
    */
   stallNudgeQuietMs?: number;
   /**
+   * How many quiet windows a row with a WATCHING builder dispatch gets
+   * before the wake calls its builder silent (default
+   * `BUILDER_SILENT_MULTIPLIER_DEFAULT`, two; `CW_BUILDER_SILENT_MULTIPLIER`
+   * sets it on the box). A test seam for the same reason `stallNudgeQuietMs`
+   * is one; the reasoning behind the number is on the constant in
+   * stall-gate.ts.
+   */
+  stallBuilderSilentMultiplier?: number;
+  /**
    * How long a row must stay stalled before the wake says it AGAIN (default
    * `STALL_REPEAT_DEFAULT_MS`, four hours; `CW_STALL_REPEAT_HOURS` sets it on
    * the box).
@@ -1444,6 +1453,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     }
 
     const now = Date.now();
+    // Which rows have a builder whose worktree is actually being WATCHED —
+    // those the gate judges on the builder-silence clock (stall-gate.ts). A
+    // dispatch whose watcher failed to arm or died is deliberately left out:
+    // its activity cannot be seen, so its row keeps the ordinary clock — a
+    // degraded signal must not loosen detection. The registry is fleet-wide
+    // rather than per-board; task ids are opaque and unique, so a foreign
+    // board's ids simply never match.
+    const watchingDispatchTaskIds = new Set(
+      dispatches
+        .list()
+        .filter((d) => d.watching)
+        .map((d) => d.taskId),
+    );
     const input = {
       tasks: rows,
       events,
@@ -1452,6 +1474,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       unreadableReviewTaskIds,
       now,
       ...(opts.stallNudgeQuietMs !== undefined ? { quietMs: opts.stallNudgeQuietMs } : {}),
+      ...(watchingDispatchTaskIds.size > 0 ? { watchingDispatchTaskIds } : {}),
+      ...(opts.stallBuilderSilentMultiplier !== undefined
+        ? { builderSilentMultiplier: opts.stallBuilderSilentMultiplier }
+        : {}),
     };
     const first = evaluateStalls(input);
     const suspect = [...first.stalled, ...first.unfiled];
@@ -1481,8 +1507,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // a comment is — the builder works in a checkout the board cannot see,
       // and without this the loop woke leads over its silence (8 of 9 wakes
       // one night). Merged as max into the same exoneration seam; a closed,
-      // dead, or silent dispatch contributes nothing and the ordinary clock
-      // stands.
+      // dead, or silent dispatch contributes nothing here, and which clock
+      // then stands is `watchingDispatchTaskIds` above: the builder-silence
+      // one for a dispatch still watching, the ordinary one otherwise.
       const dispatchTs = dispatches.activityFor(row.id);
       if (dispatchTs !== undefined && dispatchTs > newest) newest = dispatchTs;
       if (newest > 0) threadActivity.set(row.id, newest);
