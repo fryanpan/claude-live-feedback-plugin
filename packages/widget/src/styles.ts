@@ -103,6 +103,28 @@ export const widgetStyles = `
   background: #fafbfc;
 }
 .panel-actions .me { font-size: 12px; display: flex; align-items: center; gap: 6px; color: #6e7781; margin-left: auto; }
+.auth-signin {
+  background: #fff;
+  border: 1px solid #d1d5da;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.auth-signin:hover { border-color: #2e7dd7; color: #2e7dd7; }
+.auth-signout {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  color: #6e7781;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.auth-signout:hover { color: #1b1f23; }
 .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
 .primary {
   background: #2e7dd7;

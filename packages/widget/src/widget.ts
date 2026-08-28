@@ -73,7 +73,24 @@ export interface WidgetOpts {
    * person by name.
    */
   identityScope?: 'widget' | 'host';
+  /**
+   * Offer workspace sign-in on this embed (the popup-token handshake).
+   *
+   * Explicit opt-in for DEV SERVERS only — attribute form `auth-offer`.
+   * Deliberately not a heuristic: any rule that guesses "this looks like a
+   * dev server" misfires eventually, and the failure mode is a workspace
+   * sign-in offer rendered on a production site. An embed that does not
+   * ask for it never shows auth UI, never touches the auth endpoints, and
+   * behaves byte-for-byte as before. Mockup pages served by the workspace
+   * itself need none of this — there the session cookie already flows.
+   */
+  authOffer?: boolean;
 }
+
+/** localStorage keys for the popup-token handshake. Always under `cfw:` —
+ *  the token belongs to the widget even when identityScope is 'host'. */
+const AUTH_TOKEN_KEY = 'cfw:authToken';
+const AUTH_USER_KEY = 'cfw:authUser';
 
 const TAG = 'claude-feedback-widget';
 const IGNORE_ATTR = 'data-feedback-widget';
@@ -125,6 +142,13 @@ class FeedbackWidgetEl extends HTMLElement {
   private scrollHandler: (() => void) | null = null;
   private vvHandler: (() => void) | null = null;
   private showResolved = false;
+  /** The popup-token, when this embed opted into auth and a person signed in. */
+  private authToken: string | null = null;
+  private authUser: User | null = null;
+  /** The identity the browser had before sign-in — restored on sign-out. */
+  private anonUser: User | null = null;
+  private authPopup: Window | null = null;
+  private authMsgHandler: ((ev: MessageEvent) => void) | null = null;
 
   constructor() {
     super();
@@ -145,6 +169,9 @@ class FeedbackWidgetEl extends HTMLElement {
       get: (k) => localStorage.getItem(`${idPrefix}${k}`),
       set: (k, v) => localStorage.setItem(`${idPrefix}${k}`, v),
     });
+    this.anonUser = this.user;
+    this.opts.authOffer = opts.authOffer === true;
+    if (this.opts.authOffer) this.loadStoredAuth();
     this.showResolved = localStorage.getItem('cfw:showResolved') === '1';
     this.currentContext = {
       url: currentUrl(),
@@ -155,6 +182,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.renderShell();
     this.connect();
     this.startObserver();
+    if (this.opts.authOffer) void this.validateStoredAuth();
   }
 
   // Auto-initialize from HTML attributes. Lets the canonical "drop in a tag +
@@ -184,6 +212,8 @@ class FeedbackWidgetEl extends HTMLElement {
     // does not ask for it keeps the `cfw:` namespace byte-for-byte, so no page
     // already running the widget can have its identity change underneath it.
     if (this.getAttribute('identity-scope') === 'host') opts.identityScope = 'host';
+    // Presence-only, like every boolean HTML attribute. See WidgetOpts.
+    if (this.hasAttribute('auth-offer')) opts.authOffer = true;
     this.init(opts);
   }
 
@@ -279,6 +309,12 @@ class FeedbackWidgetEl extends HTMLElement {
         window.removeEventListener('scroll', this.scrollHandler);
       } catch {}
     }
+    if (this.authMsgHandler) {
+      try {
+        window.removeEventListener('message', this.authMsgHandler);
+      } catch {}
+      this.authMsgHandler = null;
+    }
     if (this.vvHandler && window.visualViewport) {
       try {
         window.visualViewport.removeEventListener('resize', this.vvHandler);
@@ -345,10 +381,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.shadow.appendChild(panel);
 
     this.statusEl = panel.querySelector('.status') as HTMLElement;
-    const me = panel.querySelector('.me') as HTMLElement;
-    if (this.user) {
-      me.innerHTML = `<span class="swatch" style="background:${cssColor(this.user.color)}"></span>${escape(this.user.name)}`;
-    }
+    this.updateAuthUi();
 
     panel.querySelector('.close-panel')?.addEventListener('click', () => this.togglePanel(false));
     panel.querySelector('.pick-btn')?.addEventListener('click', () => this.startPicker());
@@ -376,6 +409,144 @@ class FeedbackWidgetEl extends HTMLElement {
     panel.classList.toggle('open', open);
     const fab = this.shadow.querySelector('.fab') as HTMLElement | null;
     fab?.classList.toggle('open', open);
+  }
+
+  // --- Workspace sign-in (popup-token handshake, auth-offer embeds only) ---
+
+  private httpBase(): string {
+    return this.opts.serverUrl.replace(/^ws/, 'http');
+  }
+
+  /** The one origin the message listener will take a token from. */
+  private serverOrigin(): string {
+    try {
+      return new URL(this.httpBase()).origin;
+    } catch {
+      return '';
+    }
+  }
+
+  private loadStoredAuth(): void {
+    try {
+      this.authToken = localStorage.getItem(AUTH_TOKEN_KEY);
+      const raw = localStorage.getItem(AUTH_USER_KEY);
+      this.authUser = raw ? (JSON.parse(raw) as User) : null;
+    } catch {
+      this.authToken = null;
+      this.authUser = null;
+    }
+    if (this.authUser) this.user = this.authUser;
+  }
+
+  /**
+   * Ask the server whether the stored token still stands. The server 401s a
+   * dead one (revoked, expired, tampered) — that clears it and the offer
+   * returns; it never silently keeps a token the server would refuse.
+   */
+  private async validateStoredAuth(): Promise<void> {
+    if (!this.authToken) return;
+    try {
+      const res = await fetch(`${this.httpBase()}/api/auth/widget-session`, {
+        headers: { authorization: `Bearer ${this.authToken}` },
+      });
+      if (!res.ok) {
+        this.clearAuth();
+        return;
+      }
+      const body = (await res.json()) as { authenticated: boolean; user?: User };
+      if (!body.authenticated || !body.user) {
+        this.clearAuth();
+        return;
+      }
+      this.setAuth(this.authToken, body.user);
+    } catch {
+      // Offline is not signed-out: keep the token, the next post decides.
+    }
+  }
+
+  private setAuth(token: string, user: User): void {
+    this.authToken = token;
+    this.authUser = user;
+    this.user = user;
+    try {
+      localStorage.setItem(AUTH_TOKEN_KEY, token);
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+    } catch {}
+    this.updateAuthUi();
+    this.scheduleRender();
+  }
+
+  /** Local only — the workspace session lives on, sign-out there revokes. */
+  private clearAuth(): void {
+    this.authToken = null;
+    this.authUser = null;
+    this.user = this.anonUser;
+    try {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      localStorage.removeItem(AUTH_USER_KEY);
+    } catch {}
+    this.updateAuthUi();
+    this.scheduleRender();
+  }
+
+  private startSignIn(): void {
+    const url = `${this.httpBase()}/widget-auth?origin=${encodeURIComponent(location.origin)}`;
+    this.authPopup = window.open(url, 'cw-widget-auth', 'popup,width=420,height=560');
+    if (!this.authMsgHandler) {
+      this.authMsgHandler = (ev: MessageEvent) => {
+        // Both walls, independently: the token may only arrive FROM the
+        // workspace origin, and only from the window this widget opened.
+        if (ev.origin !== this.serverOrigin()) return;
+        if (!this.authPopup || ev.source !== this.authPopup) return;
+        const data = ev.data as { type?: string; token?: string; user?: User } | null;
+        if (!data || data.type !== 'cw-widget-auth') return;
+        if (typeof data.token !== 'string' || !data.user) return;
+        this.setAuth(data.token, data.user);
+      };
+      window.addEventListener('message', this.authMsgHandler);
+    }
+  }
+
+  private updateAuthUi(): void {
+    const actions = this.shadow.querySelector('.panel-actions') as HTMLElement | null;
+    if (!actions) return;
+    const me = actions.querySelector('.me') as HTMLElement | null;
+    if (!me) return;
+    actions.querySelector('.auth-signin')?.remove();
+    if (this.user) {
+      me.innerHTML = `<span class="swatch" style="background:${cssColor(this.user.color)}"></span>${escape(this.user.name)}`;
+    }
+    if (!this.opts.authOffer) return;
+    if (this.authToken) {
+      const out = document.createElement('button');
+      out.type = 'button';
+      out.className = 'auth-signout';
+      out.textContent = 'sign out';
+      out.addEventListener('click', () => this.clearAuth());
+      me.appendChild(out);
+    } else {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'auth-signin';
+      btn.title = 'Sign in with your workspace session to comment as yourself';
+      btn.textContent = 'Sign in';
+      btn.addEventListener('click', () => this.startSignIn());
+      actions.appendChild(btn);
+    }
+  }
+
+  /**
+   * POST with the token when one is held. On a 401 the server has refused
+   * the token (revoked, expired) — sign out locally and retry once without
+   * it, so the comment lands as anonymous rather than vanishing.
+   */
+  private async authedPost(url: string, init: RequestInit): Promise<Response> {
+    if (!this.authToken) return fetch(url, init);
+    const headers = { ...(init.headers as Record<string, string>), authorization: `Bearer ${this.authToken}` };
+    const res = await fetch(url, { ...init, headers });
+    if (res.status !== 401) return res;
+    this.clearAuth();
+    return fetch(url, init);
   }
 
   // --- Element picker ---
@@ -510,8 +681,7 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   private async postNewThread(anchor: ElementAnchor, text: string): Promise<void> {
-    const base = this.opts.serverUrl.replace(/^ws/, 'http');
-    await fetch(`${base}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`, {
+    await this.authedPost(`${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: this.user, text, anchor }),
@@ -519,9 +689,8 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   private async postReply(threadId: string, text: string): Promise<void> {
-    const base = this.opts.serverUrl.replace(/^ws/, 'http');
-    await fetch(
-      `${base}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
+    await this.authedPost(
+      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -531,10 +700,9 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   private async setStatus(threadId: string, status: 'open' | 'resolved'): Promise<void> {
-    const base = this.opts.serverUrl.replace(/^ws/, 'http');
     const action = status === 'resolved' ? 'resolve' : 'reopen';
-    await fetch(
-      `${base}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
+    await this.authedPost(
+      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
       { method: 'POST' },
     );
   }

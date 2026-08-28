@@ -50,7 +50,7 @@ export function widgetAuthPage(): string {
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (body.error === 'not_signed_in' || body.error === 'session_needs_refresh') {
-        say('Sign in to the workspace first, then tap the widget\\u2019s sign-in button again. <br><a href="/" target="_blank" rel="opener">Open the workspace</a>');
+        say('Sign in to the workspace first, then tap the widget\\u2019s sign-in button again. <br><a href="/" target="_blank">Open the workspace</a>');
       } else if (body.error === 'origin_not_allowed') {
         say('This page\\u2019s origin is not one the workspace server trusts, so it cannot receive a sign-in.');
       } else {
