@@ -252,6 +252,16 @@ const codeSenderChoice = resolvePostmarkCodeSender(process.env, readKeychainPass
 if (codeSenderChoice.reason) console.log(`[auth] ${codeSenderChoice.reason}`);
 else console.log('[auth] login codes send via Postmark');
 
+// Hourly abuse ceilings on the login-code mailer. Unset or not a positive
+// number → the defaults in auth/email-code.ts; there is deliberately no
+// value that turns a ceiling OFF.
+const positiveIntEnv = (name: string): number | undefined => {
+  const n = Number((process.env[name] ?? '').trim() || Number.NaN);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+};
+const authGlobalStartsPerHour = positiveIntEnv('CW_AUTH_GLOBAL_STARTS_PER_HOUR');
+const authPeerStartsPerHour = positiveIntEnv('CW_AUTH_PEER_STARTS_PER_HOUR');
+
 // The ONLY place the real voice fast-path completer is constructed — the
 // same seam rule (and the same dedicated-key consent) as the summarizer.
 // Absent key → null → the fast path is off and voice routes to the agent.
@@ -369,6 +379,10 @@ for (let i = 0; i < 20 && !handle; i++) {
       share,
       summarizer,
       ...(codeSenderChoice.sender ? { codeSender: codeSenderChoice.sender } : {}),
+      authCeilings: {
+        ...(authGlobalStartsPerHour ? { globalStartsPerHour: authGlobalStartsPerHour } : {}),
+        ...(authPeerStartsPerHour ? { peerStartsPerHour: authPeerStartsPerHour } : {}),
+      },
       ...(readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs } : {}),
       ...(stallNudgeQuietMs !== undefined ? { stallNudgeQuietMs } : {}),
       ...(stallBuilderSilentMultiplier !== undefined ? { stallBuilderSilentMultiplier } : {}),
