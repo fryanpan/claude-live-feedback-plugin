@@ -329,6 +329,117 @@ describe('the board tells its lead which rows have stopped', () => {
   });
 
   /**
+   * The same exoneration, for an ask filed as a REVIEW PAYLOAD ON A COMMENT
+   * rather than on the ticket. Both land on the reader's Home queue, so both
+   * are a filed question — but the ticket store's `reviewState` cannot see
+   * this one, and for one release the loop read only that and woke the lead
+   * about a row whose ask was sitting open on its own discussion.
+   */
+  it('leaves a row alone while a comment-borne review item is waiting on a person', async () => {
+    const ctx = await boardWithLead();
+    const askedId = await addRow(ctx.workspaceId, 'Pick a retention window');
+    await jj(
+      await post(`/api/docs/${encodeURIComponent(`task:${askedId}`)}/threads`, {
+        text: 'How long should search history be kept?',
+        author: LEAD,
+        anchor: { kind: 'subject' },
+        review: {
+          shape: 'decision',
+          headline: 'How long should search history be kept?',
+          options: [
+            { id: 'o-30', label: '30 days' },
+            { id: 'o-forever', label: 'Forever' },
+          ],
+        },
+      }),
+    );
+    await settle();
+
+    handle.nudgeStalls();
+    await settle(400);
+    expect(stalls(ctx.lead.frames)).toHaveLength(0);
+
+    // The positive control, exactly as on the ticket-borne test above: the
+    // same pass still names a row with nothing outstanding.
+    const freeId = await addRow(ctx.workspaceId, 'Cache the facet counts');
+    await settle();
+    handle.nudgeStalls();
+    const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+
+    expect(got).toHaveLength(1);
+    expect(rowsOf(got[0] as Frame).map((r) => r.id)).toEqual([freeId]);
+    expect(got[0]?.data?.consideredCount).toBe(2);
+
+    await ctx.lead.stop();
+    await ctx.tab.stop();
+  });
+
+  /**
+   * A SETTLED comment-borne ask excuses nothing. Answering retires the
+   * declaration and resolving retires the thread — either way nobody is being
+   * waited on any more, so a quiet row behind one is exactly the stall the
+   * wake exists to name. This is the openness rule the Home queue reads
+   * (`pendingDeclaration`), driven through the loop.
+   */
+  it('does not excuse a row whose comment review was answered or resolved', async () => {
+    const ctx = await boardWithLead();
+
+    const answeredId = await addRow(ctx.workspaceId, 'Pick a retention window');
+    const answeredDoc = encodeURIComponent(`task:${answeredId}`);
+    const { thread } = await jj<{ thread: { id: string; comments: Array<{ id: string }> } }>(
+      await post(`/api/docs/${answeredDoc}/threads`, {
+        text: 'How long should search history be kept?',
+        author: LEAD,
+        anchor: { kind: 'subject' },
+        review: {
+          shape: 'decision',
+          headline: 'How long should search history be kept?',
+          options: [
+            { id: 'o-30', label: '30 days' },
+            { id: 'o-forever', label: 'Forever' },
+          ],
+        },
+      }),
+    );
+    await jj(
+      await post(`/api/docs/${answeredDoc}/threads/${thread.id}/answer`, {
+        author: PERSON,
+        text: '30 days',
+        commentId: thread.comments[0]?.id,
+        optionId: 'o-30',
+      }),
+    );
+
+    const resolvedId = await addRow(ctx.workspaceId, 'Rank results by recency');
+    const resolvedDoc = encodeURIComponent(`task:${resolvedId}`);
+    const { thread: retired } = await jj<{ thread: { id: string } }>(
+      await post(`/api/docs/${resolvedDoc}/threads`, {
+        text: 'Should stop words be stripped before ranking?',
+        author: LEAD,
+        anchor: { kind: 'subject' },
+        review: { shape: 'question', headline: 'Should stop words be stripped before ranking?' },
+      }),
+    );
+    await jj(
+      await post(`/api/docs/${resolvedDoc}/threads/${retired.id}/resolve`, { author: PERSON }),
+    );
+    await settle();
+
+    handle.nudgeStalls();
+    const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+
+    expect(got).toHaveLength(1);
+    expect(
+      rowsOf(got[0] as Frame)
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([answeredId, resolvedId].sort());
+
+    await ctx.lead.stop();
+    await ctx.tab.stop();
+  });
+
+  /**
    * `park_task` moves the row to triage and records why in a comment, so the
    * gate never sees it — the deferral is enforced by the status filter rather
    * than by a bucket of its own. This drives the real route to prove it.

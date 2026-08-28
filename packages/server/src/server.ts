@@ -1426,15 +1426,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Second pass over the handful the first pass named. A room that was never
     // opened holds no threads and answers nothing, which is the right answer:
     // a row with no discussion has no comment activity to find.
+    //
+    // The same walk also collects the asks `reviewState` cannot see: a review
+    // item filed as a payload ON A COMMENT lives in the room, not on the
+    // ticket, yet it sits on the reader's Home queue exactly like a
+    // ticket-borne one — so a row behind one is legitimately waiting, and the
+    // loop woke a live lead over exactly this shape. Openness is
+    // `pendingDeclaration`, the rule the queue itself reads: an answered
+    // declaration or a resolved thread is nobody being waited on, and excuses
+    // nothing.
     const threadActivity = new Map<string, number>();
+    const commentAsks: Array<{ taskId: string; askedAt: number }> = [];
     for (const row of suspect) {
       let newest = 0;
       for (const thread of rooms.listThreads(taskBodyDocId(row.id))) {
         if (thread.lastActivity > newest) newest = thread.lastActivity;
+        const declaring = pendingDeclaration(thread);
+        if (declaring) commentAsks.push({ taskId: row.id, askedAt: declaring.ts });
       }
       if (newest > 0) threadActivity.set(row.id, newest);
     }
-    return threadActivity.size > 0 ? evaluateStalls({ ...input, threadActivity }) : first;
+    if (threadActivity.size === 0 && commentAsks.length === 0) return first;
+    return evaluateStalls({
+      ...input,
+      reviewItems: [...input.reviewItems, ...commentAsks],
+      ...(threadActivity.size > 0 ? { threadActivity } : {}),
+    });
   };
   const stallSnapshot = (workspace: HubWorkspace): StallSnapshot => {
     const verdict = stallVerdict(workspace);
