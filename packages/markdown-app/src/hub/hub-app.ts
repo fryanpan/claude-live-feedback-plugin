@@ -696,25 +696,29 @@ async function main(): Promise<void> {
    * whole point of the queue. A decision opens its task panel; a task comment
    * opens that task's discussion; a doc comment opens the doc AT the comment
    * (`?thread=`), not the doc's top.
+   *
+   * Returns whether the reader is still on THIS page afterwards — false only
+   * for the doc jump, which leaves via location.assign. The walkthrough's
+   * hand-off keys its card repaint on it (see onOpenItem).
    */
-  function openReviewItem(item: ReviewItem): void {
+  function openReviewItem(item: ReviewItem): boolean {
     // `reviewRow` is the one reader for "which task is this row about", so a
     // future band that carries a task row cannot land in the strip with a
     // chip that taps into nothing.
     const row = reviewRow(item);
     if (row) {
       boardHandlers.onOpenTask(row.task);
-      return;
+      return true;
     }
     const t = item.thread;
-    if (!t) return;
+    if (!t) return true;
     if (t.kind === 'task-review') {
       // A ticket-borne review item lives on the TASK — there is no thread to
       // aim at, so the panel itself is the place. Without this branch the
       // fall-through below navigated to `/review/undefined`.
       const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
       if (task) boardHandlers.onOpenTask(task);
-      return;
+      return true;
     }
     if (t.kind === 'goal-thread' && t.taskId) {
       // The goal PANEL, not the task panel and not the raw doc: the row is a
@@ -725,18 +729,18 @@ async function main(): Promise<void> {
       state.detailTaskId = null;
       state.detailThreadId = t.threadId;
       renderDetail();
-      return;
+      return true;
     }
     if (t.kind === 'task-thread') {
       const task = t.taskId ? state.tasks.get(t.taskId) : undefined;
-      if (!task) return;
+      if (!task) return true;
       boardHandlers.onOpenTask(task);
       // The task is the container; the thread is the errand. On a task with
       // six discussions, landing on the panel top is the same "now go find
       // it" the strip exists to remove — so aim at the one that was queued.
       state.detailThreadId = t.threadId;
       renderDetail();
-      return;
+      return true;
     }
     // The doc's canonical workspace address rather than the legacy `/review/`
     // one, so what lands in the reader's address bar is the shape every other
@@ -744,6 +748,7 @@ async function main(): Promise<void> {
     location.assign(
       `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}`,
     );
+    return false;
   }
 
   /** Everyone a task can be handed to besides a person: the agents attached
@@ -1529,10 +1534,18 @@ async function main(): Promise<void> {
         onReply: (item, text, optionId) =>
           finishWalkItem(item, next, () => replyToReviewItem(item, text, optionId)),
         onOpenItem: (item) => {
+          // Close-in-state first, but render the OPEN first: the close and
+          // the open are one user action, and they must reach syncBoardUrl as
+          // one step (walk → panel, a push). Rendering the close ahead of the
+          // open wrote a 'close' step whose history.back() — an async
+          // traversal — landed after the open's pushState, and its popstate
+          // re-applied the old ?item= entry: the tapped task closed itself
+          // and the reader bounced back to Home. When the item leaves the
+          // page instead (a doc jump), the card repaint is skipped outright —
+          // a close-step back() queued beside location.assign races it.
           state.walkIndex = -1;
           state.walkKey = null;
-          renderWalkthrough();
-          openReviewItem(item);
+          if (openReviewItem(item)) renderWalkthrough();
         },
         onStep: (i) => {
           // Skip and back are positional by nature — the reader is pointing at
