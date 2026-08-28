@@ -2898,12 +2898,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     raw: string,
     presentedOrigin: string | null,
   ): IdentityRecord | null => {
+    // Belt-and-braces, deliberately: `isRevoked` below already answers true
+    // while the denylist is failed closed, and a widget token always
+    // carries a session id (verifyWidgetToken refuses one without), so this
+    // line is never the only thing refusing. It mirrors sessionIdentityFor,
+    // where a v1 cookie has no session id and WOULD skip `isRevoked`; kept
+    // so the two gates read the same and a future edit to one is obviously
+    // a change to both. Mutation-tested: removing it turns nothing red.
     if (sessionRevocations.failedClosed()) return null;
     const claims = verifyWidgetToken(raw, widgetTokenKey());
     if (!claims) return null;
     if (presentedOrigin === null || presentedOrigin !== claims.origin) return null;
     if (sessionRevocations.isRevoked(claims.sessionId)) return null;
     const rec = identities.get(claims.identityId);
+    // Status is load-bearing on its own, not only via the watermark:
+    // `archive()` bumps sessionsValidFrom, but a roster row hand-edited to
+    // `archived` (the file is meant to be editable) carries no bump, and
+    // only this check refuses its tokens. Pinned in the routes test.
     if (!rec || rec.status !== 'active') return null;
     if (claims.sessionIssuedAt < rec.sessionsValidFrom) return null;
     return rec;

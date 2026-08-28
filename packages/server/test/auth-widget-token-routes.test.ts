@@ -329,6 +329,66 @@ describe('revocation kills the token', () => {
   });
 });
 
+describe('the denylist failing closed at runtime', () => {
+  it('refuses every token once the denylist is deleted out from under a running server', async () => {
+    // Boot-time corruption is covered by the watermark test above; this is
+    // the OTHER failed-closed path — the file vanishing while the server
+    // runs — which no watermark bump heals. With the list gone nothing can
+    // tell a live session from a logged-out one, so every token reads as
+    // revoked. Load-bearing check: `isRevoked` itself answers true while
+    // failed closed; the explicit `failedClosed()` guard ahead of it in
+    // widgetTokenIdentityFor is belt-and-braces (see its comment).
+    const { base, dataDir } = boot();
+    const { token } = await signInAndMint(base, 'reviewer@example.com');
+    const alive = await fetch(`${base}/api/auth/widget-session`, { headers: bearer(token) });
+    expect(alive.status).toBe(200);
+
+    rmSync(join(dataDir, 'revoked-sessions.json'));
+
+    const dead = await fetch(`${base}/api/auth/widget-session`, { headers: bearer(token) });
+    expect(dead.status).toBe(401);
+    const write = await postComment(base, dataDir, 'denylist-gone-doc', token);
+    expect(write.status).toBe(401);
+    expect(commentRows(dataDir).length).toBe(0);
+  });
+});
+
+describe('an archived identity', () => {
+  it('cannot use its token, even when the row carries no session watermark', async () => {
+    // `archive()` bumps sessionsValidFrom, so through the API the watermark
+    // alone would refuse the token. The roster is also a file people edit:
+    // a row hand-marked `archived` with its watermark left at 0 is exactly
+    // the case the status check catches on its own. Remove that check and
+    // this token works again.
+    const dataDir = mkdtempSync(join(tmpdir(), 'widget-token-archived-'));
+    const first = boot({ dataDir });
+    const { token } = await signInAndMint(first.base, 'reviewer@example.com');
+    const alive = await fetch(`${first.base}/api/auth/widget-session`, {
+      headers: bearer(token),
+    });
+    expect(alive.status).toBe(200);
+    await first.handle.stop();
+
+    const rosterPath = join(dataDir, 'identities.json');
+    const roster = JSON.parse(readFileSync(rosterPath, 'utf8')) as {
+      identities: Record<string, { status: string; sessionsValidFrom: number }>;
+    };
+    const row = roster.identities[emailIdentityId('reviewer@example.com')];
+    expect(row).toBeTruthy();
+    (row as { status: string }).status = 'archived';
+    (row as { sessionsValidFrom: number }).sessionsValidFrom = 0;
+    writeFileSync(rosterPath, JSON.stringify(roster));
+
+    const second = createServer({ port: 0, dataDir });
+    cleanups.push(async () => {
+      await second.stop();
+    });
+    const base = `http://localhost:${second.port}`;
+    const res = await fetch(`${base}/api/auth/widget-session`, { headers: bearer(token) });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('the token is bound to the origin it was minted for', () => {
   // The mint route hands the token to one server-validated page origin, and
   // every use must come from that page: the browser stamps Origin on each
