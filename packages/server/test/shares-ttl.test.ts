@@ -10,7 +10,7 @@
  * half of that removal and lives in per-doc-share-removed.test.ts.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Shares } from '../src/share/shares.ts';
@@ -152,6 +152,59 @@ describe('a share must name a workspace', () => {
       expect(share.slug).toBeUndefined();
     } finally {
       cleanup();
+    }
+  });
+});
+
+/**
+ * The cf-access middleware asks the registry which Access audience a
+ * hostname must satisfy. That answer must be TTL-aware on its own: it runs
+ * before anything else has classified the host, so if it resolved an
+ * expired share, a stale-but-valid Access JWT would keep matching a grant
+ * that has lapsed. (host-scope.test.ts "an expired share host stops being a
+ * share host" holds the request-level version of this property.)
+ */
+describe('audienceResolver ignores expired shares', () => {
+  // The registry file is a bare array of records (see Shares.load).
+  const accessRecord = (expiresAt: number) => [
+    {
+      shareId: 'aud-fixture',
+      surface: 'workspace',
+      docId: '',
+      workspaceId: 'ws1',
+      hostname: 'aud.example.test',
+      url: 'https://aud.example.test/',
+      audience: 'aud-tag-fixture',
+      appId: 'app-fixture',
+      createdAt: 1,
+      expiresAt,
+    },
+  ];
+
+  it('an expired access share resolves to no audience', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'shares-aud-'));
+    try {
+      writeFileSync(join(dataDir, 'shares.json'), JSON.stringify(accessRecord(Date.now() - 1_000)));
+      const shares = new Shares({ dataDir, config: {} });
+      // The record loaded — expiry is a serve-time refusal, not a drop.
+      expect(shares.list()).toHaveLength(1);
+      expect(shares.audienceResolver('aud.example.test')).toBeNull();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('positive control: the same record, still live, resolves its audience', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'shares-aud-'));
+    try {
+      writeFileSync(
+        join(dataDir, 'shares.json'),
+        JSON.stringify(accessRecord(Date.now() + 60_000)),
+      );
+      const shares = new Shares({ dataDir, config: {} });
+      expect(shares.audienceResolver('aud.example.test')).toBe('aud-tag-fixture');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
     }
   });
 });
