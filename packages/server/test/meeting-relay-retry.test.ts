@@ -85,6 +85,7 @@ describe('meeting relay retry after a failed handshake', () => {
     const relay = new MeetingRelay({
       store: new MeetingStore(dataDir),
       engine,
+      notes: null,
       broadcast: () => {},
     });
     const { ws, frames } = createClient('retry-doc');
