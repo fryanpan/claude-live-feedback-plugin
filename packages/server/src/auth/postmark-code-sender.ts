@@ -1,21 +1,20 @@
 /**
- * Delivering a login code through Cloudflare Email Sending.
+ * Delivering a login code through Postmark.
  *
- * Chosen because this deployment already runs on Cloudflare and already pays
- * for the plan it needs, so it adds no vendor. It fits `CodeSender` without
- * bending it: one HTTPS call through `fetch`, the token read from the
- * Keychain at construction, and no new npm dependency — an SDK would add
- * weight to a bundle this repo measures in order to save a dozen lines.
- *
- * The service is in PUBLIC BETA. That is not a reason to avoid it, but it is
- * a reason to keep the wire shape in one function and the sender swappable,
- * which is what the seam was for. If the endpoint moves, one file changes.
+ * Postmark replaced Cloudflare Email Sending here (Bryan, 2026-08-28, on the
+ * design doc) — the Cloudflare service never left public beta and was never
+ * configured in prod, so the swap is exactly what the `CodeSender` seam was
+ * for: one HTTPS call through `fetch`, the token read from the Keychain at
+ * boot, and no new npm dependency — an SDK would add weight to a bundle this
+ * repo measures in order to save a dozen lines.
  *
  * TWO RULES THIS FILE EXISTS TO HOLD:
  *
  * - **A refusal throws.** `code-sender.ts` explains why at length: a sender
  *   that resolved on a 4xx would leave somebody in front of a code box for a
  *   code that was never sent, with a cheerful log line as the only evidence.
+ *   A send that never answers is the same failure in slow motion, so every
+ *   request carries a timeout (5s) and hitting it throws too.
  * - **The code and the token never reach an error message.** Errors get
  *   logged, pasted into tickets and quoted in chat. A six-digit login code in
  *   one is a live credential sitting somewhere nobody treats as secret, and a
@@ -30,18 +29,21 @@ import { type CodeSender, loginCodeSubject, loginCodeText } from './code-sender.
 /** The subset of `fetch` this needs, so a test can hand it a function. */
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
-export interface CloudflareCodeSenderConfig {
-  /** Cloudflare account the sending domain is onboarded under. */
-  accountId: string;
-  /** The From address. Its domain must be onboarded, or every send 403s. */
+const ENDPOINT = 'https://api.postmarkapp.com/email';
+
+/** How long a send may take before it is cut off and thrown. Postmark
+ *  answers in well under a second; a login route parked behind a hung
+ *  provider is the "waiting for mail that never comes" failure with extra
+ *  steps. */
+export const SEND_TIMEOUT_MS = 5_000;
+
+export interface PostmarkCodeSenderConfig {
+  /** The From address. Must match a verified sender signature, or every send 422s. */
   from: string;
-  /** API token with email-sending permission. Never logged, never in an error. */
+  /** Server API token. Never logged, never in an error. */
   token: string;
   fetch?: FetchLike;
-}
-
-function endpoint(accountId: string): string {
-  return `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/email/sending/send`;
+  timeoutMs?: number;
 }
 
 /**
@@ -68,44 +70,57 @@ function redact(text: string, secrets: readonly string[]): string {
 }
 
 /** What the provider said, reduced to something safe to write down. A body
- *  we cannot parse is truncated rather than dropped: "400" on its own has
+ *  we cannot parse is truncated rather than dropped: "422" on its own has
  *  never once been enough to fix anything. */
 function providerMessage(status: number, body: string, secrets: readonly string[]): string {
   let detail = body.trim().slice(0, 300);
   try {
-    const parsed = JSON.parse(body) as { errors?: Array<{ message?: string }> };
-    const messages = (parsed.errors ?? [])
-      .map((e) => e.message)
-      .filter((m): m is string => typeof m === 'string' && m.length > 0);
-    if (messages.length > 0) detail = messages.join('; ');
+    const parsed = JSON.parse(body) as { Message?: string };
+    if (typeof parsed.Message === 'string' && parsed.Message.length > 0) {
+      detail = parsed.Message;
+    }
   } catch {
     // Not JSON. The truncated body is still the most useful thing available.
   }
-  return `Cloudflare refused the login code (HTTP ${status}): ${redact(detail, secrets)}`;
+  return `Postmark refused the login code (HTTP ${status}): ${redact(detail, secrets)}`;
 }
 
-export function createCloudflareCodeSender(config: CloudflareCodeSenderConfig): CodeSender {
+export function createPostmarkCodeSender(config: PostmarkCodeSenderConfig): CodeSender {
   const doFetch = config.fetch ?? ((url, init) => fetch(url, init));
+  const timeoutMs = config.timeoutMs ?? SEND_TIMEOUT_MS;
   return {
-    name: 'cloudflare',
+    name: 'postmark',
     async send(req): Promise<void> {
       const body = JSON.stringify({
-        from: config.from,
-        to: [{ email: req.to }],
-        subject: loginCodeSubject(req.code),
-        text: loginCodeText(req),
+        From: config.from,
+        To: req.to,
+        Subject: loginCodeSubject(req.code),
+        TextBody: loginCodeText(req),
+        MessageStream: 'outbound',
       });
-      // A transport failure propagates as-is: it already names the cause
-      // ("ECONNREFUSED"), and wrapping it would only bury that behind our own
-      // wording. Nothing secret is in it — the request never got sent.
-      const res = await doFetch(endpoint(config.accountId), {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${config.token}`,
-          'content-type': 'application/json',
-        },
-        body,
-      });
+      let res: Response;
+      try {
+        // A transport failure propagates as-is: it already names the cause
+        // ("ECONNREFUSED"), and wrapping it would only bury that behind our
+        // own wording. Nothing secret is in it — the request never got sent.
+        res = await doFetch(ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'x-postmark-server-token': config.token,
+            'content-type': 'application/json',
+            accept: 'application/json',
+          },
+          body,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (err) {
+        // Except the timeout, whose stock message ("The operation timed
+        // out") names neither the provider nor the wait.
+        if (err instanceof Error && err.name === 'TimeoutError') {
+          throw new Error(`Postmark did not answer within ${timeoutMs}ms`);
+        }
+        throw err;
+      }
       if (!res.ok) {
         throw new Error(providerMessage(res.status, await res.text(), [req.code, config.token]));
       }
@@ -121,43 +136,34 @@ export interface CodeSenderResolution {
   reason: string | null;
 }
 
-/** The Keychain service holding the email-sending token. Separate from
- *  `cloudflare-api-token`, which the share module uses: these want different
- *  permissions, and a token scoped to one job cannot be widened by accident
- *  when the other one is rotated. */
-export const EMAIL_TOKEN_SERVICE = 'cloudflare-email-api-token';
+/** The Keychain service holding the Postmark server token. Its own entry —
+ *  a token scoped to one job cannot be widened by accident when another
+ *  service's token is rotated. */
+export const EMAIL_TOKEN_SERVICE = 'postmark-api-token';
 
 /**
  * Decide whether real email can be sent, WITHOUT throwing.
  *
- * Two of the three inputs are things only the operator can create — a domain
- * onboarded in the dashboard, and a scoped token — so partial configuration
- * is the normal state during setup, not an error. Falling back to the log
- * sender keeps login working end to end; naming the missing piece is what
- * stops that fallback from looking like a working install.
+ * Both inputs are things only the operator can create — a verified sender
+ * signature in the Postmark dashboard, and a server token — so partial
+ * configuration is the normal state during setup, not an error. Falling back
+ * to the log sender keeps login working end to end; naming the missing piece
+ * is what stops that fallback from looking like a working install.
  *
- * The From address is deliberately NOT defaulted. Guessing a domain here
- * would produce a sender that builds cleanly at boot and 403s on the first
+ * The From address is deliberately NOT defaulted. Guessing an address here
+ * would produce a sender that builds cleanly at boot and 422s on the first
  * real login, which is the worst of both: configured-looking and broken.
  */
-export function resolveCloudflareCodeSender(
+export function resolvePostmarkCodeSender(
   env: Record<string, string | undefined>,
   readToken: (service: string) => string,
 ): CodeSenderResolution {
   const from = env.AUTH_EMAIL_FROM;
-  const accountId = env.AUTH_EMAIL_CF_ACCOUNT_ID ?? env.CF_ACCOUNT_ID;
   if (!from) {
     return {
       sender: null,
       reason:
-        'no AUTH_EMAIL_FROM, so login codes still print to the log. Set it to an address on a domain onboarded for Cloudflare Email Sending.',
-    };
-  }
-  if (!accountId) {
-    return {
-      sender: null,
-      reason:
-        'no CF_ACCOUNT_ID (or AUTH_EMAIL_CF_ACCOUNT_ID), so login codes still print to the log.',
+        'no AUTH_EMAIL_FROM, so login codes still print to the log. Set it to an address with a verified Postmark sender signature.',
     };
   }
   let token: string;
@@ -172,5 +178,5 @@ export function resolveCloudflareCodeSender(
       reason: `login codes still print to the log — ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  return { sender: createCloudflareCodeSender({ accountId, from, token }), reason: null };
+  return { sender: createPostmarkCodeSender({ from, token }), reason: null };
 }
