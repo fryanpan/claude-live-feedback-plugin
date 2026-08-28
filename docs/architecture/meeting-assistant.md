@@ -83,6 +83,24 @@ follows the same no-default seam as the engine: nothing that merely spins a
 server up can reach an LLM. Partials count as speech in progress and defer
 the pause tick.
 
+## Task capture ("file a ticket for that")
+
+Each pause tick ALSO runs a task-capture pass (`meeting-task-capture.ts`)
+before the compose: a second Haiku call — same dedicated-key consent, off
+switch `CW_MEETING_TASKS=0` — extracts explicit task requests and references
+to tracked work from the new speech. Find-or-create is guarded
+deterministically (a model-claimed reference must share words with the tick's
+own transcript; a request that duplicates open work links the row instead of
+twinning it), because a wrong link is worse than no link. New rows are
+attributed to the `Meeting Assistant` agent actor and enter triage; a request
+judged clear-and-doable goes to the chores band at `todo` and wakes the
+board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
+`in-progress` itself. The composer receives the resolved links and writes
+plain markdown links into the notes; the doc editor's `TaskLinkChips`
+decoration (markdown-app) renders title + live status chip beside them,
+refreshed on the board's `task.transitioned` SSE push, without ever touching
+stored content.
+
 ## Load-bearing gotchas (each cost real debugging)
 
 - **AssemblyAI `format_turns: true` ends every turn TWICE** at the same turn
