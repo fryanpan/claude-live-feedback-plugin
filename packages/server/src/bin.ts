@@ -79,6 +79,16 @@ const readyNudgeIdleMs = positiveEnvDuration(process.env, 'CW_READY_NUDGE_MINUTE
 // asks whether ready work has been picked up.
 const stallNudgeQuietMs = positiveEnvDuration(process.env, 'CW_STALL_NUDGE_MINUTES', MINUTE_MS);
 
+// How many quiet windows a row with a WATCHING builder dispatch gets before
+// the board calls its builder silent (stall-gate.ts). A bare multiplier —
+// unit 1 — rather than its own duration, so it scales whatever the quiet
+// window above is set to.
+const stallBuilderSilentMultiplier = positiveEnvDuration(
+  process.env,
+  'CW_BUILDER_SILENT_MULTIPLIER',
+  1,
+);
+
 // How long the board waits before saying the SAME unchanged stall again
 // (stall-nudge.ts). Hours, not minutes, because this one is priced in a
 // woken lead's whole turn rather than in a tick: a wake costs the lead
@@ -361,6 +371,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(codeSenderChoice.sender ? { codeSender: codeSenderChoice.sender } : {}),
       ...(readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs } : {}),
       ...(stallNudgeQuietMs !== undefined ? { stallNudgeQuietMs } : {}),
+      ...(stallBuilderSilentMultiplier !== undefined ? { stallBuilderSilentMultiplier } : {}),
       ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
