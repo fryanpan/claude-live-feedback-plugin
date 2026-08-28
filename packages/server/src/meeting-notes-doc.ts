@@ -70,7 +70,7 @@ export function replaceNotesSection(
     : `## ${heading}\n\n${notesMarkdown}`;
   let blocks: Y.XmlElement[];
   try {
-    blocks = prose.parseMarkdownBlocks(withHeading);
+    blocks = prose.parseMarkdownBlocks(demoteBodyHeadings(withHeading));
   } catch {
     return { ok: false, error: 'parse-failed' };
   }
@@ -110,6 +110,41 @@ export function replaceNotesSection(
     fragment.insert(start, blocks);
   }, 'agent');
   return { ok: true, mode: 'replaced' };
+}
+
+/**
+ * Demote every heading AFTER the first line to at least level 3, so nothing
+ * inside the section sits at the section heading's own level. The replace
+ * span above runs heading-to-next-heading at the same or a higher level; a
+ * body heading at level 2 — the stub's `## Notes`, a model ignoring the
+ * "### subheadings" instruction — would end that span early, and every later
+ * write would leave the previous body behind, duplicating the notes once per
+ * pause for the length of the meeting.
+ */
+function demoteBodyHeadings(markdown: string): string {
+  let fenced = false;
+  let seenSectionHeading = false;
+  return markdown
+    .split('\n')
+    .map((line) => {
+      // A fence marker flips the state; heading-looking lines inside a code
+      // block are code, not structure.
+      if (/^\s*(```|~~~)/.test(line)) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced) return line;
+      const m = line.match(/^#{1,2}\s+(.*)$/);
+      if (!m) return line;
+      // The first heading IS the section heading — the one the replace
+      // contract finds again. Everything after it is body.
+      if (!seenSectionHeading) {
+        seenSectionHeading = true;
+        return line;
+      }
+      return `### ${m[1]}`;
+    })
+    .join('\n');
 }
 
 function startsWithHeading(markdown: string, heading: string): boolean {
