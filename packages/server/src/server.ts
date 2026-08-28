@@ -78,7 +78,8 @@ import {
   buildLandingModel,
 } from './landing.ts';
 import { linkTitlesFor } from './link-titles.ts';
-import type { MeetingNotesDeps } from './meeting-notes.ts';
+import { withServerNotesSinks } from './meeting-notes-doc.ts';
+import type { MeetingNotesOptions } from './meeting-notes.ts';
 import { MeetingRelay } from './meeting-protocol.ts';
 import { MeetingStore } from './meetings.ts';
 import {
@@ -603,13 +604,19 @@ export interface ServerOptions {
    */
   transcription?: TranscriptionEngine;
   /**
-   * Pause-driven meeting notes: composer, quiet threshold, and the sink the
-   * composed notes go to. **No default**, same seam rule as `transcription`
+   * Pause-driven meeting notes: composer, quiet threshold, optionally an
+   * observing sink. **No default**, same seam rule as `transcription`
    * directly above — the real composer is an LLM call, and nothing that
    * merely spins a server up may construct one. Omitting it means meetings
-   * record transcripts and compose nothing. See `meeting-notes.ts`.
+   * record transcripts and compose nothing.
+   *
+   * The REAL sink is the server's own: composed notes are written into the
+   * meeting doc's "Meeting notes" section through the Yjs fragment, and the
+   * composer's context (doc title, open board task titles) is resolved here
+   * too — see `meeting-notes-doc.ts`. A caller `onNotes` observes after the
+   * doc write, it never replaces it.
    */
-  meetingNotes?: MeetingNotesDeps;
+  meetingNotes?: MeetingNotesOptions;
   /**
    * Liveness-marker interval for the uptime measurement (§3.12 commit 11).
    * The monitor appends `server.tick` lines to every hub workspace's
@@ -948,7 +955,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const meetingRelay = new MeetingRelay({
     store: meetingStore,
     engine: opts.transcription ?? null,
-    notes: opts.meetingNotes ?? null,
+    // The server supplies the notes sink — the write into the meeting doc —
+    // and the context resolver (doc title, board task titles). Thunks, not
+    // references: rooms and the task store are constructed below, and both
+    // exist long before any meeting can start.
+    notes: opts.meetingNotes
+      ? withServerNotesSinks(opts.meetingNotes, {
+          rooms: () => rooms,
+          tasks: () => taskStore,
+        })
+      : null,
     // Lifecycle only. The words never touch this hub — see meeting-protocol.
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
   });

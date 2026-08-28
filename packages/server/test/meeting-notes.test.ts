@@ -13,7 +13,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MEETING_AUDIO_ENCODING, MEETING_SAMPLE_RATE, meetingSocketPath } from '@feedback/core';
+import {
+  MEETING_AUDIO_ENCODING,
+  MEETING_SAMPLE_RATE,
+  meetingSocketPath,
+  prose,
+} from '@feedback/core';
 import {
   type NotesComposeInput,
   type NotesComposer,
@@ -286,15 +291,24 @@ describe('notes through the audio socket', () => {
   let dataDir: string;
   const schedule = new ManualScheduler();
   const updates: NotesUpdate[] = [];
+  /** What the composer was HANDED — the server resolves context per meeting. */
+  const composed: NotesComposeInput[] = [];
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-notes-'));
+    const stub = createStubNotesComposer();
     handle = createServer({
       port: 0,
       dataDir,
       transcription: createMockTranscriptionEngine(),
       meetingNotes: {
-        composer: createStubNotesComposer(),
+        composer: {
+          name: stub.name,
+          compose(input) {
+            composed.push(input);
+            return stub.compose(input);
+          },
+        },
         quietMs: 1000,
         schedule,
         onNotes: (u) => updates.push(u),
@@ -360,5 +374,20 @@ describe('notes through the audio socket', () => {
     expect(updates[1]?.tick.reason).toBe('end');
     expect(updates[1]?.notes).toContain(updates[0]?.notes ?? '@@');
     ws.close();
+  });
+
+  it('the composed notes are IN the doc, as a replaceable named section', () => {
+    const room = handle.rooms.get('planning');
+    expect(room).toBeDefined();
+    const md = prose.serializeFragmentToMarkdown(prose.getProseFragment(room!.ydoc));
+    // The end tick's notes replaced the pause tick's — one section, current.
+    expect(md.split('## Meeting notes').length).toBe(2);
+    expect(md).toContain('So the sync is the bottleneck.');
+    expect(md).toContain('# planning'); // the doc's own content survived
+  });
+
+  it('the composer was handed the doc as context, not a bare transcript', () => {
+    expect(composed.length).toBeGreaterThan(0);
+    expect(composed[0]?.context?.docTitle).toBe('planning');
   });
 });
