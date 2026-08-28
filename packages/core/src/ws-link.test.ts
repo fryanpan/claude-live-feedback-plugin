@@ -25,6 +25,45 @@ describe('parseWorkspaceLink', () => {
     });
   });
 
+  it('parses a task deep link copied from a nav page — /home carries ?task= too', () => {
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123/home?task=t-42fixture`)).toEqual({
+      kind: 'task',
+      workspaceId: 'w-abc123',
+      taskId: 't-42fixture',
+    });
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123/mine`)).toEqual({
+      kind: 'workspace',
+      workspaceId: 'w-abc123',
+    });
+  });
+
+  it('parses a goal deep link (?goal= on the board URL)', () => {
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123?goal=t-goalfixture`)).toEqual({
+      kind: 'goal',
+      workspaceId: 'w-abc123',
+      goalId: 't-goalfixture',
+    });
+    // Task wins over goal, matching the board's own panel rule.
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123?task=t-1&goal=t-2`)).toEqual({
+      kind: 'task',
+      workspaceId: 'w-abc123',
+      taskId: 't-1',
+    });
+  });
+
+  it('a thread param does not change what the link addresses', () => {
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123?task=t-1&thread=th-9`)).toEqual({
+      kind: 'task',
+      workspaceId: 'w-abc123',
+      taskId: 't-1',
+    });
+    expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123/docs/doc-1?thread=th-9`)).toEqual({
+      kind: 'doc',
+      workspaceId: 'w-abc123',
+      docId: 'doc-1',
+    });
+  });
+
   it('parses doc URLs in both address shapes', () => {
     expect(parseWorkspaceLink(`${HOST}/workspaces/w-abc123/docs/doc-1`)).toEqual({
       kind: 'doc',

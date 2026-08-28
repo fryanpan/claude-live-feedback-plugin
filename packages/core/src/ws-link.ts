@@ -22,11 +22,15 @@
 export type WorkspaceLink =
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'task'; workspaceId: string; taskId: string }
+  | { kind: 'goal'; workspaceId: string; goalId: string }
   | { kind: 'doc'; workspaceId: string | null; docId: string }
   | { kind: 'mockup'; workspaceId: string | null; docId: string }
   | { kind: 'review'; workspaceId: string; reviewId: string };
 
-const WS_PATH = /^\/workspaces\/([^/?#]+)\/?$/;
+// The optional suffix is the hub's nav destinations: the board keeps its
+// panel params on every nav page, so a link copied from `/home` addresses
+// the same task a link copied from the bare path does.
+const WS_PATH = /^\/workspaces\/([^/?#]+)(?:\/(?:home|tasks|mine|activity))?\/?$/;
 const WS_CHILD_PATH = /^\/workspaces\/([^/?#]+)\/(docs|mockups|reviews)\/([^/?#]+)\/?$/;
 const LEGACY_PATH = /^\/(review|mockup)\/([^/?#]+)\/?$/;
 
@@ -60,7 +64,10 @@ export function parseWorkspaceLink(urlOrPath: string): WorkspaceLink | null {
   if (ws?.[1]) {
     const workspaceId = decode(ws[1]);
     const taskId = u.searchParams.get('task');
-    return taskId ? { kind: 'task', workspaceId, taskId } : { kind: 'workspace', workspaceId };
+    if (taskId) return { kind: 'task', workspaceId, taskId };
+    const goalId = u.searchParams.get('goal');
+    if (goalId) return { kind: 'goal', workspaceId, goalId };
+    return { kind: 'workspace', workspaceId };
   }
 
   const child = u.pathname.match(WS_CHILD_PATH);

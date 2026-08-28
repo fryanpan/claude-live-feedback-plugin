@@ -165,6 +165,23 @@ describe('POST /api/links/titles', () => {
       const { titles, statuses } = await lookup([url]);
       expect(titles[url]).toBe('Ship search v2');
       expect(typeof statuses[url]).toBe('string');
+
+      // The canonical goal shape — what the goal panel's copy-link emits.
+      const goalUrl = `${base}/workspaces/${wsId}?goal=${goalId}`;
+      const canonical = await lookup([goalUrl]);
+      expect(canonical.titles[goalUrl]).toBe('Ship search v2');
+      expect(typeof canonical.statuses[goalUrl]).toBe('string');
+
+      // Board-truthfulness holds for goals as it does for tasks.
+      const lied = `${base}/workspaces/${otherWsId}?goal=${goalId}`;
+      expect((await lookup([lied])).titles[lied]).toBeNull();
+    });
+
+    it('resolves a task link copied from a nav page (/home carries the params)', async () => {
+      const url = `${base}/workspaces/${wsId}/home?task=${taskId}`;
+      const { titles, statuses } = await lookup([url]);
+      expect(titles[url]).toBe('Ship the widget');
+      expect(typeof statuses[url]).toBe('string');
     });
 
     it('carries the status for a task BODY doc address too', async () => {
