@@ -294,7 +294,7 @@ function avalanche(x: number): number {
  * Every id a roster could plausibly hold for this display name, lowercased.
  *
  * A roster entry is whatever the attaching session passed — its derived
- * identity id (`agent-live-feedback`), a hand-supplied slug (`quick-build`),
+ * identity id (`agent-live-feedback`), a hand-supplied slug (`my-tool`),
  * or the display name itself. All three occur in the field, so matching one
  * spelling matches roughly none of the fleet.
  */
