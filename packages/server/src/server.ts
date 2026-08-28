@@ -3180,7 +3180,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // AHEAD of both auth paths on purpose: while sharing is off, a live
           // Access JWT, an unexpired session cookie and no credential at all
           // must be indistinguishable. Gating after auth would leak which
-          // slugs are real to anyone still holding one.
+          // share links are real to anyone still holding one.
           //
           // Only external hosts pass through here — `local` returned above
           // this point untouched, so the agent's MCP calls over loopback and
@@ -3221,12 +3221,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               shares?.findLiveByHostname(req.headers.get('host') ?? '')?.shareId ?? null;
           } else if (decision.kind === 'link') {
             // Redeeming a link is the ONLY thing reachable here without a
-            // session — that request is what mints one.
-            // Matched with the SAME regex the redeem route uses. A `startsWith`
-            // prefix let any GET under /s/ skip the session check — inert today
-            // because nothing else is mounted there and URL normalizes `..`,
-            // but it becomes a hole the moment something is.
-            const redeeming = req.method === 'GET' && /^\/s\/[^/]+$/.test(pathname);
+            // session — that request is what mints one. `/s/<slug>` is the
+            // RETIRED unsigned form: it must stay reachable to answer its
+            // not-found page, and answers nothing else.
+            // Matched with the SAME regexes the routes use. A `startsWith`
+            // prefix let any GET under the redeem path skip the session check
+            // — inert today because nothing else is mounted there and URL
+            // normalizes `..`, but it becomes a hole the moment something is.
+            const redeeming = req.method === 'GET' && /^\/(?:share|s)\/[^/]+$/.test(pathname);
             if (!redeeming) {
               const target = linkSessionTarget(req);
               if (!target) return j(401, { error: 'no_share_session' });
@@ -3408,7 +3410,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // --- REST: shares ---
         if (pathname === '/api/share' && req.method === 'GET') {
           if (!shares) return j(404, { error: 'sharing not enabled' });
-          return j(200, { shares: shares.list(), sharing: sharingGate.status() });
+          // `listWithUrls` recomputes every link share's signed URL, which is
+          // how a record minted before signing serves a usable URL at all.
+          return j(200, { shares: await shares.listWithUrls(), sharing: sharingGate.status() });
         }
         // Flip the master switch. Local-only, like the rest of /api/share*.
         // Turning it OFF also hangs up what is already connected: a websocket
@@ -3456,17 +3460,32 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
         }
         // --- Redeem a share link ---
-        // The slug is a bearer credential: exchange it for a signed session
-        // cookie, then redirect to the doc. Deliberately gives nothing away
-        // on failure — an unknown, expired, or malformed slug all look alike.
-        const redeemMatch = pathname.match(/^\/s\/([^/]+)$/);
+        // A SIGNED capability URL: `/share/<id>?exp=<unix-seconds>&sig=<hex>`,
+        // HMAC over `<id>.<exp>` (share/url-signing.ts). Exchange it for a
+        // signed session cookie, then redirect to the board. Validated here
+        // on every request as defense-in-depth — the edge Worker
+        // (infra/share-link-worker/) is the first gate, and the app never
+        // trusts that it ran. Deliberately gives nothing away on failure —
+        // tampered, expired, revoked, and never-existed all look alike.
+        const redeemMatch = pathname.match(/^\/share\/([^/]+)$/);
         if (redeemMatch && req.method === 'GET') {
-          const slug = decodeURIComponent(redeemMatch[1] ?? '');
-          const share = shares?.findBySlug(slug) ?? null;
+          const shareId = decodeURIComponent(redeemMatch[1] ?? '');
+          const share = shares
+            ? await shares.verifySignedLink(
+                shareId,
+                url.searchParams.get('exp') ?? '',
+                url.searchParams.get('sig') ?? '',
+              )
+            : null;
           if (!share) {
             return new Response(renderLinkNotFound(), {
               status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
+              headers: {
+                'content-type': 'text/html; charset=utf-8',
+                // Even the failure page must not leak the (possibly almost-
+                // valid) signed URL into a Referer header.
+                'referrer-policy': 'no-referrer',
+              },
             });
           }
           // A share lands IN the board — never a review URL, never a lobby
@@ -3475,14 +3494,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           //
           // A legacy GROUPING share lands here too, and gets that same 404
           // rather than a named 410. The route's own rule is that an unknown,
-          // an expired and a malformed slug are indistinguishable — telling a
+          // an expired and a tampered URL are indistinguishable — telling a
           // stranger holding a leaked link that it was once real would give
           // away more than the removal takes back. The named 410 is for the
           // MINT routes, where the caller is a peer with a legitimate ask.
           if (!boardShareTarget(share)) {
             return new Response(renderLinkNotFound(), {
               status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
+              headers: {
+                'content-type': 'text/html; charset=utf-8',
+                'referrer-policy': 'no-referrer',
+              },
             });
           }
           const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
@@ -3491,7 +3513,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             headers: {
               location: `/workspaces/${encodeURIComponent(share.workspaceId)}`,
               'set-cookie': sessionCookieHeader(share.shareId, cookieKey(), maxAge),
-              // Keep the slug out of any downstream Referer header.
+              // Keep the signed URL out of any downstream Referer header.
+              'referrer-policy': 'no-referrer',
+            },
+          });
+        }
+
+        // The RETIRED unsigned form. `/s/<slug>` stopped being accepted when
+        // links became signed URLs — the registry is never consulted, so a
+        // record that still carries a slug redeems nothing. The records
+        // themselves stay (soft behavior): list_shares serves each one a
+        // fresh signed URL computed on demand, which is the migration path
+        // for anything minted before signing.
+        if (req.method === 'GET' && /^\/s\/[^/]+$/.test(pathname)) {
+          return new Response(renderLinkNotFound(), {
+            status: 404,
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              // An old slug is a retired credential — same Referer hygiene.
               'referrer-policy': 'no-referrer',
             },
           });
@@ -3547,7 +3586,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             });
           }
           try {
-            const share = shares.createShareLink({
+            const share = await shares.createShareLink({
               workspaceId,
               ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
               label: typeof body?.label === 'string' ? body.label : undefined,
@@ -3568,7 +3607,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const ttlSeconds = body?.ttlSeconds;
           if (typeof ttlSeconds !== 'number') return j(400, { error: 'ttlSeconds required' });
           try {
-            const share = shares.setTtl(shareId, ttlSeconds);
+            const share = await shares.setTtl(shareId, ttlSeconds);
             return share ? j(200, { share }) : j(404, { error: 'share not found' });
           } catch (err) {
             return j(400, { error: err instanceof Error ? err.message : 'bad ttl' });

@@ -1,12 +1,13 @@
 /**
  * Link-mode sessions.
  *
- * A capability URL (`/s/<slug>`) is redeemed ONCE for a signed cookie; every
- * later request — including the Yjs websocket upgrade — is authorized from
- * that cookie. This is the same shape Cloudflare Access uses, and it exists
- * for the same reason: the review app fetches `/api/docs/<id>` and `/y/<id>`
- * at the ROOT, so the slug would be gone by the second request. Carrying the
- * session in a cookie means zero client changes.
+ * A signed capability URL (`/share/<id>?exp=…&sig=…`) is redeemed ONCE for a
+ * signed cookie; every later request — including the Yjs websocket upgrade —
+ * is authorized from that cookie. This is the same shape Cloudflare Access
+ * uses, and it exists for the same reason: the review app fetches
+ * `/api/docs/<id>` and `/y/<id>` at the ROOT, so the signed URL would be gone
+ * by the second request. Carrying the session in a cookie means zero client
+ * changes.
  *
  * The cookie holds only the shareId plus an HMAC over it. It deliberately
  * does NOT carry an expiry: the share's own `expiresAt` is re-checked on

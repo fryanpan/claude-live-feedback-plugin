@@ -596,10 +596,11 @@ describe('import route (dry-run first, apply stamps the file)', () => {
   it('a hub-share visitor cannot import (403), though the hub page serves them (presence)', async () => {
     const workspaceId = await seedWorkspace();
     const path = trackerCopy();
-    const { share } = await jj<{ share: { slug: string } }>(
+    const { share } = await jj<{ share: { url: string } }>(
       await post('/api/share/link', { workspaceId, label: 'hub share' }),
     );
-    const redeem = await fetch(`${base}/s/${share.slug}`, {
+    const shareUrl = new URL(share.url);
+    const redeem = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST },
     });

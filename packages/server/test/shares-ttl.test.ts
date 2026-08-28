@@ -29,64 +29,80 @@ function makeShares() {
 const LINK = { workspaceId: 'ws1', entryDocId: 'd1' };
 
 describe('TTL validation at the registry', () => {
-  it('refuses values a link could never survive', () => {
+  it('refuses values a link could never survive', async () => {
     const { shares, cleanup } = makeShares();
     try {
       // These can't arrive over JSON (NaN/Infinity serialize to null), but
       // an in-process caller can pass them.
       for (const ttlSeconds of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-        expect(() => shares.createShareLink({ ...LINK, ttlSeconds }), String(ttlSeconds)).toThrow(
+        expect(shares.createShareLink({ ...LINK, ttlSeconds }), String(ttlSeconds)).rejects.toThrow(
           /positive, finite/,
         );
       }
       // Positive control: the same call with a sane TTL mints, so the throws
       // above are the TTL check rather than the fixture being unmintable.
-      expect(shares.createShareLink({ ...LINK, ttlSeconds: 60 }).slug).toBeTruthy();
+      expect((await shares.createShareLink({ ...LINK, ttlSeconds: 60 })).url).toContain('sig=');
     } finally {
       cleanup();
     }
   });
 
-  it('refuses to extend an expired share, so a leaked URL stays dead', () => {
+  it('refuses to extend an expired share, so a leaked URL stays dead', async () => {
     const { shares, cleanup } = makeShares();
     try {
-      const share = shares.createShareLink({ ...LINK, ttlSeconds: 60 });
-      expect(shares.findBySlug(share.slug ?? '')).not.toBeNull();
+      const share = await shares.createShareLink({ ...LINK, ttlSeconds: 60 });
+      expect(shares.findLive(share.shareId)).not.toBeNull();
 
       share.expiresAt = Date.now() - 1;
-      expect(shares.findBySlug(share.slug ?? '')).toBeNull();
-      expect(shares.setTtl(share.shareId, 3600)).toBeNull();
+      expect(shares.findLive(share.shareId)).toBeNull();
+      expect(await shares.setTtl(share.shareId, 3600)).toBeNull();
       // Still dead after the refused extension.
-      expect(shares.findBySlug(share.slug ?? '')).toBeNull();
+      expect(shares.findLive(share.shareId)).toBeNull();
     } finally {
       cleanup();
     }
   });
 
-  it('extends a live share, measured from now', () => {
+  it('extends a live share, measured from now — and re-issues the signed URL', async () => {
     const { shares, cleanup } = makeShares();
     try {
-      const share = shares.createShareLink({ ...LINK, ttlSeconds: 60 });
-      const extended = shares.setTtl(share.shareId, 7200);
+      const share = await shares.createShareLink({ ...LINK, ttlSeconds: 60 });
+      const urlBefore = share.url;
+      const extended = await shares.setTtl(share.shareId, 7200);
       expect(extended).not.toBeNull();
       const hours = ((extended?.expiresAt ?? 0) - Date.now()) / 3_600_000;
       expect(hours).toBeGreaterThan(1.9);
       expect(hours).toBeLessThan(2.1);
+      // The expiry is embedded in the URL, so moving it re-signs the URL.
+      expect(extended?.url).not.toBe(urlBefore);
+      expect(extended?.url).toContain(`/share/${share.shareId}?exp=`);
     } finally {
       cleanup();
     }
   });
 
-  it('needs a public hostname before it can mint anything', () => {
+  it('defaults a link to two weeks (temporary-use links)', async () => {
+    const { shares, cleanup } = makeShares();
+    try {
+      const share = await shares.createShareLink(LINK);
+      const days = (share.expiresAt - Date.now()) / 86_400_000;
+      expect(days).toBeGreaterThan(13.9);
+      expect(days).toBeLessThan(14.1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('needs a public hostname before it can mint anything', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'shares-nohost-'));
     try {
       const shares = new Shares({ dataDir, config: {} });
-      expect(() => shares.createShareLink(LINK)).toThrow(/publicHostname/);
+      expect(shares.createShareLink(LINK)).rejects.toThrow(/publicHostname/);
       // Positive control: the identical call against a configured registry
       // mints, so the throw is the missing hostname and not the payload.
       const ok = makeShares();
       try {
-        expect(ok.shares.createShareLink(LINK).slug).toBeTruthy();
+        expect((await ok.shares.createShareLink(LINK)).url).toContain('sig=');
       } finally {
         ok.cleanup();
       }
@@ -100,36 +116,40 @@ describe('TTL validation at the registry', () => {
  * A workspace is the unit of sharing, so a record without one names a grant
  * nothing can mint. This block is the MINT half, at the registry layer where
  * `createShareLink` validates its argument — the other half (a legacy record
- * already on disk being dropped at `load()`, and its slug no longer
- * resolving) lives in per-doc-share-removed.test.ts, which owns the removal
- * end to end. Both halves matter: the gate reads the registry rather than the
- * code that wrote it, so removing only the mint path would retire the feature
- * everywhere except where it is actually exercised.
+ * already on disk being dropped at `load()`) lives in
+ * per-doc-share-removed.test.ts, which owns the removal end to end. Both
+ * halves matter: the gate reads the registry rather than the code that wrote
+ * it, so removing only the mint path would retire the feature everywhere
+ * except where it is actually exercised.
  */
 describe('a share must name a workspace', () => {
-  it('refuses to mint a link with no workspace', () => {
+  it('refuses to mint a link with no workspace — and mints NOTHING on the way', async () => {
     const { shares, cleanup } = makeShares();
     try {
-      expect(() => shares.createShareLink({ entryDocId: 'd1' } as never)).toThrow(
+      expect(shares.createShareLink({ entryDocId: 'd1' } as never)).rejects.toThrow(
         /workspaceId is required/,
       );
+      // Validation precedes signing and saving, so the refusal left no grant.
+      expect(shares.list()).toHaveLength(0);
       // Positive control: add the workspace and the same doc mints.
-      expect(shares.createShareLink(LINK).workspaceId).toBe('ws1');
+      expect((await shares.createShareLink(LINK)).workspaceId).toBe('ws1');
     } finally {
       cleanup();
     }
   });
 
-  it('mints a board link with no entry doc — a share opens the board', () => {
+  it('mints a board link with no entry doc — a share opens the board', async () => {
     // There is no longer an entry-doc form to refuse. A board is the unit of
     // sharing, redemption lands on `/workspaces/<id>`, and `docId` is a
     // landing address that no share written today fills in.
     const { shares, cleanup } = makeShares();
     try {
-      const share = shares.createShareLink({ workspaceId: 'ws1' });
+      const share = await shares.createShareLink({ workspaceId: 'ws1' });
       expect(share.docId).toBe('');
       expect(share.workspaceId).toBe('ws1');
       expect(share.surface).toBe('workspace');
+      // And no slug: the signed URL is the credential now.
+      expect(share.slug).toBeUndefined();
     } finally {
       cleanup();
     }

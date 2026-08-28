@@ -220,8 +220,8 @@ describe('the back target is not handed to a share visitor', () => {
 
     const mint = await post('/api/share/link', { workspaceId: boardId, label: 'a share' });
     expect(mint.status).toBe(200);
-    const slug = ((await mint.json()) as { share: { slug: string } }).share.slug;
-    const redeemed = await fetch(`${base}/s/${slug}`, {
+    const shareUrl = new URL(((await mint.json()) as { share: { url: string } }).share.url);
+    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST },
     });

@@ -231,15 +231,17 @@ describe('per-doc sharing is removed', () => {
     });
 
     /**
-     * Asserted at the registry rather than through `/s/<slug>` deliberately.
-     * `findBySlug` is the single lookup the redeem route makes, so this is the
-     * layer the decision lives in — and reaching the route half would need a
-     * server restart, whose OTHER failure mode (a workspace whose members have
-     * not rehydrated yet) would make the control fail for a reason that has
-     * nothing to do with this change. A control that is flaky for unrelated
-     * reasons is worse than one taken a layer down.
+     * Asserted at the registry rather than through the redeem route
+     * deliberately. `findLive` is the lookup every serving path makes, so
+     * this is the layer the decision lives in — and reaching the route half
+     * would need a server restart, whose OTHER failure mode (a workspace
+     * whose members have not rehydrated yet) would make the control fail for
+     * a reason that has nothing to do with this change. A control that is
+     * flaky for unrelated reasons is worse than one taken a layer down.
+     * (Slugs as such resolve NOWHERE any more — signed-link-share.test.ts
+     * owns that removal at the route.)
      */
-    it('no longer resolves its slug, where a workspace share still does', () => {
+    it('no longer resolves, where a workspace share still does', () => {
       const dir = mkdtempSync(join(tmpdir(), 'legacy-redeem-'));
       const legacySlug = 'c'.repeat(32);
       const liveSlug = 'd'.repeat(32);
@@ -264,9 +266,8 @@ describe('per-doc sharing is removed', () => {
 
       const shares = new Shares({ dataDir: dir, config: { publicHostname: PUBLIC_HOST } });
       // Positive control: the lookup can find something at all.
-      expect(shares.findBySlug(liveSlug)?.shareId).toBe('live0001');
-      // The legacy doc slug is indistinguishable from one that never existed.
-      expect(shares.findBySlug(legacySlug)).toBeNull();
+      expect(shares.findLive('live0001')?.shareId).toBe('live0001');
+      // The legacy doc record is indistinguishable from one that never existed.
       expect(shares.findLive('legacy01')).toBeNull();
 
       rmSync(dir, { recursive: true, force: true });
@@ -296,7 +297,8 @@ describe('per-doc sharing is removed', () => {
       expect(mint.status).toBe(200);
       const share = ((await mint.json()) as { share: Share }).share;
 
-      const r = await fetch(`${base}/s/${share.slug}`, {
+      const shareUrl = new URL(share.url);
+      const r = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
         headers: { host: PUBLIC_HOST },
         redirect: 'manual',
       });
