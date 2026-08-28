@@ -36,6 +36,7 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from './agent-watches.ts';
+import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
 import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
 import {
@@ -118,7 +119,7 @@ import {
   ReadyWorkNudger,
   type ReadyWorkSnapshot,
 } from './ready-nudge.ts';
-import { listArchivedDocs, listArchivedReviews } from './review-archive.ts';
+import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
@@ -512,6 +513,11 @@ export interface ServerOptions {
    * after a change and do not read it as a rate.
    */
   stallNudgeRepeatMs?: number;
+  /** Stands in for the done-artifact check's GitHub lookup. Tests only —
+   *  production asks api.github.com, unauthenticated. */
+  artifactCheckFetch?: typeof fetch;
+  /** Per-link budget for that check (default 5s). Tests only. */
+  artifactCheckTimeoutMs?: number;
   /**
    * How the dispatch registry watches builder worktrees (default: recursive
    * fs.watch). A test seam for the same reason `stallNudgeQuietMs` is one —
@@ -1253,6 +1259,46 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
+
+  // The done-artifact check (artifact-check.ts): a move to done gets the
+  // row's links verified after the transition commits — a dead PR link or a
+  // vanished doc surfaces as a system comment on the task's discussion, the
+  // park-note pattern. Advisory end to end: nothing here can block, slow, or
+  // fail a transition, and a lookup that cannot answer stays quiet.
+  const artifactChecker = new ArtifactChecker({
+    getTask: (id) => taskStore.getTask(id),
+    record: (id, result) => void taskStore.recordArtifactCheck(id, result),
+    // A doc exists if a live room holds it or an archive manifest does —
+    // archiving is the board's reversible removal, so a retired doc still
+    // counts as delivered. Review members archive under a set manifest, not
+    // a per-doc one, so both archive shapes are consulted.
+    docStatus: (docId) => {
+      if (rooms.list().some((m) => m.docId === docId)) return 'live';
+      if (readDocArchiveManifest(dataDir, docId) !== null) return 'archived';
+      if (listArchivedReviews(dataDir).some((m) => m.docIds.includes(docId))) return 'archived';
+      return 'missing';
+    },
+    postMissingNote: async (task, text) => {
+      taskProjection.ensureTaskBody(task);
+      // Same actor-shape cast as the park migration's comment: the server's
+      // own identity, rendered as a known author rather than an anonymous one.
+      await rooms.postComment(
+        taskBodyDocId(task.id),
+        null,
+        { ...ARTIFACT_CHECK_ACTOR, kind: 'known' } as unknown as User,
+        text,
+        { kind: 'subject' },
+        // Machine-written and short: not worth an outbound summary call.
+        { generate: false },
+      );
+    },
+    ...(opts.artifactCheckFetch !== undefined ? { fetchImpl: opts.artifactCheckFetch } : {}),
+    ...(opts.artifactCheckTimeoutMs !== undefined
+      ? { timeoutMs: opts.artifactCheckTimeoutMs }
+      : {}),
+    log: (line) => console.error(line),
+  });
+  artifactChecker.install(taskStore);
 
   /**
    * One board as the nudger reads it: who to wake, whether to wake them at
