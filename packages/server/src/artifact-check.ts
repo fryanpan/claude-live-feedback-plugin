@@ -167,7 +167,7 @@ export function missingNoteText(result: ArtifactCheck): string | null {
   const tail = rest.length > 0 ? ` Other links: ${rest.join(', ')}.` : '';
   return (
     `**Marked done, but a promised artifact can't be found:**\n\n${lines.join('\n')}\n\n` +
-    `Checked automatically at done — advisory, the status stands. A PR in a ` +
+    'Checked automatically at done — advisory, the status stands. A PR in a ' +
     `private repo also reads as missing to this unauthenticated check.${tail}`
   );
 }

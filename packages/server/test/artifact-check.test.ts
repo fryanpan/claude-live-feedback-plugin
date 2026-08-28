@@ -40,10 +40,7 @@ const docRef = (docId: string): Ref => ({ kind: 'doc', docId });
 
 /** A fetch stub keyed by nothing: every call answers with `status` and
  *  `body`. `calls` records the URLs so a test can assert what was asked. */
-function fetchStub(
-  status: number,
-  body: unknown,
-): { impl: typeof fetch; calls: string[] } {
+function fetchStub(status: number, body: unknown): { impl: typeof fetch; calls: string[] } {
   const calls: string[] = [];
   const impl = (async (input: string | URL | Request) => {
     calls.push(String(input));
@@ -116,12 +113,8 @@ describe('runArtifactCheck', () => {
       fetchImpl: impl,
       docStatus: noDocs,
     });
-    expect(result.links).toEqual([
-      { ref: prRef(PR_URL), verdict: 'verified', detail: 'open' },
-    ]);
-    expect(calls).toEqual([
-      'https://api.github.com/repos/example-org/example-repo/pulls/1669',
-    ]);
+    expect(result.links).toEqual([{ ref: prRef(PR_URL), verdict: 'verified', detail: 'open' }]);
+    expect(calls).toEqual(['https://api.github.com/repos/example-org/example-repo/pulls/1669']);
   });
 
   it('a merged PR reads merged, not closed', async () => {
@@ -155,7 +148,7 @@ describe('runArtifactCheck', () => {
   it('a network failure is unverified and does not throw', async () => {
     const failing = (async () => {
       throw new TypeError('fetch failed');
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     const result = await runArtifactCheck([prRef(PR_URL)], {
       fetchImpl: failing,
       docStatus: noDocs,
@@ -197,18 +190,10 @@ describe('runArtifactCheck', () => {
   it('mixed links each get their own verdict, in link order', async () => {
     const { impl } = fetchStub(200, { state: 'open' });
     const result = await runArtifactCheck(
-      [
-        prRef(PR_URL),
-        docRef('never-was'),
-        { kind: 'url', url: 'https://example.com/dashboard' },
-      ],
+      [prRef(PR_URL), docRef('never-was'), { kind: 'url', url: 'https://example.com/dashboard' }],
       { fetchImpl: impl, docStatus: () => 'missing' },
     );
-    expect(result.links.map((l) => l.verdict)).toEqual([
-      'verified',
-      'missing',
-      'not-checkable',
-    ]);
+    expect(result.links.map((l) => l.verdict)).toEqual(['verified', 'missing', 'not-checkable']);
     expect(result.ts).toBeGreaterThan(0);
   });
 });
@@ -303,7 +288,7 @@ describe('ArtifactChecker on a real store', () => {
   it('a network failure records unverified — no note, no block, no throw', async () => {
     const failing = (async () => {
       throw new TypeError('fetch failed');
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     const checker = install(failing);
     const task = doneTask([prRef(PR_URL)]);
     const moved = store.transition(task.id, 'done', { actor: PERSON });

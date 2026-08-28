@@ -36,6 +36,7 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from './agent-watches.ts';
+import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
 import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
 import {
@@ -117,12 +118,7 @@ import {
   ReadyWorkNudger,
   type ReadyWorkSnapshot,
 } from './ready-nudge.ts';
-import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
-import {
-  listArchivedDocs,
-  listArchivedReviews,
-  readDocArchiveManifest,
-} from './review-archive.ts';
+import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
