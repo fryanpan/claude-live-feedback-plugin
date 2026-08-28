@@ -467,7 +467,7 @@ export interface ServerOptions {
   readyNudgeIdleMs?: number;
   /**
    * How long a row may go untouched before the board tells its lead it has
-   * stalled (default `STALL_QUIET_DEFAULT_MS`, thirty minutes;
+   * stalled (default `STALL_QUIET_DEFAULT_MS`, twenty minutes;
    * `CW_STALL_NUDGE_MINUTES` sets it on the box). A test seam for the same
    * reason `readyNudgeIdleMs` is one — the feature is a comparison against a
    * wall-clock gap no test can wait out.
