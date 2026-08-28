@@ -511,9 +511,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       expect(handle.tasks.getWorkspace(secondBoard)?.docIds).toContain('rev-shared');
 
       const gs = await post('/api/share/link', { workspaceId: secondBoard });
-      const gammaCookie = await redeem(
-        ((await gs.json()) as { share: { url: string } }).share.url,
-      );
+      const gammaCookie = await redeem(((await gs.json()) as { share: { url: string } }).share.url);
 
       // Positive control: the gamma visitor is a real visitor on its board.
       expect((await pub(`/api/workspaces/${secondBoard}`, gammaCookie)).status).toBe(200);
@@ -526,9 +524,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
 
       // …and a third board that was never linked still gets nothing.
       const bs = await post('/api/share/link', { workspaceId: boardB });
-      const betaCookie = await redeem(
-        ((await bs.json()) as { share: { url: string } }).share.url,
-      );
+      const betaCookie = await redeem(((await bs.json()) as { share: { url: string } }).share.url);
       expect((await pub(`/api/workspaces/${boardB}`, betaCookie)).status).toBe(200); // control
       expect((await pub('/api/workspaces/rev-shared/tree', betaCookie)).status).toBe(403);
       expect((await pub(`/api/docs/${sharedMember}`, betaCookie)).status).toBe(403);

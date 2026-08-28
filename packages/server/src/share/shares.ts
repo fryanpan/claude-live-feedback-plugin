@@ -183,7 +183,11 @@ export class Shares {
     if (!s) return null;
     s.expiresAt = Date.now() + ttl * 1000;
     if (s.mode === 'link') {
-      s.url = await this.signedLinkUrl(s.shareId, s.expiresAt, this.config.publicHostname ?? s.hostname);
+      s.url = await this.signedLinkUrl(
+        s.shareId,
+        s.expiresAt,
+        this.config.publicHostname ?? s.hostname,
+      );
     }
     this.save();
     return s;

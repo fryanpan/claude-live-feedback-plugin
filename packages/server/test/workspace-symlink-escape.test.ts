@@ -110,7 +110,8 @@ describe('symlink escape from a shared workspace', () => {
       method: 'POST',
       body: JSON.stringify({ workspaceId: boardId }),
     }).then((r) => r.json());
-    const redeemed = await fetch(`${base}/s/${share.share.slug}`, {
+    const shareUrl = new URL(share.share.url);
+    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST },
     });

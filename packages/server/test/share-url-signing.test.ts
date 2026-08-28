@@ -163,7 +163,10 @@ describe('the Cloudflare Worker verifies what the server signs', () => {
         return new Response('origin', { status: 200 });
       };
       try {
-        const res = await workerHandler.fetch(new Request(`https://feedback.example.com${path}`), e);
+        const res = await workerHandler.fetch(
+          new Request(`https://feedback.example.com${path}`),
+          e,
+        );
         return { res, proxied };
       } finally {
         globalThis.fetch = realFetch;
