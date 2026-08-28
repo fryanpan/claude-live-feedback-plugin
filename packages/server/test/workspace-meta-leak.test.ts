@@ -93,7 +93,8 @@ describe('workspace share does not leak host details', () => {
       method: 'POST',
       body: JSON.stringify({ workspaceId: boardId }),
     }).then((r) => r.json());
-    const redeemed = await fetch(`${base}/s/${share.share.slug}`, {
+    const shareUrl = new URL(share.share.url);
+    const redeemed = await fetch(`${base}${shareUrl.pathname}${shareUrl.search}`, {
       redirect: 'manual',
       headers: { host: PUBLIC_HOST, 'x-forwarded-proto': 'https' },
     });
