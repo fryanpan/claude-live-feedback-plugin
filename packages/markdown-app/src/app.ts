@@ -738,10 +738,15 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     if (deepLinked) return;
     const wanted = new URLSearchParams(location.search).get('thread');
     if (!wanted) return;
-    // Only when it's really there — a stale link should leave the reader on
-    // the doc rather than pulse at nothing.
-    if (!reviewChrome.collectThreads().some((t) => t.id === wanted)) return;
     deepLinked = true;
+    // Only when it's really there — a stale link leaves the reader on the doc
+    // rather than pulsing at nothing, and SAYS so: threads all ride the ydoc
+    // that just synced, so absent now is gone (resolved away, or a stale
+    // paste), not still loading. A silent nothing reads as a broken link.
+    if (!reviewChrome.collectThreads().some((t) => t.id === wanted)) {
+      showToast('That comment thread is gone from this doc — the link may be outdated.');
+      return;
+    }
     reviewChrome.revealThread(wanted);
   }
 
