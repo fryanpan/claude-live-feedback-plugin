@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
-import { resolveCloudflareCodeSender } from './auth/cloudflare-code-sender.ts';
+import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
@@ -248,9 +248,9 @@ const summarizer = new ThreadSummarizer();
 // network or the Keychain. Resolving never throws; a partial setup keeps the
 // log sender and says which piece is missing, because during setup that is
 // the normal state rather than an error.
-const codeSenderChoice = resolveCloudflareCodeSender(process.env, readKeychainPassword);
+const codeSenderChoice = resolvePostmarkCodeSender(process.env, readKeychainPassword);
 if (codeSenderChoice.reason) console.log(`[auth] ${codeSenderChoice.reason}`);
-else console.log('[auth] login codes send via Cloudflare Email Sending');
+else console.log('[auth] login codes send via Postmark');
 
 // The ONLY place the real voice fast-path completer is constructed — the
 // same seam rule (and the same dedicated-key consent) as the summarizer.
