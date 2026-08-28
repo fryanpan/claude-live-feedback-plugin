@@ -505,7 +505,7 @@ describe('a grouping cannot be shared on its own', () => {
 
     it('creates a review on a fresh board and shares it in one create + one share', async () => {
       // The cost this change lands on the most-used path, measured on the
-      // actual flow rather than asserted. Bryan's ruling on t-o5gm3Hnvot2K:
+      // actual flow rather than asserted. Bryan's ruling on the board ticket:
       // "creating and sharing docs should both still take seconds … workspace
       // setup should normally have already happened … and that should also
       // take seconds to make a blank empty workspace if there isn't one yet."
