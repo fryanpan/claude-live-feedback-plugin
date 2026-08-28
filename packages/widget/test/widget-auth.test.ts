@@ -266,10 +266,23 @@ describe('a stored token is validated on load', () => {
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
   });
 
-  it('never probes on a prod embed — no offer, no stored token, no traffic', async () => {
+  it('never probes on a prod embed, even with a token in storage', async () => {
+    // The stored token is what makes this a real test: with nothing stored
+    // the probe returns early for every embed, and "no traffic" would pass
+    // on a production embed whether or not the offer gated it. Seeding the
+    // same token that the auth-offer test above proves DOES fire the probe
+    // makes this the negative half of that pair.
+    localStorage.setItem('cfw:authToken', 'wt1.stored-token');
+    localStorage.setItem(
+      'cfw:authUser',
+      JSON.stringify({ id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' }),
+    );
     const mod = await importWidget();
-    mod.FeedbackWidget.init({ docId: 'w-auth-silent' });
+    const el = mod.FeedbackWidget.init({ docId: 'w-auth-silent' });
     await flush();
     expect(fetchCalls.filter((c) => c.url.includes('/api/auth/')).length).toBe(0);
+    // And the stored identity is not adopted either: no offer, no sign-in.
+    expect(el.shadowRoot!.querySelector('.me')?.textContent).not.toContain('Reviewer');
+    expect(el.shadowRoot!.querySelector('.auth-signout')).toBeNull();
   });
 });
