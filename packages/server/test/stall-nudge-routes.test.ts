@@ -446,4 +446,85 @@ describe('the board tells its lead which rows have stopped', () => {
     await ctx.lead.stop();
     await ctx.tab.stop();
   });
+
+  it('honours an operator-set repeat window, and holds its default without one', async () => {
+    // The repeat window is what a fleet pays to be told about boards where
+    // nothing is changing, so it is the number an operator reaches for first.
+    // Both arms run here because either alone is satisfiable by a wake path
+    // that ignores the option entirely.
+    const ctx = await boardWithLead();
+    await addRow(ctx.workspaceId, 'Rank results by recency', 'in-progress');
+    await settle();
+
+    handle.nudgeStalls();
+    await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+    await settle(60);
+    handle.nudgeStalls();
+    await settle(400);
+    // Default window: the board has not changed, so it is not said again.
+    expect(stalls(ctx.lead.frames)).toHaveLength(1);
+    await ctx.lead.stop();
+    await ctx.tab.stop();
+
+    // A one-millisecond window on an otherwise identical board. Every tick
+    // lands the oldest row in a new bucket, so the same unchanged board is
+    // owed the wake again.
+    const dir = mkdtempSync(join(tmpdir(), 'stall-repeat-'));
+    const own = createServer({
+      port: 0,
+      dataDir: dir,
+      stallNudgeQuietMs: 0,
+      stallNudgeRepeatMs: 1,
+    });
+    const ownBase = `http://localhost:${own.port}`;
+    try {
+      const { workspace } = await jj<{ workspace: { id: string } }>(
+        await fetch(`${ownBase}/api/workspaces`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'repeat-window', leadAgentId: LEAD.id }),
+        }),
+      );
+      await fetch(`${ownBase}/api/workspaces/${workspace.id}/attachments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agentId: LEAD.id, runtime: 'claude-code-local' }),
+      });
+      const res = await fetch(
+        `${ownBase}/events/workspace/${workspace.id}?agentId=${encodeURIComponent(LEAD.id)}`,
+        { headers: { accept: 'text/event-stream' } },
+      );
+      const lead = listenFrames(res);
+      const { task } = await jj<{ task: { id: string } }>(
+        await fetch(`${ownBase}/api/workspaces/${workspace.id}/tasks`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            title: 'Cache the facet counts',
+            body: 'Agent can cache the counts so that the panel opens fast.',
+            assignee: LEAD.name,
+            assigneeKind: 'agent',
+            author: LEAD,
+          }),
+        }),
+      );
+      await fetch(`${ownBase}/api/tasks/${task.id}/transition`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ to: 'in-progress', author: PERSON, workspaceId: workspace.id }),
+      });
+      await settle();
+
+      own.nudgeStalls();
+      await waitForFrames(lead.frames, STALL_EVENT, 1);
+      await settle(60);
+      own.nudgeStalls();
+      const twice = await waitForFrames(lead.frames, STALL_EVENT, 2);
+      expect(twice).toHaveLength(2);
+      await lead.stop();
+    } finally {
+      await own.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
