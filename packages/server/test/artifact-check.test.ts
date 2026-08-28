@@ -28,6 +28,8 @@ import {
   missingNoteText,
   runArtifactCheck,
 } from '../src/artifact-check.ts';
+import { type ServerHandle, createServer } from '../src/server.ts';
+import { taskBodyDocId } from '../src/task-projection.ts';
 import { type ArtifactCheck, type Ref, type Task, TaskStore } from '../src/tasks.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
@@ -370,5 +372,89 @@ describe('TaskStore.recordArtifactCheck', () => {
     } finally {
       rehydrated.stop();
     }
+  });
+});
+
+describe('server wiring: REST done-transition triggers the check', () => {
+  // Route-level proof of the glue in server.ts: the subscription, the store
+  // write, and the system comment on the task's body room — with the fetch
+  // stubbed through ServerOptions so nothing leaves the process.
+  const REST_PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
+
+  async function until<T>(read: () => T | undefined): Promise<T> {
+    for (let i = 0; i < 80; i++) {
+      const v = read();
+      if (v !== undefined) return v;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error('condition never held');
+  }
+
+  async function withServer(
+    status: number,
+    body: unknown,
+    fn: (ctx: {
+      handle: ServerHandle;
+      post: (path: string, payload: unknown) => Promise<Response>;
+    }) => Promise<void>,
+  ): Promise<void> {
+    const dataDir = mkdtempSync(join(tmpdir(), 'artifact-wire-'));
+    const { impl } = fetchStub(status, body);
+    const handle = createServer({ port: 0, dataDir, artifactCheckFetch: impl });
+    const post = (path: string, payload: unknown) =>
+      fetch(`http://localhost:${handle.port}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    try {
+      await fn({ handle, post });
+    } finally {
+      await handle.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }
+
+  async function doneTaskOver(
+    post: (path: string, payload: unknown) => Promise<Response>,
+  ): Promise<string> {
+    const ws = await post('/api/workspaces', { name: 'launch-board' });
+    const { workspace } = (await ws.json()) as { workspace: { id: string } };
+    const created = await post(`/api/workspaces/${workspace.id}/tasks`, {
+      author: REST_PERSON,
+      title: 'Land the watcher fix',
+      links: [{ kind: 'url', url: PR_URL }],
+    });
+    const { task } = (await created.json()) as { task: { id: string } };
+    const moved = await post(`/api/tasks/${task.id}/transition`, {
+      to: 'done',
+      author: REST_PERSON,
+    });
+    expect(moved.status).toBe(200);
+    return task.id;
+  }
+
+  it('a dead PR surfaces as a system comment on the task discussion', async () => {
+    await withServer(404, { message: 'Not Found' }, async ({ handle, post }) => {
+      const taskId = await doneTaskOver(post);
+      const check = await until(() => handle.tasks.getTask(taskId)?.artifactCheck);
+      expect(check.links[0]?.verdict).toBe('missing');
+      const doc = await until(() => {
+        const d = handle.rooms.getDoc(taskBodyDocId(taskId));
+        return d && d.threads.length > 0 ? d : undefined;
+      });
+      const comment = doc.threads[0]?.comments[0];
+      expect(comment?.text).toContain('example-org/example-repo#1669');
+      expect(comment?.author.name).toBe('Claude Workspaces');
+    });
+  });
+
+  it('a healthy PR records verified and leaves the discussion empty', async () => {
+    await withServer(200, { state: 'open' }, async ({ handle, post }) => {
+      const taskId = await doneTaskOver(post);
+      const check = await until(() => handle.tasks.getTask(taskId)?.artifactCheck);
+      expect(check.links[0]?.verdict).toBe('verified');
+      expect(handle.rooms.getDoc(taskBodyDocId(taskId))?.threads ?? []).toHaveLength(0);
+    });
   });
 });
