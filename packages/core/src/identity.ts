@@ -194,6 +194,14 @@ export function agentIdForName(name: string): string {
  * would silently merge two people on a provider that treats them as two.
  * What this does fold is the set of spellings that address the same mailbox
  * on EVERY provider, which is exactly case and whitespace.
+ *
+ * The WHOLE address is lowercased, not just the domain — on purpose, so do
+ * not "fix" this to domain-only. RFC 5321 makes only the domain
+ * case-insensitive and technically lets a mail server distinguish `Bryan@`
+ * from `bryan@`; no real provider does, and identity here keys on the
+ * address (see `emailIdentityId`), so folding only the domain would split
+ * one person into two identities the first time autocapitalize typed their
+ * address with a capital letter.
  */
 export function normalizeEmail(email: string): string {
   return email.trim().replace(/^<|>$/g, '').trim().toLowerCase();
