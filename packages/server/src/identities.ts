@@ -238,6 +238,24 @@ export class Identities {
     return this.patch(id, (rec) => ({ ...rec, sessionsValidFrom: this.now() }));
   }
 
+  /**
+   * Invalidate every session ever minted, for everyone — one watermark
+   * write, no file of ids. This is the self-heal for a revocation denylist
+   * that failed to load (see auth/session-revocations.ts): with the list
+   * unreadable, ending everything outstanding is the only way to be sure
+   * nothing revoked survives. Returns how many identities were touched.
+   */
+  revokeAllSessions(): number {
+    const now = this.now();
+    const ids = Object.keys(this.state.identities);
+    for (const id of ids) {
+      const rec = this.state.identities[id];
+      if (rec) this.state.identities[id] = { ...rec, sessionsValidFrom: now, updatedAt: now };
+    }
+    if (ids.length > 0) this.save();
+    return ids.length;
+  }
+
   /** Record that `legacyId` was this person all along (commit 7's writer). */
   addMergedFrom(id: string, legacyId: string): IdentityRecord | null {
     return this.patch(id, (rec) =>
