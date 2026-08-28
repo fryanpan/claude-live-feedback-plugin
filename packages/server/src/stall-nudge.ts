@@ -369,28 +369,54 @@ export class StallNudger {
 
   /**
    * Which rows are stuck, what kind of stuck, and how many repeat windows deep
-   * each one is. One string, so a new stall, a recovery, a row changing bucket
-   * and a row escalating all arm the wake through the same door.
+   * THE BOARD is. One string, so a new stall, a recovery, a row changing
+   * bucket and the board escalating all arm the wake through the same door.
    *
    * The quiet time is QUANTISED rather than carried exactly, and that is the
    * whole escalation design: a raw duration changes on every tick and would
    * make the stamp a clock, waking the lead every minute over a row they have
    * already seen.
+   *
+   * ── Why the window is the board's and not each row's ──────────────────
+   *
+   * It was per-row first, and that amortises catastrophically. Every stalled
+   * row crosses its own boundary at its own wall-clock moment, each crossing
+   * moves the stamp, and the ceiling becomes one wake per row per window
+   * rather than one per board. On the boards this shipped against — 32
+   * eligible rows on one, 24 on another — that is seven or eight wakes an hour
+   * forever, with nothing about the board having changed. The frugality rules
+   * at the top of this file were doing their job on the SET and being
+   * completely defeated on the clock.
+   *
+   * So the bucket is computed once, from the OLDEST row: one re-wake per board
+   * per window. Escalation survives intact — the board still gets louder the
+   * longer its worst row sits — and the row ids stay in the stamp, so a
+   * genuinely new stall still fires immediately rather than waiting out
+   * somebody else's window.
    */
   private stampFor(board: StallSnapshot): string {
-    const part = (row: StalledRow) =>
-      `${row.id}:${row.bucket}:${Math.floor(row.quietMs / this.repeatMs)}`;
-    const rows = [...board.stalled, ...board.unfiled].map(part).sort();
+    const rows = [...board.stalled, ...board.unfiled];
+    const ids = rows
+      .map((row) => `${row.id}:${row.bucket}`)
+      .slice()
+      .sort();
+    // The oldest row speaks for the board. `0` on a board whose only finding
+    // is unreadable rows, which is right: there is no silence to escalate.
+    const oldestQuietMs = rows.reduce((max, row) => Math.max(max, row.quietMs), 0);
+    const bucket = Math.floor(oldestQuietMs / this.repeatMs);
     const undetermined = board.undetermined
       .map((u) => `${u.id}:${u.reason}`)
       .slice()
       .sort();
-    // The second segment is appended only when non-empty, so a board with
-    // nothing unreadable — which is almost all of them — keeps computing the
-    // byte-identical string a previous process wrote to disk. Adding it
-    // unconditionally would mismatch every stored stamp on the first tick
-    // after a deploy and bill every board one extra wake.
-    return undetermined.length > 0 ? `${rows.join(',')}|${undetermined.join(',')}` : rows.join(',');
+    // Still appended only when non-empty, so a board with nothing unreadable —
+    // which is almost all of them — keeps computing a stable string from one
+    // process to the next. (The move of the bucket to the front is itself a
+    // format change, so every stored stamp mismatches once on the first tick
+    // after this deploys and each board is billed one extra wake. That is a
+    // one-time cost against a standing one.)
+    return undetermined.length > 0
+      ? `${bucket}|${ids.join(',')}|${undetermined.join(',')}`
+      : `${bucket}|${ids.join(',')}`;
   }
 
   private reachable(workspaceId: string, agentId: string): boolean {
