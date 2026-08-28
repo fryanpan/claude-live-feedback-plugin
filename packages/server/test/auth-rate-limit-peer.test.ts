@@ -21,7 +21,14 @@ let base: string;
 
 beforeAll(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'auth-peer-rl-test-'));
-  handle = createServer({ port: 0, dataDir });
+  // This file spends more starts than the default hourly abuse ceilings
+  // allow one server; its subject is the peer KEYING, and the ceilings have
+  // their own file (auth-start-ceilings.test.ts). Lift them out of the way.
+  handle = createServer({
+    port: 0,
+    dataDir,
+    authCeilings: { globalStartsPerHour: 10_000, peerStartsPerHour: 10_000 },
+  });
   base = `http://localhost:${handle.port}`;
 });
 

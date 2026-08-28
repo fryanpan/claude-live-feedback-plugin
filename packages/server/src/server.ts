@@ -412,6 +412,14 @@ export interface ServerOptions {
    */
   codeSender?: CodeSender;
   /**
+   * Hourly abuse ceilings on the login-code mailer
+   * (`CW_AUTH_GLOBAL_STARTS_PER_HOUR`, `CW_AUTH_PEER_STARTS_PER_HOUR`).
+   * Bounds how much mail `/api/auth/start` can be made to send in total and
+   * per peer, above the sliding 15-minute limits. Defaults in
+   * auth/email-code.ts; a tripped ceiling answers like a success and logs.
+   */
+  authCeilings?: { globalStartsPerHour?: number; peerStartsPerHour?: number };
+  /**
    * How long an attachment stays `live` without a heartbeat (default five
    * minutes, `HEARTBEAT_FRESH_MS`). A test seam: the whole away-lead half of
    * this server is unreachable otherwise, since a test cannot sleep five
@@ -2804,7 +2812,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   } else if (identityLinkLoad.loaded > 0) {
     console.log(`[identities] ${identityLinkLoad.loaded} identity link(s) loaded`);
   }
-  const emailCodes = new EmailCodes();
+  const emailCodes = new EmailCodes(opts.authCeilings ?? {});
   const sessionRevocations = new SessionRevocations({ dataDir });
   if (sessionRevocations.loadError) {
     // Loud on purpose: an unreadable revocation file fails OPEN — every
@@ -3292,6 +3300,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const peer = clientKeyFor(req);
           const started = emailCodes.start(email, peer);
           if (!started.ok) {
+            if (started.error === 'ceiling') {
+              // An abuse ceiling. On the wire this is EXACTLY a success —
+              // same status, same shape — because a 429 would hand a
+              // mail-bomber a progress meter and tell any client the
+              // server-wide traffic state. The refusal is loud here instead,
+              // which is where the person who can raise the ceiling reads.
+              console.error(
+                `[auth] login-start ceiling tripped (${started.scope}) — no code mailed to ` +
+                  `${started.email} for peer ${peer}. Raise CW_AUTH_GLOBAL_STARTS_PER_HOUR / ` +
+                  'CW_AUTH_PEER_STARTS_PER_HOUR if this is honest traffic.',
+              );
+              return j(200, {
+                ok: true,
+                email: started.email,
+                expiresInSeconds: Math.max(0, Math.floor((started.expiresAt - Date.now()) / 1000)),
+              });
+            }
             if (started.error === 'rate_limited') {
               return new Response(
                 JSON.stringify({
