@@ -164,6 +164,80 @@ describe('a row that stays stalled is said again, eventually', () => {
     expect(sent).toHaveLength(2);
   });
 
+  /**
+   * The escalation window is the BOARD's, not each row's.
+   *
+   * A per-row bucket amortises catastrophically: every stalled row crosses its
+   * own boundary at its own wall-clock moment, each crossing moves the stamp,
+   * and the ceiling becomes one wake per row per window. Measured against real
+   * boards at the time — 32 eligible rows on one, 24 on another — that is a
+   * board re-waking its lead seven or eight times an hour, forever, with
+   * nothing about it having changed.
+   *
+   * So the bucket comes from the OLDEST row: one re-wake per board per window,
+   * with the row ids still in the stamp so a genuine set change fires at once.
+   */
+  it('does not re-fire when one row crosses a boundary the oldest has not', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [
+      // About to cross its own boundary…
+      { id: 't-young', title: 'Cache the facet counts', bucket: 'in-progress', quietMs: 59 * MIN },
+      // …while the oldest row sits well inside its own.
+      { id: 't-old', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 125 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 2 * MIN;
+    world.boards[0]!.stalled[0]!.quietMs = 61 * MIN;
+    world.boards[0]!.stalled[1]!.quietMs = 127 * MIN;
+    nudger.tick();
+
+    // The young row changed buckets. Nothing about the board did.
+    expect(sent).toHaveLength(1);
+  });
+
+  it('re-fires when the OLDEST row crosses the next boundary', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [
+      { id: 't-young', title: 'Cache the facet counts', bucket: 'in-progress', quietMs: 10 * MIN },
+      { id: 't-old', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 175 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 10 * MIN;
+    world.boards[0]!.stalled[0]!.quietMs = 20 * MIN;
+    world.boards[0]!.stalled[1]!.quietMs = 185 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+
+  it('still fires at once when the set itself changes inside a window', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [
+      { id: 't-old', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 125 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // A board-level clock must not swallow a NEW stall — the ids are in the
+    // stamp for exactly this.
+    world.boards[0]!.stalled = [
+      ...world.boards[0]!.stalled,
+      {
+        id: 't-new',
+        title: 'Cache the facet counts',
+        bucket: 'ready-unpicked',
+        quietMs: 21 * MIN,
+      },
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+
   it('defaults the repeat window to something coarser than the tick', () => {
     expect(STALL_REPEAT_DEFAULT_MS).toBeGreaterThan(60 * MIN);
   });
