@@ -4,10 +4,17 @@
  * Shaped after `share/link-session.ts` — same HMAC, same key file, same
  * timing-safe compare — with three deliberate differences.
  *
- * 1. **It carries an expiry, and the share cookie does not.** A share is
- *    re-checked against its own `expiresAt` on every request, so its cookie
- *    can be open-ended. A person's session has no such record behind it; the
- *    lifetime is the cookie's, and it is 90 days, extended on use.
+ * 1. **It never expires by time; it ends by revocation.** (Bryan, 2026-08-28,
+ *    on the design doc — replacing the original 90-day sliding expiry.) Each
+ *    minted session carries a random session id, and logout writes that id
+ *    into `SessionRevocations` server-side; a revoked cookie is dead however
+ *    cleanly it validates. Two revocation layers, different reach: the
+ *    per-session list ends ONE device's session (logout), and the roster's
+ *    `Identities.sessionsValidFrom` watermark still ends EVERYTHING an
+ *    identity minted before it. The v1 format — expiry baked into the value —
+ *    is still verified so devices signed in before the change stay signed in;
+ *    those cookies keep their own expiry and gain a session id at their next
+ *    sliding refresh.
  *
  * 2. **`Secure` is derived, never hardcoded.** The server's own socket is
  *    always plain http, so `new URL(req.url).protocol` never tells you the
@@ -22,34 +29,40 @@
  *    (`loadCookieKey`), different derived key, so a value minted for one
  *    protocol can never verify under the other however the two formats
  *    happen to line up.
- *
- * Revocation lives in the roster, not here: a session names an identity and
- * an issue time, and `Identities.sessionsValidFrom` is the watermark that
- * refuses everything minted before it. That is what makes a 90-day cookie
- * safe to hand out — it can be ended from the server without waiting for it.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_COOKIE = 'cw_session';
 
-/** 90 days, Bryan's pick. Sliding: see `sessionNeedsRefresh`. */
-export const SESSION_MAX_AGE_SECONDS = 90 * 24 * 60 * 60;
+/**
+ * What the BROWSER is asked to keep the cookie for — not a session lifetime.
+ * The session has none; this is pinned to the cap browsers put on cookie
+ * `Max-Age` (~400 days), and the daily sliding refresh keeps re-arming it,
+ * so an active device stays signed in indefinitely.
+ */
+export const SESSION_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
 
 /**
  * How much of a session's life may elapse before a request re-issues the
- * cookie. A day, so an active reviewer's session never lapses while a
- * `Set-Cookie` on literally every response would be noise.
+ * cookie. A day, so an active reviewer's cookie never falls off the
+ * browser's cap while a `Set-Cookie` on literally every response would be
+ * noise.
  */
 export const SESSION_REFRESH_AFTER_MS = 24 * 60 * 60 * 1000;
 
-const VERSION = 'v1';
+/** The revocable format. `v1` — expiry-carrying, no session id — is still
+ *  accepted by `verifySession` for the cookies minted before the change. */
+const VERSION = 'v2';
 
 export interface SessionClaims {
   identityId: string;
+  /** What logout revokes. Null only for a surviving v1 cookie, which has
+   *  nothing to revoke individually — the roster watermark still covers it. */
+  sessionId: string | null;
   /** ms epoch — checked against the roster's revocation watermark. */
   issuedAt: number;
-  /** ms epoch. */
-  expiresAt: number;
+  /** ms epoch, v1 cookies only. Null means "never" — the v2 model. */
+  expiresAt: number | null;
 }
 
 /**
@@ -62,7 +75,9 @@ export function sessionKey(cookieKey: string): string {
   return createHmac('sha256', cookieKey).update('cw-email-session-v1').digest('hex');
 }
 
-/** `v1.<identityId>.<issuedAt>.<expiresAt>.<mac>` — opaque to the client. */
+/** `v2.<identityId>.<sessionId>.<issuedAt>.<mac>` — opaque to the client.
+ *  Claims without a session id sign as the old `v1.<identityId>.<issuedAt>.
+ *  <expiresAt>.<mac>`, which exists so tests can mint what old devices hold. */
 export function signSession(claims: SessionClaims, key: string): string {
   const payload = payloadOf(claims);
   return `${payload}.${mac(payload, key)}`;
@@ -71,9 +86,11 @@ export function signSession(claims: SessionClaims, key: string): string {
 /**
  * The claims a cookie attests to, or null.
  *
- * Null for anything that is not ours, does not verify, or has expired — the
- * caller cannot tell those apart, and should not: every one of them means
- * "no session".
+ * Null for anything that is not ours, does not verify, or (v1 only) has
+ * expired — the caller cannot tell those apart, and should not: every one of
+ * them means "no session". Revocation is NOT checked here — this function
+ * has no storage; the caller holds the `SessionRevocations` store and the
+ * roster watermark.
  */
 export function verifySession(
   value: string | undefined | null,
@@ -93,13 +110,22 @@ export function verifySession(
 
   const parts = payload.split('.');
   if (parts.length !== 4) return null;
-  const [version, identityId, issuedRaw, expiresRaw] = parts;
-  if (version !== VERSION || !identityId) return null;
-  const issuedAt = Number(issuedRaw);
-  const expiresAt = Number(expiresRaw);
-  if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt)) return null;
-  if (expiresAt <= now) return null;
-  return { identityId, issuedAt, expiresAt };
+  const [version, identityId, thirdRaw, fourthRaw] = parts;
+  if (!identityId) return null;
+  if (version === VERSION) {
+    const sessionId = thirdRaw;
+    const issuedAt = Number(fourthRaw);
+    if (!sessionId || !Number.isSafeInteger(issuedAt)) return null;
+    return { identityId, sessionId, issuedAt, expiresAt: null };
+  }
+  if (version === 'v1') {
+    const issuedAt = Number(thirdRaw);
+    const expiresAt = Number(fourthRaw);
+    if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt)) return null;
+    if (expiresAt <= now) return null;
+    return { identityId, sessionId: null, issuedAt, expiresAt };
+  }
+  return null;
 }
 
 /** Whether a live session has used enough of its life to be re-issued. */
@@ -107,12 +133,29 @@ export function sessionNeedsRefresh(claims: SessionClaims, now: number = Date.no
   return now - claims.issuedAt >= SESSION_REFRESH_AFTER_MS;
 }
 
-/** Fresh claims for an identity — a login, or the sliding extension. */
+/** Fresh claims for an identity at login. 128 bits of id: unguessable, and
+ *  two logins can never collide into sharing a revocation. */
 export function mintSession(identityId: string, now: number = Date.now()): SessionClaims {
   return {
     identityId,
+    sessionId: randomBytes(16).toString('base64url'),
     issuedAt: now,
-    expiresAt: now + SESSION_MAX_AGE_SECONDS * 1000,
+    expiresAt: null,
+  };
+}
+
+/**
+ * The sliding extension of a live session. KEEPS the session id — the
+ * re-issued cookie is the same session, so a later logout on this device
+ * still revokes it. A v1 cookie has no id, so its refresh is the upgrade
+ * path: it gains one here and sheds its baked-in expiry.
+ */
+export function refreshedSession(claims: SessionClaims, now: number = Date.now()): SessionClaims {
+  return {
+    identityId: claims.identityId,
+    sessionId: claims.sessionId ?? randomBytes(16).toString('base64url'),
+    issuedAt: now,
+    expiresAt: null,
   };
 }
 
@@ -128,11 +171,15 @@ export function sessionCookieHeader(
   opts: { secure: boolean; now?: number },
 ): string {
   const now = opts.now ?? Date.now();
-  const maxAge = Math.max(0, Math.floor((claims.expiresAt - now) / 1000));
+  const maxAge =
+    claims.expiresAt === null
+      ? SESSION_COOKIE_MAX_AGE_SECONDS
+      : Math.max(0, Math.floor((claims.expiresAt - now) / 1000));
   return cookie(signSession(claims, key), maxAge, opts.secure);
 }
 
-/** `Set-Cookie` that ends the session in this browser. */
+/** `Set-Cookie` that ends the session in this browser. The server-side half
+ *  of logout — revoking the session id — is the route's job, not this one's. */
 export function clearedSessionCookieHeader(opts: { secure: boolean }): string {
   return cookie('', 0, opts.secure);
 }
@@ -149,7 +196,10 @@ function cookie(value: string, maxAge: number, secure: boolean): string {
 }
 
 function payloadOf(claims: SessionClaims): string {
-  return `${VERSION}.${claims.identityId}.${claims.issuedAt}.${claims.expiresAt}`;
+  if (claims.sessionId !== null) {
+    return `${VERSION}.${claims.identityId}.${claims.sessionId}.${claims.issuedAt}`;
+  }
+  return `v1.${claims.identityId}.${claims.issuedAt}.${claims.expiresAt ?? 0}`;
 }
 
 function mac(payload: string, key: string): string {

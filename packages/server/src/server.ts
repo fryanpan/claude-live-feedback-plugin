@@ -39,12 +39,14 @@ import {
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
 import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
+import { SessionRevocations } from './auth/session-revocations.ts';
 import {
   SESSION_COOKIE,
   clearedSessionCookieHeader,
   sessionKey as deriveSessionKey,
   sessionCookieHeader as emailSessionCookieHeader,
   mintSession,
+  refreshedSession,
   sessionNeedsRefresh,
   verifySession as verifyEmailSession,
 } from './auth/session.ts';
@@ -2803,6 +2805,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     console.log(`[identities] ${identityLinkLoad.loaded} identity link(s) loaded`);
   }
   const emailCodes = new EmailCodes();
+  const sessionRevocations = new SessionRevocations({ dataDir });
+  if (sessionRevocations.loadError) {
+    // Loud on purpose: an unreadable revocation file fails OPEN — every
+    // logged-out session validates again until somebody looks at this.
+    console.error(`[auth] revoked-sessions file was unreadable: ${sessionRevocations.loadError}`);
+  }
   const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
   // Teach the owner check the owner's email identity. Without this the check
@@ -2854,10 +2862,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   /**
    * The identity a request's session cookie attests to, or null.
    *
-   * Four ways to be null and they are deliberately indistinguishable to the
-   * caller: no cookie, a cookie that does not verify or has expired, an
-   * identity the roster does not hold, and an identity whose sessions have
-   * been revoked or archived. Every one of them means "not signed in".
+   * Five ways to be null and they are deliberately indistinguishable to the
+   * caller: no cookie, a cookie that does not verify (or, old format, has
+   * expired), an identity the roster does not hold, an identity whose
+   * sessions have been revoked or archived, and a session that was logged
+   * out. Every one of them means "not signed in".
    */
   const sessionIdentityFor = (req: Request): IdentityRecord | null => {
     const claims = verifyEmailSession(
@@ -2865,16 +2874,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       emailSessionKey(),
     );
     if (!claims) return null;
+    // Per-session revocation — what logout writes. This is the only thing
+    // that ends a v2 cookie, which carries no expiry of its own.
+    if (claims.sessionId !== null && sessionRevocations.isRevoked(claims.sessionId)) return null;
     const rec = identities.get(claims.identityId);
     if (!rec || rec.status !== 'active') return null;
-    // Server-side revocation: a cookie minted before the watermark is dead
+    // Identity-wide revocation: a cookie minted before the watermark is dead
     // however long it says it lives.
     if (claims.issuedAt < rec.sessionsValidFrom) return null;
     return rec;
   };
 
   /**
-   * Extend a live session in place — the "sliding" half of 90 days sliding.
+   * Re-issue a live session's cookie in place. The session itself never
+   * expires; what slides is the browser's own cap on cookie retention (and,
+   * for surviving old-format cookies, their baked-in 90-day expiry — this is
+   * where they upgrade to the revocable format).
    *
    * Done in the response wrapper rather than per route because "on use" means
    * every request, and a session that lapsed while somebody was reviewing
@@ -2893,7 +2908,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const headers = new Headers(res.headers);
     headers.append(
       'set-cookie',
-      emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
+      // NOT a fresh mint: the refresh keeps the session id, so a later
+      // logout on this device revokes the session it has had all along.
+      // (An old-format cookie gains its id here — the upgrade path.)
+      emailSessionCookieHeader(refreshedSession(claims), emailSessionKey(), {
         secure: isSecureRequest(req),
       }),
     );
@@ -3367,8 +3385,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
 
         if (pathname === '/api/auth/logout' && req.method === 'POST') {
-          // This browser only. Ending a person's sessions everywhere is a
-          // roster operation (`revokeSessions`), not a cookie one.
+          // THIS session only — ending a person's sessions everywhere is a
+          // roster operation (`revokeSessions`). Clearing the cookie is the
+          // browser half; revoking the session id is what kills any captured
+          // copy of the value, which otherwise validates forever. Only an id
+          // off a VERIFIED cookie reaches the store, so an attacker cannot
+          // grow the file with junk.
+          const claims = verifyEmailSession(
+            readCookie(req.headers.get('cookie'), SESSION_COOKIE),
+            emailSessionKey(),
+          );
+          if (claims?.sessionId) sessionRevocations.revoke(claims.sessionId);
           return new Response(JSON.stringify({ ok: true }), {
             status: 200,
             headers: {
