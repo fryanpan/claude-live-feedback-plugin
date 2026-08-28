@@ -164,6 +164,80 @@ describe('a row that stays stalled is said again, eventually', () => {
     expect(sent).toHaveLength(2);
   });
 
+  /**
+   * The escalation window is the BOARD's, not each row's.
+   *
+   * A per-row bucket amortises catastrophically: every stalled row crosses its
+   * own boundary at its own wall-clock moment, each crossing moves the stamp,
+   * and the ceiling becomes one wake per row per window. Measured against real
+   * boards at the time — 32 eligible rows on one, 24 on another — that is a
+   * board re-waking its lead seven or eight times an hour, forever, with
+   * nothing about it having changed.
+   *
+   * So the bucket comes from the OLDEST row: one re-wake per board per window,
+   * with the row ids still in the stamp so a genuine set change fires at once.
+   */
+  it('does not re-fire when one row crosses a boundary the oldest has not', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [
+      // About to cross its own boundary…
+      { id: 't-young', title: 'Cache the facet counts', bucket: 'in-progress', quietMs: 59 * MIN },
+      // …while the oldest row sits well inside its own.
+      { id: 't-old', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 125 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 2 * MIN;
+    world.boards[0]!.stalled[0]!.quietMs = 61 * MIN;
+    world.boards[0]!.stalled[1]!.quietMs = 127 * MIN;
+    nudger.tick();
+
+    // The young row changed buckets. Nothing about the board did.
+    expect(sent).toHaveLength(1);
+  });
+
+  it('re-fires when the OLDEST row crosses the next boundary', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [
+      { id: 't-young', title: 'Cache the facet counts', bucket: 'in-progress', quietMs: 10 * MIN },
+      { id: 't-old', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 175 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.now += 10 * MIN;
+    world.boards[0]!.stalled[0]!.quietMs = 20 * MIN;
+    world.boards[0]!.stalled[1]!.quietMs = 185 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+
+  it('still fires at once when the set itself changes inside a window', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [
+      { id: 't-old', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 125 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // A board-level clock must not swallow a NEW stall — the ids are in the
+    // stamp for exactly this.
+    world.boards[0]!.stalled = [
+      ...world.boards[0]!.stalled,
+      {
+        id: 't-new',
+        title: 'Cache the facet counts',
+        bucket: 'ready-unpicked',
+        quietMs: 21 * MIN,
+      },
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+
   it('defaults the repeat window to something coarser than the tick', () => {
     expect(STALL_REPEAT_DEFAULT_MS).toBeGreaterThan(60 * MIN);
   });
@@ -311,6 +385,81 @@ describe('the arming survives a restart', () => {
     expect(() => nudger.tick()).not.toThrow();
     // One duplicate wake is the cheaper failure than a wake that never fires.
     expect(sent).toHaveLength(1);
+  });
+});
+
+/**
+ * Every DELIVERED wake leaves a line, so somebody can count what this feature
+ * costs.
+ *
+ * The measurement it exists for is wakes per board per hour — a lead's turn is
+ * the unit of spend here, and a loop that fires more often than anyone
+ * realises is exactly the failure the arming rules were written against. A
+ * count nobody can take is a claim nobody can check.
+ *
+ * It rides the injectable `report` rather than `console.error` for the same
+ * reason the unevaluable notice does: a line only a human tailing a log can
+ * see is a line no test can assert, and this one has to stay true as the
+ * arming rules change around it.
+ */
+describe('every delivered wake is counted', () => {
+  it('reports the board, the lead, and what the wake was about', () => {
+    const { reported, nudger } = harness();
+
+    nudger.tick();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain('w-atlas');
+    expect(reported[0]).toContain('agent-cartographer');
+    expect(reported[0]).toContain('stalled=1');
+    expect(reported[0]).toContain('unfiled=0');
+    expect(reported[0]).toContain('undetermined=0');
+  });
+
+  it('counts each list separately rather than as one total', () => {
+    const { world, reported, nudger } = harness();
+    world.boards[0]!.unfiled = [
+      {
+        id: 't-9',
+        title: 'Pick a retention window',
+        bucket: 'blocked-on-owner-unfiled',
+        quietMs: 0,
+      },
+    ];
+    world.boards[0]!.undetermined = [{ id: 't-3', reason: 'review-items-unreadable' }];
+
+    nudger.tick();
+
+    const wake = reported.find((line) => line.includes('wake'));
+    expect(wake).toContain('stalled=1');
+    expect(wake).toContain('unfiled=1');
+    expect(wake).toContain('undetermined=1');
+  });
+
+  it('says nothing on a tick that delivers no wake', () => {
+    const { world, reported, nudger } = harness();
+    nudger.tick();
+    expect(reported.filter((line) => line.includes('wake'))).toHaveLength(1);
+
+    // Nothing has changed, so no wake is owed — and a line here would count a
+    // turn nobody spent, which is the opposite of what the measurement is for.
+    world.now += 5 * MIN;
+    nudger.tick();
+    world.now += 5 * MIN;
+    nudger.tick();
+
+    expect(reported.filter((line) => line.includes('wake'))).toHaveLength(1);
+  });
+
+  it('says nothing when the lead holds no stream', () => {
+    const { world, reported, nudger } = harness();
+    world.reachable.clear();
+
+    nudger.tick();
+
+    // The wake is still OWED, not spent — logging it would inflate the very
+    // number this line exists to make honest.
+    expect(reported.filter((line) => line.includes('wake'))).toHaveLength(0);
   });
 });
 
