@@ -183,7 +183,7 @@ describe('review docs stay reachable without leaking back onto /', () => {
   });
 });
 
-describe('the landing page says which workspaces are waiting on the owner (t-DA4rBTmdP0d2)', () => {
+describe('the landing page says which workspaces are waiting on the owner', () => {
   let waitingId: string;
   let quietId: string;
 
