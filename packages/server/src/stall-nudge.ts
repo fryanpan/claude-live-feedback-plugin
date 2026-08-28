@@ -78,9 +78,12 @@ import type { StallUndeterminedRow, StalledRow } from './stall-gate.ts';
  *
  * Four hours: coarse enough that a lead who has seen the row once is not told
  * a second time inside the span it would take them to act on it, and fine
- * enough that a row abandoned overnight is named several times rather than
- * once. It quantises the row's own silence — see the header — so nothing here
- * is a timer and nothing needs cancelling.
+ * enough that a board abandoned overnight is named several times rather than
+ * once. It quantises the silence of the board's OLDEST quiet row — see the
+ * header — so nothing here is a timer and nothing needs cancelling.
+ *
+ * `CW_STALL_REPEAT_HOURS` overrides it, because this is the number that sets
+ * what a fleet pays to be told about boards where nothing is changing.
  */
 export const STALL_REPEAT_DEFAULT_MS = 4 * 60 * 60_000;
 
