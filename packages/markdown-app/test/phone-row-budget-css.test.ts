@@ -174,25 +174,15 @@ describe('the phone task row', () => {
   });
 
   /**
-   * The new chip and the budget it inherits. `parked` is a WORD badge like
-   * `due`, so it is hidden on a phone with the rest of the strip — a
-   * deliberate cost, not an oversight: on Bryan's iPad (1180x820, far above
-   * this block) and on any laptop the chip shows, and on a phone a parked row
-   * is title-only and its deferral lives one tap away in the panel's park
-   * note, exactly where the overdue mark went.
-   *
-   * What this pins is that it takes no exception and adds no LAYOUT, so the
-   * measured budget above is still the budget. A chip that grew a padding or
-   * a min-width here would move numbers that were taken in a browser and
-   * cannot be re-derived from the file.
+   * The parked chip is gone (2026-08-27, with the state behind it), and the
+   * phone row must not have kept a rule for it: a dangling selector in the
+   * coarse block is invisible until somebody reuses the class name and cannot
+   * work out why their chip is hidden on a phone.
    */
-  it('gives the parked chip colour only, and no phone exception', () => {
-    const rule = /\n\.hub-badge-parked\s*\{([^}]*)\}/.exec(declarationsOnly(CSS))?.[1] ?? '';
-    expect(rule).not.toBe(''); // control: the chip has a rule at all
-    expect(rule).toMatch(/border-color|background/);
-    for (const layout of ['padding', 'margin', 'min-width', 'width', 'font-size', 'display']) {
-      expect(rule, `${layout} would move the measured phone budget`).not.toContain(layout);
-    }
+  it('has no parked chip left to budget for, on the phone row or off it', () => {
+    // Control: the strip this is asserting an absence in is still here.
+    expect(/\n\.hub-badge-overdue\s*\{/.test(declarationsOnly(CSS))).toBe(true);
+    expect(declarationsOnly(CSS)).not.toContain('hub-badge-parked');
     expect(phoneRowBlock()).not.toContain('hub-badge-parked');
   });
 

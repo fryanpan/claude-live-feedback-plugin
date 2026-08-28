@@ -14399,7 +14399,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.116";
+var PLUGIN_VERSION = "0.1.117";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15561,7 +15561,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "next_tasks",
-      description: 'The work queue: what to pick up next, in priority order, filtered to what you can actually do. Take the whole ready set, not the top row. Each row carries its full description, blockedBy, ready, and bodyWrittenAt — descriptions age, so check that date before trusting one. Skip any row carrying parked (somebody deferred it deliberately) and any row whose claimedBy is an active session that is not you. Triage rows are never returned; read those with list_tasks(status:"triage").',
+      description: 'The work queue: what to pick up next, in priority order, filtered to what you can actually do. Take the whole ready set, not the top row. Each row carries its full description, blockedBy, ready, and bodyWrittenAt — descriptions age, so check that date before trusting one. Skip any row whose claimedBy is an active session that is not you. Triage rows are never returned; read those with list_tasks(status:"triage").',
       inputSchema: {
         type: "object",
         properties: {
@@ -15650,21 +15650,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "park_task",
-      description: 'Defer a task to a date: "not now, and here is when". Reach for it instead of moving the row to in-progress or inventing a dependency to quiet the ready-work nudge — both make the board say something untrue. The row does not move: still todo, still owned, still in next_tasks, now carrying parked: {until, reason}. Pass until: null to un-park early. Write a reason — the date says a decision was made, not what it was waiting for.',
+      description: 'Defer a task: "not now". Moves the row to triage and posts a comment recording why and when to come back to it. Reach for it instead of moving the row to in-progress or inventing a dependency to quiet the ready-work nudge — both make the board say something untrue. Write a reason: triage says a decision was made, and the comment is the only place that says what it was waiting for. There is no un-park — when the row is ready again, move it on with task_transition like any other triage row.',
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
           until: {
-            description: 'When the deferral ends. An epoch-ms number, or a date string ("2026-09-02", or a full ISO timestamp for a specific hour — a bare date is read as UTC midnight). Pass `null` to un-park now.',
+            description: 'When to come back to it, if you know. An epoch-ms number, or a date string ("2026-09-02", or a full ISO timestamp for a specific hour — a bare date is read as UTC midnight). Omit it for "not now, and I do not know when" — the comment says so rather than inventing a date. `null` is the retired un-park: accepted, and it does nothing.',
             type: ["number", "string", "null"]
           },
           reason: {
             type: "string",
-            description: 'Why, in one line — e.g. "waiting on the index rebuild". Replaced rather than merged whenever the date moves, so restate it if it still holds.'
+            description: 'Why, in one line — e.g. "waiting on the index rebuild". It goes in the comment, which is the record a reader argues with weeks later.'
           }
         },
-        required: ["taskId", "until"]
+        required: ["taskId"]
       }
     },
     {
@@ -16739,11 +16739,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "park_task": {
         const { taskId, until, reason } = a;
         let parkedUntil;
-        if (until === null || until === undefined) {
+        if (until === undefined) {
+          parkedUntil = undefined;
+        } else if (until === null) {
           parkedUntil = null;
         } else if (typeof until === "number") {
           if (!Number.isFinite(until))
-            return err("until must be a date, or null to un-park");
+            return err("until must be a date, or omitted");
           parkedUntil = until;
         } else {
           const parsed = Date.parse(until);
@@ -16753,16 +16755,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           parkedUntil = parsed;
         }
         const res = await http("POST", `/api/tasks/${encodeURIComponent(taskId)}/park`, {
-          parkedUntil,
+          ...parkedUntil !== undefined ? { parkedUntil } : {},
           ...reason !== undefined ? { reason } : {},
           author: AUTHOR
         });
         return ok({
           taskId,
-          parkedUntil: res.task.parkedUntil ?? null,
-          ...res.task.parkedReason !== undefined ? { parkedReason: res.task.parkedReason } : {},
           status: res.task.status,
-          changed: res.changed
+          moved: res.changed,
+          commented: res.commented,
+          ...res.message !== undefined ? { message: res.message } : {}
         });
       }
       case "archive_task": {
