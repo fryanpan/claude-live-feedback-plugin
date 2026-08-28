@@ -3,6 +3,7 @@ import {
   ENV_RENAMES,
   type EnvLike,
   legacyEnvName,
+  positiveEnvDuration,
   readRenamedEnv,
   renamedEnvConflicts,
 } from '../src/env-names.ts';
@@ -127,5 +128,40 @@ describe('renamedEnvConflicts', () => {
       LF_CLIENT_ROOT: '/b',
     });
     expect(c.map((x) => x.current).sort()).toEqual(['CW_CLIENT_ROOT', 'CW_SUMMARIES']);
+  });
+});
+
+describe('positiveEnvDuration', () => {
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+
+  it('converts the operator-facing unit into milliseconds', () => {
+    expect(positiveEnvDuration({ CW_X: '20' }, 'CW_X', MIN)).toBe(20 * MIN);
+    expect(positiveEnvDuration({ CW_X: '4' }, 'CW_X', HOUR)).toBe(4 * HOUR);
+  });
+
+  it('accepts a fractional value, so a sub-unit window is reachable', () => {
+    expect(positiveEnvDuration({ CW_X: '0.5' }, 'CW_X', HOUR)).toBe(30 * MIN);
+  });
+
+  it('falls back to the default when the variable is unset or blank', () => {
+    expect(positiveEnvDuration({}, 'CW_X', MIN)).toBeUndefined();
+    expect(positiveEnvDuration({ CW_X: '' }, 'CW_X', MIN)).toBeUndefined();
+    expect(positiveEnvDuration({ CW_X: '   ' }, 'CW_X', MIN)).toBeUndefined();
+  });
+
+  // A zero window would fire on every tick and a negative one is meaningless.
+  // Both fall back rather than disabling the feature or hammering it.
+  it('falls back rather than honouring a non-positive or unreadable value', () => {
+    expect(positiveEnvDuration({ CW_X: '0' }, 'CW_X', MIN)).toBeUndefined();
+    expect(positiveEnvDuration({ CW_X: '-5' }, 'CW_X', MIN)).toBeUndefined();
+    expect(positiveEnvDuration({ CW_X: 'soon' }, 'CW_X', MIN)).toBeUndefined();
+    expect(positiveEnvDuration({ CW_X: 'Infinity' }, 'CW_X', MIN)).toBeUndefined();
+  });
+
+  it('reads the legacy spelling too, like every other env read here', () => {
+    expect(
+      positiveEnvDuration({ LF_SUMMARY_BACKFILL_MINUTES: '7' }, 'CW_SUMMARY_BACKFILL_MINUTES', MIN),
+    ).toBe(7 * MIN);
   });
 });
