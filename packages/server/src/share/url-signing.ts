@@ -78,8 +78,8 @@ export async function verifySignedShare(
   return crypto.subtle.verify('HMAC', await hmacKey(key, 'verify'), unhex(sig), payload(shareId, exp));
 }
 
-const payload = (shareId: string, exp: string): Uint8Array =>
-  new TextEncoder().encode(`${shareId}.${exp}`);
+const payload = (shareId: string, exp: string): Uint8Array<ArrayBuffer> =>
+  new TextEncoder().encode(`${shareId}.${exp}`) as Uint8Array<ArrayBuffer>;
 
 const hmacKey = (key: string, usage: 'sign' | 'verify'): Promise<CryptoKey> =>
   crypto.subtle.importKey(
@@ -93,5 +93,5 @@ const hmacKey = (key: string, usage: 'sign' | 'verify'): Promise<CryptoKey> =>
 const hex = (buf: ArrayBuffer): string =>
   Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
 
-const unhex = (s: string): Uint8Array =>
-  Uint8Array.from(s.match(/.{2}/g) ?? [], (b) => Number.parseInt(b, 16));
+const unhex = (s: string): Uint8Array<ArrayBuffer> =>
+  Uint8Array.from(s.match(/.{2}/g) ?? [], (b) => Number.parseInt(b, 16)) as Uint8Array<ArrayBuffer>;

@@ -1,15 +1,16 @@
-import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CfApi } from './cf-api.ts';
 import {
   type CreateShareLinkReq,
   type CreateShareWorkspaceReq,
+  DEFAULT_LINK_TTL_SECONDS,
   DEFAULT_TTL_SECONDS,
   type Share,
   type ShareConfig,
   type ShareSurface,
 } from './types.ts';
+import { loadUrlKey, signedSharePath, verifySignedShare } from './url-signing.ts';
 
 const REGISTRY_FILENAME = 'shares.json';
 
@@ -25,8 +26,6 @@ function assertTtl(ttlSeconds: number): number {
   }
   return ttlSeconds;
 }
-/** 128 bits — unguessable in practice, and short enough to paste. */
-const SLUG_BYTES = 16;
 
 export interface SharesOptions {
   dataDir: string;
@@ -40,6 +39,7 @@ export class Shares {
   private readonly cfApi: CfApi | null;
   private readonly config: ShareConfig;
   private shares: Share[] = [];
+  private urlKeyCache: string | null = null;
 
   constructor(opts: SharesOptions) {
     this.dataDir = opts.dataDir;
@@ -68,8 +68,10 @@ export class Shares {
   }
 
   /**
-   * Share a BOARD by unguessable link. No Cloudflare Access app, no email
-   * policy — possession of the slug is the credential until `expiresAt`.
+   * Share a BOARD by signed link. No Cloudflare Access app, no email policy
+   * — the URL's HMAC signature is the credential until `expiresAt` (the
+   * S3-presigned pattern; see share/url-signing.ts). Validation throws
+   * BEFORE anything is signed or saved, so a refused mint leaves no grant.
    *
    * There is no single-doc form and no single-review form: a board is the
    * unit of sharing. Both of those grants minted a share scoped to something
@@ -77,7 +79,7 @@ export class Shares {
    * asking for one is refused at the route rather than quietly re-scoped to
    * something it did not ask for.
    */
-  createShareLink(req: CreateShareLinkReq): Share {
+  async createShareLink(req: CreateShareLinkReq): Promise<Share> {
     if (!this.config.publicHostname) {
       throw new Error(
         'link shares need config.publicHostname (the single hostname the tunnel serves)',
@@ -88,32 +90,72 @@ export class Shares {
     // guard scopes by workspaceId alone.
     const docId = '';
 
-    const slug = randomBytes(SLUG_BYTES).toString('hex');
     const hostname = this.config.publicHostname;
-    const ttl = assertTtl(req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_TTL_SECONDS);
+    const ttl = assertTtl(
+      req.ttlSeconds ?? this.config.defaultTtlSeconds ?? DEFAULT_LINK_TTL_SECONDS,
+    );
+    const shareId = randomHex(8);
+    const expiresAt = Date.now() + ttl * 1000;
     const share: Share = {
-      shareId: randomHex(8),
+      shareId,
       surface: 'workspace',
       mode: 'link',
       docId,
       workspaceId: req.workspaceId,
-      slug,
       hostname,
-      url: `https://${hostname}/s/${slug}`,
+      url: await this.signedLinkUrl(shareId, expiresAt, hostname),
       ...(req.label ? { label: req.label } : {}),
       createdAt: Date.now(),
-      expiresAt: Date.now() + ttl * 1000,
+      expiresAt,
     };
     this.shares.push(share);
     this.save();
     return share;
   }
 
-  /** Look up a live link share by its slug. Expired slugs resolve to null. */
-  findBySlug(slug: string, now: number = Date.now()): Share | null {
-    const s = this.shares.find((x) => x.mode === 'link' && x.slug === slug);
-    if (!s) return null;
-    return s.expiresAt > now ? s : null;
+  /**
+   * Verify a presented `/share/<id>?exp&sig` tuple and resolve the LIVE link
+   * share it names, or null. Signature and URL expiry first (attacker-typed
+   * input proves itself before it earns a registry lookup), then the record:
+   * `findLive` re-checks the share's own `expiresAt`, which is what makes
+   * early revocation and TTL shortening bite even against a validly signed
+   * URL — the app never trusts that the edge Worker ran.
+   */
+  async verifySignedLink(
+    shareId: string,
+    exp: string,
+    sig: string,
+    now: number = Date.now(),
+  ): Promise<Share | null> {
+    if (!(await verifySignedShare(shareId, exp, sig, this.urlKey(), now))) return null;
+    const share = this.findLive(shareId, now);
+    return share?.mode === 'link' ? share : null;
+  }
+
+  /**
+   * The share with its `url` recomputed to the CURRENT signed form — link
+   * mode only; anything else passes through. This is also the migration for
+   * records minted before signing existed: their stored `/s/<slug>` url is
+   * simply never served, and listing them hands back a signed URL computed
+   * on demand from the same record.
+   */
+  async withSignedUrl(share: Share): Promise<Share> {
+    if (share.mode !== 'link') return share;
+    const hostname = this.config.publicHostname ?? share.hostname;
+    return { ...share, url: await this.signedLinkUrl(share.shareId, share.expiresAt, hostname) };
+  }
+
+  private async signedLinkUrl(
+    shareId: string,
+    expiresAt: number,
+    hostname: string,
+  ): Promise<string> {
+    return `https://${hostname}${await signedSharePath(shareId, expiresAt, this.urlKey())}`;
+  }
+
+  private urlKey(): string {
+    this.urlKeyCache ??= loadUrlKey(this.dataDir);
+    return this.urlKeyCache;
   }
 
   /** Look up a live share by id. Expired shares resolve to null. */
@@ -124,18 +166,25 @@ export class Shares {
   }
 
   /**
-   * Change a LIVE share's expiry. `ttlSeconds` is measured from now.
+   * Change a LIVE share's expiry. `ttlSeconds` is measured from now. A link
+   * share's signed URL embeds the expiry, so moving it re-issues the URL —
+   * the previously handed-out URL keeps its OWN `exp`, and whichever bound
+   * is tighter (the old signature's exp, or the record's new `expiresAt`,
+   * re-checked per request) wins.
    *
    * An already-expired share is deliberately NOT extendable: its URL may
    * have been forwarded or archived in the meantime, and reviving it would
    * silently hand access back to everyone who kept a copy. Mint a fresh
-   * link instead — that rotates the slug.
+   * link instead — that rotates the signature.
    */
-  setTtl(shareId: string, ttlSeconds: number): Share | null {
+  async setTtl(shareId: string, ttlSeconds: number): Promise<Share | null> {
     const ttl = assertTtl(ttlSeconds);
     const s = this.findLive(shareId);
     if (!s) return null;
     s.expiresAt = Date.now() + ttl * 1000;
+    if (s.mode === 'link') {
+      s.url = await this.signedLinkUrl(s.shareId, s.expiresAt, this.config.publicHostname ?? s.hostname);
+    }
     this.save();
     return s;
   }
@@ -222,6 +271,11 @@ export class Shares {
     return this.shares.slice();
   }
 
+  /** `list()` with every link share's url recomputed — what the API serves. */
+  listWithUrls(): Promise<Share[]> {
+    return Promise.all(this.shares.map((s) => this.withSignedUrl(s)));
+  }
+
   /** The single hostname link shares are served from, if configured. */
   get publicHostname(): string | null {
     return this.config.publicHostname ?? null;
@@ -301,10 +355,10 @@ export class Shares {
  * entropy it had just generated: `randomHex(8)` returned 32 bits, not 64, and
  * `randomHex(3)` returned 12 bits — 4096 possibilities for the date-suffixed
  * Access share slug, which is also its public hostname. Neither value is a
- * bearer credential (link slugs use their own full-width `randomBytes(16)`,
- * and an Access hostname is gated by a JWT), so this was a collision bug
- * rather than a guessing one — but a function named for a byte count should
- * return that many bytes.
+ * bearer credential (a link URL's credential is its HMAC signature, and an
+ * Access hostname is gated by a JWT), so this was a collision bug rather
+ * than a guessing one — but a function named for a byte count should return
+ * that many bytes.
  */
 function randomHex(bytes: number): string {
   const arr = new Uint8Array(bytes);
