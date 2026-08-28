@@ -52,7 +52,10 @@ describe('hub-app wires the handoff', () => {
   });
 
   it('auto-opens the walkthrough after the first review-items load', () => {
-    expect(src).toMatch(/loadReviewItems\(\)\.then\(maybeAutoWalk\)/);
+    // `deepLinkTick` bundles the ?walk= flag with the ?item= boot deep link —
+    // both wait on the same queue, so they share every retry hook.
+    expect(src).toMatch(/loadReviewItems\(\)\.then\(deepLinkTick\)/);
+    expect(src).toMatch(/const deepLinkTick[\s\S]{0,80}maybeAutoWalk\(\)/);
   });
 
   it('chains to walkNextUrl when the queue drains', () => {
