@@ -71,6 +71,49 @@ describe('wireMeMenu', () => {
     expect(menu.classList.contains('hidden')).toBe(true);
   });
 
+  it('renames through the profile route, seeds the local name, and reloads', async () => {
+    const saveName = vi.fn(async () => true);
+    const storeName = vi.fn();
+    const onRenamed = vi.fn();
+    wire({ authenticated: true, user: { name: 'Bryan' } }, { saveName, storeName, onRenamed });
+    button.click();
+    await vi.waitFor(() => {
+      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+    });
+    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
+    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    expect(input?.value).toBe('Bryan');
+    if (!input) throw new Error('no rename input');
+    input.value = '  Bryan C. ';
+    menu.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    await vi.waitFor(() => {
+      expect(onRenamed).toHaveBeenCalled();
+    });
+    expect(saveName).toHaveBeenCalledWith('Bryan C.');
+    expect(storeName).toHaveBeenCalledWith('Bryan C.');
+    expect(menu.classList.contains('hidden')).toBe(true);
+  });
+
+  it('keeps the rename form open with an error when the server refuses', async () => {
+    const saveName = vi.fn(async () => false);
+    const onRenamed = vi.fn();
+    wire({ authenticated: true, user: { name: 'Bryan' } }, { saveName, onRenamed });
+    button.click();
+    await vi.waitFor(() => {
+      expect(menu.querySelector('.hub-me-rename')).not.toBeNull();
+    });
+    menu.querySelector<HTMLButtonElement>('.hub-me-rename')?.click();
+    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    if (!input) throw new Error('no rename input');
+    input.value = 'Bryan C.';
+    menu.querySelector('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    await vi.waitFor(() => {
+      expect(menu.querySelector('.hub-me-error')?.classList.contains('hidden')).toBe(false);
+    });
+    expect(onRenamed).not.toHaveBeenCalled();
+    expect(menu.querySelector('#hub-me-name')).not.toBeNull();
+  });
+
   it('closes on a second click, an outside click, and Escape', async () => {
     wire({ authenticated: false });
     button.click();

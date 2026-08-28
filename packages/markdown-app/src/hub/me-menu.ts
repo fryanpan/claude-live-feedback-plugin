@@ -1,4 +1,4 @@
-import { escapeHtml } from '@feedback/core';
+import { escapeHtml, storeUserName } from '@feedback/core';
 
 /**
  * The identity chip's menu — the sign-in entry point.
@@ -27,6 +27,12 @@ export interface MeMenuOpts {
   signinHref?: string;
   /** After sign-out — a reload, so nothing keeps rendering the old session. */
   onSignedOut?: () => void;
+  /** Saves a new display name; resolves false when the server refused. */
+  saveName?: (name: string) => Promise<boolean>;
+  /** Persist the confirmed name where `ensureUserIdentity` reads it. */
+  storeName?: (name: string) => void;
+  /** After a rename — a reload, so every surface repaints the new name. */
+  onRenamed?: () => void;
 }
 
 async function defaultFetchSession(): Promise<MeSession> {
@@ -36,6 +42,15 @@ async function defaultFetchSession(): Promise<MeSession> {
 
 async function defaultSignOut(): Promise<void> {
   await fetch('/api/auth/logout', { method: 'POST' });
+}
+
+async function defaultSaveName(name: string): Promise<boolean> {
+  const res = await fetch('/api/auth/profile', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ displayName: name }),
+  });
+  return res.ok;
 }
 
 export function defaultSigninHref(pathname: string, search: string): string {
@@ -48,6 +63,15 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
   const signOut = opts.signOut ?? defaultSignOut;
   const signinHref = opts.signinHref ?? defaultSigninHref(location.pathname, location.search);
   const onSignedOut = opts.onSignedOut ?? (() => location.reload());
+  const saveName = opts.saveName ?? defaultSaveName;
+  const storeName =
+    opts.storeName ??
+    ((name: string) =>
+      storeUserName(
+        { get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) },
+        name,
+      ));
+  const onRenamed = opts.onRenamed ?? (() => location.reload());
 
   const close = () => {
     menu.classList.add('hidden');
@@ -62,7 +86,13 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
     if (session.authenticated && session.user) {
       menu.innerHTML = `
         <p class="hub-me-row">Signed in as <b>${escapeHtml(session.user.name)}</b></p>
-        <button type="button" class="hub-me-action hub-me-signout">Sign out</button>`;
+        <div class="hub-me-actions">
+          <button type="button" class="hub-me-action hub-me-rename">Change name</button>
+          <button type="button" class="hub-me-action hub-me-signout">Sign out</button>
+        </div>`;
+      menu.querySelector('.hub-me-rename')?.addEventListener('click', () => {
+        renderRename(session.user?.name ?? '');
+      });
       menu.querySelector('.hub-me-signout')?.addEventListener('click', () => {
         void signOut().then(() => {
           close();
@@ -76,6 +106,46 @@ export function wireMeMenu(opts: MeMenuOpts): () => void {
     menu.innerHTML = `
       <p class="hub-me-row hub-me-note">Commenting as <b>${escapeHtml(opts.localName)}</b> — not signed in</p>
       <a class="hub-me-action" href="${escapeHtml(signinHref)}">Sign in</a>`;
+  };
+
+  /** The rename form — what "You can change this later from the board"
+   *  promises. Saves through the same profile route the sign-in flow uses,
+   *  seeds the confirmed name locally, then reloads so every surface —
+   *  awareness, the chip, comment attribution — repaints as this name. */
+  const renderRename = (current: string) => {
+    menu.innerHTML = `
+      <form class="hub-me-rename-form">
+        <label class="hub-me-row" for="hub-me-name">Display name</label>
+        <input id="hub-me-name" type="text" maxlength="40" autocomplete="name" value="${escapeHtml(current)}" />
+        <div class="hub-me-actions">
+          <button type="submit" class="hub-me-action">Save</button>
+        </div>
+        <p class="hub-me-row hub-me-note hub-me-error hidden" role="alert"></p>
+      </form>`;
+    const input = menu.querySelector<HTMLInputElement>('#hub-me-name');
+    menu.querySelector('form')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = input?.value.trim() ?? '';
+      if (!name) {
+        input?.focus();
+        return;
+      }
+      void saveName(name).then((ok) => {
+        if (!ok) {
+          const err = menu.querySelector<HTMLElement>('.hub-me-error');
+          if (err) {
+            err.textContent = 'Couldn’t save the name. Try again.';
+            err.classList.remove('hidden');
+          }
+          return;
+        }
+        storeName(name);
+        close();
+        onRenamed();
+      });
+    });
+    input?.focus();
+    input?.select();
   };
 
   const open = () => {

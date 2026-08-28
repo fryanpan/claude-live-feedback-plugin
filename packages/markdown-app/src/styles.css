@@ -913,6 +913,28 @@ body.hub-body {
 .hub-me-action:hover {
   background: var(--bg-hover);
 }
+.hub-me-actions {
+  display: flex;
+  gap: 8px;
+}
+.hub-me-rename-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hub-me-rename-form input {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 16px; /* ≥16px so iOS Safari doesn't zoom the field on focus */
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.hub-me-error {
+  color: var(--red);
+}
 
 /* --- settings panel: the surfaces that are not the task list ---
    A true popover, anchored to the header's bottom-right under the settings
