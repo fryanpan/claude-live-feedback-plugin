@@ -99,3 +99,25 @@ export function renamedEnvConflicts(env: EnvLike): { current: string; legacy: st
   }
   return out;
 }
+
+/**
+ * A duration an operator types, in whatever unit reads naturally at the call
+ * site — minutes for a quiet window, hours for an escalation window — returned
+ * in milliseconds, or `undefined` to mean "use the built-in default".
+ *
+ * WHY EVERY BAD VALUE FALLS BACK RATHER THAN THROWING. These knobs exist to be
+ * turned in a launch config at 2am, and the failure that matters is not a typo
+ * — it is a typo that silently changes behaviour. `0` is the dangerous one: it
+ * reads as "off" and would actually mean "fire on every tick", which is the
+ * one behaviour these windows exist to prevent. Negative, non-numeric and
+ * `Infinity` land in the same place for the same reason. The server keeps its
+ * default and stays boring.
+ */
+export function positiveEnvDuration(
+  env: EnvLike,
+  current: string,
+  unitMs: number,
+): number | undefined {
+  const raw = Number(readRenamedEnv(env, current) ?? '');
+  return Number.isFinite(raw) && raw > 0 ? raw * unitMs : undefined;
+}
