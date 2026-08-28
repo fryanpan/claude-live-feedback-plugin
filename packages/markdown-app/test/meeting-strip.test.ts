@@ -393,6 +393,56 @@ describe('the strip when no words are coming', () => {
   });
 });
 
+describe('the strip across stop and start', () => {
+  it('a second meeting starts clean: fresh clock, fresh socket, no words from the last one', async () => {
+    const h = mount();
+    h.toggle().click();
+    await settle();
+    const first = h.sockets[0];
+    expect(first).toBeDefined();
+    first?.onopen?.();
+    first?.serve({ type: 'ready', meetingId: 'm-1', startedAt: 0, engine: 'mock' });
+    first?.serve({ type: 'transcript', turn: 0, text: 'old words', final: true });
+    h.clock.at += 65_000;
+    h.tick();
+    expect(h.elapsed()).toBe('01:05');
+    expect(h.caption()).toContain('old words');
+
+    // Stop: the strip settles to rest immediately — Paused, zeroed clock,
+    // no pulse — and the socket is closed, not abandoned.
+    h.toggle().click();
+    expect(h.root.dataset.state).toBe('idle');
+    expect(h.status()).toBe('Paused');
+    expect(h.toggle().textContent).toBe('Start');
+    expect(h.elapsed()).toBe('00:00');
+    expect(h.root.classList.contains('is-live')).toBe(false);
+    expect(first?.closed).toBe(1);
+
+    // A long idle gap must not leak into the next meeting's clock.
+    h.clock.at += 120_000;
+    h.toggle().click();
+    await settle();
+    const second = h.sockets[1];
+    expect(second).toBeDefined();
+    second?.onopen?.();
+    second?.serve({ type: 'ready', meetingId: 'm-2', startedAt: 0, engine: 'mock' });
+    expect(h.root.dataset.state).toBe('recording');
+    expect(h.status()).toBe('REC');
+    // The clock counts THIS meeting only — not the first one, not the gap.
+    expect(h.elapsed()).toBe('00:00');
+    h.clock.at += 5_000;
+    h.tick();
+    expect(h.elapsed()).toBe('00:05');
+    // And the first meeting's words are gone from the caption.
+    expect(h.caption()).not.toContain('old words');
+    second?.serve({ type: 'transcript', turn: 0, text: 'new words', final: false });
+    expect(h.caption()).toContain('new words');
+    // Nothing was sent on the dead socket; the new meeting announced itself
+    // on its own.
+    expect(JSON.parse(String(second?.sent[0]))).toMatchObject({ type: 'start' });
+  });
+});
+
 describe('teardown', () => {
   it('releases the mic and the socket when the doc is navigated away from', async () => {
     const stop = vi.fn();
