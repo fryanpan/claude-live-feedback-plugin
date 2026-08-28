@@ -25,10 +25,13 @@ export const RESEND_COOLDOWN_S = 60;
 /**
  * Where to land after signing in. Same-origin PATHS only: `next` arrives on
  * the URL, and an absolute or scheme-relative value would make the sign-in
- * page an open redirect for whoever composes a link.
+ * page an open redirect for whoever composes a link. The second character
+ * may be neither `/` nor `\` — browsers treat backslashes as forward
+ * slashes when parsing special-scheme URLs, so `/\evil.com` navigates to
+ * `http://evil.com/` exactly like `//evil.com` does.
  */
 export function safeNextPath(raw: string | null | undefined): string {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return '/';
+  if (!raw || !/^\/(?![/\\])/.test(raw)) return '/';
   return raw;
 }
 

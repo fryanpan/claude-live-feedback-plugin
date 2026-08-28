@@ -75,6 +75,9 @@ describe('safeNextPath', () => {
     expect(safeNextPath('')).toBe('/');
     expect(safeNextPath('https://evil.example.com/')).toBe('/');
     expect(safeNextPath('//evil.example.com')).toBe('/');
+    // Browsers treat backslashes as forward slashes when parsing
+    // special-scheme URLs, so /\evil.com resolves to http://evil.com/.
+    expect(safeNextPath('/\\evil.example.com')).toBe('/');
     expect(safeNextPath('javascript:alert(1)')).toBe('/');
   });
 });
