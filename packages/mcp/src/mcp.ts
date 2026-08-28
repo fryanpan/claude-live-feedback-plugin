@@ -46,7 +46,7 @@ import {
  *
  * env:
  *   CW_BASE_URL    — optional override; usually discovery handles it
- *   CW_AGENT_NAME  — this agent's display name (e.g. "Quick Build");
+ *   CW_AGENT_NAME  — this agent's display name, as a person would say it;
  *                          wins over CW_AUTHOR, which the plugin's
  *                          .mcp.json pins to `agent` for every peer
  *   CW_AUTHOR      — fallback author key/name (default: agent)
