@@ -77,20 +77,20 @@ afterEach(() => {
 describe('the sign-in offer', () => {
   it('does NOT exist without auth-offer — the production default', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-off' });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-off' });
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeNull();
   });
 
   it('exists on an embed that opted in', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-on', authOffer: true });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-on', authOffer: true });
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
   });
 
   it('reads the auth-offer attribute in the declarative embed', async () => {
     await importWidget();
     const host = document.createElement('claude-feedback-widget');
-    host.setAttribute('doc-id', 'w-auth-attr');
+    host.setAttribute('doc-id', 'doc-auth-attr');
     host.setAttribute('auth-offer', '');
     document.body.appendChild(host);
     expect((host as HTMLElement).shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
@@ -105,7 +105,7 @@ describe('the popup handshake', () => {
       opened.push(String(url));
       return {} as Window;
     };
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-popup', authOffer: true });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-popup', authOffer: true });
     (el.shadowRoot!.querySelector('.auth-signin') as HTMLButtonElement).click();
     expect(opened.length).toBe(1);
     const url = new URL(opened[0] as string);
@@ -118,7 +118,7 @@ describe('the popup handshake', () => {
     const mod = await importWidget();
     const popup = {} as Window;
     (window as unknown as { open: unknown }).open = () => popup;
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-msg', authOffer: true });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-msg', authOffer: true });
     (el.shadowRoot!.querySelector('.auth-signin') as HTMLButtonElement).click();
 
     const user = { id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
@@ -162,7 +162,7 @@ describe('posting with a token', () => {
         : new Response(JSON.stringify({ ok: true }), {
             headers: { 'content-type': 'application/json' },
           });
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-post', authOffer: true });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-post', authOffer: true });
     await flush();
     fetchCalls = [];
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
@@ -199,7 +199,7 @@ describe('posting with a token', () => {
             headers: { 'content-type': 'application/json' },
           });
     };
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-401', authOffer: true });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-401', authOffer: true });
     await flush();
     fetchCalls = [];
     // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
@@ -241,7 +241,7 @@ describe('a stored token is validated on load', () => {
         : new Response(JSON.stringify({ ok: true }), {
             headers: { 'content-type': 'application/json' },
           });
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-check', authOffer: true });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-check', authOffer: true });
     await flush();
     const probe = fetchCalls.find((c) => c.url.includes('/api/auth/widget-session'));
     expect(probe).toBeTruthy();
@@ -258,7 +258,7 @@ describe('a stored token is validated on load', () => {
         : new Response(JSON.stringify({ ok: true }), {
             headers: { 'content-type': 'application/json' },
           });
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-dead', authOffer: true });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-dead', authOffer: true });
     await flush();
     expect(localStorage.getItem('cfw:authToken')).toBeNull();
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();
@@ -276,7 +276,7 @@ describe('a stored token is validated on load', () => {
       JSON.stringify({ id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' }),
     );
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-auth-silent' });
+    const el = mod.FeedbackWidget.init({ docId: 'doc-auth-silent' });
     await flush();
     expect(fetchCalls.filter((c) => c.url.includes('/api/auth/')).length).toBe(0);
     // And the stored identity is not adopted either: no offer, no sign-in.
