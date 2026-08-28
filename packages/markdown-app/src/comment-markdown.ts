@@ -13,12 +13,19 @@
  * Plus one convenience: a BARE workspace URL (a pasted board / task / doc /
  * mockup address — see `parseWorkspaceLink` in @feedback/core) becomes a link
  * whose text is the resource's title once `link-titles.ts` has resolved it,
- * and the raw URL until then. Display-only: the stored comment keeps the raw
- * URL. An explicit [label](url) is untouched — the author chose that text —
- * and non-workspace URLs stay plain text.
+ * and the raw URL until then — plus a STATUS CHIP when the target is a task
+ * or goal. Display-only: the stored comment keeps the raw URL. An explicit
+ * [label](url) keeps the author's text but a workspace target still earns the
+ * chip (`data-ws-custom` is how hydration knows not to touch the words); and
+ * non-workspace URLs stay plain text.
  */
 import { parseWorkspaceLink } from '@feedback/core';
-import { cachedLinkTitle, scheduleLinkTitleHydration } from './link-titles.ts';
+import {
+  cachedLinkStatus,
+  cachedLinkTitle,
+  scheduleLinkTitleHydration,
+  statusChipLabel,
+} from './link-titles.ts';
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (ch) =>
@@ -58,10 +65,21 @@ function inline(escaped: string): string {
   out = out.replace(/(^|[^_\w])_([^_\s][^_]*?)_/g, '$1<em>$2</em>');
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, label: string, rawUrl: string) => {
     // The URL text was HTML-escaped; unescape &amp; for parsing, then re-escape.
-    const href = safeHref(rawUrl.replace(/&amp;/g, '&'));
-    return href
-      ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`
-      : m;
+    const url = rawUrl.replace(/&amp;/g, '&');
+    const href = safeHref(url);
+    if (!href) return m;
+    const base = `href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"`;
+    // A workspace target keeps the author's label but is still marked, so a
+    // task/goal link can wear its status chip once hydration answers. Same
+    // origin rule as the bare-URL pass — a foreign lookalike stays unmarked.
+    if (!isSameOriginWorkspaceUrl(url) || !parseWorkspaceLink(url))
+      return `<a ${base}>${label}</a>`;
+    const status = cachedLinkStatus(url);
+    if (status === undefined) scheduleLinkTitleHydration();
+    const attrs =
+      `${base} class="ws-link" data-ws-link="${escapeHtml(url)}" data-ws-custom=""` +
+      `${status === undefined ? ' data-ws-pending=""' : ''}`;
+    return `<a ${attrs}>${label}${status ? statusChipHtml(status) : ''}</a>`;
   });
   out = linkifyWorkspaceUrls(out);
   return out;
@@ -91,6 +109,13 @@ function isSameOriginWorkspaceUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** The chip a task/goal link wears, built for the escaped-HTML string path.
+ *  The status is server data, not markup — escaped into both the class and
+ *  the words. */
+function statusChipHtml(status: string): string {
+  return `<span class="ws-status-chip ws-chip-${escapeHtml(status)}">${escapeHtml(statusChipLabel(status))}</span>`;
 }
 
 /** Trailing characters that read as punctuation AFTER a pasted URL, entity
@@ -134,13 +159,14 @@ function linkifyWorkspaceUrls(html: string): string {
       const url = trimmed.replace(/&amp;/g, '&');
       if (!isSameOriginWorkspaceUrl(url) || !parseWorkspaceLink(url)) return m;
       const title = cachedLinkTitle(url);
+      const status = cachedLinkStatus(url);
       if (title === undefined) sawPending = true;
       const attrs =
         `href="${escapeHtml(url)}" class="ws-link" data-ws-link="${escapeHtml(url)}"` +
         `${title === undefined ? ' data-ws-pending=""' : ''} target="_blank" rel="noopener noreferrer"`;
       // Title text via escapeHtml (server data is not markup); the raw-URL
       // fallback is `trimmed`, which is already escaped text.
-      return `<a ${attrs}>${title ? escapeHtml(title) : trimmed}</a>${tail}`;
+      return `<a ${attrs}>${title ? escapeHtml(title) : trimmed}${status ? statusChipHtml(status) : ''}</a>${tail}`;
     });
   });
   if (sawPending) scheduleLinkTitleHydration();

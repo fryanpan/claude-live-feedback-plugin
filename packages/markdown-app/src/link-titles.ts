@@ -1,36 +1,76 @@
 /**
- * Resolve pasted workspace URLs to display titles — the async half of the
- * "a raw link reads as its title" feature.
+ * Resolve pasted workspace URLs to display titles and status chips — the
+ * async half of the "a raw link reads as its title" feature.
  *
  * The renderer (`comment-markdown.ts`) stays synchronous: it emits an anchor
- * whose visible text is the raw URL, marked `data-ws-link` (+
- * `data-ws-pending` until resolved), and calls `scheduleLinkTitleHydration`.
- * A beat later this module gathers every pending anchor in the document into
- * route-sized `POST /api/links/titles` batches, caches the answers, and swaps each anchor's
- * TEXT for its title. The href — and the stored comment — keep the raw URL:
- * conversion is display-only, so it stays correct when a title changes and
- * never rewrites user content.
+ * whose visible text is the raw URL (or the author's own label, marked
+ * `data-ws-custom`), marked `data-ws-link` (+ `data-ws-pending` until
+ * resolved), and calls `scheduleLinkTitleHydration`. A beat later this module
+ * gathers every pending anchor in the document into route-sized
+ * `POST /api/links/titles` batches, caches the answers, swaps each bare
+ * anchor's TEXT for its title, and appends a status chip when the target is a
+ * task or goal (a custom label keeps its words and still gets the chip). The
+ * href — and the stored comment — keep the raw URL: conversion is
+ * display-only, so it stays correct when a title changes and never rewrites
+ * user content.
  *
  * Failure is always the raw URL: an unknown id caches as null and renders as
  * itself; a failed lookup leaves the anchors pending, so a later render
  * retries. Nothing here ever throws into a render path.
  */
 
-const cache = new Map<string, string | null>();
+/** What one URL resolved to. `status` is null when the target is not a
+ *  task/goal — the "no chip" answer, distinct from "never asked". */
+interface LinkInfo {
+  title: string | null;
+  status: string | null;
+}
+
+const cache = new Map<string, LinkInfo>();
 
 /** The cached title for a URL: a string when known, null when the server said
  *  "not resolvable", undefined when never asked. */
 export function cachedLinkTitle(url: string): string | null | undefined {
-  return cache.get(url);
+  return cache.has(url) ? (cache.get(url)?.title ?? null) : undefined;
 }
 
-/** Seed the cache (tests, or a caller that already holds the title). */
-export function primeLinkTitle(url: string, title: string | null): void {
-  cache.set(url, title);
+/** The cached status for a URL — same undefined/null contract as the title. */
+export function cachedLinkStatus(url: string): string | null | undefined {
+  return cache.has(url) ? (cache.get(url)?.status ?? null) : undefined;
+}
+
+/** Seed the cache (tests, or a caller that already holds the answer). */
+export function primeLinkTitle(
+  url: string,
+  title: string | null,
+  status: string | null = null,
+): void {
+  cache.set(url, { title, status });
 }
 
 export function _resetLinkTitlesForTest(): void {
   cache.clear();
+}
+
+/** Chip words, mirroring hub-model's STATUS_LABEL — copied rather than
+ *  imported so the doc page's renderer does not pull the hub module in.
+ *  An unknown status renders as its raw string: not nice, but TRUE. */
+const STATUS_CHIP_LABEL: Record<string, string> = {
+  triage: 'Triage',
+  todo: 'To do',
+  'in-progress': 'In progress',
+  done: 'Done',
+};
+
+export function statusChipLabel(status: string): string {
+  return STATUS_CHIP_LABEL[status] ?? status;
+}
+
+function statusChipEl(status: string): HTMLSpanElement {
+  const chip = document.createElement('span');
+  chip.className = `ws-status-chip ws-chip-${status}`;
+  chip.textContent = statusChipLabel(status);
+  return chip;
 }
 
 /** How many URLs one lookup carries — mirrors the route's own cap. */
@@ -66,18 +106,25 @@ export async function hydrateLinkTitles(
         body: JSON.stringify({ urls: chunk }),
       });
       if (!res.ok) break; // leave the rest pending — a later render retries
-      const data = (await res.json()) as { titles?: Record<string, string | null> };
-      for (const u of chunk) cache.set(u, data.titles?.[u] ?? null);
+      const data = (await res.json()) as {
+        titles?: Record<string, string | null>;
+        statuses?: Record<string, string>;
+      };
+      for (const u of chunk)
+        cache.set(u, { title: data.titles?.[u] ?? null, status: data.statuses?.[u] ?? null });
     } catch {
       break; // network failure: raw URLs stay visible, retry later
     }
   }
   for (const a of anchors) {
     const url = a.getAttribute('data-ws-link') ?? '';
-    const title = cache.get(url);
-    if (title === undefined) continue; // not in this batch (over the cap)
+    const info = cache.get(url);
+    if (info === undefined) continue; // not in this batch (over the cap)
     // textContent, never innerHTML — the title is server data, not markup.
-    if (title) a.textContent = title;
+    // A custom label (`data-ws-custom`) is the author's text and stays.
+    if (info.title && !a.hasAttribute('data-ws-custom')) a.textContent = info.title;
+    a.querySelector('.ws-status-chip')?.remove();
+    if (info.status) a.append(statusChipEl(info.status));
     a.removeAttribute('data-ws-pending');
   }
 }
@@ -97,4 +144,29 @@ export function scheduleLinkTitleHydration(): void {
     scheduled = false;
     void hydrateLinkTitles(document);
   }, 0);
+}
+
+/**
+ * A task somewhere changed status: forget every cached status and mark the
+ * chipped anchors pending again, so the next hydration pass re-asks. Wired to
+ * the hub's `task.transitioned` SSE event — the chip's freshness rides the
+ * same push every other REST-fed region refreshes on. Whole-cache on purpose:
+ * the event does not say which URL the row was pasted under, and the refetch
+ * is one debounced batch.
+ */
+export function staleTaskLinkStatuses(root: ParentNode | null = null): void {
+  const staleUrls = new Set<string>();
+  for (const [url, info] of cache) {
+    if (info.status) {
+      staleUrls.add(url);
+      cache.delete(url);
+    }
+  }
+  if (staleUrls.size === 0) return;
+  const scope = root ?? (typeof document === 'undefined' ? null : document);
+  if (!scope) return;
+  for (const a of scope.querySelectorAll<HTMLAnchorElement>('a[data-ws-link]')) {
+    if (staleUrls.has(a.getAttribute('data-ws-link') ?? '')) a.setAttribute('data-ws-pending', '');
+  }
+  scheduleLinkTitleHydration();
 }

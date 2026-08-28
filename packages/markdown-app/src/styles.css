@@ -6340,6 +6340,40 @@ body.threads-resizing {
 .cm-h:first-child {
   margin-top: 0;
 }
+/* Status chip on a workspace task/goal link (comment-markdown + link-titles).
+   Unscoped for the same reason as `.cm-h`: stamped by that one renderer,
+   read wherever its output lands — a thread body, a hub card, a task detail
+   panel. Colours are the board's status vocabulary (`.hub-status-mark-*`):
+   triage dashed yellow, in-progress accent, done green, todo quiet. */
+.ws-status-chip {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 6px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  vertical-align: 0.1em;
+  text-decoration: none;
+}
+.ws-chip-triage {
+  border-style: dashed;
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+.ws-chip-in-progress {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ws-chip-done {
+  border-color: var(--green);
+  color: var(--green);
+}
 .thread .body li {
   margin: 0.1em 0;
 }
