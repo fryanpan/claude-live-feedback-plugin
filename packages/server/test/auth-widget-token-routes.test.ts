@@ -5,7 +5,8 @@
  * The load-bearing security claims each get a test in BOTH directions:
  * a live session's token attributes comments (positive control), and the
  * same token is refused — not silently downgraded — after the session is
- * revoked, whether by logout (denylist) or by the roster watermark.
+ * revoked, whether by logout (denylist) or by the roster watermark, or when
+ * presented from any origin but the one it was minted for.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -115,11 +116,18 @@ async function signInAndMint(
   return { cookie, token: body.token };
 }
 
+/** A token-carrying request as the widget sends it: a cross-origin fetch
+ *  from the dev server, so the browser stamps Origin on it. */
+function bearer(token: string, origin: string | null = DEV_ORIGIN): Record<string, string> {
+  return { authorization: `Bearer ${token}`, ...(origin === null ? {} : { origin }) };
+}
+
 async function postComment(
   base: string,
   dataDir: string,
   docId: string,
   token?: string,
+  origin: string | null = DEV_ORIGIN,
 ): Promise<Response> {
   const file = join(dataDir, `${docId}.md`);
   writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
@@ -133,7 +141,7 @@ async function postComment(
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(token ? bearer(token, origin) : {}),
     },
     body: JSON.stringify({ author: bryan, text: 'this needs more detail', anchor: fakeAnchor }),
   });
@@ -216,7 +224,7 @@ describe('GET /api/auth/widget-session', () => {
     const { base } = boot();
     const { token } = await signInAndMint(base, 'reviewer@example.com');
     const res = await fetch(`${base}/api/auth/widget-session`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: bearer(token),
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
@@ -282,7 +290,7 @@ describe('revocation kills the token', () => {
 
     // Positive control first: the token works while the session lives.
     const alive = await fetch(`${base}/api/auth/widget-session`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: bearer(token),
     });
     expect(((await alive.json()) as { authenticated: boolean }).authenticated).toBe(true);
 
@@ -290,7 +298,7 @@ describe('revocation kills the token', () => {
     expect(out.status).toBe(200);
 
     const dead = await fetch(`${base}/api/auth/widget-session`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: bearer(token),
     });
     expect(dead.status).toBe(401);
     // And a write is refused outright, not attributed to anyone.
@@ -315,9 +323,48 @@ describe('revocation kills the token', () => {
     });
     const base = `http://localhost:${second.port}`;
     const res = await fetch(`${base}/api/auth/widget-session`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: bearer(token),
     });
     expect(res.status).toBe(401);
+  });
+});
+
+describe('the token is bound to the origin it was minted for', () => {
+  // The mint route hands the token to one server-validated page origin, and
+  // every use must come from that page: the browser stamps Origin on each
+  // cross-origin fetch the widget makes, and nothing else can forge it. A
+  // token lifted out of a dev server's localStorage is worthless from curl,
+  // from another origin, or from an opaque (`null`) one.
+  it('accepts the token from the origin it was minted for (positive control)', async () => {
+    const { base, dataDir } = boot();
+    const { token } = await signInAndMint(base, 'reviewer@example.com');
+    const probe = await fetch(`${base}/api/auth/widget-session`, {
+      headers: bearer(token, DEV_ORIGIN),
+    });
+    expect(probe.status).toBe(200);
+    expect(((await probe.json()) as { authenticated: boolean }).authenticated).toBe(true);
+    const write = await postComment(base, dataDir, 'bound-doc', token, DEV_ORIGIN);
+    expect(write.status).toBe(200);
+    expect(commentRows(dataDir)[0]?.actorId).toBe(emailIdentityId('reviewer@example.com'));
+  });
+
+  it.each([
+    ['another allowed origin', 'http://localhost:3000'],
+    ['no Origin header at all (curl, a server-side replay)', null],
+    ['an opaque origin', 'null'],
+  ])('refuses the token presented from %s', async (_label, origin) => {
+    const { base, dataDir } = boot();
+    const { token } = await signInAndMint(base, 'reviewer@example.com');
+    const probe = await fetch(`${base}/api/auth/widget-session`, {
+      headers: bearer(token, origin),
+    });
+    expect(probe.status).toBe(401);
+    expect(await probe.json()).toEqual({ error: 'widget_token_invalid' });
+    const write = await postComment(base, dataDir, 'unbound-doc', token, origin);
+    // An opaque-origin write is refused one wall earlier, by the browser-
+    // origin policy (403); the probe above is what pins the token gate.
+    expect([401, 403]).toContain(write.status);
+    expect(commentRows(dataDir).length).toBe(0);
   });
 });
 
@@ -326,7 +373,7 @@ describe('the token is narrower than the session', () => {
     const { base } = boot();
     const { token } = await signInAndMint(base, 'reviewer@example.com');
     const res = await fetch(`${base}/api/auth/session`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: bearer(token),
     });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { authenticated: boolean }).authenticated).toBe(false);

@@ -24,6 +24,13 @@
  *    the widget-session probe, nothing else: it never sets a cookie, never
  *    satisfies a share gate, and never makes `/api/auth/session` answer
  *    "signed in".
+ * 4. **It is bound to one page origin.** The mint route validates the
+ *    recipient origin and signs it into the token; the request gate then
+ *    accepts the token only from a request whose `Origin` header names
+ *    that origin. Every use the widget makes is a cross-origin fetch, so
+ *    the browser stamps that header and nothing on the page can forge it —
+ *    while a token lifted out of the dev server's localStorage is worth
+ *    nothing from curl, from another origin, or from an opaque one.
  *
  * Same construction as session.ts: HMAC over a dotted payload, key derived
  * from the shared cookie key under its own domain string so neither format
@@ -46,6 +53,8 @@ export interface WidgetTokenClaims {
   sessionIssuedAt: number;
   /** ms epoch. Unlike the session, the token always expires. */
   expiresAt: number;
+  /** The one page origin this token may be presented from. */
+  origin: string;
 }
 
 /** The widget-token key, derived from the shared cookie key. */
@@ -61,6 +70,7 @@ export function widgetTokenKey(cookieKey: string): string {
  */
 export function mintWidgetToken(
   session: SessionClaims,
+  origin: string,
   key: string,
   now: number = Date.now(),
 ): string | null {
@@ -71,6 +81,8 @@ export function mintWidgetToken(
     session.sessionId,
     session.issuedAt,
     now + WIDGET_TOKEN_TTL_MS,
+    // base64url: an origin is full of dots, and the payload is dot-split.
+    Buffer.from(origin).toString('base64url'),
   ].join('.');
   return `${payload}.${mac(payload, key)}`;
 }
@@ -96,14 +108,16 @@ export function verifyWidgetToken(
   if (!timingSafeEqual(a, b)) return null;
 
   const parts = payload.split('.');
-  if (parts.length !== 5) return null;
-  const [version, identityId, sessionId, issuedRaw, expiresRaw] = parts;
-  if (version !== VERSION || !identityId || !sessionId) return null;
+  if (parts.length !== 6) return null;
+  const [version, identityId, sessionId, issuedRaw, expiresRaw, originRaw] = parts;
+  if (version !== VERSION || !identityId || !sessionId || !originRaw) return null;
   const sessionIssuedAt = Number(issuedRaw);
   const expiresAt = Number(expiresRaw);
   if (!Number.isSafeInteger(sessionIssuedAt) || !Number.isSafeInteger(expiresAt)) return null;
   if (expiresAt <= now) return null;
-  return { identityId, sessionId, sessionIssuedAt, expiresAt };
+  const origin = Buffer.from(originRaw, 'base64url').toString();
+  if (!origin) return null;
+  return { identityId, sessionId, sessionIssuedAt, expiresAt, origin };
 }
 
 function mac(payload: string, key: string): string {

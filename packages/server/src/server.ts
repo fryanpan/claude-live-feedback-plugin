@@ -2886,11 +2886,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * logout writes, roster status, the `sessionsValidFrom` watermark —
    * applies to the token on every use. Remove any of these and a revoked
    * session keeps commenting through its token.
+   *
+   * `presentedOrigin` is the request's `Origin` header. The token was
+   * minted for exactly one page origin (signed in), and only a request the
+   * browser stamped with that origin may use it: absent (curl, a server-
+   * side replay), `null` (an opaque origin), or any other origin is a 401.
+   * The widget's every use is a cross-origin fetch, which always carries
+   * the header — this costs the real caller nothing and a thief everything.
    */
-  const widgetTokenIdentityFor = (raw: string): IdentityRecord | null => {
+  const widgetTokenIdentityFor = (
+    raw: string,
+    presentedOrigin: string | null,
+  ): IdentityRecord | null => {
     if (sessionRevocations.failedClosed()) return null;
     const claims = verifyWidgetToken(raw, widgetTokenKey());
     if (!claims) return null;
+    if (presentedOrigin === null || presentedOrigin !== claims.origin) return null;
     if (sessionRevocations.isRevoked(claims.sessionId)) return null;
     const rec = identities.get(claims.identityId);
     if (!rec || rec.status !== 'active') return null;
@@ -3383,7 +3394,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         {
           const rawWidgetToken = widgetBearerOf(req);
           if (rawWidgetToken !== null) {
-            widgetIdentity = widgetTokenIdentityFor(rawWidgetToken);
+            widgetIdentity = widgetTokenIdentityFor(rawWidgetToken, req.headers.get('origin'));
             if (widgetIdentity === null) return j(401, { error: 'widget_token_invalid' });
           }
         }
@@ -3427,7 +3438,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             readCookie(req.headers.get('cookie'), SESSION_COOKIE),
             emailSessionKey(),
           );
-          const token = claims ? mintWidgetToken(claims, widgetTokenKey()) : null;
+          // Signed into the token: the gate will accept it from `target` alone.
+          const token = claims ? mintWidgetToken(claims, target, widgetTokenKey()) : null;
           if (token === null) {
             // A surviving v1 cookie: no session id, so a token tied to it
             // could not die with a logout. The daily sliding refresh
