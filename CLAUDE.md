@@ -11,6 +11,16 @@ with host sites); agent integration is MCP tools + HTTP webhooks. TypeScript
 strict mode. Widget bundle size is a hard constraint — measure and report it
 on every PR that touches widget code.
 
+## Architecture summaries — linked, never inlined
+
+Per-subsystem summaries live in [docs/architecture/](docs/architecture/):
+[meeting-assistant](docs/architecture/meeting-assistant.md) (live
+transcription + pause-driven notes) and
+[stall-detection](docs/architecture/stall-detection.md) (board wakes and
+their economics). Read the relevant one before touching its subsystem.
+Deliberately not `@`-imported — they cost no context until needed; keep it
+that way and add new subsystem docs to the list here.
+
 ## Conventions
 
 - Lead with goals, not implementation, in top-level docs.
