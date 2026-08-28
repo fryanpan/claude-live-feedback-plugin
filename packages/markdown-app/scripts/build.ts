@@ -18,7 +18,7 @@ const isWatch = process.argv.includes('--watch');
  * invisible: the id would not move, and "a new version is available" would
  * stay silent for the one file the browser re-fetches on its own schedule.
  */
-const HASHED = ['app.js', 'hub.js', 'sw.js', 'styles.css', 'tokens.css', 'index.html'];
+const HASHED = ['app.js', 'hub.js', 'signin.js', 'sw.js', 'styles.css', 'tokens.css', 'index.html'];
 
 /**
  * Builds both entries plus the copied assets. Runs TWICE per build: once with
@@ -93,6 +93,27 @@ async function emit(buildId: string): Promise<boolean> {
   if (!hubResult.success) {
     console.error('hub build failed:');
     for (const m of hubResult.logs) console.error(m);
+    if (!isWatch) process.exit(1);
+    return false;
+  }
+
+  // The sign-in page: its own entry (served at /app/signin.js by the shell
+  // the server renders for /signin). Splitting off — the page is a card and
+  // three fetches; there is nothing worth a second request.
+  const signinResult = await Bun.build({
+    entrypoints: [join(pkgRoot, 'src', 'signin', 'signin-app.ts')],
+    outdir: dist,
+    target: 'browser',
+    format: 'esm',
+    splitting: false,
+    sourcemap: 'external',
+    define,
+    naming: { entry: 'signin.js', chunk: '[name]-[hash].js', asset: '[name].[ext]' },
+    minify: process.env.NODE_ENV !== 'dev' && !isWatch,
+  });
+  if (!signinResult.success) {
+    console.error('signin build failed:');
+    for (const m of signinResult.logs) console.error(m);
     if (!isWatch) process.exit(1);
     return false;
   }

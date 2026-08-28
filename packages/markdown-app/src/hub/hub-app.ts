@@ -101,6 +101,7 @@ import {
 } from './hub-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
 import { mountIslandProbe } from './island-probe.tsx';
+import { wireMeMenu } from './me-menu.ts';
 import {
   driftData,
   mountDriftIsland,
@@ -335,8 +336,9 @@ function buildShell(root: HTMLElement, name: string): void {
         <div id="hub-people" class="hub-presence hub-people hidden"></div>
         <button type="button" id="hub-share" class="hub-icon-btn" title="Share workspace" aria-label="Share workspace">${NAV_ICONS.share}</button>
         <button type="button" id="hub-settings" class="hub-icon-btn" title="Workspace settings" aria-label="Workspace settings" aria-expanded="false">${NAV_ICONS.settings}<span id="hub-settings-alarm" class="hub-alarm-dot hidden" aria-hidden="true"></span></button>
-        <span id="hub-me" class="hub-me" title="Signed in"></span>
+        <button type="button" id="hub-me" class="hub-me" title="Signed in" aria-haspopup="true" aria-expanded="false"></button>
       </div>
+      <div id="hub-me-menu" class="hub-me-menu hidden" role="region" aria-label="Your identity"></div>
       <div id="hub-settings-panel" class="hub-settings-panel hidden" role="region" aria-label="Workspace settings">
         <div id="hub-drift" class="hub-presence hidden"></div>
         <div id="hub-lead" class="hub-lead"></div>
@@ -1688,10 +1690,13 @@ async function main(): Promise<void> {
   function renderMe(): void {
     const me = el('hub-me');
     me.textContent = initialsOf(user.name);
-    me.setAttribute('title', `Signed in as ${user.name}`);
-    me.setAttribute('aria-label', `Signed in as ${user.name}`);
+    me.setAttribute('title', `You: ${user.name}`);
+    me.setAttribute('aria-label', `You: ${user.name}`);
     if (user.color) me.style.background = user.color;
   }
+  // The chip's menu — sign in / sign out. Wired once (buildShell above was
+  // the last write of this subtree); renderMe only repaints the chip face.
+  wireMeMenu({ button: el('hub-me'), menu: el('hub-me-menu'), localName: user.name });
 
   function renderSettingsPanel(): void {
     el('hub-settings-panel').classList.toggle('hidden', !state.settingsOpen);
