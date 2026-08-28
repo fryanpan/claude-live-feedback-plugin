@@ -1,4 +1,10 @@
 import { type Thread, threadRenderKey, threadSummary } from '@feedback/core';
+import {
+  keptComposerFocus,
+  keptScrollTops,
+  restoreComposerFocus,
+  restoreScrollTops,
+} from './composer-keep.ts';
 import { threadDecision } from './long-thread.ts';
 import { isFoldingTap, sizeThreadSlots, syncFaceVisibility } from './thread-morph.ts';
 
@@ -215,7 +221,13 @@ export function mountThreadModal(opts: ThreadModalOpts): ThreadModalHandle {
     // optimisation: a rebuild while somebody is typing loses the caret, and
     // the column rebuilds on every editor transaction in the doc behind this.
     if (threadRenderKey(t) === renderedKey) return;
+    // A reply landing in THIS thread does rebuild the card — carry the caret
+    // and the body's scroll across it, same contract as the drawer's render.
+    const keptFocus = keptComposerFocus(bodyEl);
+    const keptScroll = keptScrollTops(bodyEl);
     paint(t, draft());
+    if (keptFocus) restoreComposerFocus(bodyEl, keptFocus);
+    restoreScrollTops(keptScroll);
   }
 
   scope.listen(root.querySelector('.thread-modal-close') as HTMLElement, 'click', close);

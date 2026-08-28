@@ -1,5 +1,6 @@
 import { type Thread, formatTime, suggestOps, threadRenderKey } from '@feedback/core';
 import type { EditorView } from '@tiptap/pm/view';
+import { keptComposerFocus, restoreComposerFocus } from '../composer-keep.ts';
 import { COMPOSER_MOUNTED_EVENT } from '../md-composer.ts';
 import type { MountScope } from '../mount-scope.ts';
 import { type ReviewChrome, showToast } from '../review-chrome.ts';
@@ -654,6 +655,10 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
       const ta = r.el.querySelector<HTMLTextAreaElement>('textarea');
       if (ta?.value) pendingReplies.set(r.thread.id, ta.value);
     }
+    // …and the caret with them: a peer's reply landing on ANY thread rebuilds
+    // every balloon, and losing focus mid-word dismisses the iPad keyboard
+    // and yanks the viewport with it.
+    const keptFocus = keptComposerFocus(marginEl);
 
     marginEl.textContent = '';
     const nextDel: RenderedDelBalloon[] = delGroups.map((group, i) => {
@@ -682,6 +687,7 @@ export function mountMarkupMargin(opts: MarkupMarginOpts): MarkupMarginHandle {
     // balloons are in the document, BEFORE layoutBalloons reads `offsetHeight`
     // off the cards, or every comment balloon stacks as a header and a footer.
     sizeThreadSlots(marginEl);
+    if (keptFocus) restoreComposerFocus(marginEl, keptFocus);
   }
 
   /** Y of a client-rect top in the editor's scrolled content space. */
