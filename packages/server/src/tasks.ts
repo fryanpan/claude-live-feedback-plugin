@@ -66,6 +66,35 @@ export type Ref =
  *  do. Derived from nothing: keep it in step with the union above. */
 export const REF_KINDS = ['doc', 'thread', 'task', 'diff', 'url'] as const;
 
+/**
+ * What the done-artifact check concluded about one link (artifact-check.ts).
+ *
+ * Four verdicts, and the split matters: `missing` is positive evidence the
+ * promised artifact is not there (a 404 on the PR, no doc with that id) and
+ * is the only one that makes noise; `unverified` is absence of evidence (rate
+ * limit, network failure, timeout) and stays quiet, because an advisory check
+ * that cried on every flaky lookup would train everyone to ignore it.
+ * `not-checkable` records that a link was seen and is not a kind this check
+ * knows how to verify — recorded rather than skipped, so a reader of the
+ * result can tell "unchecked" from "unnoticed".
+ */
+export type ArtifactVerdict = 'verified' | 'missing' | 'unverified' | 'not-checkable';
+
+export interface ArtifactLinkCheck {
+  ref: Ref;
+  verdict: ArtifactVerdict;
+  /** The human-readable half: a verified PR's state (open/closed/merged),
+   *  or why a verdict degraded ("GitHub answered 403"). */
+  detail?: string;
+}
+
+/** The whole check as recorded on the task — one row per link, stamped when
+ *  the check ran (which is after the done transition committed, not at it). */
+export interface ArtifactCheck {
+  ts: number;
+  links: ArtifactLinkCheck[];
+}
+
 /** Schemes a `url` ref may carry. A ref is rendered as a clickable chip, so
  *  the value becomes an href — `javascript:` and `data:` are script injection
  *  and `file:` reads the host. Every other kind is an internal id and cannot
@@ -568,6 +597,13 @@ export interface Task {
    *  reason about a removal that has been undone is a claim nobody makes. */
   archiveReason?: string;
   links: Ref[];
+  /**
+   * What the done-artifact check found in this row's `links` the last time it
+   * moved to done. Advisory bookkeeping, written AFTER the transition
+   * committed (`recordArtifactCheck`) — its absence on a done row means the
+   * row had no links or predates the check, never that the transition failed.
+   */
+  artifactCheck?: ArtifactCheck;
   /** The thread/doc this was promoted from. */
   origin?: Ref;
   /**
@@ -4819,6 +4855,29 @@ export class TaskStore {
     task.bodyWrittenAt = Date.now();
     this.scheduleSave(task.workspaceId);
     return true;
+  }
+
+  /**
+   * Record what the done-artifact check concluded about this row's links.
+   *
+   * Deliberately quiet on both clocks: no store event (§3.6's table is
+   * exhaustive by contract, and a subscriber-visible event here would restart
+   * the ready-nudger's idle clock on machine bookkeeping) and no `updatedAt`
+   * bump (the row did not change in any sense a person acts on). The visible
+   * half of a bad verdict is the system comment the checker posts on the
+   * task's discussion, which rides the ordinary thread pipeline. Last write
+   * wins: a row done twice keeps the latest check, which is the one that
+   * matches its current claim.
+   */
+  recordArtifactCheck(
+    taskId: string,
+    result: ArtifactCheck,
+  ): { ok: true; task: Task } | { ok: false; error: 'not-found' } {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    task.artifactCheck = result;
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task };
   }
 
   // ── Cross-references (§3.2 Ref; §3.12 commit 4) ──────────────────────────
