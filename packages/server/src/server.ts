@@ -51,6 +51,7 @@ import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
+import { DispatchRegistry, type WatchFactory, isValidDispatchTaskId } from './dispatch-registry.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import { showFile } from './git-diff.ts';
 import {
@@ -502,6 +503,13 @@ export interface ServerOptions {
    * after a change and do not read it as a rate.
    */
   stallNudgeRepeatMs?: number;
+  /**
+   * How the dispatch registry watches builder worktrees (default: recursive
+   * fs.watch). A test seam for the same reason `stallNudgeQuietMs` is one —
+   * the feature is OS filesystem events a test on CI's Bun-on-Linux cannot
+   * rely on receiving (see dispatch-registry.ts).
+   */
+  dispatchWatchFactory?: WatchFactory;
   /** Absolute path to the built widget dist dir, or null to skip. */
   widgetDistDir?: string | null;
   /** Absolute path to the built markdown-app dist dir. */
@@ -766,6 +774,9 @@ export interface ServerHandle {
   /** Per-agent durable watch sets (agent-watches.ts). Exposed so tests can
    *  read the store the route wrote, not only the route's answer. */
   agentWatches: AgentWatches;
+  /** Open builder dispatches and their worktree watchers
+   *  (dispatch-registry.ts). Exposed for the same reason `agentWatches` is. */
+  dispatches: DispatchRegistry;
   shares: Shares | null;
   /** Hang up every websocket and SSE stream whose share is no longer live.
    *  Runs on a 60s interval; exposed so tests exercise the real sweep. */
@@ -1043,6 +1054,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const agentWatches = new AgentWatches({ dataDir });
   if (agentWatches.loadError) {
     console.error(`[agent-watches] ${agentWatches.loadError}`);
+  }
+
+  // Which builder worktrees are working which tasks — the witness that keeps
+  // the stall loop from waking a lead over a row whose builder is busy in a
+  // checkout the board cannot see. See dispatch-registry.ts.
+  const dispatches = new DispatchRegistry({
+    dataDir,
+    ...(opts.dispatchWatchFactory !== undefined ? { watchFactory: opts.dispatchWatchFactory } : {}),
+  });
+  if (dispatches.loadError) {
+    console.error(`[dispatch] ${dispatches.loadError}`);
   }
 
   // The per-agent unfiled-ask counters the daily chat audit publishes, kept
@@ -1455,6 +1477,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const declaring = pendingDeclaration(thread);
         if (declaring) commentAsks.push({ taskId: row.id, askedAt: declaring.ts });
       }
+      // A registered builder's worktree churn is the row moving, exactly as
+      // a comment is — the builder works in a checkout the board cannot see,
+      // and without this the loop woke leads over its silence (8 of 9 wakes
+      // one night). Merged as max into the same exoneration seam; a closed,
+      // dead, or silent dispatch contributes nothing and the ordinary clock
+      // stands.
+      const dispatchTs = dispatches.activityFor(row.id);
+      if (dispatchTs !== undefined && dispatchTs > newest) newest = dispatchTs;
       if (newest > 0) threadActivity.set(row.id, newest);
     }
     if (threadActivity.size === 0 && commentAsks.length === 0) return first;
@@ -5780,6 +5810,45 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(405, { error: 'method not allowed' });
         }
+        // --- REST: builder dispatches ---
+        // The lead's statement that a builder is working a task in a private
+        // worktree, so the stall loop can read worktree churn as the row
+        // moving. POST registers {taskId, worktreePath} (re-POST replaces);
+        // DELETE /api/dispatches/<taskId> closes on terminal. The registry
+        // validates paths and prunes dispatches whose worktree is gone. See
+        // dispatch-registry.ts.
+        if (pathname === '/api/dispatches') {
+          // Same defense-in-depth posture as the agent-watches route: no
+          // share host reaches here today, and this keeps a later
+          // allowlisting from exposing host filesystem paths to an external
+          // reviewer.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method === 'GET') {
+            return j(200, { dispatches: dispatches.list() });
+          }
+          if (req.method === 'POST') {
+            const body = await safeJson(req);
+            const taskId = body?.taskId;
+            const worktreePath = body?.worktreePath;
+            if (!isValidDispatchTaskId(taskId)) return j(400, { error: 'bad-task-id' });
+            if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
+              return j(400, { error: 'path-not-absolute' });
+            }
+            const res = dispatches.register(taskId, worktreePath);
+            if (!res.ok) return j(400, { error: res.error });
+            return j(200, res);
+          }
+          return j(405, { error: 'method not allowed' });
+        }
+        const dispatchCloseMatch = pathname.match(/^\/api\/dispatches\/([^/]+)$/);
+        if (dispatchCloseMatch) {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method === 'DELETE') {
+            const taskId = decodeURIComponent(dispatchCloseMatch[1] ?? '');
+            return j(200, dispatches.close(taskId));
+          }
+          return j(405, { error: 'method not allowed' });
+        }
         // --- REST: chat-audit counters ---
         // The daily chat audit publishes per-agent unfiled-ask counts here
         // (POST), and any session reads its own back (GET /:agent). The
@@ -7730,6 +7799,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     tasks: taskStore,
     projection: taskProjection,
     agentWatches,
+    dispatches,
     shares,
     sweepDeadShares,
     // Exactly what the interval does, exposed for the same reason
@@ -7757,6 +7827,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // server that is going away.
       readyNudger.stop();
       stallNudger.stop();
+      // Close the worktree watchers with the loop that read them; the
+      // persisted dispatch set survives for the next process to re-arm.
+      dispatches.stop();
       uptimeMonitor.stop();
       // Close the books on any live meeting, so a restart never finds a doc
       // marked as recording by a socket that died with the process.

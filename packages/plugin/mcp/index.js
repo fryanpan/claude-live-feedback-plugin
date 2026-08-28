@@ -14399,7 +14399,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.117";
+var PLUGIN_VERSION = "0.1.118";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15997,6 +15997,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "register_dispatch",
+      description: "Tell the board a builder is working a task in a private git worktree, so the stall loop can read the worktree's file activity as the row moving instead of waking the lead over silence it cannot see. Call it when you spawn a builder; re-registering the same task replaces the old worktree. Close it with close_dispatch when the builder reaches terminal (done or died) — a worktree that is deleted closes its own dispatch.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "The task the builder is working." },
+          worktreePath: {
+            type: "string",
+            description: "Absolute path to the builder's git worktree on this machine."
+          }
+        },
+        required: ["taskId", "worktreePath"]
+      }
+    },
+    {
+      name: "close_dispatch",
+      description: "Close a builder dispatch registered with register_dispatch — the builder reached terminal (done or died), so the task's worktree no longer vouches for it. closed: false means no dispatch was open for that task, which is fine to ignore.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string", description: "The task whose dispatch to close." }
+        },
+        required: ["taskId"]
+      }
+    },
+    {
       name: "request_plugin_refresh",
       description: "Ask this machine to fetch the newest plugin from the marketplace. Call it when a board's settings panel says sessions are running an older bundle. It requests rather than forces — the update rewrites a version-keyed cache, so nothing running is interrupted and each session picks it up at its next restart. changed: false with matching versions means the cache was already current.",
       inputSchema: { type: "object", properties: {} }
@@ -17012,6 +17038,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           auditor: AUTHOR.name,
           entries
         }));
+      }
+      case "register_dispatch": {
+        const { taskId, worktreePath } = a;
+        return ok(await http("POST", "/api/dispatches", { taskId, worktreePath }));
+      }
+      case "close_dispatch": {
+        const { taskId } = a;
+        return ok(await http("DELETE", `/api/dispatches/${encodeURIComponent(taskId)}`));
       }
       case "request_plugin_refresh": {
         return ok(await http("POST", "/api/plugin/refresh"));
