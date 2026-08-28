@@ -78,6 +78,8 @@ import {
   buildLandingModel,
 } from './landing.ts';
 import { linkTitlesFor } from './link-titles.ts';
+import { MeetingRelay } from './meeting-protocol.ts';
+import { MeetingStore } from './meetings.ts';
 import {
   LOOPBACK_HOSTS,
   corsHeadersFor,
@@ -181,6 +183,7 @@ import {
   retiredRefusal,
   taskChip,
 } from './tasks.ts';
+import type { TranscriptionEngine } from './transcribe.ts';
 import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
@@ -606,6 +609,16 @@ export interface ServerOptions {
    */
   voiceComplete?: VoiceComplete;
   /**
+   * Live-meeting transcription engine. **No default**, the same seam rule as
+   * the summarizer and the voice completer above — and with the largest bill
+   * of the three attached, because a streaming session is charged by the
+   * minute for as long as a socket stays open. Omitting it makes
+   * `/audio/<docId>` answer `unavailable` with reason `not_configured`, which
+   * is a state the strip renders rather than a failure. Only `bin.ts`
+   * constructs a real one (`createAssemblyAiEngine`).
+   */
+  transcription?: TranscriptionEngine;
+  /**
    * Liveness-marker interval for the uptime measurement (§3.12 commit 11).
    * The monitor appends `server.tick` lines to every hub workspace's
    * events.jsonl so the gap analysis has density even on an idle board.
@@ -947,6 +960,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const summarizer = opts.summarizer ?? null;
   const pluginRefresher = opts.pluginRefresher ?? null;
   const deployer = opts.deployer ?? null;
+  // Same opt-in seam: no engine here means no socket can start a billed
+  // streaming session. See ServerOptions.transcription.
+  const meetingStore = new MeetingStore(dataDir);
+  const meetingRelay = new MeetingRelay({
+    store: meetingStore,
+    engine: opts.transcription ?? null,
+    // Lifecycle only. The words never touch this hub — see meeting-protocol.
+    broadcast: (docId, payload) => sse.broadcast(docId, payload),
+  });
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
@@ -2733,7 +2755,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
   };
 
-  const server = Bun.serve<{ docId: string }>({
+  // `kind` is what the ONE websocket handler below branches on: Bun routes
+  // every upgraded path into the same `open`/`message`/`close`, so the audio
+  // socket and the editing socket are told apart by what the upgrade
+  // attached. Absent means the editing socket, which is every upgrade that
+  // predates meetings.
+  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' }>({
     port,
     // Explicit because the DEFAULT is what broke the event streams: Bun's is
     // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
@@ -2768,7 +2795,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // table lives in here unchanged.
       async function route(
         req: Request,
-        server: BunServer<{ docId: string }>,
+        server: BunServer<{ docId: string; kind?: 'yjs' | 'audio' }>,
       ): Promise<Response | undefined> {
         const url = new URL(req.url);
         const { pathname } = url;
@@ -3435,6 +3462,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const error = err instanceof Error ? err.message : 'delete_share_failed';
             return j(502, { error });
           }
+        }
+
+        // --- WebSocket upgrade: a doc's live meeting audio ---
+        //
+        // Same guard as `/y/` below and for the same reason: CORS does not
+        // apply to websockets, so without the Origin check any page the user
+        // visits could open a microphone relay against any doc — and this one
+        // spends money while it is open.
+        if (pathname.startsWith('/audio/')) {
+          if (!isAllowedBrowserOrigin(req.headers.get('origin'), policyFor(req))) {
+            return j(403, { error: 'origin_not_allowed' });
+          }
+          const addressed = decodeURIComponent(pathname.slice('/audio/'.length));
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const docId = rooms.get(addressed)?.docId ?? addressed;
+          // Unlike `/y/`, this never conjures a room: a meeting belongs to a
+          // doc that already exists, and auto-creating one here would let a
+          // typo start a billed session against a doc nobody can find.
+          if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+          const upgraded = server.upgrade(req, { data: { docId, kind: 'audio' as const } });
+          if (!upgraded) return new Response('upgrade required', { status: 426 });
+          return undefined;
         }
 
         // --- WebSocket upgrade ---
@@ -6366,6 +6415,45 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // Same redaction as /files — see redactWorkspaceTreeForVisitor.
           return j(200, visitor ? redactWorkspaceTreeForVisitor(tree, visitor.workspaceId) : tree);
         }
+        // --- A doc's meetings (read-only) ---
+        //
+        // Ahead of the `/api/docs/<id>/...` catch-all below, which would
+        // otherwise swallow both. Deliberately NOT gated on the doc's room
+        // existing: a transcript outlives the meeting and the notes agent
+        // that reads it arrives afterwards, sometimes after the room has been
+        // evicted. There is no write and no delete here — a transcript is the
+        // least reconstructible thing this server holds, because the audio is
+        // already gone.
+        const meetingsMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings$/);
+        if (meetingsMatch && req.method === 'GET') {
+          const addressed = decodeURIComponent(meetingsMatch[1] ?? '');
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          // Same canonicalization the `/audio/` upgrade does, and for the same
+          // reason: a doc is reachable by a readable alias, and the meetings
+          // are filed under its own id. Reading by alias must find them.
+          const docId = rooms.get(addressed)?.docId ?? addressed;
+          const meetings = meetingStore.list(docId);
+          const live = meetingStore.active(docId);
+          return j(200, {
+            docId,
+            meetings,
+            ...(live ? { recording: live.meetingId } : {}),
+          });
+        }
+        const meetingMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)$/);
+        if (meetingMatch && req.method === 'GET') {
+          const addressed = decodeURIComponent(meetingMatch[1] ?? '');
+          const meetingId = decodeURIComponent(meetingMatch[2] ?? '');
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const docId = rooms.get(addressed)?.docId ?? addressed;
+          const record = meetingStore.list(docId).find((m) => m.meetingId === meetingId);
+          if (!record) return j(404, { error: 'meeting not found' });
+          // `turns` stays the COUNT the index recorded; the settled lines are
+          // their own field, so a caller reading one is never reading the
+          // other by accident.
+          return j(200, { ...record, transcript: meetingStore.transcript(docId, meetingId) });
+        }
+
         const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
         if (docMatch) {
           const addressed = decodeURIComponent(docMatch[1] ?? '');
@@ -7335,6 +7423,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     },
     websocket: {
       open(ws) {
+        if (ws.data.kind === 'audio') {
+          meetingRelay.onOpen(ws);
+          return;
+        }
         const typed = ws as unknown as FeedbackWs;
         const room = rooms.get(typed.data.docId);
         if (!room) {
@@ -7344,6 +7436,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         onOpen(room, typed);
       },
       message(ws, message) {
+        if (ws.data.kind === 'audio') {
+          if (typeof message === 'string') {
+            meetingRelay.onText(ws, message);
+            return;
+          }
+          const buf = message as unknown as ArrayBufferView;
+          // COPIED, unlike the yjs path below: audio can be held in the
+          // relay's pending queue across the handshake, and Bun is free to
+          // reuse the receive buffer the moment this returns.
+          meetingRelay.onAudio(
+            ws,
+            new Uint8Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)),
+          );
+          return;
+        }
         const typed = ws as unknown as FeedbackWs;
         const room = rooms.get(typed.data.docId);
         if (!room) return;
@@ -7358,6 +7465,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         onMessage(room, typed, data);
       },
       close(ws) {
+        if (ws.data.kind === 'audio') {
+          meetingRelay.onClose(ws);
+          return;
+        }
         onClose(ws as unknown as FeedbackWs);
       },
     },
@@ -7585,6 +7696,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       readyNudger.stop();
       stallNudger.stop();
       uptimeMonitor.stop();
+      // Close the books on any live meeting, so a restart never finds a doc
+      // marked as recording by a socket that died with the process.
+      meetingRelay.dispose();
       // Flush pending body snapshots into the store BEFORE the store's own
       // flush, so the last keystrokes in a task body reach the sidecar.
       taskProjection.stop();

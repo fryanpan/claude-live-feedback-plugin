@@ -104,6 +104,15 @@ import type { WebhookDispatcher } from './webhooks.ts';
 
 export type WsCtx = {
   docId: string;
+  /**
+   * Which socket protocol this connection speaks. Bun hands every path to ONE
+   * websocket handler object, so `/audio/<docId>` and `/y/<docId>` arrive at
+   * the same `open`/`message`/`close`, and the only thing that can tell them
+   * apart is what the upgrade attached. Absent means the editing socket —
+   * every existing upgrade predates this field and none of them should have
+   * to be touched to keep meaning what they meant.
+   */
+  kind?: 'yjs' | 'audio';
   isAwarenessOrigin: symbol;
   /**
    * The share that authorized this socket, when it came from a share
