@@ -123,9 +123,7 @@ describe('the popup handshake', () => {
 
     const user = { id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
     const send = (origin: string, source: unknown, data: unknown) =>
-      window.dispatchEvent(
-        new MessageEvent('message', { origin, source: source as Window, data }),
-      );
+      window.dispatchEvent(new MessageEvent('message', { origin, source: source as Window, data }));
 
     // Wrong origin: ignored even with the right shape and source.
     send('https://evil.example.com', popup, { type: 'cw-widget-auth', token: 'wt1.x', user });

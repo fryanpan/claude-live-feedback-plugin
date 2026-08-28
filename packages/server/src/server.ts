@@ -51,9 +51,9 @@ import {
   verifySession as verifyEmailSession,
 } from './auth/session.ts';
 import {
+  widgetTokenKey as deriveWidgetTokenKey,
   mintWidgetToken,
   verifyWidgetToken,
-  widgetTokenKey as deriveWidgetTokenKey,
 } from './auth/widget-token.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
@@ -107,7 +107,6 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { injectWidget } from './mockup-widget.ts';
-import { widgetAuthPage } from './widget-auth-page.ts';
 import {
   PARK_MIGRATION_ACTOR,
   type ParkMigrationResult,
@@ -199,6 +198,7 @@ import type { TranscriptionEngine } from './transcribe.ts';
 import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
 import { type WebhookLogEntry, createWebhookDispatcher } from './webhooks.ts';
+import { widgetAuthPage } from './widget-auth-page.ts';
 import { onClose, onMessage, onOpen } from './yjs-protocol.ts';
 
 const DEFAULT_PORT = Number(process.env.PORT ?? 8787);

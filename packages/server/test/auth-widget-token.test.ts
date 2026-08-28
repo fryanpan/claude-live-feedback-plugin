@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'bun:test';
+import { mintSession } from '../src/auth/session.ts';
 import {
   WIDGET_TOKEN_TTL_MS,
   mintWidgetToken,
   verifyWidgetToken,
   widgetTokenKey,
 } from '../src/auth/widget-token.ts';
-import { mintSession } from '../src/auth/session.ts';
 
 const KEY = widgetTokenKey('test-cookie-key');
 /** The dev-server origin a token is minted for — the only page that may use it. */
@@ -63,7 +63,10 @@ describe('verifyWidgetToken', () => {
 
   it('refuses a token whose origin was swapped — the origin is signed too', () => {
     const other = mintWidgetToken(session, 'http://localhost:3000', KEY, now) as string;
-    const [payloadA, macA] = [token.slice(0, token.lastIndexOf('.')), token.slice(token.lastIndexOf('.') + 1)];
+    const [payloadA, macA] = [
+      token.slice(0, token.lastIndexOf('.')),
+      token.slice(token.lastIndexOf('.') + 1),
+    ];
     const payloadB = other.slice(0, other.lastIndexOf('.'));
     expect(payloadA).not.toBe(payloadB);
     expect(verifyWidgetToken(`${payloadB}.${macA}`, KEY, now)).toBeNull();

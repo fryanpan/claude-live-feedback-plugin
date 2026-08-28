@@ -550,7 +550,10 @@ class FeedbackWidgetEl extends HTMLElement {
   private async authedPost(url: string, build: () => RequestInit): Promise<Response> {
     if (!this.authToken) return fetch(url, build());
     const init = build();
-    const headers = { ...(init.headers as Record<string, string>), authorization: `Bearer ${this.authToken}` };
+    const headers = {
+      ...(init.headers as Record<string, string>),
+      authorization: `Bearer ${this.authToken}`,
+    };
     const res = await fetch(url, { ...init, headers });
     if (res.status !== 401) return res;
     this.clearAuth();
@@ -689,11 +692,14 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   private async postNewThread(anchor: ElementAnchor, text: string): Promise<void> {
-    await this.authedPost(`${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`, () => ({
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ author: this.user, text, anchor }),
-    }));
+    await this.authedPost(
+      `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`,
+      () => ({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ author: this.user, text, anchor }),
+      }),
+    );
   }
 
   private async postReply(threadId: string, text: string): Promise<void> {
