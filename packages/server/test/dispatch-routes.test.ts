@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DispatchRecord } from '../src/dispatch-registry.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { BUILDER_SILENT_BUCKET } from '../src/stall-gate.ts';
 import { STALL_EVENT } from '../src/stall-nudge.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'person' };
@@ -93,6 +94,9 @@ describe('builder dispatches through the server', () => {
   let base: string;
   /** The fake watcher's handles, keyed by watched path. */
   let fired: Map<string, () => void>;
+  /** Paths whose watcher refuses to arm — the degraded, non-WATCHING
+   *  dispatch, which must keep the pre-dispatch clock. */
+  let failArm: Set<string>;
 
   const post = (path: string, body: unknown) =>
     fetch(`${base}${path}`, {
@@ -108,11 +112,13 @@ describe('builder dispatches through the server', () => {
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'dispatch-routes-'));
     fired = new Map();
+    failArm = new Set();
     handle = createServer({
       port: 0,
       dataDir,
       stallNudgeQuietMs: QUIET_MS,
       dispatchWatchFactory: (path, onEvent) => {
+        if (failArm.has(path)) throw new Error('arm refused (test)');
         fired.set(path, onEvent);
         return { close: () => fired.delete(path) };
       },
@@ -215,19 +221,76 @@ describe('builder dispatches through the server', () => {
     expect(noBody.status).toBe(400);
   });
 
-  it('a silent worktree does not excuse its row — the wake still fires', async () => {
+  it('a builder silent past twice the window is named, as builder-silent', async () => {
     const worktree = mkdtempSync(join(tmpdir(), 'wt-'));
     try {
       const ctx = await boardWithLead();
       const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
       await jj(await post('/api/dispatches', { taskId, worktreePath: worktree }));
-      // Out-quiet the window with no watcher events at all.
-      await settle(QUIET_MS + 150);
+      // Out-quiet the builder's DOUBLED window with no watcher events at all.
+      // (This test out-quieted the single window until the builder-silence
+      // clock landed — a watching dispatch now buys one extra window, and its
+      // silence past that is a missed check-in under its own name.)
+      await settle(2 * QUIET_MS + 150);
 
       handle.nudgeStalls();
       const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
       expect(got).toHaveLength(1);
       expect(got[0]?.data?.taskId).toBe(taskId);
+      // The frame NAMES the condition: the lead's remedy is to probe or
+      // replace the builder, not to find someone to claim the row.
+      const rows = got[0]?.data?.rows as Array<{ id: string; bucket: string }>;
+      expect(rows?.find((r) => r.id === taskId)?.bucket).toBe(BUILDER_SILENT_BUCKET);
+      await ctx.lead.stop();
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('inside the doubled window a watching builder is not yet stalled', async () => {
+    const worktree = mkdtempSync(join(tmpdir(), 'wt-'));
+    try {
+      const ctx = await boardWithLead();
+      const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
+      await jj(await post('/api/dispatches', { taskId, worktreePath: worktree }));
+      // Past the ordinary window — where an undispatched row would be named
+      // (the non-watching test below proves this harness fires there) — but
+      // inside the builder's doubled one.
+      await settle(QUIET_MS + 50);
+
+      handle.nudgeStalls();
+      // The builder-silent test above is the positive control: same board,
+      // same harness, longer silence, frame observed. Here the same wait must
+      // produce none.
+      await settle(300);
+      expect(stalls(ctx.lead.frames)).toHaveLength(0);
+      await ctx.lead.stop();
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('a dispatch whose watcher never armed keeps the ordinary clock', async () => {
+    const worktree = mkdtempSync(join(tmpdir(), 'wt-'));
+    try {
+      failArm.add(worktree);
+      const ctx = await boardWithLead();
+      const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
+      const reg = await jj<{ dispatch: DispatchRecord }>(
+        await post('/api/dispatches', { taskId, worktreePath: worktree }),
+      );
+      expect(reg.dispatch.watching).toBe(false);
+      // The same silence the not-yet-stalled test above holds back on: a
+      // watcher that cannot see activity must not buy the row a longer leash,
+      // so this is exactly the pre-dispatch behavior, ordinary bucket and all.
+      await settle(QUIET_MS + 50);
+
+      handle.nudgeStalls();
+      const got = await waitForFrames(ctx.lead.frames, STALL_EVENT, 1);
+      expect(got).toHaveLength(1);
+      expect(got[0]?.data?.taskId).toBe(taskId);
+      const rows = got[0]?.data?.rows as Array<{ id: string; bucket: string }>;
+      expect(rows?.find((r) => r.id === taskId)?.bucket).toBe('in-progress');
       await ctx.lead.stop();
     } finally {
       rmSync(worktree, { recursive: true, force: true });
@@ -240,13 +303,15 @@ describe('builder dispatches through the server', () => {
       const ctx = await boardWithLead();
       const taskId = await inProgressRow(ctx.workspaceId, 'Rank results by recency');
       await jj(await post('/api/dispatches', { taskId, worktreePath: worktree }));
-      await settle(QUIET_MS + 150);
+      // Out-quiet even the doubled window, so nothing but the watcher event
+      // below can be what keeps the row off the list.
+      await settle(2 * QUIET_MS + 150);
       // The builder just touched a file: the watcher speaks, the board stays
       // silent — exactly the false-positive shape.
       fired.get(worktree)?.();
 
       handle.nudgeStalls();
-      // The silent-worktree test above is the positive control: same board,
+      // The builder-silent test above is the positive control: same board,
       // same window, same harness, frame observed. Here the same wait must
       // produce none.
       await settle(300);
