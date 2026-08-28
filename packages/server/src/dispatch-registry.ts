@@ -139,7 +139,7 @@ export class DispatchRegistry {
         this.entries.set(taskId, entry);
         // A path already gone stays until a read prunes it; arming would
         // throw ENOENT into the degraded branch for nothing.
-        if (existsSync(rec.worktreePath)) this.arm(taskId, entry);
+        if (existsSync(rec.worktreePath)) this.arm(entry);
       }
     } catch (err) {
       const aside = `${this.path}.corrupt-${this.now()}`;
@@ -162,7 +162,7 @@ export class DispatchRegistry {
     this.closeEntry(taskId);
     const entry: Entry = { worktreePath, registeredAt: this.now(), watcher: null };
     this.entries.set(taskId, entry);
-    this.arm(taskId, entry);
+    this.arm(entry);
     this.save();
     return { ok: true, dispatch: this.record(taskId, entry) };
   }
@@ -214,7 +214,7 @@ export class DispatchRegistry {
     }
   }
 
-  private arm(taskId: string, entry: Entry): void {
+  private arm(entry: Entry): void {
     try {
       entry.watcher = this.watchFactory(
         entry.worktreePath,

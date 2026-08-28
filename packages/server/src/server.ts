@@ -37,11 +37,6 @@ import {
   isValidWatchKey,
 } from './agent-watches.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
-import {
-  DispatchRegistry,
-  type WatchFactory,
-  isValidDispatchTaskId,
-} from './dispatch-registry.ts';
 import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
 import {
   SESSION_COOKIE,
@@ -56,6 +51,7 @@ import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
+import { DispatchRegistry, type WatchFactory, isValidDispatchTaskId } from './dispatch-registry.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import { showFile } from './git-diff.ts';
 import {
@@ -1065,9 +1061,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // checkout the board cannot see. See dispatch-registry.ts.
   const dispatches = new DispatchRegistry({
     dataDir,
-    ...(opts.dispatchWatchFactory !== undefined
-      ? { watchFactory: opts.dispatchWatchFactory }
-      : {}),
+    ...(opts.dispatchWatchFactory !== undefined ? { watchFactory: opts.dispatchWatchFactory } : {}),
   });
   if (dispatches.loadError) {
     console.error(`[dispatch] ${dispatches.loadError}`);
