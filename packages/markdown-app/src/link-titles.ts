@@ -84,17 +84,18 @@ const BATCH_LIMIT = 100;
 /** The one slice of `fetch` the lookup uses — narrow so tests stub it flat. */
 export type LinkTitleFetcher = (path: string, init?: RequestInit) => Promise<Response>;
 
-export async function hydrateLinkTitles(
-  root: ParentNode,
+/**
+ * Ask the server about `urls` (uncached ones only) and fill the cache.
+ * Returns whether anything new landed. Shared by the DOM hydration below and
+ * the doc editor's chip decorations (`task-link-chips.ts`), which has no
+ * `data-ws-link` anchors to walk.
+ */
+export async function fetchLinkInfos(
+  urls: readonly string[],
   fetcher: LinkTitleFetcher = fetch,
-): Promise<void> {
-  const anchors = [...root.querySelectorAll<HTMLAnchorElement>('a[data-ws-link][data-ws-pending]')];
-  if (anchors.length === 0) return;
-  const wanted = [
-    ...new Set(
-      anchors.map((a) => a.getAttribute('data-ws-link') ?? '').filter((u) => u && !cache.has(u)),
-    ),
-  ];
+): Promise<boolean> {
+  const wanted = [...new Set(urls.filter((u) => u && !cache.has(u)))];
+  let landed = false;
   // Every uncached URL gets asked, one route-sized batch at a time — a page
   // with more links than one batch must not leave the tail raw forever.
   for (let i = 0; i < wanted.length; i += BATCH_LIMIT) {
@@ -112,10 +113,24 @@ export async function hydrateLinkTitles(
       };
       for (const u of chunk)
         cache.set(u, { title: data.titles?.[u] ?? null, status: data.statuses?.[u] ?? null });
+      landed = true;
     } catch {
       break; // network failure: raw URLs stay visible, retry later
     }
   }
+  return landed;
+}
+
+export async function hydrateLinkTitles(
+  root: ParentNode,
+  fetcher: LinkTitleFetcher = fetch,
+): Promise<void> {
+  const anchors = [...root.querySelectorAll<HTMLAnchorElement>('a[data-ws-link][data-ws-pending]')];
+  if (anchors.length === 0) return;
+  await fetchLinkInfos(
+    anchors.map((a) => a.getAttribute('data-ws-link') ?? ''),
+    fetcher,
+  );
   for (const a of anchors) {
     const url = a.getAttribute('data-ws-link') ?? '';
     const info = cache.get(url);

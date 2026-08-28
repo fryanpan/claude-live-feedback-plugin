@@ -36,6 +36,7 @@ import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
 import { type TableMenuItem, tableMenuItems } from './table-menu.ts';
+import { watchTaskLinkStatuses } from './task-link-chips.ts';
 import { mountDocVoice } from './voice-dock.ts';
 import { renderWorkspaceTree } from './workspace-tree.ts';
 
@@ -745,12 +746,25 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     reviewChrome.revealThread(wanted);
   }
 
+  // Live task-link status chips: once the doc's meta has synced (onReady) we
+  // know its board, and the board's `task.transitioned` push keeps every chip
+  // honest — the "filed in the meeting, flips when dispatched" surface.
+  let chipsWatched = false;
+  function watchChips(): void {
+    if (chipsWatched || scope.disposed) return;
+    const chipWorkspaceId = ctx.workspaceId ?? readDocMeta(ydoc).workspaceId;
+    if (!chipWorkspaceId) return;
+    chipsWatched = true;
+    scope.onCleanup(watchTaskLinkStatuses(chipWorkspaceId, editor.editor.view));
+  }
+
   client.onReady(() => {
     if (scope.disposed) return;
     reviewChrome.renderDocLabel();
     void renderSetNav();
     reviewChrome.redrawThreads();
     revealLinkedThread();
+    watchChips();
   });
 
   // ---- Save state indicator ----

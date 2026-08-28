@@ -26,6 +26,7 @@ import type {
   NotesProjectContext,
   NotesUpdate,
 } from './meeting-notes.ts';
+import { type TaskCaptureBoard, runTaskCapture } from './meeting-task-capture.ts';
 
 /** The section the notes agent owns, verbatim — finding it again is the
  *  replace contract, so this string changing would orphan every live doc's
@@ -189,10 +190,47 @@ export function applyNotesUpdate(rooms: NotesDocRooms, update: NotesUpdate): boo
  */
 export function withServerNotesSinks(
   options: MeetingNotesOptions,
-  deps: { rooms: () => NotesDocRooms; tasks: () => NotesContextTasks },
+  deps: {
+    rooms: () => NotesDocRooms;
+    tasks: () => NotesContextTasks;
+    /** The store the capture pipeline writes through. A thunk like `tasks`,
+     *  and only read when `taskExtractor` is present. */
+    captureBoard?: () => TaskCaptureBoard;
+    /** The lead wake for a captured task judged clear enough to start —
+     *  wired to the ready-nudge channel by the server. */
+    onTaskReady?: (wake: { workspaceId: string; taskId: string; title: string }) => void;
+  },
 ): MeetingNotesDeps {
+  const extractor = options.taskExtractor;
+  const captureBoard = deps.captureBoard;
+  const captureTasks: MeetingNotesDeps['captureTasks'] =
+    options.captureTasks ??
+    (extractor && captureBoard
+      ? async ({ docId, turns }) => {
+          // The doc's board is the capture's scope: a meeting on a doc no
+          // workspace owns has no board to find or create on.
+          const room = deps.rooms().get(docId);
+          const workspaceId = room?.meta.setId;
+          if (!workspaceId) return [];
+          return runTaskCapture(
+            {
+              board: captureBoard(),
+              extractor,
+              ...(deps.onTaskReady ? { onTaskReady: deps.onTaskReady } : {}),
+              onError: (message) => console.error(`[meeting-tasks] ${message}`),
+            },
+            {
+              workspaceId,
+              docId,
+              ...(room.meta.title !== undefined ? { docTitle: room.meta.title } : {}),
+              turns,
+            },
+          );
+        }
+      : undefined);
   return {
     ...options,
+    ...(captureTasks ? { captureTasks } : {}),
     resolveContext: (docId: string): NotesProjectContext | undefined => {
       const gathered: NotesProjectContext = {};
       try {

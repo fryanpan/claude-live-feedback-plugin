@@ -990,6 +990,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       ? withServerNotesSinks(opts.meetingNotes, {
           rooms: () => rooms,
           tasks: () => taskStore,
+          // The capture pipeline's board writes, and the "go do it" wake —
+          // the same immediate addressed delivery an answered review item
+          // gets. Both close over consts declared below; a meeting can only
+          // start long after createServer has returned.
+          captureBoard: () => taskStore,
+          onTaskReady: (wake) =>
+            readyNudger.taskReady({
+              workspaceId: wake.workspaceId,
+              taskId: wake.taskId,
+              taskTitle: wake.title,
+            }),
         })
       : null,
     // Lifecycle only. The words never touch this hub — see meeting-protocol.
