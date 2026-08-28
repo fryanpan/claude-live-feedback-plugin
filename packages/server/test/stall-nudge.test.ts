@@ -142,6 +142,123 @@ describe('a stalled row wakes the lead — once', () => {
   });
 });
 
+/**
+ * The wake must never fire over its own remedy.
+ *
+ * This is the loop that shipped: the stamp was compared for EQUALITY, so a
+ * board whose set merely SHRANK moved the stamp and re-armed. The lead was
+ * woken to file an ask, filed it, the row left the unfiled list, and the next
+ * tick woke the lead again to announce the fix it had just made — a wake that
+ * re-arms on the action it asked for is self-sustaining, and the design at the
+ * top of the file wants it self-extinguishing. Measured on a live board: six
+ * wakes in one evening, `stalled=0` in every one, the unfiled count walking
+ * 1→2→3→2→1 with three of those wakes inside five minutes.
+ */
+describe('a set that shrinks is not news', () => {
+  function unfiled(id: string, quietMs = 30 * MIN) {
+    return { id, title: `Decide ${id}`, bucket: 'blocked-on-owner-unfiled', quietMs };
+  }
+
+  it('says nothing when the lead files the ask the wake asked for', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // The lead does the one thing the wake asked for. The row leaves the list.
+    world.boards[0]!.unfiled = [unfiled('t-b')];
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('still fires when a row arrives after one has left', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
+    nudger.tick();
+    world.boards[0]!.unfiled = [unfiled('t-b')];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.boards[0]!.unfiled = [unfiled('t-b'), unfiled('t-c')];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+
+  /**
+   * A shrink is silent, but it is still RECORDED — otherwise the stamp would
+   * keep naming a row that is no longer on the list, and the row coming back
+   * would read as unchanged and never fire.
+   */
+  it('fires again when a row that left comes back', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
+    nudger.tick();
+    world.boards[0]!.unfiled = [unfiled('t-b')];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.boards[0]!.unfiled = [unfiled('t-a'), unfiled('t-b')];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+
+  it('does not fire when the board simply gets quieter', () => {
+    const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
+    world.boards[0]!.stalled = [
+      { id: 't-old', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 185 * MIN },
+      { id: 't-young', title: 'Cache the facet counts', bucket: 'in-progress', quietMs: 30 * MIN },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    // The oldest row is picked up and worked. The board's escalation bucket
+    // falls from 3 to 0 — a recovery, and recoveries are not announced.
+    world.boards[0]!.stalled = [
+      { id: 't-young', title: 'Cache the facet counts', bucket: 'in-progress', quietMs: 35 * MIN },
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('says nothing when a row that could not be read becomes readable', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.undetermined = [
+      { id: 't-3', reason: 'review-items-unreadable' },
+      { id: 't-4', reason: 'review-items-unreadable' },
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+
+    world.boards[0]!.undetermined = [{ id: 't-4', reason: 'review-items-unreadable' }];
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('fires when a new row becomes unreadable', () => {
+    const { world, sent, nudger } = harness();
+    world.boards[0]!.stalled = [];
+    world.boards[0]!.undetermined = [{ id: 't-4', reason: 'review-items-unreadable' }];
+    nudger.tick();
+
+    world.boards[0]!.undetermined = [
+      { id: 't-4', reason: 'review-items-unreadable' },
+      { id: 't-5', reason: 'review-items-unreadable' },
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+  });
+});
+
 describe('a row that stays stalled is said again, eventually', () => {
   it('re-fires once the row has been quiet for another repeat window', () => {
     const { world, sent, nudger } = harness({ repeatMs: 60 * MIN });
