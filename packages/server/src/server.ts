@@ -4869,8 +4869,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // actually needs it — the membership question is the same one the
           // /api/docs listing answers, asked through the same index.
           let boardIndex: Map<string, string[]> | null = null;
-          return j(200, {
-            titles: linkTitlesFor(
+          // `titles` + `statuses` at the top level — the old `{ titles }`
+          // shape is preserved for clients on a pre-status bundle.
+          return j(
+            200,
+            linkTitlesFor(
               urls.filter((u): u is string => typeof u === 'string'),
               {
                 docMeta: (docId) => rooms.get(docId)?.meta,
@@ -4882,13 +4885,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   return hubBoardsForDocIndexed(boardIndex, meta).has(workspaceId);
                 },
                 task: (taskId) => {
-                  const t = taskStore.getTask(taskId);
-                  return t ? { title: t.title, workspaceId: t.workspaceId } : undefined;
+                  // Goals answer here too: they share the id namespace and
+                  // the status machine, and a pasted goal link should read
+                  // as its title + status like any other row.
+                  const t = taskStore.getTask(taskId) ?? taskStore.getGoalRow(taskId);
+                  return t
+                    ? { title: t.title, workspaceId: t.workspaceId, status: t.status }
+                    : undefined;
                 },
                 workspaceName: (workspaceId) => taskStore.getWorkspace(workspaceId)?.name,
               },
             ),
-          });
+          );
         }
         if (taskLinksMatch && (req.method === 'POST' || req.method === 'DELETE')) {
           const taskId = decodeURIComponent(taskLinksMatch[1] ?? '');
