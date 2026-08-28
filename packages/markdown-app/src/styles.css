@@ -649,7 +649,11 @@ body.has-set .doc-switcher-caret {
 #editor-pane {
   position: relative; /* anchors the floating diff/file view toggle */
   display: grid;
-  grid-template-rows: auto 1fr;
+  /* format bar, document, transcript strip. The third track is what makes the
+     strip RESERVE its height instead of covering the prose: the editor keeps
+     the 1fr and shrinks by exactly the strip's height. It costs nothing when
+     no meeting surface is mounted — a hidden strip is a zero-height track. */
+  grid-template-rows: auto 1fr auto;
   overflow: hidden;
   background: var(--bg);
   border-right: 1px solid var(--border);
@@ -5411,6 +5415,200 @@ body.is-reading-width #editor > .ProseMirror {
   }
   100% {
     background: rgba(255, 213, 79, 0.35);
+  }
+}
+
+/* ================= MEETING TRANSCRIPT STRIP =================
+   The one thing a live meeting adds to the document editor. Secondary by
+   construction: panel background against the white doc, a top border, and sans
+   at 12.5px against the prose's 18px serif, with the text masked out as it
+   rolls up.
+
+   Two shapes. Above 720px it is a single 40px bar — clock, rolling words, and
+   the control at the far end — which is what the iPad reads. At or below it,
+   the bar has no room for a sentence, so the strip becomes its own panel: the
+   recording state on a micro-row above about two wrapped lines of transcript.
+   The design was drawn with container queries; this stylesheet has none, so
+   the switch is a media query at the same width. That leaves a 721-900px band
+   where the doc is already single-column and the strip is still the bar, which
+   is correct — the bar's constraint is horizontal room, not column count.
+
+   On a phone the strip sits at the true bottom edge of the window. There is no
+   bottom bar on this surface (the one the hub draws is a different shell, and
+   its height variable resolves to nothing here), so the padding that keeps the
+   words clear of the home indicator and of an open keyboard is the strip's
+   own. */
+.meeting-strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 14px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+/* `display: flex` above out-specifies the UA's `[hidden]` rule, so the shell's
+   hidden strip would otherwise claim its grid row on every other surface. */
+.meeting-strip[hidden] {
+  display: none;
+}
+/* A real box only in the stacked layout; see the wide-mode block below. */
+.meeting-strip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.meeting-meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-variant-numeric: tabular-nums;
+}
+.meeting-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+.meeting-strip.is-live .meeting-dot {
+  background: var(--red);
+  animation: meeting-pulse 1.6s ease-in-out infinite;
+}
+@keyframes meeting-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+}
+/* The word ("REC" / "Paused") is the phone's; the bar has the clock, and a
+   pulsing red dot beside a running clock already says recording. */
+.meeting-status {
+  display: none;
+}
+.meeting-elapsed {
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+/* One line of transcript, bottom-aligned, with the line above it fading out as
+   it rolls off — the mask is what keeps a half-visible line from reading as
+   clipped text. */
+.meeting-caption {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1.45em;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 55%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 55%);
+}
+.meeting-caption-line {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+/* One span per word, so a word the engine revises is rewritten where it
+   already is rather than the line being redrawn under the reader. */
+.meeting-caption-line .w {
+  border-radius: 3px;
+}
+.meeting-caption-line .w.is-fixed {
+  animation: meeting-fix 1300ms ease-out both;
+}
+@keyframes meeting-fix {
+  0%,
+  40% {
+    background: rgba(46, 125, 215, 0.22);
+  }
+  100% {
+    background: transparent;
+  }
+}
+/* Why no words are coming — an unconfigured server, a refused mic, an origin
+   the browser gives no mic on. It occupies the transcript's line because it is
+   the answer to the same question. */
+.meeting-note {
+  color: var(--fg-muted);
+}
+.meeting-toggle {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  /* design-mobile.md tap-target floor; the strip's only control. */
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.meeting-toggle:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+@media (min-width: 721px) {
+  /* The strip is one row here, so the micro-row stops being a box and its
+     children join the strip's own flex line. That flattens them in SOURCE
+     order, which would put the control between the clock and the words; the
+     order properties restore the intended line. */
+  .meeting-strip-row {
+    display: contents;
+  }
+  .meeting-meta {
+    order: 1;
+  }
+  .meeting-caption {
+    order: 2;
+  }
+  .meeting-toggle {
+    order: 3;
+  }
+}
+@media (max-width: 720px) {
+  .meeting-strip {
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+    padding: 7px 14px;
+    /* The last row of the window: clear of the home indicator, and lifted by
+       whatever an open keyboard is covering (--kb-bottom, published by
+       keyboard-inset.ts) so the words are not behind it. */
+    padding-bottom: calc(9px + var(--safe-bottom) + var(--kb-bottom, 0px));
+  }
+  .meeting-status {
+    display: inline;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .meeting-caption {
+    height: 2.9em;
+  }
+  .meeting-toggle {
+    margin-left: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .meeting-strip.is-live .meeting-dot,
+  .meeting-caption-line .w.is-fixed {
+    animation: none;
   }
 }
 
