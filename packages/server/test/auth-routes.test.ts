@@ -268,3 +268,105 @@ describe('POST /api/auth/logout', () => {
     expect(header).toContain('Max-Age=0');
   });
 });
+
+/**
+ * Logout as revocation, on a server of its own — the tests above share one
+ * server and its per-peer start budget (`MAX_STARTS_PER_PEER`, one loopback
+ * peer for the whole file), and these need several logins each.
+ */
+describe('logout revokes the session server-side', () => {
+  let handle2: ServerHandle;
+  let dataDir2: string;
+  let base2: string;
+
+  beforeAll(() => {
+    dataDir2 = mkdtempSync(join(tmpdir(), 'auth-revoke-test-'));
+    handle2 = createServer({ port: 0, dataDir: dataDir2 });
+    base2 = `http://localhost:${handle2.port}`;
+  });
+
+  afterAll(async () => {
+    await handle2.stop();
+    rmSync(dataDir2, { recursive: true, force: true });
+  });
+
+  /** Sign in and hand back the cookie pair — the console intercept in the
+   *  file-wide beforeAll captures this server's codes too. */
+  async function signIn(email: string): Promise<string> {
+    await fetch(`${base2}/api/auth/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const res = await fetch(`${base2}/api/auth/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, code: logged[logged.length - 1] }),
+    });
+    expect(res.status).toBe(200);
+    return sessionCookie(res);
+  }
+
+  async function authenticated(cookie: string, at: string = base2): Promise<boolean> {
+    const res = await fetch(`${at}/api/auth/session`, { headers: { cookie } });
+    const body = (await res.json()) as { authenticated: boolean };
+    return body.authenticated;
+  }
+
+  it('kills the session: the same cookie value is dead afterwards', async () => {
+    const cookie = await signIn('logout-revokes@example.com');
+    // Positive control first: the cookie authenticates before logout.
+    expect(await authenticated(cookie)).toBe(true);
+    await fetch(`${base2}/api/auth/logout`, { method: 'POST', headers: { cookie } });
+    // The browser that logged out cleared its cookie; this is a captured
+    // copy of the value, which validates cryptographically forever. The
+    // server-side revocation is the only thing standing.
+    expect(await authenticated(cookie)).toBe(false);
+  });
+
+  it('ends only this session — a second device stays signed in', async () => {
+    const email = 'logout-one-device@example.com';
+    const deviceA = await signIn(email);
+    const deviceB = await signIn(email);
+    await fetch(`${base2}/api/auth/logout`, { method: 'POST', headers: { cookie: deviceA } });
+    expect(await authenticated(deviceA)).toBe(false);
+    expect(await authenticated(deviceB)).toBe(true);
+  });
+
+  it('outlives a server restart, because a reboot must not resurrect a logged-out session', async () => {
+    const cookie = await signIn('logout-durable@example.com');
+    const survivor = await signIn('logout-durable@example.com');
+    await fetch(`${base2}/api/auth/logout`, { method: 'POST', headers: { cookie } });
+    const fresh = createServer({ port: 0, dataDir: dataDir2 });
+    try {
+      const at = `http://localhost:${fresh.port}`;
+      expect(await authenticated(cookie, at)).toBe(false);
+      // Positive control: the un-revoked session works on the fresh server.
+      expect(await authenticated(survivor, at)).toBe(true);
+    } finally {
+      await fresh.stop();
+    }
+  });
+
+  it('still accepts a pre-revocation 90-day cookie, so signed-in devices are not stranded', async () => {
+    const email = 'old-format@example.com';
+    // Log in normally so the identity exists in the roster.
+    await signIn(email);
+    // Hand-build the old format against the server's own key material: the
+    // cookie a device minted before sessions became revocable.
+    const { loadCookieKey } = await import('../src/share/link-session.ts');
+    const { sessionKey, signSession } = await import('../src/auth/session.ts');
+    const key = sessionKey(loadCookieKey(dataDir2));
+    const now = Date.now();
+    const value = signSession(
+      {
+        identityId: emailIdentityId(email),
+        sessionId: null,
+        issuedAt: now,
+        expiresAt: now + 60_000,
+      },
+      key,
+    );
+    expect(await authenticated(`${SESSION_COOKIE}=${value}`)).toBe(true);
+  });
+});
