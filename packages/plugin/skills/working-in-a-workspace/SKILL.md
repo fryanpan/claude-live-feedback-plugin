@@ -132,11 +132,27 @@ Someone who was not in the conversation should be able to see a task, know why i
   - Work sitting in an unmerged PR stays `in-progress`
   - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — the row moves to `triage` and the tool posts a comment saying when to come back and why, so the board stops treating it as work nobody got to. Write the `reason`, and give an `until` date whenever you have one: triage says a decision was made, and that comment is the only place that says what it was waiting for. There is no un-park — move the row on with `task_transition` when it is ready. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
   - Say what you did in the transition `note` — the PR, what you verified and what you couldn't. The note is the whole of what the trail keeps, so a move with an empty note is a move nobody can read back.
-- Share progress on a task by writing brief comments (100 words or less) in the task when you start, when you hit a blocker, when a PR opens, and when it merges.
+- Share progress on a task by writing brief comments in the task at each
+  milestone — these are handover notes, shaped below.
 - **Your final message is a pointer, not the report.** Post the full report as a task comment FIRST — the harness drops final messages routinely, so the board comment is the copy that survives — then write the message from the `threadUrl` that comment returns. Three parts, 50 words or less all together:
   1. The outcome, in one line.
   2. The `threadUrl` of the comment holding the full report, formatted for wherever the message lands (below).
   3. Any blocker, in one line.
+
+### Handover notes
+
+Builders die mid-task — some at spawn — and a replacement that restarts from
+scratch re-reads everything and can redo finished work. The task thread is the
+handover. At each milestone — worktree created, first commit, tests green, PR
+open — and whenever you stop or are blocked, post a comment with three parts,
+under 70 words:
+
+1. DONE — what is finished and verified.
+2. TRIED — approaches abandoned, and why, so nobody retries them.
+3. WHERE — branch name, last commit hash, worktree path.
+
+Picking up a task that already has a thread? Read the thread FIRST and resume
+from the newest handover instead of restarting.
 
 ## When You Are Blocked
 
