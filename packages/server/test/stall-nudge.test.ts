@@ -314,6 +314,81 @@ describe('the arming survives a restart', () => {
   });
 });
 
+/**
+ * Every DELIVERED wake leaves a line, so somebody can count what this feature
+ * costs.
+ *
+ * The measurement it exists for is wakes per board per hour — a lead's turn is
+ * the unit of spend here, and a loop that fires more often than anyone
+ * realises is exactly the failure the arming rules were written against. A
+ * count nobody can take is a claim nobody can check.
+ *
+ * It rides the injectable `report` rather than `console.error` for the same
+ * reason the unevaluable notice does: a line only a human tailing a log can
+ * see is a line no test can assert, and this one has to stay true as the
+ * arming rules change around it.
+ */
+describe('every delivered wake is counted', () => {
+  it('reports the board, the lead, and what the wake was about', () => {
+    const { reported, nudger } = harness();
+
+    nudger.tick();
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain('w-atlas');
+    expect(reported[0]).toContain('agent-cartographer');
+    expect(reported[0]).toContain('stalled=1');
+    expect(reported[0]).toContain('unfiled=0');
+    expect(reported[0]).toContain('undetermined=0');
+  });
+
+  it('counts each list separately rather than as one total', () => {
+    const { world, reported, nudger } = harness();
+    world.boards[0]!.unfiled = [
+      {
+        id: 't-9',
+        title: 'Pick a retention window',
+        bucket: 'blocked-on-owner-unfiled',
+        quietMs: 0,
+      },
+    ];
+    world.boards[0]!.undetermined = [{ id: 't-3', reason: 'review-items-unreadable' }];
+
+    nudger.tick();
+
+    const wake = reported.find((line) => line.includes('wake'));
+    expect(wake).toContain('stalled=1');
+    expect(wake).toContain('unfiled=1');
+    expect(wake).toContain('undetermined=1');
+  });
+
+  it('says nothing on a tick that delivers no wake', () => {
+    const { world, reported, nudger } = harness();
+    nudger.tick();
+    expect(reported.filter((line) => line.includes('wake'))).toHaveLength(1);
+
+    // Nothing has changed, so no wake is owed — and a line here would count a
+    // turn nobody spent, which is the opposite of what the measurement is for.
+    world.now += 5 * MIN;
+    nudger.tick();
+    world.now += 5 * MIN;
+    nudger.tick();
+
+    expect(reported.filter((line) => line.includes('wake'))).toHaveLength(1);
+  });
+
+  it('says nothing when the lead holds no stream', () => {
+    const { world, reported, nudger } = harness();
+    world.reachable.clear();
+
+    nudger.tick();
+
+    // The wake is still OWED, not spent — logging it would inflate the very
+    // number this line exists to make honest.
+    expect(reported.filter((line) => line.includes('wake'))).toHaveLength(0);
+  });
+});
+
 describe('the timer', () => {
   it('starts and stops idempotently', () => {
     const { nudger } = harness();

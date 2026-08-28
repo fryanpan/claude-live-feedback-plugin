@@ -454,6 +454,44 @@ export class StallNudger {
       this.opts.send(workspaceId, agentId, frame);
     } catch (err) {
       console.error('[stall] send failed:', err);
+      // No line: a send that threw spent nobody's turn, and the count below
+      // is meant to be countable.
+      return;
+    }
+    this.noteWake(workspaceId, agentId, frame);
+  }
+
+  /**
+   * One line per DELIVERED wake, so what this feature costs can be counted.
+   *
+   * The unit of spend here is a lead's turn, and the number worth watching is
+   * wakes per board per hour — a loop that fires more often than anyone
+   * realises is precisely the failure the arming rules exist to prevent, and a
+   * claim nobody can check is how that failure survives. So the line is
+   * emitted at the one point a turn is actually billed: after `send` returned,
+   * never beside the decision to send.
+   *
+   * The three counts stay SEPARATE rather than summed. They are three
+   * different asks — drive it, file the question, go and read it — and a board
+   * waking its lead nine times about unreadable rows is a different finding
+   * from one waking it nine times about stalled work. A total cannot tell them
+   * apart.
+   *
+   * It rides the injectable `report`, not `console.error`, for the same reason
+   * the unevaluable notice does: a line only a human tailing a log can see is
+   * one no test can assert, and this has to stay true as the arming rules move
+   * around it.
+   */
+  private noteWake(workspaceId: string, agentId: string, frame: StallNudgeFrame): void {
+    try {
+      this.report(
+        `[stall] wake ws=${workspaceId} lead=${agentId} ` +
+          `stalled=${frame.stalledCount} unfiled=${frame.unfiled?.length ?? 0} ` +
+          `undetermined=${frame.undetermined?.count ?? 0}`,
+      );
+    } catch {
+      // A reporter that throws must not undo a wake that was already
+      // delivered — the frame is out, and the arming below has to record it.
     }
   }
 }
