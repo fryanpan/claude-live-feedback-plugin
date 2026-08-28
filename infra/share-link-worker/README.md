@@ -37,3 +37,13 @@ cross-verifies server-minted signatures against this Worker's verify function.
 With no `SHARE_LINK_KEY` configured the Worker fails closed: every
 `/share/*` request 404s. If share links stop working at the edge but redeem
 fine over the tailnet, check the secret before anything else.
+
+## Hygiene
+
+The signed URL is the credential, so every `/share/*` response — the 302 and
+both sides' 404s — carries `Referrer-Policy: no-referrer`, and neither the
+Worker nor the server logs request URLs. Any future log line that must carry
+a share URL goes through `scrubShareUrl` (server, `share/url-signing.ts`),
+which redacts the `sig` param. Cloudflare's own request logging (observability
+/ `wrangler tail`) is a separate account-level surface — keep it off for this
+route, or accept that it sees full URLs.

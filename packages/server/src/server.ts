@@ -3480,7 +3480,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!share) {
             return new Response(renderLinkNotFound(), {
               status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
+              headers: {
+                'content-type': 'text/html; charset=utf-8',
+                // Even the failure page must not leak the (possibly almost-
+                // valid) signed URL into a Referer header.
+                'referrer-policy': 'no-referrer',
+              },
             });
           }
           // A share lands IN the board — never a review URL, never a lobby
@@ -3496,7 +3501,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!boardShareTarget(share)) {
             return new Response(renderLinkNotFound(), {
               status: 404,
-              headers: { 'content-type': 'text/html; charset=utf-8' },
+              headers: {
+                'content-type': 'text/html; charset=utf-8',
+                'referrer-policy': 'no-referrer',
+              },
             });
           }
           const maxAge = Math.floor((share.expiresAt - Date.now()) / 1000);
@@ -3520,7 +3528,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         if (req.method === 'GET' && /^\/s\/[^/]+$/.test(pathname)) {
           return new Response(renderLinkNotFound(), {
             status: 404,
-            headers: { 'content-type': 'text/html; charset=utf-8' },
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              // An old slug is a retired credential — same Referer hygiene.
+              'referrer-policy': 'no-referrer',
+            },
           });
         }
 

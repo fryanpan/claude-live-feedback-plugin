@@ -6,6 +6,12 @@
  * /share/* request itself — this Worker is the first gate, never the only one.
  *
  * Deploying this (and setting SHARE_LINK_KEY) is a manual step — see README.md.
+ *
+ * Log hygiene: the signed URL IS the credential, so this Worker never logs
+ * request URLs. If you add logging, scrub the `sig` query param first (the
+ * server's share/url-signing.ts `scrubShareUrl` shows the convention) — and
+ * remember Cloudflare's own request logging is a separate surface governed
+ * by the account's observability settings, not this code.
  */
 
 /** Same check as the server's share/url-signing.ts: HMAC-SHA256 over `<id>.<exp>`. */
@@ -40,7 +46,14 @@ export default {
           url.searchParams.get('sig') ?? '',
           env.SHARE_LINK_KEY,
         ));
-      if (!ok) return new Response('Not found', { status: 404 });
+      // no-referrer for the same reason the origin sets it: even a failure
+      // page must not leak a (possibly almost-valid) signed URL downstream.
+      if (!ok) {
+        return new Response('Not found', {
+          status: 404,
+          headers: { 'referrer-policy': 'no-referrer' },
+        });
+      }
     }
     return fetch(request);
   },

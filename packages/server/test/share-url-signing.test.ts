@@ -22,6 +22,7 @@ import workerHandler, {
 import {
   URL_KEY_FILENAME,
   loadUrlKey,
+  scrubShareUrl,
   signedSharePath,
   verifySignedShare,
 } from '../src/share/url-signing.ts';
@@ -103,6 +104,29 @@ describe('verifySignedShare refuses', () => {
     }
     // Positive control: the untampered tuple still verifies.
     expect(await verifySignedShare('abcd1234', exp, sig, KEY)).toBe(true);
+  });
+});
+
+describe('scrubShareUrl — the signature never reaches a log line', () => {
+  it('redacts the sig param from a full URL, keeping id and expiry', async () => {
+    const url = `https://feedback.example.com${await signedSharePath('abcd1234', Date.now() + HOUR, KEY)}`;
+    const scrubbed = scrubShareUrl(url);
+    expect(scrubbed).not.toMatch(/sig=[0-9a-f]{64}/);
+    expect(scrubbed).toContain('sig=[redacted]');
+    // The parts that identify without granting survive.
+    expect(scrubbed).toContain('/share/abcd1234?exp=');
+  });
+
+  it('scrubs every sig in arbitrary log text, and leaves other text alone', async () => {
+    const a = await signedSharePath('abcd1234', Date.now() + HOUR, KEY);
+    const b = await signedSharePath('ffff9999', Date.now() + HOUR, KEY);
+    const line = `redeem failed for ${a} after ${b} (design=sig-v1)`;
+    const scrubbed = scrubShareUrl(line);
+    expect(scrubbed).not.toMatch(/sig=[0-9a-f]{64}/);
+    expect(scrubbed.match(/sig=\[redacted\]/g)).toHaveLength(2);
+    // Non-param text mentioning "sig" is not mangled.
+    expect(scrubbed).toContain('(design=sig-v1)');
+    expect(scrubShareUrl('no urls here')).toBe('no urls here');
   });
 });
 
@@ -192,6 +216,8 @@ describe('the Cloudflare Worker verifies what the server signs', () => {
         const { res, proxied } = await run(path, env);
         expect(res.status, path).toBe(404);
         expect(proxied, path).toBe(false);
+        // Even the edge's failure page must not leak the URL via Referer.
+        expect(res.headers.get('referrer-policy'), path).toBe('no-referrer');
       }
     });
 
