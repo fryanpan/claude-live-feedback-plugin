@@ -5,7 +5,8 @@
  * rather than an overlay — `renderWalkthrough` hides `#hub-home-page` whenever
  * the queue position resolves to 0 or more, and that covers both the card
  * itself and the end-of-queue done state you land on after answering the last
- * item. Neither has a URL of its own; both sit at `/workspaces/<id>/home`.
+ * item. The card carries its item in `?item=`; `/workspaces/<id>/home` with no
+ * item is the main Home page.
  *
  * So the Home nav item had nothing to do: `setNav` saw `state.nav === 'home'`
  * already, skipped the pushState, re-rendered the same three regions, and the
@@ -95,8 +96,8 @@ describe('the Home nav item resets Home', () => {
   });
 
   it('closes it even when Home is already the destination', () => {
-    // The whole bug: `same` short-circuited the only thing the tap did. It
-    // may gate the history entry and nothing else.
+    // The whole bug: a `same` guard short-circuited the only thing the tap
+    // did. The reset must stay unconditional.
     const reset = setNavBody()
       .split('\n')
       .find((line) => line.includes('closeWalkthrough()'));
@@ -104,15 +105,14 @@ describe('the Home nav item resets Home', () => {
     // means the opposite of what it reads as.
     expect(reset, 'no closeWalkthrough call in setNav').toBeDefined();
     expect(reset).not.toContain('same');
-    expect(setNavBody()).toMatch(/if \(push && !same\) history\.pushState/);
   });
 
-  it('writes no history entry of its own', () => {
-    // Main Home and the walkthrough share one URL, so a pushState here would
-    // leave a Back step that re-renders the page it came from — a Back tap
-    // that looks broken. The only history call in setNav stays the one that
-    // records an actual change of destination.
-    expect(setNavBody().match(/history\.(pushState|replaceState)/g)).toEqual(['history.pushState']);
+  it('writes history only through the one address writer', () => {
+    // `syncBoardUrl` owns push-vs-replace-vs-unwind (`historyStep` decides);
+    // a raw history call in setNav would be a second, drifting opinion. The
+    // popstate path passes `push=false` — there the URL is the input.
+    expect(setNavBody()).toMatch(/if \(push\) syncBoardUrl\(\)/);
+    expect(setNavBody().match(/history\.(pushState|replaceState)/g)).toBeNull();
   });
 
   it('closes it the same way the card’s own close button does', () => {
