@@ -1194,7 +1194,6 @@ async function main(): Promise<void> {
         goals: state.info?.goals ?? [],
         onGoalSet: (t, goalId) => void setTaskGoal(t, goalId),
         onDueSet: (t, dueAt) => void setTaskDue(t, dueAt),
-        onParkSet: (t, parkedUntil) => void setTaskPark(t, parkedUntil),
         onArchive: (t) => void archiveTask(t),
         onRestore: (t) => void restoreTask(t),
         onComment: (t, text, threadId) => postRowComment(t, text, threadId),
@@ -1646,16 +1645,6 @@ async function main(): Promise<void> {
     });
     if (!res.ok)
       showToast(dueAt === null ? 'Clearing the due date failed' : 'Setting the due date failed');
-  }
-
-  /** The panel's Parked field. `null` un-parks. The row itself never moves —
-   *  parking defers work without claiming it, which is the whole point. */
-  async function setTaskPark(task: HubTask, parkedUntil: number | null): Promise<void> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/park`, 'POST', {
-      parkedUntil,
-      author,
-    });
-    if (!res.ok) showToast(parkedUntil === null ? 'Un-parking failed' : 'Parking the task failed');
   }
 
   /**
@@ -2126,7 +2115,7 @@ async function main(): Promise<void> {
     if (state.detailTaskId || state.detailGoalId) renderDetail();
   };
 
-  // ── Sentry (t-scWMQmOZcpu1) ─────────────────────────────────────────────
+  // ── Sentry ──────────────────────────────────────────────────────────────
   // Errors + tracing, but only when the served shell carries the DSN meta —
   // box config, never the repo. Dynamic import: the hub entry builds with
   // splitting on, so an unconfigured page fetches zero Sentry bytes and
@@ -2153,7 +2142,7 @@ async function main(): Promise<void> {
       .catch(() => {});
   }
 
-  // ── Load report (t-scWMQmOZcpu1) ────────────────────────────────────────
+  // ── Load report ─────────────────────────────────────────────────────────
   // One line per page load, POSTed to /load-reports so "the board was slow"
   // is a recorded fact with phase attribution: msToBoot is the REST first
   // paint, msToFirstProjection is when the ydoc's task projection actually
@@ -2593,7 +2582,7 @@ async function main(): Promise<void> {
   // No loadEvents here: the Activity view and the detail panel — the only
   // readers — each fetch the log on their own open, and boot fetching ~590KB
   // nobody is looking at was a measured slice of the iPad's 10-second load
-  // (t-scWMQmOZcpu1). loadEvents itself is gated on a visible reader too,
+  // (the board-observability ticket). loadEvents itself is gated on a visible reader too,
   // so the SSE refresh calls it safely.
   void loadReviewItems().then(maybeAutoWalk);
   // A deep link straight to /home needs its payload without a nav tap.

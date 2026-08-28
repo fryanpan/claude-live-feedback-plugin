@@ -85,16 +85,18 @@ describe('the gate keys on dependency state, not on the clock', () => {
     expect(verdict.held).toEqual({ blocked: 1 });
   });
 
-  it('withholds a parked row, and takes it back once the date has passed', () => {
-    const parked = evaluateReadyWork(
-      [row({ parked: { until: 1_000, reason: 'waiting on the index rebuild' } })],
-      probes(),
-    );
-    expect(parked.ready).toEqual([]);
-    expect(parked.held).toEqual({ parked: 1 });
+  it('never sees a deliberately-deferred row at all', () => {
+    // Parking used to be a hold reason here. It is now a move to `triage`
+    // plus a comment, and `buildQueue` — the list this gate is handed — does
+    // not list triage rows. So a deferred row is absent from `considered`
+    // rather than counted and withheld, and the gate has one fewer state to
+    // be wrong about.
+    const verdict = evaluateReadyWork([row({ status: 'triage' })], probes());
+    expect(verdict.ready).toEqual([]);
+    expect(verdict.held).toEqual({ claimed: 1 });
 
-    // `parked` is computed against `now` by the caller, so a park that has
-    // expired simply arrives without the field.
+    // Positive control: the same row in the state a real queue hands over IS
+    // ready, so the assertion above is about triage and not about `row()`.
     expect(evaluateReadyWork([row()], probes()).ready).toHaveLength(1);
   });
 
@@ -113,7 +115,7 @@ describe('the gate keys on dependency state, not on the clock', () => {
     const verdict = evaluateReadyWork(
       [
         row({ id: 't-person' }),
-        row({ id: 't-parked', parked: { until: 1_000 } }),
+        row({ id: 't-claimed', status: 'in-progress' }),
         row({ id: 't-open', title: 'Cache the facet counts' }),
       ],
       probes({
@@ -124,7 +126,7 @@ describe('the gate keys on dependency state, not on the clock', () => {
 
     expect(verdict.ready).toEqual([{ id: 't-open', title: 'Cache the facet counts' }]);
     expect(verdict.considered).toBe(3);
-    expect(verdict.held).toEqual({ 'awaiting-person': 1, parked: 1 });
+    expect(verdict.held).toEqual({ 'awaiting-person': 1, claimed: 1 });
   });
 });
 
@@ -193,15 +195,16 @@ describe('a row it could not read is not a row it found healthy', () => {
   });
 
   it('reports a confident hold ahead of an unreadable field on the same row', () => {
-    // A parked row whose reviews are corrupt is PARKED. The gate read a state
-    // that settles the question on its own, so reporting it as unevaluable
-    // would manufacture an alarm about a row nobody was going to be woken for.
+    // An out-of-band row whose reviews are corrupt is BACKLOG. The gate read
+    // a state that settles the question on its own, so reporting it as
+    // unevaluable would manufacture an alarm about a row nobody was going to
+    // be woken for.
     const verdict = evaluateReadyWork(
-      [row({ parked: { until: 1_000 } })],
+      [row({ inGoalBand: false })],
       probes({ reviewState: () => ({ open: 0, unreadable: 1 }) }),
     );
 
-    expect(verdict.held).toEqual({ parked: 1 });
+    expect(verdict.held).toEqual({ backlog: 1 });
     expect(verdict.undetermined).toEqual([]);
   });
 });
@@ -240,17 +243,6 @@ describe('the backlog band is never dispatched, so it is never a reason to wake'
     expect(verdict.considered).toBe(1);
   });
 
-  it('reports a parked backlog row as backlog — the band settles it alone', () => {
-    // Parked expires; backlog does not. The stronger, non-expiring fact is
-    // the one the held count should carry.
-    const verdict = evaluateReadyWork(
-      [row({ inGoalBand: false, parked: { until: Date.now() + 60_000 } })],
-      probes(),
-    );
-
-    expect(verdict.held).toEqual({ backlog: 1 });
-  });
-
   it('still names the goal-band row standing next to a wall of backlog', () => {
     // The positive control for this describe: a gate that held everything
     // out-of-band AND in-band would pass the two tests above.
@@ -282,17 +274,6 @@ describe('a band still in triage is not dispatched either', () => {
     // Still counted. "One row held because its band is unagreed" and "nothing
     // on this board" must not reach a reader as the same sentence.
     expect(verdict.considered).toBe(1);
-  });
-
-  it('reports a parked row in a triage band as goal-triage — the band outlasts the park', () => {
-    // Same ordering rule the backlog case above documents: a park expires,
-    // an unagreed band does not, so the held count carries the durable fact.
-    const verdict = evaluateReadyWork(
-      [row({ goalInTriage: true, parked: { until: Date.now() + 60_000 } })],
-      probes(),
-    );
-
-    expect(verdict.held).toEqual({ 'goal-triage': 1 });
   });
 
   it('still names a row in an agreed band standing next to one that is not', () => {

@@ -2993,15 +2993,6 @@ body.hub-body {
   border-color: var(--red);
   color: var(--red);
 }
-/* Deferred on purpose. Quieter than `overdue` deliberately — the red chip
-   next door says something is WRONG, and a park is the opposite: somebody
-   made a decision and the board is reporting it. It still has to be legible
-   at a glance on a row that otherwise looks like ordinary ready work, which
-   is why it carries a tinted border rather than only muted text. */
-.hub-badge-parked {
-  border-color: color-mix(in srgb, var(--fg-muted) 55%, var(--border));
-  background: color-mix(in srgb, var(--fg-muted) 8%, transparent);
-}
 /* --- activity view (exactly two filters — §3.9) --- */
 /* Uptime banner (deploy readiness — §3.12 commit 11): the 99% target
    rendered where the after-the-fact review happens. */
@@ -3241,36 +3232,15 @@ body.hub-body {
   color: var(--warn-fg, #b25e09);
   background: var(--bg, #fff);
 }
-/* --- the parked note: the panel's half of a deferral, in the blocked note's
-   shape but deliberately NOT its amber. Blocking is a warning; a park is a
-   decision somebody made and the board is reporting it, so it takes the
-   neutral wash. The date input sits inside the note rather than in the fields
-   row above, which is a pinned four and is where height is scarcest. --- */
-.hub-parked-note {
-  margin: 16px 0 0;
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
-  font-size: 13.5px;
-  line-height: 1.55;
-}
-.hub-parked-note p {
-  margin: 6px 0 0;
-  overflow-wrap: anywhere;
-}
-.hub-parked-k {
+/* The archived note: the panel's half of a soft delete, in the blocked note's
+   shape but deliberately NOT its amber — this is the board reporting a
+   decision somebody made, not a warning. It exists because a deep
+   link or the restore list can open a task that is on no board, and a panel
+   that looked like any other's would make that absence read as a bug. */
+.hub-archived-k {
   color: var(--fg-muted);
   background: var(--bg, #fff);
 }
-.hub-parked-until {
-  margin: 8px 0 0;
-}
-/* The archived note: the panel's half of a soft delete, in the parked note's
-   shape and sharing its neutral wash for the same reason — this is the board
-   reporting a decision somebody made, not a warning. It exists because a deep
-   link or the restore list can open a task that is on no board, and a panel
-   that looked like any other's would make that absence read as a bug. */
 .hub-archived-note {
   margin: 16px 0 0;
   padding: 11px 12px;

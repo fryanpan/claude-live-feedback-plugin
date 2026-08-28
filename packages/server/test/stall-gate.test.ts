@@ -141,10 +141,9 @@ describe('rows the gate refuses to name', () => {
     expect(verdict.stalled).toHaveLength(0);
   });
 
-  it('a row deliberately parked into the future is never stalled', () => {
-    const verdict = evaluate({
-      tasks: [task({ id: 't-1', status: 'todo', parkedUntil: now + 100 * MIN })],
-    });
+  it('a row deliberately deferred to triage is never stalled', () => {
+    const verdict = evaluate({ tasks: [task({ id: 't-1', status: 'triage' })] });
+    expect(verdict.considered).toBe(0);
     expect(verdict.stalled).toHaveLength(0);
   });
 
