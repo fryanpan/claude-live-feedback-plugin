@@ -195,7 +195,7 @@ describe('a report comes back with the link to hand over', () => {
   it('a doc nobody has heard of gets no link rather than a broken one', async () => {
     // The spread is conditional so an unresolvable doc simply omits the
     // field. A link built anyway would point at a 404 and read as authoritative.
-    const r = await post(`/api/docs/${encodeURIComponent('task:t-does-not-exist')}/threads`, {
+    const r = await post(`/api/docs/${encodeURIComponent('task:t-nothing')}/threads`, {
       author: AGENT,
       text: 'Into the void.',
       anchor: { kind: 'subject' },
