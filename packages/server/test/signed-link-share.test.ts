@@ -145,6 +145,9 @@ describe('signed share links over HTTP', () => {
       for (const path of tampered) {
         const r = await pub(path);
         expect(r.status, path).toBe(404);
+        // Failure pages carry the same Referer hygiene as the redirect: an
+        // almost-valid URL must not leak into whatever loads next.
+        expect(r.headers.get('referrer-policy'), path).toBe('no-referrer');
         bodies.add(await r.text());
       }
       // Every failure reads identically — tampered, unsigned, never-existed.
@@ -211,6 +214,7 @@ describe('signed share links over HTTP', () => {
       legacify(s, 'a'.repeat(32));
       const r = await pub(`/s/${'a'.repeat(32)}`);
       expect(r.status).toBe(404);
+      expect(r.headers.get('referrer-policy')).toBe('no-referrer');
       // Indistinguishable from a slug that never existed.
       expect(await r.text()).toBe(await (await pub(`/s/${'f'.repeat(32)}`)).text());
     });

@@ -85,6 +85,20 @@ export async function verifySignedShare(
   );
 }
 
+/**
+ * Redact the signature from anything that might be written to a log or an
+ * error message. The signed URL IS the credential, so a full URL in a log
+ * line is a leaked share; the id and expiry are fine to keep (they identify
+ * the share without granting it). Works on whole log lines, not just clean
+ * URLs — every `sig=`-shaped param in the string is scrubbed.
+ *
+ * No server or Worker code logs request URLs today; this is the one door any
+ * future log line carrying a share URL must pass through.
+ */
+export function scrubShareUrl(text: string): string {
+  return text.replace(/([?&]sig=)[0-9a-f]+/gi, '$1[redacted]');
+}
+
 const payload = (shareId: string, exp: string): Uint8Array<ArrayBuffer> =>
   new TextEncoder().encode(`${shareId}.${exp}`) as Uint8Array<ArrayBuffer>;
 
