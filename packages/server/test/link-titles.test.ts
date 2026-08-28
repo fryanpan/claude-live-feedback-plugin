@@ -36,11 +36,22 @@ describe('POST /api/links/titles', () => {
       body: JSON.stringify(body),
     });
 
-  const titlesFor = async (urls: string[]): Promise<Record<string, string | null>> => {
+  const lookup = async (
+    urls: string[],
+  ): Promise<{
+    titles: Record<string, string | null>;
+    statuses: Record<string, string>;
+  }> => {
     const r = await post('/api/links/titles', { urls });
     expect(r.status).toBe(200);
-    return ((await r.json()) as { titles: Record<string, string | null> }).titles;
+    return (await r.json()) as {
+      titles: Record<string, string | null>;
+      statuses: Record<string, string>;
+    };
   };
+
+  const titlesFor = async (urls: string[]): Promise<Record<string, string | null>> =>
+    (await lookup(urls)).titles;
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'link-titles-'));
@@ -118,6 +129,58 @@ describe('POST /api/links/titles', () => {
     const titles = await titlesFor([docWrongWs, taskWrongWs]);
     expect(titles[docWrongWs]).toBeNull();
     expect(titles[taskWrongWs]).toBeNull();
+  });
+
+  describe('statuses — the chip beside a task or goal title', () => {
+    it('carries the task status beside the title, and follows a transition', async () => {
+      const url = `${base}/workspaces/${wsId}?task=${taskId}`;
+      const before = await lookup([url]);
+      expect(before.titles[url]).toBe('Ship the widget');
+      expect(before.statuses[url]).toBe('todo');
+
+      const moved = await post(`/api/tasks/${taskId}/transition`, {
+        to: 'in-progress',
+        author: { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' },
+      });
+      expect(moved.status).toBe(200);
+      const after = await lookup([url]);
+      expect(after.statuses[url]).toBe('in-progress');
+    });
+
+    it('resolves a GOAL deep link to the goal title and status', async () => {
+      // Goals live outside getTask (separate goalIndex) — the lookup must
+      // reach them too, or a pasted goal link stays a raw URL forever.
+      const put = await local(`/api/workspaces/${wsId}/goals`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          goals: [{ title: 'Ship search v2' }],
+          author: { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' },
+        }),
+      });
+      expect(put.status).toBe(200);
+      const created = ((await put.json()) as { created: Array<{ id: string }> }).created;
+      const goalId = created[0]?.id ?? '';
+      const url = `${base}/workspaces/${wsId}?task=${goalId}`;
+      const { titles, statuses } = await lookup([url]);
+      expect(titles[url]).toBe('Ship search v2');
+      expect(typeof statuses[url]).toBe('string');
+    });
+
+    it('carries the status for a task BODY doc address too', async () => {
+      const url = `${base}/review/${encodeURIComponent(`task:${taskId}`)}`;
+      const { titles, statuses } = await lookup([url]);
+      expect(titles[url]).toBe('Ship the widget');
+      expect(typeof statuses[url]).toBe('string');
+    });
+
+    it('gives docs and workspaces no status entry — only tasks and goals chip', async () => {
+      const docUrl = `${base}/workspaces/${wsId}/docs/${encodeURIComponent(docId)}`;
+      const wsUrl = `${base}/workspaces/${wsId}`;
+      const { statuses } = await lookup([docUrl, wsUrl]);
+      expect(statuses[docUrl]).toBeUndefined();
+      expect(statuses[wsUrl]).toBeUndefined();
+    });
   });
 
   it('refuses a malformed body', async () => {

@@ -9,7 +9,12 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { renderCommentMarkdown } from '../src/comment-markdown.ts';
-import { _resetLinkTitlesForTest, hydrateLinkTitles, primeLinkTitle } from '../src/link-titles.ts';
+import {
+  _resetLinkTitlesForTest,
+  hydrateLinkTitles,
+  primeLinkTitle,
+  staleTaskLinkStatuses,
+} from '../src/link-titles.ts';
 
 // happy-dom's page origin — the one origin the renderer may trust.
 const DOC_URL = `${location.origin}/workspaces/w-abc123/docs/doc-1`;
@@ -41,9 +46,18 @@ describe('renderCommentMarkdown — bare workspace URLs', () => {
     expect(out).toContain('&lt;img');
   });
 
-  it('leaves the label of an explicit markdown link alone — the author chose it', () => {
+  it('keeps the label of an explicit markdown link but marks it for status hydration', () => {
     const out = renderCommentMarkdown(`[the design doc](${DOC_URL})`);
-    expect(out).toContain('>the design doc</a>');
+    // The author chose the text — the title never replaces it — but the
+    // anchor is still marked so a task/goal target can grow a status chip.
+    expect(out).toContain('>the design doc<');
+    expect(out).toContain('data-ws-link=');
+    expect(out).toContain('data-ws-custom');
+  });
+
+  it('leaves an explicit link to a NON-workspace URL entirely alone', () => {
+    const out = renderCommentMarkdown('[the PR](https://github.com/owner/repo/pull/1)');
+    expect(out).toContain('>the PR</a>');
     expect(out).not.toContain('data-ws-link');
   });
 
@@ -141,6 +155,82 @@ describe('hydrateLinkTitles', () => {
     const texts = [...el.querySelectorAll('a')].map((a) => a.textContent);
     expect(texts).toContain('Redline Design');
     expect(texts).toContain('Ship the widget');
+  });
+
+  it('appends a status chip when the server says the target is a task/goal', async () => {
+    const taskUrl = `${location.origin}/workspaces/w-abc123?task=t-42fixture`;
+    const el = mount(taskUrl);
+    const fetcher = async () =>
+      new Response(
+        JSON.stringify({
+          titles: { [taskUrl]: 'Ship the widget' },
+          statuses: { [taskUrl]: 'in-progress' },
+        }),
+        { status: 200 },
+      );
+    await hydrateLinkTitles(el, fetcher);
+    const a = el.querySelector('a');
+    expect(a?.textContent).toBe('Ship the widgetIn progress');
+    const chip = a?.querySelector('.ws-status-chip');
+    expect(chip?.textContent).toBe('In progress');
+    expect(chip?.classList.contains('ws-chip-in-progress')).toBe(true);
+  });
+
+  it('keeps a custom label and still appends the chip', async () => {
+    const taskUrl = `${location.origin}/workspaces/w-abc123?task=t-42fixture`;
+    const el = mount(`[my words](${taskUrl})`);
+    const fetcher = async () =>
+      new Response(
+        JSON.stringify({
+          titles: { [taskUrl]: 'Ship the widget' },
+          statuses: { [taskUrl]: 'done' },
+        }),
+        { status: 200 },
+      );
+    await hydrateLinkTitles(el, fetcher);
+    const a = el.querySelector('a');
+    expect(a?.textContent).toBe('my wordsDone');
+    expect(a?.textContent).not.toContain('Ship the widget');
+    expect(a?.querySelector('.ws-status-chip')?.classList.contains('ws-chip-done')).toBe(true);
+  });
+
+  it('adds no chip when the server returns no status for the URL', async () => {
+    const el = mount(DOC_URL);
+    const fetcher = async () =>
+      new Response(JSON.stringify({ titles: { [DOC_URL]: 'Redline Design' } }), { status: 200 });
+    await hydrateLinkTitles(el, fetcher);
+    expect(el.querySelector('.ws-status-chip')).toBeNull();
+  });
+
+  it('renders the chip synchronously on re-render once the status is cached', () => {
+    const taskUrl = `${location.origin}/workspaces/w-abc123?task=t-42fixture`;
+    primeLinkTitle(taskUrl, 'Ship the widget', 'todo');
+    const out = renderCommentMarkdown(taskUrl);
+    expect(out).toContain(
+      '>Ship the widget<span class="ws-status-chip ws-chip-todo">To do</span></a>',
+    );
+  });
+
+  it('staleTaskLinkStatuses re-pends chipped anchors so the next pass refreshes them', async () => {
+    const taskUrl = `${location.origin}/workspaces/w-abc123?task=t-42fixture`;
+    const el = mount(taskUrl);
+    const respond = (status: string) => async () =>
+      new Response(
+        JSON.stringify({
+          titles: { [taskUrl]: 'Ship the widget' },
+          statuses: { [taskUrl]: status },
+        }),
+        { status: 200 },
+      );
+    await hydrateLinkTitles(el, respond('todo'));
+    expect(el.querySelector('.ws-status-chip')?.textContent).toBe('To do');
+
+    staleTaskLinkStatuses(el);
+    expect(el.querySelector('a')?.hasAttribute('data-ws-pending')).toBe(true);
+    await hydrateLinkTitles(el, respond('done'));
+    const chips = el.querySelectorAll('.ws-status-chip');
+    expect(chips.length).toBe(1);
+    expect(chips[0]?.textContent).toBe('Done');
   });
 
   it('keeps batching past the 100-URL cap until every pending link is resolved', async () => {
