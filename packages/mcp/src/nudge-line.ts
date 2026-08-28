@@ -58,6 +58,28 @@ export interface NudgePayload {
   links?: unknown[];
 }
 
+/** One stuck row, as `stall-nudge.ts` puts it on the wire. Every field is
+ *  optional here and required there, deliberately: this renderer also has to
+ *  survive a frame from a server older than the field it is reading. */
+export interface StalledRowPayload {
+  id?: string;
+  title?: string;
+  bucket?: string;
+  quietMs?: number;
+}
+
+/** What `workspace.stalled` carries. Three lists, because the lead's next act
+ *  differs for each — see `stalledLine`. */
+export interface StallPayload {
+  taskId?: string;
+  title?: string;
+  stalledCount?: number;
+  consideredCount?: number;
+  rows?: StalledRowPayload[];
+  unfiled?: StalledRowPayload[];
+  undetermined?: { count?: number; reasons?: string[] };
+}
+
 /** Mirrors mcp.ts's helper of the same name. Duplicated rather than shared
  *  because mcp.ts exports nothing; the copy is what lets the rendered line be
  *  asserted from a test. */
@@ -190,4 +212,85 @@ export function reviewAnsweredLine(p: NudgePayload): string {
       ? '; walk its links as the propagation checklist'
       : '';
   return `[workspace.review_answered] ${subject} has an answer — read it and act on it now${walk}.`;
+}
+
+/** How many rows the line names before it starts counting instead. Five is
+ *  what fits in a channel message a reader takes in at a glance; the rest are
+ *  summarised rather than dropped, because a truncated list a reader cannot
+ *  tell from a complete one is worse than either. The FRAME carries them all
+ *  — see `stall-nudge.ts`. */
+const STALL_ROWS_SHOWN = 5;
+
+/** One stuck row as the line names it: what it is, and how long it has been
+ *  silent. The bucket is left out — the reader's action is the same for both
+ *  stalled kinds, and the word "in-progress" beside a title reads as status
+ *  rather than as diagnosis. */
+function stalledRowClause(row: StalledRowPayload): string {
+  const named = row.title ? `"${truncate(row.title, 50)}" (${row.id})` : (row.id ?? 'a row');
+  return row.quietMs === undefined ? named : `${named} quiet ${humanDuration(row.quietMs)}`;
+}
+
+/** The named rows, then a count of whatever did not fit. */
+function stalledRowsClause(rows: readonly StalledRowPayload[]): string {
+  const shown = rows.slice(0, STALL_ROWS_SHOWN).map(stalledRowClause);
+  const rest = rows.length - shown.length;
+  return rest > 0 ? `${shown.join('; ')}; and ${rest} more` : shown.join('; ');
+}
+
+/**
+ * Render `workspace.stalled` — work that was supposed to be moving and is not.
+ *
+ * This wake differs from `readyIdleLine` in what it asks for. Ready work needs
+ * one row picked up, so that line names one and points at the queue. A stall
+ * frame names work that already has an owner who stopped, and the lead's job
+ * is to go and drive EACH row — so the list is what the line is for, and it
+ * carries several rather than a head and a count.
+ *
+ * Two other lists ride the same frame and each asks for something different,
+ * which is why they are separate sentences rather than one merged total:
+ *
+ *  - `unfiled` is a row waiting on a person nobody actually asked. Nothing is
+ *    stalled there; the remedy is to file the question where they read it, and
+ *    telling the lead to "drive" it would send them to chase somebody who was
+ *    never asked.
+ *  - `undetermined` is rows the pass could not read. Spelled loudly and with
+ *    which way the uncertainty falls, for the reason the ready line spells it:
+ *    a row nobody could read that arrives as "already handled" is the exact
+ *    swap this clause exists to prevent.
+ */
+export function stalledLine(p: StallPayload): string {
+  const parts: string[] = [];
+  const rows = p.rows ?? [];
+  const count = p.stalledCount ?? rows.length;
+  const denominator =
+    p.consideredCount === undefined ? '' : ` (of ${p.consideredCount} open row(s) checked)`;
+  if (count > 0) {
+    const subject = count === 1 ? '1 task has' : `${count} tasks have`;
+    const list = rows.length > 0 ? ` — ${stalledRowsClause(rows)}` : '';
+    parts.push(
+      `${subject} stopped moving${denominator}${list}. Drive each one: read its thread, ` +
+        'then unblock it, hand it to somebody, or park it with a reason.',
+    );
+  }
+  const unfiled = p.unfiled ?? [];
+  if (unfiled.length > 0) {
+    const noun = unfiled.length === 1 ? 'row is' : 'rows are';
+    parts.push(
+      `${unfiled.length} ${noun} waiting on a person with NO question filed — ` +
+        `${stalledRowsClause(unfiled)}. File the ask where they will see it, or the wait is invisible.`,
+    );
+  }
+  const unread = p.undetermined?.count ?? p.undetermined?.reasons?.length ?? 0;
+  if (unread > 0) {
+    const reasons = p.undetermined?.reasons ?? [];
+    parts.push(
+      `${unread} open row(s) could NOT be evaluated (${
+        reasons.length > 0 ? reasons.join(', ') : 'reason not reported'
+      }) and are not counted healthy. Read them with list_tasks before treating this board as fine.`,
+    );
+  }
+  // Never empty: the server does not send this frame with all three lists
+  // empty, and a line that could render to a bare slug would be the
+  // no-subject wake the whole file exists to prevent.
+  return `[workspace.stalled] ${parts.join(' ') || 'the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.'}`;
 }

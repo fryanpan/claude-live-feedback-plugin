@@ -71,6 +71,18 @@ const readyNudgeIdleMs =
     ? readyNudgeMinutes * 60_000
     : undefined;
 
+// How long a row may go untouched before the board tells its lead it has
+// STALLED (stall-nudge.ts) — a different question from the one above, which
+// asks whether ready work has been picked up. Same guard rails: minutes
+// because it is a number an operator types, and a non-numeric or non-positive
+// value falls back to the default rather than reporting every open row as
+// stalled on every tick.
+const stallNudgeMinutes = Number(readRenamedEnv(process.env, 'CW_STALL_NUDGE_MINUTES') ?? '');
+const stallNudgeQuietMs =
+  Number.isFinite(stallNudgeMinutes) && stallNudgeMinutes > 0
+    ? stallNudgeMinutes * 60_000
+    : undefined;
+
 // Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
 // machine's LAN names, and private IPv4 ranges are detected automatically;
 // this covers anything we can't detect (a reverse proxy in front, a custom
@@ -308,6 +320,7 @@ for (let i = 0; i < 20 && !handle; i++) {
       summarizer,
       ...(codeSenderChoice.sender ? { codeSender: codeSenderChoice.sender } : {}),
       ...(readyNudgeIdleMs !== undefined ? { readyNudgeIdleMs } : {}),
+      ...(stallNudgeQuietMs !== undefined ? { stallNudgeQuietMs } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),

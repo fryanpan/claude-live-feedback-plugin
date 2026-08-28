@@ -14144,6 +14144,38 @@ function reviewAnsweredLine(p) {
   const walk = Array.isArray(p.links) && p.links.length > 0 ? "; walk its links as the propagation checklist" : "";
   return `[workspace.review_answered] ${subject} has an answer — read it and act on it now${walk}.`;
 }
+var STALL_ROWS_SHOWN = 5;
+function stalledRowClause(row) {
+  const named = row.title ? `"${truncate3(row.title, 50)}" (${row.id})` : row.id ?? "a row";
+  return row.quietMs === undefined ? named : `${named} quiet ${humanDuration2(row.quietMs)}`;
+}
+function stalledRowsClause(rows) {
+  const shown = rows.slice(0, STALL_ROWS_SHOWN).map(stalledRowClause);
+  const rest = rows.length - shown.length;
+  return rest > 0 ? `${shown.join("; ")}; and ${rest} more` : shown.join("; ");
+}
+function stalledLine(p) {
+  const parts = [];
+  const rows = p.rows ?? [];
+  const count = p.stalledCount ?? rows.length;
+  const denominator = p.consideredCount === undefined ? "" : ` (of ${p.consideredCount} open row(s) checked)`;
+  if (count > 0) {
+    const subject = count === 1 ? "1 task has" : `${count} tasks have`;
+    const list = rows.length > 0 ? ` — ${stalledRowsClause(rows)}` : "";
+    parts.push(`${subject} stopped moving${denominator}${list}. Drive each one: read its thread, ` + "then unblock it, hand it to somebody, or park it with a reason.");
+  }
+  const unfiled = p.unfiled ?? [];
+  if (unfiled.length > 0) {
+    const noun = unfiled.length === 1 ? "row is" : "rows are";
+    parts.push(`${unfiled.length} ${noun} waiting on a person with NO question filed — ` + `${stalledRowsClause(unfiled)}. File the ask where they will see it, or the wait is invisible.`);
+  }
+  const unread = p.undetermined?.count ?? p.undetermined?.reasons?.length ?? 0;
+  if (unread > 0) {
+    const reasons = p.undetermined?.reasons ?? [];
+    parts.push(`${unread} open row(s) could NOT be evaluated (${reasons.length > 0 ? reasons.join(", ") : "reason not reported"}) and are not counted healthy. Read them with list_tasks before treating this board as fine.`);
+  }
+  return `[workspace.stalled] ${parts.join(" ") || "the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board."}`;
+}
 
 // packages/mcp/src/self-authored.ts
 var COMMENT_EVENTS = new Set(["thread.created", "thread.replied"]);
@@ -17348,6 +17380,9 @@ async function emitHubChannelMessage(event, rawPayload) {
       break;
     case "workspace.review_answered":
       body = reviewAnsweredLine(p);
+      break;
+    case "workspace.stalled":
+      body = stalledLine(p);
       break;
     case "agent.attached":
     case "agent.detached":
