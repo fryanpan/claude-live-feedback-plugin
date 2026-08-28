@@ -121,3 +121,22 @@ describe('createHaikuNotesComposer', () => {
     expect(composer?.compose(input)).rejects.toThrow('empty');
   });
 });
+
+describe('captured task links in the prompt', () => {
+  it('offers each link and the instruction to cite it', () => {
+    const { user } = buildNotesPrompt({
+      ...input,
+      taskLinks: [
+        { title: 'Strip overlaps navbar', url: '/workspaces/w-b?task=t-9', status: 'todo' },
+      ],
+    });
+    expect(user).toContain('[Strip overlaps navbar](/workspaces/w-b?task=t-9)');
+    expect(user).toContain('todo');
+    expect(user.toLowerCase()).toContain('markdown link');
+  });
+
+  it('says nothing about tasks when the tick captured none', () => {
+    const { user } = buildNotesPrompt(input);
+    expect(user.toLowerCase()).not.toContain('markdown link');
+  });
+});

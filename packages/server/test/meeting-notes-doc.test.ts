@@ -197,3 +197,82 @@ describe('withServerNotesSinks', () => {
     expect(markdownOf(ydoc)).toContain('- landed');
   });
 });
+
+describe('withServerNotesSinks task capture', () => {
+  const captureWorld = () => {
+    const ydoc = docFrom('# Planning\n');
+    const rooms = {
+      get: (id: string) =>
+        id === 'doc-a'
+          ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Q3 planning', setId: 'w-1' } }
+          : undefined,
+    };
+    const created: unknown[] = [];
+    const wakes: unknown[] = [];
+    const board = {
+      listTasks: (workspaceId: string) =>
+        workspaceId === 'w-1'
+          ? [{ id: 't-live', title: 'Live navbar strip task', status: 'todo' as const }]
+          : [],
+      createTask: () => {
+        created.push(1);
+        return { ok: false as const, error: 'workspace-retired' };
+      },
+      transition: () => ({ ok: false as const }),
+    };
+    const extractor = {
+      name: 'stub',
+      extract: () => Promise.resolve([{ kind: 'reference' as const, taskId: 't-live' }]),
+    };
+    return { rooms, board, created, wakes, extractor };
+  };
+
+  it('assembles a per-tick capture that resolves the doc board and links rows', async () => {
+    const w = captureWorld();
+    const wired = withServerNotesSinks(
+      { composer: { name: 's', compose: async () => 'n' }, taskExtractor: w.extractor },
+      {
+        rooms: () => w.rooms,
+        tasks: () => ({ listTasks: () => [] }),
+        captureBoard: () => w.board,
+        onTaskReady: (wake) => w.wakes.push(wake),
+      },
+    );
+    const links = await wired.captureTasks?.({
+      docId: 'doc-a',
+      meetingId: 'm-1',
+      turns: [{ turn: 1, text: 'The navbar strip task again.' }],
+    });
+    expect(links).toEqual([
+      { title: 'Live navbar strip task', url: '/workspaces/w-1?task=t-live', status: 'todo' },
+    ]);
+    expect(w.created).toHaveLength(0);
+  });
+
+  it('a doc outside any workspace captures nothing', async () => {
+    const w = captureWorld();
+    const wired = withServerNotesSinks(
+      { composer: { name: 's', compose: async () => 'n' }, taskExtractor: w.extractor },
+      {
+        rooms: () => w.rooms,
+        tasks: () => ({ listTasks: () => [] }),
+        captureBoard: () => w.board,
+      },
+    );
+    const links = await wired.captureTasks?.({
+      docId: 'doc-unknown',
+      meetingId: 'm-1',
+      turns: [{ turn: 1, text: 'Anything.' }],
+    });
+    expect(links).toEqual([]);
+  });
+
+  it('no extractor means no capture hook at all', () => {
+    const w = captureWorld();
+    const wired = withServerNotesSinks(
+      { composer: { name: 's', compose: async () => 'n' } },
+      { rooms: () => w.rooms, tasks: () => ({ listTasks: () => [] }), captureBoard: () => w.board },
+    );
+    expect(wired.captureTasks).toBeUndefined();
+  });
+});
