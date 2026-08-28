@@ -135,7 +135,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   let hubId: string;
   let taskId: string;
   let decisionId: string;
-  let hubShare: { shareId: string; slug: string };
+  let hubShare: { shareId: string; url: string };
   let hubCookie: string;
   /** A second, unrelated hub workspace and a live share on it. This is the
    *  "authorized visitor who is not in THIS workspace" — the shape that
@@ -182,8 +182,10 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       },
     });
 
-  const redeem = async (slug: string): Promise<string> => {
-    const r = await pub(`/s/${slug}`);
+  /** Redeem a signed share URL and return the session cookie value. */
+  const redeem = async (shareUrl: string): Promise<string> => {
+    const u = new URL(shareUrl);
+    const r = await pub(`${u.pathname}${u.search}`);
     expect(r.status).toBe(302);
     const m = (r.headers.get('set-cookie') ?? '').match(new RegExp(`${SHARE_COOKIE}=([^;]+)`));
     expect(m).not.toBeNull();
@@ -262,11 +264,11 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
     const hs = await post('/api/share/link', { workspaceId: hubId, label: 'hub share' });
     expect(hs.status).toBe(200);
     hubShare = ((await hs.json()) as { share: typeof hubShare }).share;
-    hubCookie = await redeem(hubShare.slug);
+    hubCookie = await redeem(hubShare.url);
 
     const os = await post('/api/share/link', { workspaceId: otherId, label: 'other share' });
     expect(os.status).toBe(200);
-    otherCookie = await redeem(((await os.json()) as { share: { slug: string } }).share.slug);
+    otherCookie = await redeem(((await os.json()) as { share: { url: string } }).share.url);
   });
 
   afterAll(async () => {
@@ -276,11 +278,12 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
 
   describe('minting + landing', () => {
     it('mints a link share against a hub workspace (no bound member docs required)', () => {
-      expect(hubShare.slug).toMatch(/^[0-9a-f]{32}$/);
+      expect(new URL(hubShare.url).searchParams.get('sig')).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it('redeeming lands IN the hub — never a review URL, never a lobby', async () => {
-      const r = await pub(`/s/${hubShare.slug}`);
+      const u = new URL(hubShare.url);
+      const r = await pub(`${u.pathname}${u.search}`);
       expect(r.status).toBe(302);
       expect(r.headers.get('location')).toBe(`/workspaces/${hubId}`);
     });
@@ -732,8 +735,8 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   describe('revocation hangs up the hub, it does not just refuse', () => {
     it('closes the board room socket and the workspace stream a share had open', async () => {
       const mint = await post('/api/share/link', { workspaceId: hubId });
-      const share = ((await mint.json()) as { share: { shareId: string; slug: string } }).share;
-      const cookie = await redeem(share.slug);
+      const share = ((await mint.json()) as { share: { shareId: string; url: string } }).share;
+      const cookie = await redeem(share.url);
 
       const client = connectDoc(`${wsBase}/y/ws%3A${hubId}`, {
         host: PUBLIC_HOST,

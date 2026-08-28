@@ -4,12 +4,16 @@
  *
  * Two auth modes:
  *
- * - `link` — an unguessable slug IS the credential (a capability URL).
- *   Needs no Cloudflare Zero Trust at all: no team domain, no account id,
- *   no API token. Opening `/s/<slug>` exchanges the slug for a signed
- *   session cookie; every later request is authorized from that cookie.
- *   Anyone holding the link is in, so TTLs are short and the scope check
- *   (middleware/host-guard.ts) is what bounds a leak.
+ * - `link` — a SIGNED capability URL (the S3-presigned pattern). The URL
+ *   carries the share id, an expiry, and an HMAC over both under a
+ *   server-held key (share/url-signing.ts); a tampered or expired URL is
+ *   indistinguishable from one that never existed. Needs no Cloudflare Zero
+ *   Trust at all: no team domain, no account id, no API token — though an
+ *   optional edge Worker (infra/share-link-worker/) runs the same check in
+ *   front of the tunnel. Opening `/share/<id>?exp=…&sig=…` exchanges the
+ *   URL for a signed session cookie; every later request is authorized from
+ *   that cookie. Anyone holding the link is in, so TTLs are short and the
+ *   scope check (middleware/host-guard.ts) is what bounds a leak.
  *
  * - `access` — Cloudflare Access in front of a per-share hostname. The
  *   visitor proves an email address, and the per-app AUD means a token
@@ -47,8 +51,14 @@ export type ShareSurface = 'workspace' | 'site' | 'mockup';
 export type ShareMode = 'link' | 'access';
 
 /** A week. Long enough for a review to sit over a weekend, short enough
- *  that a forgotten link doesn't live forever. Callers may override. */
+ *  that a forgotten link doesn't live forever. Callers may override.
+ *  `access` mode only — link mode has its own default below. */
 export const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/** Two weeks — the link-mode default (Bryan, 2026-08-28: share links are
+ *  temporary-use). The expiry is embedded in the signed URL at issue time,
+ *  and the TTL tooling (`setTtl`) re-issues the URL when it moves. */
+export const DEFAULT_LINK_TTL_SECONDS = 14 * 24 * 60 * 60;
 
 export interface Share {
   /** Random 8-hex id used as the registry primary key. */
@@ -73,14 +83,20 @@ export interface Share {
    */
   workspaceId: string;
   /**
-   * `link` mode only: the unguessable capability slug (128 bits of CSPRNG).
-   * Possession of this grants access until `expiresAt`, so treat it like a
-   * password — never log it, never put it in an error message.
+   * LEGACY, `link` mode: the pre-signing capability slug. `/s/<slug>` no
+   * longer redeems — the signed URL replaced it — but records that carry one
+   * keep it (soft behavior: a capability removed, not user content deleted).
+   * New link shares mint no slug at all.
    */
   slug?: string;
   /** Public hostname the reviewer visits. */
   hostname: string;
-  /** Full URL the reviewer clicks. */
+  /**
+   * Full URL the reviewer clicks. For `link` mode this is a SIGNED URL
+   * whose `exp` mirrors `expiresAt` at the moment it was computed — the API
+   * layer recomputes it on demand (`signedUrlFor`), which is also how a
+   * legacy `/s/` record migrates: its stored url is simply never served.
+   */
   url: string;
   /** `access` mode only: Cloudflare Access AUD tag the JWT must match. */
   audience?: string;
@@ -100,7 +116,7 @@ export interface CreateShareLinkReq {
   /** The BOARD in scope. There is no `docId` and no `entryDocId`
    *  alternative: file the review on a board and share the board. */
   workspaceId: string;
-  /** Defaults to DEFAULT_TTL_SECONDS (one week). */
+  /** Defaults to DEFAULT_LINK_TTL_SECONDS (two weeks). */
   ttlSeconds?: number;
   /** Optional human label shown in list_shares. */
   label?: string;

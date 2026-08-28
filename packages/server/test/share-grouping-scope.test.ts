@@ -138,8 +138,10 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       },
     });
 
-  const redeem = async (slug: string): Promise<string> => {
-    const r = await pub(`/s/${slug}`);
+  /** Redeem a signed share URL and return the session cookie value. */
+  const redeem = async (shareUrl: string): Promise<string> => {
+    const u = new URL(shareUrl);
+    const r = await pub(`${u.pathname}${u.search}`);
     expect(r.status).toBe(302);
     const m = (r.headers.get('set-cookie') ?? '').match(new RegExp(`${SHARE_COOKIE}=([^;]+)`));
     expect(m).not.toBeNull();
@@ -235,7 +237,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
 
     const hs = await post('/api/share/link', { workspaceId: boardA, label: 'board alpha share' });
     expect(hs.status).toBe(200);
-    cookieA = await redeem(((await hs.json()) as { share: { slug: string } }).share.slug);
+    cookieA = await redeem(((await hs.json()) as { share: { url: string } }).share.url);
   });
 
   afterAll(() => {
@@ -360,8 +362,8 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
   describe('revoking the board share hangs up the member doc it opened', () => {
     it('closes a member-doc socket and stream the board share authorized', async () => {
       const mint = await post('/api/share/link', { workspaceId: boardA });
-      const share = ((await mint.json()) as { share: { shareId: string; slug: string } }).share;
-      const cookie = await redeem(share.slug);
+      const share = ((await mint.json()) as { share: { shareId: string; url: string } }).share;
+      const cookie = await redeem(share.url);
 
       const client = connectDoc(`ws://localhost:${handle.port}/y/${encodeURIComponent(memberA)}`, {
         host: PUBLIC_HOST,
@@ -464,7 +466,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       const gs = await post('/api/share/link', { workspaceId: narrowBoard });
       expect(gs.status).toBe(200);
       const narrowCookie = await redeem(
-        ((await gs.json()) as { share: { slug: string } }).share.slug,
+        ((await gs.json()) as { share: { url: string } }).share.url,
       );
       // Positive control: its own board, its own review's tree, its own member.
       expect((await pub(`/api/workspaces/${narrowBoard}`, narrowCookie)).status).toBe(200);
@@ -510,7 +512,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
 
       const gs = await post('/api/share/link', { workspaceId: secondBoard });
       const gammaCookie = await redeem(
-        ((await gs.json()) as { share: { slug: string } }).share.slug,
+        ((await gs.json()) as { share: { url: string } }).share.url,
       );
 
       // Positive control: the gamma visitor is a real visitor on its board.
@@ -525,7 +527,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
       // …and a third board that was never linked still gets nothing.
       const bs = await post('/api/share/link', { workspaceId: boardB });
       const betaCookie = await redeem(
-        ((await bs.json()) as { share: { slug: string } }).share.slug,
+        ((await bs.json()) as { share: { url: string } }).share.url,
       );
       expect((await pub(`/api/workspaces/${boardB}`, betaCookie)).status).toBe(200); // control
       expect((await pub('/api/workspaces/rev-shared/tree', betaCookie)).status).toBe(403);
