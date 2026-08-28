@@ -3559,21 +3559,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (result.error === 'invalid_email') return j(400, { error: 'invalid_email' });
             return j(401, { error: result.error });
           }
+          // Read BEFORE the upsert creates the row: `firstSignIn` is what
+          // sends the client to the display-name screen, and a returning
+          // person who already chose a name must never be asked again.
+          const firstSignIn = identities.byEmail(result.email) === null;
           const rec = identities.upsertByEmail(result.email);
           if (rec.status !== 'active') {
             // An archived identity proved control of its mailbox and still
             // may not sign in. Un-archiving is somebody's decision.
             return j(403, { error: 'identity_archived' });
           }
-          return new Response(JSON.stringify({ ok: true, user: userForIdentity(rec) }), {
-            status: 200,
-            headers: {
-              'content-type': 'application/json',
-              'set-cookie': emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
-                secure: isSecureRequest(req),
-              }),
+          return new Response(
+            JSON.stringify({ ok: true, user: userForIdentity(rec), firstSignIn }),
+            {
+              status: 200,
+              headers: {
+                'content-type': 'application/json',
+                'set-cookie': emailSessionCookieHeader(mintSession(rec.id), emailSessionKey(), {
+                  secure: isSecureRequest(req),
+                }),
+              },
             },
-          });
+          );
         }
 
         if (pathname === '/api/auth/session' && req.method === 'GET') {
@@ -3606,6 +3613,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               'set-cookie': clearedSessionCookieHeader({ secure: isSecureRequest(req) }),
             },
           });
+        }
+
+        if (pathname === '/api/auth/profile' && req.method === 'POST') {
+          // The one write the sign-in flow makes about a person: their chosen
+          // display name. Session-gated, and ONLY the session decides whose —
+          // the body names no identity, so nobody can rename somebody else by
+          // claiming to be them.
+          const rec = sessionIdentityFor(req);
+          if (!rec) return j(401, { error: 'not_signed_in' });
+          const body = await safeJson(req);
+          const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
+          if (!displayName) return j(400, { error: 'invalid_display_name' });
+          const updated = identities.setDisplayName(rec.id, displayName);
+          if (!updated) return j(401, { error: 'not_signed_in' });
+          return j(200, { ok: true, user: userForIdentity(updated) });
         }
 
         // --- REST: shares ---
@@ -7856,6 +7878,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (resp) return resp;
         }
 
+        // --- Sign-in page ---
+        // Server-rendered shell like the hub's, so the route works — and the
+        // page's behavior all lives in /app/signin.js. Identity, not access:
+        // the tailnet reaches everything signed out; this page only lets a
+        // person claim who they are (`/api/auth/*` above).
+        if (pathname === '/signin' && req.method === 'GET') {
+          return new Response(renderSigninShell(), {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
+
         // --- Landing ---
         if (pathname === '/') {
           const model = buildLandingModel(
@@ -8433,6 +8466,31 @@ function renderHubShell(
   <body class="hub-body">
     <div id="hub-root" data-workspace-id="${safeId}"></div>
     <script type="module" src="/app/hub.js"></script>${widget}
+  </body>
+</html>`;
+}
+
+/**
+ * The sign-in page shell. Same pattern as the hub shell — server-rendered so
+ * the route answers whether or not the app bundle is built, all behavior in
+ * the bundle (`/app/signin.js`), the app's own stylesheet so the page looks
+ * like the product it signs you into.
+ */
+function renderSigninShell(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <title>Sign in · Fryanpan Workspaces</title>
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#2e7dd7" />
+    <link rel="stylesheet" href="/app/styles.css" />
+    <link rel="stylesheet" href="/app/tokens.css" />
+  </head>
+  <body class="signin-body">
+    <div id="signin-root"></div>
+    <script type="module" src="/app/signin.js"></script>
   </body>
 </html>`;
 }
