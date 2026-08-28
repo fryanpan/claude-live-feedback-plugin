@@ -8418,6 +8418,181 @@ body.redline-mode #toggle-suggest-mode {
   }
 }
 
+/* ================= SIGN-IN PAGE (/signin) ================= */
+/* Three states of one centered card — email entry, code entry, first-time
+   display name (mockup: auth-signin.html, approved 2026-08-28). One fluid
+   column; the card fits every state inside iPad-landscape's ~750px usable
+   height without scrolling, and shrinks to 430px with margin to spare. */
+.signin-body {
+  display: flex;
+  align-items: safe center;
+  justify-content: center;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 24px 16px;
+  font-family: var(--sans);
+  color: var(--fg);
+  background: var(--bg-panel);
+}
+#signin-root {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.signin-card {
+  width: min(380px, 100%);
+  text-align: center;
+}
+.signin-wordmark {
+  margin: 0 0 28px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.signin-card h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 600;
+}
+.signin-sub {
+  margin: 0 0 24px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+.signin-sub strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+.signin-field-label {
+  display: block;
+  margin: 0 0 6px 2px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+}
+.signin-form input[type="email"],
+.signin-form input[type="text"] {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 16px; /* ≥16px so iOS Safari doesn't zoom the field on focus */
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  outline: none;
+}
+.signin-form input:focus,
+.signin-code input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(46, 125, 215, 0.18);
+}
+.signin-btn {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 11px 16px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.signin-btn:hover {
+  background: #2568b8;
+}
+.signin-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.signin-quiet {
+  margin-top: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+.signin-note {
+  font-size: 12px;
+}
+/* Links here are <button>s (they act, not navigate) styled as links, plus
+   the one real <a> to /signin — one look for both. */
+.signin-link,
+a.signin-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.signin-link:hover {
+  text-decoration: underline;
+}
+.signin-link:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+  text-decoration: none;
+}
+.signin-code {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 4px 0 0;
+}
+.signin-code input {
+  width: 46px;
+  height: 56px;
+  padding: 0;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 24px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  outline: none;
+}
+.signin-switch {
+  margin-top: 20px;
+  font-size: 13px;
+}
+.signin-attribution {
+  margin-top: 18px;
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--fg-muted);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.signin-attribution b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.signin-error {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--red);
+}
+/* Narrow screens: the six boxes plus gaps must fit 430px minus page padding. */
+@media (max-width: 480px) {
+  .signin-code {
+    gap: 6px;
+  }
+  .signin-code input {
+    width: 40px;
+    height: 50px;
+    font-size: 20px;
+  }
+}
+
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */
 /* Full-viewport scrim shown once per browser (until a name is stored or the
    prompt is skipped). Single fluid column, so it needs no separate mobile
