@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { walkHandoff, walkNextUrl } from '../src/hub/hub-model';
 
-// The landing page's review chip and "Review all" bar (t-DA4rBTmdP0d2) hand
+// The landing page's review chip and "Review all" bar (the walkthrough
+// handoff ticket) hand
 // the client `?walk=1` (open the walkthrough on arrival) and `&then=<ids>`
 // (workspaces still holding items, to visit after this queue drains). These
 // two pure helpers are the whole contract; hub-app just wires them.
@@ -52,7 +53,10 @@ describe('hub-app wires the handoff', () => {
   });
 
   it('auto-opens the walkthrough after the first review-items load', () => {
-    expect(src).toMatch(/loadReviewItems\(\)\.then\(maybeAutoWalk\)/);
+    // `deepLinkTick` bundles the ?walk= flag with the ?item= boot deep link —
+    // both wait on the same queue, so they share every retry hook.
+    expect(src).toMatch(/loadReviewItems\(\)\.then\(deepLinkTick\)/);
+    expect(src).toMatch(/const deepLinkTick[\s\S]{0,80}maybeAutoWalk\(\)/);
   });
 
   it('chains to walkNextUrl when the queue drains', () => {

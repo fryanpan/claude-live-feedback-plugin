@@ -22,6 +22,14 @@ import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
+import {
+  type BoardLocation,
+  buildBoardUrl,
+  historyStep,
+  parseBoardLocation,
+  resourceOf,
+  taskShareUrl,
+} from './board-url.ts';
 import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
 import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
@@ -59,8 +67,6 @@ import {
   humanBlockerRows,
   initialsOf,
   isTaskArchived,
-  navFromPath,
-  navPath,
   paneForNav,
   panelAsks,
   parseQuickAdd,
@@ -211,32 +217,15 @@ function workspaceIdFromPath(): string {
 const WALK_HANDOFF_DEADLINE_MS = 4000;
 
 /**
- * The shareable address of one task. It is the board's own URL plus `?task=`,
- * which is the deep link the app already reads at start-up — so the link a
- * person pastes into a message opens the workspace AND the task, and says
- * which workspace it belongs to on its face rather than being an opaque id.
+ * The shareable address of one task: the deep link the app reads at start-up,
+ * so the link a person pastes into a message opens the workspace AND the task,
+ * and says which workspace it belongs to on its face rather than being an
+ * opaque id. Always the canonical bare-path shape — `board-url.ts` owns it —
+ * whatever nav page it is copied from, because that is the shape the link-chip
+ * renderer resolves to a title.
  */
 function taskUrl(taskId: string): string {
-  const url = new URL(location.href);
-  url.hash = '';
-  url.search = `?task=${encodeURIComponent(taskId)}`;
-  return url.toString();
-}
-
-/**
- * Keep the address bar pointing at whatever the panel is showing, so a reload,
- * a bookmark, or a copy of the browser's own URL all land back on this task.
- * `replaceState` rather than `pushState`: opening a task from a row is not a
- * navigation the Back button should have to unwind — Escape closes the panel,
- * and Back should still leave the board.
- */
-function syncTaskParam(taskId: string | null): void {
-  const params = new URLSearchParams(location.search);
-  if ((params.get('task') ?? null) === taskId) return;
-  if (taskId) params.set('task', taskId);
-  else params.delete('task');
-  const q = params.toString();
-  history.replaceState(null, '', `${location.pathname}${q ? `?${q}` : ''}${location.hash}`);
+  return taskShareUrl(location.origin, workspaceIdFromPath(), taskId);
 }
 
 function wsUrl(docId: string, type: string): string {
@@ -451,7 +440,13 @@ async function main(): Promise<void> {
   });
   const author = { id: user.id, name: user.name, kind: user.kind, color: user.color };
 
-  const initialNav = navFromPath(location.pathname);
+  // Everything the address names, read once: nav destination, an open task
+  // or goal (and the thread it is aimed at), Home's walkthrough item, the
+  // archived filter. The panel ids go straight into state — the projection
+  // they resolve against arrives after first paint, and the deadline near the
+  // bottom of main() is what finally decides a claim was stale.
+  const bootLoc = parseBoardLocation(location.pathname, location.search);
+  const initialNav = bootLoc.nav;
   const state: HubState = {
     info: null,
     tasks: new Map(),
@@ -465,16 +460,16 @@ async function main(): Promise<void> {
     tab: tabForNav(initialNav) ?? 'all',
     doneWindow: DEFAULT_DONE_WINDOW,
     view: initialNav === 'activity' ? 'activity' : 'board',
-    showArchived: new URLSearchParams(location.search).get('view') === 'archived',
+    showArchived: bootLoc.archived,
     activityFilter: 'all',
     events: [],
     uptime: null,
     agents: [],
     pluginRelease: null,
     clientRelease: null,
-    detailTaskId: null,
-    detailGoalId: null,
-    detailThreadId: null,
+    detailTaskId: bootLoc.task,
+    detailGoalId: bootLoc.goal,
+    detailThreadId: bootLoc.thread,
     discussion: { loading: false, threads: [] },
     discussionTaskId: null,
     reviewItems: [],
@@ -483,6 +478,22 @@ async function main(): Promise<void> {
     walkProgress: { cleared: 0, last: null },
     followedKey: null,
   };
+
+  // ── The address bar's working state (functions live next to setNav) ─────
+  /** What the URL currently says, in parsed form — `historyStep`'s "prev". */
+  let urlLoc: BoardLocation = bootLoc;
+  /** True while popstate is writing URL → state, so the renders it triggers
+   *  don't write state → URL back over the entry being applied. */
+  let applyingHistory = false;
+  /** The boot URL's goal claim, held until the projection confirms or the
+   *  deadline denies it — `renderDetail` must not clear an unconfirmed goal
+   *  the way it clears one that genuinely left the board. */
+  let pendingBootGoal = bootLoc.goal;
+  /** The boot URL aimed at a thread; checked once against the loaded
+   *  discussion, then dropped. */
+  let bootThreadPending = bootLoc.thread !== null;
+  /** The boot URL named a walkthrough item; opened when the queue holds it. */
+  let pendingBootItem = bootLoc.item;
 
   const initial = await fetchJson<{ workspace: HubWorkspaceInfo }>(
     `/api/workspaces/${encodeURIComponent(workspaceId)}`,
@@ -727,8 +738,11 @@ async function main(): Promise<void> {
       renderDetail();
       return;
     }
+    // The doc's canonical workspace address rather than the legacy `/review/`
+    // one, so what lands in the reader's address bar is the shape every other
+    // surface emits and the link-chip renderer titles.
     location.assign(
-      `/review/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}`,
     );
   }
 
@@ -752,19 +766,96 @@ async function main(): Promise<void> {
   /**
    * Show or leave the restore list, and put it in the address bar.
    *
-   * `replaceState`, matching `syncTaskParam` next to it and for the same
-   * reason: this is a filter on the board rather than a page, and Back should
-   * leave the workspace rather than unwind a list somebody glanced at.
+   * A filter on the board rather than a page: `historyStep` answers `replace`
+   * for it, so Back still leaves the workspace rather than unwinding a list
+   * somebody glanced at.
    */
   function setShowArchived(on: boolean): void {
     if (state.showArchived === on) return;
     state.showArchived = on;
-    const params = new URLSearchParams(location.search);
-    if (on) params.set('view', 'archived');
-    else params.delete('view');
-    const q = params.toString();
-    history.replaceState(null, '', `${location.pathname}${q ? `?${q}` : ''}${location.hash}`);
+    syncBoardUrl();
     renderBoardRegion();
+  }
+
+  /** The board state the URL names, read whole. `renderDetail`'s task-wins
+   *  rule and the walkthrough's "-1 means closed" are folded in here so the
+   *  address never claims a panel the screen is not showing. */
+  function currentBoardLocation(): BoardLocation {
+    const panel = state.detailTaskId ?? state.detailGoalId;
+    return {
+      nav: state.nav,
+      task: state.detailTaskId,
+      goal: state.detailTaskId ? null : state.detailGoalId,
+      thread: panel ? state.detailThreadId : null,
+      item: state.walkIndex >= 0 ? state.walkKey : null,
+      archived: state.showArchived,
+    };
+  }
+
+  /**
+   * The one writer of the address bar. Reads the whole board state, asks
+   * `historyStep` whether the change is a new place (push), a rewrite of the
+   * current one (replace), or a resource closing, and writes accordingly —
+   * every state change the URL can name funnels through here (`renderDetail`,
+   * `renderWalkthrough`, `setNav`, `setShowArchived`), so the address bar is
+   * always the deep link to what is on screen.
+   *
+   * Closing unwinds with Back only when THIS document pushed the entry — the
+   * marker rides `history.state`. A panel arriving by pasted link is the
+   * session's first entry, and Back from it would leave the app; that case
+   * rewrites to the clean board URL instead. (`?task=` was replaceState-only
+   * for exactly that fear; the marker is what makes push safe.)
+   */
+  function syncBoardUrl(): void {
+    // While popstate applies an entry, the URL is the input, not the output.
+    // While a boot ?item= waits for its queue, the renders that have not
+    // opened it yet must not strip the param they have not honoured.
+    if (applyingHistory || pendingBootItem) return;
+    const next = currentBoardLocation();
+    const step = historyStep(urlLoc, next);
+    const closing = resourceOf(urlLoc);
+    urlLoc = next;
+    const url = buildBoardUrl(workspaceId, next, location.search);
+    const here = `${location.pathname}${location.search}`;
+    if (step === 'push') {
+      if (url !== here) history.pushState({ res: resourceOf(next) }, '', url);
+    } else if (step === 'close') {
+      if ((history.state as { res?: string } | null)?.res === closing) history.back();
+      else history.replaceState(null, '', url);
+    } else if (url !== here) {
+      history.replaceState(history.state, '', url);
+    }
+  }
+
+  /**
+   * URL → state, for Back/Forward. The inverse of `syncBoardUrl`, and
+   * idempotent: it re-renders whatever the entry names, so landing on a state
+   * the click path already produced paints nothing new.
+   */
+  function applyHistoryLocation(): void {
+    const loc = parseBoardLocation(location.pathname, location.search);
+    applyingHistory = true;
+    try {
+      setNav(loc.nav, false);
+      setShowArchived(loc.archived);
+      state.detailTaskId = loc.task;
+      state.detailGoalId = loc.goal;
+      state.detailThreadId = loc.thread;
+      if (loc.item) {
+        // Aim the walkthrough where the entry says. If the item was answered
+        // since, `walkPosition`'s index fallback lands the reader nearby.
+        state.walkProgress = { cleared: 0, last: null };
+        state.walkKey = loc.item;
+        state.walkIndex = Math.max(state.walkIndex, 0);
+      } else if (state.walkIndex >= 0) {
+        closeWalkthrough();
+      }
+      renderWalkthrough();
+      renderDetail();
+    } finally {
+      applyingHistory = false;
+    }
+    urlLoc = loc;
   }
 
   function renderBoardRegion(): void {
@@ -908,7 +999,6 @@ async function main(): Promise<void> {
    * undo the reader's choice on the way back.
    */
   function setNav(nav: HubNav, push = true): void {
-    const same = state.nav === nav;
     state.nav = nav;
     state.pane = paneForNav(nav);
     // Leaving the board leaves the restore list. It is a view OF the board,
@@ -918,18 +1008,18 @@ async function main(): Promise<void> {
     state.view = nav === 'activity' ? 'activity' : 'board';
     const tab = tabForNav(nav);
     if (tab !== undefined) state.tab = tab;
-    // Arriving at Home means arriving at the TOP of Home. The walkthrough is a
-    // page inside Home with no URL of its own, so `/workspaces/<id>/home` names
-    // the Home page and nothing else — every way of asking for that address
-    // (the nav item, the board banner's "go home", Back onto it) has to show
-    // it. Deliberately outside the `same` guard below: tapping Home while
-    // already on Home is exactly the case that used to do nothing at all, with
-    // the reader stuck on a review card and only its own close button out.
+    // Arriving at Home means arriving at the TOP of Home: `/workspaces/<id>/home`
+    // names the Home page, and the walkthrough's own address is that page plus
+    // `?item=`. Unconditional — tapping Home while already on Home is exactly
+    // the case that used to do nothing at all, with the reader stuck on a
+    // review card and only its own close button out.
     if (nav === 'home') closeWalkthrough();
-    // No history entry for the reset — main Home and the walkthrough share one
-    // URL, so a push here would leave a Back step that re-renders the page it
-    // came from. `same` gates the pushState and only that.
-    if (push && !same) history.pushState(null, '', navPath(workspaceId, nav));
+    // The address follows the state: a changed destination is a push, a
+    // same-nav tap rewrites in place, and the walkthrough the line above
+    // closed unwinds — `historyStep` owns the distinction, so `same` gates
+    // nothing here any more. `push=false` is the popstate path, where the URL
+    // is the input rather than the output.
+    if (push) syncBoardUrl();
     syncTabTitle();
     renderHomeRegion();
     renderBoardRegion();
@@ -1125,15 +1215,22 @@ async function main(): Promise<void> {
             now: Date.now(),
           },
         };
+        // A deep-linked thread aim that the loaded discussion does not hold
+        // is gone, not loading — drop it gracefully, once.
+        if (state.discussionTaskId === section.id && !goalDiscussion.loading) {
+          noteStaleBootThread(goalDiscussion);
+        }
         renderedGoalId = section.id;
         renderedDetailId = null;
         detailEventsFor = null;
-        syncTaskParam(null);
+        syncBoardUrl();
         return;
       }
       // The goal left the board under us (removed from the list, or the
-      // projection has not caught up) — fall through to an empty panel.
-      state.detailGoalId = null;
+      // projection has not caught up) — fall through to an empty panel. A
+      // boot deep link is the second case by construction, so its claim
+      // survives until the deadline in main() gives up on it.
+      if (state.detailGoalId !== pendingBootGoal) state.detailGoalId = null;
     }
     // Past this point the goal panel is not what is showing, and its container
     // is its own — so it has to be told to close rather than being replaced.
@@ -1170,6 +1267,11 @@ async function main(): Promise<void> {
       task && state.discussionTaskId === task.id
         ? state.discussion
         : { loading: true, threads: [] };
+    // A deep-linked thread aim that the loaded discussion does not hold is
+    // gone, not loading — drop it gracefully, once, leaving the panel open.
+    if (task && state.discussionTaskId === task.id && !discussion.loading) {
+      noteStaleBootThread(discussion);
+    }
     taskDetailData.value = {
       task,
       discussion: task ? discussion : undefined,
@@ -1225,9 +1327,23 @@ async function main(): Promise<void> {
       if (detailOpener?.isConnected) detailOpener.focus();
       detailOpener = null;
     }
-    syncTaskParam(task?.id ?? null);
+    syncBoardUrl();
     renderedDetailId = task?.id ?? null;
     renderedGoalId = null;
+  }
+
+  /**
+   * A boot deep link's `?thread=` aim, checked once against a discussion that
+   * has actually loaded: absent then means gone (resolved away, or a stale
+   * paste), and the graceful fallback is the panel without the aim — plus a
+   * word about it, because a silent nothing reads as a broken link.
+   */
+  function noteStaleBootThread(discussion: TaskDiscussion): void {
+    if (!bootThreadPending || !state.detailThreadId) return;
+    bootThreadPending = false;
+    if (discussion.threads.some((t) => t.id === state.detailThreadId)) return;
+    state.detailThreadId = null;
+    showToast('That comment thread is gone — the link may be outdated.');
   }
 
   /**
@@ -1433,6 +1549,10 @@ async function main(): Promise<void> {
         },
       },
     };
+    // The address names the item on screen (`?item=`): opening the
+    // walkthrough is a push, advancing through it rewrites in place, closing
+    // unwinds — `historyStep` sees one `walk` resource however far it steps.
+    syncBoardUrl();
   }
 
   /**
@@ -2402,7 +2522,12 @@ async function main(): Promise<void> {
     });
   }
   window.addEventListener('popstate', () => {
-    setNav(navFromPath(location.pathname), false);
+    // A history move is the reader going somewhere; whatever a boot deep link
+    // was still waiting for, they have left it behind.
+    pendingBootItem = null;
+    pendingBootGoal = null;
+    bootThreadPending = false;
+    applyHistoryLocation();
   });
   (document.getElementById('hub-done-filter') as HTMLSelectElement).addEventListener(
     'change',
@@ -2504,6 +2629,7 @@ async function main(): Promise<void> {
       },
       closeDetail: () => {
         state.detailTaskId = null;
+        state.detailThreadId = null;
         renderDetail();
       },
       archiveTask: (taskId) => {
@@ -2516,11 +2642,45 @@ async function main(): Promise<void> {
     }),
   );
 
-  // Deep link: /workspaces/<id>?task=<taskId> opens the detail on load —
-  // this is also how the voice fast path lands a task lookup from another
-  // surface.
-  const deepLinkTask = new URLSearchParams(location.search).get('task');
-  if (deepLinkTask) state.detailTaskId = deepLinkTask;
+  // Deep links (?task=, ?goal=, ?thread=, Home's ?item=) went into `state`
+  // before the first render — see `bootLoc` at the top of main(). What is
+  // left here is the waiting: the projection that can confirm them lands
+  // after first paint, so "not here yet" and "not here" are only
+  // distinguishable by a deadline — the same economics as ?walk= below.
+  const maybeOpenBootItem = (): void => {
+    if (!pendingBootItem) return;
+    const q = currentQueue();
+    const idx = q.items.findIndex((i) => i.key === pendingBootItem);
+    const item = q.items[idx];
+    if (!item) return; // don't burn — the projection may still be coming
+    pendingBootItem = null;
+    openInQueue(item, idx);
+  };
+  if (bootLoc.task || bootLoc.goal || bootLoc.item) {
+    setTimeout(() => {
+      if (pendingBootItem) {
+        pendingBootItem = null;
+        showToast('That review item is not in the queue any more — it may already be answered.');
+        syncBoardUrl();
+      }
+      pendingBootGoal = null;
+      const goneTask =
+        bootLoc.task !== null &&
+        state.detailTaskId === bootLoc.task &&
+        !state.tasks.has(bootLoc.task);
+      const goneGoal =
+        bootLoc.goal !== null &&
+        state.detailGoalId === bootLoc.goal &&
+        !(state.info?.goals ?? []).some((g) => g.id === bootLoc.goal);
+      if (goneTask || goneGoal) {
+        state.detailTaskId = null;
+        state.detailGoalId = null;
+        state.detailThreadId = null;
+        showToast('Nothing on this board matches that link — it may be outdated.');
+        renderDetail();
+      }
+    }, WALK_HANDOFF_DEADLINE_MS);
+  }
 
   // Deep link from the landing page's review chip / "Review all" bar:
   // ?walk=1 opens the walkthrough once the queue arrives, and ?then= names
@@ -2540,7 +2700,11 @@ async function main(): Promise<void> {
     pendingWalk = false;
     startWalkthrough();
   };
-  autoWalkTick = maybeAutoWalk;
+  const deepLinkTick = (): void => {
+    maybeAutoWalk();
+    maybeOpenBootItem();
+  };
+  autoWalkTick = deepLinkTick;
   if (pendingWalk) {
     // Still nothing by now and the sync has had its chance: the board is
     // genuinely clear (someone answered since the landing page rendered).
@@ -2588,7 +2752,7 @@ async function main(): Promise<void> {
   // nobody is looking at was a measured slice of the iPad's 10-second load
   // (the board-observability ticket). loadEvents itself is gated on a visible reader too,
   // so the SSE refresh calls it safely.
-  void loadReviewItems().then(maybeAutoWalk);
+  void loadReviewItems().then(deepLinkTick);
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
 }
