@@ -78,6 +78,7 @@ import {
   buildLandingModel,
 } from './landing.ts';
 import { linkTitlesFor } from './link-titles.ts';
+import type { MeetingNotesDeps } from './meeting-notes.ts';
 import { MeetingRelay } from './meeting-protocol.ts';
 import { MeetingStore } from './meetings.ts';
 import {
@@ -602,6 +603,14 @@ export interface ServerOptions {
    */
   transcription?: TranscriptionEngine;
   /**
+   * Pause-driven meeting notes: composer, quiet threshold, and the sink the
+   * composed notes go to. **No default**, same seam rule as `transcription`
+   * directly above — the real composer is an LLM call, and nothing that
+   * merely spins a server up may construct one. Omitting it means meetings
+   * record transcripts and compose nothing. See `meeting-notes.ts`.
+   */
+  meetingNotes?: MeetingNotesDeps;
+  /**
    * Liveness-marker interval for the uptime measurement (§3.12 commit 11).
    * The monitor appends `server.tick` lines to every hub workspace's
    * events.jsonl so the gap analysis has density even on an idle board.
@@ -939,6 +948,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const meetingRelay = new MeetingRelay({
     store: meetingStore,
     engine: opts.transcription ?? null,
+    notes: opts.meetingNotes ?? null,
     // Lifecycle only. The words never touch this hub — see meeting-protocol.
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
   });

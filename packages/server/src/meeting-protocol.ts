@@ -17,6 +17,11 @@
  */
 
 import { type MeetingServerMessage, parseMeetingClientMessage } from '@feedback/core';
+import {
+  type MeetingNotesDeps,
+  type MeetingNotesSession,
+  beginNotesSession,
+} from './meeting-notes.ts';
 import type { ActiveMeeting, MeetingStore } from './meetings.ts';
 import type { TranscriptionEngine, TranscriptionSession } from './transcribe.ts';
 
@@ -30,6 +35,12 @@ export interface MeetingRelayDeps {
   store: MeetingStore;
   /** No engine is the configured-off state, not an error. See `transcribe.ts`. */
   engine: TranscriptionEngine | null;
+  /**
+   * Pause-driven notes. Same no-default seam as the engine — null means no
+   * meeting composes notes, and nothing constructed here can reach an LLM.
+   * See `meeting-notes.ts`.
+   */
+  notes: MeetingNotesDeps | null;
   /** Lifecycle facts only — never a transcript frame. */
   broadcast: (docId: string, payload: { event: string } & Record<string, unknown>) => void;
 }
@@ -46,6 +57,8 @@ interface Conn {
   state: ConnState;
   meeting: ActiveMeeting | null;
   session: TranscriptionSession | null;
+  /** This meeting's notes pipeline, when the server has a composer. */
+  notes: MeetingNotesSession | null;
   /** Audio that arrived before the engine session finished opening. */
   pending: Uint8Array[];
   /**
@@ -67,6 +80,7 @@ export class MeetingRelay {
       state: 'idle',
       meeting: null,
       session: null,
+      notes: null,
       pending: [],
       pendingStop: null,
     });
@@ -153,6 +167,19 @@ export class MeetingRelay {
     }
     conn.state = 'opening';
     conn.meeting = meeting;
+    // The notes pipeline exists for exactly the meeting's lifetime. Created
+    // before the handshake so the closure below can feed it, but it holds no
+    // resource until a turn arrives — abandoning it on a failed handshake
+    // leaks nothing.
+    const notesDeps = this.deps.notes;
+    // Held as a local, not read back off `conn`: `stop()` detaches the conn's
+    // fields BEFORE awaiting the engine close, and the close is what settles
+    // the turn in progress — the meeting's last sentence must still have a
+    // pipeline to land in when that settle arrives.
+    const notes = notesDeps
+      ? beginNotesSession(notesDeps, { docId, meetingId: meeting.meetingId })
+      : null;
+    conn.notes = notes;
 
     let session: TranscriptionSession;
     try {
@@ -168,6 +195,9 @@ export class MeetingRelay {
           // Only settled turns reach the file. A partial is a view of a turn
           // still being revised, and the record keeps what the turn became.
           if (turn.final) meeting.recordTurn(turn.turn, turn.text);
+          // The notes pipeline sees EVERY frame: a partial is speech in
+          // progress, which is exactly the evidence that defers a pause tick.
+          notes?.onTurn(turn);
         },
         onError: (message) => {
           this.send(ws, { type: 'error', message });
@@ -179,6 +209,8 @@ export class MeetingRelay {
       meeting.stop();
       conn.state = 'idle';
       conn.meeting = null;
+      // Nothing has fed it, so there is nothing to flush — just let it go.
+      conn.notes = null;
       // The socket stays open after `unavailable`, so a client may retry
       // `start` on this same connection — and audio buffered during THIS
       // failed handshake must not be replayed into that next meeting's
@@ -238,8 +270,10 @@ export class MeetingRelay {
     conn.state = 'ending';
     const meeting = conn.meeting;
     const session = conn.session;
+    const notes = conn.notes;
     conn.session = null;
     conn.meeting = null;
+    conn.notes = null;
     conn.pending = [];
     // Closing the session is what flushes the turn in progress, so the last
     // sentence of a meeting reaches `onTurn` — and therefore the file —
@@ -248,6 +282,13 @@ export class MeetingRelay {
       await session?.close();
     } catch (err) {
       console.error('[meeting] engine close failed:', err);
+    }
+    // AFTER the close: the flush above settles the turn in progress, and the
+    // meeting's last sentence belongs in its notes as much as in its file.
+    try {
+      await notes?.end();
+    } catch (err) {
+      console.error('[meeting] notes flush failed:', err);
     }
     conn.state = 'idle';
     if (!meeting) return;
