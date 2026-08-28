@@ -50,6 +50,11 @@ import {
   sessionNeedsRefresh,
   verifySession as verifyEmailSession,
 } from './auth/session.ts';
+import {
+  mintWidgetToken,
+  verifyWidgetToken,
+  widgetTokenKey as deriveWidgetTokenKey,
+} from './auth/widget-token.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
@@ -102,6 +107,7 @@ import {
   shareScopeAllows,
 } from './middleware/host-guard.ts';
 import { injectWidget } from './mockup-widget.ts';
+import { widgetAuthPage } from './widget-auth-page.ts';
 import {
   PARK_MIGRATION_ACTOR,
   type ParkMigrationResult,
@@ -2853,6 +2859,44 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     emailSessionKeyCache ??= deriveSessionKey(cookieKey());
     return emailSessionKeyCache;
   };
+  let widgetTokenKeyCache: string | null = null;
+  const widgetTokenKey = (): string => {
+    widgetTokenKeyCache ??= deriveWidgetTokenKey(cookieKey());
+    return widgetTokenKeyCache;
+  };
+
+  /**
+   * The widget popup-token off a request's Authorization header, or null.
+   *
+   * Only `Bearer wt1.…` is ours — any other Authorization value is somebody
+   * else's protocol and must stay invisible here, so presenting one can
+   * never trip the widget-token 401.
+   */
+  const widgetBearerOf = (req: Request): string | null => {
+    const header = req.headers.get('authorization');
+    if (!header) return null;
+    const m = header.match(/^Bearer\s+(wt1\..+)$/i);
+    return m?.[1] ?? null;
+  };
+
+  /**
+   * The identity a widget token attests to, or null. The mirror of
+   * `sessionIdentityFor`: the token names a session, so every liveness rule
+   * a cookie faces — the failed-closed denylist, the per-session revocation
+   * logout writes, roster status, the `sessionsValidFrom` watermark —
+   * applies to the token on every use. Remove any of these and a revoked
+   * session keeps commenting through its token.
+   */
+  const widgetTokenIdentityFor = (raw: string): IdentityRecord | null => {
+    if (sessionRevocations.failedClosed()) return null;
+    const claims = verifyWidgetToken(raw, widgetTokenKey());
+    if (!claims) return null;
+    if (sessionRevocations.isRevoked(claims.sessionId)) return null;
+    const rec = identities.get(claims.identityId);
+    if (!rec || rec.status !== 'active') return null;
+    if (claims.sessionIssuedAt < rec.sessionsValidFrom) return null;
+    return rec;
+  };
 
   /**
    * Which client the login rate limits count this request against.
@@ -3127,6 +3171,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          * flag off this function is byte-for-byte what it was.
          */
         const authorFor = (claimed: unknown): User | undefined => {
+          // Rung 0: a verified widget popup-token. NOT behind the flag,
+          // unlike the cookie rung — no request carries this header by
+          // accident, so presenting the token is itself the opt-in, and the
+          // whole point of the handshake is attribution on a surface the
+          // cookie can never reach. An invalid token never lands here: the
+          // gate below 401s it before any route runs.
+          if (widgetIdentity) return userForIdentity(widgetIdentity);
           if (requireEmailAuth) {
             const proven = provenIdentityFor();
             if (proven) return userForIdentity(proven);
@@ -3159,6 +3210,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return chips.length > 0 ? { ...t, tasks: chips } : t;
         };
 
+        /**
+         * The identity a widget popup-token proved, resolved once below the
+         * host gate and read by `authorFor` (rung 0). Stays null when no
+         * token was presented; a presented-but-invalid token never gets this
+         * far — the gate answers 401 for the whole request.
+         */
+        let widgetIdentity: IdentityRecord | null = null;
         // Set when this request comes from a SHARE visitor (either mode).
         // Everything below treats a non-null value as "untrusted outsider":
         // their claimed identity is rewritten and doc metadata is redacted.
@@ -3315,6 +3373,80 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // reaches them only if `shareScopeAllows` lets them, and it does not:
         // link mode keeps minting `guest-` identities and this is not a way
         // around that.
+        // --- Widget popup-token gate ---
+        // Resolve a presented token ONCE for the whole request, and fail
+        // loudly: an invalid token 401s rather than silently downgrading the
+        // write to anonymous — the widget hears "signed out" on the request
+        // that proved it, not never. Runs below the host gate so a share
+        // visitor's request is already scoped; runs above every route so no
+        // write path can forget the check.
+        {
+          const rawWidgetToken = widgetBearerOf(req);
+          if (rawWidgetToken !== null) {
+            widgetIdentity = widgetTokenIdentityFor(rawWidgetToken);
+            if (widgetIdentity === null) return j(401, { error: 'widget_token_invalid' });
+          }
+        }
+
+        // --- The widget popup-token handshake ---
+        // The popup page itself. The handshake is popup-only: framed, it
+        // would mint with nothing visible on screen, so DENY.
+        if (pathname === '/widget-auth' && req.method === 'GET') {
+          return new Response(widgetAuthPage(), {
+            status: 200,
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              'x-frame-options': 'DENY',
+              'cache-control': 'no-store',
+            },
+          });
+        }
+
+        // Exchange the session cookie for a widget token. Same-origin only:
+        // this is the popup page's route, and the cookie could not arrive
+        // cross-site anyway (SameSite=Lax, and CORS here never grants
+        // credentials) — the Origin check is the second, independent wall.
+        if (pathname === '/api/auth/widget-token' && req.method === 'POST') {
+          const callerOrigin = req.headers.get('origin');
+          if (callerOrigin !== null && callerOrigin !== policyFor(req).requestOrigin) {
+            return j(403, { error: 'same_origin_only' });
+          }
+          const rec = sessionIdentityFor(req);
+          if (!rec) return j(401, { error: 'not_signed_in' });
+          const body = await safeJson(req);
+          const target = typeof body?.origin === 'string' ? body.origin : '';
+          // The origin the popup will postMessage the token TO. Validated
+          // against the same policy that governs which pages may write —
+          // an origin that could not post a comment cannot receive a token
+          // — and refusing `null`/absent keeps the popup from ever being
+          // told to broadcast.
+          if (target === '' || !isAllowedBrowserOrigin(target, policyFor(req))) {
+            return j(403, { error: 'origin_not_allowed' });
+          }
+          const claims = verifyEmailSession(
+            readCookie(req.headers.get('cookie'), SESSION_COOKIE),
+            emailSessionKey(),
+          );
+          const token = claims ? mintWidgetToken(claims, widgetTokenKey()) : null;
+          if (token === null) {
+            // A surviving v1 cookie: no session id, so a token tied to it
+            // could not die with a logout. The daily sliding refresh
+            // upgrades it; until then the popup says to sign in again.
+            return j(401, { error: 'session_needs_refresh' });
+          }
+          return j(200, { ok: true, token, user: userForIdentity(rec), origin: target });
+        }
+
+        // What the widget calls on load to learn whether its stored token
+        // still stands. An invalid token never reaches here — the gate
+        // above 401s it — so this only distinguishes "no token" from live.
+        if (pathname === '/api/auth/widget-session' && req.method === 'GET') {
+          return j(200, {
+            authenticated: widgetIdentity !== null,
+            ...(widgetIdentity ? { user: userForIdentity(widgetIdentity) } : {}),
+          });
+        }
+
         if (pathname === '/api/auth/start' && req.method === 'POST') {
           const body = await safeJson(req);
           const email = typeof body?.email === 'string' ? body.email : '';
