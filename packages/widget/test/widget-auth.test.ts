@@ -210,6 +210,17 @@ describe('posting with a token', () => {
     expect(posts.length).toBe(2);
     expect(authHeaderOf(posts[0] as FetchCall)).toBe('Bearer wt1.revoked-token');
     expect(authHeaderOf(posts[1] as FetchCall)).toBeNull();
+    // The retry's BODY is rebuilt too: the server trusts a claimed author on
+    // the local surface, so re-sending the signed-in identity without its
+    // token would let the revoked person keep their name on every comment.
+    const authorOf = (c: FetchCall) =>
+      (JSON.parse(String(c.init?.body)) as { author: { id: string } }).author.id;
+    // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
+    const anonId = (el as any).anonUser.id as string;
+    expect(anonId).not.toBe('user-abc');
+    expect(authorOf(posts[0] as FetchCall)).toBe('user-abc');
+    expect(authorOf(posts[1] as FetchCall)).not.toBe('user-abc');
+    expect(authorOf(posts[1] as FetchCall)).toBe(anonId);
     // Signed out for real: token gone, offer back.
     expect(localStorage.getItem('cfw:authToken')).toBeNull();
     expect(el.shadowRoot!.querySelector('.auth-signin')).toBeTruthy();

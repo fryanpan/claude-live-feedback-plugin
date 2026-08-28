@@ -539,14 +539,22 @@ class FeedbackWidgetEl extends HTMLElement {
    * POST with the token when one is held. On a 401 the server has refused
    * the token (revoked, expired) — sign out locally and retry once without
    * it, so the comment lands as anonymous rather than vanishing.
+   *
+   * Takes a BUILDER, not a built request: the body names `this.user` as the
+   * claimed author, and the server trusts that claim on the local surface.
+   * A retry that re-sent the request built before `clearAuth()` would carry
+   * the revoked person's name without their token — exactly the attribution
+   * the 401 just refused. Rebuilding after the sign-out sends the anonymous
+   * identity the widget now actually holds.
    */
-  private async authedPost(url: string, init: RequestInit): Promise<Response> {
-    if (!this.authToken) return fetch(url, init);
+  private async authedPost(url: string, build: () => RequestInit): Promise<Response> {
+    if (!this.authToken) return fetch(url, build());
+    const init = build();
     const headers = { ...(init.headers as Record<string, string>), authorization: `Bearer ${this.authToken}` };
     const res = await fetch(url, { ...init, headers });
     if (res.status !== 401) return res;
     this.clearAuth();
-    return fetch(url, init);
+    return fetch(url, build());
   }
 
   // --- Element picker ---
@@ -681,21 +689,21 @@ class FeedbackWidgetEl extends HTMLElement {
   }
 
   private async postNewThread(anchor: ElementAnchor, text: string): Promise<void> {
-    await this.authedPost(`${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`, {
+    await this.authedPost(`${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads`, () => ({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ author: this.user, text, anchor }),
-    });
+    }));
   }
 
   private async postReply(threadId: string, text: string): Promise<void> {
     await this.authedPost(
       `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/comments`,
-      {
+      () => ({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: this.user, text }),
-      },
+      }),
     );
   }
 
@@ -703,7 +711,7 @@ class FeedbackWidgetEl extends HTMLElement {
     const action = status === 'resolved' ? 'resolve' : 'reopen';
     await this.authedPost(
       `${this.httpBase()}/api/docs/${encodeURIComponent(this.opts.docId)}/threads/${encodeURIComponent(threadId)}/${action}`,
-      { method: 'POST' },
+      () => ({ method: 'POST' }),
     );
   }
 
