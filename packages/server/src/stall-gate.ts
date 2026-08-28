@@ -72,6 +72,40 @@ import {
  */
 export const STALL_QUIET_DEFAULT_MS = 20 * 60_000;
 
+/**
+ * How many quiet windows a row with a WATCHING builder dispatch gets before
+ * it stalls. Two: the ordinary window, plus one full missed check-in.
+ *
+ * A registered dispatch changes what the silence means. An undispatched row's
+ * silence says nobody is on it, and twenty minutes of that is worth a wake. A
+ * row with a builder whose worktree is being watched has somebody on it BY
+ * CONSTRUCTION — the builder promised work by existing — so its silence is a
+ * missed check-in rather than an empty seat, and one window of it is routine
+ * (a builder reading code, or a watcher between events). Two windows of
+ * nothing anywhere — no worktree churn, no thread, no board event — is the
+ * builder gone, and that IS worth a wake, under its own name (`builder-silent`
+ * below) so the lead probes or replaces the builder rather than hunting for
+ * someone to claim the row.
+ *
+ * Like the quiet default above this is a decision, not a measurement, so it
+ * is exported and overridable via `CW_BUILDER_SILENT_MULTIPLIER` — the number
+ * to turn if silent builders are being named too eagerly or too late. It only
+ * ever applies to a dispatch that is actually watching: a dead or unarmed
+ * watcher cannot tell activity from absence, and a degraded signal must not
+ * loosen detection, so such a row keeps the ordinary clock unchanged.
+ */
+export const BUILDER_SILENT_MULTIPLIER_DEFAULT = 2;
+
+/**
+ * The bucket a dispatch-silent row carries in the wake frame. Not one of
+ * `classifyOpenTasks`'s buckets on purpose: the classifier's vocabulary is
+ * shared with the keep-moving report and describes board state, while this
+ * word describes what the WAKE knows on top of it — a builder that stopped
+ * reporting. The remedy differs per bucket (see `StalledRow.bucket`), which
+ * is why it is a distinct word rather than a flag on `in-progress`.
+ */
+export const BUILDER_SILENT_BUCKET = 'builder-silent';
+
 /** Why a row could not be evaluated. A closed vocabulary, matching
  *  `ready-gate.ts`, so the rendered line can name the condition rather than
  *  saying that something went wrong. */
@@ -83,8 +117,10 @@ export interface StalledRow {
   title: string;
   /** Which keep-moving bucket put it here — `in-progress` (claimed and gone
    *  quiet), `ready-unpicked` (nothing blocking it and nobody on it), or
-   *  `blocked-on-owner-unfiled` on the `unfiled` list. The lead's next move
-   *  differs per bucket, so the frame must not flatten them into one word. */
+   *  `blocked-on-owner-unfiled` on the `unfiled` list — or the gate's own
+   *  `builder-silent` (a watched builder that stopped reporting; probe or
+   *  replace it). The lead's next move differs per bucket, so the frame must
+   *  not flatten them into one word. */
   bucket: string;
   /** How long since anything touched the row — a transition, an edit, or a
    *  comment on its discussion. */
@@ -135,6 +171,19 @@ export interface EvaluateStallsInput {
    *  row moving; without this a ticket whose whole conversation is live on its
    *  thread reads as abandoned. */
   threadActivity?: Map<string, number>;
+  /**
+   * Rows with an OPEN dispatch whose worktree watcher is WATCHING — and only
+   * those. The caller must exclude a dispatch whose watcher failed to arm or
+   * died: such a row's activity cannot be seen, so it keeps the ordinary
+   * clock, exactly the pre-dispatch behavior — a degraded signal must never
+   * make detection stricter or looser than it was. Worktree activity itself
+   * arrives merged into `threadActivity` by the caller; this set only says
+   * whose silence is a builder's.
+   */
+  watchingDispatchTaskIds?: ReadonlySet<string>;
+  /** Test seam over `BUILDER_SILENT_MULTIPLIER_DEFAULT` — same reason
+   *  `quietMs` is one. */
+  builderSilentMultiplier?: number;
 }
 
 /**
@@ -147,6 +196,9 @@ export interface EvaluateStallsInput {
  */
 export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
   const quietMs = input.quietMs ?? STALL_QUIET_DEFAULT_MS;
+  const builderQuietMs =
+    quietMs * (input.builderSilentMultiplier ?? BUILDER_SILENT_MULTIPLIER_DEFAULT);
+  const watchingDispatches = input.watchingDispatchTaskIds ?? new Set<string>();
   const unreadable = input.unreadableReviewTaskIds ?? new Set<string>();
   const rows = classifyOpenTasks(
     [...input.tasks],
@@ -175,7 +227,19 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
       bucket: row.bucket,
       quietMs: row.sinceActivityMs,
     };
-    if (row.stalled) stalled.push(named);
+    // A row with a watching builder is re-judged on the builder's own clock.
+    // `classifyOpenTasks` stays untouched — the keep-moving report keeps its
+    // shared meaning of "stalled" — and the gate narrows the WAKE's reading
+    // on top, the same move the unfiled clock below makes. `sinceActivityMs`
+    // already folds in every signal the caller had (board events, thread
+    // comments, and worktree churn via `threadActivity`), so past the doubled
+    // window the builder has been silent EVERYWHERE, which is a missed
+    // check-in — named as `builder-silent` so the lead probes the builder
+    // instead of hunting for someone to claim the row.
+    if (row.stalled && watchingDispatches.has(row.id)) {
+      if (row.sinceActivityMs > builderQuietMs)
+        stalled.push({ ...named, bucket: BUILDER_SILENT_BUCKET });
+    } else if (row.stalled) stalled.push(named);
     // Restricted to the row that actually needs the ask filed. `unfiledAsk` is
     // also set on rows BEHIND such a row, whose chain bottoms out in it —
     // listing those would hand the lead the same single action several times
