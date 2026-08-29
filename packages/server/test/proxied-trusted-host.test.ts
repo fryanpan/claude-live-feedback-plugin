@@ -103,6 +103,10 @@ describe('a proxied trusted host, with Access in front of it', () => {
       // own verifier built from the static AUD.
       share: { config: { publicHostname: LINK_HOST } },
       trustedHosts: [LAN_ALIAS],
+      // A collaboration host on the SAME server, sharing the SAME static
+      // AUD: the two opt-in lists reuse one verifier, so the thing under
+      // test in suite C is that the grant still differs by list.
+      accessTunnelHosts: [COLLAB_HOST],
       proxiedTrustedHosts: [PROXIED_HOST],
     });
     jwt = await signJwt(OPERATOR_AUD);
@@ -187,6 +191,27 @@ describe('a proxied trusted host, with Access in front of it', () => {
       // always was — local, no token needed.
       const direct = await get(h, '/api/docs', { host: LAN_ALIAS });
       expect(direct.status).toBe(200);
+    });
+
+    it('a collab-listed host still CANNOT reach an operator verb — same token, same server', async () => {
+      // The same valid token — one static AUD serves both lists — reaches the
+      // product on the operator host (suite A) and is refused the operator
+      // verbs on the collaboration host. The list, not the token, is the
+      // grant.
+      const collab = { host: COLLAB_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt };
+      const list = await get(h, '/api/docs', collab);
+      expect(list.status).toBe(403);
+      expect(await list.json()).toEqual({ error: 'out_of_share_scope' });
+      const create = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+        method: 'POST',
+        headers: { ...collab, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Should not exist' }),
+      });
+      expect(create.status).toBe(403);
+      expect(await create.json()).toEqual({ error: 'out_of_share_scope' });
+      // POSITIVE CONTROL: the collab host is live and serving its own
+      // surface, so the 403s above are scope, not a dead hostname.
+      expect((await get(h, '/app', collab)).status).not.toBe(403);
     });
 
     it('leaves loopback and the link hostname exactly as they were', async () => {
