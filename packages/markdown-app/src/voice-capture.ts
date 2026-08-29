@@ -163,7 +163,7 @@ export function lingerFor(text: string): number {
  * recording. Push-to-talk is a hold; a typed space is a tap (keydown→keyup in
  * well under 150ms), and before this threshold existed a tap RECORDED — every
  * space that landed outside a text field started the engine and left a 6s
- * "Didn't catch anything." toast (t-Mym15-yQ3QxJ). The mic button keeps
+ * "Didn't catch anything." toast (the accidental-trigger ticket). The mic button keeps
  * starting instantly: pressing a mic is already unambiguous.
  */
 export const SPACE_HOLD_ARM_MS = 250;
@@ -288,7 +288,7 @@ export const SPACE_HOLD_PAGE_ATTR = 'data-space-hold';
  * something on almost any focused element — it activates a button, toggles a
  * checkbox, opens a select, "selects" a task row. `typingInPath` only knows
  * about text entry, so every one of those cases used to start a recording
- * (t-Mym15-yQ3QxJ). The honest positive predicate is narrow: the press is the
+ * (the accidental-trigger ticket). The honest positive predicate is narrow: the press is the
  * page's own only when it lands on body / the root / the document — which is
  * exactly the state of a reader who is not interacting with anything.
  *
@@ -519,7 +519,7 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
 
   /**
    * The document-level hotkey. Three rules beyond the typing guard. The first
-   * two are from the accidental-trigger report (t-Mym15-yQ3QxJ — "voice
+   * two are from the accidental-trigger report (the accidental-trigger ticket — "voice
    * triggers while I'm typing, basically everywhere"):
    *
    * 1. The press must land on the PAGE (`spaceHoldTargetsPage`), not on some
