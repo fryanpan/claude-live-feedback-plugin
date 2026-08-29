@@ -24,6 +24,9 @@
 
 export interface VoiceContext {
   surface: 'hub' | 'doc' | 'task';
+  /** The thread the speaker has open — the review item they are "in", so a
+   *  spoken answer lands on it rather than on whichever item is first. */
+  threadId?: string;
   docId?: string;
   taskId?: string;
   visibleHeading?: string;
@@ -134,7 +137,27 @@ export interface VoiceCapture {
 }
 
 /** How long a terminal indicator message stays up. */
-const INDICATOR_LINGER_MS = 6_000;
+/** How long a one-line ack stays up. The floor of `lingerFor`. */
+export const INDICATOR_LINGER_MS = 6_000;
+/** From this many words an ack is prose — a status brief — and the readout
+ *  takes its long form (`.voice-indicator--long`) so the stylesheet can cap
+ *  and scroll it. */
+export const LONG_ACK_WORDS = 30;
+/** Reading pace the linger is sized to, per word. ~250 wpm is brisk; a
+ *  hundred-word brief gets ~30s, which is what it takes to read it twice. */
+const LINGER_PER_WORD_MS = 300;
+const LINGER_MAX_MS = 45_000;
+
+/**
+ * How long an ack stays up: the fixed linger for a sentence, longer for a
+ * paragraph. Bryan, 2026-08-29: *"If I ask for a brief status update, that
+ * should be able to show me a 100 word message"* — and a hundred words that
+ * clear themselves after six seconds were not shown, they were flashed.
+ */
+export function lingerFor(text: string): number {
+  const words = text.split(/\s+/).filter((w) => w.length > 0).length;
+  return Math.min(LINGER_MAX_MS, Math.max(INDICATOR_LINGER_MS, words * LINGER_PER_WORD_MS));
+}
 /**
  * How long Space must be HELD before the document-level hotkey starts
  * recording. Push-to-talk is a hold; a typed space is a tap (keydown→keyup in
@@ -373,12 +396,17 @@ export function createVoiceCapture(opts: VoiceCaptureOpts): VoiceCapture {
     label.textContent = text;
     indicator.append(label);
     indicator.classList.toggle('voice-indicator--busy', busy);
+    // Prose, not a line: the long form wraps, caps its height and scrolls.
+    indicator.classList.toggle(
+      'voice-indicator--long',
+      text.split(/\s+/).filter((w) => w.length > 0).length >= LONG_ACK_WORDS,
+    );
     indicator.setAttribute('aria-busy', busy ? 'true' : 'false');
     indicator.classList.remove('hidden');
     if (opts2?.linger) {
       clearTimer = setTimeout(() => {
         indicator.classList.add('hidden');
-      }, INDICATOR_LINGER_MS);
+      }, lingerFor(text));
     }
   };
 
