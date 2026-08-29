@@ -368,6 +368,46 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
     expect(note.textContent).toContain('Waiting on Helper');
     expect(root.querySelector('.hub-walk-thread')).toBeNull();
   });
+
+  it('a held (waiting) item offers no pill, and a selection does nothing', async () => {
+    const q = reviewQueue([], [ticketRow()], NOW);
+    const item = q.items[0] as ReviewItem;
+    const held: ReviewQueue = {
+      ...q,
+      items: [{ ...item, waiting: { question: 'Which other?', owner: 'Helper' } }],
+    };
+    mountWalk(held, walk());
+    expect(root.querySelector('.hub-walk-pill')).toBeNull();
+    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
+    expect(root.querySelector('.hub-walk-pill')).toBeNull();
+    // The waiting note is unaffected by the selection.
+    expect((root.querySelector('.hub-walk-waiting') as HTMLElement).textContent).toContain(
+      'Waiting on Helper',
+    );
+  });
+
+  it('after a successful ask the pill goes away for that item; a fresh item still gets one', async () => {
+    const onAskOnItem = vi.fn().mockResolvedValue(true);
+    const q = reviewQueue([], [ticketRow()], NOW);
+    mountWalk(q, walk({ onAskOnItem }));
+    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
+    expect(root.querySelector('.hub-walk-pill')).not.toBeNull();
+    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await tick();
+    const form = root.querySelector('.hub-walk-thread-form') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'Which other?';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await tick();
+    // Waiting now — no pill at all, and selecting again raises none.
+    expect(root.querySelector('.hub-walk-pill')).toBeNull();
+    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'mockup shows');
+    expect(root.querySelector('.hub-walk-pill')).toBeNull();
+
+    // A fresh (not waiting) item still gets a pill.
+    mountWalk(reviewQueue([], [ticketRow({ reviewItemId: 'r-2' })], NOW), walk());
+    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
+    expect(root.querySelector('.hub-walk-pill')).not.toBeNull();
+  });
 });
 
 describe('the walkthrough card: a revised item comes back marked', () => {

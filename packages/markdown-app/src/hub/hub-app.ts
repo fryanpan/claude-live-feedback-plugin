@@ -774,7 +774,14 @@ async function main(): Promise<void> {
     const t = item.thread;
     const threadId = item.revision?.threadId ?? t?.threadId;
     if (!t || t.kind !== 'task-review' || !t.taskId || !threadId) return openReviewItem(item);
-    const task = state.tasks.get(t.taskId);
+    return openTaskThread(t.taskId, threadId);
+  }
+
+  /** The task panel, aimed at one thread on it — the shared tail of
+   *  `openReviewThread` and the stale-view fallback below, which knows the
+   *  OPEN thread's id from a 409 rather than from the item's own fields. */
+  function openTaskThread(taskId: string, threadId: string): boolean {
+    const task = state.tasks.get(taskId);
     if (!task) return true;
     boardHandlers.onOpenTask(task);
     state.detailThreadId = threadId;
@@ -2123,6 +2130,27 @@ async function main(): Promise<void> {
     if (!reqSpec) return false;
     const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
     if (!res.ok) {
+      // A stale card: the pill hides itself once THIS session learns the item
+      // is waiting, but another session's question can put it there first.
+      // The server refuses with the open thread's id rather than filing a
+      // second question nobody would read — surface that thread instead of
+      // the generic failure, and refresh so the pill goes away here too.
+      if (res.status === 409 && res.data?.error === 'waiting') {
+        const message =
+          typeof res.data.message === 'string'
+            ? res.data.message
+            : 'Already waiting on the owner — add to the open thread instead';
+        const openThreadId = typeof res.data.threadId === 'string' ? res.data.threadId : undefined;
+        const taskId = item.thread?.taskId;
+        showToast(
+          message,
+          openThreadId && taskId
+            ? { label: 'Open thread', run: () => openTaskThread(taskId, openThreadId) }
+            : undefined,
+        );
+        await loadReviewItems();
+        return false;
+      }
       showToast('Sending the question failed — your words are still in the box');
       return false;
     }
