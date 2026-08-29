@@ -2032,6 +2032,16 @@ export type RequestMoreInfoResult =
  * One HELD review item as the stall monitor reads it off the board: enough to
  * name the item and the ticket in a wake, and to address the filer.
  */
+/**
+ * Which WORDS a review item currently has: its revision count. A judge's
+ * verdict is about one version; `recordReviewJudgement` compares this so a
+ * verdict that outlived the words it judged is dropped rather than applied
+ * to the revision that replaced them.
+ */
+export function reviewItemVersion(item: Pick<TaskReviewItem, 'revisions'>): number {
+  return item.revisions?.length ?? 0;
+}
+
 export interface HeldReviewItem {
   taskId: string;
   title: string;
@@ -4052,16 +4062,29 @@ export class TaskStore {
     taskId: string,
     reviewItemId: string,
     judgement: ReviewItemJudgement,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /**
+       * The words the verdict is ABOUT, as `reviewItemVersion` read them
+       * before the judge was asked. A revision that landed while the judge
+       * was out makes this verdict stale — it is refused, and the revision's
+       * own judgement is the one that stands. Omitted: the caller accepts
+       * whatever words are there now.
+       */
+      forVersion?: number;
+    },
   ):
     | { ok: true; task: Task; item: TaskReviewItem }
-    | { ok: false; error: 'not-found' | 'unknown-review-item' | 'answered' } {
+    | { ok: false; error: 'not-found' | 'unknown-review-item' | 'answered' | 'stale' } {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     if (reviewItemId === LEGACY_REVIEW_ITEM_ID) return { ok: false, error: 'unknown-review-item' };
     const item = task.reviews?.find((r) => r.id === reviewItemId);
     if (!item) return { ok: false, error: 'unknown-review-item' };
     if (item.answer) return { ok: false, error: 'answered' };
+    if (opts.forVersion !== undefined && reviewItemVersion(item) !== opts.forVersion) {
+      return { ok: false, error: 'stale' };
+    }
     item.judge = { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason };
     item.filedBy = {
       id: opts.actor.id,

@@ -23,6 +23,7 @@ import {
   normalizeEmail,
   pendingDeclaration,
   readReviewPayload,
+  readTaskReviewItem,
   reviewGapAdvice,
   reviewIdOf,
   reviewItemState,
@@ -233,6 +234,7 @@ import {
   isValidRef,
   retiredNotice,
   retiredRefusal,
+  reviewItemVersion,
   taskChip,
 } from './tasks.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
@@ -1448,6 +1450,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const judge = opts.reviewJudge;
     const criteria = taskStore.reviewItemCriteria(task.workspaceId);
     if (!judge || !criteria) return { held: false, item };
+    // The words this verdict will be about. A revision landing while the
+    // judge is out gets its own call; this one's verdict must not be
+    // stamped onto words it never read (codex review).
+    const forVersion = reviewItemVersion(item);
     let verdict: ReviewJudgeVerdict | null = null;
     try {
       verdict = await judge({
@@ -1475,10 +1481,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         : { at, verdict: verdict.ok ? ('ok' as const) : ('held' as const), reason: verdict.reason };
     const recorded = taskStore.recordReviewJudgement(task.id, item.id, judgement, {
       actor: author,
+      forVersion,
     });
-    // A row the store would not stamp (answered under us, or the derived
-    // legacy row) is left exactly as it was — and let through.
-    if (!recorded.ok) return { held: false, item };
+    // A row the store would not stamp (answered under us, revised under us,
+    // or the derived legacy row) is left exactly as it was — and let
+    // through. For a stale verdict the revision's own judgement is the one
+    // that stands, and the row handed back is whatever it says now.
+    if (!recorded.ok) {
+      const current = taskStore.getTask(task.id)?.reviews?.find((r) => r.id === item.id);
+      const read = current ? readTaskReviewItem(current) : undefined;
+      return { held: false, item: read ?? item };
+    }
     // The projection carries `judge`, so the card can say "Held: …".
     taskProjection.ensureWorkspace(task.workspaceId);
     if (judgement.verdict !== 'held') return { held: false, item: recorded.item };

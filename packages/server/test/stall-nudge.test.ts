@@ -59,7 +59,9 @@ function board(over: Partial<StallSnapshot> = {}): StallSnapshot {
   };
 }
 
-function harness(opts: { repeatMs?: number; stampFile?: string; world?: World } = {}) {
+function harness(
+  opts: { repeatMs?: number; stampFile?: string; world?: World; filerDelivers?: () => number } = {},
+) {
   const world: World = opts.world ?? {
     now: 1_000_000,
     boards: [board()],
@@ -78,7 +80,7 @@ function harness(opts: { repeatMs?: number; stampFile?: string; world?: World } 
     },
     sendToFiler: (workspaceId, agentId, frame) => {
       toFilers.push({ workspaceId, agentId, frame });
-      return 1;
+      return opts.filerDelivers ? opts.filerDelivers() : 1;
     },
     report: (line) => reported.push(line),
     ...(opts.repeatMs !== undefined ? { repeatMs: opts.repeatMs } : {}),
@@ -672,6 +674,43 @@ describe('a held review item wakes its filer and then the lead — once each', (
     ];
     nudger.tick();
     expect(toFilers.map((f) => f.frame.reviewItemId)).toEqual(['ri-1', 'ri-2', 'ri-1']);
+  });
+
+  // Found by codex review: stamping held rows by ticket alone meant a second
+  // item held on a ticket the lead had already heard about was not news.
+  it('a second item held on the SAME ticket is news to the lead', () => {
+    const { world, sent, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    nudger.tick();
+    world.boards = [board({ stalled: [], held: [HELD, { ...HELD, reviewItemId: 'ri-2' }] })];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frame.heldItems?.map((r) => r.reviewItemId)).toEqual(['ri-1', 'ri-2']);
+    // And the same ticket going quiet over the same held ask is NOT.
+    world.boards = [
+      board({
+        stalled: [{ id: 't-7', title: HELD.title, bucket: 'in-progress', quietMs: 45 * MIN }],
+        held: [HELD, { ...HELD, reviewItemId: 'ri-2' }],
+      }),
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+  });
+
+  // Found by codex review: a filer that dropped between the reachability
+  // check and the send got nothing, and was marked told forever.
+  it('a filer nudge that reached nobody is not "told" — the next pass tries again', () => {
+    let delivers = 0;
+    const { world, toFilers, nudger } = harness({ filerDelivers: () => delivers });
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    expect(toFilers).toHaveLength(1);
+    delivers = 1;
+    nudger.tick();
+    expect(toFilers).toHaveLength(2);
+    nudger.tick();
+    expect(toFilers).toHaveLength(2);
   });
 
   it('an unreachable filer is skipped, not marked told — the next pass tries again', () => {
