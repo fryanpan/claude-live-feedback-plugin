@@ -21,6 +21,7 @@ import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
+import { asksOf } from './activity-model.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
 import {
   type BoardLocation,
@@ -31,6 +32,7 @@ import {
   taskShareUrl,
 } from './board-url.ts';
 import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
+import { homeActivityData, mountHomeActivityIsland } from './home-activity-island.tsx';
 import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
   ACTIVITY_REFRESH_EVENTS,
@@ -383,8 +385,9 @@ function buildShell(root: HTMLElement, name: string): void {
       </nav>
       <section id="hub-home" class="hub-home hidden">
         <div id="hub-home-page">
-          <div id="hub-home-brief"></div>
           <div id="hub-home-review"></div>
+          <div id="hub-home-activity"></div>
+          <div id="hub-home-brief"></div>
         </div>
         <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
       </section>
@@ -534,6 +537,17 @@ async function main(): Promise<void> {
     onOpen: (item) => openReviewItem(item),
     onOpenThread: (item) => void openReviewThread(item),
     onWalkthrough: () => startWalkthrough(),
+  });
+
+  // "Recent activity" — the second island on Home, under the queue and above
+  // the brief (approved mock, 2026-08-29). Same contract, same mount-once
+  // reason. Its one handler opens the task the way a queue row does;
+  // `boardHandlers` is declared below and only read when a row is tapped.
+  mountHomeActivityIsland(el('hub-home-activity'), {
+    onOpenTask: (taskId) => {
+      const task = state.tasks.get(taskId);
+      if (task) boardHandlers.onOpenTask(task);
+    },
   });
 
   // The card that pane opens on — the walkthrough. Mounted once for the
@@ -1026,10 +1040,21 @@ async function main(): Promise<void> {
     // keep their DOM nodes. Background events still reach this line through
     // `repaintGuard.schedule(...)` exactly as they reached the old renderer —
     // the guard's parked/flush path is upstream of the write, not bypassed.
+    const queue = currentQueue();
+    const now = Date.now();
     homeReviewData.value = {
-      queue: currentQueue(),
+      queue,
       settled: [...state.homeSettled.values()],
-      now: Date.now(),
+      now,
+    };
+    // The activity pane's one input: the projection as it stands, plus what
+    // the queue above is already asking so the pane never says it twice. The
+    // island groups and flags; this line only hands over the facts.
+    homeActivityData.value = {
+      tasks: taskList(),
+      goals: state.info?.goals ?? [],
+      asks: asksOf(queue.items),
+      now,
     };
   }
 

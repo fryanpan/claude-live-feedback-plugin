@@ -15,9 +15,11 @@ import {
   type HubGoal,
   type HubNote,
   type HubTask,
+  type ReviewItem,
   type TaskStatus,
   goalRank,
   isTaskArchived,
+  reviewRowTitle,
   timeAgo,
 } from './hub-model.ts';
 
@@ -82,6 +84,22 @@ export interface ActivityInput {
    */
   asks?: ReadonlyArray<{ taskId: string; text: string }>;
   now: number;
+}
+
+/**
+ * The review queue's rows as the pane's `asks`: the task each is about and
+ * the line the row shows for it. A decision names its task on the row; a
+ * thread item names it as `taskId` (a goal thread's is a goal id, which
+ * matches no task and is harmless); a doc thread names none and is skipped.
+ */
+export function asksOf(items: ReadonlyArray<ReviewItem>): { taskId: string; text: string }[] {
+  const asks: { taskId: string; text: string }[] = [];
+  for (const item of items) {
+    const taskId = item.decision?.task.id ?? item.thread?.taskId;
+    if (taskId === undefined || taskId === '') continue;
+    asks.push({ taskId, text: reviewRowTitle(item) });
+  }
+  return asks;
 }
 
 /** "4m" / "2h" — `timeAgo` without its " ago", so the line and the presence

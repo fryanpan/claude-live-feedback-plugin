@@ -5,9 +5,16 @@ import {
   ACTIVITY_WINDOW_MS,
   type ActivityGroup,
   DARK_AFTER_MS,
+  asksOf,
   homeActivity,
 } from '../src/hub/activity-model.ts';
-import { CHORES_ID, type HubGoal, type HubNote, type HubTask } from '../src/hub/hub-model.ts';
+import {
+  CHORES_ID,
+  type HubGoal,
+  type HubNote,
+  type HubTask,
+  type ReviewItem,
+} from '../src/hub/hub-model.ts';
 
 /** All fixtures are synthetic — invented agents, short fake ids. */
 
@@ -326,5 +333,62 @@ describe('homeActivity', () => {
       const t = task({ id: 't-ask', notes: [note(1 * MIN, 'Which tile host?')] });
       expect(groups([t], { asks: [{ taskId: 't-ask', text: 'Which tile host?' }] })).toEqual([]);
     });
+  });
+});
+
+describe('asksOf', () => {
+  const base = { key: 'k', kind: 'task-thread' as const, why: '', since: NOW };
+  it('reduces queue rows to the task each is about and the line the row shows', () => {
+    const t = task({ id: 't-dec', title: 'Pick a cache' });
+    const items: ReviewItem[] = [
+      {
+        ...base,
+        key: 'k1',
+        kind: 'decision',
+        title: 'Pick a cache',
+        ask: '',
+        decision: { task: t, blocks: [], hard: false },
+      },
+      {
+        ...base,
+        key: 'k2',
+        title: 'Some task',
+        ask: 'Which cache do we keep?',
+        thread: {
+          kind: 'task-thread',
+          band: 'declared',
+          docId: 'task:t-th',
+          threadId: 'th-1',
+          taskId: 't-th',
+          title: 'Some task',
+          ask: 'Which cache do we keep?',
+          askedBy: 'Helper',
+          since: NOW,
+          direct: true,
+        },
+      },
+      {
+        ...base,
+        key: 'k3',
+        kind: 'doc-thread',
+        title: 'A doc',
+        ask: 'Does this cover tables?',
+        thread: {
+          kind: 'doc-thread',
+          band: 'declared',
+          docId: 'd-1',
+          threadId: 'th-2',
+          title: 'A doc',
+          ask: 'Does this cover tables?',
+          askedBy: 'Helper',
+          since: NOW,
+          direct: true,
+        },
+      },
+    ];
+    expect(asksOf(items)).toEqual([
+      { taskId: 't-dec', text: 'Pick a cache' },
+      { taskId: 't-th', text: 'Which cache do we keep?' },
+    ]);
   });
 });
