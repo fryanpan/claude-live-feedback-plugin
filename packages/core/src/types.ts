@@ -281,7 +281,37 @@ export interface SubjectAnchor {
   kind: 'subject';
 }
 
-export type Anchor = TextRangeAnchor | ElementAnchor | OrphanAnchor | SubjectAnchor;
+/**
+ * A thread about a PHRASE of a review item's text — the doc-style comment on
+ * an ask, rather than on the task body the ask hangs off.
+ *
+ * Its own kind because nothing in the four above can say it. A review item's
+ * `detail` is a plain string in the task sidecar, not text in any Yjs doc, so
+ * there is no RelativePosition to point at and nothing for the re-anchor
+ * sweep to resolve; `start`/`end` are character offsets into that string as
+ * it read when the comment was made, and `snippet.text` is the phrase itself,
+ * which is what a renderer falls back to once a revision moves the offsets.
+ * Never orphaned: the item outlives every edit to its words.
+ */
+export interface ReviewItemAnchor {
+  kind: 'review-item';
+  /** Which item on the task the thread's doc belongs to. */
+  reviewItemId: string;
+  /** The selected phrase, verbatim. */
+  snippet: AnchorSnippet;
+  /** Offsets into the item's `detail` at the time of asking. Absent when the
+   *  phrase could not be located uniquely in the text — the snippet still
+   *  says what was meant. */
+  start?: number;
+  end?: number;
+}
+
+export type Anchor =
+  | TextRangeAnchor
+  | ElementAnchor
+  | OrphanAnchor
+  | SubjectAnchor
+  | ReviewItemAnchor;
 
 export interface Comment {
   id: string;
