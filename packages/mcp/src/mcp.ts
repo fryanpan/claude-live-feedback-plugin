@@ -99,7 +99,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.119';
+const PLUGIN_VERSION = '0.1.120';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1143,7 +1143,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'share_link',
       description:
-        'Publish a board as an unguessable link — no sign-in, the default way to share outside the tailnet. Same scope as an Access share, and a board is still the unit. The link is the credential: treat it like a password, keep the TTL short for anything sensitive, and give the person the bare URL on its own line. Use share_workspace when you need verified identities, per-person revocation, or attribution. Default TTL one week.',
+        'Publish a board as an unguessable link — no sign-in, the default way to share outside the tailnet. Same scope as an Access share, and a board is still the unit: there is no doc-scoped link, and a docId is refused rather than widened to the board. The link is the credential: treat it like a password, keep the TTL short for anything sensitive, and give the person the bare URL on its own line. Use share_workspace when you need verified identities, per-person revocation, or attribution. Default TTL two weeks; a configured ceiling clamps longer asks and the reply says so (ttlClamped). Every argument is honoured or refused by name — never silently dropped.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1152,7 +1152,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               'The BOARD to share — the id create_workspace returned, or the hubWorkspaceId bind_folder / create_diff_review reported. NOT a review/review id.',
           },
-          ttlSeconds: { type: 'number', description: 'Defaults to one week (604800).' },
+          ttl: {
+            type: 'string',
+            description:
+              "How long the link lives, as an integer plus a unit: '15m', '2h', '3d', '1w'. Pass this OR ttlSeconds, not both.",
+          },
+          ttlSeconds: {
+            type: 'number',
+            description:
+              'Lifetime in seconds. Defaults to two weeks (1209600) when neither ttl nor ttlSeconds is given.',
+          },
           label: { type: 'string', description: 'Human label shown in list_shares.' },
         },
         required: ['workspaceId'],
@@ -2815,16 +2824,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok(res);
       }
       case 'share_link': {
-        const { workspaceId, ttlSeconds, label } = a as {
-          workspaceId: string;
-          ttlSeconds?: number;
-          label?: string;
-        };
-        const res = await http('POST', '/api/share/link', {
-          workspaceId,
-          ttlSeconds,
-          label,
-        });
+        // Forward the call AS SENT. This handler used to destructure three
+        // named keys and forward those, so `share_link(docId, ttl: '15m')`
+        // reached the server as a bare board share and came back 200 —
+        // the whole board, for two weeks, to a caller who asked for one doc
+        // for fifteen minutes. The SDK does not reject an argument the
+        // schema does not name; it just never makes the wire. The server
+        // now refuses every key it does not honour by name, and the only
+        // way that refusal reaches the caller is if every key gets there.
+        const res = await http('POST', '/api/share/link', a);
         return ok(res);
       }
       case 'set_share_ttl': {
