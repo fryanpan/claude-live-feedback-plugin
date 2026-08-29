@@ -11,7 +11,7 @@ import {
 } from '../src/middleware/host-guard.ts';
 
 const LOCAL = {
-  tailscaleHost: 'mac-mini.<private-network>',
+  tailscaleHost: 'mac-mini.tail-example.ts.net',
   lanHosts: ['mac-mini.local', '192.168.50.227'],
 };
 
@@ -38,7 +38,7 @@ describe('isTrustedLocalHost', () => {
       'localhost:8787',
       '127.0.0.1:8787',
       '[::1]:8787',
-      'mac-mini.<private-network>',
+      'mac-mini.tail-example.ts.net',
       'mac-mini.local:8787',
       '192.168.50.227:8787',
     ]) {
@@ -64,7 +64,7 @@ describe('isTrustedLocalHost', () => {
   it('matches exactly — a lookalike suffix/prefix must not pass', () => {
     expect(isTrustedLocalHost('evil-mac-mini.local', LOCAL)).toBe(false);
     expect(isTrustedLocalHost('mac-mini.local.attacker.com', LOCAL)).toBe(false);
-    expect(isTrustedLocalHost('mac-mini.<private-network>.evil.com', LOCAL)).toBe(false);
+    expect(isTrustedLocalHost('mac-mini.tail-example.ts.net.evil.com', LOCAL)).toBe(false);
   });
 
   it('trusts only THIS machine’s addresses — not private ranges in general', () => {
