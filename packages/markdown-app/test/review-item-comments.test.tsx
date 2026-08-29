@@ -301,13 +301,16 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
     const stage = root.querySelector('.hub-walk-stage') as HTMLElement;
     expect(stage, 'the card sits on a stage').not.toBeNull();
     expect(stage.querySelector(':scope > .hub-walk-card')).not.toBeNull();
-    // Nothing to the side until a phrase is asked on.
+    // Nothing to the side until a phrase is asked on — and no column reserved
+    // for it either: the stage only widens to two columns while it is open.
     expect(stage.querySelector(':scope > .hub-walk-margin')).toBeNull();
+    expect(stage.classList.contains('hub-walk-stage-open')).toBe(false);
     await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
     (root.querySelector('.hub-walk-pill') as HTMLElement).click();
     await tick();
     const margin = stage.querySelector(':scope > .hub-walk-margin') as HTMLElement;
     expect(margin, 'the margin column appears with the thread').not.toBeNull();
+    expect(stage.classList.contains('hub-walk-stage-open')).toBe(true);
     expect(margin.querySelector('.hub-walk-thread')).not.toBeNull();
     expect(root.querySelector('.hub-walk-card .hub-walk-thread')).toBeNull();
     // The margin follows the card in source order, so at ≤1100px (one

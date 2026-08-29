@@ -110,8 +110,14 @@ describe('the review-item comment furniture is thumb-sized and height-frugal', (
     expect(top).not.toMatch(/grid-template-columns:[^;]*1fr[^;]*px/);
     const wide = media('(min-width: 1101px)');
     expect(wide, 'no ≥1101px block').not.toBe('');
-    const stage = rule('.hub-walk-stage', wide);
-    expect(stage, '.hub-walk-stage has no ≥1101px rule').not.toBe('');
+    // The second column exists only while a thread is open. A bare stage —
+    // no thread — is one column at every width: a reserved-but-empty 300px
+    // margin squeezed the card to a third of a desktop screen (Bryan,
+    // 2026-08-29, "review items only take up a narrow part of the screen").
+    const bare = rule('.hub-walk-stage', wide);
+    expect(bare).not.toMatch(/grid-template-columns/);
+    const stage = rule('.hub-walk-stage-open', wide);
+    expect(stage, '.hub-walk-stage-open has no ≥1101px rule').not.toBe('');
     expect(stage).toMatch(/display:\s*grid/);
     expect(stage).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+\d+px/);
     expect(stage).toMatch(/align-items:\s*start/);
