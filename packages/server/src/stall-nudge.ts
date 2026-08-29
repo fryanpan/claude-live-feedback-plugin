@@ -81,7 +81,7 @@
  * one duplicate wake, which is much the cheaper failure.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import type { StallUndeterminedRow, StalledRow } from './stall-gate.ts';
+import type { HeldItemRow, StallUndeterminedRow, StalledRow } from './stall-gate.ts';
 
 /**
  * How long a row must stay quiet before the wake says it AGAIN.
@@ -107,6 +107,15 @@ export const STALL_TICK_DEFAULT_MS = 60_000;
  *  stall and a ready-work wake indistinguishable in the lead's channel. */
 export const STALL_EVENT = 'workspace.stalled';
 
+/**
+ * The quality gate telling a FILER their review item is held — at filing
+ * time (the route sends it) and again when the hold has stood past the
+ * window (this loop sends it, `overdue: true`). Addressed to the filer,
+ * never the lead: the lead learns of an overdue hold inside the stall frame,
+ * where it sits beside the other things the lead drives.
+ */
+export const REVIEW_ITEM_HELD_EVENT = 'workspace.review_item_held';
+
 /** The data-dir filename the server uses. Exported so a test can assert the
  *  file the server actually writes rather than a copy of its name. */
 export const STALL_NUDGE_STAMP_FILENAME = 'stall-nudge-stamps.json';
@@ -126,6 +135,26 @@ export interface StallSnapshot {
   considered: number;
   /** Rows the gate could not evaluate. Neither stalled nor healthy. */
   undetermined: readonly StallUndeterminedRow[];
+  /** Review items the quality gate is holding past the window — asks that
+   *  exist on a ticket and on nobody's queue. Absent on a snapshot from a
+   *  caller that does not read them, which is the same as none. */
+  held?: readonly HeldItemRow[];
+}
+
+/** What the filer's own wake carries. Flat, like every other frame. */
+export interface ReviewItemHeldFrame {
+  event: typeof REVIEW_ITEM_HELD_EVENT;
+  workspaceId: string;
+  taskId: string;
+  title: string;
+  reviewItemId: string;
+  headline: string;
+  reason: string;
+  /** Present, and true, only on the loop's complaint — the filing-time wake
+   *  is the ask, this one is the ask repeated after the window. */
+  overdue?: true;
+  heldMs?: number;
+  ts: number;
 }
 
 /** What goes on the wire. Flat, because the plugin's renderer reads these
@@ -167,6 +196,15 @@ export interface StallNudgeFrame {
    * and that one it does not send at all.
    */
   undetermined?: { count: number; reasons: readonly string[] };
+  /**
+   * Review items held by the quality gate past the window, oldest first.
+   * Absent when there are none. A frame carrying ONLY this is a real wake:
+   * a question the filer wrote and the reader cannot see is work stopped,
+   * even though no row is quiet. `heldItems`, not `held`: the ready_idle
+   * frame already spends `held` on its withheld-row counts, and the plugin
+   * reads both frames into one payload type.
+   */
+  heldItems?: readonly HeldItemRow[];
   ts: number;
 }
 
@@ -177,6 +215,13 @@ export interface StallNudgerOptions {
   canReach: (workspaceId: string, agentId: string) => boolean;
   /** Addressed delivery. Returns how many sinks it reached. */
   send: (workspaceId: string, agentId: string, frame: StallNudgeFrame) => number;
+  /**
+   * The same addressed delivery, aimed at a held item's FILER. Optional: a
+   * caller that never reads held items never nudges filers. Sent once per
+   * item per process — the lead's frame is the durable complaint; this one is
+   * the tap on the shoulder that costs the cheaper turn.
+   */
+  sendToFiler?: (workspaceId: string, agentId: string, frame: ReviewItemHeldFrame) => number;
   repeatMs?: number;
   now?: () => number;
   /**
@@ -243,6 +288,14 @@ export class StallNudger {
    *  condition worth naming is worth naming again after a restart, and a
    *  duplicate log line is the cheapest failure in this file. */
   private readonly reported = new Map<string, string>();
+  /**
+   * Held items whose filer has been nudged, by `<workspaceId>|<reviewItemId>`.
+   * Once per item per process, and deliberately NOT persisted: a filer's
+   * nudge is the cheap turn (the filer is the party who can end it in one
+   * call), and a duplicate after a deploy is worth less than the code to
+   * avoid it. Pruned when the item leaves the held list.
+   */
+  private readonly filersTold = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly stampFile: string | null;
   /** What the file already holds, so an unchanged map costs no write. `tick`
@@ -280,6 +333,9 @@ export class StallNudger {
     // life of the install while the in-memory one stays bounded.
     for (const key of this.armed.keys()) if (!live.has(key)) this.armed.delete(key);
     for (const key of this.reported.keys()) if (!live.has(key)) this.reported.delete(key);
+    for (const key of this.filersTold) {
+      if (!live.has(key.slice(0, key.indexOf('|')))) this.filersTold.delete(key);
+    }
     this.saveStamps();
   }
 
@@ -310,6 +366,12 @@ export class StallNudger {
   private considerBoard(board: StallSnapshot, now: number): void {
     const key = board.workspaceId;
     const lead = board.leadAgentId;
+    const held = board.retired ? [] : (board.held ?? []);
+    this.pruneFilersTold(key, held);
+    // The filer first, before the lead's seat is even looked at: the filer
+    // can end a hold in one call, their nudge is per item rather than per
+    // board stamp, and a board with an empty lead seat still has filers.
+    this.nudgeFilers(key, held, now);
     // Nobody to tell. Drop the arming so a board that becomes woken again
     // starts from a clean slate rather than from a stamp recorded under
     // different conditions.
@@ -320,7 +382,7 @@ export class StallNudger {
       this.reportUnevaluable(board);
       return;
     }
-    // "Nothing to say" takes all three being empty. A pass that examined nine
+    // "Nothing to say" takes all four being empty. A pass that examined nine
     // rows and could not evaluate one of them has not established that the
     // board is healthy, and returning on the stalled list alone is precisely
     // how "I could not look" comes to be delivered as "I looked and saw
@@ -328,7 +390,8 @@ export class StallNudger {
     if (
       board.stalled.length === 0 &&
       board.unfiled.length === 0 &&
-      board.undetermined.length === 0
+      board.undetermined.length === 0 &&
+      held.length === 0
     ) {
       this.armed.delete(key);
       this.reported.delete(key);
@@ -352,7 +415,7 @@ export class StallNudger {
     // reached nobody must stay owed, or the lead returns to a board that has
     // already decided it told them.
     if (!this.reachable(key, lead)) return;
-    const top = board.stalled[0] ?? board.unfiled[0];
+    const top = board.stalled[0] ?? board.unfiled[0] ?? held[0];
     this.emit(key, lead, {
       event: STALL_EVENT,
       workspaceId: key,
@@ -361,6 +424,9 @@ export class StallNudger {
       consideredCount: board.considered,
       ...(board.stalled.length > 0 ? { rows: board.stalled } : {}),
       ...(board.unfiled.length > 0 ? { unfiled: board.unfiled } : {}),
+      // `heldItems`, not `held`: the ready_idle frame already spends `held` on
+      // its withheld-row counts, and the plugin reads both frames into one type.
+      ...(held.length > 0 ? { heldItems: held } : {}),
       ...(board.undetermined.length > 0
         ? {
             undetermined: {
@@ -442,10 +508,17 @@ export class StallNudger {
     // would read as a new row under the growth rule below, waking the lead to
     // announce what it just did. The frame still carries every row's bucket;
     // it is the ARMING that must not turn on it.
-    const ids = rows
-      .map((row) => row.id)
-      .slice()
-      .sort();
+    // A held item enters the stamp under its TICKET's id, deduped with the
+    // stalled and unfiled rows — one complaint per item, and none when the
+    // same ticket later goes quiet or reads as unfiled over the same held
+    // ask: the lead was already told to get that item revised, and being
+    // told again under a different bucket is the same wake twice. It stays
+    // OUT of the escalation bucket below: a hold is the filer's to end, and
+    // re-saying it every repeat window would bill the lead for the filer's
+    // silence.
+    const ids = Array.from(
+      new Set([...rows.map((row) => row.id), ...(board.held ?? []).map((row) => row.id)]),
+    ).sort();
     // The oldest row speaks for the board. `0` on a board whose only finding
     // is unreadable rows, which is right: there is no silence to escalate.
     const oldestQuietMs = rows.reduce((max, row) => Math.max(max, row.quietMs), 0);
@@ -500,6 +573,52 @@ export class StallNudger {
     for (const id of after.ids) if (!before.ids.has(id)) return true;
     for (const row of after.undetermined) if (!before.undetermined.has(row)) return true;
     return false;
+  }
+
+  /**
+   * Tell each overdue item's filer, once per item, that the hold has stood
+   * past the window. Silent — and NOT recorded — when the filer holds no
+   * stream: a nudge delivered to nobody would spend the one this item is
+   * owed, and the filer would return to an item the loop had decided it told
+   * them about. An item with no known filer is left to the lead's frame.
+   */
+  private nudgeFilers(workspaceId: string, held: readonly HeldItemRow[], now: number): void {
+    const send = this.opts.sendToFiler;
+    if (!send) return;
+    for (const item of held) {
+      if (item.filerAgentId === undefined) continue;
+      const key = `${workspaceId}|${item.reviewItemId}`;
+      if (this.filersTold.has(key)) continue;
+      if (!this.reachable(workspaceId, item.filerAgentId)) continue;
+      try {
+        send(workspaceId, item.filerAgentId, {
+          event: REVIEW_ITEM_HELD_EVENT,
+          workspaceId,
+          taskId: item.id,
+          title: item.title,
+          reviewItemId: item.reviewItemId,
+          headline: item.headline,
+          reason: item.reason,
+          overdue: true,
+          heldMs: item.heldMs,
+          ts: now,
+        });
+      } catch (err) {
+        console.error('[stall] filer nudge failed:', err);
+        continue;
+      }
+      this.filersTold.add(key);
+    }
+  }
+
+  /** Forget filers told about items no longer held, so a fresh hold on the
+   *  same item (revised, judged, held again) is nudged afresh. */
+  private pruneFilersTold(workspaceId: string, held: readonly HeldItemRow[]): void {
+    const live = new Set(held.map((item) => `${workspaceId}|${item.reviewItemId}`));
+    const prefix = `${workspaceId}|`;
+    for (const key of this.filersTold) {
+      if (key.startsWith(prefix) && !live.has(key)) this.filersTold.delete(key);
+    }
   }
 
   private reachable(workspaceId: string, agentId: string): boolean {
@@ -596,7 +715,7 @@ export class StallNudger {
       this.report(
         `[stall] wake ws=${workspaceId} lead=${agentId} ` +
           `stalled=${frame.stalledCount} unfiled=${frame.unfiled?.length ?? 0} ` +
-          `undetermined=${frame.undetermined?.count ?? 0}`,
+          `undetermined=${frame.undetermined?.count ?? 0} held=${frame.heldItems?.length ?? 0}`,
       );
     } catch {
       // A reporter that throws must not undo a wake that was already
