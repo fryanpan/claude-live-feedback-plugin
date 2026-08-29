@@ -2102,8 +2102,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             answerable: item.review !== undefined,
             ask: item.ask,
             askedBy: item.askedBy,
+            // The labels a spoken pick is matched against, with the ids the
+            // answer is stamped with — the same pair a tapped button sends.
+            ...(item.review?.options?.length
+              ? { options: item.review.options.map((o) => ({ id: o.id, label: o.label })) }
+              : {}),
           })),
       };
+    },
+    // A doc's LABEL, for matching "the Akash review doc" against what the
+    // board calls it. Title, else the file's basename — never the path, for
+    // the reason given twice above.
+    docTitle: (_workspaceId, docId) => {
+      const meta = rooms.get(docId)?.meta;
+      // Title, else the file's NAME. The review-items route stops at
+      // `relPath`'s basename because a share visitor reads it; this label
+      // reaches only the local speaker's ack and the classification prompt,
+      // and a bare filename ("expansion-plan.md") is what a doc bound without
+      // a title is called everywhere else. Directories never come along.
+      const file = (meta?.relPath ?? meta?.sourceUrl ?? '').split('/').pop();
+      return meta?.title || (file ? file.replace(/\.[a-z0-9]+$/i, '') : undefined) || undefined;
+    },
+    // What is waiting on a person, board-wide, for "brief status" — the SAME
+    // rows the Home queue renders, so the count voice says is the count the
+    // reader sees when they look.
+    queue: (workspaceId) => {
+      const workspace = taskStore.getWorkspace(workspaceId);
+      if (!workspace) return [];
+      return reviewItemsFor(workspace).map((item) => ({
+        title: item.title,
+        ask: item.ask,
+        askedBy: item.askedBy,
+      }));
     },
     // The room store itself, for the two text verbs. Voice calls
     // `postComment` — the one choke point every reply path in this server

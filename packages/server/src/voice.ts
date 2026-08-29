@@ -36,11 +36,39 @@
  * only bin.ts constructs the real one, and only the DEDICATED keychain entry
  * counts as consent for LF→Anthropic traffic.
  */
+import { isReviewItemOpen } from '@feedback/core';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
 import { resolveAssignee } from './task-owner.ts';
-import { taskIdOfBodyDoc } from './task-projection.ts';
+import { taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import type { Ref, Task, TaskStatus, TaskStore, VoiceRoute } from './tasks.ts';
+import {
+  type ScoredCandidate,
+  type StatusQueueRow,
+  type StatusTask,
+  type TitleCandidate,
+  answerBody,
+  composeStatus,
+  navigationAsk,
+  parseOrdinal,
+  pickByLabel,
+  resolveByTitle,
+  statusAsk,
+} from './voice-resolve.ts';
+
+// The deterministic pieces live in voice-resolve.ts; re-exported so callers
+// and tests keep one import for "voice".
+export {
+  VOICE_STATUS_MAX_WORDS,
+  answerBody,
+  composeStatus,
+  countWords,
+  navigationAsk,
+  parseOrdinal,
+  pickByLabel,
+  resolveByTitle,
+  statusAsk,
+} from './voice-resolve.ts';
 
 export type VoiceSurface = 'hub' | 'doc' | 'task';
 
@@ -59,6 +87,16 @@ export interface VoiceContext {
   taskId?: string;
   /** Topmost heading on screen — rough scroll awareness, no pixel tracking. */
   visibleHeading?: string;
+  /**
+   * The thread the speaker has OPEN — the review item they are "in". Bryan,
+   * 2026-08-29: *"If I'm in a review item, I should be able to reply by
+   * voice."* With several items open on one doc, this is what makes "pick
+   * the second one" unambiguous. Never trusted on its own: it only selects
+   * among items the router has already read off the validated resource.
+   */
+  threadId?: string;
+  /** Same, for a ticket-borne review item (a row on the task, not a thread). */
+  reviewItemId?: string;
 }
 
 /** Sanitize a client-supplied context object; anything malformed → none. */
@@ -71,11 +109,15 @@ export function parseVoiceContext(raw: unknown): VoiceContext | undefined {
   const docId = str(r.docId, 300);
   const taskId = str(r.taskId, 300);
   const visibleHeading = str(r.visibleHeading, 200);
+  const threadId = str(r.threadId, 300);
+  const reviewItemId = str(r.reviewItemId, 300);
   return {
     surface: r.surface,
     ...(docId !== undefined ? { docId } : {}),
     ...(taskId !== undefined ? { taskId } : {}),
     ...(visibleHeading !== undefined ? { visibleHeading } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+    ...(reviewItemId !== undefined ? { reviewItemId } : {}),
   };
 }
 
@@ -93,13 +135,36 @@ export type VoiceResource =
       assignee: string;
       needs?: string;
       links: Ref[];
+      /** The ticket's own open review items plus the open items on its
+       *  discussion — what "reply by voice" can land on from the task panel. */
+      reviewItems?: VoiceReviewItem[];
     }
   | { kind: 'doc'; id: string; title?: string; reviewItems: VoiceReviewItem[] };
 
+/** An option a review item offers, as much of it as a pick needs. */
+export interface VoiceReviewOption {
+  id: string;
+  label: string;
+}
+
+/** What every open review item carries, whatever it hangs on. */
+interface VoiceReviewItemBase {
+  ask: string;
+  askedBy: string;
+  /** Present on a decision: the labels a spoken pick is matched against. */
+  options?: VoiceReviewOption[];
+}
+
+/** A review item hanging on a TICKET — answered against `taskId` /
+ *  `reviewItemId` through `answerTaskReview`, never through a thread. */
+export interface VoiceTicketReviewItem extends VoiceReviewItemBase {
+  reviewItemId: string;
+}
+
 /** One open review item on a doc, flattened to what a prompt can use. Kept to
- *  four fields on purpose: the review-item SHAPE is owned elsewhere and is
+ *  a few fields on purpose: the review-item SHAPE is owned elsewhere and is
  *  being reworked, so voice reads a projection of it rather than its type. */
-export interface VoiceReviewItem {
+export interface VoiceThreadReviewItem extends VoiceReviewItemBase {
   threadId: string;
   /** The comment the item is ABOUT — what an answer is stamped back onto.
    *  Never rendered into the prompt: the model must not learn ids it is
@@ -119,8 +184,13 @@ export interface VoiceReviewItem {
    * band the review queue actually surfaces.
    */
   answerable: boolean;
-  ask: string;
-  askedBy: string;
+}
+
+export type VoiceReviewItem = VoiceThreadReviewItem | VoiceTicketReviewItem;
+
+/** The one key a review item is addressed by, whichever it hangs on. */
+export function reviewItemKey(item: VoiceReviewItem): string {
+  return 'reviewItemId' in item ? item.reviewItemId : item.threadId;
 }
 
 /** How the router learns what a doc holds. Injected, because the answer needs
@@ -292,6 +362,19 @@ function refNavigation(ref: Ref): string | undefined {
   return sameOriginPath(`/review/${encodeURIComponent(ref.docId)}`);
 }
 
+function renderReviewItems(lines: string[], items: VoiceReviewItem[]): void {
+  if (items.length === 0) return;
+  lines.push('  open review items:');
+  for (const item of items) {
+    const options = item.options?.length
+      ? ` [options: ${item.options.map((o) => promptSafe(o.label, FIELD_MAX.name)).join(' | ')}]`
+      : '';
+    lines.push(
+      `    - ${promptSafe(reviewItemKey(item), FIELD_MAX.id)} (${promptSafe(item.askedBy, FIELD_MAX.name)}): ${promptSafe(item.ask, FIELD_MAX.ask)}${options}`,
+    );
+  }
+}
+
 /** Render the `Resource in view:` block, clamped to `RESOURCE_MAX` bytes. */
 export function renderResourceBlock(resource: VoiceResource): string {
   const lines: string[] = [];
@@ -308,17 +391,11 @@ export function renderResourceBlock(resource: VoiceResource): string {
       lines.push('  links:');
       for (const ref of resource.links) lines.push(`    - ${describeRef(ref)}`);
     }
+    renderReviewItems(lines, resource.reviewItems ?? []);
   } else {
     lines.push(`Resource in view: doc ${promptSafe(resource.id, FIELD_MAX.id)}`);
     if (resource.title) lines.push(`  title: ${promptSafe(resource.title, FIELD_MAX.title)}`);
-    if (resource.reviewItems.length > 0) {
-      lines.push('  open review items:');
-      for (const item of resource.reviewItems) {
-        lines.push(
-          `    - ${promptSafe(item.threadId, FIELD_MAX.id)} (${promptSafe(item.askedBy, FIELD_MAX.name)}): ${promptSafe(item.ask, FIELD_MAX.ask)}`,
-        );
-      }
-    }
+    renderReviewItems(lines, resource.reviewItems);
   }
   const full = lines.join('\n');
   if (byteLength(full) <= RESOURCE_MAX) return full;
@@ -359,7 +436,25 @@ export type VoiceClassification =
        * into a write against the resource that happened to be in view.
        */
       id?: string;
+      /**
+       * Which review item, which option, or which words — set ONLY by the
+       * deterministic pick parser in `VoiceRouter.directPick`, never by
+       * `parseVoiceReply`. The model may name a verb; it may never name the
+       * words that get posted under the speaker's name, and this field is
+       * where those words travel.
+       */
+      pick?: VoicePick;
     };
+
+export interface VoicePick {
+  /** `reviewItemKey` of the item the speaker addressed. */
+  itemKey: string;
+  optionId?: string;
+  /** The option's label from the STORE — what the answer records. */
+  optionLabel?: string;
+  /** Free words, already stripped of their spoken "answer:" prefix. */
+  text?: string;
+}
 
 export interface VoiceResult {
   route: VoiceRoute;
@@ -436,6 +531,9 @@ export function buildVoicePrompt(
     goals: Array<{ id: string; title: string }>;
     tasks: Array<{ id: string; title: string; status: string; needs?: string }>;
     docIds: string[];
+    /** Doc labels by id. A model that can only see ids cannot match "the
+     *  Akash review doc" to anything; with titles it can. */
+    docTitles?: Record<string, string>;
   },
   transcript: string,
   context?: VoiceContext,
@@ -490,7 +588,12 @@ export function buildVoicePrompt(
   }
   if (index.docIds.length > 0) {
     lines.push('Docs:');
-    for (const d of index.docIds) lines.push(`  - ${promptSafe(d, FIELD_MAX.id)}`);
+    for (const d of index.docIds) {
+      const title = index.docTitles?.[d];
+      lines.push(
+        `  - ${promptSafe(d, FIELD_MAX.id)}${title ? `: ${promptSafe(title, FIELD_MAX.title)}` : ''}`,
+      );
+    }
   }
   if (context) {
     lines.push(
@@ -595,18 +698,28 @@ export type VoiceActionPlan =
     }
   | {
       action: 'answer-review';
-      docId: string;
-      threadId: string;
-      commentId: string;
       text: string;
       actor: VoiceActor;
-      /**
-       * `answer` stamps the reply onto a DECLARED Review Item; `reply` is a
-       * plain threaded reply, for an open question that never declared one.
-       * Chosen from the projection rather than from an error string — see
-       * `VoiceReviewItem.answerable`. Both are existing public room writes.
-       */
-      mode: 'answer' | 'reply';
+      /** The item's headline, for the ack: "Answered … on <headline>". */
+      headline: string;
+      /** Set when the speaker picked an OPTION; `text` is then its label. */
+      optionId?: string;
+      target:
+        | {
+            kind: 'thread';
+            docId: string;
+            threadId: string;
+            commentId: string;
+            /**
+             * `answer` stamps the reply onto a DECLARED Review Item; `reply`
+             * is a plain threaded reply, for an open question that never
+             * declared one. Chosen from the projection rather than from an
+             * error string — see `VoiceThreadReviewItem.answerable`. Both are
+             * existing public room writes.
+             */
+            mode: 'answer' | 'reply';
+          }
+        | { kind: 'ticket'; taskId: string; reviewItemId: string };
     }
   | { action: 'open-link'; taskId: string; ref: Ref };
 
@@ -809,26 +922,41 @@ export function resolveVoiceAction(args: {
         actor,
       };
     case 'answer-review': {
-      if (resource.kind !== 'doc') return null;
-      // Which item "that comment" means is only knowable when there is one.
-      // With none open there is nothing to answer; with several, picking would
-      // mean the model naming a thread id — the thing condition (3) forbids.
-      // Both cases are the agent's call, which is a narrowing a later commit
-      // can widen by putting the choice in the speaker's hands, never the
-      // model's.
-      const [only, ...rest] = resource.reviewItems;
-      if (!only || rest.length > 0) return null;
+      const items = resource.kind === 'doc' ? resource.reviewItems : (resource.reviewItems ?? []);
+      // Which item "that comment" means comes from the SPEAKER, never the
+      // model: the thread they have open (context), a pick the deterministic
+      // parser resolved from their own words, or the one item there is. With
+      // several open and none of those, the choice would be the model naming
+      // a thread id — the thing condition (3) forbids — so it is the agent's.
+      const item = pickReviewItem(items, context, c.pick);
+      if (!item) return null;
+      const text = c.pick?.text ?? c.pick?.optionLabel ?? transcript;
+      const optionId = c.pick?.optionId;
+      // The option must be one the ITEM offers, by the store's own id.
+      if (optionId !== undefined && !item.options?.some((o) => o.id === optionId)) return null;
+      const target =
+        'reviewItemId' in item
+          ? { kind: 'ticket' as const, taskId: resource.id, reviewItemId: item.reviewItemId }
+          : {
+              kind: 'thread' as const,
+              // A task's discussion lives in its body room.
+              docId: resource.kind === 'doc' ? resource.id : taskBodyDocId(resource.id),
+              threadId: item.threadId,
+              commentId: item.commentId,
+              // A declared Review Item gets its answer STAMPED; a plain open
+              // question gets a plain reply. Both are what "reply to that
+              // review comment" means, and the first cut could only do the
+              // former.
+              mode: item.answerable ? ('answer' as const) : ('reply' as const),
+            };
+      if (target.kind === 'ticket' && resource.kind !== 'task') return null;
       return {
         action: 'answer-review',
-        docId: resource.id,
-        threadId: only.threadId,
-        commentId: only.commentId,
-        text: transcript,
+        text,
         actor,
-        // A declared Review Item gets its answer STAMPED; a plain open
-        // question gets a plain reply. Both are what "reply to that review
-        // comment" means, and the first cut could only do the former.
-        mode: only.answerable ? 'answer' : 'reply',
+        headline: item.ask,
+        ...(optionId !== undefined ? { optionId } : {}),
+        target,
       };
     }
     case 'open-link': {
@@ -838,6 +966,34 @@ export function resolveVoiceAction(args: {
       return { action: 'open-link', taskId: resource.id, ref: only };
     }
   }
+}
+
+/**
+ * The review item an utterance is about, or nothing.
+ *
+ * In order: the item the deterministic parser resolved (its key must still
+ * be one of the items in view — the parser read the same projection, but
+ * the guardrail re-checks rather than trusts); the thread / row the speaker
+ * has OPEN; the only item there is. Several items and no pin is nothing.
+ */
+function pickReviewItem(
+  items: VoiceReviewItem[],
+  context: VoiceContext,
+  pick?: VoicePick,
+): VoiceReviewItem | undefined {
+  if (pick) return items.find((i) => reviewItemKey(i) === pick.itemKey);
+  if (context.threadId !== undefined) {
+    const pinned = items.find((i) => !('reviewItemId' in i) && i.threadId === context.threadId);
+    if (pinned) return pinned;
+  }
+  if (context.reviewItemId !== undefined) {
+    const pinned = items.find(
+      (i) => 'reviewItemId' in i && i.reviewItemId === context.reviewItemId,
+    );
+    if (pinned) return pinned;
+  }
+  const [only, ...rest] = items;
+  return only && rest.length === 0 ? only : undefined;
 }
 
 /**
@@ -856,9 +1012,18 @@ export class VoiceRouter {
   private docResource: VoiceDocResourceReader | undefined;
   private rooms: VoiceRooms | undefined;
   private taskCommentDoc: VoiceTaskCommentDoc | undefined;
+  private docTitle: ((workspaceId: string, docId: string) => string | undefined) | undefined;
+  private queue: ((workspaceId: string) => StatusQueueRow[]) | undefined;
   /** Recent text writes, keyed by workspace + verb + target + exact words —
    *  see `once`. Pruned on every write, so it cannot grow without bound. */
   private recentWrites = new Map<string, number>();
+  /**
+   * "Did you mean A or B?" — the two the router offered, per speaker, so the
+   * NEXT utterance ("the second one", "the billing one") can answer. Consumed
+   * by whatever is said next, and expired after `RETRY_WINDOW_MS`: a choice
+   * offered a minute ago is not what a fresh sentence is about.
+   */
+  private pendingChoices = new Map<string, { candidates: ScoredCandidate[]; at: number }>();
 
   constructor(opts: {
     tasks: TaskStore;
@@ -868,12 +1033,20 @@ export class VoiceRouter {
      *  defer, exactly as they did before their executors existed. */
     rooms?: VoiceRooms;
     taskCommentDoc?: VoiceTaskCommentDoc;
+    /** A doc's label, for title matching and the prompt's index. Absent, a
+     *  doc can only be reached by its id — which is what "never worked". */
+    docTitle?: (workspaceId: string, docId: string) => string | undefined;
+    /** What is waiting on a person board-wide — the Home queue, as the
+     *  review-items route ships it. Feeds "brief status" only. */
+    queue?: (workspaceId: string) => StatusQueueRow[];
   }) {
     this.tasks = opts.tasks;
     this.complete = opts.complete;
     this.docResource = opts.docResource;
     this.rooms = opts.rooms;
     this.taskCommentDoc = opts.taskCommentDoc;
+    this.docTitle = opts.docTitle;
+    this.queue = opts.queue;
   }
 
   /**
@@ -932,6 +1105,11 @@ export class VoiceRouter {
       ...(docId !== undefined ? { docId } : {}),
       ...(taskId !== undefined ? { taskId } : {}),
       ...(context.visibleHeading !== undefined ? { visibleHeading: context.visibleHeading } : {}),
+      // Carried, not validated: neither is ever acted on by itself. They only
+      // SELECT among review items the router has already read off a resource
+      // that passed the membership checks above (`pickReviewItem`).
+      ...(context.threadId !== undefined ? { threadId: context.threadId } : {}),
+      ...(context.reviewItemId !== undefined ? { reviewItemId: context.reviewItemId } : {}),
     };
   }
 
@@ -948,6 +1126,23 @@ export class VoiceRouter {
     if (context.taskId !== undefined) {
       const task = this.taskInWorkspace(workspaceId, context.taskId);
       if (task) {
+        // Both places a ticket's review items live: rows on the ticket
+        // itself, and declared threads on its discussion. Read through the
+        // same two readers everything else uses, so what the panel shows and
+        // what voice can answer cannot disagree.
+        const ticketItems: VoiceReviewItem[] = this.tasks
+          .listReviewItems(task.id)
+          .filter(isReviewItemOpen)
+          .map((r) => ({
+            reviewItemId: r.id,
+            ask: r.review.headline,
+            askedBy: r.createdBy,
+            ...(r.review.options?.length
+              ? { options: r.review.options.map((o) => ({ id: o.id, label: o.label })) }
+              : {}),
+          }));
+        const threadItems =
+          this.docResource?.(workspaceId, taskBodyDocId(task.id))?.reviewItems ?? [];
         return {
           kind: 'task',
           id: task.id,
@@ -956,6 +1151,7 @@ export class VoiceRouter {
           assignee: task.assignee,
           ...(task.needs !== undefined ? { needs: task.needs } : {}),
           links: task.links,
+          reviewItems: [...ticketItems, ...threadItems],
         };
       }
     }
@@ -1097,32 +1293,59 @@ export class VoiceRouter {
         );
       }
       case 'answer-review': {
-        if (!this.verbatim(transcript, plan.text) || !this.rooms) return { kind: 'defer' };
+        // The words posted are the speaker's (the transcript, or the transcript
+        // minus its spoken "answer:" prefix) or the STORE's (an option label).
+        // Never the model's.
+        if (!this.verbatim(transcript, plan.text, plan.optionId !== undefined)) {
+          return { kind: 'defer' };
+        }
+        const { target } = plan;
+        // The ack says what was RECORDED — the option or the words, and on
+        // which item — because the person holding the mic is the only
+        // verifier this design has (Bryan: "Answered 'Keep placeholders' on
+        // <headline>").
+        const headline = `"${plan.headline}"`;
+        const ack =
+          plan.optionId !== undefined
+            ? `${heard(transcript)} Answered "${plan.text}" on ${headline}.`
+            : target.kind === 'thread' && target.mode === 'reply'
+              ? `${heard(transcript)} Replied on ${headline}: "${plan.text}".`
+              : `${heard(transcript)} Answered ${headline}: "${plan.text}".`;
+        if (target.kind === 'ticket') {
+          return this.once(
+            workspaceId,
+            `answer-review|${target.taskId}|${target.reviewItemId}|${plan.actor.id}|${plan.optionId ?? ''}|${plan.text}`,
+            ack,
+            // The same store write the ticket's answer route makes, with the
+            // same provenance stamp for a picked option.
+            async () =>
+              this.tasks.answerTaskReview(target.taskId, target.reviewItemId, plan.text, {
+                actor: plan.actor,
+                ...(plan.optionId !== undefined ? { answeredWith: plan.optionId } : {}),
+              }).ok,
+          );
+        }
+        if (!this.rooms) return { kind: 'defer' };
         const rooms = this.rooms;
-        const ack = `${heard(transcript)} ${
-          plan.mode === 'answer'
-            ? 'Answered the open review item on'
-            : 'Replied on the open thread on'
-        } ${plan.docId}.`;
         return this.once(
           workspaceId,
-          `answer-review|${plan.docId}|${plan.threadId}|${plan.actor.id}|${plan.text}`,
+          `answer-review|${target.docId}|${target.threadId}|${plan.actor.id}|${plan.optionId ?? ''}|${plan.text}`,
           ack,
           async () => {
-            if (plan.mode === 'answer') {
-              // Called as it stands, including the `optionId` slot left empty:
-              // a spoken answer names no option, and `answerReviewItem`
-              // already treats a typed answer with no id as a full answer.
-              // Everything that makes an answer an answer — the reply, the
-              // reopen, the events a watching agent receives — is that
-              // function's, not this one's.
+            if (target.mode === 'answer') {
+              // Called as it stands. A free-text answer leaves the `optionId`
+              // slot empty, exactly as a typed answer does; a pick fills it
+              // with the store's own id, exactly as a tap does. Everything
+              // that makes an answer an answer — the reply, the reopen, the
+              // events a watching agent receives — is that function's, not
+              // this one's.
               const res = await rooms.answerReviewItem(
-                plan.docId,
-                plan.threadId,
-                plan.commentId,
+                target.docId,
+                target.threadId,
+                target.commentId,
                 plan.actor,
                 plan.text,
-                undefined,
+                plan.optionId,
                 NO_GENERATE,
               );
               return res.ok;
@@ -1133,8 +1356,8 @@ export class VoiceRouter {
             // from the projection, so the branch is chosen from a fact rather
             // than from a message another branch may rename.
             const replied = await rooms.postComment(
-              plan.docId,
-              plan.threadId,
+              target.docId,
+              target.threadId,
               plan.actor,
               plan.text,
               undefined,
@@ -1177,8 +1400,14 @@ export class VoiceRouter {
    * supply the words would post half a sentence to a thread under the
    * speaker's name, indistinguishable from something they said.
    */
-  private verbatim(transcript: string, text: string): boolean {
+  private verbatim(transcript: string, text: string, isOptionLabel = false): boolean {
     if (text === transcript) return true;
+    // "answer: yes but only for the auth task" posts the words after the
+    // prefix — a deterministic strip of the speaker's own sentence.
+    if (answerBody(transcript) === text) return true;
+    // An option label comes from the store, and the plan only carries one
+    // the guardrail found on the item itself.
+    if (isOptionLabel) return true;
     console.error('[voice] refusing to post text that is not the transcript');
     return false;
   }
@@ -1252,32 +1481,79 @@ export class VoiceRouter {
     // was shown, so the guardrail cannot be arguing about a different read of
     // the store than the one that produced the classification.
     let resource: VoiceResource | undefined;
-    if (this.complete) {
+    try {
+      // In a try, not bare. `resourceInView` walks the review items of every
+      // doc on the board through injected readers, and every one of those is
+      // I/O this function does not own. An exception here used to escape
+      // `handle()` entirely — no `voice.request` row, no queue, a 500 to the
+      // client — which is the one outcome §2.4 rules out. Degrading to a
+      // prompt with no resource block is a worse classification and an
+      // honest one.
+      resource = this.resourceInView(workspaceId, context);
+    } catch (err) {
+      console.error('[voice] resource read failed:', err instanceof Error ? err.message : err);
+    }
+
+    /**
+     * A READ the server answered itself, with no model: a status brief, a
+     * navigation resolved by title, the "which one?" question when two titles
+     * are too close to call, or the answer to that question. Read-only, so
+     * nothing is queued for an agent and the route is `fast-path`.
+     */
+    let direct: VoiceResult | undefined;
+    /** Title matches below the confidence floor: the model is shown THESE
+     *  rather than the whole board, and validated exactly as before. */
+    let narrowTo: ScoredCandidate[] | undefined;
+    try {
+      direct = this.answerPendingChoice(workspaceId, transcript, actor);
+      if (!direct && statusAsk(transcript)) {
+        direct = this.statusResult(workspaceId, workspace.name, resource);
+      }
+      if (!direct) {
+        const name = navigationAsk(transcript);
+        if (name !== null) {
+          const r = resolveByTitle(name, this.titleIndex(workspaceId));
+          if (r.kind === 'hit') direct = this.openCandidate(workspaceId, transcript, r.match);
+          else if (r.kind === 'ambiguous')
+            direct = this.askWhich(workspaceId, transcript, actor, r.matches);
+          else narrowTo = r.top;
+        }
+      }
+      // A spoken pick or answer on the review item in view needs no model
+      // either: the words are the speaker's, the option is the store's.
+      if (!direct) classification = this.directPick(transcript, context, resource);
+    } catch (err) {
+      console.error('[voice] direct read failed:', err instanceof Error ? err.message : err);
+    }
+
+    if (direct || classification) {
+      // Answered, or resolved to an action, without the model.
+    } else if (this.complete) {
+      const keep = narrowTo?.length
+        ? new Set(narrowTo.map((c) => c.id).concat(resource ? [resource.id] : []))
+        : undefined;
+      const docTitles: Record<string, string> = {};
+      for (const d of workspace.docIds) {
+        const title = this.docTitle?.(workspaceId, d);
+        if (title) docTitles[d] = title;
+      }
       const index = {
         goals: workspace.goals.flatMap((g) => [
           { id: g.id, title: g.title },
           ...(g.subgoals ?? []).map((sg) => ({ id: sg.id, title: sg.title })),
         ]),
-        tasks: this.tasks.listTasks(workspaceId).map((t) => ({
-          id: t.id,
-          title: t.title,
-          status: t.status,
-          ...(t.needs !== undefined ? { needs: t.needs } : {}),
-        })),
-        docIds: workspace.docIds,
+        tasks: this.tasks
+          .listTasks(workspaceId)
+          .filter((t) => !keep || keep.has(t.id))
+          .map((t) => ({
+            id: t.id,
+            title: t.title,
+            status: t.status,
+            ...(t.needs !== undefined ? { needs: t.needs } : {}),
+          })),
+        docIds: workspace.docIds.filter((d) => !keep || keep.has(d)),
+        docTitles,
       };
-      try {
-        // Inside the try, not before it. `resourceInView` walks the review
-        // items of every doc on the board through injected readers, and every
-        // one of those is I/O this function does not own. An exception here
-        // used to escape `handle()` entirely — no `voice.request` row, no
-        // queue, a 500 to the client — which is the one outcome §2.4 rules
-        // out. Degrading to a prompt with no resource block is a worse
-        // classification and an honest one.
-        resource = this.resourceInView(workspaceId, context);
-      } catch (err) {
-        console.error('[voice] resource read failed:', err instanceof Error ? err.message : err);
-      }
       try {
         const reply = await this.complete(buildVoicePrompt(index, transcript, context, resource));
         classification = parseVoiceReply(reply);
@@ -1343,6 +1619,10 @@ export class VoiceRouter {
           applied: result.ack,
         });
       }
+    } else if (direct) {
+      // A read the server answered itself — nothing moved, nothing to hand
+      // over. Same standing as a resolved lookup.
+      result = direct;
     } else if (
       classification?.kind === 'lookup' &&
       (answered = this.lookupResult(workspaceId, transcript, classification))
@@ -1427,6 +1707,207 @@ export class VoiceRouter {
       this.tasks.markVoiceEmitted(workspaceId, queueId);
     }
     return { ok: true, ...result };
+  }
+
+  /** Every task and doc on the board with the words a person would say. */
+  private titleIndex(workspaceId: string): TitleCandidate[] {
+    const workspace = this.tasks.getWorkspace(workspaceId);
+    const tasks: TitleCandidate[] = this.tasks
+      .listTasks(workspaceId)
+      .map((t) => ({ id: t.id, kind: 'task', title: t.title }));
+    const docs: TitleCandidate[] = (workspace?.docIds ?? []).map((id) => ({
+      id,
+      kind: 'doc',
+      title: this.docTitle?.(workspaceId, id) ?? id,
+    }));
+    return [...tasks, ...docs];
+  }
+
+  /** Where a resolved candidate opens — the same two paths `lookupResult`
+   *  emits, through the same same-origin assertion. */
+  private navigationFor(workspaceId: string, c: TitleCandidate): string | undefined {
+    return c.kind === 'task'
+      ? sameOriginPath(
+          `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(c.id)}`,
+        )
+      : sameOriginPath(`/review/${encodeURIComponent(c.id)}`);
+  }
+
+  private openCandidate(
+    workspaceId: string,
+    transcript: string,
+    c: TitleCandidate,
+  ): VoiceResult | undefined {
+    const navigate = this.navigationFor(workspaceId, c);
+    if (!navigate) return undefined;
+    return { route: 'fast-path', ack: `${heard(transcript)} Opening "${c.title}".`, navigate };
+  }
+
+  /**
+   * Two titles too close to call: ASK, and remember the pair for the next
+   * thing this speaker says. Wrong-but-confident navigation is worse than a
+   * question — the speaker lands somewhere, reads for a while, and only then
+   * learns it was the wrong doc.
+   */
+  private askWhich(
+    workspaceId: string,
+    transcript: string,
+    actor: VoiceActor,
+    matches: [ScoredCandidate, ScoredCandidate],
+  ): VoiceResult {
+    this.pendingChoices.set(`${workspaceId}\0${actor.id}`, {
+      candidates: matches,
+      at: Date.now(),
+    });
+    return {
+      route: 'fast-path',
+      ack: `${heard(transcript)} Did you mean "${matches[0].title}" or "${matches[1].title}"? Say first or second, or part of the name.`,
+    };
+  }
+
+  /**
+   * The answer to a standing "which one?", if the utterance is one — by
+   * ordinal ("the second one") or by name ("the billing one"). Any utterance
+   * consumes the pending pair, so a stale question cannot catch a later,
+   * unrelated "the first one".
+   */
+  private answerPendingChoice(
+    workspaceId: string,
+    transcript: string,
+    actor: VoiceActor,
+  ): VoiceResult | undefined {
+    const key = `${workspaceId}\0${actor.id}`;
+    const pending = this.pendingChoices.get(key);
+    if (!pending) return undefined;
+    this.pendingChoices.delete(key);
+    if (Date.now() - pending.at > RETRY_WINDOW_MS) return undefined;
+    const ordinal = parseOrdinal(transcript, pending.candidates.length);
+    const chosen =
+      ordinal !== null
+        ? pending.candidates[ordinal]
+        : (() => {
+            const byName = pickByLabel(
+              transcript,
+              pending.candidates.map((c) => ({ id: c.id, label: c.title })),
+            );
+            return byName ? pending.candidates.find((c) => c.id === byName.id) : undefined;
+          })();
+    return chosen ? this.openCandidate(workspaceId, transcript, chosen) : undefined;
+  }
+
+  /**
+   * "brief status": ≤ `VOICE_STATUS_MAX_WORDS` words about the thing in view,
+   * or the board when nothing is. Composed from the store; no model phrases
+   * it, so the numbers in it are the board's numbers.
+   */
+  private statusResult(
+    workspaceId: string,
+    workspaceName: string,
+    resource: VoiceResource | undefined,
+  ): VoiceResult {
+    const now = Date.now();
+    const toStatus = (t: Task): StatusTask => {
+      const last = t.transitions[t.transitions.length - 1];
+      const done = [...t.transitions].reverse().find((tr) => tr.to === 'done');
+      return {
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        assignee: t.assignee,
+        ...(t.needs !== undefined ? { needs: t.needs } : {}),
+        ...(done ? { doneAt: done.ts } : {}),
+        ...(last
+          ? { lastMove: { from: last.from, to: last.to, by: last.by.name, ts: last.ts } }
+          : {}),
+        links: t.links.length,
+      };
+    };
+    const tasks = this.tasks.listTasks(workspaceId).map(toStatus);
+    const queue = this.queue?.(workspaceId) ?? [];
+    const task = resource?.kind === 'task' ? tasks.find((t) => t.id === resource.id) : undefined;
+    const doc =
+      resource?.kind === 'doc'
+        ? {
+            title: resource.title ?? resource.id,
+            asks: resource.reviewItems.map((i) => ({
+              title: resource.title ?? resource.id,
+              ask: i.ask,
+              askedBy: i.askedBy,
+            })),
+          }
+        : undefined;
+    return {
+      route: 'fast-path',
+      ack: composeStatus({
+        workspaceName,
+        tasks,
+        queue,
+        now,
+        ...(task ? { task } : {}),
+        ...(doc ? { doc } : {}),
+      }),
+    };
+  }
+
+  /**
+   * A spoken pick or answer on the review item in view, resolved from the
+   * speaker's words alone — no model. Returns the same classification shape
+   * the model would, carrying a `pick`, so it passes through the SAME
+   * guardrail (`resolveVoiceAction`) and the same executor.
+   *
+   *  - "pick the second one" → the item's second option, by ordinal;
+   *  - "choose keep placeholders" → the option whose label those words
+   *    resolve to, across every item in view when the label is unique;
+   *  - "answer: yes but only for the auth task" → the words after the prefix.
+   *
+   * Which item: the one the speaker has open (context), else the only one.
+   * An ordinal over several items with nothing open is NOT guessed.
+   */
+  private directPick(
+    transcript: string,
+    context: VoiceContext | undefined,
+    resource: VoiceResource | undefined,
+  ): VoiceClassification | null {
+    if (!resource || !context) return null;
+    const items = resource.kind === 'doc' ? resource.reviewItems : (resource.reviewItems ?? []);
+    if (items.length === 0) return null;
+    const pinned = pickReviewItem(items, context);
+    const action = (pick: VoicePick): VoiceClassification => ({
+      kind: 'action',
+      action: 'answer-review',
+      id: resource.id,
+      pick,
+    });
+    const text = answerBody(transcript);
+    if (text !== null) {
+      return pinned ? action({ itemKey: reviewItemKey(pinned), text }) : null;
+    }
+    if (pinned?.options?.length) {
+      const ordinal = parseOrdinal(transcript, pinned.options.length);
+      const option = ordinal !== null ? pinned.options[ordinal] : undefined;
+      if (option) {
+        return action({
+          itemKey: reviewItemKey(pinned),
+          optionId: option.id,
+          optionLabel: option.label,
+        });
+      }
+    }
+    // By label — across every item in view, and only when exactly one item
+    // offers the label those words resolve to.
+    const hits = items.flatMap((item) => {
+      const option = item.options?.length ? pickByLabel(transcript, item.options) : null;
+      return option ? [{ item, option }] : [];
+    });
+    const [hit, ...rest] = hits;
+    if (hit && rest.length === 0 && (!pinned || pinned === hit.item)) {
+      return action({
+        itemKey: reviewItemKey(hit.item),
+        optionId: hit.option.id,
+        optionLabel: hit.option.label,
+      });
+    }
+    return null;
   }
 
   /**
