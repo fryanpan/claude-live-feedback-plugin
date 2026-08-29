@@ -93,6 +93,27 @@ if [ -n "${ACCESS_TUNNEL_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "
     exit 1
 fi
 
+# The operator's OWN public hostnames: through the tunnel, behind an Access
+# application, and then the whole product — not the share surface. A third
+# list, separate from TRUSTED_HOSTS and from the collaboration list above,
+# because it grants the most. Same contract: baked into the plist, empty by
+# default, reverted by a reinstall without it, and the same all-or-none rule
+# with the team domain and the AUD. Dual-read like the base URL — the domain
+# plan spells it `LF_`; the new name wins when both are set.
+#
+#   CW_PROXIED_TRUSTED_HOSTS=workspaces.example.com \
+#   CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com \
+#   CF_ACCESS_AUD=<the Access application's AUD tag> \
+#     scripts/launchd/install.sh
+PROXIED_TRUSTED_HOSTS="${CW_PROXIED_TRUSTED_HOSTS:-${LF_PROXIED_TRUSTED_HOSTS:-}}"
+if [ -n "${PROXIED_TRUSTED_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "${ACCESS_AUD}" ]; }; then
+    echo "error: CW_PROXIED_TRUSTED_HOSTS needs CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD too." >&2
+    echo "       Without an Access application in front of those hostnames the server" >&2
+    echo "       would serve the WHOLE product to anyone who can reach the tunnel, so it" >&2
+    echo "       refuses to honour the list — they would answer 403. Set all three, or none." >&2
+    exit 1
+fi
+
 echo "[install] label:    ${LABEL}"
 echo "[install] repo:     ${REPO_DIR}"
 echo "[install] bun:      ${BUN_BIN}"
@@ -101,6 +122,7 @@ echo "[install] logs:     ${LOG_DIR}/${LABEL}.{out,err}.log"
 echo "[install] links:    ${PUBLIC_BASE_URL:-<discovered host>:<port> over http}"
 echo "[install] sharing:  ${SHARE_PUBLIC_HOSTNAME:-<link mode off>}"
 echo "[install] collab:   ${ACCESS_TUNNEL_HOSTS:-<off>}"
+echo "[install] operator: ${PROXIED_TRUSTED_HOSTS:-<off>}"
 
 DOMAIN="gui/$(id -u)"
 
@@ -156,6 +178,7 @@ sed \
     -e "s|{{PUBLIC_BASE_URL}}|${PUBLIC_BASE_URL}|g" \
     -e "s|{{SHARE_PUBLIC_HOSTNAME}}|${SHARE_PUBLIC_HOSTNAME}|g" \
     -e "s|{{ACCESS_TUNNEL_HOSTS}}|${ACCESS_TUNNEL_HOSTS}|g" \
+    -e "s|{{PROXIED_TRUSTED_HOSTS}}|${PROXIED_TRUSTED_HOSTS}|g" \
     -e "s|{{ACCESS_TEAM_DOMAIN}}|${ACCESS_TEAM_DOMAIN}|g" \
     -e "s|{{ACCESS_AUD}}|${ACCESS_AUD}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
