@@ -177,9 +177,14 @@ export function briefEvents(rows: BriefEventRow[], since: number): BriefEventRow
  * has nothing here to cancel and STAYS: the reader saw that answer stand
  * before they left, and its reopening is the news.
  *
- * `decision.answer_withdrawn` names a task, never a review item, so the
- * pairing is on task id; the legacy `answer_decision` path is the only one
- * that writes the withdrawal today, and it carries one answer per task.
+ * Only the TASK-LEVEL answer can be withdrawn — `withdrawAnswer` undoes the
+ * legacy `answer_decision` record and nothing else — and only that answer's
+ * event arrives without a `reviewItemId` (`answerTaskReview` stamps one on
+ * every real row it answers, and delegates the derived legacy row to
+ * `answerDecision`, which stamps none). So a withdrawal pairs with the
+ * newest standing row-less answer on its task, and an answered review item
+ * on the same ticket is left standing: pairing by task alone popped the
+ * review item's answer instead and kept reporting the withdrawn one.
  */
 export function settleWithdrawnAnswers(rows: BriefEventRow[]): BriefEventRow[] {
   const dropped = new Set<BriefEventRow>();
@@ -187,6 +192,7 @@ export function settleWithdrawnAnswers(rows: BriefEventRow[]): BriefEventRow[] {
   for (const row of rows) {
     if (typeof row.taskId !== 'string') continue;
     if (row.event === 'decision.answered') {
+      if (row.reviewItemId !== undefined) continue;
       const list = standing.get(row.taskId) ?? [];
       list.push(row);
       standing.set(row.taskId, list);

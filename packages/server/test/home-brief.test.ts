@@ -199,6 +199,25 @@ describe('an answer that was taken back is not news', () => {
     ]);
   });
 
+  it("pairs with the task's own answer only — an answered review item on the same ticket stands", () => {
+    // Only the legacy task-level answer can be withdrawn; a real review row's
+    // answer carries `reviewItemId` and has no undo. Pairing by task alone
+    // popped the review item's answer and kept asserting the withdrawn one.
+    const rowAnswer = ev('decision.answered', NOW + 2, {
+      taskId: 't-2',
+      reviewItemId: 'r-abc',
+      actor: { name: 'Riley' },
+      answer: 'Keep disk.',
+    });
+    const rows = briefEvents([answered(NOW + 1), rowAnswer, withdrawn(NOW + 3)], NOW);
+    expect(rows).toEqual([rowAnswer]);
+    expect(deterministicBrief(input(rows))).toContain('**Decided:** 1 decision was answered');
+    // And a withdrawal with only a review-item answer in the window has
+    // nothing to cancel: it stands as a reopening rather than eating the row.
+    const lone = briefEvents([rowAnswer, withdrawn(NOW + 3)], NOW);
+    expect(lone.map((r) => r.event)).toEqual(['decision.answered', 'decision.answer_withdrawn']);
+  });
+
   it('a withdrawal of an answer given before the window is reported as a reopening', () => {
     const rows = briefEvents([answered(NOW - 5), withdrawn(NOW + 2)], NOW);
     expect(rows.map((r) => r.event)).toEqual(['decision.answer_withdrawn']);
