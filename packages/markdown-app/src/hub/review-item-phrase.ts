@@ -80,9 +80,11 @@ function loosen(phrase: string): string {
  * resolved-range mark, across as many text nodes as it spans. Tries the
  * phrase as given, then with markdown punctuation stripped (a revised span
  * of the SOURCE may carry `**` the render does not). Returns whether a mark
- * was placed; on false the DOM is untouched.
+ * was placed; on false the DOM is untouched. `className` is the mark's
+ * dressing — resolved by default; the task feed passes the ACTIVE range for
+ * the phrase an open thread is about.
  */
-export function markPhrase(el: HTMLElement, phrase: string): boolean {
+export function markPhrase(el: HTMLElement, phrase: string, className = MARK_CLASS): boolean {
   unmarkPhrase(el);
   const nodes = textNodesIn(el);
   const whole = nodes.map((n) => n.data).join('');
@@ -108,7 +110,7 @@ export function markPhrase(el: HTMLElement, phrase: string): boolean {
     if (from > 0) target = target.splitText(from);
     if (to - from < target.data.length) target.splitText(to - from);
     const mark = el.ownerDocument.createElement('mark');
-    mark.className = MARK_CLASS;
+    mark.className = className;
     target.parentNode?.insertBefore(mark, target);
     mark.appendChild(target);
   }

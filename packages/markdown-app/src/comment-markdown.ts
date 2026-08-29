@@ -8,7 +8,7 @@
  *
  * Supported: **bold**, *italic* / _italic_, `code`, ~~strike~~,
  * [label](url) (http/https/mailto only), `-`/`*` bullet lists, `#` headings,
- * and line breaks.
+ * ``` / ~~~ fenced code (literal, escaped, no marks inside), and line breaks.
  *
  * Plus one convenience: a BARE workspace URL (a pasted board / task / doc /
  * mockup address — see `parseWorkspaceLink` in @feedback/core) becomes a link
@@ -195,11 +195,16 @@ function absorbHardBreaks(text: string): string {
   return text.replace(/\\\r?\n/g, '\n');
 }
 
+/** A fence line: three backticks or tildes, an optional info string. The
+ *  block's lines are literal — no prose rule runs on them — and escaped. */
+const FENCE_LINE = /^\s{0,3}(```|~~~)/;
+
 export function renderCommentMarkdown(text: string): string {
   const lines = absorbHardBreaks(text).replace(/\r\n/g, '\n').split('\n');
   const html: string[] = [];
   let listOpen = false;
   let para: string[] = [];
+  let fence: string[] | null = null;
   const flushPara = () => {
     if (para.length) {
       html.push(`<p>${para.join('<br>')}</p>`);
@@ -212,7 +217,30 @@ export function renderCommentMarkdown(text: string): string {
       listOpen = false;
     }
   };
+  const closeFence = () => {
+    if (fence) {
+      html.push(`<pre class="cm-code"><code>${escapeHtml(fence.join('\n'))}</code></pre>`);
+      fence = null;
+    }
+  };
   for (const line of lines) {
+    // Fenced code: a turn note is an end-of-turn message, and those carry
+    // test output and diffs whose `#` and `-` lines are not headings and
+    // bullets. An unterminated fence runs to the end.
+    if (FENCE_LINE.test(line)) {
+      if (fence) {
+        closeFence();
+      } else {
+        flushPara();
+        closeList();
+        fence = [];
+      }
+      continue;
+    }
+    if (fence) {
+      fence.push(line);
+      continue;
+    }
     // ATX heading. Demoted by two so the body sits UNDER whatever card title
     // it was rendered into — a decision body's `## Question` is a section of
     // the card, never a peer of the card's own heading. A space after the
@@ -239,6 +267,7 @@ export function renderCommentMarkdown(text: string): string {
       para.push(inline(escapeHtml(line)));
     }
   }
+  closeFence();
   flushPara();
   closeList();
   return html.join('');

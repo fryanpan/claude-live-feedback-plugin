@@ -21,16 +21,18 @@ through the owner's chat window in 38 hours, because nothing in it was false:
 ninety-nine messages is a reasonable count, and two of them ran 3,079 and
 4,392 words.
 
-- **Post the report where the work is** — a comment on the task or the review
-  doc — and hand over the `threadUrl` that comes back on the response. The
-  full contract is in the `claude-workspaces:working-in-a-workspace` skill
-  ("Share progress in the workspace on the most appropriate task or doc"). A message here is read once by
-  one session and is gone; a task comment is there for whoever picks the work
-  up next.
+- **Post the report where the work is** — `post_status` on the task, which
+  lands on its Activity tab — and hand over the task's link. A comment
+  (`post_reply`, `create_thread`, a review item) is only for something a
+  person must read and answer (Bryan, 2026-08-29: status off the comment
+  feed). The full contract is in the `claude-workspaces:working-in-a-workspace`
+  skill ("Share status on the task's Activity tab"). A message here is read
+  once by one session and is gone; a status note on the task is there for
+  whoever picks the work up next.
 - **Count AND length.** Still 3–5 messages per task — start, blockers, PR
   open, merge, done — and each one **under 150 words**. A handover is two
   sentences and a link. If you are writing a third paragraph, you are writing
-  a task comment in the wrong window.
+  a status note in the wrong window.
 - Use `mcp__claude-hive__send_message` with **`to_stable_id`** (stable IDs survive session restarts; session IDs don't).
 - The user reads the conductor, not individual peer stdouts — and everything
   you send the conductor, he scrolls past too. That is the cost this section

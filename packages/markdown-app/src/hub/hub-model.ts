@@ -41,16 +41,21 @@ export interface HubTransition {
 }
 
 /**
- * One line an agent posted about a task — its Stop hook's turn summary, or
- * a permission denial reduced to the shape that was refused. The server
- * projects the newest `TASK_NOTES_READ_CAP` of them, NEWEST FIRST, with
- * display fields only (the session id stays in the store, like actor ids do
- * on transitions). Denial text is the bare shape — "blocked: " is the
- * pane's prefix, not the store's.
+ * What an agent posted about a task — its Stop hook's whole end-of-turn
+ * message (`turn`), a status line it chose to post (`status`, the
+ * `post_status` verb), or a permission denial reduced to the shape that was
+ * refused (`denial`). The server projects the newest `TASK_NOTES_READ_CAP`
+ * of them, NEWEST FIRST, with display fields only (the session id stays in
+ * the store, like actor ids do on transitions). Denial text is the bare
+ * shape — "blocked: " is the surface's prefix, not the store's.
+ *
+ * Notes are the task's Activity tab, in full; the Home pane shows each one's
+ * first line. Comments are for asks, decisions and replies to a person —
+ * status never goes there (Bryan, 2026-08-29).
  */
 export interface HubNote {
   at: number;
-  kind: 'turn' | 'denial';
+  kind: 'turn' | 'denial' | 'status';
   text: string;
   /** The agent's display name, as its hook environment spelled it. */
   agent: string;
@@ -1794,8 +1799,10 @@ const DECISION_EVENTS: ReadonlySet<string> = new Set([
  * read effortless. server.tick is the same class (the server strips it
  * before it ever reaches us; the guard here keeps that a server-side
  * courtesy, not a load-bearing assumption). task.noted is one row per agent
- * TURN — the per-agent activity pane's material, and a trail that carried
- * it would bury the rows that move.
+ * TURN — and it STAYS noise here even now that notes are the task's own
+ * Activity feed: the notes render from `task.notes` on that task's tab (and
+ * as first lines on the Home pane), never from the board-wide trail, which
+ * would bury the rows that move under one row per turn of every agent.
  */
 const TRAIL_NOISE: ReadonlySet<string> = new Set(['agent.heartbeat', 'server.tick', 'task.noted']);
 

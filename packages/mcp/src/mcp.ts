@@ -80,6 +80,10 @@ function resolveBaseUrl(): string {
   );
 }
 const AUTHOR = resolveAgentAuthor(process.env);
+/** What `post_status` accepts — the server's `NOTE_TEXT_MAX`
+ *  (packages/server/src/agent-notes.ts), which refuses anything longer.
+ *  Spelled here because the bundle imports nothing from the server. */
+const STATUS_TEXT_MAX = 4000;
 
 /** The {id,name,color} subset of AUTHOR a `suggest: true` route call needs —
  *  suggestions are attributed per-agent from the same identity every other
@@ -99,7 +103,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.125';
+const PLUGIN_VERSION = '0.1.126';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -379,7 +383,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'post_reply',
       description:
-        'Reply to an existing thread. Pass review when the reply is asking a person to decide or look; without it, it is an ordinary comment and does not enter the queue, which is right for status notes. Returns threadUrl, the link to hand a peer.',
+        'Reply to an existing thread. Pass review when the reply is asking a person to decide or look; without it, it is an ordinary comment and does not enter the queue. A comment is an ask, a decision, or a reply to a person — where the work stands goes through post_status instead. Returns threadUrl, the link to hand a peer.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -389,6 +393,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           review: REVIEW_ITEM_SCHEMA,
         },
         required: ['docId', 'threadId', 'text'],
+      },
+    },
+    {
+      name: 'post_status',
+      description:
+        "One line to a few sentences on where the work stands; lands on the task's Activity tab, never as a comment. Omit taskId to post to your current in-progress task. Your end-of-turn message already reaches the same tab on its own, so this is for a milestone worth naming — started, blocked on what, PR open, done. Refused when empty or over 4000 chars.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          taskId: {
+            type: 'string',
+            description:
+              'The row to report on. Omit it and the note lands on your current in-progress task; with none, it is kept on your own recent-activity list only.',
+          },
+        },
+        required: ['text'],
       },
     },
     {
@@ -2263,6 +2284,42 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           { author: AUTHOR, text, ...(review !== undefined ? { review } : {}) },
         );
         return ok(res);
+      }
+      case 'post_status': {
+        // A status is a NOTE on the row (kind `status`, beside the hooks'
+        // `turn` and `denial`), never a comment: the same body the Stop hook
+        // posts, under the same agent name, to the row the caller names —
+        // or, with no taskId, to the hook route, which pins it to this
+        // agent's current claim. Empty and over-cap text are refused here,
+        // where the message can say why; the server would 400 either.
+        const { text, taskId } = a as { text?: unknown; taskId?: string };
+        const body = typeof text === 'string' ? text.trim() : '';
+        if (body === '') return err('text is empty — say where the work stands');
+        if (body.length > STATUS_TEXT_MAX) {
+          return err(
+            `text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`,
+          );
+        }
+        const path =
+          taskId !== undefined && taskId !== ''
+            ? `/api/tasks/${encodeURIComponent(taskId)}/notes`
+            : '/api/agent-notes';
+        const res = (await http('POST', path, {
+          agent: AUTHOR.name,
+          kind: 'status',
+          text: body,
+          at: Date.now(),
+        })) as { taskId?: string; workspaceId?: string };
+        return ok({
+          posted: true,
+          ...(res.taskId !== undefined ? { taskId: res.taskId } : {}),
+          ...(res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {}),
+          ...(res.taskId === undefined
+            ? {
+                note: 'no in-progress task of yours to pin this to — kept on your own recent-activity list; pass taskId to put it on a row',
+              }
+            : {}),
+        });
       }
       case 'create_thread': {
         // Two endpoints; omitting `find` opens the thread on the subject.

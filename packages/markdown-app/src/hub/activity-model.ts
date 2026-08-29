@@ -40,6 +40,11 @@ export const STALE_REPEATS = 3;
 /** What a denial line starts with; the island splits on it to tint the
  *  refused shape and leave the word as prose. */
 export const DENIAL_PREFIX = 'blocked: ';
+/** How much of a note the Home pane shows: its first prose line, at most
+ *  this many characters. A turn note is the agent's WHOLE end-of-turn
+ *  message now, and the pane is a glance — the full text is on the task's
+ *  Activity tab. */
+export const NOTE_LINE_CAP = 200;
 
 /**
  * The one badge a group may wear. `dark` beats `stale` beats `off-band`
@@ -111,6 +116,42 @@ export function ageShort(at: number, now: number): string {
   return timeAgo(at, now).replace(/ ago$/, '');
 }
 
+/**
+ * The first prose line of a note, for the pane's one-line glance: blank
+ * lines, fence markers and fenced code are skipped, a heading / quote /
+ * list marker is shed from the line that is kept, and anything past `cap`
+ * ends in an ellipsis (the whole line is `cap` characters at most). A note
+ * that is ONLY fenced code falls back to its first code line — a pane row
+ * must never be blank for a message that said something — and is empty
+ * only when there is nothing at all.
+ */
+export function firstLine(text: string, cap = NOTE_LINE_CAP): string {
+  let inFence = false;
+  let firstCode = '';
+  for (const raw of text.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(raw)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      if (firstCode === '' && raw.trim() !== '') firstCode = raw.trim();
+      continue;
+    }
+    const line = raw
+      .replace(/^\s{0,3}#{1,6}\s+/, '')
+      .replace(/^\s*>\s?/, '')
+      .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
+      .trim();
+    if (line === '') continue;
+    return clip(line, cap);
+  }
+  return firstCode === '' ? '' : clip(firstCode, cap);
+}
+
+function clip(line: string, cap: number): string {
+  return line.length <= cap ? line : `${line.slice(0, cap - 1).trimEnd()}…`;
+}
+
 /** The comparison key for "the same text": trimmed, whitespace-collapsed,
  *  case-folded. An agent re-posting its wait with a stray space or a capital
  *  is still repeating itself. */
@@ -119,8 +160,10 @@ function sameText(text: string): string {
 }
 
 /**
- * Every line one task contributes, in no particular order: its notes as
- * they are, denials prefixed, and each transition rendered as a move. A
+ * Every line one task contributes, in no particular order: its notes by
+ * their first line (`firstLine` — a turn note is a whole message now, and
+ * `status` reads exactly like `turn`), denials prefixed, and each transition
+ * rendered as a move. A
  * transition that put the task into progress under somebody other than the
  * actor who moved it reads as a hand-off — the projection records no
  * assignee history, so "the assignee changed" is approximated as "the mover
@@ -129,11 +172,14 @@ function sameText(text: string): string {
 function linesOf(task: HubTask, dropped: ReadonlySet<string>): ActivityNote[] {
   const lines: ActivityNote[] = [];
   for (const n of task.notes ?? []) {
-    if (dropped.has(sameText(n.text))) continue;
+    const shown = n.kind === 'denial' ? `${DENIAL_PREFIX}${n.text}` : firstLine(n.text);
+    // Against the line the pane would SHOW: an ask the queue carries is one
+    // line, and a note that opens with it is that ask said again.
+    if (dropped.has(sameText(n.text)) || dropped.has(sameText(shown))) continue;
     lines.push({
       at: n.at,
       age: '',
-      text: n.kind === 'denial' ? `${DENIAL_PREFIX}${n.text}` : n.text,
+      text: shown,
       agent: n.agent,
       kind: n.kind,
     });

@@ -14406,10 +14406,11 @@ function resolveBaseUrl() {
   throw new Error("claude-workspaces server not found — start it with `bun run dev` (or set CW_BASE_URL). " + `Looked for a discovery file at ${discoveryCandidates(homedir()).join(" and ")}.`);
 }
 var AUTHOR = resolveAgentAuthor(process.env);
+var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.125";
+var PLUGIN_VERSION = "0.1.126";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -14612,7 +14613,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "post_reply",
-      description: "Reply to an existing thread. Pass review when the reply is asking a person to decide or look; without it, it is an ordinary comment and does not enter the queue, which is right for status notes. Returns threadUrl, the link to hand a peer.",
+      description: "Reply to an existing thread. Pass review when the reply is asking a person to decide or look; without it, it is an ordinary comment and does not enter the queue. A comment is an ask, a decision, or a reply to a person — where the work stands goes through post_status instead. Returns threadUrl, the link to hand a peer.",
       inputSchema: {
         type: "object",
         properties: {
@@ -14622,6 +14623,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           review: REVIEW_ITEM_SCHEMA
         },
         required: ["docId", "threadId", "text"]
+      }
+    },
+    {
+      name: "post_status",
+      description: "One line to a few sentences on where the work stands; lands on the task's Activity tab, never as a comment. Omit taskId to post to your current in-progress task. Your end-of-turn message already reaches the same tab on its own, so this is for a milestone worth naming — started, blocked on what, PR open, done. Refused when empty or over 4000 chars.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          taskId: {
+            type: "string",
+            description: "The row to report on. Omit it and the note lands on your current in-progress task; with none, it is kept on your own recent-activity list only."
+          }
+        },
+        required: ["text"]
       }
     },
     {
@@ -16199,6 +16215,30 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { docId, threadId, text, review } = a;
         const res = await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/comments`, { author: AUTHOR, text, ...review !== undefined ? { review } : {} });
         return ok(res);
+      }
+      case "post_status": {
+        const { text, taskId } = a;
+        const body = typeof text === "string" ? text.trim() : "";
+        if (body === "")
+          return err("text is empty — say where the work stands");
+        if (body.length > STATUS_TEXT_MAX) {
+          return err(`text is over ${STATUS_TEXT_MAX} chars — a status is a line to a few sentences; the full report is already on the Activity tab from your end-of-turn message`);
+        }
+        const path = taskId !== undefined && taskId !== "" ? `/api/tasks/${encodeURIComponent(taskId)}/notes` : "/api/agent-notes";
+        const res = await http("POST", path, {
+          agent: AUTHOR.name,
+          kind: "status",
+          text: body,
+          at: Date.now()
+        });
+        return ok({
+          posted: true,
+          ...res.taskId !== undefined ? { taskId: res.taskId } : {},
+          ...res.workspaceId !== undefined ? { workspaceId: res.workspaceId } : {},
+          ...res.taskId === undefined ? {
+            note: "no in-progress task of yours to pin this to — kept on your own recent-activity list; pass taskId to put it on a row"
+          } : {}
+        });
       }
       case "create_thread": {
         const { path, body } = threadCreateRequest(a, AUTHOR);

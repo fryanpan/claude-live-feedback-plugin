@@ -1398,6 +1398,11 @@ async function main(): Promise<void> {
         onArchive: (t) => void archiveTask(t),
         onRestore: (t) => void restoreTask(t),
         onComment: (t, text, threadId) => postRowComment(t, text, threadId),
+        // The Activity feed takes comments the way the Home pane does — the
+        // same two writes, the same thread on the task's doc.
+        onActivityComment: (t, phrase, text) => commentOnActivity(t.id, phrase, text),
+        onActivityReply: (t, threadId, text) => replyOnActivity(t.id, threadId, text),
+        user,
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
         // the panel says the same thing the row that sent them here said.

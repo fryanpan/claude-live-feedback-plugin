@@ -13,7 +13,7 @@ The purpose of a workspace is to provide a significantly better agent and human 
 
 1. The workspace is your plan, task list, and decision repository.
    1. If you are in a workspace, stop using harness' tools. Do not use `TaskCreate` / `TaskUpdate` / `TaskList` (formerly `TodoWrite`) and `EnterPlanMode` / `ExitPlanMode`. A task or plan in harness becomes invisible and confusing to workspace users.
-2. The workspace is where you share status and ask for human help.
+2. The workspace is where you ask for human help (status is item 3).
    1. DO NOT use regular chat messages to share progress or ask for a decision
    2. DO NOT use `AskUserQuestion`, create a review item instead
    3. Ask for human help
@@ -31,7 +31,7 @@ The purpose of a workspace is to provide a significantly better agent and human 
          1. The option label is the contract — the reviewer answers the label, not the reasoning under it. Plain words, phone-readable.
          2. The item has to be actionable on its own. The Home card renders the payload and nothing around it, so every link the reviewer needs goes in the payload's `detail` as an inline markdown link (`[the diff](/review/d-xxxx)`) — a link that lives only in the surrounding comment text never reaches the card, and the reviewer is left scrolling the comments for it.
       5. Anything the reviewer still owes an answer to is a filed review item BEFORE your turn ends — answerable where they read, with chat carrying at most a pointer to it. A "still waiting on you" list in chat is the failure mode this rule exists for: audited sessions filed 18 chat-only asks in a day, and 13 died unanswered.
-3. Share progress in the workspace on the most appropriate task or doc using comments
+3. The workspace is where you share status: on the task's Activity tab, never in its comments. Your end-of-turn message reaches the tab by itself — the Stop hook posts it in full — and `post_status(text, taskId?)` adds a milestone worth naming: started, blocked on what, PR open, done. Comments are for asks (review items, decisions), replies to a person, and anything a person must read and answer.
 
 ### What a chat message is
 
@@ -135,27 +135,28 @@ Someone who was not in the conversation should be able to see a task, know why i
   - Work sitting in an unmerged PR stays `in-progress`
   - Work you have decided to come back to LATER is `park_task(taskId, until, reason)` — the row moves to `triage` and the tool posts a comment saying when to come back and why, so the board stops treating it as work nobody got to. Write the `reason`, and give an `until` date whenever you have one: triage says a decision was made, and that comment is the only place that says what it was waiting for. There is no un-park — move the row on with `task_transition` when it is ready. Never move a row to `in-progress`, invent an `after` edge, or hand it to a person to quiet the ready-work nudge; all three make the board say something untrue.
   - Say what you did in the transition `note` — the PR, what you verified and what you couldn't. The note is the whole of what the trail keeps, so a move with an empty note is a move nobody can read back.
-- Share progress on a task by writing brief comments in the task at each
-  milestone — these are handover notes, shaped below.
-- **Your final message is a pointer, not the report.** Post the full report as a task comment FIRST — the harness drops final messages routinely, so the board comment is the copy that survives — then write the message from the `threadUrl` that comment returns. Three parts, 50 words or less all together:
+- Share progress on a task with `post_status` at each milestone — these are
+  handover notes, shaped below. A status is movement to the stall clock; a
+  comment is a question the person has to read.
+- **Your final message is a pointer, not the report.** Post the full report with `post_status` FIRST — the harness drops final messages routinely, so the note on the task's Activity tab is the copy that survives — then point at the task. Three parts, 50 words or less all together:
   1. The outcome, in one line.
-  2. The `threadUrl` of the comment holding the full report, formatted for wherever the message lands (below).
+  2. The task's link (`?task=<taskId>` on the board URL), formatted for wherever the message lands (below).
   3. Any blocker, in one line.
 
 ### Handover notes
 
 Builders die mid-task — some at spawn — and a replacement that restarts from
-scratch re-reads everything and can redo finished work. The task thread is the
-handover. At each milestone — worktree created, first commit, tests green, PR
-open — and whenever you stop or are blocked, post a comment with three parts,
-under 70 words:
+scratch re-reads everything and can redo finished work. The task's Activity
+tab is the handover. At each milestone — worktree created, first commit, tests
+green, PR open — and whenever you stop or are blocked, `post_status` three
+parts, under 70 words:
 
 1. DONE — what is finished and verified.
 2. TRIED — approaches abandoned, and why, so nobody retries them.
 3. WHERE — branch name, last commit hash, worktree path.
 
-Picking up a task that already has a thread? Read the thread FIRST and resume
-from the newest handover instead of restarting.
+Picking up a task that already has notes? Read its Activity tab (`notes` on
+the row) FIRST and resume from the newest handover instead of restarting.
 
 ## When You Are Blocked
 

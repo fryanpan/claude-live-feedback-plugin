@@ -236,6 +236,32 @@ describe('renderCommentMarkdown — headings', () => {
   });
 });
 
+describe('renderCommentMarkdown — fenced code', () => {
+  it('renders a fenced block as one <pre><code>, escaped, with no prose rules applied inside', () => {
+    // An agent's turn note routinely carries a fence; each line used to go
+    // through the prose rules, so `# comment` became a heading and `- x` a
+    // bullet, with the fence markers left as literal text.
+    const out = renderCommentMarkdown(
+      'Ran:\n```ts\nfunction retry() {\n  # not python\n  - a dash line\n  a < b && **x**\n}\n```\nDone.',
+    );
+    expect(out).toBe(
+      '<p>Ran:</p><pre class="cm-code"><code>function retry() {\n  # not python\n  - a dash line\n  a &lt; b &amp;&amp; **x**\n}</code></pre><p>Done.</p>',
+    );
+    expect(out).not.toContain('```');
+    expect(out).not.toContain('cm-h');
+    expect(out).not.toContain('<strong>');
+  });
+  it('accepts ~~~ fences and closes an unterminated fence at the end', () => {
+    expect(renderCommentMarkdown('~~~\nx\n~~~')).toBe('<pre class="cm-code"><code>x</code></pre>');
+    expect(renderCommentMarkdown('```\nx\ny')).toBe('<pre class="cm-code"><code>x\ny</code></pre>');
+  });
+  it('keeps blank lines inside the block', () => {
+    expect(renderCommentMarkdown('```\na\n\n\nb\n```')).toBe(
+      '<pre class="cm-code"><code>a\n\n\nb</code></pre>',
+    );
+  });
+});
+
 describe('renderCommentMarkdownInline — hard-break backslashes', () => {
   it('absorbs a backslash-newline as the space it collapses to', () => {
     const out = renderCommentMarkdownInline('one\\\ntwo');
