@@ -513,7 +513,9 @@ describe('voice actions (§3.8): status and assignee, on the speaker’s authori
 
     it('a DOC lookup still navigates, which is the assertion’s positive control', async () => {
       classify({ kind: 'lookup', target: 'doc', id: noItemDocId });
-      const body = await say(hubId, 'open the ranking notes', { surface: 'hub' });
+      // Model-named: with an opener ("open …") the server resolves by title
+      // first, and "Review the ranking notes" is a task on this board.
+      const body = await say(hubId, 'the ranking notes doc', { surface: 'hub' });
 
       expect(body.route).toBe('fast-path');
       expect(body.navigate).toBe(`/review/${noItemDocId}`);

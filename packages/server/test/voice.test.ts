@@ -215,8 +215,13 @@ describe('voice routing (§3.8)', () => {
       completeImpl = () =>
         Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: taskId }));
       lastPrompt.value = null;
+      // No navigation OPENER ("take me to", "open"): a spoken opener now
+      // resolves by title on the server first, and this board holds two
+      // "results page" tasks — which is exactly the case that ASKS rather
+      // than navigates (voice-smooth.test.ts). This test is about the MODEL
+      // naming a target, so the phrase leaves the model its turn.
       const r = await voice({
-        transcript: 'take me to the results page task',
+        transcript: 'the results page task',
         context: { surface: 'hub' },
         author: PERSON,
       });
@@ -224,11 +229,11 @@ describe('voice routing (§3.8)', () => {
       const body = (await r.json()) as { route: string; ack: string; navigate?: string };
       expect(body.route).toBe('fast-path');
       expect(body.navigate).toBe(`/workspaces/${hubId}?task=${taskId}`);
-      expect(body.ack).toContain('take me to the results page task');
+      expect(body.ack).toContain('the results page task');
       expect(body.ack).toContain('Wire the results page');
       // The route forwarded the transcript into the classification prompt,
       // and the prompt carries the workspace index the model searches.
-      expect(promptUser()).toContain('take me to the results page task');
+      expect(promptUser()).toContain('the results page task');
       expect(promptUser()).toContain('Wire the results page');
     });
 
@@ -248,8 +253,9 @@ describe('voice routing (§3.8)', () => {
     it('a doc lookup navigates to the review page', async () => {
       completeImpl = () =>
         Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'doc', id: docId }));
+      // Model-named, so no opener (see the task lookup above).
       const r = await voice({
-        transcript: 'open the expansion plan',
+        transcript: 'the expansion plan doc',
         context: { surface: 'hub' },
         author: PERSON,
       });
@@ -377,7 +383,9 @@ describe('voice routing (§3.8)', () => {
 
     it('garbage from the model is a fast-path failure, never a crash', async () => {
       completeImpl = () => Promise.resolve('well, that depends on what you mean by task');
-      const r = await voice({ transcript: 'open the plan', author: PERSON });
+      // A change, not a navigation ask: "open the plan" now resolves by title
+      // before the model is consulted, and this test is about the model.
+      const r = await voice({ transcript: 'regroup the plan tasks', author: PERSON });
       expect(r.status).toBe(200);
       const body = (await r.json()) as { route: string };
       expect(body.route).toBe('agent');
@@ -463,7 +471,7 @@ describe('voice routing (§3.8)', () => {
         const before = handle.tasks.listQueuedVoice(hubId).length;
         const seen: TaskStoreEvent[] = [];
         const off = handle.tasks.onEvent((ev) => seen.push(ev));
-        const r = await voice({ transcript: 'take me to the results page', author: PERSON });
+        const r = await voice({ transcript: 'the results page', author: PERSON });
         off();
         const body = (await r.json()) as { route: string; ack: string; navigate?: string };
         expect(body.route).toBe('fast-path');
@@ -493,7 +501,7 @@ describe('voice routing (§3.8)', () => {
       );
       expect(queued?.route).toBe('agent-queued');
       expect(queued?.ack?.toLowerCase()).toContain('queued');
-      const looked = voiceEvents.find((e) => e.transcript === 'take me to the results page task');
+      const looked = voiceEvents.find((e) => e.transcript === 'the results page task');
       expect(looked?.route).toBe('fast-path');
     });
   });
@@ -777,14 +785,18 @@ describe('voice routing (§3.8)', () => {
         }),
       ).toEqual({
         action: 'answer-review',
-        docId: 'expansion-plan',
-        threadId: 'th-0',
-        // Carried from the projection, never named by the model: the executor
-        // needs it to stamp the answer onto the comment that asked.
-        commentId: 'c-0',
         text: 'yes, wait for it',
         actor: PERSON_ACTOR,
-        mode: 'answer',
+        headline: 'Should the rollout wait?',
+        target: {
+          kind: 'thread',
+          docId: 'expansion-plan',
+          threadId: 'th-0',
+          // Carried from the projection, never named by the model: the
+          // executor needs it to stamp the answer onto the comment that asked.
+          commentId: 'c-0',
+          mode: 'answer',
+        },
       });
       // Nothing open, or more than one open: which one "that comment" means is
       // not knowable from the context, so it is the agent's call.
