@@ -172,10 +172,14 @@ export function briefEvents(rows: BriefEventRow[], since: number): BriefEventRow
  * has been away: nothing was decided, and saying "answered, then withdrawn"
  * is bookkeeping they did not ask for.
  *
- * Pairing is per task, newest standing answer first — a second answer given
- * after the undo is untouched. A withdrawal whose answer predates the window
- * has nothing here to cancel and STAYS: the reader saw that answer stand
- * before they left, and its reopening is the news.
+ * A withdrawal clears EVERY standing task-level answer on its task, not the
+ * newest alone. Answering twice overwrites — `answerDecision` moves the
+ * first answer into history — and `withdrawAnswer` does not bring it back,
+ * so after answer, answer, undo the ticket is OPEN, and a brief that kept
+ * the first answer would report it decided. An answer given after the undo
+ * is untouched. A withdrawal whose answer predates the window has nothing
+ * here to cancel and STAYS: the reader saw that answer stand before they
+ * left, and its reopening is the news.
  *
  * Only the TASK-LEVEL answer can be withdrawn — `withdrawAnswer` undoes the
  * legacy `answer_decision` record and nothing else — and only that answer's
@@ -197,9 +201,10 @@ export function settleWithdrawnAnswers(rows: BriefEventRow[]): BriefEventRow[] {
       list.push(row);
       standing.set(row.taskId, list);
     } else if (row.event === 'decision.answer_withdrawn') {
-      const undone = standing.get(row.taskId)?.pop();
-      if (undone) {
-        dropped.add(undone);
+      const undone = standing.get(row.taskId);
+      if (undone && undone.length > 0) {
+        for (const r of undone) dropped.add(r);
+        undone.length = 0;
         dropped.add(row);
       }
     }

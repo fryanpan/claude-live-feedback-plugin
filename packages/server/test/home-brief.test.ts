@@ -199,6 +199,15 @@ describe('an answer that was taken back is not news', () => {
     ]);
   });
 
+  it('an undo after an overwrite reopens the ticket — the overwritten answer does not stand in', () => {
+    // Answering twice moves the first answer into history, and the undo does
+    // not bring it back: the ticket is open. Pairing the undo with the newest
+    // answer alone left the first one reported as decided.
+    const rows = briefEvents([answered(NOW + 1), answered(NOW + 2), withdrawn(NOW + 3)], NOW);
+    expect(rows).toEqual([]);
+    expect(deterministicBrief(input(rows))).not.toContain('**Decided:**');
+  });
+
   it("pairs with the task's own answer only — an answered review item on the same ticket stands", () => {
     // Only the legacy task-level answer can be withdrawn; a real review row's
     // answer carries `reviewItemId` and has no undo. Pairing by task alone
