@@ -8,7 +8,7 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import { type ReviewPayload, type User, connect, escapeHtml } from '@feedback/core';
+import { type ReviewPayload, type Thread, type User, connect, escapeHtml } from '@feedback/core';
 import {
   renderConnectionBanner,
   renderLiveStaleNotice,
@@ -21,7 +21,7 @@ import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
-import { asksOf } from './activity-model.ts';
+import { activityCommentRequest, asksOf } from './activity-model.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
 import {
   type BoardLocation,
@@ -543,12 +543,18 @@ async function main(): Promise<void> {
   // the brief (approved mock, 2026-08-29). Same contract, same mount-once
   // reason. Its one handler opens the task the way a queue row does;
   // `boardHandlers` is declared below and only read when a row is tapped.
-  mountHomeActivityIsland(el('hub-home-activity'), {
-    onOpenTask: (taskId) => {
-      const task = state.tasks.get(taskId);
-      if (task) boardHandlers.onOpenTask(task);
+  mountHomeActivityIsland(
+    el('hub-home-activity'),
+    {
+      onOpenTask: (taskId) => {
+        const task = state.tasks.get(taskId);
+        if (task) boardHandlers.onOpenTask(task);
+      },
+      onComment: (taskId, phrase, text) => commentOnActivity(taskId, phrase, text),
+      onReply: (taskId, threadId, text) => replyOnActivity(taskId, threadId, text),
     },
-  });
+    user,
+  );
 
   // The card that pane opens on — the walkthrough. Mounted once for the
   // reason the board island is: this surface is repainted by every board
@@ -2190,6 +2196,53 @@ async function main(): Promise<void> {
     // the walkthrough card where the reader is.
     await loadReviewItems();
     return true;
+  }
+
+  /**
+   * Comment on a phrase of a task's note (or its title) from the activity
+   * pane — a thread on the task's doc whose first comment quotes the phrase
+   * (`activityCommentRequest` says why the anchor is the task itself). The
+   * owner hears about it the way it hears every task-doc thread. Resolves to
+   * the thread the server made, which the pane's card then shows.
+   */
+  async function commentOnActivity(
+    taskId: string,
+    phrase: { text: string },
+    text: string,
+  ): Promise<Thread | null> {
+    const reqSpec = activityCommentRequest(taskId, phrase.text, text);
+    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
+    const thread = res.ok ? (res.data?.thread as Thread | undefined) : undefined;
+    if (!thread) {
+      showToast('Posting the comment failed — your text is still in the box');
+      return null;
+    }
+    return thread;
+  }
+
+  /** A further reply on the thread the activity pane's card is showing —
+   *  the same POST the task panel's composer makes. Resolves to the thread
+   *  as the server now has it. */
+  async function replyOnActivity(
+    taskId: string,
+    threadId: string,
+    text: string,
+  ): Promise<Thread | null> {
+    const doc = encodeURIComponent(`task:${taskId}`);
+    const res = await send(
+      `/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`,
+      'POST',
+      {
+        author,
+        text,
+      },
+    );
+    const thread = res.ok ? (res.data?.thread as Thread | undefined) : undefined;
+    if (!thread) {
+      showToast('Posting the reply failed — your text is still in the box');
+      return null;
+    }
+    return thread;
   }
 
   /**

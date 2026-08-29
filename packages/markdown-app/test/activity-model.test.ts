@@ -5,6 +5,7 @@ import {
   ACTIVITY_WINDOW_MS,
   type ActivityGroup,
   DARK_AFTER_MS,
+  activityCommentRequest,
   asksOf,
   homeActivity,
 } from '../src/hub/activity-model.ts';
@@ -390,5 +391,21 @@ describe('asksOf', () => {
       { taskId: 't-dec', text: 'Pick a cache' },
       { taskId: 't-th', text: 'Which cache do we keep?' },
     ]);
+  });
+});
+
+describe('activityCommentRequest: where a comment on a note goes', () => {
+  it('posts a subject thread on the task doc whose first comment quotes the phrase', () => {
+    const req = activityCommentRequest('t-abc1', 'adding the download route', 'Which route?');
+    expect(req.path).toBe('/api/docs/task%3At-abc1/threads');
+    expect(req.body).toEqual({
+      text: '> adding the download route\n\nWhich route?',
+      anchor: { kind: 'subject' },
+    });
+  });
+
+  it('quotes every line of a multi-line phrase', () => {
+    const req = activityCommentRequest('t-abc1', 'one\ntwo', 'why?');
+    expect(req.body.text).toBe('> one\n> two\n\nwhy?');
   });
 });

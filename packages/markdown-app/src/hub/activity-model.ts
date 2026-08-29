@@ -234,3 +234,31 @@ export function homeActivity(input: ActivityInput): ActivityGroup[] {
   groups.sort((a, b) => b.newestAt - a.newestAt || a.group.taskId.localeCompare(b.group.taskId));
   return groups.slice(0, ACTIVITY_GROUP_CAP).map((g) => g.group);
 }
+
+/**
+ * Where a comment on a phrase of a note (or of the title) gets WRITTEN: a
+ * thread on the task's doc whose first comment quotes the phrase.
+ *
+ * A SUBJECT anchor, not a phrase anchor, on purpose. The server accepts an
+ * anchor of any kind at the write, but the only kinds it knows how to keep
+ * are the doc's own (`text-range`, `element`) and `review-item`, which must
+ * name an item the task carries; a note's words live in the task sidecar,
+ * not in any doc, and an anchor of an unknown kind would be swept as if it
+ * pointed into the doc and orphaned. Until there is a note anchor the server
+ * understands, the phrase rides in the comment as a blockquote — which is
+ * what a person reading the thread later needs anyway.
+ */
+export function activityCommentRequest(
+  taskId: string,
+  phrase: string,
+  text: string,
+): { path: string; body: { text: string; anchor: { kind: 'subject' } } } {
+  const quote = phrase
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
+  return {
+    path: `/api/docs/${encodeURIComponent(`task:${taskId}`)}/threads`,
+    body: { text: `${quote}\n\n${text}`, anchor: { kind: 'subject' } },
+  };
+}

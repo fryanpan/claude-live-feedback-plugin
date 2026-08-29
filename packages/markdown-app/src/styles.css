@@ -2548,6 +2548,47 @@ body.hub-body {
   opacity: 0.75;
   margin-top: 1px;
 }
+/* ── Commenting on a note like a doc (2026-08-29) ──
+   Select (or tap) words of a note line or the title → the walkthrough's
+   `.comment-pill` appears beside them → the REAL thread card (threads.ts
+   `renderThread`) opens beside the group, quoting the phrase. Every group
+   sits in a wrap so opening a card never re-parents the group; the open
+   wrap is a two-column grid at the tablet tier — the card takes the 300px
+   the drawer gives a card — and the ≤1100px block stacks it under the
+   group instead. */
+.acti-group-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.acti-group-wrap-open {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+.acti-pill {
+  z-index: 800;
+}
+/* The card is the real one, whole, minus the one control this pane does not
+   offer: Resolve lives on the task's discussion, and the pane has ONE action.
+   `.thread-face` is absolutely positioned inside its slot by the drawer's
+   rules, which apply here unchanged. */
+.acti-thread .thread-foot {
+  display: none;
+}
+.acti-thread .thread {
+  margin: 0;
+}
+/* The phrase, marked the way the editor marks a thread's range — those
+   rules are scoped to `#editor > .ProseMirror`, so the pane carries the
+   active state it uses. */
+.acti-group .thread-range {
+  background: rgba(46, 125, 215, 0.22);
+  border-bottom: 2px solid rgba(46, 125, 215, 0.8);
+  border-radius: 1px;
+  color: inherit;
+}
 /* The board island owns a wrapper of its own inside `#hub-board` — Preact
    must never share a container with vanilla code. `display: contents` keeps
    that wrapper out of layout entirely, so the sections stay DIRECT children
@@ -4805,6 +4846,19 @@ a.hub-link-chip:hover {
     font-size: 13px;
     white-space: normal;
     overflow: visible;
+  }
+  /* Below 1100px the thread card goes UNDER the group, and the pill grows
+     to the thumb size every comment control takes on this tier. */
+  .acti-group-wrap-open {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .acti-pill {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
   }
   /* --- the goal band on mobile ---
      A goal row is a HEADER, so here it is allowed the second line a task row

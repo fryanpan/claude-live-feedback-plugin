@@ -18,6 +18,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { Thread, User } from '@feedback/core';
 import { describe, expect, it, vi } from 'vitest';
 import { ACTIVITY_GROUP_CAP, ACTIVITY_NOTE_CAP } from '../src/hub/activity-model.ts';
 import {
@@ -65,7 +66,13 @@ const GOALS: HubGoal[] = [
   { id: 'g-blog', title: '2. Blog post' },
 ];
 
-const handlers = (): ActivityHandlers => ({ onOpenTask: vi.fn() });
+const ME: User = { id: 'u-me', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
+
+const handlers = (): ActivityHandlers => ({
+  onOpenTask: vi.fn(),
+  onComment: vi.fn().mockResolvedValue(null),
+  onReply: vi.fn().mockResolvedValue(null),
+});
 
 function mount(
   tasks: HubTask[],
@@ -75,8 +82,58 @@ function mount(
   const host = document.createElement('div');
   document.body.appendChild(host);
   homeActivityData.value = { tasks, goals: GOALS, asks, now: NOW };
-  const unmount = mountHomeActivityIsland(host, h);
+  const unmount = mountHomeActivityIsland(host, h, ME);
   return { host, h, unmount };
+}
+
+/** The pill keys off `selectionchange`, debounced — wait it out. */
+const settle = () => new Promise((r) => setTimeout(r, 160));
+
+/** Select `phrase` inside `el` the way a finger does, and let the pill hear. */
+async function select(el: HTMLElement, phrase: string): Promise<void> {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node: Text | null = null;
+  while (walker.nextNode()) {
+    const t = walker.currentNode as Text;
+    if (t.data.includes(phrase)) {
+      node = t;
+      break;
+    }
+  }
+  if (!node) throw new Error(`no text node holds “${phrase}”`);
+  const r = document.createRange();
+  r.setStart(node, node.data.indexOf(phrase));
+  r.setEnd(node, node.data.indexOf(phrase) + phrase.length);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(r);
+  document.dispatchEvent(new Event('selectionchange'));
+  await settle();
+}
+
+function threadOn(phrase: string, text: string, id = 'th-1'): Thread {
+  return {
+    id,
+    status: 'open',
+    anchor: { kind: 'subject' },
+    commentCount: 1,
+    lastActivity: NOW,
+    createdBy: ME,
+    comments: [{ id: 'c-1', author: ME, text: `> ${phrase}\n\n${text}`, ts: NOW }],
+  };
+}
+
+const pillIn = (host: HTMLElement) => host.querySelector('.acti-pill') as HTMLElement;
+const pillShown = (host: HTMLElement) => !pillIn(host).classList.contains('hidden');
+const composer = (host: HTMLElement) =>
+  host.querySelector('.acti-thread textarea') as HTMLTextAreaElement;
+const replyButton = (host: HTMLElement) =>
+  host.querySelector('.acti-thread .thread-actions button.primary') as HTMLButtonElement;
+
+/** Type into the real card's box and tap its one button. */
+function reply(host: HTMLElement, text: string): void {
+  composer(host).value = text;
+  replyButton(host).click();
 }
 
 const groupsIn = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.acti-group')];
@@ -285,6 +342,167 @@ describe('home-activity island rendering', () => {
   });
 });
 
+describe('commenting on a note like a doc', () => {
+  const noteTask = () =>
+    task({
+      id: 't-c',
+      title: 'Bryan can export a board as CSV',
+      notes: [
+        note(MIN, 'CSV writer done; adding the download route next'),
+        note(8 * MIN, 'Picked this up'),
+      ],
+    });
+
+  it('selecting a phrase in a note line shows the walkthrough’s comment pill; selecting elsewhere hides it', async () => {
+    const { host, unmount } = mount([noteTask()]);
+    const pill = pillIn(host);
+    expect(pill, 'no pill rendered').not.toBeNull();
+    expect(pill.classList.contains('comment-pill')).toBe(true);
+    expect(pillShown(host)).toBe(false);
+    await select(host, 'download route');
+    expect(pillShown(host)).toBe(true);
+    // No hover hints, no comment box, no other buttons in the pane.
+    expect(host.querySelectorAll('.acti-group button').length).toBe(0);
+    expect(host.querySelector('.acti-thread')).toBeNull();
+    // A selection somewhere else on the page is not this pane's.
+    const elsewhere = document.createElement('p');
+    elsewhere.textContent = 'other words';
+    document.body.append(elsewhere);
+    await select(elsewhere, 'other');
+    expect(pillShown(host)).toBe(false);
+    elsewhere.remove();
+    window.getSelection()?.removeAllRanges();
+    unmount();
+    host.remove();
+  });
+
+  it('selecting words of the title shows the pill, and a tap on the header with words selected does not open the task', async () => {
+    const { host, h, unmount } = mount([noteTask()]);
+    await select(host, 'export a board');
+    expect(pillShown(host)).toBe(true);
+    (host.querySelector('.acti-head') as HTMLElement).click();
+    expect(h.onOpenTask).not.toHaveBeenCalled();
+    window.getSelection()?.removeAllRanges();
+    unmount();
+    host.remove();
+  });
+
+  it('the pill opens the real thread card in the group’s wrap, quoting the phrase and marking it in the line', async () => {
+    const { host, unmount } = mount([noteTask()]);
+    await select(host, 'download route');
+    pillIn(host).click();
+    await tick();
+    const wrap = host.querySelector('.acti-group-wrap-open') as HTMLElement;
+    expect(wrap, 'no open wrap').not.toBeNull();
+    expect(wrap.querySelector('.acti-group')?.getAttribute('data-task-id')).toBe('t-c');
+    // The real card: threads.ts `renderThread` anatomy, expanded, with the
+    // reply box addressed to the reader.
+    const card = wrap.querySelector('.acti-thread .thread') as HTMLElement;
+    expect(card, 'no .thread card').not.toBeNull();
+    expect(card.classList.contains('expanded')).toBe(true);
+    expect(card.querySelector('.thread-head .thread-who')?.textContent).toBe('Bryan');
+    expect(card.querySelector('.thread-topic')?.textContent).toBe('download route');
+    expect(composer(host).placeholder).toBe('Reply as Bryan…');
+    // The phrase is marked in the line the way a doc marks a thread's range.
+    const mark = wrap.querySelector('.acti-group mark.thread-range') as HTMLElement;
+    expect(mark?.textContent).toBe('download route');
+    // The pill is gone and the selection with it.
+    expect(pillShown(host)).toBe(false);
+    unmount();
+    host.remove();
+  });
+
+  it('Reply creates the thread on the task with the phrase, then shows that thread; a further reply goes to it', async () => {
+    const created = threadOn('download route', 'Which route?');
+    const replied: Thread = {
+      ...created,
+      commentCount: 2,
+      comments: [
+        ...created.comments,
+        { id: 'c-2', author: ME, text: 'And the auth?', ts: NOW + 1 },
+      ],
+    };
+    const h = handlers();
+    (h.onComment as ReturnType<typeof vi.fn>).mockResolvedValue(created);
+    (h.onReply as ReturnType<typeof vi.fn>).mockResolvedValue(replied);
+    const { host, unmount } = mount([noteTask()], h);
+    await select(host, 'download route');
+    pillIn(host).click();
+    await tick();
+    reply(host, 'Which route?');
+    expect(h.onComment).toHaveBeenCalledWith('t-c', { text: 'download route' }, 'Which route?');
+    await tick();
+    await tick();
+    const card = host.querySelector('.acti-thread .thread') as HTMLElement;
+    expect(card.getAttribute('data-thread-id')).toBe('th-1');
+    expect(card.querySelector('.thread-message')?.textContent).toContain('Which route?');
+    expect(composer(host).value).toBe('');
+    reply(host, 'And the auth?');
+    expect(h.onReply).toHaveBeenCalledWith('t-c', 'th-1', 'And the auth?');
+    await tick();
+    await tick();
+    expect(host.querySelector('.acti-thread .comments')?.textContent).toContain('And the auth?');
+    unmount();
+    host.remove();
+  });
+
+  it('a refused comment leaves the words in the box', async () => {
+    const { host, h, unmount } = mount([noteTask()]);
+    await select(host, 'download route');
+    pillIn(host).click();
+    await tick();
+    reply(host, 'Which route?');
+    expect(h.onComment).toHaveBeenCalled();
+    await tick();
+    await tick();
+    expect(composer(host).value).toBe('Which route?');
+    expect(host.querySelector('.acti-thread .thread')).not.toBeNull();
+    unmount();
+    host.remove();
+  });
+
+  it('Escape puts a draft away, and so does folding its card', async () => {
+    const { host, unmount } = mount([noteTask()]);
+    await select(host, 'download route');
+    pillIn(host).click();
+    await tick();
+    expect(host.querySelector('.acti-thread')).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    expect(host.querySelector('.acti-thread')).toBeNull();
+    expect(host.querySelector('.acti-group-wrap-open')).toBeNull();
+    expect(host.querySelector('mark.thread-range')).toBeNull();
+
+    await select(host, 'Picked this up');
+    pillIn(host).click();
+    await tick();
+    (host.querySelector('.acti-thread .thread-caret') as HTMLElement).click();
+    await tick();
+    expect(host.querySelector('.acti-thread')).toBeNull();
+    unmount();
+    host.remove();
+  });
+
+  it('a second selection replaces the open draft rather than stacking a card', async () => {
+    const { host, unmount } = mount([
+      noteTask(),
+      task({ id: 't-d', notes: [note(MIN, 'Other work')] }),
+    ]);
+    await select(host, 'download route');
+    pillIn(host).click();
+    await tick();
+    await select(host, 'Other work');
+    pillIn(host).click();
+    await tick();
+    expect(host.querySelectorAll('.acti-thread').length).toBe(1);
+    expect(
+      host.querySelector('.acti-group-wrap-open .acti-group')?.getAttribute('data-task-id'),
+    ).toBe('t-d');
+    unmount();
+    host.remove();
+  });
+});
+
 /* ---------------------------------------------------------------------- */
 
 const CSS = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
@@ -372,6 +590,18 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
     expect(line).toMatch(/overflow:\s*hidden/);
   });
 
+  it('the thread card sits BESIDE the group at the tablet tier, in a 300px column, and carries no second action', () => {
+    const wrap = rule('.acti-group-wrap-open');
+    expect(wrap, '.acti-group-wrap-open has no rule').not.toBe('');
+    expect(wrap).toMatch(/display:\s*grid/);
+    expect(wrap).toMatch(/grid-template-columns:[^;]*300px/);
+    // One action only: the real card's Resolve foot is not offered here.
+    expect(rule('.acti-thread .thread-foot')).toMatch(/display:\s*none/);
+    // The marked phrase gets the editor's range colours, which are scoped to
+    // the editor and so have to be restated for the pane.
+    expect(rule('.acti-group .thread-range')).toMatch(/background:/);
+  });
+
   it('the notes sit indented under the title, past the status mark', () => {
     const notes = rule('.acti-notes');
     expect(notes, '.acti-notes has no rule').not.toBe('');
@@ -400,6 +630,18 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
     const line = rule('.hub-activity-note', phone);
     expect(line, '.hub-activity-note has no phone rule').not.toBe('');
     expect(line).toMatch(/white-space:\s*normal/);
+  });
+
+  it('the thread card goes UNDER the group on the phone tier and the pill grows to a thumb', () => {
+    const phone = media('(max-width: 1100px)');
+    const wrap = rule('.acti-group-wrap-open', phone);
+    expect(wrap, '.acti-group-wrap-open has no phone rule').not.toBe('');
+    expect(wrap).toMatch(/display:\s*flex/);
+    expect(wrap).toMatch(/flex-direction:\s*column/);
+    const pill = rule('.acti-pill', phone);
+    expect(pill, '.acti-pill has no phone rule').not.toBe('');
+    expect(pill).toMatch(/min-width:\s*44px/);
+    expect(pill).toMatch(/min-height:\s*44px/);
   });
 
   it('negative control: a selector the sheet does not have reads as empty', () => {

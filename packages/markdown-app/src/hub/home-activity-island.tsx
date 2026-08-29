@@ -10,27 +10,41 @@
  * them. No fetches, no subscriptions of its own; a background event's signal
  * write still waits for the reader's finger through the repaint-guard.
  *
- * One action only, and it is not on this island yet: commenting on a phrase
- * of a note line or the title. The lines are plain text — not buttons — so
- * a selection can land on them; the header row is the only tap, and it
- * opens the task. No hover hints, no comment box, no counters.
+ * One action only: commenting on a phrase of a note line or of the title,
+ * doc-style. The lines are plain text — not buttons — so a selection can
+ * land on them (and a tap on a word selects it); the walkthrough card's
+ * comment pill appears beside the words; tapping it opens the REAL thread
+ * card (threads.ts `renderThread`) beside the group, or under it on a narrow
+ * viewport, quoting the phrase. The header row is the only other tap, and
+ * it opens the task. No hover hints, no comment box, no counters.
  *
  * Groups are keyed on the task id, so a signal write that changes one task's
- * lines leaves every other group's DOM node IDENTICAL — the property the
- * comment anchors (next) will lean on.
+ * lines leaves every other group's DOM node IDENTICAL.
  */
+import type { Thread, User } from '@feedback/core';
 import { signal } from '@preact/signals';
 import { render } from 'preact';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { sizeThreadSlots } from '../thread-morph.ts';
+import { ThreadPanel } from '../threads.ts';
 import {
   type ActivityGroup,
   type ActivityInput,
   type ActivityNote,
   homeActivity,
 } from './activity-model.ts';
+import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
 
 export interface ActivityHandlers {
   /** The header row's one tap: open this task, the way a queue row does. */
   onOpenTask: (taskId: string) => void;
+  /** A comment on `phrase` of this task's note or title: opens a thread on
+   *  the task's doc. Resolves to the thread the server made, or null when
+   *  the write was refused — the words then stay in the box. */
+  onComment: (taskId: string, phrase: { text: string }, text: string) => Promise<Thread | null>;
+  /** A further reply on the thread the card is showing. Resolves to the
+   *  thread as the server now has it, or null when refused. */
+  onReply: (taskId: string, threadId: string, text: string) => Promise<Thread | null>;
 }
 
 /** The one write target the vanilla side has: the projection as it stands.
@@ -44,11 +58,44 @@ export const homeActivityData = signal<ActivityInput>({ tasks: [], goals: [], no
 export const ACTIVITY_EMPTY =
   'Nothing yet — agents post a line per turn once they restart on 0.1.124.';
 
-function NoteLine(props: { note: ActivityNote }) {
-  const { note } = props;
+/** Who the card's reply box is addressed to when no user was handed over —
+ *  a surface mounted before identity resolves. Never posted with. */
+const NOBODY: User = { id: '', name: 'you', kind: 'anon', color: '#888888' };
+
+/** The comment being written or shown on one group. `thread` is null while
+ *  the words are still a draft — nothing has been posted yet. */
+interface OpenComment {
+  taskId: string;
+  phrase: string;
+  thread: Thread | null;
+}
+
+/**
+ * `text` with `mark` wrapped the way a doc marks a thread's range — built
+ * declaratively, so Preact owns every node and a repaint never fights a
+ * mark it did not draw. Only the first occurrence; a phrase that is not in
+ * this text renders it unmarked rather than marking the wrong words.
+ */
+function Marked(props: { text: string; mark?: string }) {
+  const { text, mark } = props;
+  const at = mark ? text.indexOf(mark) : -1;
+  if (!mark || at < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <mark class="thread-range active">{mark}</mark>
+      {text.slice(at + mark.length)}
+    </>
+  );
+}
+
+function NoteLine(props: { note: ActivityNote; mark?: string }) {
+  const { note, mark } = props;
   return (
     <div class={`hub-activity-note hub-activity-note-${note.kind}`}>
-      <span class="acti-text">{note.text}</span>
+      <span class="acti-text">
+        <Marked text={note.text} mark={mark} />
+      </span>
       {' · '}
       <span class="acti-age">{note.age}</span>
       {note.agent !== undefined && note.agent !== '' && (
@@ -61,47 +108,207 @@ function NoteLine(props: { note: ActivityNote }) {
   );
 }
 
-function Group(props: { group: ActivityGroup; handlers: ActivityHandlers }) {
-  const { group, handlers } = props;
-  const open = (): void => handlers.onOpenTask(group.taskId);
+/**
+ * The real thread card, on the pane. `ThreadPanel.renderThread` is the one
+ * card renderer every surface uses (the drawer, the redline margin, the
+ * modal), and it is imperative DOM — so, like the walkthrough's PromptForm,
+ * Preact owns the box and the card is built into it in a layout effect.
+ *
+ * Before the first post the card renders a DRAFT thread: the reader's own
+ * name in the head, the phrase as the topic, no replies, the reply box. Its
+ * Reply is what creates the thread; after that the card shows the thread
+ * the server returned, and Reply posts to it.
+ */
+function ThreadCard(props: {
+  thread: Thread;
+  user: User;
+  onReply: (text: string) => Promise<boolean>;
+  onFold: () => void;
+}) {
+  const host = useRef<HTMLDivElement | null>(null);
+  // Read at submit/fold time, never captured: the handlers close over the
+  // draft/thread this paint drew, and the box outlives the paint.
+  const latest = useRef(props);
+  latest.current = props;
+  const { thread, user } = props;
+  useLayoutEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    const panel = new ThreadPanel({
+      // The panel's own list is never shown — the card is lifted out of it.
+      container: document.createElement('div'),
+      currentUser: user,
+      onThreadClick: (id) => panel.setActive(id),
+      onReply: (_id, text) => latest.current.onReply(text),
+      // One action only on this pane: the card's Resolve foot is hidden by
+      // CSS, and an open thread never offers Re-anchor.
+      onResolve: () => {},
+      onReopen: () => {},
+      onReanchor: () => {},
+      // The card folding shut (a tap on it, or its caret) is the one way a
+      // draft is put away besides Escape.
+      onActiveChange: (id) => {
+        if (id === null) latest.current.onFold();
+      },
+    });
+    panel.markSynced();
+    panel.setThreads([thread]);
+    panel.setActive(thread.id);
+    const card = panel.renderThread(thread);
+    el.replaceChildren(card);
+    // The card's two slots take their height from the face they show; the
+    // margin and the drawer measure after insertion and on resize, so does
+    // this.
+    sizeThreadSlots(el);
+    const onResize = (): void => sizeThreadSlots(el);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      el.replaceChildren();
+    };
+  }, [thread, user]);
+  return <div class="acti-thread" ref={host} />;
+}
+
+/** A thread that does not exist yet, shaped for the real card: the reader as
+ *  its author, the phrase as its topic, nothing said. */
+function draftThread(open: OpenComment, user: User, now: number): Thread {
+  return {
+    id: `draft:${open.taskId}`,
+    status: 'open',
+    // Local only — never posted (`activityCommentRequest` sends a subject
+    // anchor and quotes the phrase). The card's topic line reads whichever
+    // anchor's snippet it is handed, and this is the one kind with a
+    // snippet and nothing else to satisfy.
+    anchor: { kind: 'review-item', reviewItemId: 'draft', snippet: { text: open.phrase } },
+    commentCount: 0,
+    lastActivity: now,
+    createdBy: user,
+    comments: [],
+  };
+}
+
+function Group(props: {
+  group: ActivityGroup;
+  handlers: ActivityHandlers;
+  open: OpenComment | null;
+  user: User;
+  now: number;
+  onPosted: (thread: Thread) => void;
+  onClose: () => void;
+}) {
+  const { group, handlers, open, user, now } = props;
+  const isOpen = open !== null && open.taskId === group.taskId;
+  const mark = isOpen ? open.phrase : undefined;
+  const openTask = (): void => {
+    // A tap that ends a drag across the title is the end of a SELECTION,
+    // not a request to leave Home — the pill is about to appear for it.
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    handlers.onOpenTask(group.taskId);
+  };
+  // "Tap a word to select it" on the note lines — a pointer gesture only
+  // (a keyboard selects with shift+arrows and needs nothing here), so it is
+  // a listener on the node rather than a click handler in the markup.
+  const notesRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = notesRef.current;
+    if (!el) return;
+    const tapWord = (ev: MouseEvent): void => {
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) return;
+      selectWordAtPoint(ev.clientX, ev.clientY, el);
+    };
+    el.addEventListener('click', tapWord);
+    return () => el.removeEventListener('click', tapWord);
+  }, []);
+  const reply = async (text: string): Promise<boolean> => {
+    if (!open) return false;
+    const t = open.thread
+      ? await handlers.onReply(group.taskId, open.thread.id, text)
+      : await handlers.onComment(group.taskId, { text: open.phrase }, text);
+    if (!t) return false;
+    props.onPosted(t);
+    return true;
+  };
   return (
-    <div class="acti-group" data-task-id={group.taskId}>
-      {/* The queue's row anatomy — hairline, 44px floor, hover — as the group
-          header. A div acting as a button rather than a <button>, because a
-          button's text cannot be selected, and selecting a phrase of the
-          title is how it gets commented on. */}
-      {/* biome-ignore lint/a11y/useSemanticElements: the title must stay selectable text, which a <button> forbids; the div carries the role, the tab stop and the keys a button has. */}
-      <div
-        role="button"
-        tabIndex={0}
-        class="hub-review-row acti-head"
-        title={`Open task: ${group.title}`}
-        onClick={open}
-        onKeyDown={(ev) => {
-          if (ev.key === 'Enter' || ev.key === ' ') {
-            ev.preventDefault();
-            open();
-          }
-        }}
-      >
-        <span class={`acti-mark acti-mark-${group.status}`} aria-hidden="true" />
-        <span class="hub-review-row-title acti-title-text">{group.title}</span>
-        {group.flag && (
-          <span class={`hub-badge hub-badge-${group.flag.replace('-', '')}`}>{group.flag}</span>
-        )}
+    // The wrap is always there, so opening a card beside a group never
+    // re-parents the group's node. Open, it is a two-column grid at the
+    // tablet tier and a stack below 1100px.
+    <div class={`acti-group-wrap${isOpen ? ' acti-group-wrap-open' : ''}`}>
+      <div class="acti-group" data-task-id={group.taskId}>
+        {/* The queue's row anatomy — hairline, 44px floor, hover — as the group
+            header. A div acting as a button rather than a <button>, because a
+            button's text cannot be selected, and selecting a phrase of the
+            title is how it gets commented on. */}
+        {/* biome-ignore lint/a11y/useSemanticElements: the title must stay selectable text, which a <button> forbids; the div carries the role, the tab stop and the keys a button has. */}
+        <div
+          role="button"
+          tabIndex={0}
+          class={`hub-review-row acti-head${isOpen ? ' acti-group-open' : ''}`}
+          title={`Open task: ${group.title}`}
+          onClick={openTask}
+          onKeyDown={(ev) => {
+            if (ev.key === 'Enter' || ev.key === ' ') {
+              ev.preventDefault();
+              handlers.onOpenTask(group.taskId);
+            }
+          }}
+        >
+          <span class={`acti-mark acti-mark-${group.status}`} aria-hidden="true" />
+          <span class="hub-review-row-title acti-title-text">
+            <Marked text={group.title} mark={mark} />
+          </span>
+          {group.flag && (
+            <span class={`hub-badge hub-badge-${group.flag.replace('-', '')}`}>{group.flag}</span>
+          )}
+        </div>
+        <div class="acti-notes" ref={notesRef}>
+          {group.notes.map((n) => (
+            <NoteLine key={`${n.at}:${n.kind}:${n.text}`} note={n} mark={mark} />
+          ))}
+          {group.more > 0 && <div class="acti-more">{`+${group.more} more`}</div>}
+        </div>
       </div>
-      <div class="acti-notes">
-        {group.notes.map((n) => (
-          <NoteLine key={`${n.at}:${n.kind}:${n.text}`} note={n} />
-        ))}
-        {group.more > 0 && <div class="acti-more">{`+${group.more} more`}</div>}
-      </div>
+      {isOpen && (
+        <ThreadCard
+          thread={open.thread ?? draftThread(open, user, now)}
+          user={user}
+          onReply={reply}
+          onFold={() => {
+            // Folding a POSTED thread's card is the card's own fold; only a
+            // draft has nothing to keep.
+            if (open.thread === null) props.onClose();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function HomeActivity(props: { handlers: ActivityHandlers }) {
-  const groups = homeActivity(homeActivityData.value);
+function HomeActivity(props: { handlers: ActivityHandlers; user: User }) {
+  const input = homeActivityData.value;
+  const groups = homeActivity(input);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const pill = useSelectionPill(listRef, true);
+  const [open, setOpen] = useState<OpenComment | null>(null);
+  // Escape puts a draft away. A posted thread's card stays — it is a real
+  // thread now, and the way to it is to fold it like any card.
+  useLayoutEffect(() => {
+    if (!open || open.thread !== null) return;
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') setOpen(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+  const openCard = (): void => {
+    const taskId = pill.at?.closest<HTMLElement>('.acti-group')?.dataset.taskId;
+    if (!pill.phrase || !taskId) return;
+    setOpen({ taskId, phrase: pill.phrase, thread: null });
+    pill.clear();
+    window.getSelection()?.removeAllRanges();
+  };
   return (
     <section class="hub-activity-card">
       <div class="hub-home-review-head">
@@ -109,12 +316,35 @@ function HomeActivity(props: { handlers: ActivityHandlers }) {
       </div>
       {groups.length === 0 && <p class="hub-home-quiet">{ACTIVITY_EMPTY}</p>}
       {groups.length > 0 && (
-        <div class="acti-list">
+        <div class="acti-list" ref={listRef}>
           {groups.map((g) => (
-            <Group key={g.taskId} group={g} handlers={props.handlers} />
+            <Group
+              key={g.taskId}
+              group={g}
+              handlers={props.handlers}
+              open={open}
+              user={props.user}
+              now={input.now}
+              onPosted={(thread) => setOpen((o) => (o ? { ...o, thread } : o))}
+              onClose={() => setOpen(null)}
+            />
           ))}
         </div>
       )}
+      {/* The walkthrough card's pill, on the pane: fixed-position, placed by
+          the hook beside the selection's end. `mousedown` is swallowed so the
+          tap does not blur the selection before the click lands (touch is
+          left alone, since cancelling it cancels the click on iOS). */}
+      <button
+        type="button"
+        class={`comment-pill acti-pill${pill.phrase ? '' : ' hidden'}`}
+        style={{ left: `${pill.place.left}px`, top: `${pill.place.top}px` }}
+        aria-label="Comment on this"
+        onMouseDown={(ev) => ev.preventDefault()}
+        onClick={openCard}
+      >
+        💬
+      </button>
     </section>
   );
 }
@@ -124,13 +354,18 @@ function HomeActivity(props: { handlers: ActivityHandlers }) {
  * returns the disposer. The island contract, as the review pane has it: the
  * wrapper — not the host — is Preact's container, disposal is render(null,
  * el), and no vanilla code may replaceChildren/innerHTML a container holding
- * the live island. Handlers are bound once at mount.
+ * the live island. Handlers are bound once at mount; `user` is who the
+ * card's reply box speaks as.
  */
-export function mountHomeActivityIsland(host: HTMLElement, handlers: ActivityHandlers): () => void {
+export function mountHomeActivityIsland(
+  host: HTMLElement,
+  handlers: ActivityHandlers,
+  user: User = NOBODY,
+): () => void {
   const el = document.createElement('div');
   el.setAttribute('data-preact-island', 'home-activity');
   host.appendChild(el);
-  render(<HomeActivity handlers={handlers} />, el);
+  render(<HomeActivity handlers={handlers} user={user} />, el);
   return () => {
     render(null, el);
     el.remove();
