@@ -234,6 +234,42 @@ describe('POST /api/workspaces/:id/huddles and the empty task', () => {
       const row = tasks.find((t) => t.id === task.id);
       expect(row?.untitled).toBeUndefined();
     });
+
+    it('drops the flag when the name given IS the placeholder text', async () => {
+      // A person naming the row is the signal, whatever they typed. The
+      // stored title of an unnamed row already equals the placeholder, so a
+      // rename to that literal used to read as a no-op and keep the flag —
+      // and a flagged row's rename box shows blank, so it could never be
+      // named again.
+      const { task } = await jj<{ task: TaskRow }>(
+        await post(`/api/workspaces/${workspaceId}/tasks`, { untitled: true, author: PERSON }),
+      );
+      const renamed = await jj<{ task: TaskRow }>(
+        await post(`/api/tasks/${task.id}/title`, { title: UNTITLED_TASK_TITLE, author: PERSON }),
+      );
+      expect(renamed.task.title).toBe(UNTITLED_TASK_TITLE);
+      expect(renamed.task.untitled).toBeUndefined();
+      const { tasks } = await jj<{ tasks: TaskRow[] }>(
+        await local(`/api/workspaces/${workspaceId}/tasks`),
+      );
+      expect(tasks.find((t) => t.id === task.id)?.untitled).toBeUndefined();
+    });
+
+    it('a same-text rename of a row that was never untitled sets nothing', async () => {
+      // Negative control: the fix must not turn every no-op rename into a
+      // write. A named row renamed to its own title stays unchanged and
+      // unflagged.
+      const { task } = await jj<{ task: TaskRow }>(
+        await post(`/api/workspaces/${workspaceId}/tasks`, { title: 'Plain row', author: PERSON }),
+      );
+      expect(task.untitled).toBeUndefined();
+      const same = await jj<{ task: TaskRow; changed: boolean }>(
+        await post(`/api/tasks/${task.id}/title`, { title: 'Plain row', author: PERSON }),
+      );
+      expect(same.changed).toBe(false);
+      expect(same.task.title).toBe('Plain row');
+      expect(same.task.untitled).toBeUndefined();
+    });
   });
 
   describe('share visitors', () => {
