@@ -1559,6 +1559,41 @@ export function walkHandoff(search: string): WalkHandoff {
   return { walk, chain: walk ? chain : [] };
 }
 
+/**
+ * Which halves of the queue have landed since boot. The queue is built from
+ * two sources that arrive separately on a cold load: the REST review-items
+ * list (threads and ticket asks) and the ydoc task projection (decisions,
+ * and the tasks every thread ranks against).
+ */
+export interface WalkSources {
+  reviewItems: boolean;
+  projection: boolean;
+}
+
+/**
+ * Whether an armed `?walk=1` handoff may open the walkthrough NOW.
+ *
+ * The walk aims by item key, chosen from the queue as it stands when the walk
+ * opens. Opening on the first non-empty queue — as this did until 2026-08-29
+ * — opened on a HALF queue: review items alone have no tasks to rank against,
+ * so every one takes the tail rank ordered by age, and the walk pinned the
+ * oldest ask. When the projection landed, the key rightly followed that ask
+ * to its real rank, which is the bottom — "Review all" opened on N of N.
+ *
+ * So: both sources, then open at the head. An empty queue is never ready
+ * (the flag stays armed for the half still coming), and the deadline opens
+ * on whatever has landed — a board with items in hand must not hop the
+ * chain as though it were clear.
+ */
+export function walkHandoffReady(
+  queue: ReviewQueue,
+  sources: WalkSources,
+  deadlinePassed = false,
+): boolean {
+  if (queue.items.length === 0) return false;
+  return deadlinePassed || (sources.reviewItems && sources.projection);
+}
+
 /** The next hop of the chain, or null when there is nowhere left to go. */
 export function walkNextUrl(chain: string[]): string | null {
   const [next, ...rest] = chain;

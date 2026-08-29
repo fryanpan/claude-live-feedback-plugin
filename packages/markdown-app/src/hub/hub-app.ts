@@ -61,6 +61,7 @@ import {
   type ReviewThreadItem,
   type UptimeReport,
   type WalkHold,
+  type WalkSources,
   advanceWalk,
   applyRefresh,
   archivedTasks,
@@ -88,6 +89,7 @@ import {
   unplacedNotice,
   voiceHubContext,
   walkHandoff,
+  walkHandoffReady,
   walkNextUrl,
   walkPosition,
 } from './hub-model.ts';
@@ -1703,6 +1705,13 @@ async function main(): Promise<void> {
   // observer below gives the walk another look at the queue then.
   let autoWalkTick: (() => void) | null = null;
 
+  // Which halves of the queue have landed. The armed walk opens only once
+  // both are in (or the deadline passes): a walk opened on the review-items
+  // half alone aimed at the oldest ask, which the task projection then
+  // ranked to the bottom — "Review all" from the landing page opened on
+  // N of N. See `walkHandoffReady`.
+  const walkSources: WalkSources = { reviewItems: false, projection: false };
+
   async function finishWalkItem(
     item: ReviewItem | null,
     next: ReviewItem | null,
@@ -2541,6 +2550,10 @@ async function main(): Promise<void> {
       // — only send once boot has painted and stamped msToBoot.
       if (msToBoot > 0) sendLoadReport();
     }
+    // The projection half of the queue is in — an EMPTY board's sync too,
+    // which changes no task and so never reaches the observeDeep tick.
+    walkSources.projection = true;
+    autoWalkTick?.();
   });
 
   // ── Wiring ──────────────────────────────────────────────────────────────
@@ -2924,14 +2937,15 @@ async function main(): Promise<void> {
   // closed, so the flag burns on first use.
   const handoff = walkHandoff(location.search);
   let pendingWalk = handoff.walk && state.pane === 'home';
-  const maybeAutoWalk = (): void => {
+  const maybeAutoWalk = (deadlinePassed = false): void => {
     if (!pendingWalk) return;
-    // An empty queue does NOT burn the flag: on a cold connection the ydoc
-    // task projection (which carries the decisions) can land after the first
-    // review-items load, and a one-shot consumed here would skip a queue
-    // that was seconds from existing. The projection observer and every
-    // review-items load call back in; only the deadline below gives up.
-    if (currentQueue().items.length === 0) return;
+    // Neither half landing alone burns the flag: on a cold connection the
+    // ydoc task projection (decisions, and the tasks threads rank against)
+    // and the review-items list arrive in either order, and a walk opened on
+    // one half aims at a head the other half re-ranks to the bottom. The
+    // projection's onReady, its observer, and every review-items load call
+    // back in; only the deadline below stops waiting.
+    if (!walkHandoffReady(currentQueue(), walkSources, deadlinePassed)) return;
     pendingWalk = false;
     startWalkthrough();
   };
@@ -2945,6 +2959,10 @@ async function main(): Promise<void> {
     // genuinely clear (someone answered since the landing page rendered).
     // Hop to the next board holding items, or stand down on Home.
     setTimeout(() => {
+      if (!pendingWalk) return;
+      // Whatever has landed by now is the queue: open on it. Only a board
+      // with nothing in hand is clear enough to hop.
+      maybeAutoWalk(true);
       if (!pendingWalk) return;
       pendingWalk = false;
       const next = walkNextUrl(handoff.chain);
@@ -2987,7 +3005,10 @@ async function main(): Promise<void> {
   // nobody is looking at was a measured slice of the iPad's 10-second load
   // (the board-observability ticket). loadEvents itself is gated on a visible reader too,
   // so the SSE refresh calls it safely.
-  void loadReviewItems().then(deepLinkTick);
+  void loadReviewItems().then(() => {
+    walkSources.reviewItems = true;
+    deepLinkTick();
+  });
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
 }
