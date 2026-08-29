@@ -1,6 +1,6 @@
 {
   "name": "@fryanpan/claude-workspaces-mcp",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "MCP stdio server for claude-workspaces-plugin. Lets Claude Code agents observe and reply to review comments.",
   "type": "module",
   "bin": {
