@@ -290,6 +290,9 @@ export interface HeldItemRow {
   reason: string;
   /** How long the item has been held. */
   heldMs: number;
+  /** When THIS hold was placed (the judge's stamp). A revision that is held
+   *  again gets a new one, which is what tells one hold from the next. */
+  heldAt: number;
   /** The filer's display name — who the lead nudges. */
   filedBy: string;
   /** The filer's agent id, for the addressed nudge. Absent when unknown. */
@@ -329,6 +332,7 @@ export function overdueHeldItems(
       headline: item.headline,
       reason: item.reason,
       heldMs: age,
+      heldAt: item.heldAt,
       filedBy: item.filedBy,
       ...(item.filerAgentId !== undefined ? { filerAgentId: item.filerAgentId } : {}),
     });
