@@ -1588,7 +1588,10 @@ body.hub-body {
   margin: 0 0 12px;
 }
 @media (min-width: 1101px) {
-  .hub-walk-stage {
+  /* Two columns only while a thread is open (`.hub-walk-stage-open`). A
+     bare stage stays one column: reserving the 300px margin on an empty
+     stage left the card a third of a desktop screen (Bryan, 2026-08-29). */
+  .hub-walk-stage-open {
     display: grid;
     /* minmax(0, …) so a long headline wraps instead of widening the stage. */
     grid-template-columns: minmax(0, 1fr) 300px;
