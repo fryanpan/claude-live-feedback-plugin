@@ -13916,11 +13916,19 @@ async function declareWorkspaceLead(args, deps) {
   const declaring = named.length === 0 || named === deps.self.id;
   const leadAgentId = declaring ? deps.self.id : named;
   const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+  if (declaring && deps.identityIsShared === true) {
+    return {
+      isError: true,
+      error: "author-required",
+      message: "This session has no identity: CW_AGENT_NAME is not set, so it resolves to the shared " + '"agent" category, which cannot lead a board or keep its watches across a restart. ' + "Set CW_AGENT_NAME in the launch environment, restart the session, and declare again. " + "No seat was changed."
+    };
+  }
   let attached;
   let subscription = { open: false, persisted: false };
   if (declaring) {
     attached = await deps.http("POST", `${path}/attachments`, {
       agentId: deps.self.id,
+      agentName: deps.self.name,
       runtime: deps.runtime,
       pluginVersion: deps.pluginVersion,
       processId: deps.processId
@@ -13955,9 +13963,10 @@ async function declareWorkspaceLead(args, deps) {
     warnings.push("the event stream did not confirm it was open before the seat changed, so anything the " + "server delivered in that window may not have arrived — call list_watched_docs to check " + "coverage, and re-run this if it still looks wrong");
   }
   if (!subscription.persisted) {
-    warnings.push("this subscription was NOT persisted against an agent identity, so it will not come back " + "after a respawn — set CW_AGENT_NAME in the launch environment");
+    warnings.push("this subscription was NOT persisted, so it will not come back after a respawn — the " + "server refused or did not answer the watch write; re-run this once the server is up " + "(a session with CW_AGENT_NAME unset is refused before this point)");
   }
   return {
+    ...subscription.persisted ? {} : { subscriptionPersisted: false, subscriptionWarning: warnings.join("; ") },
     ...seat,
     subscribed: subscription.open,
     subscriptionPersisted: subscription.persisted,
@@ -14400,7 +14409,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.121";
+var PLUGIN_VERSION = "0.1.123";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -16613,7 +16622,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "set_workspace_lead": {
         const { workspaceId, leadAgentId, takeover } = a;
-        return ok(await declareWorkspaceLead({
+        const declared = await declareWorkspaceLead({
           workspaceId,
           ...leadAgentId !== undefined ? { leadAgentId } : {},
           ...takeover === true ? { takeover: true } : {}
@@ -16621,10 +16630,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           http,
           watchWorkspace,
           self: AUTHOR,
+          identityIsShared: IDENTITY_IS_SHARED,
           runtime: "claude-code-local",
           pluginVersion: PLUGIN_VERSION,
           processId: PROCESS_ID
-        }));
+        });
+        return declared.isError === true ? err(String(declared.message)) : ok(declared);
       }
       case "attach_doc": {
         const { workspaceId, docId } = a;
@@ -16987,6 +16998,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { workspaceId, agentId, runtime, capabilities, subscribe } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
           agentId: agentId ?? AUTHOR.id,
+          ...agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {},
           runtime: runtime ?? "claude-code-local",
           ...capabilities !== undefined ? { capabilities } : {},
           pluginVersion: PLUGIN_VERSION,
@@ -17150,6 +17162,7 @@ async function ensureWatchesRestored() {
         try {
           const attachRes = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`, {
             agentId: AUTHOR.id,
+            agentName: AUTHOR.name,
             runtime: "claude-code-local",
             pluginVersion: PLUGIN_VERSION,
             processId: PROCESS_ID

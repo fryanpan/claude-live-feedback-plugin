@@ -152,10 +152,31 @@ describe('with CW_REQUIRE_EMAIL_AUTH on', () => {
 });
 
 describe('with the flag off (the default)', () => {
-  it('attributes a cookie-carrying request exactly as it does today', async () => {
+  it('a verified session still wins over the claimed body — the flag governs REQUIREMENT, not attribution', async () => {
+    // Bryan, 2026-08-29: a verified name is never worse than a typed one.
+    // Signing in without the requirement on used to change nothing about
+    // who a comment was attributed to, so the browser kept minting anon-*
+    // for a person the server had just verified.
     const { base, dataDir } = boot();
     const cookie = await signIn(base, 'reviewer@example.com');
     await commentAsBryan(base, dataDir, 'flagoff-doc', cookie);
+    const [row] = rowsFor(dataDir, 'comment');
+    expect(row?.actorId).toBe(emailIdentityId('reviewer@example.com'));
+    expect(row?.actorName).toBe('Reviewer');
+    // On the thread too, not only in the activity stream.
+    const listed = await fetch(`${base}/api/docs/flagoff-doc/threads`);
+    const { threads } = (await listed.json()) as {
+      threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
+    };
+    expect(threads[0]?.comments[0]?.author).toMatchObject({
+      id: emailIdentityId('reviewer@example.com'),
+      name: 'Reviewer',
+    });
+  });
+
+  it('POSITIVE CONTROL: with no cookie the body is trusted, flag off', async () => {
+    const { base, dataDir } = boot();
+    await commentAsBryan(base, dataDir, 'flagoff-nocookie-doc');
     expect(rowsFor(dataDir, 'comment')[0]?.actorId).toBe('known-bryan');
   });
 });
@@ -183,5 +204,94 @@ describe('owner recognition survives the rename', () => {
     const cookie = await signIn(base, 'somebody-else@example.com');
     await commentAsBryan(base, dataDir, 'other-doc', cookie);
     expect(rowsFor(dataDir, 'comment')[0]?.isOwner).toBe(false);
+  });
+});
+
+/**
+ * A category is not an author. `known-agent` is what every session launched
+ * without CW_AGENT_NAME collapses into — 1,031 comments on the live corpus
+ * are signed by it and belong to nobody in particular. Tasks already refuse
+ * it as an owner; the comment routes accepted it, which is how the seat and
+ * the comment log stayed out of step. Refused loudly, with the fix named.
+ */
+describe('comment routes refuse the shared "agent" identity', () => {
+  const unnamed: User = { id: 'known-agent', name: 'Agent', kind: 'known', color: '#e36f1e' };
+  const named: User = { id: 'agent-relay', name: 'Relay', kind: 'known', color: '#888888' };
+
+  async function bindDoc(base: string, dataDir: string, docId: string): Promise<void> {
+    const file = join(dataDir, `${docId}.md`);
+    writeFileSync(file, '# Heading\n\nSome prose to comment on.\n');
+    const created = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId, type: 'markdown', sourceUrl: file }),
+    });
+    expect(created.status).toBe(200);
+  }
+  const post = (base: string, path: string, body: unknown) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('refuses a thread, a reply, and a resolve signed by the category, naming CW_AGENT_NAME', async () => {
+    const { base, dataDir } = boot();
+    await bindDoc(base, dataDir, 'refused-doc');
+    const refused = await post(base, '/api/docs/refused-doc/threads', {
+      author: unnamed,
+      text: 'anonymous words',
+      anchor: fakeAnchor,
+    });
+    expect(refused.status).toBe(400);
+    const body = (await refused.json()) as { error: string; message: string };
+    expect(body.error).toBe('author-required');
+    expect(body.message).toContain('CW_AGENT_NAME');
+
+    // POSITIVE CONTROL: the named agent posts the same thread.
+    const okRes = await post(base, '/api/docs/refused-doc/threads', {
+      author: named,
+      text: 'named words',
+      anchor: fakeAnchor,
+    });
+    expect(okRes.status).toBe(200);
+    const { thread } = (await okRes.json()) as { thread: { id: string } };
+
+    const reply = await post(base, `/api/docs/refused-doc/threads/${thread.id}/comments`, {
+      author: unnamed,
+      text: 'anonymous reply',
+    });
+    expect(reply.status).toBe(400);
+    expect(((await reply.json()) as { error: string }).error).toBe('author-required');
+
+    const resolve = await post(base, `/api/docs/refused-doc/threads/${thread.id}/resolve`, {
+      author: unnamed,
+    });
+    expect(resolve.status).toBe(400);
+
+    // Nothing from the category landed; the named reply does.
+    const namedReply = await post(base, `/api/docs/refused-doc/threads/${thread.id}/comments`, {
+      author: named,
+      text: 'named reply',
+    });
+    expect(namedReply.status).toBe(200);
+    const listed = await fetch(`${base}/api/docs/refused-doc/threads`);
+    const { threads } = (await listed.json()) as {
+      threads: Array<{ comments: Array<{ author: { id: string }; text: string }> }>;
+    };
+    expect(threads).toHaveLength(1);
+    expect(threads[0]?.comments.map((c) => c.author.id)).toEqual(['agent-relay', 'agent-relay']);
+    expect(rowsFor(dataDir, 'comment').map((r) => r.actorId)).toEqual(['agent-relay']);
+  });
+
+  it('also refuses the bare NAME "agent" under any id — the word is the category', async () => {
+    const { base, dataDir } = boot();
+    await bindDoc(base, dataDir, 'bare-name-doc');
+    const refused = await post(base, '/api/docs/bare-name-doc/threads', {
+      author: { id: 'agent-x1', name: 'agent', kind: 'known' },
+      text: 'words',
+      anchor: fakeAnchor,
+    });
+    expect(refused.status).toBe(400);
   });
 });

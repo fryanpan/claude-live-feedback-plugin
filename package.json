@@ -27,6 +27,7 @@
     "share": "bun run scripts/share.ts",
     "activity:backfill": "bun run packages/server/src/activity-backfill.ts",
     "activity:repair-owner": "bun run packages/server/src/activity-repair-owner.ts",
+    "agents:merge": "bun run scripts/merge-agent.ts",
     "identity:link": "bun run scripts/link-identity.ts",
     "review:migrate": "bun run packages/server/src/migrate-review-queue.ts"
   },

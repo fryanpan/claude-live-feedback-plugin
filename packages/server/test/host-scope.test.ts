@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { emailIdentityId } from '@feedback/core';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { CfApi } from '../src/share/cf-api.ts';
@@ -822,7 +823,6 @@ describe('workspace share over HTTP', () => {
     expect(r.status).toBe(200);
     const raw = await r.text();
     expect(raw).not.toContain('/Volumes/');
-    expect(raw).not.toContain('tailb53801');
     expect(raw).not.toContain('.ts.net');
     const { meta } = JSON.parse(raw) as { meta: Record<string, unknown> };
     expect(meta.sourceUrl).toBeUndefined();
@@ -874,9 +874,14 @@ describe('workspace share over HTTP', () => {
     };
     const authors = threads.flatMap((t) => t.comments.map((c) => c.author));
     expect(authors.length).toBeGreaterThan(0);
+    // Access already verified this visitor's email, so the comment is
+    // theirs — the stable `user-<hash>` for that address — not a guest id
+    // and never the claimed one. (It was `guest-*` while the verified
+    // rung was gated behind requireEmailAuth; identity now follows the
+    // session wherever the session is proven.)
     for (const a of authors) {
       expect(a.id).not.toBe('known-bryan');
-      expect(a.id).toStartWith('guest-');
+      expect(a.id).toBe(emailIdentityId('reviewer@partner.example'));
       expect(a.name).not.toBe('Bryan');
     }
   });

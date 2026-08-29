@@ -28,7 +28,14 @@ import {
   checkDecisionShape,
   decisionShapeMessage,
 } from './decision-shape.ts';
-import { type DeclaredOwnerKind, declaredAssigneeKind } from './task-owner.ts';
+import {
+  AUTHOR_REQUIRED_MESSAGE,
+  type DeclaredOwnerKind,
+  GENERIC_ASSIGNEE,
+  HUMAN_ASSIGNEE,
+  declaredAssigneeKind,
+  isCategoryAuthor,
+} from './task-owner.ts';
 import { bodyHead } from './task-title.ts';
 
 /**
@@ -517,6 +524,17 @@ export interface Task {
    *  task-owner.ts), so a stored 'agent' is a pre-enforcement row. */
   assignee: string;
   /**
+   * The roster's ONE id for `assignee`, when the roster can place it — an
+   * agent row matched by id, display name, or a spelling folded into it by
+   * a merge. Stored beside the name at every write, never instead of it:
+   * `assignee` stays verbatim because old bundles keep sending it and the
+   * board keeps drawing it. Absent when nobody the roster knows owns the
+   * row, and absent on every row written before the field existed — those
+   * resolve the same way at read time (`ownerIdOf`), so history is never
+   * rewritten to catch up.
+   */
+  assigneeId?: string;
+  /**
    * What KIND of somebody the assignee is, as DECLARED — never as guessed
    * from the name. Absent means nobody has said, which reads as `unknown`
    * (see `resolveOwnerKind`), not as a person. Cleared on a hand-over that
@@ -976,6 +994,19 @@ export function isAttachmentRuntime(v: unknown): v is AttachmentRuntime {
  * minimal-share commit), so the endpoint's only exits are the attachments
  * sidecar and owner REST, with visitor redaction — the private-meta pattern.
  */
+/**
+ * The slice of the fleet address book the store needs (identities.ts
+ * implements it). An interface rather than the class so tasks.ts stays free
+ * of identities.ts and the dependency runs one way.
+ */
+export interface AgentRoster {
+  upsertAgent(id: string, displayName?: string): unknown;
+  resolveAgentId(idOrName: string): string | null;
+  displayNameFor(id: string): string | null;
+  /** The survivor an id was merged into, or null when the id is live. */
+  mergedAwayInto(id: string): string | null;
+}
+
 export interface AgentAttachment {
   workspaceId: string;
   agentId: string;
@@ -1199,7 +1230,18 @@ export type AttachAgentResult =
        */
       leadNameConflicts?: LeadNameConflicts;
     }
-  | { ok: false; error: 'workspace-not-found' };
+  | { ok: false; error: 'workspace-not-found' }
+  /** The id was folded into another by a merge; `into` is the one to use.
+   *  Attaching under the old id would recreate the duplicate the merge
+   *  removed and route this session's deliveries to a key nothing reads. */
+  | { ok: false; error: 'merged-away'; into: string; message: string }
+  | {
+      ok: false;
+      /** The shared "agent" identity tried to attach. A category cannot hold
+       *  a seat or be owed a delivery — see `isCategoryAuthor`. */
+      error: 'author-required';
+      message: string;
+    };
 
 /** What an agent is told when it reads a board that has been stood down. */
 export interface RetiredNotice {
@@ -1830,7 +1872,7 @@ export type SetLeadAgentResult =
        *  attachment record of, so every lead-addressed delivery would route
        *  to nobody. `empty-lead-agent-id` — the id trimmed to nothing, which
        *  used to take the seat as ''. */
-      error: 'unknown-lead-agent' | 'empty-lead-agent-id';
+      error: 'unknown-lead-agent' | 'empty-lead-agent-id' | 'author-required';
       /** The verbatim refusal, naming the id — written to land in a retrying
        *  caller's context, the same contract as `bad-review`. */
       message: string;
@@ -2225,6 +2267,7 @@ export class TaskStore {
   private debounceMs: number;
   private attachmentThresholds: AttachmentThresholds;
   private deliveryProbe: DeliveryProbe | undefined;
+  private roster: AgentRoster | undefined;
   private readonly voiceAckGraceMs: number;
   private readonly commentAckGraceMs: number;
   private agentStreamProbe: AgentStreamProbe | undefined;
@@ -2281,6 +2324,62 @@ export class TaskStore {
 
   setDeliveryProbe(probe: DeliveryProbe | undefined): void {
     this.deliveryProbe = probe;
+  }
+
+  /**
+   * Wire the fleet's address book (identities.ts). Optional for the same
+   * reason the probes are: a store-only test needs no roster, and left
+   * unwired every attach and seat claim behaves exactly as it did. With it
+   * wired, an attach writes the agent's roster row and a seat claim names
+   * the lead by its roster display name rather than by its id.
+   */
+  setAgentRoster(roster: AgentRoster | undefined): void {
+    this.roster = roster;
+  }
+
+  /** The roster's id for an owner name, or undefined. The reserved words
+   *  are not names: `human` means "a person, unnamed" and `agent` means
+   *  nobody, and neither may resolve to a row that happens to be called
+   *  that. */
+  private rosterIdFor(assignee: string): string | undefined {
+    const name = assignee.trim();
+    const lower = name.toLowerCase();
+    if (name === '' || lower === GENERIC_ASSIGNEE || lower === HUMAN_ASSIGNEE) return undefined;
+    return this.roster?.resolveAgentId(name) ?? undefined;
+  }
+
+  /** `resolveAgentId` through whatever roster is wired, for readers that
+   *  hold an attachment id and need the id a merge folded it into. */
+  resolveAgentId(idOrName: string): string | null {
+    return this.roster?.resolveAgentId(idOrName) ?? null;
+  }
+
+  /**
+   * The canonical owner id of a row, resolved NOW.
+   *
+   * A stored `assigneeId` is re-resolved through the roster so a row written
+   * under an id that was later merged away answers with the surviving id;
+   * a row with none (written before the field, or under a name the roster
+   * did not know at the time) resolves from its name. Undefined for a
+   * person, a reserved owner, or a name the roster still cannot place.
+   */
+  ownerIdOf(task: Pick<Task, 'assignee' | 'assigneeId'>): string | undefined {
+    if (task.assigneeId !== undefined) {
+      return this.roster?.resolveAgentId(task.assigneeId) ?? task.assigneeId;
+    }
+    return this.rosterIdFor(task.assignee);
+  }
+
+  /**
+   * "Does this row belong to `assignee`?" — by the verbatim name, as every
+   * filter always matched, OR by resolved id, which is what makes
+   * `next_tasks?assignee=<me>` find the rows filed under the other seven
+   * spellings of me. The filter's own spelling is resolved once.
+   */
+  ownerMatcher(assignee: string): (task: Task) => boolean {
+    const wantedId = this.rosterIdFor(assignee);
+    return (task) =>
+      task.assignee === assignee || (wantedId !== undefined && this.ownerIdOf(task) === wantedId);
   }
 
   /**
@@ -2661,6 +2760,13 @@ export class TaskStore {
         message: 'leadAgentId is empty — the lead seat needs a real agent id.',
       };
     }
+    // The seat routes deliveries to SOMEBODY. The shared category — as the
+    // proposed holder or as the caller — is nobody in particular, and a seat
+    // held by it is exactly the state this refusal was written against
+    // (one live board, lead seat "known-agent", 1,031 unattributed rows).
+    if (isCategoryAuthor({ id: next }) || isCategoryAuthor(opts.actor)) {
+      return { ok: false, error: 'author-required', message: AUTHOR_REQUIRED_MESSAGE };
+    }
     if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
     // Naming a THIRD PARTY is a deliberate handover, and a handover needs an
     // addressee this workspace has a record of. The record is the attachments
@@ -2723,6 +2829,105 @@ export class TaskStore {
       changed: true,
       ...(previousLeadAgentId !== undefined ? { previousLeadAgentId } : {}),
     };
+  }
+
+  /**
+   * Fold agent id `from` into `into` on EVERY board: the seat moves where
+   * `from` held it, and `from`'s attachment record is re-keyed (the fresher
+   * clocks win where `into` already had one). This is the board half of a
+   * rename — the roster half is `Identities.mergeAgent`, the durable-watch
+   * half `AgentWatches.rekey` — and the three are composed by the merge
+   * route so one verb does all of it.
+   *
+   * Nothing here bypasses `assignLead`: the seat change persists and
+   * announces exactly like a handover, so the board repaints and the audit
+   * log carries who did it. `dryRun` computes the same answer and touches
+   * nothing, which is what an operator runs first against prod's data.
+   */
+  mergeAgent(
+    from: string,
+    into: string,
+    opts: { actor: { id: string; name: string; kind?: string }; dryRun?: boolean },
+  ): { seats: string[]; seatsSkipped: string[]; attachments: string[]; comments: string[] } {
+    const seats: string[] = [];
+    const seatsSkipped: string[] = [];
+    const attachments: string[] = [];
+    const comments: string[] = [];
+    const result = () => ({
+      seats: seats.sort(),
+      seatsSkipped: seatsSkipped.sort(),
+      attachments: attachments.sort(),
+      comments: comments.sort(),
+    });
+    if (from.trim() === '' || into.trim() === '' || from === into) return result();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    for (const state of this.workspaces.values()) {
+      const workspaceId = state.workspace.id;
+      const old = state.attachments.get(from);
+      if (old) {
+        attachments.push(workspaceId);
+        if (!opts.dryRun) {
+          const existing = state.attachments.get(into);
+          const fresher = existing && existing.lastHeartbeat >= old.lastHeartbeat ? existing : old;
+          state.attachments.delete(from);
+          state.attachments.set(into, { ...fresher, agentId: into });
+          this.scheduleAttachmentsSave(workspaceId);
+        }
+      }
+      if (state.workspace.leadAgentId === from) {
+        // The same rule as a hand-over (`setLeadAgent`): the seat routes
+        // deliveries to somebody this board has a record of. After the
+        // re-key above that is the target itself whenever the old id was
+        // attached; when it was NOT — a seat held by an id nothing ever
+        // attached under, `known-agent` included — moving it would hand the
+        // seat to an id the queue cannot reach, which is exactly the state
+        // the unknown-lead check exists to refuse. Reported, not silent.
+        // On a dry run nothing was re-keyed yet, so "the old id was
+        // attached" is what "the target will be attached" looks like.
+        const targetAttached =
+          state.attachments.has(into) || (opts.dryRun === true && old !== undefined);
+        if (targetAttached) {
+          seats.push(workspaceId);
+          if (!opts.dryRun) this.assignLead(state, into, actor, Date.now());
+        } else {
+          seatsSkipped.push(workspaceId);
+        }
+      }
+      // The un-acked backlog is delivery bookkeeping keyed by addressee, and
+      // an addressee that no longer exists never acks: without this re-key
+      // every comment queued for the old id sat under it until the per-agent
+      // cap dropped it, while the new id attached to an empty list.
+      const backlog = this.listQueuedComments(workspaceId);
+      if (backlog.some((q) => q.agentId === from)) {
+        comments.push(workspaceId);
+        if (!opts.dryRun) {
+          this.writeCommentQueue(
+            workspaceId,
+            backlog.map((q) => (q.agentId === from ? { ...q, agentId: into } : q)),
+          );
+        }
+      }
+      // A re-key is an attachment change, and the board projects off store
+      // events: without this the rows owned under the old id keep drawing
+      // it until something unrelated touches a task. Emitted for the
+      // SURVIVING id, after every change above, like `attachAgent` does.
+      const survivor = !opts.dryRun && old ? state.attachments.get(into) : undefined;
+      if (survivor) {
+        const now = Date.now();
+        this.emit({
+          type: 'agent.attached',
+          workspaceId,
+          agentId: into,
+          attachment: publicAttachment(survivor, now, this.attachmentThresholds),
+          ts: now,
+        });
+      }
+    }
+    return result();
   }
 
   /** The seat change itself, shared by `setLeadAgent` and the attach-time
@@ -2898,6 +3103,7 @@ export class TaskStore {
 
     const now = Date.now();
     const assigneeKind = declaredAssigneeKind(opts.assignee ?? '', opts.assigneeKind, opts.actor);
+    const assigneeId = this.rosterIdFor(opts.assignee ?? 'agent');
     const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
     const order = opts.order ?? Math.max(0, ...inGoal.map((t) => t.order)) + 1;
     const task: Task = {
@@ -2910,6 +3116,7 @@ export class TaskStore {
       // in-process call that named nobody.
       assignee: opts.assignee ?? 'agent',
       ...(assigneeKind !== undefined ? { assigneeKind } : {}),
+      ...(assigneeId !== undefined ? { assigneeId } : {}),
       ...(opts.needs !== undefined ? { needs: opts.needs } : {}),
       ...(options.length > 0 ? { options } : {}),
       goal,
@@ -3154,7 +3361,7 @@ export class TaskStore {
     if (filter?.includeArchived !== true) tasks = tasks.filter((t) => !isArchived(t));
     if (filter?.goal !== undefined) tasks = tasks.filter((t) => t.goal === filter.goal);
     if (filter?.status !== undefined) tasks = tasks.filter((t) => t.status === filter.status);
-    if (filter?.assignee !== undefined) tasks = tasks.filter((t) => t.assignee === filter.assignee);
+    if (filter?.assignee !== undefined) tasks = tasks.filter(this.ownerMatcher(filter.assignee));
     if (filter?.needs !== undefined) tasks = tasks.filter((t) => t.needs === filter.needs);
     return tasks.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
   }
@@ -3971,6 +4178,12 @@ export class TaskStore {
     if (from === assignee && task.assigneeKind === kind) return { ok: true, task, changed: false };
     const ts = Date.now();
     task.assignee = assignee;
+    // Re-resolved from the NEW name, never carried over: the previous
+    // owner's id on a row handed to somebody the roster cannot place would
+    // keep routing their queue reads to the old owner.
+    const assigneeId = this.rosterIdFor(assignee);
+    if (assigneeId === undefined) task.assigneeId = undefined;
+    else task.assigneeId = assigneeId;
     if (kind === undefined) task.assigneeKind = undefined;
     else task.assigneeKind = kind;
     task.updatedAt = ts;
@@ -5087,6 +5300,10 @@ export class TaskStore {
     workspaceId: string,
     opts: {
       agentId: string;
+      /** The display name the session runs under (`CW_AGENT_NAME`). Written
+       *  to the roster so every surface names this agent the same way; an
+       *  older bundle sends none and attaches under its id. */
+      agentName?: string;
       runtime: AttachmentRuntime;
       capabilities?: string[];
       endpoint?: string;
@@ -5096,6 +5313,23 @@ export class TaskStore {
   ): AttachAgentResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
+    // Same rule as the seat: a category cannot attach, because an attachment
+    // is what makes an id an addressee (and would claim an empty seat).
+    if (isCategoryAuthor({ id: opts.agentId })) {
+      return { ok: false, error: 'author-required', message: AUTHOR_REQUIRED_MESSAGE };
+    }
+    const survivor = this.roster?.mergedAwayInto(opts.agentId) ?? null;
+    if (survivor !== null) {
+      return {
+        ok: false,
+        error: 'merged-away',
+        into: survivor,
+        message:
+          `${opts.agentId} was merged into ${survivor}. Relaunch with CW_AGENT_NAME set to ` +
+          `that agent's name (or merge back first); attaching under the old id would ` +
+          'recreate the duplicate the merge removed.',
+      };
+    }
     const now = Date.now();
     // Is this attach a NEW process, or the same live one re-attaching (a
     // lead declaration, a retry after `subscribed: false`, a defensive
@@ -5120,6 +5354,9 @@ export class TaskStore {
     };
     state.attachments.set(opts.agentId, attachment);
     this.scheduleAttachmentsSave(workspaceId);
+    // The attach is where an agent first says who it is, so the roster row
+    // is written here — one address book, not a per-board one.
+    this.roster?.upsertAgent(opts.agentId, opts.agentName);
     // Claim an EMPTY seat only. A board created before this field existed —
     // or by a person — would otherwise stay a dead letter forever, but an
     // occupied seat is a standing decision and a second agent attaching is
@@ -5132,7 +5369,11 @@ export class TaskStore {
       this.assignLead(
         state,
         opts.agentId,
-        { id: opts.agentId, name: opts.agentId, kind: 'agent' },
+        {
+          id: opts.agentId,
+          name: this.roster?.displayNameFor(opts.agentId) ?? opts.agentName ?? opts.agentId,
+          kind: 'agent',
+        },
         now,
       );
     }

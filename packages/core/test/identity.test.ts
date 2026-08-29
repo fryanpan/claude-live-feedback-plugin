@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   GUEST_ANIMALS,
+  authorLabel,
   dismissNamePrompt,
   guestNameFor,
   needsNamePrompt,
@@ -182,5 +183,15 @@ describe('needsNamePrompt', () => {
     storeUserName(s, '   ');
     expect(needsNamePrompt(null, s)).toBe(true);
     expect(resolveUser(null, s).kind).toBe('anon');
+  });
+});
+
+describe('authorLabel — the shared identity renders as "Unnamed agent"', () => {
+  it('labels the category and passes every real name through', () => {
+    expect(authorLabel({ id: 'known-agent', name: 'Agent' })).toBe('Unnamed agent');
+    expect(authorLabel({ id: 'agent', name: 'agent' })).toBe('Unnamed agent');
+    expect(authorLabel({ id: 'agent-relay', name: 'Relay' })).toBe('Relay');
+    expect(authorLabel({ id: 'known-bryan', name: 'Bryan' })).toBe('Bryan');
+    expect(authorLabel({ id: 'anon-x', name: '' })).toBe('');
   });
 });

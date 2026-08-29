@@ -84,6 +84,10 @@ export interface QueueRow {
   goalInTriage: boolean;
   status: TaskStatus;
   assignee: string;
+  /** The roster's one id for the owner — see `Task.assigneeId`; resolved at
+   *  read so rows older than the field carry it too. Absent for a person,
+   *  a reserved owner, or a name the roster cannot place. */
+  assigneeId?: string;
   needs?: 'action' | 'decision';
   blockedBy: QueueBlocker[];
   /** No ENFORCED open blocker. Advisory (`after`-only) blockers leave this
@@ -108,7 +112,20 @@ export interface QueueRow {
 }
 
 export interface QueueOpts {
+  /** Matched verbatim against `task.assignee` unless `owner` is supplied,
+   *  in which case `owner.matches` decides — that is the reader that also
+   *  knows the roster's other spellings of the same agent. */
   assignee?: string;
+  /**
+   * The store's owner readers (`ownerMatcher`, `ownerIdOf`), passed in so
+   * this stays pure. `matches` replaces the verbatim assignee comparison
+   * and `idOf` puts the resolved `assigneeId` on each row, so a dispatcher
+   * reading the queue sees the same id the board projects.
+   */
+  owner?: {
+    matches?: (task: Task) => boolean;
+    idOf?: (task: Task) => string | undefined;
+  };
   limit?: number;
   /** Keep hard-blocked rows. Off by default — the queue is what you can DO. */
   includeBlocked?: boolean;
@@ -202,8 +219,10 @@ export function buildQueue(
   // Every other list (the board, `list_tasks`) reads the store directly and
   // still shows triage rows in their band.
   const open = tasks.filter((t) => t.status !== 'done' && t.status !== 'triage');
-  const selected =
-    opts.assignee === undefined ? open : open.filter((t) => t.assignee === opts.assignee);
+  const wanted = opts.assignee;
+  const matches =
+    opts.owner?.matches ?? (wanted === undefined ? undefined : (t: Task) => t.assignee === wanted);
+  const selected = matches === undefined ? open : open.filter(matches);
 
   const ranked = selected
     .map((t) => ({ task: t, rank: goalRank(goals, t.goal) }))
@@ -242,6 +261,7 @@ export function buildQueue(
           ...(opts.staleAfterMs !== undefined ? { staleAfterMs: opts.staleAfterMs } : {}),
         })
       : null;
+    const assigneeId = opts.owner?.idOf?.(task) ?? task.assigneeId;
     return {
       id: task.id,
       title: task.title,
@@ -252,6 +272,7 @@ export function buildQueue(
       goalInTriage: triageGoals.has(task.goal),
       status: task.status,
       assignee: task.assignee,
+      ...(assigneeId !== undefined ? { assigneeId } : {}),
       ...(task.needs !== undefined ? { needs: task.needs } : {}),
       blockedBy,
       ready: !blockedBy.some((b) => b.enforce),

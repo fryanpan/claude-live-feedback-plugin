@@ -271,3 +271,41 @@ describe('each load REPLACES the registry rather than accumulating', () => {
     expect(identityLinks()).toEqual({ 'anon-fixture1': 'known-bryan' });
   });
 });
+
+/**
+ * The owner's legacy spellings are folded into the owner's roster row at
+ * boot, so every reader that resolves through the roster — activity rows,
+ * the home brief, the weekly review's projections — lands on ONE identity
+ * for the owner instead of `known-bryan`, seven `anon-*` ids, and a
+ * `user-<hash>`.
+ */
+describe('boot seeds the owner identity with its legacy ids', () => {
+  test('known-bryan and every linked id whose target is the owner resolve to the owner row', async () => {
+    const { createServer } = await import('../src/server');
+    const { emailIdentityId } = await import('@feedback/core');
+    const dir = scratchDir();
+    writeFileSync(
+      identityLinksPath(dir),
+      JSON.stringify({
+        links: [
+          { from: 'anon-xad9ig', to: 'known-bryan', note: 'test device' },
+          // A link to SOMEBODY ELSE must not be folded into the owner.
+          { from: 'anon-other1', to: 'known-jordan' },
+        ],
+      }),
+    );
+    const handle = createServer({ port: 0, dataDir: dir, ownerEmail: 'owner@example.com' });
+    try {
+      const ownerId = emailIdentityId('owner@example.com');
+      expect(handle.identities.get('known-bryan')?.id).toBe(ownerId);
+      expect(handle.identities.get('anon-xad9ig')?.id).toBe(ownerId);
+      expect(resolveIdentityId('anon-xad9ig')).toBe(ownerId);
+      expect(isOwnerActor({ id: 'anon-xad9ig', name: 'whoever' })).toBe(true);
+      // Negative control beside the positive one.
+      expect(handle.identities.get('anon-other1')).toBeNull();
+      expect(isOwnerActor({ id: 'anon-other1', name: 'whoever' })).toBe(false);
+    } finally {
+      await handle.stop();
+    }
+  });
+});

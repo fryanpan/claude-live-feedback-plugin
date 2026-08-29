@@ -24,6 +24,11 @@ export interface DeclareLeadDeps {
   watchWorkspace: (workspaceId: string) => Promise<{ open: boolean; persisted: boolean }>;
   /** This session's identity — the agent a bare declaration names. */
   self: { id: string; name: string; kind?: string };
+  /** True when `self` is the shared "agent" identity (CW_AGENT_NAME unset).
+   *  A declaration from it is refused BEFORE any seat change: the server
+   *  refuses its watches and its attach, so the old path took a seat it
+   *  could never be reached at. Optional so older harnesses keep working. */
+  identityIsShared?: boolean;
   runtime: string;
   /** The bundle this session actually loaded, so the board can say who is behind. */
   pluginVersion: string;
@@ -75,6 +80,23 @@ export async function declareWorkspaceLead(
   const leadAgentId = declaring ? deps.self.id : named;
   const path = `/api/workspaces/${encodeURIComponent(workspaceId)}`;
 
+  // Refused up front, with nothing issued. A session with no identity cannot
+  // persist a watch, cannot attach, and must not take a seat — the seat is
+  // the addressee for every lead-bound delivery, and a category is nobody.
+  // Reported as a tool ERROR rather than a success with a warning, because
+  // the warning was read as success for weeks on a live board.
+  if (declaring && deps.identityIsShared === true) {
+    return {
+      isError: true,
+      error: 'author-required',
+      message:
+        'This session has no identity: CW_AGENT_NAME is not set, so it resolves to the shared ' +
+        '"agent" category, which cannot lead a board or keep its watches across a restart. ' +
+        'Set CW_AGENT_NAME in the launch environment, restart the session, and declare again. ' +
+        'No seat was changed.',
+    };
+  }
+
   let attached: AttachResponse | undefined;
   let subscription = { open: false, persisted: false };
   if (declaring) {
@@ -84,6 +106,9 @@ export async function declareWorkspaceLead(
     //    leave setLeadAgent re-delivering to a lead the server cannot see.
     attached = (await deps.http('POST', `${path}/attachments`, {
       agentId: deps.self.id,
+      // The roster row is written from this: the name every surface then
+      // uses for this agent, rather than whatever each one derives.
+      agentName: deps.self.name,
       runtime: deps.runtime,
       pluginVersion: deps.pluginVersion,
       processId: deps.processId,
@@ -162,12 +187,20 @@ export async function declareWorkspaceLead(
     );
   }
   if (!subscription.persisted) {
+    // A NAMED identity reaching here means the server was down or refused
+    // the write, not a missing name (that case returned above).
     warnings.push(
-      'this subscription was NOT persisted against an agent identity, so it will not come back ' +
-        'after a respawn — set CW_AGENT_NAME in the launch environment',
+      'this subscription was NOT persisted, so it will not come back after a respawn — the ' +
+        'server refused or did not answer the watch write; re-run this once the server is up ' +
+        '(a session with CW_AGENT_NAME unset is refused before this point)',
     );
   }
   return {
+    // A failed persist is the FIRST field, not a footnote: it is the one
+    // thing on this response that bites later rather than now.
+    ...(subscription.persisted
+      ? {}
+      : { subscriptionPersisted: false, subscriptionWarning: warnings.join('; ') }),
     ...seat,
     // The answer to "am I subscribed?", which an agent otherwise cannot get
     // from the inside — the whole reason the silent-queue incident lasted.
