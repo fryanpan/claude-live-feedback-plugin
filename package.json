@@ -1,7 +1,7 @@
 {
   "name": "claude-workspaces-plugin",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "workspaces": ["packages/*", "demos/*"],
   "scripts": {
     "bootstrap": "bun run scripts/bootstrap.ts",
