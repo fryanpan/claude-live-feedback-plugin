@@ -154,6 +154,61 @@ Two things worth knowing before you turn it on:
   websockets. New requests are refused immediately; an already-open editing
   socket survives until the server restarts.
 
+**This list and the operator's list below share one Access application and
+one `CF_ACCESS_AUD`.** A collaborator's token is therefore just as valid at
+the operator's hostname as at this one — a token proves the Access policy
+admitted someone, never who. What keeps the two doors apart is the operator
+email allowlist (`CW_PROXIED_TRUSTED_EMAILS`, below): the operator's hostname
+serves the product only to a verified email on that list, and refuses
+everyone else the same application admits. Keep the allowlist to the operator,
+and keep collaborators on this hostname.
+
+## The operator's own hostname (the whole product, from outside)
+
+The collaboration list above is deliberately NOT the privileged surface. When
+the operator wants their own product — the doc list, the landing page, share
+administration, the deploy verb — from outside the tailnet, that is a third
+list, kept apart from the other two because it grants the most:
+
+```sh
+export CW_PROXIED_TRUSTED_HOSTS="ops.example.com"   # LF_ spelling also read
+export CW_PROXIED_TRUSTED_EMAILS="you@example.com"  # defaults to CW_OWNER_EMAIL
+export CF_ACCESS_TEAM_DOMAIN="<team>.cloudflareaccess.com"
+export CF_ACCESS_AUD="<the AUD of the Access app over that hostname>"
+```
+
+A hostname here classifies `proxied-local`: the request must have come
+through the edge (`cf-ray`), must carry a valid Access token for that
+application, **and the email that token was issued to must be on the
+allowlist** — then it is served exactly as loopback is. Anyone else the same
+Access application admits gets a bare 403. Startup logs carry
+`[feedback]   operator:   ops.example.com (via Cloudflare Access, full product, 1 allowed email)`.
+
+Through the tunnel the browser-origin policy is same-origin plus
+`ALLOWED_ORIGINS` and nothing else: a visitor's `localhost` is the visitor's
+machine, so the loopback and LAN allowances a `TRUSTED_HOSTS` name gets do not
+apply here.
+
+Four things that do not move:
+
+- **`TRUSTED_HOSTS` does not gain this.** A LAN name reached through the
+  tunnel is still refused, whatever token it carries — the `cf-ray` veto is
+  untouched, and this list is a separate door with a separate key.
+- **Without Access it is ignored**, loudly at boot and silently in the request
+  path — the same all-or-none rule as the collaboration list, and the reason
+  is stronger: honoured without a token to check, this would be the full API
+  to anyone who can reach the tunnel. The token is demanded regardless of
+  whether link or Access sharing is configured on the same server.
+- **Without an operator allowlist it is ignored too.** A token is admission,
+  not identity; with nobody named, the door cannot tell the operator from a
+  collaborator, so it does not open.
+- **A host on both opt-in lists stays a collaboration host.** The contradiction
+  resolves toward the narrower grant, and the boot log names the overlap.
+
+What does move: the sharing master switch does not cover this door. It is the
+operator's own, keyed to their own identity, and it is how sharing gets turned
+back on from outside.
+
 ## Per-repo team config
 
 Each repo that uses sharing should set a default allow-list in its
