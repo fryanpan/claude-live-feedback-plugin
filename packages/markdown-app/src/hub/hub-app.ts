@@ -8,7 +8,7 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import { type ReviewPayload, type User, connect, escapeHtml } from '@feedback/core';
+import { type ReviewPayload, type Thread, type User, connect, escapeHtml } from '@feedback/core';
 import {
   renderConnectionBanner,
   renderLiveStaleNotice,
@@ -21,6 +21,7 @@ import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
+import { activityCommentRequest, asksOf } from './activity-model.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
 import {
   type BoardLocation,
@@ -31,6 +32,8 @@ import {
   taskShareUrl,
 } from './board-url.ts';
 import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
+import { homeActivityData, mountHomeActivityIsland } from './home-activity-island.tsx';
+import { startHomeClock } from './home-clock.ts';
 import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
   ACTIVITY_REFRESH_EVENTS,
@@ -58,6 +61,7 @@ import {
   type ReviewThreadItem,
   type UptimeReport,
   type WalkHold,
+  type WalkSources,
   advanceWalk,
   applyRefresh,
   archivedTasks,
@@ -84,6 +88,7 @@ import {
   unplacedNotice,
   voiceHubContext,
   walkHandoff,
+  walkHandoffReady,
   walkNextUrl,
   walkPosition,
 } from './hub-model.ts';
@@ -92,6 +97,7 @@ import {
   type TaskDiscussion,
   type TaskThread,
   discussionIsBusy,
+  panelAnswerRequest,
   renderActivity,
   renderArchivedList,
   renderHomeBrief,
@@ -113,7 +119,7 @@ import {
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
-import { mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
+import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import {
   type WalkProgress,
   mountWalkthroughIsland,
@@ -171,6 +177,12 @@ interface HubState {
    *  (dev, staging) — those must not report the prod machine's deploy. */
   clientRelease: ClientRelease | null;
   detailTaskId: string | null;
+  /** Which tab the task panel opens on. `comments` every way in but one: the
+   *  Home activity pane's title tap opens on Activity (Bryan, 2026-08-29).
+   *  Reset to `comments` when the panel closes, so nothing lingers into the
+   *  paths (deep link, `o`) that set `detailTaskId` without going through
+   *  `openTaskDetail`. */
+  detailTab: DetailTab;
   /** The open GOAL, when the detail container is showing a goal band rather
    *  than a task. The two panels share the container, so at most one of this
    *  and `detailTaskId` is set — each opener clears the other, and
@@ -382,8 +394,9 @@ function buildShell(root: HTMLElement, name: string): void {
       </nav>
       <section id="hub-home" class="hub-home hidden">
         <div id="hub-home-page">
-          <div id="hub-home-brief"></div>
           <div id="hub-home-review"></div>
+          <div id="hub-home-activity"></div>
+          <div id="hub-home-brief"></div>
         </div>
         <div id="hub-walkthrough" class="hub-walkthrough hidden"></div>
       </section>
@@ -476,6 +489,7 @@ async function main(): Promise<void> {
     pluginRelease: null,
     clientRelease: null,
     detailTaskId: bootLoc.task,
+    detailTab: 'comments',
     detailGoalId: bootLoc.goal,
     detailThreadId: bootLoc.thread,
     discussion: { loading: false, threads: [] },
@@ -537,6 +551,25 @@ async function main(): Promise<void> {
     onOpenThread: (item) => void openReviewThread(item),
     onWalkthrough: () => startWalkthrough(),
   });
+
+  // "Recent activity" — the second island on Home, under the queue and above
+  // the brief (approved mock, 2026-08-29). Same contract, same mount-once
+  // reason. Its one handler opens the task the way a queue row does;
+  // `boardHandlers` is declared below and only read when a row is tapped.
+  mountHomeActivityIsland(
+    el('hub-home-activity'),
+    {
+      onOpenTask: (taskId) => {
+        const task = state.tasks.get(taskId);
+        // On the Activity tab: the reader was looking at what happened to
+        // the task, and the panel opens on the rest of that.
+        if (task) openTaskDetail(task, 'activity');
+      },
+      onComment: (taskId, phrase, text) => commentOnActivity(taskId, phrase, text),
+      onReply: (taskId, threadId, text) => replyOnActivity(taskId, threadId, text),
+    },
+    user,
+  );
 
   // The card that pane opens on — the walkthrough. Mounted once for the
   // reason the board island is: this surface is repainted by every board
@@ -667,6 +700,19 @@ async function main(): Promise<void> {
   const taskList = () => [...state.tasks.values()];
   const titleOf = (taskId: string) => state.tasks.get(taskId)?.title ?? taskId;
 
+  /** The one opener behind every task tap — board row, queue row, Home
+   *  activity pane — so the panel opens the same way from each, with only
+   *  the landing tab differing. */
+  function openTaskDetail(task: HubTask, tab: DetailTab = 'comments'): void {
+    state.detailTaskId = task.id;
+    state.detailTab = tab;
+    state.detailGoalId = null;
+    // Opening the task any other way clears the queue's aim, so a mark left
+    // over from the last walkthrough item can't point at the wrong thread.
+    state.detailThreadId = null;
+    renderDetail();
+  }
+
   const boardHandlers: BoardHandlers = {
     onStatusSet: (task: HubTask, to: HubTask['status']) => void transitionTask(task, to),
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
@@ -680,14 +726,7 @@ async function main(): Promise<void> {
       state.detailThreadId = null;
       renderDetail();
     },
-    onOpenTask: (task: HubTask) => {
-      state.detailTaskId = task.id;
-      state.detailGoalId = null;
-      // Opening the task any other way clears the queue's aim, so a mark left
-      // over from the last walkthrough item can't point at the wrong thread.
-      state.detailThreadId = null;
-      renderDetail();
-    },
+    onOpenTask: (task: HubTask) => openTaskDetail(task),
     onReorder: (task: HubTask, target: ReorderTarget) => void placeTask(task, target),
     onTitleCommit: (task: HubTask, title: string) => void renameTask(task, title),
     onAssign: (task: HubTask, assignee: string) => void assignTask(task, assignee),
@@ -1028,10 +1067,21 @@ async function main(): Promise<void> {
     // keep their DOM nodes. Background events still reach this line through
     // `repaintGuard.schedule(...)` exactly as they reached the old renderer —
     // the guard's parked/flush path is upstream of the write, not bypassed.
+    const queue = currentQueue();
+    const now = Date.now();
     homeReviewData.value = {
-      queue: currentQueue(),
+      queue,
       settled: [...state.homeSettled.values()],
-      now: Date.now(),
+      now,
+    };
+    // The activity pane's one input: the projection as it stands, plus what
+    // the queue above is already asking so the pane never says it twice. The
+    // island groups and flags; this line only hands over the facts.
+    homeActivityData.value = {
+      tasks: taskList(),
+      goals: state.info?.goals ?? [],
+      asks: asksOf(queue.items),
+      now,
     };
   }
 
@@ -1301,6 +1351,10 @@ async function main(): Promise<void> {
       void loadDiscussion(task);
     }
     if (!task) state.discussionTaskId = null;
+    // Every way the panel closes — the X, a goal opening over it, the task
+    // being archived under it — lands here with no task; the next open
+    // starts on Comments unless its opener says otherwise.
+    if (!task) state.detailTab = 'comments';
     // The audit rows the Activity tab renders. Fetched on open rather than at
     // boot: a reader who never opens a ticket never needs them, and the
     // workspace Activity VIEW has always fetched them the same lazy way.
@@ -1325,9 +1379,11 @@ async function main(): Promise<void> {
     taskDetailData.value = {
       task,
       discussion: task ? discussion : undefined,
+      tab: state.detailTab,
       handlers: {
         onClose: () => {
           state.detailTaskId = null;
+          state.detailTab = 'comments';
           state.detailThreadId = null;
           renderDetail();
         },
@@ -1354,8 +1410,9 @@ async function main(): Promise<void> {
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
         // the panel says the same thing the row that sent them here said.
-        // `panelAsks` owns which rows qualify — by taskId, and only the kinds
-        // whose answer path this panel actually implements.
+        // `panelAsks` owns which rows qualify — by taskId, thread-borne and
+        // ticket-borne alike, minus the derived legacy copy of the task's own
+        // decision.
         asks: task ? panelAsks(state.reviewItems, task.id) : [],
         // A blocker is task state (design point 5): when the open task is a
         // person's own open work other tasks wait on, the panel — and only
@@ -1655,6 +1712,13 @@ async function main(): Promise<void> {
   // list, so the first load can resolve before the board has synced — the
   // observer below gives the walk another look at the queue then.
   let autoWalkTick: (() => void) | null = null;
+
+  // Which halves of the queue have landed. The armed walk opens only once
+  // both are in (or the deadline passes): a walk opened on the review-items
+  // half alone aimed at the oldest ask, which the task projection then
+  // ranked to the bottom — "Review all" from the landing page opened on
+  // N of N. See `walkHandoffReady`.
+  const walkSources: WalkSources = { reviewItems: false, projection: false };
 
   async function finishWalkItem(
     item: ReviewItem | null,
@@ -2057,14 +2121,17 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Answer an item the panel's queue got from a THREAD.
+   * Answer an item the panel's queue got from a THREAD or from the TICKET.
    *
-   * Same two routes the walkthrough uses, for the same reason: a declared item
-   * records the answer against its declaring comment, an inferred one is
+   * Same routes the walkthrough uses, for the same reason: a declared thread
+   * item records the answer against its declaring comment, an inferred one is
    * answered by replying, and in both cases the REPLY is what takes the item
-   * out of the queue. The panel used to send this through the plain comment
-   * handler, which has nowhere to put the picked option and left the queue
-   * showing an item that had just been answered.
+   * out of the queue; a ticket-borne item is stamped at the task review-item
+   * route, which drops it from every queue's next read. The panel used to
+   * send this through the plain comment handler, which has nowhere to put the
+   * picked option and left the queue showing an item that had just been
+   * answered. ONE spelling of the destination — `panelAnswerRequest` — so a
+   * card with no thread cannot post at `/threads/undefined/…`.
    */
   async function answerPanelThreadItem(
     task: HubTask,
@@ -2072,26 +2139,18 @@ async function main(): Promise<void> {
     text: string,
     optionId?: string,
   ): Promise<boolean> {
-    const docId = item.docId ?? task.bodyDocId;
-    if (!item.threadId) return false;
-    const doc = encodeURIComponent(docId);
-    const thread = encodeURIComponent(item.threadId);
-    const res =
-      item.declared && item.commentId !== undefined
-        ? await send(`/api/docs/${doc}/threads/${thread}/answer`, 'POST', {
-            author,
-            text,
-            commentId: item.commentId,
-            ...(optionId !== undefined ? { optionId } : {}),
-          })
-        : await send(`/api/docs/${doc}/threads/${thread}/comments`, 'POST', { author, text });
+    const reqSpec = panelAnswerRequest(task, item, text, optionId);
+    if (!reqSpec) return false;
+    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
     if (!res.ok) {
       showToast('Posting the answer failed — your text is still in the box');
       return false;
     }
     showToast('Answer posted');
-    // Both, and in this order: the discussion so the reply appears in the
-    // stream below, the review items so the card it answered leaves the queue.
+    // Both, and in this order: the discussion so a reply appears in the
+    // stream below (a ticket-borne answer writes no comment, but the reload
+    // is cheap and keeps one path), the review items so the card it answered
+    // leaves the queue.
     await loadDiscussion(task, true);
     await loadReviewItems();
     return true;
@@ -2153,6 +2212,53 @@ async function main(): Promise<void> {
     // the walkthrough card where the reader is.
     await loadReviewItems();
     return true;
+  }
+
+  /**
+   * Comment on a phrase of a task's note (or its title) from the activity
+   * pane — a thread on the task's doc whose first comment quotes the phrase
+   * (`activityCommentRequest` says why the anchor is the task itself). The
+   * owner hears about it the way it hears every task-doc thread. Resolves to
+   * the thread the server made, which the pane's card then shows.
+   */
+  async function commentOnActivity(
+    taskId: string,
+    phrase: { text: string },
+    text: string,
+  ): Promise<Thread | null> {
+    const reqSpec = activityCommentRequest(taskId, phrase.text, text);
+    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
+    const thread = res.ok ? (res.data?.thread as Thread | undefined) : undefined;
+    if (!thread) {
+      showToast('Posting the comment failed — your text is still in the box');
+      return null;
+    }
+    return thread;
+  }
+
+  /** A further reply on the thread the activity pane's card is showing —
+   *  the same POST the task panel's composer makes. Resolves to the thread
+   *  as the server now has it. */
+  async function replyOnActivity(
+    taskId: string,
+    threadId: string,
+    text: string,
+  ): Promise<Thread | null> {
+    const doc = encodeURIComponent(`task:${taskId}`);
+    const res = await send(
+      `/api/docs/${doc}/threads/${encodeURIComponent(threadId)}/comments`,
+      'POST',
+      {
+        author,
+        text,
+      },
+    );
+    const thread = res.ok ? (res.data?.thread as Thread | undefined) : undefined;
+    if (!thread) {
+      showToast('Posting the reply failed — your text is still in the box');
+      return null;
+    }
+    return thread;
   }
 
   /**
@@ -2449,6 +2555,10 @@ async function main(): Promise<void> {
       // — only send once boot has painted and stamped msToBoot.
       if (msToBoot > 0) sendLoadReport();
     }
+    // The projection half of the queue is in — an EMPTY board's sync too,
+    // which changes no task and so never reaches the observeDeep tick.
+    walkSources.projection = true;
+    autoWalkTick?.();
   });
 
   // ── Wiring ──────────────────────────────────────────────────────────────
@@ -2517,8 +2627,12 @@ async function main(): Promise<void> {
   window.addEventListener('pointerdown', touch, { passive: true });
   window.addEventListener('keydown', touch, { passive: true });
   const presenceTick = setInterval(() => renderPresenceRegion(), 30_000);
+  // Home's ages and time-keyed flags advance without a board event: a minute
+  // tick, only while Home is showing (home-clock.ts).
+  const stopHomeClock = startHomeClock(() => state.pane === 'home', renderHomeRegion);
   window.addEventListener('beforeunload', () => {
     clearInterval(presenceTick);
+    stopHomeClock();
     client.close();
   });
 
@@ -2828,14 +2942,15 @@ async function main(): Promise<void> {
   // closed, so the flag burns on first use.
   const handoff = walkHandoff(location.search);
   let pendingWalk = handoff.walk && state.pane === 'home';
-  const maybeAutoWalk = (): void => {
+  const maybeAutoWalk = (deadlinePassed = false): void => {
     if (!pendingWalk) return;
-    // An empty queue does NOT burn the flag: on a cold connection the ydoc
-    // task projection (which carries the decisions) can land after the first
-    // review-items load, and a one-shot consumed here would skip a queue
-    // that was seconds from existing. The projection observer and every
-    // review-items load call back in; only the deadline below gives up.
-    if (currentQueue().items.length === 0) return;
+    // Neither half landing alone burns the flag: on a cold connection the
+    // ydoc task projection (decisions, and the tasks threads rank against)
+    // and the review-items list arrive in either order, and a walk opened on
+    // one half aims at a head the other half re-ranks to the bottom. The
+    // projection's onReady, its observer, and every review-items load call
+    // back in; only the deadline below stops waiting.
+    if (!walkHandoffReady(currentQueue(), walkSources, deadlinePassed)) return;
     pendingWalk = false;
     startWalkthrough();
   };
@@ -2849,6 +2964,10 @@ async function main(): Promise<void> {
     // genuinely clear (someone answered since the landing page rendered).
     // Hop to the next board holding items, or stand down on Home.
     setTimeout(() => {
+      if (!pendingWalk) return;
+      // Whatever has landed by now is the queue: open on it. Only a board
+      // with nothing in hand is clear enough to hop.
+      maybeAutoWalk(true);
       if (!pendingWalk) return;
       pendingWalk = false;
       const next = walkNextUrl(handoff.chain);
@@ -2891,7 +3010,10 @@ async function main(): Promise<void> {
   // nobody is looking at was a measured slice of the iPad's 10-second load
   // (the board-observability ticket). loadEvents itself is gated on a visible reader too,
   // so the SSE refresh calls it safely.
-  void loadReviewItems().then(deepLinkTick);
+  void loadReviewItems().then(() => {
+    walkSources.reviewItems = true;
+    deepLinkTick();
+  });
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
 }

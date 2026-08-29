@@ -61,6 +61,7 @@ import { ComposerForm, Discussion, useFill } from './detail-parts.tsx';
 import {
   type HubDecisionOption,
   type HubTask,
+  answeredByLine,
   askedMetaLine,
   blockedNoteLine,
   isTaskArchived,
@@ -87,6 +88,11 @@ export interface TaskDetailView {
   task: HubTask | null;
   /** The task's comments, as fetched. Absent while the app has not asked. */
   discussion?: TaskDiscussion;
+  /** Which tab the panel OPENS on — read once, when the panel for this task
+   *  mounts; the reader's own switches win after that. Absent means
+   *  Comments. The Home activity pane's title tap asks for Activity, since
+   *  the reader was already looking at what happened to the task. */
+  tab?: DetailTab;
   /** Aimed at the task this paint draws — see the head of the file for why
    *  these travel with the data rather than being bound at mount. */
   handlers: DetailHandlers;
@@ -109,7 +115,7 @@ export const taskDetailData = signal<TaskDetailView>({
 });
 
 /** The two tabs at the bottom of the panel, and which one is showing. */
-type DetailTab = 'comments' | 'activity';
+export type DetailTab = 'comments' | 'activity';
 const DETAIL_TABS: { id: DetailTab; label: string }[] = [
   { id: 'comments', label: 'Comments' },
   { id: 'activity', label: 'Activity' },
@@ -155,13 +161,17 @@ function UndoAnswer(props: { undo: () => Promise<boolean> | undefined }) {
   );
 }
 
-/** The task's own recorded answer. */
+/** The task's own recorded answer — in the same voice as every other
+ *  answered record ("Answered by you" when the reader answered), because it
+ *  is the same record. */
 function TaskAnsweredNote(props: { task: HubTask; handlers: DetailHandlers }) {
   const { task, handlers } = props;
   const answer = task.answer;
   return (
     <div class="hub-detail-answered">
-      <p class="hub-detail-answer">{answer ? `Answered by ${answer.by}: “${answer.text}”` : ''}</p>
+      <p class="hub-detail-answer">
+        {answer ? `${answeredByLine(answer.by, handlers.selfName)}${answer.text}”` : ''}
+      </p>
       {handlers.onUndoAnswer && <UndoAnswer undo={() => handlers.onUndoAnswer?.(task)} />}
     </div>
   );
@@ -181,19 +191,13 @@ function ThreadAnsweredNote(props: {
   handlers: DetailHandlers;
 }) {
   const { task, item, answered, handlers } = props;
-  const label =
-    answered.by !== undefined &&
-    handlers.selfName !== undefined &&
-    answered.by === handlers.selfName
-      ? 'you'
-      : answered.by;
   // No comment id means the undo route has nothing to name — the record still
   // renders, without a button that could only 400.
   const undoable = handlers.onUndoThreadAnswer !== undefined && item.commentId !== undefined;
   return (
     <div class="hub-detail-answered">
       <p class="hub-detail-answer">
-        {label ? `Answered by ${label}: “` : 'Answered: “'}
+        {answeredByLine(answered.by, handlers.selfName)}
         <span
           class="hub-answer-words"
           // biome-ignore lint/security/noDangerouslySetInnerHtml: renderCommentMarkdownInline escapes first and re-adds only known-safe tags.
@@ -249,14 +253,19 @@ function ReviewCard(props: {
   const { task, item, handlers, now, shown } = props;
   const [busy, setBusy] = useState(false);
 
-  // Answering a thread-borne item is a REPLY on its thread, so the agent
-  // watching it hears the answer; answering the task's own decision goes
-  // through `answer_decision`. Same card, two destinations — which is the
-  // whole reason the item carries `threadId`.
+  // Answering the task's own decision goes through `answer_decision`; every
+  // other card — a thread-borne item, answered by a REPLY on its thread so the
+  // agent watching it hears it, or a ticket-borne item, answered at the task
+  // review-item route — goes through the item handler, which reads the
+  // destination off the item (`panelAnswerRequest`). Keyed on `source`, not
+  // on `threadId`: a ticket-borne card has no thread, and the old test sent it
+  // to the decision route, where its answer would have landed on the WRONG
+  // question.
   const answer = (text: string, optionId?: string): Promise<boolean> | undefined => {
-    const sent = item.threadId
-      ? handlers.onAnswerThread?.(task, item, text, optionId)
-      : handlers.onAnswer(task, text, optionId);
+    const sent =
+      item.source === 'task'
+        ? handlers.onAnswer(task, text, optionId)
+        : handlers.onAnswerThread?.(task, item, text, optionId);
     return sent;
   };
 
@@ -293,6 +302,10 @@ function ReviewCard(props: {
         >
           {item.shape === 'decision' ? 'Decision' : 'Question'}
         </span>
+        {/* The owner revised the words after the reader asked on them: the
+            item is back in the queue and says so, beside its kind rather than
+            instead of it — the walkthrough's own treatment. */}
+        {item.revision && <span class="hub-decide-k hub-decide-k-revised">Revised</span>}
         {!(echoesTitle && bodyMarkdown !== '') && (
           <p class="hub-decide-headline">{item.headline}</p>
         )}
@@ -300,6 +313,12 @@ function ReviewCard(props: {
           {askedMetaLine(item.askedBy, item.asked ?? true, item.since, now)}
         </p>
       </div>
+      {/* The reader asked in their own words; the card gives those words
+          back so "what did I ask?" is answered before "what changed?". The
+          thread itself is in the discussion below — this is its panel. */}
+      {item.revision?.question !== undefined && (
+        <blockquote class="hub-decide-question">{`You asked: “${item.revision.question}”`}</blockquote>
+      )}
       {bodyMarkdown !== '' && (
         <div
           class="hub-decide-body"
@@ -565,6 +584,7 @@ function TaskDetailPanel(props: {
   task: HubTask;
   discussion?: TaskDiscussion;
   handlers: DetailHandlers;
+  initialTab?: DetailTab;
 }) {
   const { host, task, discussion, handlers } = props;
   const now = handlers.now ?? Date.now();
@@ -574,7 +594,7 @@ function TaskDetailPanel(props: {
   const fieldsRef = useRef<HTMLDListElement | null>(null);
   const slotRef = useRef<HTMLDivElement | null>(null);
   const tabsRef = useRef<HTMLDivElement | null>(null);
-  const [tab, setTab] = useState<DetailTab>('comments');
+  const [tab, setTab] = useState<DetailTab>(props.initialTab ?? 'comments');
   // Full screen is a preference of the READER, not of the task, so it lives on
   // the container and survives both a repaint and a move to another task.
   const [full, setFull] = useState(host.classList.contains('hub-detail--full'));
@@ -915,7 +935,7 @@ function TaskDetailPanel(props: {
  * panel are siblings under different subtrees.
  */
 function TaskDetail(props: { host: HTMLElement }) {
-  const { task, discussion, handlers } = taskDetailData.value;
+  const { task, discussion, handlers, tab } = taskDetailData.value;
   const { host } = props;
   useLayoutEffect(() => {
     host.classList.toggle('hidden', task === null);
@@ -947,6 +967,7 @@ function TaskDetail(props: { host: HTMLElement }) {
       task={task}
       discussion={discussion}
       handlers={handlers}
+      initialTab={tab}
     />
   );
 }

@@ -40,6 +40,22 @@ export interface HubTransition {
   usage?: { inputTokens: number; outputTokens: number };
 }
 
+/**
+ * One line an agent posted about a task — its Stop hook's turn summary, or
+ * a permission denial reduced to the shape that was refused. The server
+ * projects the newest `TASK_NOTES_READ_CAP` of them, NEWEST FIRST, with
+ * display fields only (the session id stays in the store, like actor ids do
+ * on transitions). Denial text is the bare shape — "blocked: " is the
+ * pane's prefix, not the store's.
+ */
+export interface HubNote {
+  at: number;
+  kind: 'turn' | 'denial';
+  text: string;
+  /** The agent's display name, as its hook environment spelled it. */
+  agent: string;
+}
+
 export interface HubDecisionOption {
   id: string;
   label: string;
@@ -97,6 +113,10 @@ export interface HubTask {
   answer?: { text: string; by: string; ts: number; optionId?: string };
   triagedAgainst?: { goalId: string; ts: number };
   transitions: HubTransition[];
+  /** The agent's own one-liners on the row, newest first (see `HubNote`).
+   *  Absent when there are none, and on a projection from a server that
+   *  predates them — both read as "nothing posted". */
+  notes?: HubNote[];
   bodyDocId: string;
   /** The description, as markdown. Capped by the server projection — see
    *  `bodyTruncated` — with the full text always in the body doc. */
@@ -116,6 +136,11 @@ export interface HubTask {
    *  `triagedAgainst`). */
   unplacedSince?: number;
   createdAt: number;
+  /** Who filed the ticket, as the server resolved it (`taskAskedBy`): the
+   *  creator, or for a row older than that field its first mover. Absent
+   *  when neither is known. The one source for "Asked by" on a task-borne
+   *  decision — see `decisionAskedBy`. */
+  createdBy?: string;
   updatedAt: number;
 }
 
@@ -1099,26 +1124,37 @@ function compareAsk(a: AskRank, b: AskRank): number {
 /**
  * This task's rows, as the DETAIL PANEL is allowed to use them.
  *
- * Two filters, and the second is the one that had to be written down. Rows are
- * matched by `taskId` — a doc-thread row has none and correctly never matches.
- * And `task-review` rows are held back, because the panel answers an ask by
- * posting a comment on `item.threadId`, which a ticket-borne row does not
- * have: its option buttons would file a stray discussion comment and record no
- * answer, and since every ticket row is `direct` it would always win the lead
- * and always render on top — putting a dead copy of the option buttons above
- * the live ones on a legacy decision, and, on a ticket that is not a decision,
- * being the ONLY answer control on screen while answering nothing.
+ * Rows are matched by `taskId` — a doc-thread row has none and correctly
+ * never matches. A TICKET-borne row (`task-review`) passes the same door
+ * `reviewQueue` holds for the Home queue: it needs the two ids its answer
+ * posts to and the payload the card renders, and the DERIVED legacy row
+ * (`r-legacy`) stays out because the task's own `needs: 'decision'` already
+ * renders that question as the panel's first card — admitting the copy would
+ * put a second set of option buttons under the live ones.
+ *
+ * This held the kind back wholesale until 2026-08-29, from when the panel
+ * answered every card by commenting on `item.threadId` — a ticket-borne row
+ * has none, so its buttons would have filed a stray comment and recorded
+ * nothing. The Home queue admitted the kind on 2026-08-24, and opening one
+ * of its rows lands HERE; the panel then showed no card at all, which a
+ * fresh-eyes pass found as "`add_review_item` is a silent no-op". The panel
+ * now answers the kind at `POST /api/tasks/:id/review-items/:rid/answer`
+ * (`panelAnswerRequest` in hub-render), so the door is the same as Home's.
  *
  * A function rather than an inline filter in the app so the rule has one home
- * and a test can hold it. `reviewQueue` skips the same kind for its own
- * reasons; those two guards being separate is exactly how one of them was
- * added and the other forgotten.
- *
- * This comes back when the panel implements the ticket-borne answer path
- * (`POST /api/tasks/:id/review-items/:reviewItemId/answer`).
+ * and a test can hold it — the two guards being separate is exactly how one
+ * of them was updated and the other forgotten.
  */
 export function panelAsks(items: ReviewThreadItem[], taskId: string): ReviewThreadItem[] {
-  return items.filter((i) => i.kind !== 'task-review' && i.taskId === taskId);
+  return items.filter((i) => {
+    if (i.taskId !== taskId) return false;
+    if (i.kind !== 'task-review') return true;
+    return (
+      i.reviewItemId !== undefined &&
+      i.reviewItemId !== LEGACY_REVIEW_ITEM_ID &&
+      i.review !== undefined
+    );
+  });
 }
 
 export function reviewQueue(
@@ -1542,6 +1578,41 @@ export function walkHandoff(search: string): WalkHandoff {
     .map((id) => decodeURIComponent(id).trim())
     .filter(Boolean);
   return { walk, chain: walk ? chain : [] };
+}
+
+/**
+ * Which halves of the queue have landed since boot. The queue is built from
+ * two sources that arrive separately on a cold load: the REST review-items
+ * list (threads and ticket asks) and the ydoc task projection (decisions,
+ * and the tasks every thread ranks against).
+ */
+export interface WalkSources {
+  reviewItems: boolean;
+  projection: boolean;
+}
+
+/**
+ * Whether an armed `?walk=1` handoff may open the walkthrough NOW.
+ *
+ * The walk aims by item key, chosen from the queue as it stands when the walk
+ * opens. Opening on the first non-empty queue — as this did until 2026-08-29
+ * — opened on a HALF queue: review items alone have no tasks to rank against,
+ * so every one takes the tail rank ordered by age, and the walk pinned the
+ * oldest ask. When the projection landed, the key rightly followed that ask
+ * to its real rank, which is the bottom — "Review all" opened on N of N.
+ *
+ * So: both sources, then open at the head. An empty queue is never ready
+ * (the flag stays armed for the half still coming), and the deadline opens
+ * on whatever has landed — a board with items in hand must not hop the
+ * chain as though it were clear.
+ */
+export function walkHandoffReady(
+  queue: ReviewQueue,
+  sources: WalkSources,
+  deadlinePassed = false,
+): boolean {
+  if (queue.items.length === 0) return false;
+  return deadlinePassed || (sources.reviewItems && sources.projection);
 }
 
 /** The next hop of the chain, or null when there is nowhere left to go. */
@@ -2642,6 +2713,38 @@ export function askedMetaLine(
 }
 
 /**
+ * Who is asking the decision a TASK carries — the name after "Asked by" on
+ * the Home card and on the task panel's own decision card alike. One reader
+ * so the two cannot name different people: the projection's `createdBy`
+ * (the server's `taskAskedBy`, creator-else-first-mover) when it shipped
+ * one, else the first mover, which is all a projection from before that
+ * field can say. Undefined when neither is known — the meta line then
+ * states the clock alone rather than a name nothing recorded.
+ */
+export function decisionAskedBy(
+  task: Pick<HubTask, 'createdBy' | 'transitions'>,
+): string | undefined {
+  const who = task.createdBy?.trim() || task.transitions[0]?.by.name?.trim();
+  return who ? who : undefined;
+}
+
+/**
+ * The opening of every answered record — "Answered by you: “", "Answered by
+ * Cara: “", or "Answered: “" when the record names nobody. ONE spelling for
+ * the doc card, the task panel's thread record and the task's own answer:
+ * the doc said "Answered by you" while the panel said "Answered by Probe
+ * Reviewer" for the same reader and the same answer, because each surface
+ * spelled the rule itself and one of them never compared against the reader.
+ * `selfName` is the reader's display name; a record whose `by` equals it is
+ * the reader's own.
+ */
+export function answeredByLine(by: string | undefined, selfName: string | undefined): string {
+  const who = by?.trim() ?? '';
+  if (who === '') return 'Answered: “';
+  return `Answered by ${selfName !== undefined && who === selfName ? 'you' : who}: “`;
+}
+
+/**
  * The meta for a queue item. For a DECLARED item "Asked by" is always true —
  * a declaration IS an ask, in so many words, whatever the `direct` heuristic
  * measured. The inferred band keeps its measured Posted/Asked honesty, since
@@ -2650,9 +2753,9 @@ export function askedMetaLine(
 export function askedMeta(item: ReviewItem, now: number): string {
   const thread = item.thread;
   const row = reviewRow(item);
-  // A thread carries its asker; a decision's is whoever first moved the task,
-  // which is the only actor a projected task row records.
-  const who = thread?.askedBy ?? row?.task.transitions[0]?.by.name;
+  // A thread carries its asker; a decision's is the ticket's filer, read the
+  // one way every surface reads it.
+  const who = thread?.askedBy ?? (row ? decisionAskedBy(row.task) : undefined);
   const asked = item.review !== undefined || (thread ? thread.direct === true : true);
   // The clock beside "asked" is the QUESTION's, not the run's: a run can start
   // days before the ask, and quoting its start tells the reader they have been

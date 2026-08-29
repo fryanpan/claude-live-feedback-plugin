@@ -18,6 +18,7 @@ import {
   TASK_STATUS_ORDER,
   type UptimeReport,
   activityRows,
+  answeredByLine,
   askedMeta,
   askedMetaLine,
   blockedNoteLine,
@@ -1204,43 +1205,43 @@ describe('reviewQueue', () => {
   });
 
   /**
-   * The SECOND consumer of the same array, which is where the guard above was
-   * missing.
+   * The SECOND consumer of the same array — the task detail panel.
    *
-   * The task detail panel takes this task's rows and renders the lead one as
-   * "What we need from you" — with option buttons and a reply box that both
-   * post a COMMENT on `item.threadId`. A ticket-borne row has no `threadId`,
-   * so those controls file a stray discussion comment and record no answer;
-   * and because such a row is always `direct`, it always wins the lead and
-   * always renders on top. On a legacy decision that put a dead copy of the
-   * option buttons directly above the live ones.
+   * Until 2026-08-29 this filter held ticket-borne rows BACK, because the
+   * panel answered every card by posting a comment on `item.threadId` and a
+   * ticket-borne row has none. That guard outlived its reason: the Home queue
+   * admitted the kind on 2026-08-24, and opening one of its rows lands on
+   * this panel — which then showed no card at all. Found in a fresh-eyes
+   * pass: `add_review_item` returned 200, the row was on Home, and the panel
+   * it opened was silent (positive control: the task body text rendered).
    *
-   * So the panel takes only the rows whose answer path it actually
-   * implements. The ticket-borne rows come back when the panel learns to
-   * answer them at `POST /api/tasks/:id/review-items/:rid/answer`.
+   * So the panel takes the kind now, with the same door the Home queue
+   * uses: a row needs the two ids its answer posts to, and the DERIVED legacy
+   * row (`r-legacy`) stays out because the task's own `needs: 'decision'`
+   * already renders that question as the panel's first card.
    */
-  it('hands the detail panel only the rows whose answer path it implements', () => {
-    const ticketRow = {
-      ...threadItem({ threadId: 'th-ignored' }),
-      kind: 'task-review',
-      taskId: 'tk-1',
-      threadId: undefined,
-      docId: undefined,
-    } as unknown as ReviewThreadItem;
+  it('hands the detail panel its ticket-borne rows, minus the legacy copy and the unaddressable', () => {
+    const ticketRow = ticketRowItem();
+    const legacy = ticketRowItem({ reviewItemId: 'r-legacy' } as never);
+    const noId = ticketRowItem({ reviewItemId: undefined } as never);
+    const noPayload = ticketRowItem({ reviewItemId: 'r-2', review: undefined } as never);
+    const elsewhere = ticketRowItem({ taskId: 'tk-2', reviewItemId: 'r-3' } as never);
     const mine = threadItem({ threadId: 'th-mine', taskId: 'tk-1' });
     const other = threadItem({ threadId: 'th-other', taskId: 'tk-2' });
     const docRow = threadItem({ kind: 'doc-thread', threadId: 'th-doc', docId: 'doc-9' });
     // biome-ignore lint/performance/noDelete: the row under test has no taskId at all.
     delete (docRow as { taskId?: string }).taskId;
 
-    expect(panelAsks([ticketRow, mine, other, docRow], 'tk-1').map((i) => i.threadId)).toEqual([
-      'th-mine',
-    ]);
+    const got = panelAsks(
+      [ticketRow, legacy, noId, noPayload, elsewhere, mine, other, docRow],
+      'tk-1',
+    );
+    expect(got.map((i) => i.reviewItemId ?? i.threadId)).toEqual(['r-1', 'th-mine']);
     // POSITIVE CONTROL: the by-taskId filter is unchanged for the rows that
     // were already reaching the panel — a doc row still never matches, and
     // another ticket's row still never matches.
     expect(panelAsks([mine, other, docRow], 'tk-2').map((i) => i.threadId)).toEqual(['th-other']);
-    expect(panelAsks([ticketRow], 'tk-1')).toEqual([]);
+    expect(panelAsks([legacy, noId, noPayload], 'tk-1')).toEqual([]);
   });
 
   /**
@@ -1854,6 +1855,29 @@ describe('askedMeta — the one provenance line the card head carries', () => {
     expect(askedMeta(bare, T0)).toBe('Asked 1 day ago');
   });
 
+  it('a decision names who filed the ticket when the projection says, before its first mover', () => {
+    const d: ReviewItem = {
+      key: 'decision:d-2',
+      kind: 'decision',
+      title: 'Blue or green?',
+      ask: '',
+      why: '',
+      since: T0 - DAY,
+      decision: {
+        task: task({
+          createdAt: T0 - DAY,
+          createdBy: 'UX Bot',
+          transitions: [
+            { ts: T0 - DAY, from: 'todo', to: 'todo', by: { name: 'Harbor agent', kind: 'agent' } },
+          ],
+        }),
+        blocks: [],
+        hard: false,
+      },
+    };
+    expect(askedMeta(d, T0)).toBe('Asked by UX Bot 1 day ago');
+  });
+
   it('askedMetaLine is the shared spelling for surfaces with their own rows', () => {
     expect(askedMetaLine('Harbor agent', true, T0 - 3_600_000, T0)).toBe(
       'Asked by Harbor agent 1 hour ago',
@@ -2174,5 +2198,25 @@ describe('the detail panel takes its asks through panelAsks', () => {
     expect(hubApp).toContain('state.reviewItems');
     expect(hubApp).toContain('panelAsks(state.reviewItems, task.id)');
     expect(hubApp).not.toContain('state.reviewItems.filter');
+  });
+});
+
+describe('answeredByLine — the one you/name voice every answered record speaks in', () => {
+  /**
+   * The fresh-eyes finding: the doc card said "Answered by you: …" while the
+   * task panel said "Answered by Probe Reviewer: …" for the same reader and
+   * the same answer, because each surface spelled the rule itself — and one
+   * of them never compared against the reader at all.
+   */
+  it('says you when the answerer is the reader', () => {
+    expect(answeredByLine('Jordan', 'Jordan')).toBe('Answered by you: “');
+  });
+  it('names anyone else', () => {
+    expect(answeredByLine('Cara', 'Jordan')).toBe('Answered by Cara: “');
+    expect(answeredByLine('Cara', undefined)).toBe('Answered by Cara: “');
+  });
+  it('claims nobody when the record carries no name', () => {
+    expect(answeredByLine(undefined, 'Jordan')).toBe('Answered: “');
+    expect(answeredByLine('', 'Jordan')).toBe('Answered: “');
   });
 });

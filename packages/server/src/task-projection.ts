@@ -18,6 +18,7 @@ import {
   type TaskStoreEvent,
   type WorkspaceSubgoal,
   goalStatusMeta,
+  taskAskedBy,
 } from './tasks.ts';
 
 /**
@@ -320,6 +321,11 @@ export function projectTask(
     bodyDocId: taskBodyDocId(task.id),
     ...projectBody(task.body),
     createdAt: task.createdAt,
+    // Who filed it, already resolved through the one reader the derived
+    // review item uses — so the Home card (built in the browser off this
+    // row) and the REST queue say the same name. Omitted when nothing is
+    // known, and the card states the clock alone rather than a guess.
+    ...(taskAskedBy(task) !== '' ? { createdBy: taskAskedBy(task) } : {}),
     updatedAt: task.updatedAt,
   };
 }
