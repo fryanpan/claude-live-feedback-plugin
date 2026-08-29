@@ -154,6 +154,41 @@ Two things worth knowing before you turn it on:
   websockets. New requests are refused immediately; an already-open editing
   socket survives until the server restarts.
 
+## The operator's own hostname (the whole product, from outside)
+
+The collaboration list above is deliberately NOT the privileged surface. When
+the operator wants their own product — the doc list, the landing page, share
+administration, the deploy verb — from outside the tailnet, that is a third
+list, kept apart from the other two because it grants the most:
+
+```sh
+export CW_PROXIED_TRUSTED_HOSTS="ops.example.com"   # LF_ spelling also read
+export CF_ACCESS_TEAM_DOMAIN="<team>.cloudflareaccess.com"
+export CF_ACCESS_AUD="<the AUD of the Access app over that hostname>"
+```
+
+A hostname here classifies `proxied-local`: the request must have come
+through the edge (`cf-ray`), must carry a valid Access token for that
+application, and is then served exactly as loopback is. Startup logs carry
+`[feedback]   operator:   ops.example.com (via Cloudflare Access, full product)`.
+
+Three things that do not move:
+
+- **`TRUSTED_HOSTS` does not gain this.** A LAN name reached through the
+  tunnel is still refused, whatever token it carries — the `cf-ray` veto is
+  untouched, and this list is a separate door with a separate key.
+- **Without Access it is ignored**, loudly at boot and silently in the request
+  path — the same all-or-none rule as the collaboration list, and the reason
+  is stronger: honoured without a token to check, this would be the full API
+  to anyone who can reach the tunnel. The token is demanded regardless of
+  whether link or Access sharing is configured on the same server.
+- **A host on both opt-in lists stays a collaboration host.** The contradiction
+  resolves toward the narrower grant, and the boot log names the overlap.
+
+What does move: the sharing master switch does not cover this door. It is the
+operator's own, keyed to their own identity, and it is how sharing gets turned
+back on from outside.
+
 ## Per-repo team config
 
 Each repo that uses sharing should set a default allow-list in its

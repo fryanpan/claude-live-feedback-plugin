@@ -52,6 +52,16 @@
              default) leaves the feature off. -->
         <key>CF_ACCESS_TUNNEL_HOSTS</key>
         <string>{{ACCESS_TUNNEL_HOSTS}}</string>
+        <!-- The OPERATOR'S OWN public hostnames: served through the tunnel,
+             gated by a Cloudflare Access application over each one, and then
+             the WHOLE product — what loopback and the tailnet name get. A
+             third list, kept apart from TRUSTED_HOSTS (LAN names, refused
+             through the proxy) and from the collaboration list above (share
+             surface only). Same all-or-none rule: without CF_ACCESS_TEAM_DOMAIN
+             and CF_ACCESS_AUD the server ignores it and those hostnames
+             answer 403 unknown_host. Empty (the default) leaves it off. -->
+        <key>CW_PROXIED_TRUSTED_HOSTS</key>
+        <string>{{PROXIED_TRUSTED_HOSTS}}</string>
         <key>CF_ACCESS_TEAM_DOMAIN</key>
         <string>{{ACCESS_TEAM_DOMAIN}}</string>
         <key>CF_ACCESS_AUD</key>
