@@ -6,6 +6,10 @@
  *    carries a compact workspace index (tasks, docs, goals) and the model
  *    names the target; the server validates the id and answers with a
  *    navigation. No full-agent round trip; works with no agent attached.
+ *    A lookup the server cannot resolve is NOT answered here: it falls to
+ *    the LEAD agent like a change (below), because "nothing matched" was a
+ *    dead end nobody heard. Only an empty lead seat may fail it, and then
+ *    the ack says how to fill the seat.
  *  - A small ACTION set applied to the RESOURCE IN VIEW runs here too, on the
  *    speaker's own authority: status, assignee, a comment, an answer to the
  *    one open review item, and opening a linked doc. Every one of them goes
@@ -1339,12 +1343,36 @@ export class VoiceRouter {
           applied: result.ack,
         });
       }
-    } else if (classification?.kind === 'lookup') {
-      result = this.lookupResult(workspaceId, transcript, classification);
+    } else if (
+      classification?.kind === 'lookup' &&
+      (answered = this.lookupResult(workspaceId, transcript, classification))
+    ) {
+      // A lookup the server could vouch for: navigate, and hand nothing over.
+      result = answered;
+    } else if (classification?.kind === 'lookup' && workspace.leadAgentId === undefined) {
+      // A lookup that resolved nothing, on a board with an EMPTY seat. This is
+      // the one place voice may fail, and the message is the next step, never
+      // the bare "nothing matched" it used to be. Nothing is queued: a row on
+      // a board with no lead is a promise to nobody.
+      result = {
+        route: 'fast-path',
+        ack: `${heard(transcript)} Nothing here matched, and no lead agent is registered for this workspace — attach an agent to take the seat, then say it again.`,
+      };
     } else {
-      // A change — or an unclassifiable utterance, or an action the guardrail
-      // or the store declined. All of them need judgment this call does not
-      // have, which is what the agent is for.
+      // A change — or an unclassifiable utterance, an action the guardrail or
+      // the store declined, or a lookup that matched nothing. All of them need
+      // judgment this call does not have, which is what the agent is for.
+      //
+      // The lookup miss used to stop here with "nothing in this workspace
+      // matched": route `fast-path`, no queue row, an emit the MCP drops. A
+      // spoken request that the fast path merely could not RESOLVE was the
+      // one utterance nobody ever heard (Bryan, 2026-08-29: "voice requests
+      // should always fall back to the lead agent, never say lookup
+      // failed"). It now takes exactly this branch, addressed to the lead:
+      // the seat is proved occupied above, and liveness is the LEAD's, not
+      // any bystander's, because the ack names the lead and the queue drains
+      // only for it.
+      const lookupMiss = classification?.kind === 'lookup';
       const note = fastPathDown ? ' (Fast path unavailable.)' : '';
       // Written down FIRST, and whether or not anyone is listening. The queue
       // is the record; the emit below is an optimisation on top of it. It used
@@ -1355,7 +1383,20 @@ export class VoiceRouter {
         ...(context !== undefined ? { context } : {}),
         actor,
       });
-      if (this.tasks.hasLiveAttachment(workspaceId)) {
+      const live = lookupMiss
+        ? this.tasks.hasLiveLeadAttachment(workspaceId)
+        : this.tasks.hasLiveAttachment(workspaceId);
+      if (lookupMiss) {
+        result = live
+          ? {
+              route: 'agent',
+              ack: `${heard(transcript)} Nothing here matched — sent to the lead agent.`,
+            }
+          : {
+              route: 'agent-queued',
+              ack: `${heard(transcript)} Nothing here matched — lead agent away, queued for its next attach.`,
+            };
+      } else if (live) {
         result = {
           route: 'agent',
           ack: `${heard(transcript)} Sent to the workspace agent.${deferNote}${note}`,
@@ -1388,13 +1429,18 @@ export class VoiceRouter {
     return { ok: true, ...result };
   }
 
-  /** Validate the model's named target against the store — never navigate on
-   *  an id the model may have invented. */
+  /**
+   * Validate the model's named target against the store — never navigate on
+   * an id the model may have invented. `undefined` is a miss: no target named,
+   * or one the store does not hold on this board. The caller hands a miss to
+   * the lead agent; this function no longer composes a "nothing matched" ack,
+   * because that ack was the dead end.
+   */
   private lookupResult(
     workspaceId: string,
     transcript: string,
     c: { target?: 'task' | 'doc'; id?: string },
-  ): VoiceResult {
+  ): VoiceResult | undefined {
     if (c.target === 'task' && c.id) {
       const task = this.taskInWorkspace(workspaceId, c.id);
       // Every navigation leaves through `sameOriginPath`, this one included:
@@ -1425,10 +1471,7 @@ export class VoiceRouter {
         };
       }
     }
-    return {
-      route: 'fast-path',
-      ack: `${heard(transcript)} Lookup — nothing in this workspace matched.`,
-    };
+    return undefined;
   }
 }
 
