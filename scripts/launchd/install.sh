@@ -60,6 +60,14 @@ BUN_DIR="$(dirname "${BUN_BIN}")"
 # working; the new name wins when both are set.
 PUBLIC_BASE_URL="${CW_PUBLIC_BASE_URL:-${LF_PUBLIC_BASE_URL:-}}"
 
+# Email sign-in and the operator's own address. Plain pass-throughs, same
+# contract as the base URL: baked into the plist because launchd inherits no
+# shell environment, empty by default, and reverted by a reinstall without
+# them. Without a slot here prod could never turn sign-in on, and the
+# CW_OWNER_EMAIL fallback for the operator allowlist below could never apply.
+REQUIRE_EMAIL_AUTH="${CW_REQUIRE_EMAIL_AUTH:-}"
+OWNER_EMAIL="${CW_OWNER_EMAIL:-}"
+
 # Link-mode sharing hostname, same contract as the base URL: baked into the
 # plist because launchd inherits no shell environment, and empty (the default)
 # keeps link mode off. Re-running the installer without it reverts sharing —
@@ -111,8 +119,9 @@ fi
 # The emails are WHO the operator is. An Access token proves the policy
 # admitted someone — and one application may admit collaborators too — so the
 # verified email must be on this list before the product is served. The server
-# would fall back to CW_OWNER_EMAIL, but this plist does not carry it, so the
-# installer requires the list outright.
+# falls back to CW_OWNER_EMAIL (carried above), but the installer still
+# requires the list outright whenever the hosts are set: explicit beats
+# fallback for the one setting that opens the whole product from outside.
 PROXIED_TRUSTED_HOSTS="${CW_PROXIED_TRUSTED_HOSTS:-${LF_PROXIED_TRUSTED_HOSTS:-}}"
 PROXIED_TRUSTED_EMAILS="${CW_PROXIED_TRUSTED_EMAILS:-}"
 if [ -n "${PROXIED_TRUSTED_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "${ACCESS_AUD}" ]; }; then
@@ -136,6 +145,8 @@ echo "[install] bun:      ${BUN_BIN}"
 echo "[install] plist:    ${PLIST_DEST}"
 echo "[install] logs:     ${LOG_DIR}/${LABEL}.{out,err}.log"
 echo "[install] links:    ${PUBLIC_BASE_URL:-<discovered host>:<port> over http}"
+echo "[install] sign-in:  ${REQUIRE_EMAIL_AUTH:+required}${REQUIRE_EMAIL_AUTH:-<anonymous sessions>}"
+echo "[install] owner:    $([ -n "${OWNER_EMAIL}" ] && echo 'email set' || echo '<unset>')"
 echo "[install] sharing:  ${SHARE_PUBLIC_HOSTNAME:-<link mode off>}"
 echo "[install] collab:   ${ACCESS_TUNNEL_HOSTS:-<off>}"
 echo "[install] operator: ${PROXIED_TRUSTED_HOSTS:-<off>}"
@@ -192,6 +203,8 @@ sed \
     -e "s|{{HOME_DIR}}|${HOME}|g" \
     -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
     -e "s|{{PUBLIC_BASE_URL}}|${PUBLIC_BASE_URL}|g" \
+    -e "s|{{REQUIRE_EMAIL_AUTH}}|${REQUIRE_EMAIL_AUTH}|g" \
+    -e "s|{{OWNER_EMAIL}}|${OWNER_EMAIL}|g" \
     -e "s|{{SHARE_PUBLIC_HOSTNAME}}|${SHARE_PUBLIC_HOSTNAME}|g" \
     -e "s|{{ACCESS_TUNNEL_HOSTS}}|${ACCESS_TUNNEL_HOSTS}|g" \
     -e "s|{{PROXIED_TRUSTED_HOSTS}}|${PROXIED_TRUSTED_HOSTS}|g" \
