@@ -31,6 +31,8 @@ import {
 import {
   AUTHOR_REQUIRED_MESSAGE,
   type DeclaredOwnerKind,
+  GENERIC_ASSIGNEE,
+  HUMAN_ASSIGNEE,
   declaredAssigneeKind,
   isCategoryAuthor,
 } from './task-owner.ts';
@@ -521,6 +523,17 @@ export interface Task {
    *  resolves this from the caller and REFUSES the generic word (see
    *  task-owner.ts), so a stored 'agent' is a pre-enforcement row. */
   assignee: string;
+  /**
+   * The roster's ONE id for `assignee`, when the roster can place it — an
+   * agent row matched by id, display name, or a spelling folded into it by
+   * a merge. Stored beside the name at every write, never instead of it:
+   * `assignee` stays verbatim because old bundles keep sending it and the
+   * board keeps drawing it. Absent when nobody the roster knows owns the
+   * row, and absent on every row written before the field existed — those
+   * resolve the same way at read time (`ownerIdOf`), so history is never
+   * rewritten to catch up.
+   */
+  assigneeId?: string;
   /**
    * What KIND of somebody the assignee is, as DECLARED — never as guessed
    * from the name. Absent means nobody has said, which reads as `unknown`
@@ -2318,6 +2331,51 @@ export class TaskStore {
     this.roster = roster;
   }
 
+  /** The roster's id for an owner name, or undefined. The reserved words
+   *  are not names: `human` means "a person, unnamed" and `agent` means
+   *  nobody, and neither may resolve to a row that happens to be called
+   *  that. */
+  private rosterIdFor(assignee: string): string | undefined {
+    const name = assignee.trim();
+    const lower = name.toLowerCase();
+    if (name === '' || lower === GENERIC_ASSIGNEE || lower === HUMAN_ASSIGNEE) return undefined;
+    return this.roster?.resolveAgentId(name) ?? undefined;
+  }
+
+  /** `resolveAgentId` through whatever roster is wired, for readers that
+   *  hold an attachment id and need the id a merge folded it into. */
+  resolveAgentId(idOrName: string): string | null {
+    return this.roster?.resolveAgentId(idOrName) ?? null;
+  }
+
+  /**
+   * The canonical owner id of a row, resolved NOW.
+   *
+   * A stored `assigneeId` is re-resolved through the roster so a row written
+   * under an id that was later merged away answers with the surviving id;
+   * a row with none (written before the field, or under a name the roster
+   * did not know at the time) resolves from its name. Undefined for a
+   * person, a reserved owner, or a name the roster still cannot place.
+   */
+  ownerIdOf(task: Pick<Task, 'assignee' | 'assigneeId'>): string | undefined {
+    if (task.assigneeId !== undefined) {
+      return this.roster?.resolveAgentId(task.assigneeId) ?? task.assigneeId;
+    }
+    return this.rosterIdFor(task.assignee);
+  }
+
+  /**
+   * "Does this row belong to `assignee`?" — by the verbatim name, as every
+   * filter always matched, OR by resolved id, which is what makes
+   * `next_tasks?assignee=<me>` find the rows filed under the other seven
+   * spellings of me. The filter's own spelling is resolved once.
+   */
+  ownerMatcher(assignee: string): (task: Task) => boolean {
+    const wantedId = this.rosterIdFor(assignee);
+    return (task) =>
+      task.assignee === assignee || (wantedId !== undefined && this.ownerIdOf(task) === wantedId);
+  }
+
   /**
    * Every emitted board change is also EVIDENCE that its author was alive at
    * that moment, so the work clock moves here rather than at ~20 call sites.
@@ -2810,6 +2868,21 @@ export class TaskStore {
         seats.push(workspaceId);
         if (!opts.dryRun) this.assignLead(state, into, actor, Date.now());
       }
+      // A re-key is an attachment change, and the board projects off store
+      // events: without this the rows owned under the old id keep drawing
+      // it until something unrelated touches a task. Emitted for the
+      // SURVIVING id, after every change above, like `attachAgent` does.
+      const survivor = !opts.dryRun && old ? state.attachments.get(into) : undefined;
+      if (survivor) {
+        const now = Date.now();
+        this.emit({
+          type: 'agent.attached',
+          workspaceId,
+          agentId: into,
+          attachment: publicAttachment(survivor, now, this.attachmentThresholds),
+          ts: now,
+        });
+      }
     }
     return { seats: seats.sort(), attachments: attachments.sort() };
   }
@@ -2987,6 +3060,7 @@ export class TaskStore {
 
     const now = Date.now();
     const assigneeKind = declaredAssigneeKind(opts.assignee ?? '', opts.assigneeKind, opts.actor);
+    const assigneeId = this.rosterIdFor(opts.assignee ?? 'agent');
     const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
     const order = opts.order ?? Math.max(0, ...inGoal.map((t) => t.order)) + 1;
     const task: Task = {
@@ -2999,6 +3073,7 @@ export class TaskStore {
       // in-process call that named nobody.
       assignee: opts.assignee ?? 'agent',
       ...(assigneeKind !== undefined ? { assigneeKind } : {}),
+      ...(assigneeId !== undefined ? { assigneeId } : {}),
       ...(opts.needs !== undefined ? { needs: opts.needs } : {}),
       ...(options.length > 0 ? { options } : {}),
       goal,
@@ -3243,7 +3318,7 @@ export class TaskStore {
     if (filter?.includeArchived !== true) tasks = tasks.filter((t) => !isArchived(t));
     if (filter?.goal !== undefined) tasks = tasks.filter((t) => t.goal === filter.goal);
     if (filter?.status !== undefined) tasks = tasks.filter((t) => t.status === filter.status);
-    if (filter?.assignee !== undefined) tasks = tasks.filter((t) => t.assignee === filter.assignee);
+    if (filter?.assignee !== undefined) tasks = tasks.filter(this.ownerMatcher(filter.assignee));
     if (filter?.needs !== undefined) tasks = tasks.filter((t) => t.needs === filter.needs);
     return tasks.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
   }
@@ -4060,6 +4135,12 @@ export class TaskStore {
     if (from === assignee && task.assigneeKind === kind) return { ok: true, task, changed: false };
     const ts = Date.now();
     task.assignee = assignee;
+    // Re-resolved from the NEW name, never carried over: the previous
+    // owner's id on a row handed to somebody the roster cannot place would
+    // keep routing their queue reads to the old owner.
+    const assigneeId = this.rosterIdFor(assignee);
+    if (assigneeId === undefined) task.assigneeId = undefined;
+    else task.assigneeId = assigneeId;
     if (kind === undefined) task.assigneeKind = undefined;
     else task.assigneeKind = kind;
     task.updatedAt = ts;

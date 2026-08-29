@@ -421,3 +421,179 @@ describe('owner kind over the real routes', () => {
     expect(projected(wsId, task.id)?.ownerKind).toBe('unknown');
   });
 });
+
+/**
+ * `assigneeId` beside `assignee`.
+ *
+ * A task records its owner as whatever the caller typed, and the field
+ * measured eight spellings of one agent — `Live Feedback`, `live-feedback`,
+ * `agent-live-feedback`… — none of which matched `next_tasks?assignee=<me>`
+ * unless the spelling happened to be the caller's own. The roster now
+ * resolves the owner to ONE canonical id, stored beside the name on every
+ * write and derived at read time for every row written before the field
+ * existed. The name stays verbatim: old bundles keep sending it, and it is
+ * still what the board draws.
+ */
+describe('owner id beside the owner name', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+
+  const PERSON = { id: 'known-ada', name: 'Ada Fenwick', kind: 'known' };
+  const LF = 'agent-live-feedback';
+
+  const jj = async <T>(res: Response): Promise<T> => {
+    expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
+    return res.json() as Promise<T>;
+  };
+  const post = (path: string, body?: unknown) =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  const get = (path: string) => fetch(`${base}${path}`);
+
+  function projected(wsId: string, taskId: string): Record<string, unknown> | undefined {
+    const room = handle.rooms.get(workspaceRoomId(wsId));
+    return room?.ydoc.getMap('tasks').get(taskId) as Record<string, unknown> | undefined;
+  }
+
+  async function seedWorkspace(name: string): Promise<string> {
+    const { workspace } = await jj<{ workspace: { id: string } }>(
+      await post('/api/workspaces', { name, goal: 'Ship the atlas.' }),
+    );
+    return workspace.id;
+  }
+  const attach = async (wsId: string, agentId: string, agentName: string) =>
+    jj(
+      await post(`/api/workspaces/${wsId}/attachments`, {
+        agentId,
+        agentName,
+        runtime: 'claude-code-local',
+        capabilities: ['tasks.write'],
+      }),
+    );
+  // PERSON author: queueable work (todo), not triage — `/next` skips triage.
+  const mk = async (wsId: string, assignee: string): Promise<Task> => {
+    const { task } = await jj<{ task: Task }>(
+      await post(`/api/workspaces/${wsId}/tasks`, {
+        title: `owned by ${assignee}`,
+        assignee,
+        author: PERSON,
+      }),
+    );
+    return task;
+  };
+  const ids = async (path: string): Promise<string[]> => {
+    const { tasks } = await jj<{ tasks: Array<{ id: string }> }>(await get(path));
+    return tasks.map((t) => t.id).sort();
+  };
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'lf-owner-id-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  });
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('three spellings of one agent store one id, and a stranger stores none', async () => {
+    const wsId = await seedWorkspace('spellings');
+    await attach(wsId, LF, 'Live Feedback');
+    const byName = await mk(wsId, 'Live Feedback');
+    const bySlug = await mk(wsId, 'live-feedback');
+    const byId = await mk(wsId, LF);
+    // Control: a name the roster does not know resolves to nothing, and the
+    // row is still filed — the id is beside the name, never instead of it.
+    // (Not the author's own name: assigning to yourself declares your kind.)
+    const stranger = await mk(wsId, 'Grace Hopper');
+
+    for (const t of [byName, bySlug, byId]) expect(t.assigneeId).toBe(LF);
+    expect(byName.assignee).toBe('Live Feedback');
+    expect(bySlug.assignee).toBe('live-feedback');
+    expect(stranger.assigneeId).toBeUndefined();
+    expect(stranger.assignee).toBe('Grace Hopper');
+
+    // The board sees the same id on every spelling…
+    for (const t of [byName, bySlug, byId]) expect(projected(wsId, t.id)?.assigneeId).toBe(LF);
+    expect(projected(wsId, stranger.id)?.assigneeId).toBeUndefined();
+    // …and the resolved owner is an agent even where the attachment id
+    // and the typed name share nothing but the roster's word for it.
+    expect(projected(wsId, bySlug.id)?.ownerKind).toBe('agent');
+    expect(projected(wsId, stranger.id)?.ownerKind).toBe('unknown');
+
+    // `next_tasks` by id — or by any spelling — finds all three and only them.
+    const three = [byName.id, bySlug.id, byId.id].sort();
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual(three);
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=Live%20Feedback`)).toEqual(three);
+    expect(await ids(`/api/workspaces/${wsId}/tasks?assignee=live-feedback`)).toEqual(three);
+    // The verbatim filter still works for a name the roster cannot place.
+    expect(await ids(`/api/workspaces/${wsId}/tasks?assignee=Grace%20Hopper`)).toEqual([
+      stranger.id,
+    ]);
+    // …and a spelling nobody used and nobody is finds nothing (negative control).
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=agent-nobody`)).toEqual([]);
+  });
+
+  it('a row written before the roster knew the agent resolves at read time', async () => {
+    const wsId = await seedWorkspace('backfill');
+    const old = await mk(wsId, 'Cartographer');
+    expect(old.assigneeId).toBeUndefined();
+    expect(projected(wsId, old.id)?.assigneeId).toBeUndefined();
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=agent-cartographer`)).toEqual([]);
+
+    await attach(wsId, 'agent-cartographer', 'Cartographer');
+
+    // No task write happened. The stored row is untouched — the projection
+    // and the queue derive the id from the roster the moment it can.
+    const stored = handle.tasks.getTask(old.id) as Task;
+    expect(stored.assigneeId).toBeUndefined();
+    expect(projected(wsId, old.id)?.assigneeId).toBe('agent-cartographer');
+    expect(projected(wsId, old.id)?.ownerKind).toBe('agent');
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=agent-cartographer`)).toEqual([old.id]);
+  });
+
+  it('a merged agent’s rows follow the merge without a rewrite', async () => {
+    const wsId = await seedWorkspace('merge');
+    await attach(wsId, LF, 'Live Feedback');
+    await attach(wsId, 'quick-build', 'Quick Build');
+    const theirs = await mk(wsId, 'Quick Build');
+    expect(theirs.assigneeId).toBe('quick-build');
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([]);
+
+    await jj(await post('/api/agents/quick-build/merge', { into: LF, author: PERSON }));
+
+    const stored = handle.tasks.getTask(theirs.id) as Task;
+    // Still the id it was written with — history is never rewritten…
+    expect(stored.assigneeId).toBe('quick-build');
+    expect(stored.assignee).toBe('Quick Build');
+    // …and every read resolves it through the merge.
+    expect(projected(wsId, theirs.id)?.assigneeId).toBe(LF);
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([theirs.id]);
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=Quick%20Build`)).toEqual([theirs.id]);
+  });
+
+  it('a hand-over re-resolves the id, and clears it for a name nobody knows', async () => {
+    const wsId = await seedWorkspace('handover');
+    await attach(wsId, LF, 'Live Feedback');
+    const task = await mk(wsId, 'Live Feedback');
+    expect(task.assigneeId).toBe(LF);
+
+    await jj(
+      await post(`/api/tasks/${task.id}/assignee`, { assignee: 'Ada Fenwick', author: PERSON }),
+    );
+    const handed = handle.tasks.getTask(task.id) as Task;
+    expect(handed.assignee).toBe('Ada Fenwick');
+    expect(handed.assigneeId).toBeUndefined();
+
+    await jj(
+      await post(`/api/tasks/${task.id}/assignee`, { assignee: 'live-feedback', author: PERSON }),
+    );
+    const back = handle.tasks.getTask(task.id) as Task;
+    expect(back.assignee).toBe('live-feedback');
+    expect(back.assigneeId).toBe(LF);
+  });
+});
