@@ -1536,6 +1536,40 @@ body.hub-body {
   min-height: 36px;
   white-space: nowrap;
 }
+/* The stage the card stands on (approved mock `.demo-doc-layout`,
+   2026-08-29): the card, and a margin column that appears only while a
+   thread is open off the comment pill. One column here and at ≤1100px — the
+   margin stacks BELOW the card, as the mock does — and two at ≥1101px, where
+   HEIGHT is the scarce axis (1180×820 has ~750px usable) and a thread that
+   sits beside the card costs the card none of it. */
+.hub-walk-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hub-walk-margin {
+  min-width: 0;
+  margin: 0 0 12px;
+}
+@media (min-width: 1101px) {
+  /* Two columns only while a thread is open (`.hub-walk-stage-open`). A
+     bare stage stays one column: reserving the 300px margin on an empty
+     stage left the card a third of a desktop screen (Bryan, 2026-08-29). */
+  .hub-walk-stage-open {
+    display: grid;
+    /* minmax(0, …) so a long headline wraps instead of widening the stage. */
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 16px;
+    align-items: start;
+  }
+  /* Stays put while the card's body scrolls under it — the question is
+     about a phrase the reader can still see. */
+  .hub-walk-margin {
+    position: sticky;
+    top: 8px;
+    margin: 0;
+  }
+}
 /* The card the whole page is about (mockup `.card`). */
 .hub-walk-card {
   display: flex;
@@ -1589,6 +1623,13 @@ body.hub-body {
 .hub-walk-k-reply {
   color: var(--accent);
   background: var(--accent-wash, rgba(59, 111, 212, 0.07));
+}
+/* The owner revised the item after the reader asked on it — the editor's
+   resolved-range green, so "this came back changed" reads the same way a
+   resolved doc thread does. Sits beside the kind badge, never instead of it. */
+.hub-walk-k-revised {
+  color: #1f7a3a;
+  background: rgba(45, 164, 78, 0.12);
 }
 /* The head's top-right meta — "Asked by Harbor agent 2 days ago". A
    SENTENCE now, not the bare duration it replaced, so it must be allowed to
@@ -1666,6 +1707,18 @@ body.hub-body {
 .hub-walk-body > :last-child {
   margin-bottom: 0;
 }
+/* The revised phrase, marked the way the editor marks a thread's range
+   (`#editor > .ProseMirror .thread-range` — those rules are scoped to the
+   editor, so the card carries its own copy of the two states it uses). */
+.hub-walk-body .thread-range {
+  background: rgba(255, 213, 79, 0.35);
+  border-bottom: 2px solid rgba(191, 135, 0, 0.55);
+  color: inherit;
+}
+.hub-walk-body .thread-range.resolved {
+  background: rgba(45, 164, 78, 0.12);
+  border-bottom-color: rgba(45, 164, 78, 0.45);
+}
 .hub-walk-body-empty {
   color: var(--fg-muted);
 }
@@ -1700,12 +1753,105 @@ body.hub-body {
     color: var(--accent);
     cursor: pointer;
   }
+  /* Thumb targets for the comment furniture: the pill (a 36px circle on a
+     desktop pointer) and both "See thread" links grow to 44px on the phone
+     tier, per design-mobile.md. */
+  .hub-walk-pill {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+  }
+  .hub-walk-thread-link {
+    min-height: 44px;
+  }
+  .hub-review-thread-link {
+    min-height: 44px;
+  }
 }
 .hub-walk-asked {
   margin: 0;
   font-size: 13px;
   color: var(--fg-muted);
   overflow-wrap: anywhere;
+}
+/* ── Commenting on a review item like a doc (2026-08-29) ──
+   Select a phrase of the detail → the editor's `.comment-pill` appears beside
+   it → a thread card opens quoting the phrase. The pill is the editor's own
+   class (fixed-position, placed by JS); `.hub-walk-pill` only exists so the
+   phone tier can grow it. */
+.hub-walk-pill {
+  z-index: 800;
+}
+/* The thread card the pill opens: the quoted phrase, one box, Ask / Cancel.
+   No height of its own — at 1180×820 the card already competes with the
+   options and the answer box for ~750px, so it takes exactly what its lines
+   need. */
+.hub-walk-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid rgba(191, 135, 0, 0.55);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+}
+/* The phrase, quoted the way a doc thread quotes its range. */
+.hub-walk-thread-quote {
+  margin: 0;
+  padding: 0 0 0 8px;
+  border-left: 2px solid rgba(255, 213, 79, 0.9);
+  font-family: var(--prose);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.hub-walk-thread-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+/* "Waiting on Helper — you asked: …": the one line that changes when the
+   question is sent. Subtle on purpose — the card itself stays put. */
+.hub-walk-waiting {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+/* A revised item's question, quoted under the headline, and the way to the
+   thread it was asked on. */
+.hub-walk-question {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.hub-walk-question-text {
+  margin: 0;
+  padding: 0 0 0 8px;
+  border-left: 2px solid rgba(45, 164, 78, 0.45);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+/* The same dressing as the card's pointer out (`.hub-walk-where-link`): an
+   atomic inline-flex box with the 36px floor, so it is a tap target on an
+   iPad and not 18px of blue text. */
+.hub-walk-thread-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  font: inherit;
+  font-size: 13px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
 }
 .hub-walk-options {
   display: flex;
@@ -1737,16 +1883,16 @@ body.hub-body {
 /* The reply box (mockup `.replybox`): the field and its dark Send side by
    side, stacking under a thumb — see the ≤900px block. */
 .hub-walk-answer,
-.hub-walk-info {
+.hub-walk-thread-form {
   display: flex;
   gap: 8px;
   align-items: flex-end;
   margin: 0;
 }
 .hub-walk-answer textarea,
-.hub-walk-info textarea,
+.hub-walk-thread-form textarea,
 .hub-walk-answer .md-composer-surface,
-.hub-walk-info .md-composer-surface {
+.hub-walk-thread-form .md-composer-surface {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -1757,25 +1903,17 @@ body.hub-body {
   resize: vertical;
 }
 .hub-walk-answer .md-composer-surface:focus-within,
-.hub-walk-info .md-composer-surface:focus-within {
+.hub-walk-thread-form .md-composer-surface:focus-within {
   border-color: var(--accent);
 }
-.hub-walk-info {
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-/* Skip, and the way to say you cannot answer yet (mockup `.actions`). */
+/* Skip (mockup `.actions`). The "Tell me more" control that shared this row
+   is gone — asking back is a comment on a phrase of the item now. */
 .hub-walk-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
   margin: 0;
-}
-/* Pushed to the far end: it is the rarer move, and the mockup's actions row
-   reserves that end for the secondary control. */
-.hub-walk-more {
-  margin-left: auto;
 }
 /* The mockup's `.btn.ghost` — no border, no fill, muted. Used by the three
    controls that are ways OUT of answering rather than answers. */
@@ -2209,6 +2347,35 @@ body.hub-body {
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
   color: var(--fg-muted);
+}
+/* A REVISED row (the owner changed the item after the reader asked on it):
+   the badge above the title, the reader's question under it, and a way to the
+   thread. The row is a div acting as a button here — a button cannot hold
+   the link — so it needs the focus ring a real button gets for free. */
+.hub-review-row-revised:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.hub-review-row-badge {
+  align-self: flex-start;
+}
+.hub-review-row-quote {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+.hub-review-thread-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
 }
 /* The board island owns a wrapper of its own inside `#hub-board` — Preact
    must never share a container with vanilla code. `display: contents` keeps
@@ -4640,19 +4807,19 @@ a.hub-link-chip:hover {
      box stacked, since a field and a button side by side at 430px leaves the
      field too narrow to read what you typed. */
   .hub-walk-answer,
-  .hub-walk-info {
+  .hub-walk-thread-form {
     flex-direction: column;
     align-items: stretch;
   }
   .hub-walk-answer .hub-btn,
-  .hub-walk-info .hub-btn {
+  .hub-walk-thread-form .hub-btn {
     width: 100%;
   }
   /* The card's tail still ends under one viewport-fixed launcher — the
      feedback widget's pencil, bottom-right. (The mic used to be the other
      one; it is docked in the nav now and covers nothing.) Reserve the
-     pencil's height so the last control ("Tell me more" on a decision card —
-     exactly the one a stuck reviewer reaches for) can be scrolled clear. */
+     pencil's height so the last control (Skip, or the answer box's Send) can
+     be scrolled clear. */
   .hub-walk-card {
     padding-bottom: calc(60px + var(--safe-bottom, 0px));
   }

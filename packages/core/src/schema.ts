@@ -335,7 +335,12 @@ export function markOrphan(doc: Y.Doc, threadId: string): Thread | null {
   // existing while the thread does — so there is nothing to lose and nothing
   // to recover. Orphaning one would only hide it from the surfaces that show
   // anchored comments.
-  if (!current || current.kind === 'orphan' || current.kind === 'subject') {
+  if (
+    !current ||
+    current.kind === 'orphan' ||
+    current.kind === 'subject' ||
+    current.kind === 'review-item'
+  ) {
     return readThread(threadMap, threadId);
   }
   const orphan: Anchor = { kind: 'orphan', original: current, lastSeenAt: Date.now() };

@@ -3724,6 +3724,10 @@ export class Rooms {
       doc: decorate(room.meta),
       comment,
       ...(actor ? { actor } : {}),
+      // A comment ON a review item names the item at the top level, so the
+      // owner's channel line can say which item to revise without walking
+      // the thread's anchor.
+      ...(thread.anchor.kind === 'review-item' ? { reviewItemId: thread.anchor.reviewItemId } : {}),
       seq: room.seq,
     });
   }

@@ -174,6 +174,22 @@ context to learn nothing changed. "Never go dark" does not forbid being
 idle; it forbids standing down with asks that exist only in chat, which the
 filed items prevent.
 
+## When Someone Comments on Your Review Item
+
+A reader can select a phrase in one of your review items and ask about it,
+as on a doc. The question arrives as a thread on the task — the channel
+frame's `review_item_id` names the item — and the item leaves their queue
+until you act, so an answer in chat leaves it stuck. Rewrite the item in
+place with `revise_review_item(taskId, reviewItemId, headline?, detail?,
+options?, reply?)`, passing only what changes; `reply` is your answer on
+the thread, posted by the same call — do not also `post_reply` it, or the
+thread carries your answer twice. Write the revision to stand alone: plain
+English, no past context needed, why it matters, what each option costs.
+The item returns to their queue marked Revised, their question quoted and
+the changed span highlighted; the old words stay as history. Use
+`post_reply` on its own only when the words need no change — a question
+the item already answers.
+
 ## Use Links Effectively
 
 - Each resource (task, workspace, document, mockup, folder diff) has a unique identifier and URL.

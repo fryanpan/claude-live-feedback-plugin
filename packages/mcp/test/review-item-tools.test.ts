@@ -314,6 +314,23 @@ describe('a ticket carries review items, and the tools reach them', () => {
     expect(last().path).toBe('/api/tasks/t-legacy/more-info');
   });
 
+  it('revise_review_item lands on the revise door with only the fields that change', async () => {
+    const reply = await call('revise_review_item', {
+      taskId: 't-1',
+      reviewItemId: 'r-4b2e',
+      detail: 'Reads twice per nightly run.',
+      reply: 'Per night — clarified.',
+    });
+    okReply(reply);
+    expect(last().path).toBe('/api/tasks/t-1/review-items/r-4b2e/revise');
+    expect(last().body.detail).toBe('Reads twice per nightly run.');
+    expect(last().body.reply).toBe('Per night — clarified.');
+    // Untouched fields are not sent as undefined-turned-null.
+    expect('headline' in last().body).toBe(false);
+    expect('options' in last().body).toBe(false);
+    expect(payload(reply).revised).toBe(true);
+  });
+
   it('create_tasks carries a `review` row through and reports its advice', async () => {
     const reply = await call('create_tasks', {
       workspaceId: 'w-1',

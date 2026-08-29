@@ -93,6 +93,7 @@ export function validateAnchor(anchor: unknown): AnchorValidation {
   if (typeof a.kind !== 'string' || a.kind.length === 0) {
     return { ok: false, error: 'anchor.kind is required' };
   }
+  if (a.kind === 'review-item') return validateReviewItemAnchor(a);
   if (a.kind !== 'text-range') return { ok: true };
 
   for (const field of ['startRel', 'endRel'] as const) {
@@ -120,6 +121,45 @@ export function validateAnchor(anchor: unknown): AnchorValidation {
   }
   if (typeof snippet.text !== 'string') {
     return { ok: false, error: 'anchor.snippet.text must be a string' };
+  }
+  return { ok: true };
+}
+
+/**
+ * The review-item kind's shape, as far as it can be judged without the item.
+ *
+ * Offsets are checked for being offsets — integers, ordered — and not for
+ * pointing at the snippet: that needs the item's current text, which only
+ * the route that knows the task can read. `reviewItemId` and `snippet.text`
+ * are required because both are what every renderer reads first, and a
+ * missing one is the same class of deferred crash `text-range` has.
+ */
+function validateReviewItemAnchor(a: Record<string, unknown>): AnchorValidation {
+  if (typeof a.reviewItemId !== 'string' || a.reviewItemId.trim() === '') {
+    return { ok: false, error: 'anchor.reviewItemId is required for a review-item anchor' };
+  }
+  const snippet = a.snippet as Record<string, unknown> | undefined;
+  if (!snippet || typeof snippet !== 'object' || typeof snippet.text !== 'string') {
+    return { ok: false, error: 'anchor.snippet.text is required for a review-item anchor' };
+  }
+  if (snippet.text.trim() === '') {
+    return { ok: false, error: 'anchor.snippet.text must name the selected phrase' };
+  }
+  const hasStart = a.start !== undefined;
+  const hasEnd = a.end !== undefined;
+  if (hasStart !== hasEnd) {
+    return { ok: false, error: 'anchor.start and anchor.end come together or not at all' };
+  }
+  if (hasStart) {
+    for (const field of ['start', 'end'] as const) {
+      const n = a[field];
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) {
+        return { ok: false, error: `anchor.${field} must be a non-negative integer offset` };
+      }
+    }
+    if ((a.start as number) > (a.end as number)) {
+      return { ok: false, error: 'anchor.start must not exceed anchor.end' };
+    }
   }
   return { ok: true };
 }

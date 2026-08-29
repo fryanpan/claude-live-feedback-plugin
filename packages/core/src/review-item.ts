@@ -307,6 +307,137 @@ export interface ReviewInfoRequest {
   /** Display name. No actor ids in projected state. */
   by: string;
   ts: number;
+  /**
+   * The thread the question was asked ON, when it was asked doc-style — by
+   * selecting a phrase of the item and commenting on it (2026-08-29). The
+   * question is then the thread's first comment, the owner answers by
+   * replying there and revising the item, and this id is how the card finds
+   * that conversation. Absent on a question typed into the old "tell me
+   * more" box, which had no thread.
+   */
+  threadId?: string;
+  /** The phrase the question was about, with its offsets into `detail` as
+   *  it read at the time. Present exactly when `threadId` is. */
+  range?: ReviewItemRange;
+}
+
+/** A phrase of an item's `detail`: the words, and where they were. Offsets
+ *  are absent when the words could not be located uniquely. */
+export interface ReviewItemRange {
+  text: string;
+  start?: number;
+  end?: number;
+}
+
+/**
+ * One SUPERSEDED reading of the item — what it said before a revision.
+ *
+ * Kept on the item rather than overwritten, for the same reason answers are:
+ * the words were user content, and a reader who asked "what changed?" has to
+ * be able to see. `threadId` names the question this revision answered when
+ * there was one; `revisedRange` says where in the NEW text the change landed,
+ * so the card can highlight it.
+ */
+export interface ReviewItemRevision {
+  at: number;
+  /** Display name of who revised. */
+  by: string;
+  /** The PREVIOUS text, verbatim. */
+  headline: string;
+  detail?: string;
+  options?: ReviewOption[];
+  threadId?: string;
+  revisedRange?: { start: number; end: number };
+}
+
+/**
+ * Where an item stands with the person it is waiting on.
+ *
+ *  - `open`     — nothing asked back; it is on the queue.
+ *  - `waiting`  — a question was asked on it and the owner has not revised
+ *                 since; it is OFF the queue, waiting on the owner.
+ *  - `revised`  — the owner revised the words (after a question, or just
+ *                 because); it is back on the queue, marked.
+ *  - `answered` — closed.
+ *
+ * DERIVED, never stored, for the reason `isReviewItemOpen` gives: a status
+ * field is a second spelling of facts the item already carries, free to
+ * disagree with them. Here the facts are the thread each revision was made
+ * against and the two clocks: a revision stamped with the latest question's
+ * thread answers it, and so does one made strictly after it. The stamp
+ * decides first because the clocks can TIE — a revision and the next
+ * question in the same millisecond, measured four runs in five at the route
+ * level — and a tie read by the clocks alone put the item back on the queue
+ * with its new question unanswered.
+ */
+export type ReviewItemState = 'open' | 'waiting' | 'revised' | 'answered';
+
+export function reviewItemState(item: TaskReviewItem): ReviewItemState {
+  if (item.answer) return 'answered';
+  const question = latestThreadedQuestion(item);
+  const revision = item.revisions?.at(-1);
+  if (question) {
+    const answered =
+      revision !== undefined &&
+      (revision.threadId === question.threadId || revision.at > question.ts);
+    if (!answered) return 'waiting';
+  }
+  if (revision) return 'revised';
+  return 'open';
+}
+
+/** The newest question asked doc-style on the item, if any. */
+export function latestThreadedQuestion(item: TaskReviewItem): ReviewInfoRequest | undefined {
+  const reqs = item.infoRequests ?? [];
+  for (let i = reqs.length - 1; i >= 0; i--) {
+    const r = reqs[i];
+    if (r?.threadId) return r;
+  }
+  return undefined;
+}
+
+/**
+ * The span of `after` that differs from `before` — common prefix and suffix
+ * trimmed — or undefined when nothing did. What the card highlights as the
+ * revised phrase when the reviser did not say.
+ */
+export function changedRange(
+  before: string,
+  after: string,
+): { start: number; end: number } | undefined {
+  if (before === after) return undefined;
+  let start = 0;
+  const max = Math.min(before.length, after.length);
+  while (start < max && before[start] === after[start]) start++;
+  let tail = 0;
+  while (
+    tail < max - start &&
+    before[before.length - 1 - tail] === after[after.length - 1 - tail]
+  ) {
+    tail++;
+  }
+  return { start, end: after.length - tail };
+}
+
+/**
+ * Locate a phrase in the item's detail: the caller's offsets when they spell
+ * the phrase, else the phrase's unique occurrence, else nothing (the snippet
+ * still says what was meant). `null` means the caller's offsets are WRONG —
+ * they point at other words — which is a refusal, not a fallback: a
+ * highlight on the wrong phrase is worse than none.
+ */
+export function locateReviewItemRange(
+  detail: string | undefined,
+  range: { text: string; start?: number; end?: number },
+): ReviewItemRange | null {
+  const text = detail ?? '';
+  if (range.start !== undefined && range.end !== undefined) {
+    if (text.slice(range.start, range.end) !== range.text) return null;
+    return { text: range.text, start: range.start, end: range.end };
+  }
+  const first = text.indexOf(range.text);
+  if (first < 0 || text.indexOf(range.text, first + 1) >= 0) return { text: range.text };
+  return { text: range.text, start: first, end: first + range.text.length };
 }
 
 /**
@@ -375,6 +506,9 @@ export interface TaskReviewItem {
   priorAnswers?: ReviewItemAnswer[];
   /** "Tell me more", in order. Absent rather than empty while there are none. */
   infoRequests?: ReviewInfoRequest[];
+  /** What the item said BEFORE each revision, oldest first. Absent while
+   *  the words have never changed. See `ReviewItemRevision`. */
+  revisions?: ReviewItemRevision[];
 }
 
 /**
@@ -925,11 +1059,53 @@ export function readTaskReviewItem(value: unknown): TaskReviewItem | undefined {
     for (const raw of value.infoRequests) {
       if (!isPlainObject(raw)) continue;
       if (typeof raw.text !== 'string' || raw.text.trim() === '') continue;
-      reqs.push({ text: raw.text, by: str(raw.by, ''), ts: num(raw.ts, 0) });
+      const req: ReviewInfoRequest = { text: raw.text, by: str(raw.by, ''), ts: num(raw.ts, 0) };
+      if (typeof raw.threadId === 'string' && raw.threadId !== '') req.threadId = raw.threadId;
+      const range = readRange(raw.range);
+      if (range) req.range = range;
+      reqs.push(req);
     }
     if (reqs.length > 0) out.infoRequests = reqs;
   }
+
+  if (Array.isArray(value.revisions)) {
+    const revs: ReviewItemRevision[] = [];
+    for (const raw of value.revisions) {
+      if (!isPlainObject(raw)) continue;
+      if (typeof raw.headline !== 'string') continue;
+      const rev: ReviewItemRevision = {
+        at: num(raw.at, 0),
+        by: str(raw.by, ''),
+        headline: raw.headline,
+      };
+      if (typeof raw.detail === 'string') rev.detail = raw.detail;
+      const options = readReviewPayload({ headline: raw.headline, options: raw.options })?.options;
+      if (options) rev.options = options;
+      if (typeof raw.threadId === 'string' && raw.threadId !== '') rev.threadId = raw.threadId;
+      const span = readSpan(raw.revisedRange);
+      if (span) rev.revisedRange = span;
+      revs.push(rev);
+    }
+    if (revs.length > 0) out.revisions = revs;
+  }
   return out;
+}
+
+function readSpan(value: unknown): { start: number; end: number } | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const { start, end } = value;
+  if (typeof start !== 'number' || typeof end !== 'number') return undefined;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) {
+    return undefined;
+  }
+  return { start, end };
+}
+
+function readRange(value: unknown): ReviewItemRange | undefined {
+  if (!isPlainObject(value)) return undefined;
+  if (typeof value.text !== 'string' || value.text === '') return undefined;
+  const span = readSpan({ start: value.start, end: value.end });
+  return span ? { text: value.text, ...span } : { text: value.text };
 }
 
 /**
