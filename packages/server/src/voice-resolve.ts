@@ -114,11 +114,13 @@ export function wordsMatch(a: string, b: string): boolean {
 }
 
 /** The KIND of thing the speaker named, when they said so: "the mobile DOC"
- *  is a doc even when a task is called Mobile. `review` is not a kind word —
- *  it is a real word in real titles ("Review: Akash — …"). */
+ *  is a doc even when a task is called Mobile. `review` and `page` are not
+ *  kind words — both are real words in real titles ("Review: Akash — …",
+ *  "Wire the results page"), and treating "page" as one once narrowed
+ *  "open the results page" to the docs and found nothing. */
 export function spokenKind(text: string): 'task' | 'doc' | undefined {
   const words = new Set(text.toLowerCase().split(/[^a-z]+/));
-  const doc = ['doc', 'docs', 'document', 'page'].some((w) => words.has(w));
+  const doc = ['doc', 'docs', 'document'].some((w) => words.has(w));
   const task = ['task', 'tasks', 'ticket'].some((w) => words.has(w));
   if (doc === task) return undefined;
   return doc ? 'doc' : 'task';
@@ -382,27 +384,39 @@ export function parseOrdinal(transcript: string, count: number): number | null {
 
 /**
  * The label a pick names, when the words after the pick verb resolve to
- * exactly one option. "choose keep placeholders" → "Keep placeholders".
- * Ambiguous or unmatched → null; the router then tries the model, and the
- * model may only ever answer with the transcript's own words.
+ * exactly one option AND every word said is a word of that label. "choose
+ * keep placeholders" → "Keep placeholders"; "don't drop the placeholders" →
+ * nothing, because "dont" is left over — the title scorer only measures how
+ * much of the LABEL the words cover, and it once recorded the option a
+ * speaker had just refused. Ambiguous or unmatched → null; the router then
+ * tries the model, and the model may only ever answer with the transcript's
+ * own words.
+ *
+ * Filler is stripped from the OPENER only — the run of "pick the", "go
+ * with", "show me" before the name — never from inside it, so a label that
+ * happens to contain "open" ("Open door") is still sayable.
  */
 export function pickByLabel<T extends { id: string; label: string }>(
   transcript: string,
   options: readonly T[],
 ): T | null {
-  const spoken = transcript
+  const words = transcript
     .toLowerCase()
     .replace(/[’']/g, '')
     .split(/[^a-z0-9]+/)
-    .filter((w) => w.length > 0)
-    .filter((w, i, all) => !(PICK_FILLER.has(w) && i < all.length - 1 && !ORDINAL_WORDS[w]))
-    .join(' ');
+    .filter((w) => w.length > 0);
+  let start = 0;
+  while (start < words.length - 1 && PICK_FILLER.has(words[start] ?? '')) start++;
+  const spoken = words.slice(start).join(' ');
   if (spoken.length === 0) return null;
   const r = resolveByTitle(
     spoken,
     options.map((o) => ({ id: o.id, kind: 'task' as const, title: o.label })),
   );
   if (r.kind !== 'hit') return null;
+  const labelWords = tokenize(r.match.title);
+  const leftover = tokenize(spoken).some((w) => !labelWords.some((t) => wordsMatch(w, t)));
+  if (leftover) return null;
   return options.find((o) => o.id === r.match.id) ?? null;
 }
 

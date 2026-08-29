@@ -35,7 +35,9 @@ import {
   countWords,
   navigationAsk,
   parseOrdinal,
+  pickByLabel,
   resolveByTitle,
+  spokenKind,
   statusAsk,
   wordsMatch,
 } from '../src/voice.ts';
@@ -132,6 +134,18 @@ describe('resolveByTitle: vague words against the index', () => {
     if (t.kind === 'hit') expect(t.match.id).toBe('t-mobile');
   });
 
+  it('"page" is a title word, not a kind word: "the results page" still finds the TASKS', () => {
+    expect(spokenKind('the results page')).toBeUndefined();
+    const r = resolveByTitle('results page', [
+      task('t-wire', 'Wire the results page'),
+      task('t-fold', 'Fold the plan into the results page'),
+      doc('d-notes', 'Onboarding notes'),
+    ]);
+    // Two tasks cover it: a question, as before — never "nothing" because a
+    // doc exists on the board.
+    expect(r.kind).toBe('ambiguous');
+  });
+
   it('two titles that both cover the query are a QUESTION, not a tie-break on length', () => {
     const r = resolveByTitle('results page', [
       task('t-wire', 'Wire the results page'),
@@ -187,6 +201,28 @@ describe('countWords / capWords: one counter', () => {
     expect(capWords(dashed, VOICE_STATUS_MAX_WORDS)).toBe(dashed);
     expect(capWords('a — b → c d', 2)).toBe('a — b…');
     expect(countWords(capWords('a — b → c d', 2))).toBe(2);
+  });
+});
+
+describe('pickByLabel: the words must BE the label', () => {
+  const options = [
+    { id: 'keep', label: 'Keep placeholders' },
+    { id: 'drop', label: 'Drop placeholders' },
+  ];
+  it('a negation is a leftover word, so it is not a pick of the thing negated', () => {
+    expect(pickByLabel("don't drop the placeholders", options)).toBeNull();
+    expect(pickByLabel('never drop placeholders', options)).toBeNull();
+    expect(pickByLabel('not keep placeholders', options)).toBeNull();
+    expect(pickByLabel('choose keep placeholders', options)?.id).toBe('keep');
+    expect(pickByLabel('go with the drop one', options)?.id).toBe('drop');
+  });
+  it('filler is stripped from the OPENER only, never from inside a label', () => {
+    const doors = [
+      { id: 'open', label: 'Open door' },
+      { id: 'close', label: 'Close door' },
+    ];
+    expect(pickByLabel('choose open door', doors)?.id).toBe('open');
+    expect(pickByLabel('pick the close door', doors)?.id).toBe('close');
   });
 });
 
@@ -272,6 +308,8 @@ describe('voice, smoothly (route)', () => {
   let decisionDocId3: string;
   /** Likewise, for "answer: the second one". */
   let decisionDocId4: string;
+  /** Likewise, for the negated answer. */
+  let decisionDocId5: string;
   let reviewDocId: string;
   let reviewThreadId: string;
   let twoItemDocId: string;
@@ -401,6 +439,8 @@ describe('voice, smoothly (route)', () => {
     await declare(decisionDocId3, DECISION);
     decisionDocId4 = await newDoc('decision-four', 'Empty board decision, fourth');
     await declare(decisionDocId4, DECISION);
+    decisionDocId5 = await newDoc('decision-five', 'Empty board decision, fifth');
+    await declare(decisionDocId5, DECISION);
     reviewDocId = await newDoc('review-one', 'Auth rollout notes');
     reviewThreadId = await declare(reviewDocId, {
       shape: 'review',
@@ -644,6 +684,22 @@ describe('voice, smoothly (route)', () => {
       threads: Array<{ id: string; comments: StoredComment[] }>;
     };
     expect(threads[0]?.comments.find((c) => c.review)?.review?.answeredWith).toBe('drop');
+  });
+
+  it('"answer: don\'t drop the placeholders" is the WORDS, never the option it negates', async () => {
+    const body = await say("answer: don't drop the placeholders", {
+      surface: 'doc',
+      docId: decisionDocId5,
+    });
+    expect(body.route).toBe('fast-path-action');
+    expect(body.ack).toContain(`Answered "don't drop the placeholders" on`);
+    const r = await local(`/api/docs/${decisionDocId5}/threads`);
+    const { threads } = (await r.json()) as {
+      threads: Array<{ id: string; comments: StoredComment[] }>;
+    };
+    const declared = threads[0]?.comments.find((c) => c.review);
+    expect(declared?.review?.answeredWith).toBeUndefined();
+    expect(declared?.review?.answerText).toBe("don't drop the placeholders");
   });
 
   it('two open items and no thread in view: an ordinal is NOT guessed', async () => {
