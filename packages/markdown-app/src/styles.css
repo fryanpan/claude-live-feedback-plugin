@@ -4323,6 +4323,14 @@ a.hub-link-chip:hover {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
+/* A fresh task has no history yet; say so rather than render an empty tab
+   that reads as broken. */
+.hub-hist-empty {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
 /* `overflow-wrap: anywhere`: a status is posted raw, so one unbroken hash
    or path has to wrap in the row rather than widen the whole panel. */
 .hub-note-body {

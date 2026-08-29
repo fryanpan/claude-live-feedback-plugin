@@ -392,6 +392,14 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     expect(rows[3]).toContain('todo → in-progress');
   });
 
+  it('a task with no moves, audit rows or notes says so instead of showing nothing', () => {
+    const host = mount();
+    openActivity(task({ id: 't-fresh', transitions: [], notes: [] }), {}, []);
+    expect(rowsIn(host).length).toBe(0);
+    const empty = host.querySelector('.hub-hist-empty');
+    expect(empty?.textContent).toContain('Nothing yet');
+  });
+
   it('a note row names the agent, the age, its kind, and the WHOLE text as markdown', () => {
     const host = mount();
     const t = task({

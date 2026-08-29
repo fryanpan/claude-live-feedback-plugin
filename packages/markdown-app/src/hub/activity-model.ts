@@ -120,26 +120,36 @@ export function ageShort(at: number, now: number): string {
  * The first prose line of a note, for the pane's one-line glance: blank
  * lines, fence markers and fenced code are skipped, a heading / quote /
  * list marker is shed from the line that is kept, and anything past `cap`
- * ends in an ellipsis (the whole line is `cap` characters at most). Empty
- * when the note has no prose at all.
+ * ends in an ellipsis (the whole line is `cap` characters at most). A note
+ * that is ONLY fenced code falls back to its first code line — a pane row
+ * must never be blank for a message that said something — and is empty
+ * only when there is nothing at all.
  */
 export function firstLine(text: string, cap = NOTE_LINE_CAP): string {
   let inFence = false;
+  let firstCode = '';
   for (const raw of text.split(/\r?\n/)) {
     if (/^\s*(```|~~~)/.test(raw)) {
       inFence = !inFence;
       continue;
     }
-    if (inFence) continue;
+    if (inFence) {
+      if (firstCode === '' && raw.trim() !== '') firstCode = raw.trim();
+      continue;
+    }
     const line = raw
       .replace(/^\s{0,3}#{1,6}\s+/, '')
       .replace(/^\s*>\s?/, '')
       .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
       .trim();
     if (line === '') continue;
-    return line.length <= cap ? line : `${line.slice(0, cap - 1).trimEnd()}…`;
+    return clip(line, cap);
   }
-  return '';
+  return firstCode === '' ? '' : clip(firstCode, cap);
+}
+
+function clip(line: string, cap: number): string {
+  return line.length <= cap ? line : `${line.slice(0, cap - 1).trimEnd()}…`;
 }
 
 /** The comparison key for "the same text": trimmed, whitespace-collapsed,

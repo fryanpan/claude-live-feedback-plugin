@@ -780,6 +780,9 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
       class={`hub-detail-tabpanel hub-detail-tabpanel-activity${hidden ? ' hidden' : ''}`}
       role="tabpanel"
     >
+      {!hasFeed && (
+        <p class="hub-hist-empty">Nothing yet — the first move, edit or note lands here.</p>
+      )}
       {hasFeed && (
         <Fragment>
           <h3 class="hub-detail-subhead">History</h3>

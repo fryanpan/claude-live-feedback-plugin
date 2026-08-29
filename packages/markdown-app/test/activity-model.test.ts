@@ -480,6 +480,14 @@ describe('firstLine: the one line the Home pane shows of a note', () => {
     expect(firstLine('1. numbered')).toBe('numbered');
   });
 
+  it('a note that is only fenced code shows its first code line, so the pane row is never blank', () => {
+    expect(firstLine('```\nbun test packages/server\nbun run lint\n```')).toBe(
+      'bun test packages/server',
+    );
+    // Nothing at all is still nothing — whitespace and bare fences.
+    expect(firstLine('\n```\n\n```\n')).toBe('');
+  });
+
   it('caps at NOTE_LINE_CAP with an ellipsis, and leaves exactly the cap alone', () => {
     expect(NOTE_LINE_CAP).toBe(200);
     const exact = 'x'.repeat(NOTE_LINE_CAP);
