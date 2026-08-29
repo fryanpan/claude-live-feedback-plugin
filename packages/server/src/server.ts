@@ -6608,7 +6608,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (isSharedAgentName(agent)) {
             return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
           }
-          return j(200, { agent, notes: agentNotes.list(agent) });
+          // Display fields only — sessionId stays in the store, like the
+          // task-projection read (projectNotes) already keeps it out.
+          const notes = agentNotes.list(agent).map((n) => ({
+            at: n.at,
+            kind: n.kind,
+            text: n.text,
+            agent: n.agent,
+            ...(n.taskId !== undefined ? { taskId: n.taskId } : {}),
+            ...(n.workspaceId !== undefined ? { workspaceId: n.workspaceId } : {}),
+          }));
+          return j(200, { agent, notes });
         }
         // --- REST: chat-audit counters ---
         // The daily chat audit publishes per-agent unfiled-ask counts here

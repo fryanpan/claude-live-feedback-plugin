@@ -275,8 +275,10 @@ describe('agent notes routes', () => {
     expect(handle.tasks.getTask(taskId)?.notes ?? []).toHaveLength(0);
 
     const { notes } = await ring('Nomad');
+    // The GET read omits sessionId, same as the task-projection read does —
+    // a session id is not workspace content either way.
     expect(notes.map((n) => [n.kind, n.text, n.agent, n.sessionId, n.taskId])).toEqual([
-      ['turn', 'Compacted the transcript', 'Nomad', 'sess-9', undefined],
+      ['turn', 'Compacted the transcript', 'Nomad', undefined, undefined],
     ]);
     // Name folding on the read side too, and an unknown agent is an empty list.
     expect((await ring('nomad')).notes).toHaveLength(1);
