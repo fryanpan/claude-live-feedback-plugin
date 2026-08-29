@@ -85,7 +85,7 @@ const HISTORY_CAP = 10;
 /**
  * The default standing instructions, in Bryan's own words.
  *
- * The 110 is his (2026-08-18, answering t-vrwyE8YcVD-J: *"cut the default
+ * The 110 is his (2026-08-18, answering the Home-brief ticket: *"cut the default
  * prompt to 110 words"*), and it is a measurement rather than a round number.
  * The card is capped at `44vh`; at a true 430x932 viewport that ceiling is
  * 410px and a 146-word brief in six paragraphs renders 536px, so 410/536 of
@@ -374,7 +374,7 @@ export function deterministicBrief(input: BriefInput): string {
       );
     }
   }
-  // No count in the closing line (Bryan, 2026-08-18, t-0iestDQdJTOZ:
+  // No count in the closing line (Bryan, 2026-08-18, the review-queue ticket:
   // "Remove the count. Don't think I need it.") — the queue below IS the
   // list; the brief only says whether it is empty.
   lines.push(

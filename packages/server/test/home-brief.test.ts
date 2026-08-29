@@ -410,7 +410,7 @@ describe('buildBriefPrompt', () => {
 
   it('the default instructions ask for evidence links and own the word budget', () => {
     expect(DEFAULT_INSTRUCTIONS).toContain('Show the evidence');
-    // 110, not 150 (Bryan, 2026-08-18, t-vrwyE8YcVD-J). Asserted as the whole
+    // 110, not 150 (Bryan, 2026-08-18, the Home-brief ticket). Asserted as the whole
     // phrase, and with the superseded number asserted ABSENT beside it, so a
     // revert cannot pass by leaving both numbers in the text.
     expect(DEFAULT_INSTRUCTIONS).toContain('Under 110 words');
