@@ -99,7 +99,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.120';
+const PLUGIN_VERSION = '0.1.123';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -2937,23 +2937,25 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // Declaring yourself is attach → subscribe → seat, and hands back the
         // backlog the attach drained. Naming somebody else is the seat alone.
         // See declare-lead.ts for why the order is load-bearing.
-        return ok(
-          await declareWorkspaceLead(
-            {
-              workspaceId,
-              ...(leadAgentId !== undefined ? { leadAgentId } : {}),
-              ...(takeover === true ? { takeover: true } : {}),
-            },
-            {
-              http,
-              watchWorkspace,
-              self: AUTHOR,
-              runtime: 'claude-code-local',
-              pluginVersion: PLUGIN_VERSION,
-              processId: PROCESS_ID,
-            },
-          ),
+        const declared = await declareWorkspaceLead(
+          {
+            workspaceId,
+            ...(leadAgentId !== undefined ? { leadAgentId } : {}),
+            ...(takeover === true ? { takeover: true } : {}),
+          },
+          {
+            http,
+            watchWorkspace,
+            self: AUTHOR,
+            // A session without CW_AGENT_NAME is refused before any seat
+            // change — as a tool error, not a warning on a success.
+            identityIsShared: IDENTITY_IS_SHARED,
+            runtime: 'claude-code-local',
+            pluginVersion: PLUGIN_VERSION,
+            processId: PROCESS_ID,
+          },
         );
+        return declared.isError === true ? err(String(declared.message)) : ok(declared);
       }
       case 'attach_doc': {
         const { workspaceId, docId } = a as { workspaceId: string; docId: string };

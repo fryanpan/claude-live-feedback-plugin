@@ -330,3 +330,49 @@ describe('the tool schema widened rather than narrowed', () => {
     expect(src).toContain('Promise<{ open: boolean; persisted: boolean }>');
   });
 });
+
+/**
+ * Declaring without a name fails LOUD and before any seat change. The old
+ * path took the seat, then reported `subscriptionPersisted: false` on a
+ * success response — which is exactly how a live board ended up led by the
+ * shared "agent" identity with its watches persisted nowhere.
+ */
+describe('declareWorkspaceLead — a shared identity is refused before the seat PUT', () => {
+  it('issues no HTTP call at all and names CW_AGENT_NAME', async () => {
+    const { calls, deps } = harness();
+    const res = await declareWorkspaceLead(
+      { workspaceId: WS },
+      {
+        ...deps,
+        self: { id: 'known-agent', name: 'Agent', kind: 'agent' },
+        identityIsShared: true,
+      },
+    );
+    expect(res.isError).toBe(true);
+    expect(String(res.message)).toContain('CW_AGENT_NAME');
+    expect(calls).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: a named identity whose persist failed still takes the seat, warning first', async () => {
+    const { calls, deps } = harness();
+    deps.watchWorkspace = async (workspaceId: string) => {
+      calls.push({ kind: 'watch', path: workspaceId });
+      return { open: true, persisted: false };
+    };
+    const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
+    expect(res.isError).toBeUndefined();
+    expect(shape(calls)).toContain(`PUT /api/workspaces/${WS}/lead`);
+    // The failure is the FIRST thing in the payload, with the remedy beside it.
+    expect(Object.keys(res)[0]).toBe('subscriptionPersisted');
+    expect(res.subscriptionPersisted).toBe(false);
+    expect(String(res.subscriptionWarning)).toMatch(/CW_AGENT_NAME|server/);
+  });
+});
+
+describe('the handler turns the refusal into a tool error', () => {
+  it('mcp.ts checks isError on the declare result and passes identityIsShared', async () => {
+    const src = await mcpSource();
+    expect(src).toMatch(/identityIsShared:\s*IDENTITY_IS_SHARED/);
+    expect(src).toMatch(/declared\.isError === true\s*\?\s*err\(/);
+  });
+});
