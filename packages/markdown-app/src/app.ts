@@ -6,6 +6,7 @@ import { fetchDocMeta } from './doc-meta.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
+import { wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
@@ -169,6 +170,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     docLink: ctx.workspaceId
       ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
       : undefined,
+    // A huddle washes each participant's recent sections in their color;
+    // every other doc is untouched (no plugin registered at all).
+    recentEdits: ctx.huddle === true ? { whenSynced: (cb) => client.onReady(cb) } : undefined,
   });
   // Editor teardown runs before the client closes (LIFO — client.close was
   // registered first by the router), so the y-prosemirror binding detaches
@@ -262,9 +266,22 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // Ordinary markdown docs only. A `.md` diff member's File view mounts this
   // same surface over a companion doc (that is what `navDocId` marks), and a
   // review of somebody's branch is not a place a meeting is recorded.
+  //
+  // Opened by the Board's "Start a planning huddle": the address carries a
+  // flag, and the strip asks for the mic at once instead of waiting for a
+  // press. Read once and taken back out of the address, so a reload or a
+  // later Back into this entry does not open a mic nobody pressed for.
   const meetingStripEl = document.getElementById('meeting-strip');
   if (meetingStripEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const strip = mountMeetingStrip({ docId, root: meetingStripEl });
+    const huddleStart = wantsHuddleStart(location.search);
+    if (huddleStart) {
+      history.replaceState(
+        history.state,
+        '',
+        withoutHuddleStart(location.pathname + location.search + location.hash),
+      );
+    }
+    const strip = mountMeetingStrip({ docId, root: meetingStripEl, autoStart: huddleStart });
     scope.onCleanup(() => strip.destroy());
   }
 

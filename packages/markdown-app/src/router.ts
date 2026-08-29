@@ -2,6 +2,7 @@ import type { FeedbackClient, User } from '@feedback/core';
 import { applyBackLink } from './back-link.ts';
 import { setActiveFile } from './diff-nav.ts';
 import { docIdFromPath, docIdFromPathOrNull } from './doc-path.ts';
+import { applyHuddleCrumb } from './huddle-entry.ts';
 import type { DocMeta, MountContext, MountFn } from './mount-context.ts';
 import { MountScope } from './mount-scope.ts';
 
@@ -114,6 +115,9 @@ async function swap(docId: string): Promise<void> {
   // link. After the token re-check, so a superseded navigation cannot repoint
   // the arrow at the doc that lost.
   applyBackLink(document, meta.backTo);
+  // Same reasoning, same moment: the word is chrome the next doc must not
+  // inherit, and a superseded navigation must not write it.
+  applyHuddleCrumb(document, meta.huddle === true);
 
   const client = o.connectFor(docId, meta.docType);
   // Registered FIRST → runs LAST on dispose, after the surface's teardown.

@@ -54,6 +54,9 @@ export function redactMetaForVisitor(
     ...(opts?.workspaceScoped && meta.setId !== undefined ? { setId: meta.setId } : {}),
     ...(meta.lastActivityAt !== undefined ? { lastActivityAt: meta.lastActivityAt } : {}),
     ...(meta.stale !== undefined ? { stale: meta.stale } : {}),
+    // A huddle is what the doc IS, not where it lives — the visitor's editor
+    // dresses it the same way the owner's does.
+    ...(meta.huddle !== undefined ? { huddle: meta.huddle } : {}),
     // Diff presentation — line counts and status drive the badges the
     // visitor is looking at.
     //

@@ -253,6 +253,10 @@ export function projectTask(
     // own. See `decodeEntities` — one pass, so a deliberate `&amp;amp;` still
     // shows as `&amp;`.
     title: decodeEntities(task.title),
+    // The title above is a placeholder; the board draws the row as empty and
+    // focuses its title field. Conditional like every flag here, so naming
+    // the row removes the key from the projection.
+    ...(task.untitled ? { untitled: true } : {}),
     status: task.status,
     assignee: task.assignee,
     ...(assigneeId !== undefined ? { assigneeId } : {}),

@@ -23,3 +23,6 @@ export const SVG_ENDS = 'stroke-linecap="round" stroke-linejoin="round" aria-hid
  * finished.
  */
 export const MIC_ICON = `<svg ${SVG} ${SVG_ENDS}><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v3.2"/><path d="M8.6 21.2h6.8"/></svg>`;
+
+/** New task — the Board's primary action, drawn in the same vocabulary. */
+export const PLUS_ICON = `<svg ${SVG} ${SVG_ENDS}><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;

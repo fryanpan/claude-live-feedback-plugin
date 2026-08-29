@@ -31,7 +31,13 @@ import {
   parseAssigneeKind,
   resolveAssignee,
 } from './task-owner.ts';
-import { type CreateTaskOpts, REF_KINDS, type Ref, isValidRef } from './tasks.ts';
+import {
+  type CreateTaskOpts,
+  REF_KINDS,
+  type Ref,
+  UNTITLED_TASK_TITLE,
+  isValidRef,
+} from './tasks.ts';
 
 export const BAD_TITLE_ERROR = 'title required';
 export const BATCH_REF_OUTSIDE_BATCH_ERROR = 'batch-ref-outside-batch';
@@ -281,7 +287,16 @@ export function parseTaskCreate(
   author: { id: string; name: string; kind?: string } | undefined,
 ): TaskCreateParse {
   const body = (raw ?? {}) as Record<string, unknown>;
-  const title = body.title;
+  // The ONE way past the blank-title refusal: the caller SAYS the row has no
+  // name yet (the Board's "New task", which opens the panel to type into).
+  // A blank title without the flag is still the 400 it always was — the flag
+  // is a declaration, not a default.
+  const untitled = body.untitled === true;
+  const rawTitle = body.title;
+  const title =
+    untitled && (rawTitle === undefined || (typeof rawTitle === 'string' && !rawTitle.trim()))
+      ? UNTITLED_TASK_TITLE
+      : rawTitle;
   if (typeof title !== 'string' || title.trim().length === 0) {
     return { ok: false, error: BAD_TITLE_ERROR };
   }
@@ -321,6 +336,9 @@ export function parseTaskCreate(
     ...(review.advice !== undefined ? { reviewAdvice: review.advice } : {}),
     opts: {
       title: title.trim(),
+      // Only when the placeholder is what got stored: `untitled: true` beside
+      // a real title is a caller contradicting itself, and the title wins.
+      ...(untitled && title === UNTITLED_TASK_TITLE ? { untitled: true } : {}),
       body: body.body as string | undefined,
       assignee: owner,
       // Left undefined when the caller said nothing — the store then derives

@@ -119,6 +119,16 @@ export interface DocMeta {
    */
   stale?: boolean;
   /**
+   * This doc is a HUDDLE — a live conversation over a doc, started from the
+   * Board before there is a task. Set at creation by the huddle route and
+   * never cleared: when the mic stops the doc stays as the record, still a
+   * huddle, still listed among the board's docs. The hub reads it to dress
+   * the row and the editor; nothing else branches on it. In the CRDT meta
+   * (not the private sidecar): it describes the document, not the host, and
+   * a share visitor rendering the doc may see it.
+   */
+  huddle?: boolean;
+  /**
    * Optional provenance passthrough captured at create/bind time, so the
    * activity event stream can attribute a doc to the agent + session that
    * produced it. `agentId` / `sessionId` are best-effort: supplied by the

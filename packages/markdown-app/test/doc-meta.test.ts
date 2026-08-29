@@ -77,4 +77,12 @@ describe('fetchDocMeta', () => {
     expect(meta.docType).toBe('markdown');
     expect(meta.backTo).toBeUndefined();
   });
+  it('carries the huddle flag, and reads its absence as an ordinary doc', async () => {
+    serve({ meta: { type: 'markdown', relPath: 'huddles/d-abc1.md', huddle: true } });
+    const huddle = await fetchDocMeta('d6');
+    expect(huddle.relPath).toBe('huddles/d-abc1.md'); // control: the payload was read
+    expect(huddle.huddle).toBe(true);
+    serve({ meta: { type: 'markdown', relPath: 'plan.md' } });
+    expect((await fetchDocMeta('d7')).huddle).toBeUndefined();
+  });
 });

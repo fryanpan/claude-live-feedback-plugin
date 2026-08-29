@@ -38,10 +38,11 @@ const AGENT: User = {
 const PERSON: User = { id: 'known-robin', name: 'Robin', kind: 'known', color: '#2e7dd7' };
 
 /**
- * What quick-capture actually posts for a typed paragraph: `parseQuickAdd`
- * clips the first line on a word boundary for the title and keeps the whole
- * utterance as the body. Written out rather than imported so this file states
- * the shape it is defending; the client's own parse is tested next door.
+ * What a captured paragraph posts: a title clipped on a word boundary and the
+ * whole utterance kept verbatim as the body. Written out so this file states
+ * the shape it is defending — the Board's quick-add box that used to compose
+ * it is gone (replaced by New task / Start a planning huddle), but the server
+ * still shapes any caller that files a title-plus-body task this way.
  */
 const CAPTURE = {
   title: 'And also it is really hard to go from one shelf to the nex…',

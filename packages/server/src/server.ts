@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import {
   type Anchor,
   type DocMeta,
@@ -89,6 +89,13 @@ import {
   readerKey,
   taskDeepLink,
 } from './home-brief.ts';
+import {
+  huddleAlias,
+  huddleFilePath,
+  huddleSeedMarkdown,
+  huddleTitle,
+  parseHuddleTopic,
+} from './huddle.ts';
 import { Identities, type IdentityRecord, userForIdentity } from './identities.ts';
 import { loadIdentityLinks } from './identity-links.ts';
 import {
@@ -5141,6 +5148,79 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             warnings: mapping.warnings,
           });
         }
+        // --- REST: start a huddle ---
+        // The Board's "Start a planning huddle" button. ONE call: a
+        // workspace-tied markdown doc, titled by the clock, empty or headed
+        // by the topic, filed on this board exactly as every other board doc
+        // is (so `list_docs`, the hub's docs list and the board fan-out see
+        // it with no new verb), flagged `huddle`, and answered with where to
+        // open it. The mic is the browser's to start; the server's part ends
+        // at the doc. A share visitor never reaches this — the host guard
+        // refuses every mutation under /api/workspaces it has not named.
+        const wsHuddlesMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/huddles$/);
+        if (wsHuddlesMatch && req.method === 'POST') {
+          const workspaceId = decodeURIComponent(wsHuddlesMatch[1] ?? '');
+          const body = await safeJson(req);
+          const targetBoard = taskStore.getWorkspace(workspaceId);
+          if (!targetBoard) return j(404, { error: 'workspace-not-found' });
+          if (isRetired(targetBoard)) {
+            return j(409, { error: 'workspace-retired', message: retiredRefusal(targetBoard) });
+          }
+          const parsedTopic = parseHuddleTopic(body?.topic);
+          if (!parsedTopic.ok) {
+            return j(400, {
+              error: 'bad topic',
+              hint: 'topic is an optional short string — it becomes the first heading.',
+            });
+          }
+          const startedAt = Date.now();
+          // Minted, never re-used: `createForCaller` answers an existing doc
+          // for a name that already resolves, and a huddle is always new.
+          let created = rooms.createForCaller(huddleAlias(startedAt), {
+            type: 'markdown',
+            title: huddleTitle(startedAt),
+            huddle: true,
+          });
+          if (created.ok && !created.minted) {
+            created = rooms.createForCaller(huddleAlias(startedAt), {
+              type: 'markdown',
+              title: huddleTitle(startedAt),
+              huddle: true,
+            });
+          }
+          if (!created.ok || !created.minted) {
+            return j(500, { error: 'huddle-not-minted' });
+          }
+          const room = created.room;
+          const docId = room.docId;
+          const hubWorkspaceId = fileUnderHubWorkspace(docId, workspaceId);
+          // The file first, then the bind — `attachFile` seeds the room from
+          // the file when the room is empty, so the topic heading lands
+          // through the same path a bound project file's content does, and
+          // the doc is a record on disk before anyone has typed a word.
+          const file = huddleFilePath(dataDir, docId);
+          try {
+            mkdirSync(dirname(file), { recursive: true });
+            if (!existsSync(file)) writeFileSync(file, huddleSeedMarkdown(parsedTopic.topic));
+          } catch (err) {
+            console.error(`[huddle] could not write ${file}:`, err);
+            return j(500, { error: 'huddle-file-failed' });
+          }
+          const attached = rooms.attachFile(docId, file);
+          if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+          const meta = withReviewUrl(room.meta, hubWorkspaceId);
+          return j(200, {
+            docId,
+            // Where the Board opens it — the SPA doc route under THIS board,
+            // relative so the client navigates within its own origin.
+            url: `/workspaces/${encodeURIComponent(hubWorkspaceId)}/docs/${encodeURIComponent(docId)}`,
+            ...(meta.reviewUrl !== undefined ? { reviewUrl: meta.reviewUrl } : {}),
+            hubWorkspaceId,
+            meta,
+            ...(parsedTopic.topic !== undefined ? { topic: parsedTopic.topic } : {}),
+          });
+        }
+
         const wsTasksMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/tasks$/);
         if (wsTasksMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(wsTasksMatch[1] ?? '');
