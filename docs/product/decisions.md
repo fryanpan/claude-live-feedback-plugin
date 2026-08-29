@@ -491,3 +491,51 @@ or widen the window); a person wanting the rule applied for them (that is a
 product decision about who holds the allowlist, not a bug here); or the
 sidecar and the items drifting (then the sidecar goes and the pair is found
 by scanning the items' headlines).
+
+## 2026-08-29 — Review items pass a quality gate; a hold is pending, never a refusal
+
+Bryan, 2026-08-29: *"Don't refuse, but let's have a criteria for what makes
+a good review item. Something we can change in the settings. It's a natural
+language prompt. If the review item an agent adds is not good enough, make
+the item pending. Let the agent know they should edit it. And include this
+in the stall monitor. If a review item's been unacceptable for more than 5
+minutes. Complain."* The criteria are a per-workspace string
+(`reviewItemCriteria`, default in `packages/core/src/review-judge-prompt.ts`:
+headline in the reader's words, stakes and what to look at, a cost on every
+option, links inline, no raw ids or acronyms), read and written through
+`PUT /api/workspaces/:id/settings` and the `set_review_item_criteria` tool.
+No hub text field: the settings UI has only a select and a checkbox today,
+and a textarea pattern is its own piece of work. Reversible calls:
+
+1. **A judge failure is a pass.** No key, `CW_REVIEW_GATE=0`, timeout
+   (8s), HTTP error, or an unparseable reply all record
+   `verdict: 'unavailable'` and let the item through, logged once per cause.
+   The gate exists to raise the floor on asks; an outage that stopped
+   agents filing asks would cost more than every bad item it ever caught.
+   One call, no retries — a retry doubles the latency on the filing path
+   for the case where the answer is "pass anyway".
+2. **Held is not open.** `reviewState.open` and the Home queue both exclude
+   held items, so the answerable count, the brief, and the review strip are
+   right by construction rather than by a second filter. The item stays on
+   the ticket with the judge's reason ("Held: … — the agent has been asked
+   to revise"), because the reader should see that a question is coming.
+3. **Five minutes, then one complaint per item.** `CW_HELD_ITEM_MINUTES`
+   (default 5, Bryan's number). Past it, the filer is nudged once per item
+   per server process and the lead's `workspace.stalled` frame carries the
+   item; the item's ticket enters the stall stamp so nothing re-fires on
+   the next pass. Revise-and-pass clears both; a fresh hold on the same
+   item is nudged afresh.
+4. **The summarizer's key is the judge's key.** Same Keychain entry, same
+   consent class: what leaves the machine is text an agent already wrote
+   for a shared board. The generic `ANTHROPIC_API_KEY` stays un-honoured,
+   as for the summarizer.
+5. **The filer's agent id is store-only** (`filedBy`), like every actor id:
+   the projection carries the verdict and the display name, so the wake can
+   be addressed without an id reaching a share visitor.
+
+**What would change the decision:** the judge holding good items often
+enough that agents stop filing (loosen the default criteria, or make the
+hold advisory); a board wanting the gate to REFUSE (that is Bryan's call to
+reverse, not a knob); or the 5-minute nudge proving noisy for an agent
+mid-turn (lengthen it — the filer already heard once, in the tool result).
+

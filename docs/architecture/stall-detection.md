@@ -40,7 +40,30 @@ exists to catch a session that keeps talking without moving anything.
 
 Known gap, deliberately open: nothing ages review items sitting unanswered
 on the owner's queue. That is a different signal (ask-aging, not
-row-stalling) and gets its own design if it proves needed.
+row-stalling) and gets its own design if it proves needed. The one kind of
+review item the loop DOES age is the held one, below — an ask the reader
+cannot see is not waiting on the reader.
+
+**A held review item is a finding of its own.** Every `add_review_item` /
+`revise_review_item` passes a quality gate: a Haiku judge reads the board's
+`reviewItemCriteria` (a natural-language prompt; `set_review_item_criteria`,
+or `PUT /api/workspaces/:id/settings`) and the item, and answers
+`{ok, reason}`. Not ok → the item is HELD: it stays on the ticket with the
+reason, leaves the Home queue and the answerable count, and the filer is
+told in the tool result and on the channel (`workspace.review_item_held`).
+A judge that has no key, times out, errors, or answers unparseably PASSES
+the item — the gate is a nudge toward better asks, never a door that
+closes when the API does (`decisions.md`, 2026-08-29). Held state is
+stored on the item (`judge: {at, verdict, reason}`) and the filer's agent id
+beside it, store-only. `stallSnapshot` lists the holds older than
+`CW_HELD_ITEM_MINUTES` (default 5) as `held`; the nudger wakes the FILER
+once per item per process (`filersTold`), and the frame to the lead carries
+them as `heldItems` — a board with nothing else wrong still wakes on one.
+Held rows enter the stall stamp under their ticket's id, so a later stall
+or unfiled finding on the same ticket while it stays held re-wakes nothing:
+one complaint per item, not per pass. Revising re-judges; a pass clears
+the hold, keeps the original filing time, and forgets the filer stamp, so
+a fresh hold on the same item is nudged afresh.
 
 ## Wake economics — the number that shaped everything
 
@@ -92,6 +115,8 @@ grace window that #411 fixed.
 |---|---|---|
 | `CW_STALL_NUDGE_MINUTES` | 20 | quiet time before a row is a finding |
 | `CW_STALL_REPEAT_HOURS` | 4 | how often an unchanged bad board is re-said |
+| `CW_HELD_ITEM_MINUTES` | 5 | how long a held review item may stand before its filer, then the lead, is told |
+| `CW_REVIEW_GATE` | on | `0` turns the judge off; every item passes unjudged (also the state with no summary API key) |
 
 Both accept fractions; zero, negative, or unreadable values fall back to
 the default rather than firing every tick (`positiveEnvDuration` in
@@ -101,6 +126,8 @@ the default rather than firing every tick (`positiveEnvDuration` in
 
 `packages/server/src/stall-gate.ts` (classification) ·
 `packages/server/src/stall-nudge.ts` (stamps, wakes, logging) ·
+`packages/server/src/review-judge.ts` (the Haiku judge; prompt in
+`packages/core/src/review-judge-prompt.ts`) ·
 `packages/server/src/keep-moving.ts` (shared row classifier — the report
 counts unfiled asks with NO age gate on purpose; only the wake path has
 the grace) · `packages/mcp/src/nudge-line.ts` (frame rendering) ·
