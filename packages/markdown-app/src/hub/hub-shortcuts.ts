@@ -52,12 +52,14 @@ export function hubShortcutKeydown(deps: HubShortcutDeps): (ev: KeyboardEvent) =
       return;
     }
     // Gmail's compose key. Before the row shortcuts, and before the
-    // rows-are-empty bail below it — capture has to work on a board with
-    // nothing on it, which is exactly when it is needed most.
+    // rows-are-empty bail below it — a new task has to work on a board with
+    // nothing on it, which is exactly when it is needed most. It presses the
+    // Board's New task button: the row is filed and the panel opens with the
+    // title ready to type, which is what the old capture box's focus led to.
     if (ev.key === 'c') {
-      const box = document.querySelector<HTMLTextAreaElement>('.hub-quick-input');
-      if (box) {
-        box.focus();
+      const btn = document.querySelector<HTMLButtonElement>('.hub-quick-new');
+      if (btn) {
+        btn.click();
         ev.preventDefault();
       }
       return;

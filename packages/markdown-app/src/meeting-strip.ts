@@ -190,6 +190,16 @@ export interface MeetingStripOpts {
   interval?: (fn: () => void, ms: number) => () => void;
   openSocket?: (url: string) => MeetingSocket;
   startCapture?: (opts: { onFrame: (pcm: Int16Array) => void }) => Promise<MeetingCaptureStart>;
+  /**
+   * Ask for the mic on mount, without a press — the Board's "Start a planning
+   * huddle" button was the press, on a page that is gone by the time this
+   * mounts. A browser that wants the gesture INSIDE this page refuses the
+   * mic exactly the way it refuses a real denial; the strip cannot tell them
+   * apart, so it offers its one button as "Tap to start the mic" rather than
+   * reporting a refusal nobody made. A tap is a gesture, so a refusal after
+   * that is reported as what it is.
+   */
+  autoStart?: boolean;
 }
 
 export interface MeetingStripHandle {
@@ -270,6 +280,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * Paused.
    */
   let generation = 0;
+  /** The auto-start was refused in the way a missing gesture is: the button
+   *  is the tap that supplies one, and says so. Cleared by any press. */
+  let tapToStart = false;
 
   /** Live word spans per turn, so a correction rewrites the span that is
    *  already on screen instead of redrawing the line under the reader. */
@@ -378,11 +391,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       case 'blocked':
       case 'error':
         status.textContent = 'Off';
-        toggle.textContent = 'Start';
+        toggle.textContent = tapToStart ? 'Tap to start the mic' : 'Start';
         // Deliberately pressable: the press is how someone sees the reason
         // again after granting the permission the message named.
         toggle.disabled = false;
-        showNote(state.message);
+        showNote(tapToStart ? 'The huddle is on — the mic needs one tap to start.' : state.message);
         break;
     }
     tickClock();
@@ -449,10 +462,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
   }
 
-  async function start(): Promise<void> {
+  async function start(auto = false): Promise<void> {
     if (state.kind === 'requesting' || state.kind === 'recording') return;
     const attempt = ++generation;
     turns = [];
+    tapToStart = false;
     setState({ kind: 'requesting' });
     const started = await startCapture({
       onFrame: (pcm) => {
@@ -464,6 +478,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       return;
     }
     if (!started.ok) {
+      // Only a DENIAL can be a missing gesture; an insecure origin gives no
+      // mic to any press, and says so.
+      tapToStart = auto && started.kind === 'denied';
       setState({ kind: 'blocked', message: started.message });
       return;
     }
@@ -508,6 +525,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   toggle.addEventListener('click', onToggle);
 
   render();
+  if (opts.autoStart) void start(true);
 
   return {
     state: () => state,

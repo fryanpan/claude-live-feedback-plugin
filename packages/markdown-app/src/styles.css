@@ -165,6 +165,16 @@ button {
   color: var(--fg-muted);
   flex: 0 0 auto;
 }
+/* The crumb of a huddle doc says so, in place of "Editing:" — the huddle's
+   own orange, the colour its Board button and the meeting strip's badge
+   share, at a wash. Set by the router beside the back arrow. */
+.doc-label-huddle {
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
+  color: var(--fg);
+  font-weight: 600;
+}
 .back-link {
   flex: 0 0 auto;
   color: var(--fg-muted);
@@ -1222,86 +1232,40 @@ body.hub-body {
   padding: 0 6px;
 }
 
-/* --- quick capture: the box that stops ideas going into chat --- */
+/* --- quick actions: the two ways work starts — New task, Start a planning
+   huddle — in the slot the quick-add box had (Bryan, 2026-08-29: "replace
+   current text box"). Plain `.hub-btn`s, so on the tablet tier they are the
+   rail's 36px against the box's 40px: HEIGHT is the scarce axis at 1180×820,
+   and the swap must not spend any. A thumb target in the ≤1100px block. --- */
 .hub-quick {
   margin-bottom: 10px;
 }
-.hub-quick-form {
+.hub-quick-actions {
   display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  /* So the dictation indicator can take a line of its own under the row
-     rather than squeezing the box it is reporting on. */
   flex-wrap: wrap;
+  gap: 8px;
 }
-.hub-quick-input {
-  flex: 1;
-  min-width: 0;
-  /* 16px: anything smaller and iOS zooms the page on focus, which on a board
-     read from a phone is a worse cost than the extra pixel of height. */
-  font: inherit;
-  font-size: 16px;
-  line-height: 1.4;
-  padding: 8px 10px;
-  min-height: 40px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: inherit;
-  resize: none;
-  overflow: hidden;
-}
-.hub-quick-submit {
-  flex: none;
-  min-height: 40px;
-}
-/* Hold to dictate into the box. Square and at least 44px so it is a thumb
-   target on a phone, which is where talking beats typing by the most. */
-.hub-quick-mic {
-  flex: none;
+.hub-quick-actions .hub-btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 40px;
-  min-width: 44px;
-  padding-inline: 8px;
-  line-height: 1;
-  /* iOS turns a long press on a button into text selection / the callout
-     menu, which cancels the hold before a word is said. */
-  -webkit-user-select: none;
-  user-select: none;
-  -webkit-touch-callout: none;
+  gap: 6px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
 }
-/* The same stroked glyph the docked mic wears — two mics on one screen (this
-   one in the capture box, the docked one in the rail) that disagreed about
-   whether a mic is an emoji or an outline was the loudest half of "distinct
-   reads as unfinished". Sized as a box, so the `font-size: 16px` that used to
-   scale a `🎤` is gone rather than left meaning nothing. */
-.hub-quick-mic svg {
+/* The same stroked glyphs the rail wears, sized as boxes — decoration, not a
+   target (see `.voice-mic svg`). */
+.hub-quick-new svg,
+.hub-huddle-start svg {
   display: block;
-  width: 18px;
-  height: 18px;
-  /* Decoration, not a target — see `.voice-mic svg`. */
+  width: 15px;
+  height: 15px;
   pointer-events: none;
 }
-/* Recording. Same red as the board-wide dock's mic — one meaning, one colour,
-   whichever mic you are holding. */
-.hub-quick-mic.voice-active {
-  background: var(--red-strong);
-  border-color: var(--red-strong);
-  color: #fff;
-}
-.hub-quick-mic.voice-unavailable {
-  opacity: 0.45;
-}
-.hub-quick-mic-state {
-  /* Its own line: the streaming transcript is the longest thing here and it
-     must not reflow the row mid-utterance. */
-  flex-basis: 100%;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--fg-muted);
-  overflow-wrap: anywhere;
+@media (max-width: 1100px) {
+  .hub-quick-actions .hub-btn {
+    min-height: 44px;
+  }
 }
 
 /* --- decisions strip: the count first, the list second --- */
@@ -3559,6 +3523,12 @@ body.hub-body {
   overflow-wrap: anywhere;
   word-break: break-word;
   cursor: text;
+}
+/* "Untitled task" is the stand-in a row filed from the Board's New task
+   button carries until a name is typed: muted while the row has no name,
+   plain the paint after one lands (task-detail-island toggles the class). */
+.hub-detail-title-placeholder {
+  color: var(--fg-muted);
 }
 .hub-detail-head-actions {
   display: flex;
@@ -5889,6 +5859,44 @@ body.is-reading-width #editor > .ProseMirror {
   }
   100% {
     background: rgba(255, 213, 79, 0.35);
+  }
+}
+
+/* ========== recent-edit wash (huddle docs) ==========
+   edit-wash.ts: each participant's last three edited top-level sections,
+   tinted with THAT person's identity color (`--edit-color`, set inline by
+   the decoration — Bryan blue, agents orange, per packages/core identity).
+   A node decoration, so the class lands on the block element itself; the
+   negative margin puts the bar in the editor's gutter and the text stays
+   exactly where it was. Rank 1 = that person's most recent section. */
+#editor > .ProseMirror .edit-wash {
+  --edit-alpha: 10%;
+  border-left: 3px solid var(--edit-color, var(--accent));
+  background: color-mix(in srgb, var(--edit-color, var(--accent)) var(--edit-alpha), transparent);
+  margin-left: -14px;
+  padding-left: 11px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  border-radius: 0 4px 4px 0;
+  transition: background 240ms ease;
+}
+#editor > .ProseMirror .edit-wash-1 {
+  --edit-alpha: 12%;
+}
+#editor > .ProseMirror .edit-wash-2 {
+  --edit-alpha: 10%;
+}
+#editor > .ProseMirror .edit-wash-3 {
+  --edit-alpha: 8%;
+}
+/* The wash is the live session, not the record: a printed huddle doc is
+   plain prose. */
+@media print {
+  #editor > .ProseMirror .edit-wash {
+    background: none;
+    border-left: 0;
+    margin-left: 0;
+    padding-left: 0;
   }
 }
 

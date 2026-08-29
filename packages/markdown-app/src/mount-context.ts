@@ -21,6 +21,10 @@ export interface DocMeta {
    *  machine-wide index. Absent for a doc on no board, and for a share
    *  visitor (a board id is an unguessable URL capability). */
   backTo?: BackTarget;
+  /** A huddle doc — a live conversation over a doc, started from the Board
+   *  before there is a task. The crumb names it; nothing else about the
+   *  surface changes. */
+  huddle?: boolean;
 }
 
 /**

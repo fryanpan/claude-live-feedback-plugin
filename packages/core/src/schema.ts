@@ -66,6 +66,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const diffGroup = m.get('diffGroup') as string | undefined;
   const diffGroupRank = m.get('diffGroupRank') as number | undefined;
   const diffGroupDetails = m.get('diffGroupDetails') as string | undefined;
+  const huddle = m.get('huddle') as boolean | undefined;
   return {
     docId,
     type,
@@ -89,6 +90,7 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
     diffGroup,
     diffGroupRank,
     diffGroupDetails,
+    huddle,
   };
 }
 
@@ -125,6 +127,7 @@ export function initDocMeta(doc: Y.Doc, meta: DocMeta): void {
       m.set('diffDeletions', meta.diffDeletions);
     if (meta.diffWhitespaceOnly !== undefined && !m.has('diffWhitespaceOnly'))
       m.set('diffWhitespaceOnly', meta.diffWhitespaceOnly);
+    if (meta.huddle !== undefined && !m.has('huddle')) m.set('huddle', meta.huddle);
     if (meta.diffGroup !== undefined && !m.has('diffGroup')) m.set('diffGroup', meta.diffGroup);
     if (meta.diffGroupRank !== undefined && !m.has('diffGroupRank'))
       m.set('diffGroupRank', meta.diffGroupRank);

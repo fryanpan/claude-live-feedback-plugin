@@ -8,7 +8,7 @@ import { type ReviewPayload, reviewAnswered } from '@feedback/core';
 import type { ReviewShape } from '@feedback/core';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
-import { MIC_ICON } from '../icons.ts';
+import { MIC_ICON, PLUS_ICON } from '../icons.ts';
 import {
   type ComposerSelection,
   composerSelection,
@@ -35,16 +35,12 @@ import {
   type UnplacedNotice,
   type UptimeReport,
   activityRows,
-  appendDictation,
   assigneeLabel,
   decisionAskedBy,
   describeEvent,
   homeSinceLabel,
   ownerKindSuffix,
   ownerMarkKind,
-  quoteAfterCapture,
-  quoteAfterEdit,
-  quoteForCapture,
   reviewBannerText,
   statusLabel,
   statusOptions,
@@ -75,11 +71,18 @@ export function wireInPlaceTitle(
   current: () => string,
   commit: (v: string) => void,
   keepKey?: string,
+  opts: {
+    /** What the element shows when `current()` is empty and the edit ends
+     *  without a name — the panel's "Untitled task" stand-in. Without it an
+     *  empty original restores an empty heading. */
+    placeholder?: () => string;
+  } = {},
 ): (caret?: number) => void {
   const put = (text: string): Node => document.createTextNode(text);
   const begin = (caret?: number): void => {
     if (el.querySelector('input')) return;
     const original = current();
+    const shown = original || opts.placeholder?.() || original;
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'hub-title-input';
@@ -91,7 +94,7 @@ export function wireInPlaceTitle(
       typeof caret === 'number' ? Math.max(0, Math.min(original.length, caret)) : original.length;
     input.setSelectionRange(at, at);
     const restore = () => {
-      el.replaceChildren(put(original));
+      el.replaceChildren(put(shown));
     };
     input.addEventListener('keydown', (ke) => {
       if (ke.key === 'Enter' || ke.key === 'Escape') {
@@ -516,159 +519,60 @@ export function renderUnplacedStrip(
   container.append(open, age);
 }
 
-// ── Quick capture ──────────────────────────────────────────────────────────
+// ── Quick actions: the two ways work starts ───────────────────────────────
 
 /**
- * One box, always in the same place, that turns a sentence into a task.
+ * "New task" and "Start a planning huddle", in the slot the quick-add box had.
  *
- * Built once and never re-rendered — unlike every other region here. That is
- * the whole point: the board repaints on every ydoc change, and a composer
- * that is replaced mid-sentence loses what you were typing and the caret with
- * it. So `renderQuickAdd` is a MOUNT, guarded against a second call on the
- * same container.
+ * Bryan, 2026-08-29: *"From board, have a quick flow to create a new task
+ * (replace current text box) that creates an empty item in the usual task
+ * detail view. And have another button to start a planning huddle."* Neither
+ * asks anything first: the task is an empty row the panel opens on with the
+ * title ready to type, and the huddle is a doc the editor opens with the mic
+ * already asked for.
+ *
+ * A mount, not a render, like the box it replaced: the board repaints on
+ * every ydoc change, and a button rebuilt while its request is out would come
+ * back enabled and take a second press.
  */
-export interface QuickAddHandlers {
-  /** The raw text, exactly as typed. Splitting it into title and body is the
-   *  model's job, not the DOM's.
-   *
-   *  Resolves true when the task actually exists. The box clears on THAT, not
-   *  on dispatch: a phone in a lift would otherwise eat the idea and hand back
-   *  a toast, which is the one failure this box exists to prevent, at the
-   *  moment it costs most.
-   *
-   *  `quote` is the speaker's own words when any of the text was dictated —
-   *  kept verbatim even after the text is edited, so a misheard word can be
-   *  fixed without losing what was actually said. */
-  onCapture: (text: string, quote?: string) => Promise<boolean>;
-  /** Wire speech to the box. Called once at mount with the parts to drive;
-   *  omitted entirely where speech is unavailable, and the typed path is then
-   *  exactly what it was.
-   *
-   *  The split is deliberate: this module owns the DOM, and the caller owns
-   *  the policy (which recognizer, what it costs, when it may listen). */
-  mountVoice?: (parts: {
-    button: HTMLButtonElement;
-    indicator: HTMLElement;
-    /** A finished utterance. Appends to the box; never files anything —
-     *  dictation mishears, and a wrong task filed silently is worse than one
-     *  more tap on Add. */
-    deliver: (transcript: string) => void;
-  }) => void;
+export interface QuickActionHandlers {
+  /** Resolves when the row exists (or the attempt failed) — the button is
+   *  held until then, because the reflex second tap would file two empty
+   *  rows. */
+  onNewTask: () => Promise<boolean>;
+  /** Resolves when the huddle doc exists and the page is leaving, or when the
+   *  start was refused — which gives the button back as the retry. */
+  onStartHuddle: () => Promise<boolean>;
 }
 
-export function renderQuickAdd(container: HTMLElement, handlers: QuickAddHandlers): void {
+export function renderQuickActions(container: HTMLElement, handlers: QuickActionHandlers): void {
   if (container.dataset.mounted === '1') return;
   container.dataset.mounted = '1';
-  const form = document.createElement('form');
-  form.className = 'hub-quick-form';
-  const input = document.createElement('textarea');
-  input.className = 'hub-quick-input';
-  input.rows = 1;
-  input.placeholder = 'Capture a task — say it however you like';
-  input.setAttribute('aria-label', 'Capture a task');
-  const submit = document.createElement('button');
-  submit.type = 'submit';
-  submit.className = 'hub-btn hub-quick-submit';
-  submit.textContent = 'Add';
-
-  // Grow with the text: an idea that runs to three lines shouldn't be typed
-  // through a one-line slot.
-  const autosize = () => {
-    input.style.height = 'auto';
-    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
-  };
-  // One in flight at a time. Without this the second Enter — the reflex when
-  // the first appears to do nothing — files the idea twice, because the text
-  // now stays in the box until the task lands.
-  let inFlight = false;
-  // What was SAID, accumulated across utterances, for as long as the box still
-  // holds the idea it belongs to.
-  let spoken = '';
-  const capture = () => {
-    const text = input.value.trim();
-    if (!text || inFlight) return;
-    inFlight = true;
-    submit.disabled = true;
-    const quote = quoteForCapture(spoken);
-    void handlers.onCapture(text, quote).then((ok) => {
-      inFlight = false;
-      submit.disabled = false;
-      if (!ok) return;
-      // The utterance belonged to the task that just landed. Carrying it into
-      // the next one would file words about work nobody spoke about — but the
-      // box stayed live while the POST was out, so anything dictated SINCE
-      // belongs to the idea still sitting there. Same rule as the text below:
-      // remove what was sent, keep the rest.
-      spoken = quoteAfterCapture(spoken, quote);
-      // Only what was sent. Anything typed while it was in flight is a second
-      // idea, and clearing the whole box would take it with the first.
-      input.value = input.value.trim() === text ? '' : input.value;
-      autosize();
+  const row = document.createElement('div');
+  row.className = 'hub-quick-actions';
+  // One request in flight per button. Held rather than debounced: a disabled
+  // button also LOOKS taken, which is the receipt for the press.
+  const hold = (button: HTMLButtonElement, run: () => Promise<boolean>): void => {
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      void run().finally(() => {
+        button.disabled = false;
+      });
     });
   };
-  input.addEventListener('input', () => {
-    autosize();
-    // Edited away: the idea the utterance belonged to is gone, so the
-    // utterance goes with it — whether the box was cleared or retyped over
-    // (a select-all retype is one input event with a NON-empty value, which
-    // is how the previous "empty means forget" test let a retyped task file
-    // the last idea's words). Correcting a misheard word keeps it; the rule
-    // itself lives in the model.
-    spoken = quoteAfterEdit(input.value, spoken);
-  });
-  // Enter submits, Shift+Enter is a newline — the convention every chat box
-  // has, because this is the box people reach for instead of chat.
-  input.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey) {
-      ev.preventDefault();
-      capture();
-    } else if (ev.key === 'Escape') {
-      input.blur();
-    }
-  });
-  form.addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    capture();
-  });
-  form.append(input, submit);
-  container.append(form);
-
-  if (!handlers.mountVoice) return;
-  const mic = document.createElement('button');
-  // Not a submit: a press-and-hold on a button inside a form files the box on
-  // release in some browsers, which would send a half-dictated idea.
-  mic.type = 'button';
-  mic.className = 'hub-btn hub-quick-mic';
-  // Names the key, because the hold is genuinely available from the keyboard
-  // (the capture binds Space/Enter on this button) and nothing else on the
-  // page would tell someone who never taps that it is.
-  mic.setAttribute('aria-label', 'Hold to dictate a task — hold Space or Enter');
-  mic.innerHTML = MIC_ICON;
-  const indicator = document.createElement('span');
-  // Hidden until there is something to say — it takes a flex line of its own
-  // (`flex-basis: 100%`), so mounting it visible puts a row-gap under the form
-  // that vanishes for good the first time anything is dictated. The capture
-  // un-hides it; this is the same start the board-wide dock's indicator has.
-  indicator.className = 'hub-quick-mic-state hidden';
-  indicator.setAttribute('aria-live', 'polite');
-  // Before Add, not after: the two thumb targets on a phone are the box and
-  // the mic, and Add is the one that ends the interaction.
-  form.insertBefore(mic, submit);
-  form.append(indicator);
-  handlers.mountVoice({
-    button: mic,
-    indicator,
-    deliver: (transcript) => {
-      const next = appendDictation(input.value, transcript, spoken);
-      input.value = next.text;
-      spoken = next.quote;
-      autosize();
-      // So the next words land after these, and Enter files without a hunt
-      // for the box.
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
-    },
-  });
+  const newTask = document.createElement('button');
+  newTask.type = 'button';
+  newTask.className = 'hub-btn hub-btn-primary hub-quick-new';
+  newTask.innerHTML = `${PLUS_ICON}<span>New task</span>`;
+  hold(newTask, handlers.onNewTask);
+  const huddle = document.createElement('button');
+  huddle.type = 'button';
+  huddle.className = 'hub-btn hub-huddle-start';
+  huddle.innerHTML = `${MIC_ICON}<span>Start a planning huddle</span>`;
+  hold(huddle, handlers.onStartHuddle);
+  row.append(newTask, huddle);
+  container.append(row);
 }
 
 // ── Review banner (the board's one line about the queue) ──────────────────
@@ -984,6 +888,11 @@ export interface DetailHandlers {
    *  from the review queue. Marked and scrolled to — "open the task" is not
    *  the promise the strip makes on a task with six discussions. */
   focusThreadId?: string;
+  /** Open with the title already in rename — an EMPTY input, focused — so the
+   *  first thing typed is the name. The Board's "New task" sets this for the
+   *  row it just filed and for nothing else; it is an open-time act, and a
+   *  repaint of the same task does not repeat it. */
+  focusTitle?: boolean;
   /**
    * This task's rows from the SERVER's review queue
    * (`GET /api/workspaces/:id/review-items`) — the same computation the strip

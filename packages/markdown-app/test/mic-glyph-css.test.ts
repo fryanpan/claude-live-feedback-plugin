@@ -43,7 +43,7 @@ function rule(selector: string): string {
 /** Every mic-bearing module, and the string each one mounts. */
 const MOUNTS: ReadonlyArray<[string, string]> = [
   ['the board’s docked mic (hub-app.ts)', HUB_APP],
-  ['the capture composer’s mic (hub-render.ts)', HUB_RENDER],
+  ['the huddle button’s mic (hub-render.ts)', HUB_RENDER],
   ['the review doc’s mic (voice-dock.ts)', VOICE_DOCK],
 ];
 
@@ -76,7 +76,7 @@ describe('the mic wears the nav’s icon convention', () => {
     // to hold them, and really can see a glyph in them.
     for (const [where, src] of MOUNTS) {
       expect(src, `${where} is not the module that mounts a mic`).toMatch(
-        /voice-mic|hub-quick-mic|doc-mic/,
+        /voice-mic|hub-huddle-start|doc-mic/,
       );
       expect(src, `${where} still ships an emoji mic`).not.toMatch(/\u{1F399}|\u{1F3A4}/u);
     }
@@ -87,8 +87,8 @@ describe('the mic wears the nav’s icon convention', () => {
     // to size an emoji. An SVG ignores both, so leaving them set is how the
     // next reader concludes the glyph is still text.
     expect(rule('.voice-mic')).not.toMatch(/font-size/);
-    expect(rule('.hub-quick-mic')).not.toMatch(/font-size/);
-    for (const sel of ['.voice-mic svg', '.hub-quick-mic svg']) {
+    expect(rule('.hub-huddle-start')).not.toMatch(/font-size:\s*\d+px/);
+    for (const sel of ['.voice-mic svg', '.hub-huddle-start svg']) {
       const box = rule(sel);
       expect(box, `${sel} has no rule, so the glyph sizes itself`).not.toBe('');
       expect(box).toMatch(/width:\s*\d+px/);

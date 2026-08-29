@@ -75,7 +75,6 @@ import {
   isTaskArchived,
   paneForNav,
   panelAsks,
-  parseQuickAdd,
   pluginDriftNotice,
   presenceChips,
   presenceIdentity,
@@ -103,7 +102,7 @@ import {
   renderArchivedList,
   renderHomeBrief,
   renderLeadStrip,
-  renderQuickAdd,
+  renderQuickActions,
   renderReviewBanner,
   renderUnplacedStrip,
   renderWorkspaceIdentity,
@@ -428,7 +427,7 @@ function buildShell(root: HTMLElement, name: string): void {
           <dt>r or F2</dt><dd>rename the focused task in place — clicking its title does the same, with the cursor where you clicked</dd>
           <dt>alt + ↑ / ↓</dt><dd>move the focused task up / down — past the ends of its goal it moves into the next one</dd>
           <dt>tab to ⠿, then ↑ / ↓</dt><dd>the same move from the drag handle</dd>
-          <dt>c</dt><dd>capture a task — type it however you like, Enter files it</dd>
+          <dt>c</dt><dd>new task — an empty row opens in the panel with the title ready to type</dd>
           <dt>?</dt><dd>toggle this help</dd>
         </dl>
       </div>
@@ -516,6 +515,9 @@ async function main(): Promise<void> {
   /** The boot URL aimed at a thread; checked once against the loaded
    *  discussion, then dropped. */
   let bootThreadPending = bootLoc.thread !== null;
+  /** The row "New task" just filed: the panel opens it with the title in
+   *  rename. Cleared the moment any other task is on screen. */
+  let focusTitleTaskId: string | null = null;
   /** The boot URL named a walkthrough item; opened when the queue holds it. */
   let pendingBootItem = bootLoc.item;
 
@@ -1334,6 +1336,9 @@ async function main(): Promise<void> {
       handlers: { onClose: () => {}, onTitleCommit: () => {}, onStatusSet: () => {} },
     };
     const task = state.detailTaskId ? (state.tasks.get(state.detailTaskId) ?? null) : null;
+    // An open-time act for ONE row: a row tap on any other task, or the panel
+    // closing, ends it — reopening the same row later must not start a rename.
+    if (state.detailTaskId !== focusTitleTaskId) focusTitleTaskId = null;
     if (task && renderedDetailId === null) {
       const active = document.activeElement;
       detailOpener = active instanceof HTMLElement && active !== document.body ? active : null;
@@ -1392,6 +1397,7 @@ async function main(): Promise<void> {
         // So the answered record can say "Answered by you" for the reader's
         // own answer — the record compares display names, same as answer.by.
         selfName: author.name,
+        ...(task ? { focusTitle: focusTitleTaskId === task.id } : {}),
         onAssign: (t, assignee) => void assignTask(t, assignee),
         knownAgentIds: knownAgentIds(),
         goalLabel: (id) => goalLabel(state.info?.goals ?? [], id),
@@ -1830,29 +1836,11 @@ async function main(): Promise<void> {
   }
 
   function renderAll(): void {
-    // Mounted, not rendered: `renderQuickAdd` is a no-op after the first call
-    // so a board repaint can never take the caret out of a half-typed idea.
-    renderQuickAdd(el('hub-quick'), {
-      onCapture: (text, quote) => captureTask(text, quote),
-      // Dictation FILLS the box; it never files. The board-wide dock routes an
-      // utterance to the agent, which is right when you're talking to it and
-      // wrong when you're capturing — a misheard task filed silently costs
-      // more than one tap on Add. `spaceHotkey: false` because the dock owns
-      // Space: two captures on one press would both record and both finalize.
-      mountVoice: ({ button, indicator, deliver }) =>
-        void createVoiceCapture({
-          button,
-          indicator,
-          spaceHotkey: false,
-          getContext: () => ({ surface: 'hub' }),
-          send: async (transcript) => {
-            deliver(transcript);
-            // Not "Added": nothing has been filed yet. The words are in the
-            // box and stay there until a tap, which is the entire point of
-            // dictating into capture rather than at the agent.
-            return { route: 'capture', ack: 'In the box — edit, then tap Add' };
-          },
-        }),
+    // Mounted, not rendered: `renderQuickActions` is a no-op after the first
+    // call, so a board repaint cannot rebuild a button mid-request.
+    renderQuickActions(el('hub-quick'), {
+      onNewTask: () => newTask(),
+      onStartHuddle: () => startHuddle(),
     });
     renderLead();
     renderMe();
@@ -2310,41 +2298,61 @@ async function main(): Promise<void> {
   }
 
   /**
-   * File a captured line as a task.
+   * The Board's "New task": an EMPTY row, opened at once in the panel with the
+   * title ready to type (Bryan, 2026-08-29: *"creates an empty item in the
+   * usual task detail view"*). No prompt, no sheet — the panel IS the form.
    *
-   * It lands in TRIAGE — `goal` is deliberately omitted, which is what routes
-   * it there — because ranking an idea against the goals it competes with is
-   * exactly the judgement capture must not force at capture time.
+   * Filed as the person, to the person: the old capture box handed every idea
+   * to the lead agent, but a row Bryan is about to type into is his, and the
+   * route assigns it to the author when nobody else is named. `untitled` is
+   * the one way past the blank-title refusal; the server stores its own
+   * placeholder and clears the flag the moment a real title lands.
    *
-   * It is assigned to the workspace's lead agent when there is one, falling
-   * back to the person capturing. Reversible either way (one dropdown on the
-   * row), and this is the direction Bryan asked for: "mostly by just
-   * discussing it with you" — an idea he captures is one he wants picked up,
-   * not one he means to file to himself and never see again.
+   * The row itself arrives over the ydoc, not the response — so the panel is
+   * pointed at the id and `renderDetail` paints it when the projection lands,
+   * the way a boot deep link does.
    */
-  async function captureTask(text: string, quote?: string): Promise<boolean> {
-    const parsed = parseQuickAdd(text);
-    if (!parsed) return false;
+  async function newTask(): Promise<boolean> {
     const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/tasks`, 'POST', {
-      title: parsed.title,
-      ...(parsed.body !== undefined ? { body: parsed.body } : {}),
-      // What was actually said, when any of it was dictated. Kept verbatim so
-      // a misheard word corrected in the box doesn't cost the agent the
-      // phrasing it was corrected from.
-      ...(quote !== undefined ? { quote } : {}),
-      ...(state.info?.leadAgentId ? { assignee: state.info.leadAgentId } : {}),
+      untitled: true,
       author,
     });
-    if (!res.ok) {
-      const why = typeof res.data?.message === 'string' ? res.data.message : 'Capture failed';
+    const created = res.data?.task as { id?: unknown } | undefined;
+    const id = typeof created?.id === 'string' ? created.id : null;
+    if (!res.ok || !id) {
+      const why =
+        typeof res.data?.message === 'string' ? res.data.message : 'Could not file a new task';
       showToast(why);
-      // False, so the box KEEPS the words. A toast the reader may have already
-      // scrolled past is not a copy of their idea.
       return false;
     }
-    // The row itself arrives over the ydoc; the toast is the receipt for the
-    // words that just left the box.
-    showToast(`Captured — “${parsed.title}” is in triage`);
+    focusTitleTaskId = id;
+    state.detailTaskId = id;
+    state.detailGoalId = null;
+    state.detailThreadId = null;
+    renderDetail();
+    return true;
+  }
+
+  /**
+   * The Board's "Start a planning huddle": ONE call makes the huddle doc on
+   * this board, and the page leaves for it at once with the flag the editor
+   * reads to start the meeting assistant without a press. The click here is
+   * the person's gesture; `huddle-entry.ts` is the other half.
+   */
+  async function startHuddle(): Promise<boolean> {
+    const res = await send(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/huddles`,
+      'POST',
+      {},
+    );
+    const url = typeof res.data?.url === 'string' ? res.data.url : null;
+    if (!res.ok || !url) {
+      const why =
+        typeof res.data?.message === 'string' ? res.data.message : 'Could not start a huddle';
+      showToast(why);
+      return false;
+    }
+    location.assign(`${url}?huddle=1`);
     return true;
   }
 

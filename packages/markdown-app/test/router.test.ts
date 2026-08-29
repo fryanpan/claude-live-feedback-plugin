@@ -213,4 +213,36 @@ describe('router', () => {
       expect(backHref()).toBe('/');
     });
   });
+  /**
+   * The "Huddle" word in the crumb is shell chrome for the same reason the
+   * arrow is: a doc opened in place after a huddle would otherwise keep the
+   * word, and a huddle opened after a plain doc would never get it.
+   */
+  describe('huddle crumb', () => {
+    const crumb = () =>
+      '<div class="doc-crumb"><a href="/" class="back-link">←</a><span class="doc-label">Editing:</span></div>';
+    const label = () => document.querySelector('.doc-crumb .doc-label') as HTMLElement;
+
+    it('names a huddle doc once its meta arrives, and unnames the next doc', async () => {
+      document.body.innerHTML = `${crumb()}<aside id="set-pane"><ol id="set-pane-list"><li><a href="/review/b">b</a></li></ol></aside>`;
+      let huddle = true;
+      stop = startRouter({
+        user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+        fetchMeta: async () => ({ ...meta, ...(huddle ? { huddle: true } : {}) }),
+        connectFor: () => stubClient(),
+        mountFor: () => {},
+      });
+      await flush();
+      expect(label().textContent).toBe('Huddle');
+      expect(label().classList.contains('doc-label-huddle')).toBe(true);
+
+      huddle = false;
+      document
+        .querySelector('a[href="/review/b"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await flush();
+      expect(label().textContent).toBe('Editing:');
+      expect(label().classList.contains('doc-label-huddle')).toBe(false);
+    });
+  });
 });

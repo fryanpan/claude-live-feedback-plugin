@@ -21,6 +21,7 @@ import { Markdown } from 'tiptap-markdown';
 import type { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import { workspaceIdFromPath } from './doc-path.ts';
+import { EditWash, createEditAttribution } from './edit-wash.ts';
 import { resolveDocLink, safeLinkHref } from './link-open.ts';
 import { MermaidCodeBlock } from './mermaid-code-block.ts';
 import { SuggestionChips } from './redline/suggestion-chips.ts';
@@ -71,15 +72,29 @@ export interface CreateEditorOpts {
    *  to a sibling file navigates in-SPA (via `navigate`) instead of opening
    *  a raw relative URL that 404s. Omit for standalone docs. */
   docLink?: { workspaceId: string; relPath: string; navigate: (url: string) => void };
+  /** Huddle docs only: wash each participant's last three edited sections in
+   *  their color (edit-wash.ts). `whenSynced` gates attribution on the first
+   *  sync so hydration is nobody's edit. Absent = no wash, no plugin. */
+  recentEdits?: { whenSynced: (cb: () => void) => void };
 }
 
 export function createEditor(opts: CreateEditorOpts): EditorHandle {
-  // Intentionally unused for now — y-prosemirror awareness cursors are a
-  // follow-up once the Tiptap 3 cursor extension lands upstream.
-  void opts.awareness;
-  void opts.user;
+  // y-prosemirror awareness CURSORS are still a follow-up (once the Tiptap 3
+  // cursor extension lands upstream); awareness and the user identity are
+  // read today only by the huddle's recent-edit attribution below.
 
   const fragmentName = opts.fragmentName ?? 'prose';
+
+  // Huddle-only: the recent-edit wash needs to know who wrote each change,
+  // which is reconstructed per transaction from the local user + awareness.
+  const attribution = opts.recentEdits
+    ? createEditAttribution({
+        ydoc: opts.ydoc,
+        awareness: opts.awareness,
+        localUser: opts.user ?? { name: 'You', color: '#2e7dd7' },
+        whenSynced: opts.recentEdits.whenSynced,
+      })
+    : null;
 
   const editor = new Editor({
     element: opts.parent,
@@ -134,6 +149,7 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
       // never written into the fragment. In the base list because every
       // prose surface may hold a task link (meeting notes are the driver).
       TaskLinkChips,
+      ...(attribution ? [EditWash.configure({ authorOf: attribution.authorOf })] : []),
       ...(opts.extraExtensions ?? []),
     ],
     onSelectionUpdate: () => opts.onSelectionChange?.(),
@@ -277,6 +293,7 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
     },
     destroy() {
       editor.view.dom.removeEventListener('click', onLinkClick);
+      attribution?.destroy();
       editor.destroy();
     },
   };
