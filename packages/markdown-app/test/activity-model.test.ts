@@ -30,7 +30,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
     id: `t-${seq}`,
     title: `Task ${seq}`,
     status: 'in-progress',
-    assignee: 'Quick Build',
+    assignee: 'Beacon Bot',
     goal: 'g-pr',
     order: seq,
     after: [],
@@ -44,7 +44,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
 }
 
 function note(agoMs: number, text: string, overrides: Partial<HubNote> = {}): HubNote {
-  return { at: NOW - agoMs, kind: 'turn', text, agent: 'Quick Build', ...overrides };
+  return { at: NOW - agoMs, kind: 'turn', text, agent: 'Beacon Bot', ...overrides };
 }
 
 const GOALS: HubGoal[] = [
@@ -82,8 +82,8 @@ describe('homeActivity', () => {
     expect(busyGroup.flag).toBeUndefined();
     expect(busyGroup.more).toBe(0);
     expect(busyGroup.notes.map((n) => [n.text, n.age, n.agent, n.kind])).toEqual([
-      ['CSV writer done', '4m', 'Quick Build', 'turn'],
-      ['Picked this up', '8m', 'Quick Build', 'turn'],
+      ['CSV writer done', '4m', 'Beacon Bot', 'turn'],
+      ['Picked this up', '8m', 'Beacon Bot', 'turn'],
     ]);
     expect(out[1]?.notes[0]?.age).toBe('2h');
   });
@@ -215,7 +215,7 @@ describe('homeActivity', () => {
             ts: NOW - 10 * MIN,
             from: 'todo',
             to: 'in-progress',
-            by: { name: 'Quick Build', kind: 'agent' },
+            by: { name: 'Beacon Bot', kind: 'agent' },
           },
         ],
       });
@@ -228,7 +228,7 @@ describe('homeActivity', () => {
       const move = {
         from: 'in-progress' as const,
         to: 'todo' as const,
-        by: { name: 'Quick Build', kind: 'agent' as const },
+        by: { name: 'Beacon Bot', kind: 'agent' as const },
       };
       // The move takes one of the three shown slots; only two repeats show.
       const hidden = task({
@@ -327,13 +327,13 @@ describe('homeActivity', () => {
 
     it('a holder moving their own task to in-progress is a move, not a hand-off', () => {
       const t = task({
-        assignee: 'Quick Build',
+        assignee: 'Beacon Bot',
         transitions: [
           {
             ts: NOW - 5 * MIN,
             from: 'todo',
             to: 'in-progress',
-            by: { name: 'Quick Build', kind: 'agent' },
+            by: { name: 'Beacon Bot', kind: 'agent' },
           },
         ],
       });
@@ -348,7 +348,7 @@ describe('homeActivity', () => {
             ts: NOW - 5 * MIN,
             from: 'todo',
             to: 'in-progress',
-            by: { name: 'Quick Build', kind: 'agent' },
+            by: { name: 'Beacon Bot', kind: 'agent' },
           },
         ],
       });

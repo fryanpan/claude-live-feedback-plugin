@@ -44,7 +44,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
     id: `t-${seq}`,
     title: `Task ${seq}`,
     status: 'in-progress',
-    assignee: 'Quick Build',
+    assignee: 'Beacon Bot',
     goal: 'g-pr',
     order: seq,
     after: [],
@@ -58,7 +58,7 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
 }
 
 function note(agoMs: number, text: string, overrides: Partial<HubNote> = {}): HubNote {
-  return { at: NOW - agoMs, kind: 'turn', text, agent: 'Quick Build', ...overrides };
+  return { at: NOW - agoMs, kind: 'turn', text, agent: 'Beacon Bot', ...overrides };
 }
 
 const GOALS: HubGoal[] = [
@@ -171,13 +171,13 @@ describe('home-activity island rendering', () => {
 
     // Note lines: text, then the bare age, then the agent muted — newest first.
     expect(notesIn(groups[0] as Element)).toEqual([
-      'CSV writer done · 4m · Quick Build',
+      'CSV writer done · 4m · Beacon Bot',
       'Picked this up · 8m · Helper',
     ]);
     const agent = groups[0]?.querySelector('.hub-activity-note .acti-agent');
-    expect(agent?.textContent).toBe('Quick Build');
+    expect(agent?.textContent).toBe('Beacon Bot');
     expect(groups[0]?.querySelector('.hub-activity-note .acti-age')?.textContent).toBe('4m');
-    expect(notesIn(groups[1] as Element)).toEqual(['Opened PR, CI running · 2h · Quick Build']);
+    expect(notesIn(groups[1] as Element)).toEqual(['Opened PR, CI running · 2h · Beacon Bot']);
     // Nothing in the pane counts anything.
     expect(host.querySelector('.hub-activity-card')?.textContent).not.toMatch(/\d+ notes?/);
     unmount();
@@ -304,7 +304,7 @@ describe('home-activity island rendering', () => {
       { taskId: 't-ask', text: 'Which cache do we keep?' },
     ]);
     expect(notesIn(groupsIn(host)[0] as Element)).toEqual([
-      'Wrote the two options up · 5m · Quick Build',
+      'Wrote the two options up · 5m · Beacon Bot',
     ]);
     unmount();
     host.remove();
@@ -333,7 +333,7 @@ describe('home-activity island rendering', () => {
     };
     await tick();
     const after = groupsIn(host);
-    expect(notesIn(after[0] as Element)[0]).toBe('A two · 30s · Quick Build');
+    expect(notesIn(after[0] as Element)[0]).toBe('A two · 30s · Beacon Bot');
     expect(after[1]).toBe(groupB);
     unmount();
     host.remove();
@@ -503,7 +503,7 @@ describe('commenting on a note like a doc', () => {
     expect(host.querySelector('.acti-thread .thread')).not.toBeNull();
     expect(composer(host).value).toBe('Which rou');
     // The other group did take the new line, aged against the NEW now.
-    expect(notesIn(groupsIn(host)[0] as Element)[0]).toBe('Other done · 25s · Quick Build');
+    expect(notesIn(groupsIn(host)[0] as Element)[0]).toBe('Other done · 25s · Beacon Bot');
     unmount();
     host.remove();
   });
