@@ -10,7 +10,6 @@ import {
   goalLabel,
   humanBlockerRows,
   reviewQueue,
-  unplacedNotice,
 } from '../src/hub/hub-model.ts';
 import {
   BODY_LIVE_CLASS,
@@ -24,7 +23,6 @@ import {
   renderHomeBrief,
   renderLeadStrip,
   renderReviewBanner,
-  renderUnplacedStrip,
 } from '../src/hub/hub-render.ts';
 import {
   composerSelection,
@@ -3582,79 +3580,36 @@ describe('hub-app voice wiring', () => {
   });
 });
 
-describe('renderUnplacedStrip', () => {
-  const HOUR = 3_600_000;
-  const DAY = 24 * HOUR;
-
-  function host(): HTMLElement {
-    const el = document.createElement('div');
-    el.className = 'hub-unplaced hidden';
-    document.body.append(el);
-    return el;
+/**
+ * The "N tasks have no goal yet" banner is gone from the top of the board.
+ *
+ * Bryan, 2026-08-29, by voice on the board: *"the 44 tasks have no goal yet
+ * up top is taking out space and all of it's not useful."* The Backlog band
+ * already holds every unplaced row, so the count said nothing the board did
+ * not; `unplacedNotice` stays in the model for the lead's tools, and nothing
+ * draws it. Asserted against the source because the failure is silent: a
+ * strip that came back would render fine and fail no DOM test.
+ */
+describe('the unplaced banner is gone from the board', () => {
+  function code(path: string): string {
+    return readFileSync(resolve(path), 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
   }
 
-  it('renders nothing and stays hidden on an empty bucket', () => {
-    const el = host();
-    // Positive control: the same container DOES fill when there is something
-    // to say, so an empty one is the renderer's decision, not a dead call.
-    renderUnplacedStrip(el, unplacedNotice([task({ unplacedSince: NOW - DAY })], NOW), {
-      onOpenOldest: () => {},
-    });
-    expect(el.textContent).toContain('1 task has no goal yet');
-    expect(el.classList.contains('hidden')).toBe(false);
-
-    renderUnplacedStrip(el, unplacedNotice([task({ goal: 'g-pr' })], NOW), {
-      onOpenOldest: () => {},
-    });
-    expect(el.childElementCount).toBe(0);
-    expect(el.textContent).toBe('');
-    expect(el.classList.contains('hidden')).toBe(true);
+  it('hub-app neither hosts the strip nor renders it', () => {
+    const src = code('packages/markdown-app/src/hub/hub-app.ts');
+    expect(src).not.toContain('hub-unplaced');
+    expect(src).not.toContain('renderUnplacedStrip');
+    // Positive control: the board host it used to sit above is still there.
+    expect(src).toContain('id="hub-board"');
   });
 
-  it('says how many and how old, and opens the longest-waiting task', () => {
-    const el = host();
-    const old = task({ id: 't-waited', unplacedSince: NOW - 6 * DAY });
-    const opened: string[] = [];
-    renderUnplacedStrip(el, unplacedNotice([task({ unplacedSince: NOW - HOUR }), old], NOW), {
-      onOpenOldest: (id) => opened.push(id),
-    });
-    expect(el.textContent).toContain('2 tasks have no goal yet');
-    expect(el.textContent).toContain('oldest waiting 6d');
-
-    const btn = el.querySelector<HTMLButtonElement>('.hub-unplaced-open');
-    expect(btn).not.toBeNull();
-    btn?.click();
-    expect(opened).toEqual(['t-waited']);
-  });
-
-  it('informs rather than scolds', () => {
-    // A strip that reads as an accusation gets ignored, and an ignored strip
-    // is the same as the silence it was built to break.
-    const el = host();
-    renderUnplacedStrip(el, unplacedNotice([task({ unplacedSince: NOW - 9 * DAY })], NOW), {
-      onOpenOldest: () => {},
-    });
-    expect(el.textContent).not.toMatch(/\b(overdue|neglect\w*|ignored|stale|forgotten|should)\b/i);
-    expect(el.textContent).not.toMatch(/[!⚠]/);
-  });
-
-  it('is drawn quieter than the decisions alarm above it', () => {
-    // Same reason the coverage line is quieter than the drift alarm: if the
-    // standing reading looks like the alarm, people learn to skim the alarm.
-    const css = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
-    // Collect the strip's OWN rules rather than slicing to whatever selector
-    // happens to follow it. The slice form read to `.hub-walkthrough {`, and
-    // when that rule went away (the walkthrough stopped being a fixed overlay)
-    // `indexOf` returned -1 and the "block" became the rest of the file — a
-    // test that then fails on somebody else's colour.
-    const rules = [...css.matchAll(/\.hub-unplaced[\w-]*(?:\.[\w-]+)?\s*\{([^}]*)\}/g)].map(
-      (m) => m[1] ?? '',
-    );
-    // Positive control: the rules this asserts about really were found.
-    expect(rules.length).toBeGreaterThan(1);
-    expect(rules.some((r) => r.includes('--fg-muted'))).toBe(true);
-    for (const r of rules) expect(r).not.toContain('--yellow');
-    // The tap target still has to be reachable on a phone.
-    expect(rules.some((r) => /min-height:\s*36px/.test(r))).toBe(true);
+  it('the stylesheet carries no rule for it', () => {
+    const css = readFileSync(resolve('packages/markdown-app/src/styles.css'), 'utf8');
+    expect(css).not.toMatch(/\.hub-unplaced/);
+    // Positive control: the board's own rules are still read from this file.
+    expect(css).toMatch(/\.hub-board-foot/);
   });
 });
