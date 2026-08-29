@@ -401,3 +401,35 @@ describe('classifyActor', () => {
     );
   });
 });
+
+/**
+ * History is never rewritten: a row stamped with an old agent id keeps that
+ * id on disk forever. What changes is the READ — the roster says which
+ * identity the id belongs to now, and what that identity is called.
+ */
+describe('an old-id activity row resolves to the merged identity at read', () => {
+  it('resolveActor answers the canonical id and the roster name', async () => {
+    const { Identities } = await import('../src/identities.ts');
+    const { resolveActor, setIdentityRoster } = await import('../src/activity.ts');
+    const dataDir = mkdtempSync(join(tmpdir(), 'activity-merge-'));
+    try {
+      const roster = new Identities({ dataDir });
+      roster.upsertAgent('agent-quick-build', 'Quick Build');
+      roster.mergeAgent('qb-agent', 'agent-quick-build');
+      setIdentityRoster(roster);
+      expect(resolveActor({ actorId: 'qb-agent', actorName: 'qb-agent' })).toEqual({
+        id: 'agent-quick-build',
+        name: 'Quick Build',
+      });
+      // POSITIVE CONTROL: an id the roster does not know reads as stored.
+      expect(resolveActor({ actorId: 'anon-zz9', actorName: 'Someone' })).toEqual({
+        id: 'anon-zz9',
+        name: 'Someone',
+      });
+    } finally {
+      const { setIdentityRoster: reset } = await import('../src/activity.ts');
+      reset(undefined);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});

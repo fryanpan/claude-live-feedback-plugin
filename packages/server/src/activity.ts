@@ -296,6 +296,7 @@ export function resetOwnerIdentities(): void {
   OWNER_IDS.clear();
   OWNER_IDS.add('known-bryan');
   resetIdentityLinks();
+  IDENTITY_ROSTER = undefined;
 }
 
 /**
@@ -363,17 +364,61 @@ export function replaceIdentityLinks(pairs: Iterable<readonly [string, string]>)
 }
 
 /**
+ * The slice of the roster (identities.ts) the activity readers consult. An
+ * interface, so this module — which the roster's own test seams import —
+ * never imports the roster. Wired once at server construction, like the
+ * owner registry above and for the same reason: `isOwnerActor` is called
+ * from places that hold no configuration to thread through.
+ */
+export interface ActivityIdentityRoster {
+  get(id: string): { id: string; displayName: string } | null;
+}
+
+let IDENTITY_ROSTER: ActivityIdentityRoster | undefined;
+
+/** Wire (or clear) the roster. Cleared by `resetOwnerIdentities` too. */
+export function setIdentityRoster(roster: ActivityIdentityRoster | undefined): void {
+  IDENTITY_ROSTER = roster;
+}
+
+/**
  * Follow an id's links to the identity it stands for. An unlinked id resolves
  * to itself, so this is safe to call on every actor.
+ *
+ * The roster is asked FIRST: an id merged into a roster row (`mergedFrom`)
+ * resolves to that row, and only then do the link-file hops run — so a link
+ * that points an anon id at a legacy owner spelling still lands on the
+ * roster row that spelling was itself merged into.
  */
 export function resolveIdentityId(id: string): string {
   let current = id;
   for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
+    const rostered = IDENTITY_ROSTER?.get(current)?.id;
+    if (rostered !== undefined && rostered !== current) {
+      current = rostered;
+      continue;
+    }
     const next = IDENTITY_LINKS.get(current);
     if (next === undefined || next === current) return current;
     current = next;
   }
   return current;
+}
+
+/**
+ * Who a stored row's actor is NOW — the canonical id and the roster's name
+ * for it. History is never rewritten; this is the read that makes an old id
+ * render as the identity it was merged into. A row the roster does not know
+ * reads exactly as stored.
+ */
+export function resolveActor(row: { actorId?: string; actorName?: string }): {
+  id: string;
+  name: string;
+} {
+  const id = row.actorId ?? '';
+  const resolved = id ? resolveIdentityId(id) : id;
+  const rec = resolved ? IDENTITY_ROSTER?.get(resolved) : null;
+  return { id: resolved, name: rec?.displayName ?? row.actorName ?? '' };
 }
 
 /** Bryan is the doc owner / known person on this single-user fleet. A person

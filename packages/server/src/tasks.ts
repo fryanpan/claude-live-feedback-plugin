@@ -2748,6 +2748,53 @@ export class TaskStore {
     };
   }
 
+  /**
+   * Fold agent id `from` into `into` on EVERY board: the seat moves where
+   * `from` held it, and `from`'s attachment record is re-keyed (the fresher
+   * clocks win where `into` already had one). This is the board half of a
+   * rename — the roster half is `Identities.mergeAgent`, the durable-watch
+   * half `AgentWatches.rekey` — and the three are composed by the merge
+   * route so one verb does all of it.
+   *
+   * Nothing here bypasses `assignLead`: the seat change persists and
+   * announces exactly like a handover, so the board repaints and the audit
+   * log carries who did it. `dryRun` computes the same answer and touches
+   * nothing, which is what an operator runs first against prod's data.
+   */
+  mergeAgent(
+    from: string,
+    into: string,
+    opts: { actor: { id: string; name: string; kind?: string }; dryRun?: boolean },
+  ): { seats: string[]; attachments: string[] } {
+    const seats: string[] = [];
+    const attachments: string[] = [];
+    if (from.trim() === '' || into.trim() === '' || from === into) return { seats, attachments };
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    for (const state of this.workspaces.values()) {
+      const workspaceId = state.workspace.id;
+      const old = state.attachments.get(from);
+      if (old) {
+        attachments.push(workspaceId);
+        if (!opts.dryRun) {
+          const existing = state.attachments.get(into);
+          const fresher = existing && existing.lastHeartbeat >= old.lastHeartbeat ? existing : old;
+          state.attachments.delete(from);
+          state.attachments.set(into, { ...fresher, agentId: into });
+          this.scheduleAttachmentsSave(workspaceId);
+        }
+      }
+      if (state.workspace.leadAgentId === from) {
+        seats.push(workspaceId);
+        if (!opts.dryRun) this.assignLead(state, into, actor, Date.now());
+      }
+    }
+    return { seats: seats.sort(), attachments: attachments.sort() };
+  }
+
   /** The seat change itself, shared by `setLeadAgent` and the attach-time
    *  claim so both persist and announce it identically.
    *

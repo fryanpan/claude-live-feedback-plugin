@@ -279,3 +279,134 @@ describe('/api/agents/:agentId/watches', () => {
     expect(handle?.agentWatches.list('agent-alpha', () => true).watches).toEqual([]);
   });
 });
+
+/**
+ * A merge re-keys the durable watch set — and the only assertion worth
+ * having is DELIVERY under the new id. A re-keyed entry that never carries a
+ * comment is the silent-loss shape this store exists to end, one layer down.
+ */
+describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new id', () => {
+  let handle: ServerHandle | null = null;
+  let dataDir: string | null = null;
+
+  afterEach(async () => {
+    await handle?.stop();
+    handle = null;
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+    dataDir = null;
+  });
+
+  it('a comment posted after the merge reaches the new id, and the old id holds nothing', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-'));
+    handle = createServer({ port: 0, dataDir });
+    const base = `http://localhost:${handle.port}`;
+    const post = async (path: string, body: unknown) => {
+      const res = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { host: `localhost:${handle?.port ?? 0}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    };
+    const get = async (path: string) => {
+      const res = await fetch(`${base}${path}`, {
+        headers: { host: `localhost:${handle?.port ?? 0}` },
+      });
+      return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    };
+
+    // A board led by a THIRD agent, so the merged agent is addressed only
+    // through its durable watch — not through the lead seat.
+    const created = await post('/api/workspaces', {
+      name: 'merge-hub',
+      goal: 'Ship it.',
+      leadAgentId: 'agent-lead',
+    });
+    const wsId = (created.json.workspace as { id: string }).id;
+    const file = join(dataDir, 'watched.md');
+    writeFileSync(file, '# Watched\n\nBody.\n');
+    expect((await post('/api/docs', { docId: 'watched', sourceUrl: file })).status).toBe(200);
+    expect((await post(`/api/workspaces/${wsId}/docs`, { docId: 'watched' })).status).toBe(200);
+
+    // The old identity attaches (a bystander) and persists its board watch.
+    expect(
+      (
+        await post(`/api/workspaces/${wsId}/attachments`, {
+          agentId: 'agent-old',
+          agentName: 'Old Name',
+          runtime: 'claude-code-local',
+        })
+      ).status,
+    ).toBe(200);
+    expect((await post('/api/agents/agent-old/watches', { add: [`ws:${wsId}`] })).status).toBe(200);
+
+    const comment = (text: string) =>
+      post('/api/docs/watched/threads', {
+        author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+        text,
+        anchor: { kind: 'subject' },
+      });
+    const queuedFor = async (agentId: string): Promise<string[]> => {
+      const r = await post(`/api/workspaces/${wsId}/attachments`, {
+        agentId,
+        runtime: 'claude-code-local',
+      });
+      expect(r.status).toBe(200);
+      const rows = (r.json.queuedComments as Array<{ id: string; text: string }>) ?? [];
+      // Receipt each row the way the MCP does, so a later attach is not
+      // re-offered what this one already took.
+      for (const q of rows) {
+        expect((await post(`/api/workspaces/${wsId}/comment-queue/${q.id}/ack`, {})).status).toBe(
+          200,
+        );
+      }
+      return rows.map((q) => q.text);
+    };
+
+    // POSITIVE CONTROL: before the merge, the watch delivers to the old id.
+    expect((await comment('first, to the old id')).status).toBe(200);
+    expect(await queuedFor('agent-old')).toEqual(['first, to the old id']);
+
+    const merged = await post('/api/agents/agent-old/merge', {
+      into: 'agent-new',
+      author: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+    });
+    expect(merged.status, JSON.stringify(merged.json)).toBe(200);
+    expect(merged.json.watches).toEqual([`ws:${wsId}`]);
+
+    // The set is under the new id now, and only there.
+    const restored = await get('/api/agents/agent-new/watches');
+    expect((restored.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([
+      `ws:${wsId}`,
+    ]);
+    expect((await get('/api/agents/agent-old/watches')).json.watches).toEqual([]);
+
+    // END TO END: a comment after the merge is queued for the NEW id.
+    expect((await comment('second, to the new id')).status).toBe(200);
+    expect(await queuedFor('agent-new')).toEqual(['second, to the new id']);
+    // …and not for the old one: its watch set is empty, so nothing is
+    // addressed to it any more.
+    expect(await queuedFor('agent-old')).toEqual([]);
+
+    // The roster folded the old id into the new one.
+    expect(handle.identities.get('agent-old')?.id).toBe('agent-new');
+    expect(handle.identities.get('agent-new')?.mergedFrom).toEqual(['agent-old']);
+  });
+
+  it('refuses to merge INTO the shared identity, and refuses a self-merge', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-refuse-'));
+    handle = createServer({ port: 0, dataDir });
+    const base = `http://localhost:${handle.port}`;
+    const merge = async (from: string, body: unknown) => {
+      const res = await fetch(`${base}/api/agents/${from}/merge`, {
+        method: 'POST',
+        headers: { host: `localhost:${handle?.port ?? 0}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return res.status;
+    };
+    expect(await merge('agent-old', { into: 'known-agent' })).toBe(400);
+    expect(await merge('agent-old', { into: 'agent-old' })).toBe(400);
+    expect(await merge('agent-old', {})).toBe(400);
+  });
+});
