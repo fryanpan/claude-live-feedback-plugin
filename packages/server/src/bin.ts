@@ -165,8 +165,13 @@ const trustedHosts = (process.env.TRUSTED_HOSTS ?? '')
 // single-share use.
 const cfAccessTeam = process.env.CF_ACCESS_TEAM_DOMAIN;
 const cfAccessAud = process.env.CF_ACCESS_AUD;
+// No AUD → no `audience` at all, not a placeholder string. The server asks
+// "is a static audience configured?" by the TYPE of this field, and a string
+// placeholder answered yes — leaving every fail-closed host rule depending on
+// this file remembering to empty the lists. Absent, the verifier refuses every
+// token on its own, and the shares registry still overrides it per hostname.
 const cfAccess = cfAccessTeam
-  ? { teamDomain: cfAccessTeam, audience: cfAccessAud ?? 'placeholder-overridden-by-shares' }
+  ? { teamDomain: cfAccessTeam, ...(cfAccessAud ? { audience: cfAccessAud } : {}) }
   : undefined;
 
 /**
@@ -199,6 +204,75 @@ if (accessTunnelHosts.length && !accessTunnelReady) {
       'CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD must BOTH be set, or there is no ' +
       'Access application in front of those hostnames and they would expose the ' +
       'server to anyone who can reach the tunnel. They will answer 403 unknown_host.',
+  );
+}
+
+/**
+ * Hostnames the Cloudflare tunnel serves that are the OPERATOR'S OWN address —
+ * the whole product from outside the tailnet, behind a Cloudflare Access
+ * application over that hostname.
+ *
+ * The third list. `TRUSTED_HOSTS` is a LAN name (local, no token, refused
+ * through the proxy); `CF_ACCESS_TUNNEL_HOSTS` is for collaborators (token,
+ * then the share surface); this one is for the operator (token, then
+ * everything loopback gets). Kept apart from both because it grants the most,
+ * and a host listed here AND as a collaboration host stays collab — the
+ * server resolves the contradiction toward the narrower grant, and the boot
+ * log says so rather than leaving it to be discovered as a 403.
+ *
+ * Honoured ONLY with `CF_ACCESS_TEAM_DOMAIN` *and* `CF_ACCESS_AUD` set, for the
+ * same reason as the collaboration list and with more at stake: without an
+ * Access application to verify against, honouring the list would be the full
+ * API — every doc, share administration, the deploy verb — to anyone who can
+ * reach the tunnel and type the hostname. The server refuses on its own (see
+ * `proxiedTrustedVerifier`); this is the loud half.
+ */
+const proxiedTrustedHosts = (readRenamedEnv(process.env, 'CW_PROXIED_TRUSTED_HOSTS') ?? '')
+  .split(',')
+  .map((h) => h.trim())
+  .filter((h) => h !== '');
+if (proxiedTrustedHosts.length && !accessTunnelReady) {
+  console.error(
+    `[feedback] IGNORING CW_PROXIED_TRUSTED_HOSTS (${proxiedTrustedHosts.join(', ')}): ` +
+      'CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD must BOTH be set, or there is no ' +
+      'Access application in front of those hostnames and they would expose the ' +
+      'WHOLE product to anyone who can reach the tunnel. They will answer 403 unknown_host.',
+  );
+}
+/**
+ * WHO the operator is, by verified Access email — the check that makes the
+ * list above the operator's door rather than a door for everyone the Access
+ * application admits.
+ *
+ * A valid token proves admission by a policy this server cannot read. One
+ * application may cover the collaboration hostnames too, and then every
+ * collaborator's token is just as valid here. So after the token, the
+ * verified email must be on this list, or the request is refused. Defaults to
+ * CW_OWNER_EMAIL; with NEITHER set the host list is ignored, because a door
+ * that cannot tell the operator from a collaborator must not open.
+ */
+const proxiedTrustedEmails = (process.env.CW_PROXIED_TRUSTED_EMAILS ?? '')
+  .split(',')
+  .map((e) => e.trim())
+  .filter((e) => e !== '');
+if (proxiedTrustedEmails.length === 0 && ownerEmail) proxiedTrustedEmails.push(ownerEmail);
+const proxiedTrustedReady = accessTunnelReady && proxiedTrustedEmails.length > 0;
+if (proxiedTrustedHosts.length && accessTunnelReady && proxiedTrustedEmails.length === 0) {
+  console.error(
+    `[feedback] IGNORING CW_PROXIED_TRUSTED_HOSTS (${proxiedTrustedHosts.join(', ')}): ` +
+      'no operator allowlist. Set CW_PROXIED_TRUSTED_EMAILS (or CW_OWNER_EMAIL), or an ' +
+      'Access token from ANYONE the application admits — every collaborator on the same ' +
+      'app — would reach the whole product. They will answer 403 unknown_host.',
+  );
+}
+const alsoCollab = proxiedTrustedHosts.filter((h) =>
+  accessTunnelHosts.some((c) => c.toLowerCase() === h.toLowerCase()),
+);
+if (alsoCollab.length) {
+  console.error(
+    `[feedback] CW_PROXIED_TRUSTED_HOSTS overlaps CF_ACCESS_TUNNEL_HOSTS (${alsoCollab.join(', ')}): ` +
+      'a hostname on both lists is served as a COLLABORATION host — Access token, ' +
+      'share surface, operator verbs refused. Remove it from one list to say which you meant.',
   );
 }
 
@@ -382,6 +456,8 @@ for (let i = 0; i < 20 && !handle; i++) {
       demosDir,
       trustedHosts,
       accessTunnelHosts: accessTunnelReady ? accessTunnelHosts : [],
+      proxiedTrustedHosts: proxiedTrustedReady ? proxiedTrustedHosts : [],
+      proxiedTrustedEmails,
       allowedOrigins,
       publicBaseUrl: publicBaseUrlOverride,
       sharingEnvLocked,
@@ -437,13 +513,25 @@ if (trustedHosts.length) console.log(`[feedback]   trusted:    ${trustedHosts.jo
 if (accessTunnelHosts.length && accessTunnelReady) {
   console.log(`[feedback]   collab:     ${accessTunnelHosts.join(', ')} (via Cloudflare Access)`);
 }
+// "operator" is the whole claim: Access-gated, and then the privileged
+// surface — the one line that says the product is reachable from outside.
+if (proxiedTrustedHosts.length && proxiedTrustedReady) {
+  console.log(
+    `[feedback]   operator:   ${proxiedTrustedHosts.join(', ')} (via Cloudflare Access, full product, ` +
+      `${proxiedTrustedEmails.length} allowed ${proxiedTrustedEmails.length === 1 ? 'email' : 'emails'})`,
+  );
+}
 if (allowedOrigins.length) console.log(`[feedback]   origins:    ${allowedOrigins.join(', ')}`);
 console.log(
   '[feedback]   routes:     /  /workspaces/<id>/docs/<docId>  /widget.iife.js  /demos/mockup',
 );
 if (cfAccess) {
   const audDisplay =
-    typeof cfAccess.audience === 'string' ? cfAccess.audience.slice(0, 8) : 'auto-from-shares';
+    typeof cfAccess.audience === 'string'
+      ? cfAccess.audience.slice(0, 8)
+      : share
+        ? 'auto-from-shares'
+        : 'NONE (every token refused)';
   console.log(`[feedback]   cf-access:  team=${cfAccess.teamDomain} aud=${audDisplay}…`);
 }
 if (share) {

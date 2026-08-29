@@ -13676,6 +13676,7 @@ var ENV_RENAMES = [
   ["FEEDBACK_AUTHOR", "CW_AUTHOR"],
   ["LF_CLIENT_ROOT", "CW_CLIENT_ROOT"],
   ["LF_PUBLIC_BASE_URL", "CW_PUBLIC_BASE_URL"],
+  ["LF_PROXIED_TRUSTED_HOSTS", "CW_PROXIED_TRUSTED_HOSTS"],
   ["LF_WIDGET_DIST", "CW_WIDGET_DIST"],
   ["LF_MARKDOWN_APP_DIST", "CW_MARKDOWN_APP_DIST"],
   ["LF_SHARING_DISABLED", "CW_SHARING_DISABLED"],
@@ -14399,7 +14400,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.120";
+var PLUGIN_VERSION = "0.1.121";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
