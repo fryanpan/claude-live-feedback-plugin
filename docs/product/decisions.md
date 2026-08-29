@@ -400,3 +400,44 @@ the server could run it and the counter could go live-ish); a fleet spanning
 machines (then per-machine local-day and transcript paths both break); or
 per-session attribution mattering more than per-agent (rows already carry an
 optional `sessionId` — the read would grow a filter, not a new store).
+
+## 2026-08-29 — Status lives on the task's Activity tab; comments are for asks and replies
+
+Bryan, 2026-08-29: *"let's get status updates off the comment feed and into
+the activity tab instead — there's too much crap in the comments"*, and the
+task's Activity tab should be *"all task events as well as agent end of turn
+updates in one feed"*, showing *"the full end of turn update instead of short
+versions"*. Four reversible calls, shipped together on `feat/activity-feed`:
+
+1. **`TaskNote.kind` gains `'status'`** beside `turn` and `denial` — an
+   explicit milestone an agent posts with the new `post_status(text,
+   taskId?)` verb (`POST /api/tasks/:id/notes`, or `/api/agent-notes` to
+   pin it to the current in-progress row). Same store, same cap, same
+   projection; nothing new to rebuild analyses from.
+2. **Notes feed the stall clock, not the board trail.** `keep-moving.ts`
+   counts a task's newest note (any kind) as movement, read from
+   `task.notes` directly. `task.noted` stays OUT of the workspace event
+   stream and IN the hub's `TRAIL_NOISE`, so the board-wide trail stays
+   quiet; only the task's own Activity tab renders notes. The ready-idle
+   board clock is untouched — a note is the session talking, not the board
+   moving, and that wake exists to catch exactly that.
+3. **The Stop hook posts the FULL end-of-turn message**, scrubbed the way
+   the one-liner was (markdown kept; every line reduced: URLs → `[url]`,
+   hosts/paths → basename or `[url]`, token prefixes and Bearer →
+   `[token]`, emails → `[email]`; fences kept but reduced line by line);
+   `NOTE_TEXT_MAX` rises 2000 → 4000 with an ellipsis on the cut. The Home
+   activity pane shows only a note's first prose line (200 chars); the full
+   text is on the task's Activity tab, which takes phrase comments like a
+   doc.
+4. **Status replaces progress comments.** The skills, the hive-peer rule and
+   the keep-moving protocol now say: status goes through `post_status` or
+   arrives by itself from the hook; a comment (`post_reply`,
+   `create_thread`, a review item) is an ask, a decision, or a reply to a
+   person.
+
+**What would change the decision:** notes needing to reach the lead as
+events (then `task.noted` joins the stream with its own noise class); the
+4000-char cap clipping reports people actually read on the tab (raise it,
+or fold); or the stall clock counting a chatty-but-stuck agent as moving
+(then only `status` notes count, and the hook's turn notes go back to being
+telemetry).

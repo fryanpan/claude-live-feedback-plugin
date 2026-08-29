@@ -41,7 +41,7 @@ Then **place it**: the right goal, in the right position relative to the rows al
 
 Staff the top of the queue, in parallel where the rows don't collide, and keep going until the **goal** is met — not until the batch drains.
 
-**Every dispatch prompt states the final-message contract.** A dispatched agent reports to you as a final message, so the cap is what keeps that report a pointer instead of a paste: the agent posts its full report as a task comment first, then writes 150 words or less — the outcome in a line, that comment's `threadUrl`, and any blocker. The same three parts and the same 150 words bind the message you write to the primary user at the end of a batch.
+**Every dispatch prompt states the final-message contract.** A dispatched agent reports to you as a final message, so the cap is what keeps that report a pointer instead of a paste: the agent posts its full report with `post_status` first — onto the task's Activity tab, not its comments — then writes 150 words or less — the outcome in a line, the task's link, and any blocker. The same three parts and the same 150 words bind the message you write to the primary user at the end of a batch.
 
 **Watchdog every dispatch.** An idle notification without a report means the final message was dropped, not that there is nothing to report — measured at 41% of one day's dispatches — so nudge the agent immediately; recovery takes seconds. Probe every fresh spawn within a minute: a spawn can die instantly while you hold a "spawned successfully". Key any stall check on dependency state, never on elapsed silence — healthy work goes quiet for longer than any threshold you would set.
 
