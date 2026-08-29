@@ -57,12 +57,14 @@ import {
   type ReviewItem,
   type ReviewThreadItem,
   type UptimeReport,
+  type WalkHold,
   advanceWalk,
   applyRefresh,
   archivedTasks,
   boardSections,
   clientDriftNotice,
   goalLabel,
+  holdWaitingItem,
   hubTabTitle,
   humanBlockerRows,
   initialsOf,
@@ -74,6 +76,7 @@ import {
   presenceChips,
   presenceIdentity,
   refreshReviewItems,
+  reviewItemAskRequest,
   reviewQueue,
   reviewReplyRequest,
   reviewRow,
@@ -203,6 +206,10 @@ interface HubState {
   /** What this sitting has cleared, so the surface can say that answering
    *  moved you rather than leaving you to infer it from a shrinking total. */
   walkProgress: WalkProgress;
+  /** The item the reader just asked on, kept on its card while the server's
+   *  queue has dropped it (it is the owner's turn) — see `holdWaitingItem`.
+   *  Cleared by anything that moves the reader off the card. */
+  walkHold: WalkHold | null;
   followedKey: string | null;
 }
 
@@ -478,6 +485,7 @@ async function main(): Promise<void> {
     walkIndex: -1,
     walkKey: null,
     walkProgress: { cleared: 0, last: null },
+    walkHold: null,
     followedKey: null,
   };
 
@@ -524,6 +532,7 @@ async function main(): Promise<void> {
   mountHomeReviewIsland(el('hub-home-review'), {
     onReview: (item, index) => openInQueue(item, index),
     onOpen: (item) => openReviewItem(item),
+    onOpenThread: (item) => void openReviewThread(item),
     onWalkthrough: () => startWalkthrough(),
   });
 
@@ -753,6 +762,26 @@ async function main(): Promise<void> {
     return false;
   }
 
+  /**
+   * The thread a question on a review item lives on — the reader's question
+   * and the owner's reply, where they were written. A ticket-borne item's
+   * threads are on its task's doc, so this is the task panel aimed at that
+   * thread, the way a `task-thread` row opens. Anything without a thread to
+   * aim at falls back to opening the item itself. Same return contract as
+   * `openReviewItem`: whether the reader is still on this page.
+   */
+  function openReviewThread(item: ReviewItem): boolean {
+    const t = item.thread;
+    const threadId = item.revision?.threadId ?? t?.threadId;
+    if (!t || t.kind !== 'task-review' || !t.taskId || !threadId) return openReviewItem(item);
+    const task = state.tasks.get(t.taskId);
+    if (!task) return true;
+    boardHandlers.onOpenTask(task);
+    state.detailThreadId = threadId;
+    renderDetail();
+    return true;
+  }
+
   /** Everyone a task can be handed to besides a person: the agents attached
    *  to this workspace, plus the lead (who owns goal changes here and is
    *  therefore somebody, whether or not their session is currently up). */
@@ -938,6 +967,7 @@ async function main(): Promise<void> {
     // carrying the last one's over would open on "4 cleared" before the
     // reader has answered anything.
     state.walkProgress = { cleared: 0, last: null };
+    state.walkHold = null;
     state.walkIndex = 0;
     state.walkKey = currentQueue().items[0]?.key ?? null;
     renderWalkthrough();
@@ -955,6 +985,7 @@ async function main(): Promise<void> {
     // A new sitting, exactly as `Review All` starts one: the tally counts what
     // this pass cleared, and a leftover count would open on "4 cleared".
     state.walkProgress = { cleared: 0, last: null };
+    state.walkHold = null;
     state.walkIndex = index;
     state.walkKey = item.key;
     renderWalkthrough();
@@ -1486,6 +1517,7 @@ async function main(): Promise<void> {
     state.walkIndex = CLOSED_WALK.index;
     state.walkKey = CLOSED_WALK.key;
     state.walkProgress = { cleared: 0, last: null };
+    state.walkHold = null;
   }
 
   /**
@@ -1497,7 +1529,11 @@ async function main(): Promise<void> {
    * offered to you.
    */
   function renderWalkthrough(): void {
-    const queue = currentQueue();
+    // The item the reader just asked on stays on its card while the server's
+    // queue (which drops a waiting item at once) catches up to the reader
+    // stepping off it — otherwise the card they typed into is replaced under
+    // them before the "waiting" note has been read.
+    const queue = holdWaitingItem(currentQueue(), state.walkHold);
     // Resolve the aim before rendering, and write the result back: from here
     // on the index is a cache of where the key IS, not an independent claim
     // about where the reader stands.
@@ -1530,9 +1566,9 @@ async function main(): Promise<void> {
         // different row that happens to share a task.
         onAnswer: (t, text, optionId) =>
           finishWalkItem(current, next, () => answerDecision(t, text, optionId)),
-        // Not a finish. The decision stays open and unanswered, so advancing
-        // would claim something happened that did not.
-        onMoreInfo: (t, question) => requestMoreInfo(t, question),
+        // Not a finish either: nothing was answered, and the card stays put
+        // with the note that the item is now waiting on its owner.
+        onAskOnItem: (item, phrase, question) => askOnReviewItem(item, phrase, question),
         onReply: (item, text, optionId) =>
           finishWalkItem(item, next, () => replyToReviewItem(item, text, optionId)),
         onOpenItem: (item) => {
@@ -1547,15 +1583,32 @@ async function main(): Promise<void> {
           // a close-step back() queued beside location.assign races it.
           state.walkIndex = -1;
           state.walkKey = null;
+          state.walkHold = null;
           if (openReviewItem(item)) renderWalkthrough();
+        },
+        onOpenThread: (item) => {
+          // Same one-step close-then-open as `onOpenItem`, aimed at the thread.
+          state.walkIndex = -1;
+          state.walkKey = null;
+          state.walkHold = null;
+          if (openReviewThread(item)) renderWalkthrough();
         },
         onStep: (i) => {
           // Skip and back are positional by nature — the reader is pointing at
           // a place in the list they can see. Re-aim from that position so the
           // next repaint follows the item rather than the number.
           const to = Math.max(0, i);
-          state.walkIndex = to;
-          state.walkKey = queue.items[to]?.key ?? null;
+          // Aim by the KEY the reader can see at that position, then release
+          // the hold: the waiting item leaves the walkthrough the way it
+          // already left Home, and the index is re-found in the queue without
+          // it so the step lands on the item pointed at rather than skipping
+          // one past the row that vanished.
+          const target = queue.items[to]?.key ?? null;
+          state.walkHold = null;
+          state.walkKey = target;
+          const after = currentQueue();
+          const at = target ? after.items.findIndex((it) => it.key === target) : -1;
+          state.walkIndex = at >= 0 ? at : Math.min(to, after.items.length);
           renderWalkthrough();
         },
         onClose: () => {
@@ -1598,6 +1651,8 @@ async function main(): Promise<void> {
     const ok = await write();
     if (!ok || !item) return ok;
     state.walkProgress = { cleared: state.walkProgress.cleared + 1, last: item };
+    // Answering a held item ends the hold — it was answered, not waited on.
+    if (state.walkHold?.key === item.key) state.walkHold = null;
     // Answered items stay in the Home stack marked done (approved design)
     // instead of vanishing — a per-sitting display ledger, not stored state.
     state.homeSettled.set(item.key, item);
@@ -2047,16 +2102,41 @@ async function main(): Promise<void> {
     return true;
   }
 
-  /** "I can't answer this yet" — the decision stays open and unanswered. */
-  async function requestMoreInfo(task: HubTask, question: string): Promise<boolean> {
-    const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/more-info`, 'POST', {
-      question,
-      author,
-    });
-    showToast(
-      res.ok ? 'Asked — it stays open until you have the answer' : 'Sending the question failed',
-    );
-    return res.ok;
+  /**
+   * Ask on a phrase of a ticket-borne review item — a thread on the task's
+   * doc anchored to that phrase of that item (`reviewItemAskRequest`). The
+   * server records the question on the item and drops it from the queue
+   * while it waits on its owner; the owner hears about it the way it hears
+   * every task-doc thread. The hold keeps the card in front of the reader
+   * across the refresh, carrying the note — "Waiting on Helper" — until they
+   * step off it.
+   *
+   * The old `POST /api/tasks/:id/more-info` box that stood here is gone from
+   * the hub (Bryan, 2026-08-29); the route stays for its other callers.
+   */
+  async function askOnReviewItem(
+    item: ReviewItem,
+    phrase: { text: string },
+    question: string,
+  ): Promise<boolean> {
+    const reqSpec = reviewItemAskRequest(item, phrase.text, question);
+    if (!reqSpec) return false;
+    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
+    if (!res.ok) {
+      showToast('Sending the question failed — your words are still in the box');
+      return false;
+    }
+    const owner = item.thread?.askedBy ?? 'the owner';
+    state.walkHold = {
+      key: item.key,
+      index: Math.max(0, state.walkIndex),
+      item: { ...item, waiting: { question, owner } },
+    };
+    showToast(`Asked — waiting on ${owner}`);
+    // Home drops the item now (it is the owner's turn); the hold above keeps
+    // the walkthrough card where the reader is.
+    await loadReviewItems();
+    return true;
   }
 
   /**
