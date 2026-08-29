@@ -16770,12 +16770,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const adviceFor = (taskId) => res.reviewAdvice?.find((r) => r.taskId === taskId)?.advice ?? undefined;
         const visibilityFor = (taskId) => res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
         const droppedFor = (taskId) => res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+        const heldFor = (taskId) => {
+          const h = res.held?.find((r) => r.taskId === taskId);
+          return h === undefined ? {} : { reviewItemId: h.reviewItemId, ...heldResult({ held: true, ...h }) };
+        };
         const unplaced = new Set(res.placement?.unplaced ?? []);
         return ok({
           created: res.tasks.map((t) => ({
             title: t.title,
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
             ...adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {},
+            ...heldFor(t.id),
             ...visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}
           })),
           failures: res.failures,

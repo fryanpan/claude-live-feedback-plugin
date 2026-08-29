@@ -3101,6 +3101,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ignoredLinks?: Array<{ taskId: string; ignored: unknown[] }>;
           shapeGaps?: Array<{ taskId: string; gaps: string[] }>;
           reviewAdvice?: Array<{ taskId: string; advice: string }>;
+          held?: Array<{
+            taskId: string;
+            reviewItemId: string;
+            heldReason: string;
+            message: string;
+          }>;
           visibility?: Array<{ taskId: string; note: string }>;
           placement?: { unplaced: string[]; goals: unknown[] };
         };
@@ -3121,6 +3127,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           res.visibility?.find((v) => v.taskId === taskId)?.note ?? undefined;
         const droppedFor = (taskId: string) =>
           res.ignoredLinks?.find((l) => l.taskId === taskId)?.ignored ?? undefined;
+        // The quality gate's hold on a review filed WITH the row: the item
+        // is on the ticket and OFF the reader's queue, and the same
+        // one-layer-away failure applies — a success-shaped row for a hidden
+        // ask, with no id to revise. Same fields as add_review_item's.
+        const heldFor = (taskId: string) => {
+          const h = res.held?.find((r) => r.taskId === taskId);
+          return h === undefined
+            ? {}
+            : { reviewItemId: h.reviewItemId, ...heldResult({ held: true, ...h }) };
+        };
         const unplaced = new Set(res.placement?.unplaced ?? []);
         return ok({
           // Board order, carrying the title so the caller can match rows back
@@ -3130,6 +3146,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             title: t.title,
             ...taskCreatedSummary(t, droppedFor(t.id), gapsFor(t.id), !unplaced.has(t.id)),
             ...(adviceFor(t.id) !== undefined ? { reviewAdvice: adviceFor(t.id) } : {}),
+            ...heldFor(t.id),
             ...(visibilityFor(t.id) !== undefined ? { visibility: visibilityFor(t.id) } : {}),
           })),
           // Always present, even when empty: a caller that has to check for
