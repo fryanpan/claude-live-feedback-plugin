@@ -604,6 +604,8 @@ export class Rooms {
       /** The readable name this doc was created under. Written at creation
        *  and never again — see `claimAlias`. */
       alias?: string;
+      /** A huddle doc — see `DocMeta.huddle`. */
+      huddle?: boolean;
     },
     /**
      * Who is asking. Defaults to `caller`, which is what closes the two
@@ -687,6 +689,7 @@ export class Rooms {
         diffAdditions: init?.diffAdditions,
         diffDeletions: init?.diffDeletions,
         alias: init?.alias,
+        ...(init?.huddle ? { huddle: true } : {}),
         createdAt: Date.now(),
       };
       initDocMeta(ydoc, now);

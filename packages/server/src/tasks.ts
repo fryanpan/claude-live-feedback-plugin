@@ -375,6 +375,14 @@ export function initialTaskStatus(
   return actor !== undefined && classifyActor(actor) === 'agent' ? 'triage' : 'todo';
 }
 
+/**
+ * The title an UNNAMED row carries. A placeholder, not a name: the board
+ * refuses a blank title at every door, and a row a person is about to type
+ * into still has to be a row. `Task.untitled` is what says the placeholder is
+ * in place; the literal itself is never compared against to decide that.
+ */
+export const UNTITLED_TASK_TITLE = 'Untitled task';
+
 /** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
 export const CHORES_GOAL_ID = 'chores';
 
@@ -542,6 +550,17 @@ export interface Task {
    */
   kind?: 'task' | 'goal';
   title: string;
+  /**
+   * The row was filed with NO title — the Board's "New task" button, which
+   * opens the detail panel for the person to type into — and carries
+   * `UNTITLED_TASK_TITLE` as a placeholder so every reader that expects a
+   * non-empty title keeps working. The hub draws a flagged row as empty.
+   *
+   * Cleared by `applyTitle` the moment the row is named, and nowhere else:
+   * the flag means "nobody has said what this is yet", and only a title
+   * write can change that. Absent means the title is real.
+   */
+  untitled?: boolean;
   /** Markdown snapshot of the description. The live CRDT body room
    *  (`task:<taskId>`) arrives with the projection commit; this snapshot is
    *  for search/export and never re-seeds a live fragment (§3.3). */
@@ -875,6 +894,9 @@ export function isGoalRow(row: { kind?: 'task' | 'goal' }): row is GoalRow & { k
 
 export interface CreateTaskOpts {
   title: string;
+  /** File the row as UNNAMED: `title` is the placeholder and the row is
+   *  flagged `untitled` until somebody names it. See `Task.untitled`. */
+  untitled?: boolean;
   body?: string;
   assignee?: string;
   /** Declares whether `assignee` is a person or an agent. Omitted, the store
@@ -3159,6 +3181,7 @@ export class TaskStore {
       id: cryptoId('t'),
       workspaceId,
       title: opts.title,
+      ...(opts.untitled ? { untitled: true } : {}),
       ...(opts.body !== undefined ? { body: opts.body } : {}),
       // The last-resort default. Every creation ROUTE resolves a real owner
       // before it gets here (task-owner.ts), so this only covers a direct
@@ -4121,6 +4144,11 @@ export class TaskStore {
    * capture still lands.
    */
   private applyTitle(task: Task, title: string): void {
+    // A named row is no longer untitled. Compared against the row's OWN
+    // title rather than the placeholder literal, so the create that stamps
+    // the placeholder keeps the flag and any later write of a different
+    // title — through any of the seven doors — clears it.
+    if (task.untitled && title !== task.title) task.untitled = undefined;
     task.title = title;
     task.titleWrittenAt = Date.now();
     task.titleHead = bodyHead(task.body);
