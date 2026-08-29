@@ -33,6 +33,7 @@ import {
 } from './board-url.ts';
 import { goalDetailData, mountGoalDetailIsland } from './goal-detail-island.tsx';
 import { homeActivityData, mountHomeActivityIsland } from './home-activity-island.tsx';
+import { startHomeClock } from './home-clock.ts';
 import { homeReviewData, mountHomeReviewIsland } from './home-review-island.tsx';
 import {
   ACTIVITY_REFRESH_EVENTS,
@@ -116,7 +117,7 @@ import {
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
-import { mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
+import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import {
   type WalkProgress,
   mountWalkthroughIsland,
@@ -174,6 +175,12 @@ interface HubState {
    *  (dev, staging) — those must not report the prod machine's deploy. */
   clientRelease: ClientRelease | null;
   detailTaskId: string | null;
+  /** Which tab the task panel opens on. `comments` every way in but one: the
+   *  Home activity pane's title tap opens on Activity (Bryan, 2026-08-29).
+   *  Reset to `comments` when the panel closes, so nothing lingers into the
+   *  paths (deep link, `o`) that set `detailTaskId` without going through
+   *  `openTaskDetail`. */
+  detailTab: DetailTab;
   /** The open GOAL, when the detail container is showing a goal band rather
    *  than a task. The two panels share the container, so at most one of this
    *  and `detailTaskId` is set — each opener clears the other, and
@@ -480,6 +487,7 @@ async function main(): Promise<void> {
     pluginRelease: null,
     clientRelease: null,
     detailTaskId: bootLoc.task,
+    detailTab: 'comments',
     detailGoalId: bootLoc.goal,
     detailThreadId: bootLoc.thread,
     discussion: { loading: false, threads: [] },
@@ -548,7 +556,9 @@ async function main(): Promise<void> {
     {
       onOpenTask: (taskId) => {
         const task = state.tasks.get(taskId);
-        if (task) boardHandlers.onOpenTask(task);
+        // On the Activity tab: the reader was looking at what happened to
+        // the task, and the panel opens on the rest of that.
+        if (task) openTaskDetail(task, 'activity');
       },
       onComment: (taskId, phrase, text) => commentOnActivity(taskId, phrase, text),
       onReply: (taskId, threadId, text) => replyOnActivity(taskId, threadId, text),
@@ -685,6 +695,19 @@ async function main(): Promise<void> {
   const taskList = () => [...state.tasks.values()];
   const titleOf = (taskId: string) => state.tasks.get(taskId)?.title ?? taskId;
 
+  /** The one opener behind every task tap — board row, queue row, Home
+   *  activity pane — so the panel opens the same way from each, with only
+   *  the landing tab differing. */
+  function openTaskDetail(task: HubTask, tab: DetailTab = 'comments'): void {
+    state.detailTaskId = task.id;
+    state.detailTab = tab;
+    state.detailGoalId = null;
+    // Opening the task any other way clears the queue's aim, so a mark left
+    // over from the last walkthrough item can't point at the wrong thread.
+    state.detailThreadId = null;
+    renderDetail();
+  }
+
   const boardHandlers: BoardHandlers = {
     onStatusSet: (task: HubTask, to: HubTask['status']) => void transitionTask(task, to),
     onGoalTitleCommit: (sectionId: string, title: string) => void retitleGoal(sectionId, title),
@@ -698,14 +721,7 @@ async function main(): Promise<void> {
       state.detailThreadId = null;
       renderDetail();
     },
-    onOpenTask: (task: HubTask) => {
-      state.detailTaskId = task.id;
-      state.detailGoalId = null;
-      // Opening the task any other way clears the queue's aim, so a mark left
-      // over from the last walkthrough item can't point at the wrong thread.
-      state.detailThreadId = null;
-      renderDetail();
-    },
+    onOpenTask: (task: HubTask) => openTaskDetail(task),
     onReorder: (task: HubTask, target: ReorderTarget) => void placeTask(task, target),
     onTitleCommit: (task: HubTask, title: string) => void renameTask(task, title),
     onAssign: (task: HubTask, assignee: string) => void assignTask(task, assignee),
@@ -1327,6 +1343,10 @@ async function main(): Promise<void> {
       void loadDiscussion(task);
     }
     if (!task) state.discussionTaskId = null;
+    // Every way the panel closes — the X, a goal opening over it, the task
+    // being archived under it — lands here with no task; the next open
+    // starts on Comments unless its opener says otherwise.
+    if (!task) state.detailTab = 'comments';
     // The audit rows the Activity tab renders. Fetched on open rather than at
     // boot: a reader who never opens a ticket never needs them, and the
     // workspace Activity VIEW has always fetched them the same lazy way.
@@ -1351,9 +1371,11 @@ async function main(): Promise<void> {
     taskDetailData.value = {
       task,
       discussion: task ? discussion : undefined,
+      tab: state.detailTab,
       handlers: {
         onClose: () => {
           state.detailTaskId = null;
+          state.detailTab = 'comments';
           state.detailThreadId = null;
           renderDetail();
         },
@@ -2587,8 +2609,12 @@ async function main(): Promise<void> {
   window.addEventListener('pointerdown', touch, { passive: true });
   window.addEventListener('keydown', touch, { passive: true });
   const presenceTick = setInterval(() => renderPresenceRegion(), 30_000);
+  // Home's ages and time-keyed flags advance without a board event: a minute
+  // tick, only while Home is showing (home-clock.ts).
+  const stopHomeClock = startHomeClock(() => state.pane === 'home', renderHomeRegion);
   window.addEventListener('beforeunload', () => {
     clearInterval(presenceTick);
+    stopHomeClock();
     client.close();
   });
 

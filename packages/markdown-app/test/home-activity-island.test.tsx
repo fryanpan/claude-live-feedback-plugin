@@ -477,6 +477,72 @@ describe('commenting on a note like a doc', () => {
     host.remove();
   });
 
+  it('a background refresh keeps an open draft card and the words being typed in it', async () => {
+    const other = task({ id: 't-o', title: 'Other task', notes: [note(MIN, 'Other work')] });
+    const { host, unmount } = mount([noteTask(), other]);
+    await select(host, 'download route');
+    pillIn(host).click();
+    await tick();
+    const before = host.querySelector('.acti-thread .thread') as HTMLElement;
+    expect(before).not.toBeNull();
+    composer(host).value = 'Which rou';
+    // Every board event rewrites the signal with a fresh `now`; here another
+    // task also grew a line, which is the common shape of one.
+    homeActivityData.value = {
+      tasks: [
+        noteTask(),
+        { ...other, notes: [note(20_000, 'Other done'), ...(other.notes ?? [])] },
+      ],
+      goals: GOALS,
+      now: NOW + 5_000,
+    };
+    await tick();
+    const wrap = host.querySelector('.acti-group-wrap-open') as HTMLElement;
+    expect(wrap, 'the draft card was closed by the refresh').not.toBeNull();
+    expect(wrap.querySelector('.acti-group')?.getAttribute('data-task-id')).toBe('t-c');
+    expect(host.querySelector('.acti-thread .thread')).not.toBeNull();
+    expect(composer(host).value).toBe('Which rou');
+    // The other group did take the new line, aged against the NEW now.
+    expect(notesIn(groupsIn(host)[0] as Element)[0]).toBe('Other done · 25s · Quick Build');
+    unmount();
+    host.remove();
+  });
+
+  it('the pill is for the words only: an age, an agent name, a badge or "+N more" gets none', async () => {
+    const t = task({
+      id: 't-w',
+      goal: CHORES_ID,
+      notes: [1, 2, 3, 4].map((i) => note(i * MIN, `Step ${i}`)),
+    });
+    const { host, unmount } = mount([t]);
+    const g = groupsIn(host)[0] as HTMLElement;
+    const selectAll = async (el: Element): Promise<void> => {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+      document.dispatchEvent(new Event('selectionchange'));
+      await settle();
+    };
+    await selectAll(g.querySelector('.acti-age') as Element);
+    expect(pillShown(host), 'pill on an age').toBe(false);
+    await selectAll(g.querySelector('.acti-agent') as Element);
+    expect(pillShown(host), 'pill on an agent name').toBe(false);
+    await selectAll(g.querySelector('.hub-badge') as Element);
+    expect(pillShown(host), 'pill on a badge').toBe(false);
+    await selectAll(g.querySelector('.acti-more') as Element);
+    expect(pillShown(host), 'pill on "+N more"').toBe(false);
+    // Positive controls: the note text and the title.
+    await selectAll(g.querySelector('.acti-text') as Element);
+    expect(pillShown(host), 'no pill on the note text').toBe(true);
+    await select(host, 'Task');
+    expect(pillShown(host), 'no pill on the title').toBe(true);
+    window.getSelection()?.removeAllRanges();
+    unmount();
+    host.remove();
+  });
+
   it('Escape puts a draft away, and so does folding its card', async () => {
     const { host, unmount } = mount([noteTask()]);
     await select(host, 'download route');

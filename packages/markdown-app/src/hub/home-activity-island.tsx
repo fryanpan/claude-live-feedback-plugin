@@ -64,11 +64,17 @@ export const ACTIVITY_EMPTY =
 const NOBODY: User = { id: '', name: 'you', kind: 'anon', color: '#888888' };
 
 /** The comment being written or shown on one group. `thread` is null while
- *  the words are still a draft — nothing has been posted yet. */
+ *  the words are still a draft — nothing has been posted yet — and `draft`
+ *  is the thread-shaped stand-in the card shows meanwhile. Built ONCE, when
+ *  the pill is tapped, and held here rather than rebuilt per paint: the card
+ *  keys its DOM on the thread object, and a fresh object on every signal
+ *  write (each board event carries a new `now`) would rebuild the card under
+ *  the reader's typing. */
 interface OpenComment {
   taskId: string;
   phrase: string;
   thread: Thread | null;
+  draft: Thread;
 }
 
 /**
@@ -153,6 +159,12 @@ function ThreadCard(props: {
   // draft/thread this paint drew, and the box outlives the paint.
   const latest = useRef(props);
   latest.current = props;
+  // What the reply box held when the card was last torn down, handed to the
+  // rebuilt card the way `ThreadPanel.render` keeps `pendingReplies` — a
+  // rebuild (the reader's identity resolving, a draft becoming the posted
+  // thread) must never eat words being typed. A successful post empties the
+  // box before the thread changes, so nothing stale is ever restored.
+  const pending = useRef('');
   const { thread, user } = props;
   useLayoutEffect(() => {
     const el = host.current;
@@ -178,6 +190,9 @@ function ThreadCard(props: {
     panel.setThreads([thread]);
     panel.setActive(thread.id);
     const card = panel.renderThread(thread);
+    const ta = card.querySelector<HTMLTextAreaElement>('textarea');
+    if (ta && pending.current !== '' && ta.value === '') ta.value = pending.current;
+    pending.current = '';
     el.replaceChildren(card);
     // The card's two slots take their height from the face they show; the
     // margin and the drawer measure after insertion and on resize, so does
@@ -187,6 +202,7 @@ function ThreadCard(props: {
     window.addEventListener('resize', onResize);
     return () => {
       window.removeEventListener('resize', onResize);
+      pending.current = el.querySelector<HTMLTextAreaElement>('textarea')?.value ?? '';
       el.replaceChildren();
     };
   }, [thread, user]);
@@ -195,15 +211,15 @@ function ThreadCard(props: {
 
 /** A thread that does not exist yet, shaped for the real card: the reader as
  *  its author, the phrase as its topic, nothing said. */
-function draftThread(open: OpenComment, user: User, now: number): Thread {
+function draftThread(taskId: string, phrase: string, user: User, now: number): Thread {
   return {
-    id: `draft:${open.taskId}`,
+    id: `draft:${taskId}`,
     status: 'open',
     // Local only — never posted (`activityCommentRequest` sends a subject
     // anchor and quotes the phrase). The card's topic line reads whichever
     // anchor's snippet it is handed, and this is the one kind with a
     // snippet and nothing else to satisfy.
-    anchor: { kind: 'review-item', reviewItemId: 'draft', snippet: { text: open.phrase } },
+    anchor: { kind: 'review-item', reviewItemId: 'draft', snippet: { text: phrase } },
     commentCount: 0,
     lastActivity: now,
     createdBy: user,
@@ -216,11 +232,10 @@ function Group(props: {
   handlers: ActivityHandlers;
   open: OpenComment | null;
   user: User;
-  now: number;
   onPosted: (thread: Thread) => void;
   onClose: () => void;
 }) {
-  const { group, handlers, open, user, now } = props;
+  const { group, handlers, open, user } = props;
   const isOpen = open !== null && open.taskId === group.taskId;
   const mark = isOpen ? open.phrase : undefined;
   const openTask = (): void => {
@@ -295,7 +310,7 @@ function Group(props: {
       </div>
       {isOpen && (
         <ThreadCard
-          thread={open.thread ?? draftThread(open, user, now)}
+          thread={open.thread ?? open.draft}
           user={user}
           onReply={reply}
           onFold={() => {
@@ -325,16 +340,27 @@ function HomeActivity(props: { handlers: ActivityHandlers; user: User }) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
-  // The group the selection sits in. A drag that runs from one group into
-  // the next has no single group — its common ancestor is the list — and
-  // the words it holds are two tasks' worth; the pill stays hidden for it
-  // rather than sitting there as a dead tap.
+  // The group the selection sits in — and only when the words are the
+  // task's own: its title or a note's text. An age, an agent's name, a badge
+  // or "+N more" are the pane's chrome, not something to comment on, so a
+  // selection whose common ancestor is not inside `.acti-title-text` or
+  // `.acti-text` gets no pill. That also covers a drag from one group into
+  // the next (its ancestor is the list) and one from a note's text out over
+  // its age (its ancestor is the line): the pill stays hidden rather than
+  // sitting there as a dead tap.
   const taskId = pill.phrase
-    ? pill.at?.closest<HTMLElement>('.acti-group')?.dataset.taskId
+    ? pill.at
+        ?.closest<HTMLElement>('.acti-title-text, .acti-text')
+        ?.closest<HTMLElement>('.acti-group')?.dataset.taskId
     : undefined;
   const openCard = (): void => {
     if (!pill.phrase || !taskId) return;
-    setOpen({ taskId, phrase: pill.phrase, thread: null });
+    setOpen({
+      taskId,
+      phrase: pill.phrase,
+      thread: null,
+      draft: draftThread(taskId, pill.phrase, props.user, input.now),
+    });
     pill.clear();
     window.getSelection()?.removeAllRanges();
   };
@@ -353,7 +379,6 @@ function HomeActivity(props: { handlers: ActivityHandlers; user: User }) {
               handlers={props.handlers}
               open={open}
               user={props.user}
-              now={input.now}
               onPosted={(thread) => setOpen((o) => (o ? { ...o, thread } : o))}
               onClose={() => setOpen(null)}
             />

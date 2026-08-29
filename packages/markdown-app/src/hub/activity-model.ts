@@ -168,15 +168,18 @@ function offBand(task: HubTask, goals: HubGoal[], rank: (goalId: string) => numb
 
 /**
  * The newest note's text, repeated `STALE_REPEATS` times in a row, over the
- * lines the group SHOWS (newest first): inside the window, and minus any
- * note the queue above already carries. A badge for repetition the reader
- * cannot find in the group would be a lie — three "still waiting" lines
- * from yesterday, or three that ARE the open ask in the queue, are not
- * what this flag is for. Reads the notes only: a status move between two
- * repeats is not the agent saying something new.
+ * lines the group SHOWS (newest first): the top `ACTIVITY_NOTE_CAP`, inside
+ * the window, and minus any note the queue above already carries. A badge
+ * for repetition the reader cannot find in the group would be a lie — three
+ * "still waiting" lines from yesterday, three that ARE the open ask in the
+ * queue, or a third repeat folded into "+N more", are not what this flag is
+ * for. Reads the notes only: a status move between two repeats is not the
+ * agent saying something new — but it does take one of the shown slots, so
+ * with the cap at three a move in the top three means only two repeats are
+ * visible, and the group is not stale.
  */
-function stale(lines: ActivityNote[]): boolean {
-  const notes = lines.filter((l) => l.kind !== 'move');
+function stale(shown: ActivityNote[]): boolean {
+  const notes = shown.filter((l) => l.kind !== 'move');
   if (notes.length < STALE_REPEATS) return false;
   const head = sameText(notes[0]?.text ?? '');
   if (head === '') return false;
@@ -195,7 +198,7 @@ function flagOf(
 ): ActivityFlag | undefined {
   const newestAt = lines[0]?.at ?? now;
   if (task.status === 'in-progress' && now - newestAt >= DARK_AFTER_MS) return 'dark';
-  if (stale(lines)) return 'stale';
+  if (stale(lines.slice(0, ACTIVITY_NOTE_CAP))) return 'stale';
   if (offBand(task, goals, rank)) return 'off-band';
   return undefined;
 }

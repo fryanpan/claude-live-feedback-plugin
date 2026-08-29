@@ -224,20 +224,31 @@ describe('homeActivity', () => {
       expect(out[0]?.flag).toBeUndefined();
     });
 
-    it('stale reads the notes only — a status move between repeats does not break the run', () => {
-      const t = task({
+    it('stale counts only the repeats the reader can SEE: a move in the top three pushes the third into "+N more"', () => {
+      const move = {
+        from: 'in-progress' as const,
+        to: 'todo' as const,
+        by: { name: 'Quick Build', kind: 'agent' as const },
+      };
+      // The move takes one of the three shown slots; only two repeats show.
+      const hidden = task({
         status: 'todo',
         notes: [note(1 * MIN, 'same'), note(3 * MIN, 'same'), note(5 * MIN, 'same')],
-        transitions: [
-          {
-            ts: NOW - 2 * MIN,
-            from: 'in-progress',
-            to: 'todo',
-            by: { name: 'Quick Build', kind: 'agent' },
-          },
-        ],
+        transitions: [{ ...move, ts: NOW - 2 * MIN }],
       });
-      expect(groups([t])[0]?.flag).toBe('stale');
+      const shown = groups([hidden])[0];
+      expect(shown?.notes.map((n) => n.text)).toEqual(['same', '→ todo', 'same']);
+      expect(shown?.more).toBe(1);
+      expect(shown?.flag).toBeUndefined();
+      // Positive control: the same move OLDER than the three repeats leaves
+      // all three visible, and the badge stands.
+      const visible = task({
+        status: 'todo',
+        notes: [note(1 * MIN, 'same'), note(3 * MIN, 'same'), note(5 * MIN, 'same')],
+        transitions: [{ ...move, ts: NOW - 7 * MIN }],
+      });
+      expect(groups([visible])[0]?.notes.map((n) => n.text)).toEqual(['same', 'same', 'same']);
+      expect(groups([visible])[0]?.flag).toBe('stale');
     });
 
     it('dark: in-progress with no note or transition for 45 minutes', () => {
