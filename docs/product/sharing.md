@@ -194,7 +194,12 @@ The agent will:
    yours.
 
 For a link share with no sign-in at all, `share_link({ workspaceId })` mints an
-unguessable URL instead. The slug IS the credential, so keep the TTL short.
+unguessable URL instead. The slug IS the credential, so keep the TTL short:
+`share_link({ workspaceId, ttl: '15m' })` (`s`/`m`/`h`/`d`/`w`), or
+`ttlSeconds`. Default two weeks. Every argument is honoured or refused by
+name — a `docId` answers 410, an unknown key 400 — never dropped and widened
+to a longer, broader share. `CF_SHARE_MAX_TTL` (same grammar, e.g. `30d`)
+caps every mint and extension; a clamped reply carries `ttlClamped`.
 
 You can also drive it manually with the CLI:
 
