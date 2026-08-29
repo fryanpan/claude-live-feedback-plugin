@@ -14409,7 +14409,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.123";
+var PLUGIN_VERSION = "0.1.124";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
