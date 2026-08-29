@@ -36,6 +36,7 @@ import {
   resolveIdentityId,
   setIdentityRoster,
 } from './activity.ts';
+import { AgentNoteRing, parseAgentNote, resolveCurrentTask } from './agent-notes.ts';
 import {
   AgentWatches,
   SHARED_AGENT_IDS,
@@ -1169,6 +1170,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     console.error(`[agent-watches] ${agentWatches.loadError}`);
   }
 
+  // The per-agent memory of turn / denial notes (agent-notes.ts). In-process
+  // only: the durable copy is the note pinned to the row it landed on.
+  const agentNotes = new AgentNoteRing();
   // Which builder worktrees are working which tasks — the witness that keeps
   // the stall loop from waking a lead over a row whose builder is busy in a
   // checkout the board cannot see. See dispatch-registry.ts.
@@ -6546,6 +6550,53 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(200, dispatches.close(taskId));
           }
           return j(405, { error: 'method not allowed' });
+        }
+        // --- REST: agent turn / denial notes ---
+        // The plugin's Stop and PermissionDenied hooks post one line per
+        // turn; the server pins it to the agent's current row (its latest
+        // in-progress claim) and keeps the last few per agent either way.
+        // 202 rather than 200: the hook fires with the turn already over and
+        // never reads the answer. See agent-notes.ts.
+        if (pathname === '/api/agent-notes') {
+          // Same defense-in-depth posture as the agent-watches route: no
+          // share host reaches here today, and this keeps a later
+          // allowlisting from letting an external reviewer write a session's
+          // words onto a board row.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
+          const parsed = parseAgentNote(await safeJson(req));
+          if (!parsed.ok) return j(400, { error: parsed.error, message: parsed.message });
+          const { note } = parsed;
+          const task = resolveCurrentTask(taskStore, note.agent);
+          if (task) {
+            const res = taskStore.appendNote(task.id, {
+              kind: note.kind,
+              text: note.text,
+              agent: note.agent,
+              ts: note.at,
+              ...(note.sessionId !== undefined ? { sessionId: note.sessionId } : {}),
+            });
+            if (!res.ok) return j(500, { error: res.error });
+          }
+          agentNotes.record({
+            ...note,
+            ...(task ? { taskId: task.id, workspaceId: task.workspaceId } : {}),
+          });
+          return j(202, {
+            ok: true,
+            ...(task ? { taskId: task.id, workspaceId: task.workspaceId } : {}),
+          });
+        }
+        const agentNotesMatch = pathname.match(/^\/api\/agents\/([^/]+)\/notes$/);
+        if (agentNotesMatch) {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method !== 'GET') return j(405, { error: 'method not allowed' });
+          const agent = decodeURIComponent(agentNotesMatch[1] ?? '').trim();
+          if (agent.length === 0 || agent.length > 200) return j(400, { error: 'bad agent' });
+          if (isSharedAgentName(agent)) {
+            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
+          }
+          return j(200, { agent, notes: agentNotes.list(agent) });
         }
         // --- REST: chat-audit counters ---
         // The daily chat audit publishes per-agent unfiled-ask counts here
