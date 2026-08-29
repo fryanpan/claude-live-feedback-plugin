@@ -38,16 +38,20 @@ export const AT_FUTURE_MS = 5 * 60_000;
 export const TASK_NOTES_READ_CAP = 50;
 export { TASK_NOTES_STORE_CAP } from './tasks.ts';
 
-/** The hook caps at 200 and appends an ellipsis; this is the ceiling on
- *  what a misbehaving caller can make the sidecar hold per note. */
-export const NOTE_TEXT_MAX = 2000;
+/** The ceiling on what one note makes the sidecar hold. A turn note is the
+ *  FULL end-of-turn message (the hook reduces locators, not length, and cuts
+ *  at this many chars with an ellipsis), so the ceiling is sized for a real
+ *  report rather than a one-liner; a caller past it is refused, not clipped. */
+export const NOTE_TEXT_MAX = 4000;
 const AGENT_NAME_MAX = 200;
 const SESSION_ID_MAX = 200;
 
 export type AgentNoteKind = TaskNote['kind'];
-const KINDS: ReadonlySet<string> = new Set<AgentNoteKind>(['turn', 'denial']);
+const KINDS: ReadonlySet<string> = new Set<AgentNoteKind>(['turn', 'denial', 'status']);
 
-/** A validated `POST /api/agent-notes` body. `cwd` is accepted off the wire
+/** A validated note body — `POST /api/agent-notes` and `POST /api/tasks/:id/notes`
+ *  share it, so an explicit-task status is held to the same rules as a hook's
+ *  note (a shared agent name is refused either way). `cwd` is accepted off the wire
  *  and deliberately not here: a host filesystem path is not workspace
  *  content, and nothing downstream stores it. */
 export interface AgentNoteInput {
@@ -81,7 +85,11 @@ export function parseAgentNote(body: unknown, now: number = Date.now()): ParseAg
     };
   }
   if (typeof b.kind !== 'string' || !KINDS.has(b.kind)) {
-    return { ok: false, error: 'bad-kind', message: '`kind` must be "turn" or "denial"' };
+    return {
+      ok: false,
+      error: 'bad-kind',
+      message: '`kind` must be "turn", "denial", or "status"',
+    };
   }
   if (typeof b.text !== 'string' || b.text.trim().length === 0) {
     return { ok: false, error: 'bad-text', message: '`text` must be a non-empty string' };

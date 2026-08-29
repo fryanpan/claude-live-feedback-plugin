@@ -71,7 +71,7 @@ Big decisions that future sessions should respect or revisit deliberately.
 
 ## 2026-04-19 — Access model: Tailscale or LAN, no public tunnels
 - The feedback server binds to `localhost:<port>`. Reviewers reach it
-  via the host's Tailscale hostname (e.g. `mac-mini.<private-network>`)
+  via the host's Tailscale hostname (e.g. `<host>.ts.net`)
   or its `.local` / LAN IP on the same wifi.
 - `bun run scripts/serve.ts` prints all three URL forms on startup.
 - Rejected: Cloudflare Tunnel (added complexity — named tunnel,
@@ -301,7 +301,7 @@ deletion. Tracked separately.
 
 ## 2026-08-21 — Serialization churn: the normal form is the contract; churn is one-time, not prevented
 
-Ask 5 of the mechanical-edits task (t-voJUJHi-BmdY): write-back reflows line
+Ask 5 of the mechanical-edits task: write-back reflows line
 wraps (a one-entry insert produced a +26/-47 diff), and a table nested under a
 bullet flattens on round-trip. The asks were stable serialization, or
 warn-or-refuse on structures the round-trip cannot preserve.
@@ -358,7 +358,7 @@ parse-side fix pays for itself.
 
 ## 2026-08-25 — Unfiled-ask counter: the audit's published number, not a live measurement
 
-Task t-8NQpdf6_KPan asked for a per-session number an agent can query about
+The per-session-usage task asked for a per-session number an agent can query about
 itself: asks that appeared in chat without a matching filed review item. Two
 open questions were left to the implementer; both calls below are reversible.
 
@@ -400,3 +400,49 @@ the server could run it and the counter could go live-ish); a fleet spanning
 machines (then per-machine local-day and transcript paths both break); or
 per-session attribution mattering more than per-agent (rows already carry an
 optional `sessionId` — the read would grow a filter, not a new store).
+
+## 2026-08-29 — Status lives on the task's Activity tab; comments are for asks and replies
+
+Bryan, 2026-08-29: *"let's get status updates off the comment feed and into
+the activity tab instead — there's too much crap in the comments"*, and the
+task's Activity tab should be *"all task events as well as agent end of turn
+updates in one feed"*, showing *"the full end of turn update instead of short
+versions"*. Four reversible calls, shipped together on `feat/activity-feed`:
+
+1. **`TaskNote.kind` gains `'status'`** beside `turn` and `denial` — an
+   explicit milestone an agent posts with the new `post_status(text,
+   taskId?)` verb (`POST /api/tasks/:id/notes`, or `/api/agent-notes` to
+   pin it to the current in-progress row). Same store, same cap, same
+   projection; nothing new to rebuild analyses from.
+2. **Notes feed the stall clock, not the board trail.** `keep-moving.ts`
+   counts a task's newest note (any kind) as movement, read from
+   `task.notes` directly. `task.noted` stays OUT of the workspace event
+   stream and IN the hub's `TRAIL_NOISE`, so the board-wide trail stays
+   quiet; only the task's own Activity tab renders notes. The ready-idle
+   board clock is untouched — a note is the session talking, not the board
+   moving, and that wake exists to catch exactly that.
+3. **The Stop hook posts the FULL end-of-turn message**, scrubbed the way
+   the one-liner was (markdown kept; every line reduced: URLs → `[url]`,
+   hosts/paths → basename or `[url]`, token prefixes and Bearer →
+   `[token]`, emails → `[email]`; fences kept but reduced line by line);
+   `NOTE_TEXT_MAX` rises 2000 → 4000 with an ellipsis on the cut. Behind
+   the named shapes sits a catch-all (security review, 2026-08-29): a 20+
+   alphanumeric run with 3+ digits, a 32+ base64 word with `/` or `+`, and
+   the value of any secret-named key or assignment (`DB_PASSWORD=`,
+   `api_key:`, `authToken=`) come out as `[redacted]`; a token split over a
+   line break is reduced on both halves; blank lines inside a fence are
+   kept. The Home activity pane shows only a note's first prose line (200
+   chars); the full text is on the task's Activity tab, which takes phrase
+   comments like a doc.
+4. **Status replaces progress comments.** The skills, the hive-peer rule and
+   the keep-moving protocol now say: status goes through `post_status` or
+   arrives by itself from the hook; a comment (`post_reply`,
+   `create_thread`, a review item) is an ask, a decision, or a reply to a
+   person.
+
+**What would change the decision:** notes needing to reach the lead as
+events (then `task.noted` joins the stream with its own noise class); the
+4000-char cap clipping reports people actually read on the tab (raise it,
+or fold); or the stall clock counting a chatty-but-stuck agent as moving
+(then only `status` notes count, and the hook's turn notes go back to being
+telemetry).

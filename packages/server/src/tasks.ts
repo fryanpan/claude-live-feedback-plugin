@@ -466,17 +466,25 @@ export interface TaskEvidenceAmendment {
 }
 
 /**
- * One line an agent's session posted about this row — the closing sentence
- * of a turn, or the shape of a tool call auto mode refused. Written by the
+ * What an agent's session posted about this row — the end-of-turn message
+ * (`turn`), the shape of a tool call auto mode refused (`denial`), or a
+ * status the agent chose to report (`status`). The first two come from the
  * plugin's Stop / PermissionDenied hooks through `POST /api/agent-notes`,
- * never by a person, and pinned to whichever row was the agent's current
- * claim when it arrived. Stored VERBATIM: the hook is what reduces a message
- * to one line and keeps paths and tokens out; the server does not filter.
+ * pinned to whichever row was the agent's current claim when they arrived;
+ * a `status` names its row (`POST /api/tasks/:id/notes`, the MCP verb's
+ * route). Never written by a person. Stored VERBATIM: the poster is what
+ * keeps paths and tokens out of the text; the server does not filter.
+ *
+ * Notes are the row's Activity tab, not its comment thread: a comment is an
+ * ask, a decision, or a reply to a person; a note is the agent's own record
+ * of what it did. The newest note of any kind is movement to the stall
+ * clock (keep-moving.ts) — and only there: `task.noted` stays off the
+ * workspace event stream and out of the board-wide trail.
  */
 export interface TaskNote {
-  /** When the session reported it — the hook's clock, not the server's. */
+  /** When the session reported it — the poster's clock, not the server's. */
   ts: number;
-  kind: 'turn' | 'denial';
+  kind: 'turn' | 'denial' | 'status';
   text: string;
   /** The agent's display name, as the hook's environment spelled it. */
   agent: string;
