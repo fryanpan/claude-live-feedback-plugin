@@ -47,6 +47,7 @@ import {
   reviewReplyRequest,
   reviewRow,
   stepTarget,
+  taskActivity,
   taskVisible,
   timeAgo,
   unplacedNotice,
@@ -258,9 +259,11 @@ describe('activityRows (exactly two filters)', () => {
     { event: 'task.regrouped', ts: 3, taskId: 't-1', fromGoal: 'chores', toGoal: 'g-pr' },
     { event: 'agent.heartbeat', ts: 4, agentId: 'agent-x' },
     { event: 'decision.answered', ts: 5, taskId: 't-2' },
+    // One per agent turn — the activity pane's material, not the trail's.
+    { event: 'task.noted', ts: 6, taskId: 't-1', kind: 'turn', text: 'Shipped it.' },
   ];
 
-  it('All shows everything except heartbeat noise, newest first', () => {
+  it('All shows everything except heartbeat and turn-note noise, newest first', () => {
     const rows = activityRows(events, 'all');
     expect(rows.map((e) => e.event)).toEqual([
       'decision.answered',
@@ -275,6 +278,13 @@ describe('activityRows (exactly two filters)', () => {
     expect(activityRows(events, 'all').some((e) => e.event === 'task.transitioned')).toBe(true);
     const rows = activityRows(events, 'decisions');
     expect(rows.map((e) => e.event)).toEqual(['task.regrouped', 'task.created']);
+  });
+
+  it('a task’s own Activity tab drops turn notes too', () => {
+    // (`task.created` carries the id under `task`, not `taskId`, so the tab
+    // does not claim it; `task.transitioned` is rendered from the row.)
+    const rows = taskActivity(events, 't-1');
+    expect(rows.map((e) => e.event)).toEqual(['task.regrouped']);
   });
 });
 
