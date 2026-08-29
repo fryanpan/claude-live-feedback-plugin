@@ -78,6 +78,11 @@ board task that proposed it; what follows is the operating rule.
   forbade progress-chat without naming a size, which agents met while still
   writing paragraphs. Contract ships in the
   `claude-workspaces:working-in-a-workspace` skill; this bullet is the number.
+- **Status goes to the Activity tab, not the comments** (Bryan, 2026-08-29:
+  *"there's too much crap in the comments"*). The Stop hook posts every
+  end-of-turn message to the task's Activity tab in full; `post_status`
+  adds a named milestone; both count as movement to the stall clock. A
+  comment is an ask, a decision, or a reply to a person — never "Progress:".
 - **Goal bands run automatically.** Work goal-band tasks in priority order
   without being told, unless a task is blocked by a decision or dependency —
   and record that blockage as an `after` edge, never in your head. **Backlog

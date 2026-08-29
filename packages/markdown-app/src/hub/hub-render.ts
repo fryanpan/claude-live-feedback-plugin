@@ -5,7 +5,7 @@
  * the two-filter activity view) are testable under happy-dom.
  */
 import { type ReviewPayload, reviewAnswered } from '@feedback/core';
-import type { ReviewShape } from '@feedback/core';
+import type { ReviewShape, Thread, User } from '@feedback/core';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
 import { MIC_ICON, PLUS_ICON } from '../icons.ts';
@@ -837,6 +837,26 @@ export interface DetailHandlers {
   /** A comment on the task. With `threadId` it is a reply; without one it
    *  opens a new thread about the task itself. */
   onComment?: (task: HubTask, text: string, threadId?: string) => Promise<boolean>;
+  /**
+   * A comment on a PHRASE of the Activity feed — a note's words, or a move's
+   * or audit row's — the way the Home pane takes one: a subject thread on
+   * the task's doc whose first comment quotes the phrase
+   * (`activityCommentRequest`). Resolves to the thread the server made, or
+   * null when refused — the words then stay in the box. Without it the feed
+   * still renders and the pill never appears.
+   */
+  onActivityComment?: (
+    task: HubTask,
+    phrase: { text: string },
+    text: string,
+  ) => Promise<Thread | null>;
+  /** A further reply on the thread the feed's card is showing. Resolves to
+   *  the thread as the server now has it, or null when refused. */
+  onActivityReply?: (task: HubTask, threadId: string, text: string) => Promise<Thread | null>;
+  /** Who the feed's thread card speaks as. Without it the card addresses
+   *  "you" — a surface mounted before identity resolves — and posts nothing
+   *  under a name; the handlers above carry the author. */
+  user?: User;
   /** The one thread the reader was sent here to answer, when they arrived
    *  from the review queue. Marked and scrolled to — "open the task" is not
    *  the promise the strip makes on a task with six discussions. */

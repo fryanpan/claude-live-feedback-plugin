@@ -1,7 +1,9 @@
 /**
- * The plugin's Stop and PermissionDenied hooks post one-line notes to
- * `POST /api/agent-notes` so a per-agent activity pane can say what each
- * agent did lately. Everything that decides WHAT to post is a pure function
+ * The plugin's Stop and PermissionDenied hooks post notes to
+ * `POST /api/agent-notes` so a task's Activity tab can say what each agent
+ * did lately — the Stop hook the whole closing message (reduced, never
+ * clipped to a line), the PermissionDenied hook the denied call's shape.
+ * Everything that decides WHAT to post is a pure function
  * in `hooks/lib/agent-notes.ts`; the two scripts are thin mains. These tests
  * drive the pure module end to end (`runHook`) with a fake fetch, so the
  * exit-0 contract is asserted without spawning a process.
@@ -12,11 +14,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_BASE_URL,
+  FULL_NOTE_TEXT_CAP,
   NOTE_TEXT_CAP,
   POST_TIMEOUT_MS,
   commandShape,
   decideDenialNote,
   decideTurnNote,
+  fullNote,
   oneLine,
   payloadKeys,
   postNote,
@@ -150,6 +154,177 @@ describe('oneLine — a closing message reduced to one safe line', () => {
   });
 });
 
+describe('fullNote — the whole closing message, reduced line by line', () => {
+  it('keeps line structure and markdown: headings, lists, emphasis, inline code', () => {
+    const msg = '## Done\n\nShipped the **fix** in `server.ts`.\n\n- one\n  - nested\n1. first';
+    expect(fullNote(msg)).toBe(msg);
+  });
+  it('collapses runs of blank lines to one and trims the ends', () => {
+    expect(fullNote('\n\n\na\n\n\n\nb\n   \n\nc\n\n')).toBe('a\n\nb\n\nc');
+  });
+  it('reduces URLs on every line, and leaves versions, repo paths and branches alone', () => {
+    const out = fullNote(
+      'First https://u:p@host.example/x here.\nSecond line http://other.example/y too.',
+    );
+    expect(out).toBe('First [url] here.\nSecond line [url] too.');
+    expect(out).not.toContain('host.example');
+    // negative controls
+    const kept = fullNote('bumped 0.1.124 in packages/server/src/x.ts on feat/turn-notes');
+    expect(kept).toBe('bumped 0.1.124 in packages/server/src/x.ts on feat/turn-notes');
+  });
+  it('reduces host paths to their file name on every line', () => {
+    const out = fullNote(
+      'Token in /Users/someone/.config/app/token.\nRepo at ~/dev/repo, ran ./scripts/x.sh',
+    );
+    expect(out).toBe('Token in token.\nRepo at repo, ran x.sh');
+    expect(out).not.toContain('/Users');
+    expect(fullNote('see packages/server/src/x.ts')).toContain('packages/server/src/x.ts');
+  });
+  it('reduces scheme-less hosts, localhost and IPv4 to [url], not a dotted filename', () => {
+    const out = fullNote(
+      'Up at mac-mini.tailXXXXX.ts.net:8787/w/x\nand localhost:8787\nand 192.168.1.44:8787',
+    );
+    expect(out).toBe('Up at [url]\nand [url]\nand [url]');
+    expect(fullNote('touched server.ts and 0.1.124')).toBe('touched server.ts and 0.1.124');
+  });
+  it('reduces token prefixes and Bearer tokens to [token], emails to [email], on every line', () => {
+    const out = fullNote(
+      'Key sk-test-FAKEabc123 here\nAuthorization: Bearer eyJFAKE\nMail user@example.com',
+    );
+    expect(out).toBe('Key [token] here\nAuthorization: [token]\nMail [email]');
+    expect(out).not.toContain('sk-test');
+    expect(out).not.toContain('eyJFAKE');
+    expect(out).not.toContain('example.com');
+    // negative controls: a mention and a TLD-less address
+    expect(fullNote('@bryan asked; box is user@host')).toBe('@bryan asked; box is user@host');
+  });
+  it('reduces a markdown link or image TARGET and keeps its text', () => {
+    expect(
+      fullNote('See [the PR](https://x.example/1) and ![shot](https://x.example/a.png "t").'),
+    ).toBe('See [the PR]([url]) and ![shot]([url] "t").');
+    expect(fullNote('Mail [me](mailto:user@example.com)')).toBe('Mail [me]([email])');
+    // negative control: a repo-relative target is the work, not the host
+    expect(fullNote('See [x](packages/a.ts)')).toBe('See [x](packages/a.ts)');
+  });
+  it('reduces inside inline code, emphasis and angle brackets without dropping the markup', () => {
+    expect(fullNote('key is `sk-test-FAKEXYZ00000000` in `/Users/x/secret`')).toBe(
+      'key is `[token]` in `secret`',
+    );
+    expect(fullNote('**https://x.example/y** and <https://x.example/z>')).toBe(
+      '**[url]** and <[url]>',
+    );
+    expect(fullNote('<b>bold</b> stays bold; a < b && c > d too')).toBe(
+      'bold stays bold; a < b && c > d too',
+    );
+  });
+  it('reduces a value riding an assignment or attribute, and a URL glued to a prefix', () => {
+    expect(
+      fullNote('ran with TOKEN=ghp_FAKEFAKEFAKEFAKEFAKEFAKE1234 and --url=https://x.example'),
+    ).toBe('ran with TOKEN=[token] and --url=[url]');
+    expect(fullNote('(see:https://x.example/y)')).toBe('(see:[url])');
+    expect(fullNote('<a href="https://x.example/y">link</a>')).toBe('link');
+  });
+  it('keeps fenced code, fences included, reduced line by line rather than dropped', () => {
+    const out = fullNote(
+      '```sh\ncurl -u admin https://host.example/x\nexport K="sk-test-FAKE0000"\n  cat /Users/x/.env\n```\nAll green.',
+    );
+    expect(out).toBe('```sh\ncurl -u admin [url]\nexport K="[token]"\n  cat .env\n```\nAll green.');
+    expect(out).not.toContain('host.example');
+    expect(out).not.toContain('sk-test');
+    // negative control: an ordinary command line survives whole
+    expect(fullNote('```\nbun test packages/server\n```')).toBe(
+      '```\nbun test packages/server\n```',
+    );
+  });
+  it('keeps blank lines inside a fence verbatim — code spacing is content, not a run to collapse', () => {
+    // Verify-fix: the blank-line collapse ran inside fences too, so a pasted
+    // diff or YAML block lost its double blank lines in the stored note.
+    const msg =
+      'Ran the tests:\n\n\n```\ndef a():\n    pass\n\n\ndef b():\n    pass\n```\n\n\nDone.';
+    expect(fullNote(msg)).toBe(
+      'Ran the tests:\n\n```\ndef a():\n    pass\n\n\ndef b():\n    pass\n```\n\nDone.',
+    );
+    // A fence holding only blank lines is still "nothing"
+    expect(fullNote('```\n\n\n```')).toBe('');
+  });
+  it('redacts an opaque secret with no recognised prefix — a long alphanumeric run with digits', () => {
+    // Security review: only five shapes were reduced; a bare hex key, a
+    // JWT, a Twilio-style token or a base64 blob rode through whole.
+    const hex = fullNote('Rotated key: 4f2b8c9e1a3d5f7b9c1e3a5d7f9b1c3e0a2d4f6b8c1e3a5d');
+    expect(hex).toBe('Rotated key: [redacted]');
+    const jwt = fullNote(
+      'got eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c back',
+    );
+    expect(jwt).toBe('got [token] back');
+    expect(fullNote('twilio is 0a1b2c3d4e5f60718293a4b5c6d7e8f9')).toBe('twilio is [redacted]');
+    expect(fullNote('rk_live_FAKE0 and pk_test_FAKE0')).toBe('[token] and [token]');
+    // a base64 blob with `/` or `+` in it, as an AWS secret or a PEM line is
+    // (the canonical AWS example key, with its one digit)
+    expect(fullNote('secret was wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY there')).toBe(
+      'secret was [redacted] there',
+    );
+    // punctuation and inline code around it survive
+    expect(fullNote('(`4f2b8c9e1a3d5f7b9c1e3a5d7f9b1c3e`).')).toBe('(`[redacted]`).');
+  });
+  it('leaves identifiers, short hashes, versions and long words alone (negative control)', () => {
+    const kept =
+      'renderCommentMarkdown at 910ffe6d, bumped 0.1.126, TASK_NOTES_STORE_CAP, internationalization, convertToBase64String, ran 1700000000000 ms';
+    expect(fullNote(kept)).toBe(kept);
+    expect(fullNote('see packages/markdown-app/src/hub/task-detail-island.tsx')).toBe(
+      'see packages/markdown-app/src/hub/task-detail-island.tsx',
+    );
+    expect(fullNote('on feat/activity-feed-v2-2026-08-29')).toBe(
+      'on feat/activity-feed-v2-2026-08-29',
+    );
+  });
+  it('redacts the value of a secret-named assignment or key whatever the value looks like', () => {
+    expect(
+      fullNote(
+        'DB_PASSWORD=Tr0ub4dor&3\naws_secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"api_key": "hunter2",\nauthToken=abc',
+      ),
+    ).toBe(
+      'DB_PASSWORD=[redacted]\naws_secret_access_key: [redacted]\n"api_key": "[redacted]",\nauthToken=[redacted]',
+    );
+    expect(fullNote('Authorization: Basic dXNlcjpodW50ZXIy')).toBe('Authorization: [token]');
+    // fenced code takes the same rule
+    expect(fullNote('```\nexport PASSWORD=hunter2\npassword: hunter2\n```')).toBe(
+      '```\nexport PASSWORD=[redacted]\npassword: [redacted]\n```',
+    );
+    // negative controls: a plural, an author, a plain flag, a count
+    expect(fullNote('inputTokens: 1200, tokens: 3, author: sam, --base=main, MODE=dark')).toBe(
+      'inputTokens: 1200, tokens: 3, author: sam, --base=main, MODE=dark',
+    );
+  });
+  it('redacts a token continuation on the next line when a line ends in a bare token prefix', () => {
+    // Security review: terminal-wrapped output splits a token; the prefix
+    // half became [token] and the rest rode through as prose.
+    expect(fullNote('Key is sk-\nabc12345 done')).toBe('Key is [token]\n[token] done');
+    expect(fullNote('Key is sk-\nant-api03-abcdefghijklmnopqrstuvwxyz0123456789')).toBe(
+      'Key is [token]\n[token]',
+    );
+    // negative control: an ordinary word after a whole token stays
+    expect(fullNote('Key is sk-test-FAKEabc123\nhere')).toBe('Key is [token]\nhere');
+  });
+  it('reduces a Windows or UNC path to its file name like a POSIX one', () => {
+    expect(fullNote('Key at C:\\Users\\someone\\.ssh\\id_rsa and \\\\box\\share\\x.txt')).toBe(
+      'Key at id_rsa and x.txt',
+    );
+  });
+  it('caps at FULL_NOTE_TEXT_CAP with an ellipsis, and at a caller cap', () => {
+    const out = fullNote('a'.repeat(5000));
+    expect(out.length).toBe(FULL_NOTE_TEXT_CAP);
+    expect(FULL_NOTE_TEXT_CAP).toBe(4000);
+    expect(out.endsWith('…')).toBe(true);
+    expect(fullNote('x'.repeat(FULL_NOTE_TEXT_CAP))).toBe('x'.repeat(FULL_NOTE_TEXT_CAP));
+    expect(fullNote('hello world', 6)).toBe('hello…');
+  });
+  it('is empty for whitespace, non-strings, and bare fence markers', () => {
+    expect(fullNote('   \n\n  ')).toBe('');
+    expect(fullNote(undefined)).toBe('');
+    expect(fullNote('\n```\n```\n')).toBe('');
+  });
+});
+
 describe('commandShape — a Bash command reduced to its shape', () => {
   it('keeps the first two tokens', () => {
     expect(commandShape('git rm -rf foo')).toBe('git rm');
@@ -255,16 +430,16 @@ describe('env resolution', () => {
 
 describe('decideTurnNote — the Stop hook', () => {
   const ctx = { agent: 'Cartographer', now: NOW };
-  it('builds the payload the server route accepts', () => {
+  it('builds the payload the server route accepts, carrying the WHOLE message reduced', () => {
     const d = decideTurnNote(
-      { ...STOP, last_assistant_message: '## Done\n\nShipped the fix.' },
+      { ...STOP, last_assistant_message: '## Done\n\n\nShipped the fix at https://x.example/1.' },
       ctx,
     );
     expect(d).toEqual({
       post: {
         agent: 'Cartographer',
         kind: 'turn',
-        text: 'Shipped the fix.',
+        text: '## Done\n\nShipped the fix at [url].',
         cwd: '/work/repo',
         sessionId: 'sess-abc1',
         at: NOW,
@@ -407,11 +582,11 @@ describe('postNote — fail-open transport', () => {
 });
 
 describe('runHook — the thin main, end to end', () => {
-  it('posts a turn note and exits 0', async () => {
+  it('posts the full turn note and exits 0', async () => {
     const calls: Call[] = [];
     const code = await runHook(
       'turn',
-      JSON.stringify({ ...STOP, last_assistant_message: 'Shipped it.' }),
+      JSON.stringify({ ...STOP, last_assistant_message: 'Shipped it.\n\nTests: 3 pass.' }),
       {
         env: ENV,
         fetch: fakeFetch(calls),
@@ -423,7 +598,7 @@ describe('runHook — the thin main, end to end', () => {
     expect(sentBody(calls[0])).toEqual({
       agent: 'Cartographer',
       kind: 'turn',
-      text: 'Shipped it.',
+      text: 'Shipped it.\n\nTests: 3 pass.',
       cwd: '/work/repo',
       sessionId: 'sess-abc1',
       at: NOW,

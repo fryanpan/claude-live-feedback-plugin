@@ -14,6 +14,7 @@ import {
   AT_FUTURE_MS,
   AT_PAST_MS,
   AgentNoteRing,
+  NOTE_TEXT_MAX,
   parseAgentNote,
 } from '../src/agent-notes.ts';
 
@@ -83,5 +84,25 @@ describe('AgentNoteRing — bounded per agent AND across agents', () => {
     expect(ring.list('one-too-many')).toHaveLength(1);
     // Positive control: a name just under the cap is still there.
     expect(ring.list(`agent-${AGENT_NOTE_AGENTS_CAP - 1}`)).toHaveLength(1);
+  });
+});
+
+describe('parseAgentNote — an explicit status is a third kind, and the ceiling fits a full turn', () => {
+  it('accepts kind "status" alongside turn and denial', () => {
+    const r = parseAgentNote(body({ kind: 'status', text: 'PR open, waiting on CI' }), NOW);
+    expect(r.ok && r.note.kind).toBe('status');
+    // A kind the store has no meaning for is still refused.
+    expect(parseAgentNote(body({ kind: 'shout' }), NOW)).toMatchObject({
+      ok: false,
+      error: 'bad-kind',
+    });
+  });
+  it('holds a full end-of-turn message: the cap is 4000 and the refusal names it', () => {
+    expect(NOTE_TEXT_MAX).toBe(4000);
+    const fits = parseAgentNote(body({ text: 'x'.repeat(NOTE_TEXT_MAX) }), NOW);
+    expect(fits.ok).toBe(true);
+    const over = parseAgentNote(body({ text: 'x'.repeat(NOTE_TEXT_MAX + 1) }), NOW);
+    expect(over).toMatchObject({ ok: false, error: 'bad-text' });
+    expect(!over.ok && over.message).toContain('4000');
   });
 });

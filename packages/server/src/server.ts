@@ -1596,6 +1596,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       updatedAt: t.updatedAt,
       ...(t.bodyWrittenAt !== undefined ? { bodyWrittenAt: t.bodyWrittenAt } : {}),
       ...(t.titleWrittenAt !== undefined ? { titleWrittenAt: t.titleWrittenAt } : {}),
+      // A note's own clock, not just the `updatedAt` bump it causes: the
+      // hook's `at` is the turn's end, which can sit minutes before the
+      // server's receipt on a slow flush, and the classifier reads notes
+      // directly so the CLI report and this loop agree.
+      ...(t.notes !== undefined ? { notes: t.notes } : {}),
     }));
     // Every row timestamp as an activity tick. Deliberately unfiltered by
     // actor: the question this feeds is "did anything touch this row", and an
@@ -6720,9 +6725,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(405, { error: 'method not allowed' });
         }
-        // --- REST: agent turn / denial notes ---
-        // The plugin's Stop and PermissionDenied hooks post one line per
-        // turn; the server pins it to the agent's current row (its latest
+        // --- REST: a status note on a NAMED row ---
+        // The MCP verb's route: the agent knows which row it is reporting on
+        // and says so, where the hook route below has to resolve the current
+        // claim (and finds nothing for a row the agent never claimed). Same
+        // body rules as the hook route — `parseAgentNote`, so a shared agent
+        // name is refused identically — same append, same per-agent ring.
+        // 202 to match: a status is fire-and-forget for the poster too.
+        const taskNotesMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/notes$/);
+        if (taskNotesMatch) {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
+          const taskId = decodeURIComponent(taskNotesMatch[1] ?? '');
+          const parsed = parseAgentNote(await safeJson(req));
+          if (!parsed.ok) return j(400, { error: parsed.error, message: parsed.message });
+          const { note } = parsed;
+          const res = taskStore.appendNote(taskId, {
+            kind: note.kind,
+            text: note.text,
+            agent: note.agent,
+            ts: note.at,
+            ...(note.sessionId !== undefined ? { sessionId: note.sessionId } : {}),
+          });
+          if (!res.ok) return j(404, { error: res.error });
+          agentNotes.record({ ...note, taskId: res.task.id, workspaceId: res.task.workspaceId });
+          return j(202, { ok: true, taskId: res.task.id, workspaceId: res.task.workspaceId });
+        }
+        // --- REST: agent turn / denial / status notes on the CURRENT row ---
+        // The plugin's Stop and PermissionDenied hooks post once per turn;
+        // the server pins it to the agent's current row (its latest
         // in-progress claim) and keeps the last few per agent either way.
         // 202 rather than 200: the hook fires with the turn already over and
         // never reads the answer. See agent-notes.ts.

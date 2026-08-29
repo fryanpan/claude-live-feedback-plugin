@@ -53,13 +53,16 @@
  */
 import { reviewItemBodyMarkdown } from '@feedback/core';
 import { signal } from '@preact/signals';
-import { Fragment, type RefObject, render } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { type ComponentChildren, Fragment, type RefObject, render } from 'preact';
+import { type MutableRef, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
 import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
+import { ageShort } from './activity-model.ts';
 import { ComposerForm, Discussion, useFill } from './detail-parts.tsx';
 import {
+  type ActivityEvent,
   type HubDecisionOption,
+  type HubNote,
   type HubTask,
   answeredByLine,
   askedMetaLine,
@@ -80,6 +83,9 @@ import {
   renderTransitionRow,
   wireInPlaceTitle,
 } from './hub-render.ts';
+import { markPhrase } from './review-item-phrase.ts';
+import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
+import { NOBODY, type OpenComment, ThreadCard, draftThread } from './thread-card.tsx';
 
 // ── The contract with the vanilla loader ───────────────────────────────────
 
@@ -482,28 +488,276 @@ function ReviewRegion(props: {
   );
 }
 
+// ── The Activity feed ──────────────────────────────────────────────────────
+
+/**
+ * One entry of the feed, whatever it came from: a stored transition, an
+ * audit row from the workspace log, or a note. Keyed on its own facts rather
+ * than its position, so a note landing on top of the list leaves every
+ * other row's node — and the thread card open under one of them — where it
+ * was.
+ */
+interface FeedEntry {
+  key: string;
+  ts: number;
+  kind: 'move' | 'event' | HubNote['kind'];
+  note?: HubNote;
+  build?: () => HTMLLIElement;
+}
+
+/** ONE feed, newest first (Bryan, 2026-08-29: *"all task events as well as
+ *  agent end of turn updates in one feed"*). */
+function feedOf(task: HubTask, events: ActivityEvent[] | undefined): FeedEntry[] {
+  const entries: FeedEntry[] = [
+    ...task.transitions.map((t) => ({
+      key: `move:${t.ts}:${t.from}:${t.to}`,
+      ts: t.ts,
+      kind: 'move' as const,
+      build: () => renderTransitionRow(t),
+    })),
+    ...taskActivity(events, task.id).map((e) => ({
+      key: `event:${e.ts}:${e.event}`,
+      ts: e.ts,
+      kind: 'event' as const,
+      build: () => activityRow(e, task.title),
+    })),
+    ...(task.notes ?? []).map((n) => ({
+      key: `note:${n.at}:${n.kind}:${n.agent}`,
+      ts: n.at,
+      kind: n.kind,
+      note: n,
+    })),
+  ];
+  // Stable sort: at an equal timestamp a move stays above an audit row,
+  // and both above a note — the build order, pinned by test.
+  return uniqueKeys(entries.sort((a, b) => b.ts - a.ts));
+}
+
+/** Two notes in the same millisecond from one agent (a retried post, two
+ *  quick statuses) share every fact the key is built from; a repeat gets a
+ *  serial so Preact keeps both rows. Serials follow the sorted order, so
+ *  they are as stable as the facts are. */
+function uniqueKeys(entries: FeedEntry[]): FeedEntry[] {
+  const seen = new Map<string, number>();
+  for (const e of entries) {
+    const n = seen.get(e.key) ?? 0;
+    seen.set(e.key, n + 1);
+    if (n > 0) e.key = `${e.key}#${n}`;
+  }
+  return entries;
+}
+
+/** The word on a note's kind token. A denial says what it is — a refusal —
+ *  rather than the store's name for it. */
+const KIND_LABEL: Record<HubNote['kind'], string> = {
+  turn: 'turn',
+  status: 'status',
+  denial: 'blocked',
+};
+
+/** Past this a note folds behind "more": HEIGHT is the scarce axis at
+ *  1180×820, and a full end-of-turn message can run to forty lines. Counted
+ *  on the text — happy-dom measures nothing, and a rule the reader can
+ *  predict beats one that depends on the panel's width. */
+const FOLD_LINES = 6;
+const FOLD_CHARS = 600;
+function isLongNote(text: string): boolean {
+  return (
+    text.split('\n').filter((l) => l.trim() !== '').length > FOLD_LINES || text.length > FOLD_CHARS
+  );
+}
+
+/** The phrase an open thread is about, marked the way the editor marks a
+ *  thread's ACTIVE range. */
+const ACTIVE_MARK = 'thread-range active';
+
+/**
+ * A move or an audit row: the words the vanilla renderer already builds for
+ * the workspace trail, filled into a span Preact owns and never reaches
+ * into. The mark, when there is one, goes on after the fill.
+ *
+ * Filled only when the WORDS change, not on every paint: a refill swaps the
+ * text nodes, and the reader's selection — the one the pill is about to
+ * offer a comment on — was in the old ones. The pill's own state change is
+ * a paint, so a per-paint fill hid the pill the moment it was earned.
+ */
+function BuiltRow(props: { entry: FeedEntry; mark?: string; children?: ComponentChildren }) {
+  const { entry, mark } = props;
+  const wordsRef = useRef<HTMLSpanElement | null>(null);
+  const built = entry.build?.();
+  const words = built?.textContent ?? '';
+  useLayoutEffect(() => {
+    const el = wordsRef.current;
+    if (!el || !built) return;
+    el.replaceChildren(...built.childNodes);
+    if (mark) markPhrase(el, mark, ACTIVE_MARK);
+    // `built` is rebuilt each render; the words are what decide a refill.
+  }, [entry.key, words, mark]);
+  const classes = ['hub-hist-row', `hub-hist-row-${entry.kind}`];
+  if (built?.className) classes.push(built.className);
+  return (
+    <li class={classes.join(' ')} title={built?.title ?? ''} data-hist-key={entry.key}>
+      <span ref={wordsRef} class="hub-hist-words" />
+      {props.children}
+    </li>
+  );
+}
+
+/**
+ * A note, in FULL: the agent, its kind, the age, then the whole text as
+ * comment markdown (the same renderer the discussion uses — a turn note is
+ * an end-of-turn message, which is prose with lists and fences). A denial
+ * shows its shape in code under the "blocked" token.
+ *
+ * The body is Preact's element with no vnode children — its HTML is written
+ * in a layout effect keyed on the text and the mark — so a repaint of the
+ * same task leaves the rendered words (and the mark on them) alone, and a
+ * selection in them survives the board events that arrive while the reader
+ * is choosing a phrase.
+ */
+function NoteRow(props: {
+  entry: FeedEntry;
+  note: HubNote;
+  now: number;
+  mark?: string;
+  children?: ComponentChildren;
+}) {
+  const { entry, note, now, mark } = props;
+  const [unfolded, setUnfolded] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const { text, kind } = note;
+  const long = isLongNote(text);
+  const folded = long && !unfolded;
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    if (kind === 'denial') {
+      // The kind token above already reads "blocked"; the body is just the
+      // shape (the Home pane, with no token, keeps DENIAL_PREFIX).
+      const shape = document.createElement('code');
+      shape.className = 'acti-shape';
+      shape.textContent = text;
+      el.replaceChildren(shape);
+    } else {
+      // Same escape-then-allow-known-tags path every comment takes.
+      el.innerHTML = renderCommentMarkdown(text);
+    }
+    if (mark) markPhrase(el, mark, ACTIVE_MARK);
+  }, [text, kind, mark]);
+  return (
+    <li
+      class={`hub-hist-row hub-hist-row-${kind}`}
+      title={new Date(note.at).toLocaleString()}
+      data-hist-key={entry.key}
+    >
+      <div class="hub-note-head">
+        <span class="hub-note-agent">{note.agent}</span>
+        <span class="hub-note-kind">{KIND_LABEL[kind]}</span>
+        <span class="hub-note-age">{ageShort(note.at, now)}</span>
+      </div>
+      <div ref={bodyRef} class={`hub-note-body${folded ? ' is-folded' : ''}`} />
+      {long && (
+        <button
+          type="button"
+          class="hub-note-more"
+          aria-expanded={unfolded ? 'true' : 'false'}
+          onClick={() => setUnfolded((u) => !u)}
+        >
+          {unfolded ? 'less' : 'more'}
+        </button>
+      )}
+      {props.children}
+    </li>
+  );
+}
+
 // ── The panel's other regions ──────────────────────────────────────────────
 
-/** The RECORD: the audit trail, the words the task came from, the leftover
- *  fields, the link chips. Behind a second tab because it used to sit inline
- *  under the discussion, so scrolling to the bottom of a conversation meant
- *  scrolling through a transition list first. */
+/**
+ * The RECORD: the feed, the words the task came from, the leftover fields,
+ * the link chips. Behind a second tab because it used to sit inline under
+ * the discussion, so scrolling to the bottom of a conversation meant
+ * scrolling through a transition list first.
+ *
+ * The feed takes comments the way the Home pane's lines do: select (or tap)
+ * words of a note or of a row → the shared comment pill → the real thread
+ * card under THAT row, quoting the phrase; Reply opens a subject thread on
+ * the task's doc (`activityCommentRequest`). The tab is one column, so the
+ * card goes under the row rather than beside it. An open draft and the
+ * words in its box survive a repaint — the card is keyed on the row and
+ * holds the draft thread object rather than rebuilding it per paint.
+ */
 function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: boolean }) {
   const { task, handlers, hidden } = props;
+  const now = handlers.now ?? Date.now();
   const historyRef = useRef<HTMLUListElement | null>(null);
   const metaRef = useRef<HTMLDListElement | null>(null);
   const linksRef = useRef<HTMLDivElement | null>(null);
+  const feed = feedOf(task, handlers.activity);
+  const hasFeed = feed.length > 0;
+  const canComment = handlers.onActivityComment !== undefined;
+  const user = handlers.user ?? NOBODY;
 
-  // ONE history, newest first: the stored transitions merged with the task's
-  // own rows from the workspace audit log.
-  const history = [
-    ...task.transitions.map((t) => ({ ts: t.ts, node: () => renderTransitionRow(t) })),
-    ...taskActivity(handlers.activity, task.id).map((e) => ({
-      ts: e.ts,
-      node: () => activityRow(e, task.title),
-    })),
-  ].sort((a, b) => b.ts - a.ts);
-  useFill(historyRef as RefObject<HTMLElement>, () => history.map((h) => h.node()));
+  const pill = useSelectionPill(
+    historyRef as MutableRef<HTMLElement | null>,
+    !hidden && canComment,
+  );
+  const [open, setOpen] = useState<OpenComment | null>(null);
+  // Escape puts a draft away. A posted thread's card stays — it is a real
+  // thread now, and the way to it is to fold it like any card.
+  useLayoutEffect(() => {
+    if (!open || open.thread !== null) return;
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') setOpen(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+  // "Tap a word to select it" on the words — and only the words: a tap on
+  // the fold toggle, the head, or the card's own box is not a selection.
+  useLayoutEffect(() => {
+    const el = historyRef.current;
+    if (!el || !canComment) return;
+    const tapWord = (ev: MouseEvent): void => {
+      const target = ev.target as Element | null;
+      if (!target?.closest('.hub-note-body, .hub-hist-words')) return;
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) return;
+      selectWordAtPoint(ev.clientX, ev.clientY, el);
+    };
+    el.addEventListener('click', tapWord);
+    return () => el.removeEventListener('click', tapWord);
+  }, [hasFeed, canComment]);
+
+  // The row the selection sits in — and only when the words are the row's
+  // own: a note's body or a move's / audit row's sentence. An agent's name,
+  // a kind token, an age, the fold toggle and the card's own text are the
+  // feed's chrome, so a selection there gets no pill.
+  const rowKey = pill.phrase
+    ? pill.at
+        ?.closest<HTMLElement>('.hub-note-body, .hub-hist-words')
+        ?.closest<HTMLElement>('li.hub-hist-row')?.dataset.histKey
+    : undefined;
+  const openCard = (): void => {
+    if (!pill.phrase || !rowKey) return;
+    setOpen({
+      key: rowKey,
+      phrase: pill.phrase,
+      thread: null,
+      draft: draftThread(`${task.id}:${rowKey}`, pill.phrase, user, now),
+    });
+    pill.clear();
+    window.getSelection()?.removeAllRanges();
+  };
+  const reply = async (text: string): Promise<boolean> => {
+    if (!open) return false;
+    const t = open.thread
+      ? await handlers.onActivityReply?.(task, open.thread.id, text)
+      : await handlers.onActivityComment?.(task, { text: open.phrase }, text);
+    if (!t) return false;
+    setOpen((o) => (o ? { ...o, thread: t } : o));
+    return true;
+  };
 
   // What is left of the old definition list: reference material. `Goal` and
   // `Due` are not repeated here — they are in the fields row above.
@@ -526,11 +780,57 @@ function ActivityTab(props: { task: HubTask; handlers: DetailHandlers; hidden: b
       class={`hub-detail-tabpanel hub-detail-tabpanel-activity${hidden ? ' hidden' : ''}`}
       role="tabpanel"
     >
-      {history.length > 0 && (
+      {!hasFeed && (
+        <p class="hub-hist-empty">Nothing yet — the first move, edit or note lands here.</p>
+      )}
+      {hasFeed && (
         <Fragment>
           <h3 class="hub-detail-subhead">History</h3>
-          <ul ref={historyRef} class="hub-detail-transitions" />
+          <ul ref={historyRef} class="hub-detail-transitions">
+            {feed.map((entry) => {
+              const isOpen = open !== null && open.key === entry.key;
+              const mark = isOpen ? open.phrase : undefined;
+              const card = isOpen ? (
+                <ThreadCard
+                  key="card"
+                  thread={open.thread ?? open.draft}
+                  user={user}
+                  onReply={reply}
+                  onFold={() => {
+                    // Folding a POSTED thread's card is the card's own fold;
+                    // only a draft has nothing to keep.
+                    if (open.thread === null) setOpen(null);
+                  }}
+                />
+              ) : null;
+              return entry.note ? (
+                <NoteRow key={entry.key} entry={entry} note={entry.note} now={now} mark={mark}>
+                  {card}
+                </NoteRow>
+              ) : (
+                <BuiltRow key={entry.key} entry={entry} mark={mark}>
+                  {card}
+                </BuiltRow>
+              );
+            })}
+          </ul>
         </Fragment>
+      )}
+      {/* The shared pill, on the feed: fixed-position, placed by the hook
+          beside the selection's end. `mousedown` is swallowed so the tap does
+          not blur the selection before the click lands (touch is left alone,
+          since cancelling it cancels the click on iOS). */}
+      {canComment && (
+        <button
+          type="button"
+          class={`comment-pill hub-hist-pill${rowKey ? '' : ' hidden'}`}
+          style={{ left: `${pill.place.left}px`, top: `${pill.place.top}px` }}
+          aria-label="Comment on this"
+          onMouseDown={(ev) => ev.preventDefault()}
+          onClick={openCard}
+        >
+          💬
+        </button>
       )}
       {/*
        * The words the task came from, kept verbatim — collapsed, and below the

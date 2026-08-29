@@ -1,8 +1,11 @@
 /**
  * Agent notes — the pure half of the plugin's Stop and PermissionDenied
- * hooks. Each hook posts ONE line to `POST /api/agent-notes` so the board's
- * per-agent activity pane can say what an agent did lately: the closing
- * message of every turn, and the shape of every tool call auto mode denied.
+ * hooks. Each hook posts one note to `POST /api/agent-notes` so a task's
+ * Activity tab can say what an agent did lately: the closing message of
+ * every turn — the WHOLE message, reduced, not its first line (the owner
+ * reads and replies to these on the task, so the short form was a report
+ * with its body missing) — and the shape of every tool call auto mode
+ * denied.
  *
  * Everything that decides what to post lives here as functions of their
  * inputs (payload, env, clock, fetch); `../stop-note.ts` and
@@ -15,11 +18,17 @@
  *  - Never block the turn. A hook that throws, hangs, or exits non-zero
  *    stalls the agent that fired it; every path here ends in exit 0, and the
  *    POST is capped at `POST_TIMEOUT_MS`.
- *  - Reduce, never forward. A closing message becomes one stripped line
- *    with URLs and host paths reduced; a denied command becomes its command
- *    word plus a subcommand or flag, with anything path-, URL-, assignment-
- *    or token-shaped dropped. The server stores text verbatim (its test says
- *    so), so THIS is the only place the reduction happens.
+ *  - Reduce, never forward. A closing message keeps its lines and its
+ *    markdown but every word on every line — fenced code included — goes
+ *    through the same reduction: URLs and host paths, token prefixes,
+ *    `Bearer` values and emails come out as markers or a bare file name;
+ *    behind those, a long opaque run, a base64 blob, and the value of any
+ *    secret-named key or assignment come out as `[redacted]`, because the
+ *    named shapes only ever cover the providers somebody listed. A denied
+ *    command becomes its command word plus a subcommand or flag, with
+ *    anything path-, URL-, assignment- or token-shaped dropped. The server
+ *    stores text verbatim (its test says so), so THIS is the only place the
+ *    reduction happens.
  */
 
 export type EnvLike = Record<string, string | undefined>;
@@ -42,8 +51,13 @@ export interface NotePayload {
 export type Decision = { post: NotePayload } | { skip: string };
 
 export const DEFAULT_BASE_URL = 'http://localhost:8787';
-/** One line of a closing message, ellipsis included. */
+/** One line of a closing message, ellipsis included — what `oneLine`
+ *  produces; the Home pane's first-line view is derived client-side. */
 export const NOTE_TEXT_CAP = 200;
+/** A whole closing message, ellipsis included. Matches the server's
+ *  `NOTE_TEXT_MAX` (agent-notes.ts), which REFUSES anything longer — so the
+ *  cut happens here, where an ellipsis can mark it, never there. */
+export const FULL_NOTE_TEXT_CAP = 4000;
 /** A denied command's shape; shapes are two tokens, so this only bites on
  *  a pathological first token. */
 const SHAPE_CAP = 80;
@@ -130,6 +144,9 @@ function stripInline(line: string): string {
 
 const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const HOST_PATH_RE = /^(\/|~\/|\.\.?\/)/;
+/** A Windows drive path (`C:\Users\…`, `D:/x`) or a UNC share (`\\box\…`)
+ *  — the same host path in another spelling, reduced the same way. */
+const WIN_PATH_RE = /^([A-Za-z]:[\\/]|\\\\)/;
 /** A host with no `scheme://` to trigger `URL_RE`: a tailnet or local
  *  machine name, or `localhost`, each with an optional port and path. */
 const SCHEMELESS_HOST_RE =
@@ -140,7 +157,7 @@ const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:\d+)?(\/\S*)?$/;
 /** Prefixes of the token formats providers hand out — a closing message
  *  quoting one back is the leak, not a note about it. */
 const TOKEN_PREFIX_RE =
-  /^(sk-|sk_|ghp_|gho_|github_pat_|xox[abpr]-|AKIA[0-9A-Z]{12,}|glpat-|npm_|pypi-|AIza)/;
+  /^(sk-|sk_|rk_|pk_|ghp_|gho_|github_pat_|xox[abpr]-|xapp-|AKIA[0-9A-Z]{12,}|glpat-|npm_|pypi-|AIza|hf_|dop_v1_|shpat_|eyJ[\w-]{12,})/;
 /** `Bearer <token>` spans two words, so it's reduced on the whole line
  *  before the per-word pass below ever sees either half. */
 const BEARER_RE = /\bBearer\s+\S+/g;
@@ -155,6 +172,78 @@ function isIPv4(core: string): boolean {
 }
 
 /**
+ * The catch-all behind the named shapes: a secret that wears no known
+ * prefix — a bare hex key, an API token from a provider nobody listed, a
+ * Twilio-style 32-hex, a base64 blob. Two shapes, both needing three or
+ * more digits so an identifier (`convertToBase64String`, `renderRow2`),
+ * a long word, or a short commit hash is left alone:
+ *  - an unbroken alphanumeric run of 20+ characters (a full SHA matches
+ *    too — a 40-hex token is exactly that shape, and the loss is a hash
+ *    the reader can find in git);
+ *  - a base64 word of 32+ characters with `/` or `+` in it (an AWS secret
+ *    key, a PEM line). Repo paths and branches carry `.`, `-` or `_`, so
+ *    they fail the alphabet.
+ * Replaced with `[redacted]` rather than `[token]` — the reducer does not
+ * know what it was, only that a person would not want it repeated.
+ */
+const OPAQUE_RUN_RE = /[A-Za-z0-9]{20,}/g;
+const BASE64_WORD_RE = /^[A-Za-z0-9+/]{32,}={0,2}$/;
+const OPAQUE_MIN_DIGITS = 3;
+function hasDigits(s: string): boolean {
+  return (s.match(/\d/g)?.length ?? 0) >= OPAQUE_MIN_DIGITS;
+}
+function redactOpaque(core: string): string {
+  // The base64 shape needs the `/` or `+` (an alphanumeric-only word is the
+  // run rule's) and just one digit: the canonical AWS example key has one.
+  if (BASE64_WORD_RE.test(core) && /[+/]/.test(core) && /\d/.test(core)) return '[redacted]';
+  return core.replace(OPAQUE_RUN_RE, (run) => (hasDigits(run) ? '[redacted]' : run));
+}
+
+/** A line whose last word is a bare token prefix (`sk-`, `ghp_`): the rest
+ *  of the token is on the next line — a terminal wrap, or a hand-broken
+ *  value — and would read as prose there. */
+function endsInTokenPrefix(line: string): boolean {
+  const last = line.trim().split(/\s+/).pop() ?? '';
+  const core = last.replace(/^[("'[`<*_]+/, '');
+  return /[-_]$/.test(core) && TOKEN_PREFIX_RE.test(core);
+}
+/** What a token's continuation looks like at the head of the next line. */
+const TOKEN_TAIL_RE = /^[\w+/=-]{6,}[)"'\]`>*.,;:!?]*$/;
+function redactTokenTail(line: string): string {
+  return line.replace(/^(\s*)(\S+)/, (m, ws: string, w: string) =>
+    TOKEN_TAIL_RE.test(w) ? `${ws}[token]` : m,
+  );
+}
+
+/** A key whose VALUE is a secret by its name alone — `DB_PASSWORD=…`,
+ *  `api_key: …`, `authToken=…` — whatever the value looks like: a prose
+ *  reducer cannot know `Tr0ub4dor&3` is a password, but the name says so.
+ *  `token`/`auth` must stand as a word or camel-case segment on their own,
+ *  so `inputTokens: 1200` (a count) and `author: sam` are left alone. */
+const SECRET_NAME_RE =
+  /secret|passw|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|(^|[^a-z])token($|[^a-z])|(^|[^a-z])auth($|[^a-z])/;
+function isSecretName(name: string): boolean {
+  // Camel humps become word breaks first, so `authToken` reads `auth_token`.
+  return SECRET_NAME_RE.test(name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());
+}
+/** `name: value` / `"name": "value"` / `name = value` on a line — the
+ *  YAML, JSON and spaced-assignment spellings a pasted config comes in. A
+ *  bare `NAME=value` is one word and is `reduceLocator`'s. The value runs
+ *  to whitespace or a closing quote/comma; the quoting around it stays. */
+const SECRET_KV_RE =
+  /(^|[\s"'`,{(\[])(["'`]?)([A-Za-z_][\w.-]*)(["'`]?)(\s*:\s*|\s+=\s*|\s*=\s+)(["'`]?)([^\s"'`,;]+)/g;
+/** `Authorization: <scheme> <credential>` — the header a pasted curl or
+ *  response carries; `Bearer` alone was handled, `Basic`/`Token` were not. */
+const AUTH_HEADER_RE = /\bAuthorization:\s*\S+(?:\s+\S+)?/gi;
+
+/** `NAME=value`, `--flag=value`, `attr=value` — the value is what gets
+ *  reduced; the name stays, since it is the description. */
+const VALUE_AFTER_EQUALS_RE = /^(-{0,2}[A-Za-z_][\w-]*=)(.+)$/;
+/** A URL that starts partway through a word (`see:https://x`,
+ *  `href="https://x"`) — the anchored `URL_RE` never sees it. */
+const EMBEDDED_URL_RE = /[a-z][a-z0-9+.-]*:\/\/\S*/i;
+
+/**
  * A URL, a host path, or a credential-shaped word inside a sentence,
  * reduced: a URL (schemed or a bare tailnet/local host, `localhost`, or an
  * IPv4 address) to `[url]` (its host may be a private machine, its userinfo
@@ -164,25 +253,56 @@ function isIPv4(core: string): boolean {
  * closing sentence routinely names any of these. Repo-relative paths
  * (`packages/x/y.ts`) and branch names (`feat/x`) are left alone — they are
  * the work, not the host.
+ *
+ * Punctuation and inline markup around the word — brackets, quotes,
+ * backticks, emphasis stars and underscores, angle brackets — are peeled
+ * off and put back, so `` `sk-…` `` comes out as `` `[token]` `` with its
+ * code span intact (`fullNote` keeps markdown; `oneLine` strips it first
+ * and sees none of this). A value after `=` is reduced on its own, so
+ * `TOKEN=ghp_…` reads `TOKEN=[token]` instead of riding through whole.
  */
 function reduceLocator(word: string): string {
-  const m = /^([("'[]*)(.*?)([)"'\].,;:!?]*)$/.exec(word);
+  const m = /^([("'[`<*_]*)(.*?)([)"'\]`>*_.,;:!?]*)$/.exec(word);
   if (!m) return word;
   const [, open, core, close] = m;
   if (URL_RE.test(core)) return `${open}[url]${close}`;
-  if (HOST_PATH_RE.test(core)) return `${open}${basenameOf(core)}${close}`;
+  if (HOST_PATH_RE.test(core) || WIN_PATH_RE.test(core)) {
+    return `${open}${basenameOf(core)}${close}`;
+  }
   if (SCHEMELESS_HOST_RE.test(core) || isIPv4(core)) return `${open}[url]${close}`;
   if (TOKEN_PREFIX_RE.test(core)) return `${open}[token]${close}`;
   if (EMAIL_RE.test(core)) return `${open}[email]${close}`;
+  const assigned = VALUE_AFTER_EQUALS_RE.exec(core);
+  if (assigned) {
+    const value = reduceLocator(assigned[2]);
+    if (value !== assigned[2]) return `${open}${assigned[1]}${value}${close}`;
+    // No named shape in the value — the NAME decides. An opening quote on
+    // the value stays, so `PASSWORD="x"` still reads as a quoted value.
+    if (isSecretName(assigned[1].slice(0, -1).replace(/^-{0,2}/, ''))) {
+      const quote = /^["'`]/.exec(assigned[2])?.[0] ?? '';
+      return `${open}${assigned[1]}${quote}[redacted]${close}`;
+    }
+  }
+  if (EMBEDDED_URL_RE.test(core)) return `${open}${core.replace(EMBEDDED_URL_RE, '[url]')}${close}`;
+  const opaque = redactOpaque(core);
+  if (opaque !== core) return `${open}${opaque}${close}`;
   return word;
 }
 
-/** The word-level reduction pass: `Bearer <token>` first (it spans two
- *  words), then `reduceLocator` word by word. Shared by prose
- *  (`stripInline`) and the fenced-code fallback in `oneLine`, so a closing
- *  message and its code block get the same treatment. */
+/** The word-level reduction pass: the spans that cross a word boundary
+ *  first — `Bearer <token>`, an `Authorization:` header, a secret-named
+ *  `key: value` — then `reduceLocator` word by word, whitespace kept as it
+ *  was. Shared by prose (`stripInline`), every line of `fullNote`, and the
+ *  fenced-code fallback in `oneLine`, so a closing message and its code
+ *  block get the same treatment. */
 function reduceWords(s: string): string {
-  return s.replace(BEARER_RE, '[token]').split(' ').map(reduceLocator).join(' ');
+  return s
+    .replace(AUTH_HEADER_RE, 'Authorization: [token]')
+    .replace(BEARER_RE, '[token]')
+    .replace(SECRET_KV_RE, (m, pre, q1, name, q2, sep, q3) =>
+      isSecretName(name) ? `${pre}${q1}${name}${q2}${sep}${q3}[redacted]` : m,
+    )
+    .replace(/\S+/g, reduceLocator);
 }
 
 function capText(s: string, cap: number): string {
@@ -190,11 +310,86 @@ function capText(s: string, cap: number): string {
   return `${s.slice(0, cap - 1).trimEnd()}…`;
 }
 
+/** `[text](target)` and `![alt](target)` — the target is a URL or a path,
+ *  and the anchored word pass would see `[text](https://…` as one word with
+ *  its scheme in the middle. Reduced here so the text survives and the
+ *  target becomes a marker. `mailto:` is peeled so the address behind it is
+ *  seen as one. */
+const MD_LINK_RE = /(!?\[[^\]]*\])\(([^)\s]*)(\s[^)]*)?\)/g;
+/** An HTML tag — a letter or a closing slash right after `<`, so `a < b`
+ *  is prose, not a tag. Dropped whole, attributes and all: a tag is markup
+ *  `oneLine` never kept, and an `href` is a URL the word pass would only
+ *  half-see. An autolink (`<https://…>`, `<user@…>`) matches too and is
+ *  kept for the word pass to turn into a marker. */
+const HTML_TAG_RE = /<\/?[a-zA-Z][^<>]*>/g;
+const AUTOLINK_RE = /^<(?:[a-z][a-z0-9+.-]*:\/\/[^<>\s]+|[\w.+-]+@[\w-]+\.[\w.-]+)>$/i;
+
+function reduceLinkTarget(target: string): string {
+  const bare = target.replace(/^mailto:/i, '');
+  return reduceLocator(bare);
+}
+
+/** One prose line of `fullNote`: link targets, then tags, then words.
+ *  Trailing whitespace goes; indentation stays (a nested list is one). */
+function reduceProseLine(line: string): string {
+  const linked = line.replace(
+    MD_LINK_RE,
+    (_m, text: string, target: string, title: string | undefined) =>
+      `${text}(${reduceLinkTarget(target)}${title ?? ''})`,
+  );
+  const untagged = linked.replace(HTML_TAG_RE, (tag) => (AUTOLINK_RE.test(tag) ? tag : ''));
+  return reduceWords(untagged).trimEnd();
+}
+
+/**
+ * A closing message whole: every line kept, markdown and fences included,
+ * every word on every line reduced the way `oneLine` reduces its one, runs
+ * of blank lines collapsed to one OUTSIDE fences (inside, spacing is the
+ * code), capped at `cap` with an ellipsis marking the cut. Fenced code is
+ * reduced line by line rather than dropped — the block is often the
+ * evidence (the test run, the command) and the reader asked for the full
+ * update — with the fence markers kept so it still renders as code. A
+ * token split over a line break is reduced on both halves. Empty when
+ * nothing but whitespace or bare fence markers remains, so the caller skips
+ * the post the way it always has.
+ */
+export function fullNote(text: unknown, cap = FULL_NOTE_TEXT_CAP): string {
+  if (typeof text !== 'string') return '';
+  const out: string[] = [];
+  let inFence = false;
+  let content = false;
+  let spill = false;
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const t = raw.trim();
+    if (FENCE_RE.test(t)) {
+      inFence = !inFence;
+      out.push(t);
+      continue;
+    }
+    const joined = spill ? redactTokenTail(raw) : raw;
+    spill = endsInTokenPrefix(raw);
+    const line = inFence ? reduceWords(joined).trimEnd() : reduceProseLine(joined);
+    if (line.trim() === '') {
+      if (inFence) out.push('');
+      else if (out.length > 0 && out[out.length - 1] !== '') out.push('');
+      continue;
+    }
+    content = true;
+    out.push(line);
+  }
+  if (!content) return '';
+  while (out.length > 0 && out[out.length - 1] === '') out.pop();
+  return capText(out.join('\n'), cap);
+}
+
 /**
  * A closing message reduced to one line: markdown stripped, the first line
  * with any prose, capped at `cap` with an ellipsis marking the cut. A
  * heading (`## Done`) and fenced code are fallbacks, not first choice — the
  * sentence under the heading says what happened; the heading names it.
+ * The hook no longer posts this — `fullNote` carries the turn — but the
+ * Home pane's first-line view is the same derivation, kept here as the
+ * reference form.
  */
 export function oneLine(text: unknown, cap = NOTE_TEXT_CAP): string {
   if (typeof text !== 'string') return '';
@@ -352,13 +547,13 @@ function note(
   };
 }
 
-/** The Stop hook: the turn's closing message as one line. */
+/** The Stop hook: the turn's closing message, whole and reduced. */
 export function decideTurnNote(payload: unknown, ctx: DecideContext): Decision {
   const p = asPayload(payload);
   if (!p) return { skip: 'malformed payload' };
   if (p.stop_hook_active === true) return { skip: 'stop hook active' };
   if (!ctx.agent) return { skip: 'no agent name' };
-  const text = oneLine(p.last_assistant_message);
+  const text = fullNote(p.last_assistant_message);
   if (text === '') return { skip: 'empty message' };
   return note(p, ctx, ctx.agent, 'turn', text);
 }

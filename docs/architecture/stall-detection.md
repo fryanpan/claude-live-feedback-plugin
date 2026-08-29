@@ -28,6 +28,16 @@ owner — their Home queue is the surface), and the **backlog** on boards
 with goal bands. Boards without goal bands carry whole columns as
 stall-eligible; structure the board to scope the watcher.
 
+**Task notes count as movement.** A row's quiet time is measured from the
+newest of: its status change, its last workspace event, its last thread
+activity, and its newest note in `task.notes` — the end-of-turn message the
+Stop hook posts, an explicit `post_status`, or a denial. Notes are read from
+the row itself: `task.noted` is deliberately kept out of the workspace event
+stream and the board trail, so a talking agent resets its own task's stall
+clock without lighting up every board it is attached to. The board-level
+ready-idle clock (`ready-nudge.ts`) ignores notes on purpose — that wake
+exists to catch a session that keeps talking without moving anything.
+
 Known gap, deliberately open: nothing ages review items sitting unanswered
 on the owner's queue. That is a different signal (ask-aging, not
 row-stalling) and gets its own design if it proves needed.
