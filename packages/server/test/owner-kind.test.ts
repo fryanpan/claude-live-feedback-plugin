@@ -92,7 +92,7 @@ describe('attachedAgentTest', () => {
   });
 
   it('matches a hand-supplied slug and a display-name id too', () => {
-    expect(attachedAgentTest(['quick-build'])('Quick Build')).toBe(true);
+    expect(attachedAgentTest(['lighthouse'])('Lighthouse')).toBe(true);
     expect(attachedAgentTest(['Surveyor'])('  surveyor ')).toBe(true);
   });
 
@@ -559,21 +559,21 @@ describe('owner id beside the owner name', () => {
   it('a merged agent’s rows follow the merge without a rewrite', async () => {
     const wsId = await seedWorkspace('merge');
     await attach(wsId, LF, 'Live Feedback');
-    await attach(wsId, 'quick-build', 'Quick Build');
-    const theirs = await mk(wsId, 'Quick Build');
-    expect(theirs.assigneeId).toBe('quick-build');
+    await attach(wsId, 'lighthouse', 'Lighthouse');
+    const theirs = await mk(wsId, 'Lighthouse');
+    expect(theirs.assigneeId).toBe('lighthouse');
     expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([]);
 
-    await jj(await post('/api/agents/quick-build/merge', { into: LF, author: PERSON }));
+    await jj(await post('/api/agents/lighthouse/merge', { into: LF, author: PERSON }));
 
     const stored = handle.tasks.getTask(theirs.id) as Task;
     // Still the id it was written with — history is never rewritten…
-    expect(stored.assigneeId).toBe('quick-build');
-    expect(stored.assignee).toBe('Quick Build');
+    expect(stored.assigneeId).toBe('lighthouse');
+    expect(stored.assignee).toBe('Lighthouse');
     // …and every read resolves it through the merge.
     expect(projected(wsId, theirs.id)?.assigneeId).toBe(LF);
     expect(await ids(`/api/workspaces/${wsId}/next?assignee=${LF}`)).toEqual([theirs.id]);
-    expect(await ids(`/api/workspaces/${wsId}/next?assignee=Quick%20Build`)).toEqual([theirs.id]);
+    expect(await ids(`/api/workspaces/${wsId}/next?assignee=Lighthouse`)).toEqual([theirs.id]);
   });
 
   it('a hand-over re-resolves the id, and clears it for a name nobody knows', async () => {

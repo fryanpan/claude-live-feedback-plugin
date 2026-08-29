@@ -345,7 +345,7 @@ describe('activity backfill', () => {
 describe('classifyActor', () => {
   it('classifies named per-agent identities (agent-<slug> ids) as agent, not person', async () => {
     const { classifyActor } = await import('../src/activity.ts');
-    expect(classifyActor({ id: 'agent-quick-build', name: 'Quick Build', kind: 'known' })).toBe(
+    expect(classifyActor({ id: 'agent-lighthouse', name: 'Lighthouse', kind: 'known' })).toBe(
       'agent',
     );
   });
@@ -397,7 +397,7 @@ describe('classifyActor', () => {
     // disagree, the tie goes to 'agent' on purpose — an agent misfiled as a
     // person launders the audit log AND reopens threads it closes
     // (rooms.ts reply-reopen rule), while the reverse only over-filters.
-    expect(classifyActor({ id: 'agent-quick-build', name: 'Quick Build', kind: 'person' })).toBe(
+    expect(classifyActor({ id: 'agent-lighthouse', name: 'Lighthouse', kind: 'person' })).toBe(
       'agent',
     );
   });
@@ -415,12 +415,12 @@ describe('an old-id activity row resolves to the merged identity at read', () =>
     const dataDir = mkdtempSync(join(tmpdir(), 'activity-merge-'));
     try {
       const roster = new Identities({ dataDir });
-      roster.upsertAgent('agent-quick-build', 'Quick Build');
-      roster.mergeAgent('qb-agent', 'agent-quick-build');
+      roster.upsertAgent('agent-lighthouse', 'Lighthouse');
+      roster.mergeAgent('qb-agent', 'agent-lighthouse');
       setIdentityRoster(roster);
       expect(resolveActor({ actorId: 'qb-agent', actorName: 'qb-agent' })).toEqual({
-        id: 'agent-quick-build',
-        name: 'Quick Build',
+        id: 'agent-lighthouse',
+        name: 'Lighthouse',
       });
       // POSITIVE CONTROL: an id the roster does not know reads as stored.
       expect(resolveActor({ actorId: 'anon-zz9', actorName: 'Someone' })).toEqual({
