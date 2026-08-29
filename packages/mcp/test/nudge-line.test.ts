@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { readyIdleLine, reviewAnsweredLine, stalledLine } from '../src/nudge-line.ts';
+import {
+  readyIdleLine,
+  reviewAnsweredLine,
+  reviewItemHeldLine,
+  stalledLine,
+} from '../src/nudge-line.ts';
 
 /**
  * The two wake events exist to make the board the scheduler instead of the
@@ -369,5 +374,73 @@ describe('stalledLine', () => {
     });
     expect(line).toContain('could NOT be evaluated');
     expect(line).toContain('review-items-unreadable');
+  });
+});
+
+// ── Review items the quality gate is holding ─────────────────────────────────
+
+const HELD_ROW = {
+  id: 't-b3',
+  title: 'Rebuild the index nightly',
+  reviewItemId: 'ri-1',
+  headline: 'ok?',
+  reason: 'The headline is not a question the reader can answer.',
+  heldMs: 6 * 60_000,
+  filedBy: 'Index Keeper',
+};
+
+describe('stalledLine names held review items as their own finding', () => {
+  it('says how many are held, which, by whom, and what the judge found', () => {
+    const line = stalledLine({ ...STALL, rows: [], stalledCount: 0, heldItems: [HELD_ROW] });
+    expect(line).toContain('1 review item is HELD');
+    expect(line).toContain('"ok?"');
+    expect(line).toContain('t-b3');
+    expect(line).toContain('Index Keeper');
+    expect(line).toContain('not a question the reader can answer');
+    expect(line).toContain('revise_review_item');
+  });
+
+  it('a held item on an otherwise quiet board is not a bare slug', () => {
+    const line = stalledLine({ heldItems: [HELD_ROW] });
+    expect(line).not.toContain('no rows on it');
+    expect(line).toContain('HELD');
+  });
+
+  it('the control: a frame with no held list says nothing about holds', () => {
+    expect(stalledLine(STALL)).not.toContain('HELD');
+  });
+});
+
+describe('reviewItemHeldLine — the filer’s own wake', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
+  const payload = {
+    taskId: 't-b3',
+    title: 'Rebuild the index nightly',
+    reviewItemId: 'ri-1',
+    headline: 'ok?',
+    reason: 'The headline is not a question the reader can answer.',
+  };
+
+  it('names the item, both ids, the reason, and the one call that fixes it', () => {
+    const line = reviewItemHeldLine(payload);
+    expect(line.startsWith('[workspace.review_item_held]')).toBe(true);
+    expect(line).toContain('"ok?"');
+    expect(line).toContain('taskId t-b3');
+    expect(line).toContain('reviewItemId ri-1');
+    expect(line).toContain('not a question the reader can answer');
+    expect(line).toContain('revise_review_item');
+  });
+
+  it('says how long the hold has stood when the stall loop sends it', () => {
+    const line = reviewItemHeldLine({ ...payload, overdue: true, heldMs: 6 * 60_000 });
+    expect(line).toContain('has been held for 6m');
+    // The filing-time wake carries no such clause — nothing has stood yet.
+    expect(reviewItemHeldLine(payload)).not.toContain('has been held');
+  });
+
+  it('the shipped switch renders the event with it', () => {
+    expect(SRC).toContain("case 'workspace.review_item_held':");
+    expect(SRC).toContain('reviewItemHeldLine(p)');
   });
 });

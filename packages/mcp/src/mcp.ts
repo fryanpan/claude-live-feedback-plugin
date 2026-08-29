@@ -16,8 +16,13 @@ import { decisionAnsweredLine } from './decision-line.ts';
 import { declareWorkspaceLead } from './declare-lead.ts';
 import { createDeferredEmitter } from './deferred-emit.ts';
 import { createFrameDedup } from './frame-dedup.ts';
-import { readyIdleLine, reviewAnsweredLine, stalledLine } from './nudge-line.ts';
-import type { StalledRowPayload } from './nudge-line.ts';
+import {
+  readyIdleLine,
+  reviewAnsweredLine,
+  reviewItemHeldLine,
+  stalledLine,
+} from './nudge-line.ts';
+import type { HeldRowPayload, StalledRowPayload } from './nudge-line.ts';
 import { isSelfAuthoredEvent } from './self-authored.ts';
 import { type SseCursor, deliverThenCommit } from './sse-cursor.ts';
 import { projectTaskRows } from './task-projection.ts';
@@ -103,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.126';
+const PLUGIN_VERSION = '0.1.127';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1465,6 +1470,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'set_review_item_criteria',
+      description:
+        "Set what this board's quality gate judges a review item against — a natural-language prompt the judge reads verbatim before each add_review_item / revise_review_item. Omit `criteria` (or pass an empty string) to restore the default, which asks for a headline in the reader's words, stakes and what to look at in the detail, a cost on every option, inline links, and no raw ids or unexpanded acronyms. get_workspace shows the current text.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workspaceId: { type: 'string' },
+          criteria: {
+            type: 'string',
+            description:
+              'The criteria, as prose the judge will read. Up to 4,000 characters. Omit to restore the default.',
+          },
+        },
+        required: ['workspaceId'],
+      },
+    },
+    {
       name: 'get_workspace',
       description:
         "Read a board's goals in priority order, with per-goal task counts. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
@@ -1764,7 +1786,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'add_review_item',
       description:
-        'Hang a question on a ticket that already exists — the verb for a question that came up while working it, so the ask stays attached to the work that raised it. A ticket carries several at once, each answered on its own, so the title keeps naming the work and a second question needs no second ticket. When you are filing the work and the question together, use review on a create_tasks row instead.',
+        'Hang a question on a ticket that already exists — the verb for a question that came up while working it, so the ask stays attached to the work that raised it. A ticket carries several at once, each answered on its own, so the title keeps naming the work and a second question needs no second ticket. When you are filing the work and the question together, use review on a create_tasks row instead. Every item passes a quality gate (the board’s criteria, see set_review_item_criteria): a result with `held: true` means it is on the ticket but OFF the reader’s queue — fix the gap in `heldReason` with revise_review_item, which judges it again.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1818,7 +1840,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'revise_review_item',
       description:
-        "Rewrite one of your review items in place — the answer to a question somebody asked ON it (a comment anchored to a phrase of its text arrives on the task's thread with the reviewItemId). Pass only the fields that change; the previous words are kept as history and the item returns to the reader's queue marked Revised, with their question quoted and the changed span highlighted. `reply` posts on the thread that asked, in the same call.",
+        "Rewrite one of your review items in place — the answer to a question somebody asked ON it (a comment anchored to a phrase of its text arrives on the task's thread with the reviewItemId), or the fix for an item the quality gate HELD (`held: true` on add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Every revision is judged again: a held item reaches the reader's queue when it passes, and an already-queued one returns marked Revised, with their question quoted and the changed span highlighted. `reply` posts on the thread that asked, in the same call.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -3042,6 +3064,24 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         );
         return declared.isError === true ? err(String(declared.message)) : ok(declared);
       }
+      case 'set_review_item_criteria': {
+        const { workspaceId, criteria } = a as { workspaceId: string; criteria?: string };
+        const res = (await http(
+          'PUT',
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/settings`,
+          {
+            // `null` is the route's spelling of "back to the default"; an
+            // omitted or blank string means the same thing to the caller.
+            reviewItemCriteria: criteria !== undefined && criteria.trim() !== '' ? criteria : null,
+            author: AUTHOR,
+          },
+        )) as { reviewItemCriteria: { value: string; isDefault: boolean } };
+        return ok({
+          workspaceId,
+          criteria: res.reviewItemCriteria.value,
+          isDefault: res.reviewItemCriteria.isDefault,
+        });
+      }
       case 'attach_doc': {
         const { workspaceId, docId } = a as { workspaceId: string; docId: string };
         const res = (await http('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
@@ -3162,6 +3202,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             id: string;
             name: string;
             leadAgentId?: string;
+            reviewItemCriteria?: string;
           };
           goalSummary: unknown[];
           retired?: { since: number; reason?: string; notice: string };
@@ -3172,6 +3213,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Absent means nobody is responsible for this board — its asks
           // have no addressee until someone attaches or takes the seat.
           leadAgentId: res.workspace.leadAgentId,
+          // The board's OWN criteria for the review-item quality gate, when
+          // somebody has written some; absent means the default applies.
+          ...(res.workspace.reviewItemCriteria !== undefined
+            ? { reviewItemCriteria: res.workspace.reviewItemCriteria }
+            : {}),
           // Present only when this board has been stood down. Carried FIRST
           // in spirit even though it reads last: an agent that got this far
           // is about to decide what to work on, and a retired board's goal
@@ -3523,7 +3569,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = (await http('POST', `/api/tasks/${encodeURIComponent(taskId)}/review-items`, {
           review,
           author: AUTHOR,
-        })) as { item?: { id?: string }; reviewAdvice?: string };
+        })) as {
+          item?: { id?: string };
+          reviewAdvice?: string;
+          held?: boolean;
+          heldReason?: string;
+          message?: string;
+        };
         return ok({
           taskId,
           reviewItemId: res.item?.id,
@@ -3532,6 +3584,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // computed the advice, and the only party that can still act on it
           // never hears it.
           ...(res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {}),
+          // The quality gate's verdict, when it held the item. Same failure
+          // if dropped: the item is on the ticket and off the queue, and the
+          // filer would read a bare id as "filed".
+          ...heldResult(res),
         });
       }
       case 'answer_review_item': {
@@ -3575,7 +3631,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...(revisedRange !== undefined ? { revisedRange } : {}),
             author: AUTHOR,
           },
-        )) as { threadId?: string; reviewAdvice?: string };
+        )) as {
+          threadId?: string;
+          reviewAdvice?: string;
+          held?: boolean;
+          heldReason?: string;
+          message?: string;
+        };
         return ok({
           taskId,
           reviewItemId,
@@ -3583,6 +3645,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(res.threadId !== undefined ? { threadId: res.threadId } : {}),
           ...(reply !== undefined && res.threadId !== undefined ? { replied: true } : {}),
           ...(res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {}),
+          // Re-judged on every revision; still held means still off the queue.
+          ...heldResult(res),
         });
       }
       case 'request_more_info': {
@@ -4593,6 +4657,14 @@ interface HubEventPayload {
   stalledCount?: number;
   rows?: StalledRowPayload[];
   unfiled?: StalledRowPayload[];
+  /** `workspace.stalled`: review items the quality gate is holding past the
+   *  window. `workspace.review_item_held`: the one item this frame is about.
+   *  See nudge-line.ts. */
+  heldItems?: HeldRowPayload[];
+  reviewItemId?: string;
+  headline?: string;
+  overdue?: boolean;
+  heldMs?: number;
   trigger?: string;
   transcript?: string;
   ack?: string;
@@ -4607,6 +4679,24 @@ interface HubEventPayload {
  * actor is THIS agent never forwards (never deliver an author's own events
  * back to them — §3.10 companion rule).
  */
+/**
+ * The quality gate's verdict as a tool result carries it: present only when
+ * the item was HELD, with the reason and the server's own next-step line.
+ * One helper for both doors (add, revise) so they cannot spell it two ways.
+ */
+function heldResult(res: { held?: boolean; heldReason?: string; message?: string }): {
+  held?: true;
+  heldReason?: string;
+  message?: string;
+} {
+  if (res.held !== true) return {};
+  return {
+    held: true,
+    ...(res.heldReason !== undefined ? { heldReason: res.heldReason } : {}),
+    ...(res.message !== undefined ? { message: res.message } : {}),
+  };
+}
+
 async function emitHubChannelMessage(event: string, rawPayload: unknown): Promise<void> {
   const p = (rawPayload ?? {}) as HubEventPayload;
   if (event === 'agent.heartbeat') return;
@@ -4694,6 +4784,12 @@ async function emitHubChannelMessage(event: string, rawPayload: unknown): Promis
     // of the queue.
     case 'workspace.stalled':
       body = stalledLine(p);
+      break;
+    // The quality gate holding one of THIS agent's items — addressed to the
+    // filer, so it is always about the reader's own filing. Rendered with the
+    // ids and the reason because the next act is one revise call.
+    case 'workspace.review_item_held':
+      body = reviewItemHeldLine(p);
       break;
     case 'agent.attached':
     case 'agent.detached':
