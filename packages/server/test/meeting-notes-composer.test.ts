@@ -54,6 +54,24 @@ describe('notes prompt', () => {
     expect(user).toContain('/repo/planning');
   });
 
+  it('names the speaker on each line when the tick knows one', () => {
+    const { system, user } = buildNotesPrompt({
+      ...input,
+      tick: {
+        ...input.tick,
+        turns: [
+          { turn: 3, text: 'Can you take the migration?', speaker: 'Jordan' },
+          { turn: 4, text: 'Sure.', speaker: 'Speaker B' },
+          { turn: 5, text: 'Thanks.' },
+        ],
+      },
+    });
+    expect(user).toContain('- Jordan: Can you take the migration?');
+    expect(user).toContain('- Speaker B: Sure.');
+    expect(user).toContain('- Thanks.');
+    expect(system).toContain('Speaker B');
+  });
+
   it('says so when there are no notes yet, instead of an empty section', () => {
     const { user } = buildNotesPrompt({ ...input, previous: null, context: undefined });
     expect(user).toContain('none yet');

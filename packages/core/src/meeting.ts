@@ -38,7 +38,29 @@ export function meetingSocketPath(docId: string): string {
 /** Client → server. Sent as a JSON text frame; audio is sent as binary frames. */
 export type MeetingClientMessage =
   | { type: 'start'; sampleRate: number; encoding: typeof MEETING_AUDIO_ENCODING }
-  | { type: 'stop' };
+  | { type: 'stop' }
+  /**
+   * "Speaker A is Jordan." The engine labels voices within one session; the
+   * person names a label once and every turn with it — on the strip, in the
+   * record, in the notes — reads as the name from then on. Per meeting: the
+   * same letter is a different person next time.
+   */
+  | { type: 'name_speaker'; speaker: string; name: string };
+
+/** Longest name a speaker label can be given. A name, not a bio. */
+export const MAX_SPEAKER_NAME = 60;
+
+/**
+ * What a turn's speaker is called: the name the person gave that label, or
+ * the label itself with "Speaker" in front until they do. One function, so
+ * the strip, the record and the notes never disagree about it.
+ */
+export function speakerDisplayName(
+  label: string,
+  names: Readonly<Record<string, string>>,
+): string {
+  return names[label] ?? `Speaker ${label}`;
+}
 
 /**
  * Why a meeting cannot be transcribed. Separated from a generic error because
@@ -63,9 +85,11 @@ export type MeetingServerMessage =
    * One turn of speech. `text` is the WHOLE turn as currently understood, not
    * a delta — a later message with the same `turn` replaces the earlier text
    * in place, which is how a mis-heard word gets corrected after it is already
-   * on screen. `final` marks the engine done revising that turn.
+   * on screen. `final` marks the engine done revising that turn. `speaker` is
+   * the engine's label for the voice (`"A"`, `"B"`), absent until it has
+   * decided; display goes through `speakerDisplayName`.
    */
-  | { type: 'transcript'; turn: number; text: string; final: boolean }
+  | { type: 'transcript'; turn: number; text: string; final: boolean; speaker?: string }
   /** The meeting ended; its transcript is durable. */
   | { type: 'stopped'; meetingId: string; endedAt: number }
   /** Something went wrong mid-meeting. Distinct from `unavailable`. */
@@ -83,6 +107,12 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
   if (typeof parsed !== 'object' || parsed === null) return null;
   const m = parsed as Record<string, unknown>;
   if (m.type === 'stop') return { type: 'stop' };
+  if (m.type === 'name_speaker') {
+    const speaker = typeof m.speaker === 'string' ? m.speaker.trim() : '';
+    const name = typeof m.name === 'string' ? m.name.trim() : '';
+    if (!speaker || speaker.length > 16 || !name || name.length > MAX_SPEAKER_NAME) return null;
+    return { type: 'name_speaker', speaker, name };
+  }
   if (m.type === 'start') {
     const rate = m.sampleRate;
     // A rate the engine cannot be told about is worse than no meeting: the

@@ -173,3 +173,73 @@ describe('meeting store', () => {
     expect(listMeetings(dataDir, 'shutdown-a')[0]?.endedAt).not.toBeNull();
   });
 });
+
+describe('meeting store: who said it', () => {
+  let dataDir: string;
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-meetings-speakers-'));
+  });
+  afterAll(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps the speaker label on each settled turn', () => {
+    const store = new MeetingStore(dataDir);
+    const meeting = store.start({ docId: 'two-voices', engine: 'mock', sampleRate: 16_000 });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.recordTurn(0, 'Can you take the migration?', 'A');
+    meeting.recordTurn(1, 'Sure.', 'B');
+    meeting.recordTurn(2, 'Thanks.');
+    meeting.stop();
+    expect(readTranscript(dataDir, 'two-voices', meeting.meetingId)).toEqual([
+      expect.objectContaining({ turn: 0, text: 'Can you take the migration?', speaker: 'A' }),
+      expect.objectContaining({ turn: 1, text: 'Sure.', speaker: 'B' }),
+      expect.objectContaining({ turn: 2, text: 'Thanks.' }),
+    ]);
+    expect('speaker' in (readTranscript(dataDir, 'two-voices', meeting.meetingId)[2] ?? {})).toBe(
+      false,
+    );
+  });
+
+  it('a relabel of a written turn is appended, never rewritten, and folds on read', () => {
+    const store = new MeetingStore(dataDir);
+    const meeting = store.start({ docId: 'relabel', engine: 'mock', sampleRate: 16_000 });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.recordTurn(0, 'Sure.', 'A');
+    // The end-of-session pass decided it was the other voice.
+    meeting.recordTurn(0, 'Sure.', 'B');
+    // Same label again is not news.
+    meeting.recordTurn(0, 'Sure.', 'B');
+    const record = meeting.stop();
+    expect(record.turns).toBe(1);
+    const lines = readFileSync(meetingTranscriptPath(dataDir, 'relabel', meeting.meetingId), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ turn: 0, text: 'Sure.', speaker: 'A' });
+    expect(lines[1]).toMatchObject({ turn: 0, speaker: 'B' });
+    expect('text' in (lines[1] ?? {})).toBe(false);
+    expect(readTranscript(dataDir, 'relabel', meeting.meetingId)).toEqual([
+      expect.objectContaining({ turn: 0, text: 'Sure.', speaker: 'B' }),
+    ]);
+  });
+
+  it('remembers the names a person gives the labels, on the meeting record', () => {
+    const store = new MeetingStore(dataDir);
+    const meeting = store.start({ docId: 'named', engine: 'mock', sampleRate: 16_000 });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.nameSpeaker('A', 'Jordan');
+    meeting.nameSpeaker('B', 'Sam');
+    // Renaming replaces; the last word wins.
+    meeting.nameSpeaker('A', 'Jordan Lee');
+    expect(listMeetings(dataDir, 'named')[0]?.speakers).toEqual({ A: 'Jordan Lee', B: 'Sam' });
+    const record = meeting.stop();
+    expect(record.speakers).toEqual({ A: 'Jordan Lee', B: 'Sam' });
+    expect(listMeetings(dataDir, 'named')[0]?.speakers).toEqual({ A: 'Jordan Lee', B: 'Sam' });
+    // After stop the map is closed, like the transcript.
+    meeting.nameSpeaker('C', 'Late');
+    expect(listMeetings(dataDir, 'named')[0]?.speakers).toEqual({ A: 'Jordan Lee', B: 'Sam' });
+  });
+});

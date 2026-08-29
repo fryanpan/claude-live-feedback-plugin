@@ -29,6 +29,8 @@ export interface TranscriptTurn {
   text: string;
   /** When the turn settled, not when it was spoken. */
   ts: number;
+  /** The engine's label for the voice; names live on the meeting record. */
+  speaker?: string;
 }
 
 /** A meeting as the index describes it, after folding start and stop. */
@@ -42,6 +44,8 @@ export interface MeetingRecord {
   sampleRate: number;
   /** Settled turns at stop. Absent for a meeting that never stopped. */
   turns?: number;
+  /** Engine label → the name a person gave it, for THIS meeting only. */
+  speakers?: Record<string, string>;
 }
 
 /**
@@ -119,6 +123,14 @@ export function listMeetings(dataDir: string, docId: string): MeetingRecord[] {
     }
     if (typeof row.endedAt === 'number') existing.endedAt = row.endedAt;
     if (typeof row.turns === 'number') existing.turns = row.turns;
+    // One line per naming, merged in order: a rename is a later line for
+    // the same label, and the last one is what the person meant.
+    if (typeof row.speakers === 'object' && row.speakers !== null) {
+      existing.speakers = { ...existing.speakers };
+      for (const [label, name] of Object.entries(row.speakers as Record<string, unknown>)) {
+        if (typeof name === 'string') existing.speakers[label] = name;
+      }
+    }
   }
   return [...byId.values()].sort((a, b) => a.startedAt - b.startedAt);
 }
@@ -129,11 +141,28 @@ export function readTranscript(
   docId: string,
   meetingId: string,
 ): TranscriptTurn[] {
-  return readJsonl(meetingTranscriptPath(dataDir, docId, meetingId)).flatMap((row) =>
-    typeof row.turn === 'number' && typeof row.text === 'string'
-      ? [{ turn: row.turn, text: row.text, ts: typeof row.ts === 'number' ? row.ts : 0 }]
-      : [],
-  );
+  const turns: TranscriptTurn[] = [];
+  const byTurn = new Map<number, TranscriptTurn>();
+  for (const row of readJsonl(meetingTranscriptPath(dataDir, docId, meetingId))) {
+    if (typeof row.turn !== 'number') continue;
+    const speaker = typeof row.speaker === 'string' ? row.speaker : undefined;
+    if (typeof row.text === 'string') {
+      const turn: TranscriptTurn = {
+        turn: row.turn,
+        text: row.text,
+        ts: typeof row.ts === 'number' ? row.ts : 0,
+        ...(speaker !== undefined ? { speaker } : {}),
+      };
+      turns.push(turn);
+      byTurn.set(row.turn, turn);
+      continue;
+    }
+    // A line with a turn and a label but no words is a relabel of a turn
+    // already written — the append-only form of "we now think it was B".
+    const known = byTurn.get(row.turn);
+    if (known && speaker !== undefined) known.speaker = speaker;
+  }
+  return turns;
 }
 
 /** The handle the relay holds for as long as a meeting is live. */
@@ -141,8 +170,14 @@ export interface ActiveMeeting {
   readonly meetingId: string;
   readonly docId: string;
   readonly startedAt: number;
-  /** Append a settled turn. Repeats of a turn already written are ignored. */
-  recordTurn(turn: number, text: string): void;
+  /**
+   * Append a settled turn. Repeats of a turn already written are ignored —
+   * except a repeat with a DIFFERENT speaker label, which appends a relabel
+   * line (the engine's end-of-session pass changing its mind).
+   */
+  recordTurn(turn: number, text: string, speaker?: string): void;
+  /** "Label `speaker` is `name`" — appended to the index, last word wins. */
+  nameSpeaker(speaker: string, name: string): void;
   /** End the meeting. Idempotent; returns the folded record either way. */
   stop(): MeetingRecord;
 }
@@ -203,7 +238,9 @@ export class MeetingStore {
     // as an empty transcript rather than a missing one.
     mkdirSync(dirname(transcriptPath), { recursive: true });
     appendFileSync(transcriptPath, '');
-    const written = new Set<number>();
+    /** Turn → the label it was written with (undefined for none). */
+    const written = new Map<number, string | undefined>();
+    const speakers: Record<string, string> = {};
     let stopped = false;
     const live = this.live;
 
@@ -211,13 +248,28 @@ export class MeetingStore {
       meetingId,
       docId,
       startedAt,
-      recordTurn(turn: number, text: string): void {
+      recordTurn(turn: number, text: string, speaker?: string): void {
         if (stopped) return;
         // An engine that settles the same turn twice would otherwise double
         // it in the record, and appending is not something we can take back.
-        if (written.has(turn)) return;
-        written.add(turn);
-        appendLine(transcriptPath, { turn, text, ts: Date.now() });
+        if (written.has(turn)) {
+          if (speaker === undefined || written.get(turn) === speaker) return;
+          written.set(turn, speaker);
+          appendLine(transcriptPath, { turn, speaker, ts: Date.now() });
+          return;
+        }
+        written.set(turn, speaker);
+        appendLine(transcriptPath, {
+          turn,
+          text,
+          ...(speaker !== undefined ? { speaker } : {}),
+          ts: Date.now(),
+        });
+      },
+      nameSpeaker(speaker: string, name: string): void {
+        if (stopped) return;
+        speakers[speaker] = name;
+        appendLine(meetingIndexPath(dataDir, docId), { meetingId, speakers: { [speaker]: name } });
       },
       stop(): MeetingRecord {
         const record: MeetingRecord = {
@@ -228,6 +280,7 @@ export class MeetingStore {
           engine,
           sampleRate,
           turns: written.size,
+          ...(Object.keys(speakers).length > 0 ? { speakers: { ...speakers } } : {}),
         };
         if (stopped) return record;
         stopped = true;

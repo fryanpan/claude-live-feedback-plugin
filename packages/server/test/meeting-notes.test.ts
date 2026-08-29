@@ -134,6 +134,14 @@ describe('pause ticker', () => {
     expect(schedule.armed).toBe(0);
   });
 
+  it('carries the engine\'s speaker label on a settled turn', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'A' });
+    ticker.onTurn({ turn: 1, text: 'Sure.', final: true });
+    schedule.fire();
+    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'Take it?', speaker: 'A' }, { turn: 1, text: 'Sure.' }]);
+  });
+
   it('end() with nothing pending emits nothing', () => {
     const { ticks, ticker } = setup();
     ticker.end();
@@ -207,6 +215,46 @@ describe('notes session', () => {
     expect(inputs[1]?.previous).toBe('notes after tick 1');
     expect(updates[1]?.tick.reason).toBe('end');
     expect(updates.every((u) => u.docId === ids.docId && u.meetingId === ids.meetingId)).toBe(true);
+  });
+
+  it('the composer sees speakers by the names given so far, and "Speaker A" until then', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose(input) {
+        inputs.push(input);
+        return Promise.resolve('notes');
+      },
+    };
+    const session = beginNotesSession(
+      { composer, quietMs: 1000, schedule, onNotes: () => {} },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'A' });
+    session.onTurn({ turn: 1, text: 'Sure.', final: true, speaker: 'B' });
+    session.nameSpeaker('A', 'Jordan');
+    schedule.fire();
+    // The compose runs on the chain's microtask; let it read the names as
+    // they stand BEFORE the second one lands, so only later ticks read Sam.
+    await new Promise((r) => setTimeout(r, 0));
+    session.nameSpeaker('B', 'Sam');
+    session.onTurn({ turn: 2, text: 'By Thursday.', final: true, speaker: 'B' });
+    await session.end();
+    expect(inputs.map((i) => i.tick.turns.map((t) => t.speaker))).toEqual([
+      ['Jordan', 'Speaker B'],
+      ['Sam'],
+    ]);
+  });
+
+  it('the stub composer writes the speaker before the words', async () => {
+    const notes = await createStubNotesComposer().compose({
+      docId: 'd',
+      meetingId: 'm',
+      tick: { tick: 1, reason: 'pause', turns: [{ turn: 0, text: 'Take it?', speaker: 'Jordan' }, { turn: 1, text: 'Sure.' }] },
+      previous: null,
+    });
+    expect(notes).toBe('## Notes\n- Jordan: Take it?\n- Sure.');
   });
 
   it('a failed compose reports the error and carries its words into the next tick', async () => {
