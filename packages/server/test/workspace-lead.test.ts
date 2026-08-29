@@ -795,3 +795,76 @@ describe('a display-name change keeps the seat and renames every write', () => {
     expect(handle.identities.get('agent-legacy')?.displayName).toBe('Legacy Bundle');
   });
 });
+
+describe('the shared "agent" identity can neither claim nor be handed the seat', () => {
+  let dataDir: string;
+  let store: TaskStore;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-shared-'));
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('attachAgent refuses it, so an empty seat is not claimed by a category', () => {
+    const ws = store.createWorkspace('shared-hub');
+    const res = store.attachAgent(ws.id, { agentId: 'known-agent', runtime: 'claude-code-local' });
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error).toBe('author-required');
+    expect((res as { message?: string }).message).toContain('CW_AGENT_NAME');
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBeUndefined();
+    expect(store.listAttachments(ws.id)).toEqual([]);
+    // POSITIVE CONTROL: a named agent claims the same empty seat.
+    const named = store.attachAgent(ws.id, {
+      agentId: 'agent-relay',
+      runtime: 'claude-code-local',
+    });
+    expect(named.ok).toBe(true);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe('agent-relay');
+  });
+
+  it('setLeadAgent refuses it as the seat holder and as the caller', () => {
+    const ws = store.createWorkspace('shared-hub', { leadAgentId: 'agent-relay' });
+    const handed = store.setLeadAgent(ws.id, 'known-agent', { actor: AGENT });
+    expect(handed.ok).toBe(false);
+    if (handed.ok) throw new Error('unreachable');
+    expect(handed.error).toBe('author-required');
+    const claimed = store.setLeadAgent(ws.id, 'agent-other', {
+      actor: { id: 'known-agent', name: 'Agent', kind: 'agent' },
+      takeover: true,
+    });
+    expect(claimed.ok).toBe(false);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe('agent-relay');
+  });
+
+  it('the attach route answers 400, not 404, so the caller can read the remedy', async () => {
+    const handle = createServer({
+      port: 0,
+      dataDir: mkdtempSync(join(tmpdir(), 'ws-lead-shared-http-')),
+    });
+    try {
+      const base = `http://localhost:${handle.port}`;
+      const post = (path: string, body: unknown) =>
+        fetch(`${base}${path}`, {
+          method: 'POST',
+          headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      const created = await post('/api/workspaces', { name: 'shared-http', goal: 'Ship it.' });
+      const { workspace } = (await created.json()) as { workspace: { id: string } };
+      const res = await post(`/api/workspaces/${workspace.id}/attachments`, {
+        agentId: 'known-agent',
+        runtime: 'claude-code-local',
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('author-required');
+    } finally {
+      await handle.stop();
+    }
+  });
+});

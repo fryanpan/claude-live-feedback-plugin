@@ -15,7 +15,8 @@ import { activityLogPath } from '../src/activity.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const bryan: User = { id: 'known-bryan', name: 'Bryan', kind: 'known', color: '#2e7dd7' };
-const agent: User = { id: 'known-agent', name: 'Agent', kind: 'known', color: '#e36f1e' };
+// A NAMED agent: the shared `known-agent` category is refused as an author.
+const agent: User = { id: 'agent-relay', name: 'Relay', kind: 'known', color: '#e36f1e' };
 
 const fakeAnchor: ElementAnchor = {
   kind: 'element',

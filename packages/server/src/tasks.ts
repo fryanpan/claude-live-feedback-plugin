@@ -28,7 +28,12 @@ import {
   checkDecisionShape,
   decisionShapeMessage,
 } from './decision-shape.ts';
-import { type DeclaredOwnerKind, declaredAssigneeKind } from './task-owner.ts';
+import {
+  AUTHOR_REQUIRED_MESSAGE,
+  type DeclaredOwnerKind,
+  declaredAssigneeKind,
+  isCategoryAuthor,
+} from './task-owner.ts';
 import { bodyHead } from './task-title.ts';
 
 /**
@@ -1210,7 +1215,14 @@ export type AttachAgentResult =
        */
       leadNameConflicts?: LeadNameConflicts;
     }
-  | { ok: false; error: 'workspace-not-found' };
+  | { ok: false; error: 'workspace-not-found' }
+  | {
+      ok: false;
+      /** The shared "agent" identity tried to attach. A category cannot hold
+       *  a seat or be owed a delivery — see `isCategoryAuthor`. */
+      error: 'author-required';
+      message: string;
+    };
 
 /** What an agent is told when it reads a board that has been stood down. */
 export interface RetiredNotice {
@@ -1841,7 +1853,7 @@ export type SetLeadAgentResult =
        *  attachment record of, so every lead-addressed delivery would route
        *  to nobody. `empty-lead-agent-id` — the id trimmed to nothing, which
        *  used to take the seat as ''. */
-      error: 'unknown-lead-agent' | 'empty-lead-agent-id';
+      error: 'unknown-lead-agent' | 'empty-lead-agent-id' | 'author-required';
       /** The verbatim refusal, naming the id — written to land in a retrying
        *  caller's context, the same contract as `bad-review`. */
       message: string;
@@ -2683,6 +2695,13 @@ export class TaskStore {
         error: 'empty-lead-agent-id',
         message: 'leadAgentId is empty — the lead seat needs a real agent id.',
       };
+    }
+    // The seat routes deliveries to SOMEBODY. The shared category — as the
+    // proposed holder or as the caller — is nobody in particular, and a seat
+    // held by it is exactly the state this refusal was written against
+    // (one live board, lead seat "known-agent", 1,031 unattributed rows).
+    if (isCategoryAuthor({ id: next }) || isCategoryAuthor(opts.actor)) {
+      return { ok: false, error: 'author-required', message: AUTHOR_REQUIRED_MESSAGE };
     }
     if (next === workspace.leadAgentId) return { ok: true, workspace, changed: false };
     // Naming a THIRD PARTY is a deliberate handover, and a handover needs an
@@ -5170,6 +5189,11 @@ export class TaskStore {
   ): AttachAgentResult {
     const state = this.workspaces.get(workspaceId);
     if (!state) return { ok: false, error: 'workspace-not-found' };
+    // Same rule as the seat: a category cannot attach, because an attachment
+    // is what makes an id an addressee (and would claim an empty seat).
+    if (isCategoryAuthor({ id: opts.agentId })) {
+      return { ok: false, error: 'author-required', message: AUTHOR_REQUIRED_MESSAGE };
+    }
     const now = Date.now();
     // Is this attach a NEW process, or the same live one re-attaching (a
     // lead declaration, a retry after `subscribed: false`, a defensive

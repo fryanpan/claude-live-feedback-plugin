@@ -142,6 +142,23 @@ function stableAnonId(storage: IdentityStorage | null): string {
   return anon;
 }
 
+/**
+ * What to print for a comment's author. The shared "agent" identity —
+ * `known-agent`, or the bare word as a name — is what every session launched
+ * without a name collapsed into for months, so those rows belong to nobody
+ * in particular and say so: "Unnamed agent". Every other author renders as
+ * stored. Read-time only; nothing in the doc changes.
+ */
+export function authorLabel(author: { id?: string; name?: string } | undefined): string {
+  if (!author) return '';
+  const id = author.id?.trim() ?? '';
+  const name = author.name ?? '';
+  if (id === 'known-agent' || id === 'agent' || name.trim().toLowerCase() === 'agent') {
+    return 'Unnamed agent';
+  }
+  return name;
+}
+
 /** The full known identity for a name/key (`bryan`, `Agent`, …), or null. */
 export function knownUserForName(nameOrKey: string): User | null {
   const key = nameOrKey.toLowerCase();

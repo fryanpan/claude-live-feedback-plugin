@@ -171,8 +171,11 @@ import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
   ASSIGNEE_REQUIRED_MESSAGE,
+  AUTHOR_REQUIRED_ERROR,
+  AUTHOR_REQUIRED_MESSAGE,
   BAD_ASSIGNEE_KIND_ERROR,
   BAD_ASSIGNEE_KIND_MESSAGE,
+  isCategoryAuthor,
   parseAssigneeKind,
   resolveAssignee,
 } from './task-owner.ts';
@@ -3245,6 +3248,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          * roster does not know (a person's typed name, an old bundle's id
          * nothing attached under) passes through exactly as claimed.
          */
+        /** The 400 every comment route answers the shared category with.
+         *  One message, the same fix named, so a peer launched without a
+         *  name learns it from the first refusal rather than from silence. */
+        const refuseCategoryAuthor = (): Response =>
+          j(400, { error: AUTHOR_REQUIRED_ERROR, message: AUTHOR_REQUIRED_MESSAGE });
+
         const stampRosterAgent = (claimed: User | undefined): User | undefined => {
           if (!claimed || typeof claimed !== 'object' || typeof claimed.id !== 'string') {
             return claimed;
@@ -6626,7 +6635,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 ? body.processId.trim()
                 : undefined,
           });
-          if (!res.ok) return j(404, res);
+          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           return j(200, res);
         }
         const wsAgentHeartbeatMatch = pathname.match(
@@ -7166,6 +7175,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const user = authorFor(body?.author);
               const text = body?.text as string | undefined;
               if (!user || !text) return j(400, { error: 'author + text required' });
+              if (isCategoryAuthor(user)) return refuseCategoryAuthor();
               const declared = reviewFromBody(body?.review, text);
               if (!declared.ok) return j(400, { error: declared.error });
               // A person's plain reply IS the answer to the ask it lands on.
@@ -7342,6 +7352,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (threadRest === '/resolve' && req.method === 'POST') {
               const body = await safeJson(req);
               const author = authorFor(body?.author);
+              if (isCategoryAuthor(author)) return refuseCategoryAuthor();
               // Resolve is a thread change, so it schedules a summary — and a
               // visitor must not be able to spend the API key by clicking it.
               const t = rooms.resolve(docId, threadId, author, { generate: !visitor });
@@ -7350,6 +7361,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (threadRest === '/reopen' && req.method === 'POST') {
               const body = await safeJson(req);
               const author = authorFor(body?.author);
+              if (isCategoryAuthor(author)) return refuseCategoryAuthor();
               const t = rooms.reopen(docId, threadId, author, { generate: !visitor });
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
             }
@@ -7410,6 +7422,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!user || !text || !anchor) {
               return j(400, { error: 'author + text + anchor required' });
             }
+            if (isCategoryAuthor(user)) return refuseCategoryAuthor();
             // Validate BEFORE the write. An anchor whose startRel/endRel
             // don't decode is accepted silently by the CRDT and then kills
             // the re-anchor sweep from inside a Yjs observer, i.e. on
