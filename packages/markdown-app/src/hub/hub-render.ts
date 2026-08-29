@@ -37,6 +37,7 @@ import {
   activityRows,
   appendDictation,
   assigneeLabel,
+  decisionAskedBy,
   describeEvent,
   homeSinceLabel,
   ownerKindSuffix,
@@ -1785,6 +1786,9 @@ export function panelReviewQueue(
       headline: blurb.headline || task.title,
       ...(blurb.body !== '' ? { detail: blurb.body } : {}),
       ...(task.options ? { options: task.options } : {}),
+      // The ticket's filer, read the one way the Home card reads it, so the
+      // same decision does not say "Asked by UX Bot" there and "Asked" here.
+      ...(decisionAskedBy(task) !== undefined ? { askedBy: decisionAskedBy(task) } : {}),
       since: task.createdAt,
       asked: true,
     });

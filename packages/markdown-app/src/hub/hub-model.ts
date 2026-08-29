@@ -131,6 +131,11 @@ export interface HubTask {
    *  `triagedAgainst`). */
   unplacedSince?: number;
   createdAt: number;
+  /** Who filed the ticket, as the server resolved it (`taskAskedBy`): the
+   *  creator, or for a row older than that field its first mover. Absent
+   *  when neither is known. The one source for "Asked by" on a task-borne
+   *  decision — see `decisionAskedBy`. */
+  createdBy?: string;
   updatedAt: number;
 }
 
@@ -2852,6 +2857,38 @@ export function askedMetaLine(
 }
 
 /**
+ * Who is asking the decision a TASK carries — the name after "Asked by" on
+ * the Home card and on the task panel's own decision card alike. One reader
+ * so the two cannot name different people: the projection's `createdBy`
+ * (the server's `taskAskedBy`, creator-else-first-mover) when it shipped
+ * one, else the first mover, which is all a projection from before that
+ * field can say. Undefined when neither is known — the meta line then
+ * states the clock alone rather than a name nothing recorded.
+ */
+export function decisionAskedBy(
+  task: Pick<HubTask, 'createdBy' | 'transitions'>,
+): string | undefined {
+  const who = task.createdBy?.trim() || task.transitions[0]?.by.name?.trim();
+  return who ? who : undefined;
+}
+
+/**
+ * The opening of every answered record — "Answered by you: “", "Answered by
+ * Cara: “", or "Answered: “" when the record names nobody. ONE spelling for
+ * the doc card, the task panel's thread record and the task's own answer:
+ * the doc said "Answered by you" while the panel said "Answered by Probe
+ * Reviewer" for the same reader and the same answer, because each surface
+ * spelled the rule itself and one of them never compared against the reader.
+ * `selfName` is the reader's display name; a record whose `by` equals it is
+ * the reader's own.
+ */
+export function answeredByLine(by: string | undefined, selfName: string | undefined): string {
+  const who = by?.trim() ?? '';
+  if (who === '') return 'Answered: “';
+  return `Answered by ${selfName !== undefined && who === selfName ? 'you' : who}: “`;
+}
+
+/**
  * The meta for a queue item. For a DECLARED item "Asked by" is always true —
  * a declaration IS an ask, in so many words, whatever the `direct` heuristic
  * measured. The inferred band keeps its measured Posted/Asked honesty, since
@@ -2860,9 +2897,9 @@ export function askedMetaLine(
 export function askedMeta(item: ReviewItem, now: number): string {
   const thread = item.thread;
   const row = reviewRow(item);
-  // A thread carries its asker; a decision's is whoever first moved the task,
-  // which is the only actor a projected task row records.
-  const who = thread?.askedBy ?? row?.task.transitions[0]?.by.name;
+  // A thread carries its asker; a decision's is the ticket's filer, read the
+  // one way every surface reads it.
+  const who = thread?.askedBy ?? (row ? decisionAskedBy(row.task) : undefined);
   const asked = item.review !== undefined || (thread ? thread.direct === true : true);
   // The clock beside "asked" is the QUESTION's, not the run's: a run can start
   // days before the ask, and quoting its start tells the reader they have been

@@ -19,7 +19,7 @@ import {
   restoreComposerFocus,
   restoreScrollTops,
 } from './composer-keep.ts';
-import { askedMetaLine } from './hub/hub-model.ts';
+import { answeredByLine, askedMetaLine } from './hub/hub-model.ts';
 import { decisionOutcome, threadDecision } from './long-thread.ts';
 import { attachMarkdownComposer } from './md-composer.ts';
 import {
@@ -820,9 +820,9 @@ export class ThreadPanel {
     const wrap = div('thread-answered');
     const line = document.createElement('p');
     line.className = 'thread-answered-line';
-    const by = review.answeredBy;
-    const who = by !== undefined && by === this.opts.currentUser.name ? 'you' : by;
-    line.append(document.createTextNode(who ? `Answered by ${who}: “` : 'Answered: “'));
+    line.append(
+      document.createTextNode(answeredByLine(review.answeredBy, this.opts.currentUser.name)),
+    );
     const words = span('thread-answer-words');
     // A legacy tapped answer may predate `answerText`; the tapped option's
     // label is the verbatim words it recorded.

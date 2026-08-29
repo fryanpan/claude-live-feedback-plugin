@@ -751,6 +751,17 @@ export interface Task {
    *  before the field existed, which reads as none. */
   notes?: TaskNote[];
   createdAt: number;
+  /**
+   * Display name of whoever FILED the ticket. Until this field existed the
+   * creator was written to the `task.created` event and nowhere else, so
+   * the one question a decision card has to answer — who is asking? — had
+   * no row-level answer: the derived legacy review item shipped an empty
+   * `createdBy` and the card read "Asked 11 minutes ago" beside a thread
+   * card's "Asked by UX Bot 11 minutes ago". Absent on every row written
+   * before the field, and on a create that named no author; `taskAskedBy`
+   * is the one reader and carries the fallback.
+   */
+  createdBy?: string;
   updatedAt: number;
   /**
    * When the DESCRIPTION last changed — a body clock, not a row clock.
@@ -2331,6 +2342,24 @@ function cryptoId(prefix: string): string {
 export const LEGACY_REVIEW_ITEM_ID = 'r-legacy';
 
 /**
+ * Who is ASKING the decision a ticket carries — the display name every
+ * surface spells after "Asked by". One reader for three writers (the derived
+ * legacy review item, the board projection, and through those the REST
+ * queue), so the Home card, the task panel and `GET /review-items` cannot
+ * name three different people for one question.
+ *
+ * The creator when the row recorded one; otherwise whoever first moved the
+ * ticket, which is the only actor a row written before `createdBy` holds and
+ * is what the Home card named all along. Empty — never invented — when the
+ * row holds neither, and the card then states the clock alone.
+ */
+export function taskAskedBy(task: Pick<Task, 'createdBy' | 'transitions'>): string {
+  const created = task.createdBy?.trim();
+  if (created) return created;
+  return task.transitions[0]?.by.name?.trim() ?? '';
+}
+
+/**
  * The id of a NEWLY CREATED goal. Opaque and server-generated, exactly like a
  * task id, and for the same reason: an identifier is the one thing that must
  * never move, so nothing about it may encode something that does.
@@ -3226,6 +3255,10 @@ export class TaskStore {
       ...(opts.quote !== undefined ? { quote: opts.quote } : {}),
       transitions: [],
       createdAt: now,
+      // The display name, like every other projected `by` (§3.3 visitor
+      // contract). An author-less create (the routes predate the field)
+      // stamps nothing rather than the bare word "agent".
+      ...(opts.actor?.name ? { createdBy: opts.actor.name } : {}),
       updatedAt: now,
     };
     state.tasks.set(task.id, task);
@@ -3926,9 +3959,13 @@ export class TaskStore {
    * and — the part that matters — the legacy `answer` carried across, because
    * an answered decision read as open is a queue that never empties.
    *
-   * `createdBy` is deliberately empty. No legacy decision recorded who RAISED
-   * it; `assignee` is who has to answer it, which is a different person, and
-   * writing it here would attribute the question to the wrong one.
+   * `createdBy` is `taskAskedBy` — who filed the ticket, and for a row older
+   * than that field whoever first moved it, which is what the Home card
+   * already named. It used to be deliberately empty ("no legacy decision
+   * recorded who raised it"), which was true of the row and false of the
+   * board: the same decision read "Asked by Harbor agent" on Home and
+   * "Asked 11 minutes ago" in the task panel and the REST queue. NOT the
+   * `assignee` — that is who has to answer, a different person.
    */
   private legacyReviewItem(task: Task): TaskReviewItem | undefined {
     // `needs === 'decision'` is the WHOLE condition. It used to also require
@@ -3941,7 +3978,7 @@ export class TaskStore {
       id: LEGACY_REVIEW_ITEM_ID,
       review,
       createdAt: task.createdAt,
-      createdBy: '',
+      createdBy: taskAskedBy(task),
     };
     if (task.answer) {
       item.answer = {
