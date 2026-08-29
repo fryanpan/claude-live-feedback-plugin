@@ -61,6 +61,7 @@ import { ComposerForm, Discussion, useFill } from './detail-parts.tsx';
 import {
   type HubDecisionOption,
   type HubTask,
+  answeredByLine,
   askedMetaLine,
   blockedNoteLine,
   isTaskArchived,
@@ -160,13 +161,17 @@ function UndoAnswer(props: { undo: () => Promise<boolean> | undefined }) {
   );
 }
 
-/** The task's own recorded answer. */
+/** The task's own recorded answer — in the same voice as every other
+ *  answered record ("Answered by you" when the reader answered), because it
+ *  is the same record. */
 function TaskAnsweredNote(props: { task: HubTask; handlers: DetailHandlers }) {
   const { task, handlers } = props;
   const answer = task.answer;
   return (
     <div class="hub-detail-answered">
-      <p class="hub-detail-answer">{answer ? `Answered by ${answer.by}: “${answer.text}”` : ''}</p>
+      <p class="hub-detail-answer">
+        {answer ? `${answeredByLine(answer.by, handlers.selfName)}${answer.text}”` : ''}
+      </p>
       {handlers.onUndoAnswer && <UndoAnswer undo={() => handlers.onUndoAnswer?.(task)} />}
     </div>
   );
@@ -186,19 +191,13 @@ function ThreadAnsweredNote(props: {
   handlers: DetailHandlers;
 }) {
   const { task, item, answered, handlers } = props;
-  const label =
-    answered.by !== undefined &&
-    handlers.selfName !== undefined &&
-    answered.by === handlers.selfName
-      ? 'you'
-      : answered.by;
   // No comment id means the undo route has nothing to name — the record still
   // renders, without a button that could only 400.
   const undoable = handlers.onUndoThreadAnswer !== undefined && item.commentId !== undefined;
   return (
     <div class="hub-detail-answered">
       <p class="hub-detail-answer">
-        {label ? `Answered by ${label}: “` : 'Answered: “'}
+        {answeredByLine(answered.by, handlers.selfName)}
         <span
           class="hub-answer-words"
           // biome-ignore lint/security/noDangerouslySetInnerHtml: renderCommentMarkdownInline escapes first and re-adds only known-safe tags.
