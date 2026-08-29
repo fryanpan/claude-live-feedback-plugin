@@ -14409,7 +14409,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.123";
+var PLUGIN_VERSION = "0.1.124";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -17567,13 +17567,15 @@ async function emitChannelMessage(event, rawPayload) {
   }
   const threadId = p.threadId ?? "";
   const snippet = p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? "";
+  const reviewItemId = p.reviewItemId ?? (p.thread?.anchor?.kind === "review-item" ? p.thread.anchor.reviewItemId : undefined);
   const statusChange = event === "thread.resolved" || event === "thread.reopened";
   const author = statusChange ? p.actor?.name ?? "" : p.comment?.author?.name ?? p.thread?.comments?.[0]?.author?.name ?? "";
   const text = statusChange ? "" : p.comment?.text ?? p.thread?.comments?.at(-1)?.text ?? "";
   const sentAt = new Date(p.comment?.ts ?? Date.now()).toISOString();
   const action = event.startsWith("thread.") ? event.slice("thread.".length) : event;
   const header = snippet ? `on "${truncate5(snippet, 60)}"` : "";
-  const body = text ? `[${action}] ${author ? `${author}: ` : ""}${text}` : `[${action}]${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
+  const onItem = reviewItemId ? ` on review item ${reviewItemId}${snippet ? ` "${truncate5(snippet, 60)}"` : ""} —` : "";
+  const body = text ? `[${action}]${onItem} ${author ? `${author}: ` : ""}${text}` : `[${action}]${onItem}${author ? ` by ${author} —` : ""} thread ${threadId} ${header}`.trim();
   await server.notification({
     method: "notifications/claude/channel",
     params: {
@@ -17583,6 +17585,7 @@ async function emitChannelMessage(event, rawPayload) {
       meta: {
         doc_id: docId,
         thread_id: threadId,
+        ...reviewItemId ? { review_item_id: reviewItemId } : {},
         event,
         author,
         anchor_text: snippet
