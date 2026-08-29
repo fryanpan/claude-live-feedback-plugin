@@ -10,7 +10,7 @@ The root idea has not changed: make giving feedback to an agent as fast as point
 2. **Review and steer from an iPad or phone, staying in flow.** Every surface is laid out for a tablet in landscape and a phone first; a review item is answerable with a thumb.
 3. **Agents manage and prioritize the tickets so I rarely intervene.** Goals are ranked bands on the board; agents work them in strict priority order, file what they discover, and mark what blocks them. The server watches for stalled rows and unfiled asks and wakes the lead agent only when there is something to do. The `working-in-a-workspace` and `leading-a-workspace` skills the plugin ships are the contract every agent follows.
 4. **An outside collaborator can review dev artifacts in under a minute of my time and five of theirs.** A share link publishes a board outside the tailnet; email-code sign-in means no account to create and nothing to install.
-5. **Meetings on the doc.** Press one button and talk: live transcription in a strip beside the doc, and meeting notes that compose themselves at the natural pauses, with "file a ticket for that" landing on the board. Next: planning huddles started from the board with the mic on and everyone's recent edits summarized by person.
+5. **Meetings on the doc.** Press one button and talk: live transcription in a strip beside the doc, and meeting notes that compose themselves at the natural pauses, with "file a ticket for that" landing on the board. A planning huddle starts from the board with one tap — a doc tied to the board, mic already on — and each person's recent edits carry a wash of their color so a huddle can see who touched what.
 
 ## What it does
 
