@@ -1572,6 +1572,37 @@ body.hub-body {
   min-height: 36px;
   white-space: nowrap;
 }
+/* The stage the card stands on (approved mock `.demo-doc-layout`,
+   2026-08-29): the card, and a margin column that appears only while a
+   thread is open off the comment pill. One column here and at ≤1100px — the
+   margin stacks BELOW the card, as the mock does — and two at ≥1101px, where
+   HEIGHT is the scarce axis (1180×820 has ~750px usable) and a thread that
+   sits beside the card costs the card none of it. */
+.hub-walk-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hub-walk-margin {
+  min-width: 0;
+  margin: 0 0 12px;
+}
+@media (min-width: 1101px) {
+  .hub-walk-stage {
+    display: grid;
+    /* minmax(0, …) so a long headline wraps instead of widening the stage. */
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 16px;
+    align-items: start;
+  }
+  /* Stays put while the card's body scrolls under it — the question is
+     about a phrase the reader can still see. */
+  .hub-walk-margin {
+    position: sticky;
+    top: 8px;
+    margin: 0;
+  }
+}
 /* The card the whole page is about (mockup `.card`). */
 .hub-walk-card {
   display: flex;

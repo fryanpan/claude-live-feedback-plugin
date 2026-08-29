@@ -327,6 +327,34 @@ describe('review-item comments and revisions', () => {
       expect(row?.revisedRange).toEqual({ start: 0, end: 5 });
     });
 
+    it('refuses an explicit range that runs past the new detail, and writes nothing', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedTask(ws);
+      const itemId = await seedItem(task.id);
+      const short = 'Reads twice per nightly run.';
+      const res = await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        detail: short,
+        revisedRange: { start: 0, end: 999_999 },
+        author: AGENT,
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error?: string }).error).toBe('bad-range');
+      const item = await storedItem(ws, task.id, itemId);
+      expect(item.review.detail).toBe(DETAIL);
+      expect(item.revisions ?? []).toEqual([]);
+      // Positive control on the gate: the same call with a range the new
+      // detail can hold goes through and keeps the range verbatim.
+      await jj(
+        await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+          detail: short,
+          revisedRange: { start: 0, end: short.length },
+          author: AGENT,
+        }),
+      );
+      const [row] = await queueRows(ws, task.id);
+      expect(row?.revisedRange).toEqual({ start: 0, end: short.length });
+    });
+
     it('revises headline and options too, each revision stacking on the history', async () => {
       const ws = await seedWorkspace();
       const task = await seedTask(ws);
@@ -490,6 +518,32 @@ describe('review-item comments and revisions', () => {
       expect(item.answer?.text).toBe('Halve it');
       // History survives the answer.
       expect(item.revisions?.length).toBe(1);
+      expect(await queueRows(ws, task.id)).toEqual([]);
+    });
+
+    it('an answered item is not revised — its answer would be to words nobody can see', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedTask(ws);
+      const itemId = await seedItem(task.id);
+      await jj(
+        await post(`/api/tasks/${task.id}/review-items/${itemId}/answer`, {
+          text: 'Halve it',
+          answeredWith: 'o-4b2e',
+          author: PERSON,
+        }),
+      );
+      const res = await post(`/api/tasks/${task.id}/review-items/${itemId}/revise`, {
+        detail: 'Something else entirely.',
+        author: AGENT,
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error?: string }).error).toBe('answered');
+      // Read back through a second request: the words the answer was given
+      // to are still the words on the item, and no history was written.
+      const item = await storedItem(ws, task.id, itemId);
+      expect(item.review.detail).toBe(DETAIL);
+      expect(item.answer?.text).toBe('Halve it');
+      expect(item.revisions ?? []).toEqual([]);
       expect(await queueRows(ws, task.id)).toEqual([]);
     });
   });

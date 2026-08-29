@@ -632,8 +632,17 @@ function WalkAskThread(props: {
   onAsk: (question: string) => Promise<boolean>;
   onCancel: () => void;
 }) {
+  // The card lives in the stage's margin column — beside the card at
+  // tablet/laptop widths, BELOW the whole card (options, answer box, Skip)
+  // at ≤1100px, where a tap on the pill could otherwise open it off-screen.
+  // Bring it into view once, on open; `nearest` moves nothing when it is
+  // already visible.
+  const self = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    self.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
   return (
-    <div class="hub-walk-thread">
+    <div class="hub-walk-thread" ref={self}>
       <blockquote class="hub-walk-thread-quote">{props.phrase}</blockquote>
       <PromptForm
         className="hub-walk-thread-form"
@@ -727,124 +736,126 @@ function WalkCard(props: {
   );
 
   return (
-    <div class={`hub-walk-card hub-walk-${item.kind}`}>
-      {/* First thing on the card, above the new item: what you just finished.
+    // The stage (approved mock `.demo-doc-layout`): the card, and a margin
+    // column that holds the thread a pill opens — beside the card at
+    // ≥1101px, where height is the scarce axis, stacked below it at ≤1100px.
+    <div class="hub-walk-stage">
+      <div class={`hub-walk-card hub-walk-${item.kind}`}>
+        {/* First thing on the card, above the new item: what you just finished.
           It belongs here rather than in a toast because this is read on a
           phone, where a toast is gone before the thumb has come back down. */}
-      {progress.last && <AdvancedBanner last={progress.last} handlers={handlers} />}
-      {/* ONE anatomy (approved design): head row — kind badge, headline, goal
+        {progress.last && <AdvancedBanner last={progress.last} handlers={handlers} />}
+        {/* ONE anatomy (approved design): head row — kind badge, headline, goal
           chip, asked-by meta — then one markdown body. */}
-      <WalkCardHead item={item} now={now} />
-      {/* Under the headline: what the reader asked, when the item came back
+        <WalkCardHead item={item} now={now} />
+        {/* Under the headline: what the reader asked, when the item came back
           revised — and the way to the thread. */}
-      <WalkRevision item={item} handlers={handlers} />
-      {/* The same pointer out on every kind. Answering here is the point —
+        <WalkRevision item={item} handlers={handlers} />
+        {/* The same pointer out on every kind. Answering here is the point —
           going through the queue must not mean leaving the queue on every
           item — but a comment sometimes only makes sense in place. */}
-      <WalkWhere item={item} handlers={handlers} />
-      {waiting && draft === null && <WalkWaiting waiting={waiting} />}
+        <WalkWhere item={item} handlers={handlers} />
+        {waiting && draft === null && <WalkWaiting waiting={waiting} />}
 
-      {row ? (
-        <Fragment>
-          <WalkTaskBody task={row.task} />
-          {row.task.infoRequests && row.task.infoRequests.length > 0 && (
-            <p class="hub-walk-asked">
-              {`You already asked: “${row.task.infoRequests[row.task.infoRequests.length - 1]?.text ?? ''}”`}
-            </p>
-          )}
-          {row.task.options && row.task.options.length > 0 && (
-            <WalkOptions
-              options={row.task.options}
-              onPick={(o) => void handlers.onAnswer(row.task, o.label, o.id)}
-            />
-          )}
-          {/* Always present, options or not: the candidates are a shortcut,
+        {row ? (
+          <Fragment>
+            <WalkTaskBody task={row.task} />
+            {row.task.infoRequests && row.task.infoRequests.length > 0 && (
+              <p class="hub-walk-asked">
+                {`You already asked: “${row.task.infoRequests[row.task.infoRequests.length - 1]?.text ?? ''}”`}
+              </p>
+            )}
+            {row.task.options && row.task.options.length > 0 && (
+              <WalkOptions
+                options={row.task.options}
+                onPick={(o) => void handlers.onAnswer(row.task, o.label, o.id)}
+              />
+            )}
+            {/* Always present, options or not: the candidates are a shortcut,
               never a closed set. */}
-          <PromptForm
-            className="hub-walk-answer"
-            placeholder="…or answer in your own words — the agent gets your text verbatim"
-            submitLabel="Send"
-            keepKey={`walk-answer:${row.task.id}`}
-            onSubmit={(text) => handlers.onAnswer(row.task, text)}
-          />
-          {/* The "Tell me more" box that sat here is gone (Bryan, 2026-08-29:
+            <PromptForm
+              className="hub-walk-answer"
+              placeholder="…or answer in your own words — the agent gets your text verbatim"
+              submitLabel="Send"
+              keepKey={`walk-answer:${row.task.id}`}
+              onSubmit={(text) => handlers.onAnswer(row.task, text)}
+            />
+            {/* The "Tell me more" box that sat here is gone (Bryan, 2026-08-29:
               "maybe instead we can let me comment directly on the review item
               like in a doc"). Asking back is a comment on a phrase of a
               declared item now — the pill below — and a legacy decision's
               words are the task body, reached through its discussion. */}
-          <div class="hub-walk-actions">{skip}</div>
-        </Fragment>
-      ) : (
-        <Fragment>
-          {review ? (
-            // A DECLARED review item. Everything below was written by the agent
-            // for this card, so none of it is derived, clipped or guessed at —
-            // which is the whole reason declaring exists.
-            <Fragment>
-              <WalkReviewBody
-                review={review}
-                expanded={bodyExpanded}
-                onExpand={() => setBodyExpanded(true)}
-                bodyRef={bodyRef}
-                mark={revisedPhrase(item)}
-              />
-              {anchorable && (
-                // The editor's pill, on the card: fixed-position, placed by
-                // the hook beside the selection's end. `mousedown` is
-                // swallowed so the tap does not blur the selection before
-                // the click lands (the editor's pill does the same; touch is
-                // left alone, since cancelling it cancels the click on iOS).
-                <button
-                  type="button"
-                  class={`comment-pill hub-walk-pill${pill.phrase ? '' : ' hidden'}`}
-                  style={{ left: `${pill.place.left}px`, top: `${pill.place.top}px` }}
-                  aria-label="Comment on this"
-                  title="Comment on this"
-                  onMouseDown={(ev) => ev.preventDefault()}
-                  onClick={openThread}
-                >
-                  💬
-                </button>
-              )}
-              {draft !== null && (
-                <WalkAskThread
-                  item={item}
-                  phrase={draft}
-                  onAsk={ask}
-                  onCancel={() => setDraft(null)}
+            <div class="hub-walk-actions">{skip}</div>
+          </Fragment>
+        ) : (
+          <Fragment>
+            {review ? (
+              // A DECLARED review item. Everything below was written by the agent
+              // for this card, so none of it is derived, clipped or guessed at —
+              // which is the whole reason declaring exists.
+              <Fragment>
+                <WalkReviewBody
+                  review={review}
+                  expanded={bodyExpanded}
+                  onExpand={() => setBodyExpanded(true)}
+                  bodyRef={bodyRef}
+                  mark={revisedPhrase(item)}
                 />
-              )}
-              {review.options && review.options.length > 0 && (
-                <WalkOptions
-                  options={review.options}
-                  onPick={(o) => void handlers.onReply(item, o.label, o.id)}
-                />
-              )}
-            </Fragment>
-          ) : (
-            // The mockup's "What I need from you" block — rendered only when it
-            // says more than the heading already did. A one-line question fits
-            // in the heading, and quoting it again underneath is the card
-            // repeating itself.
-            reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ') && (
-              <div class="hub-walk-askbox">
-                <h4 class="hub-walk-ask-head">What I need from you</h4>
-                <blockquote class="hub-walk-ask">{item.ask}</blockquote>
-              </div>
-            )
-          )}
-          {/* Always present, options or not — the candidates are a shortcut,
+                {anchorable && (
+                  // The editor's pill, on the card: fixed-position, placed by
+                  // the hook beside the selection's end. `mousedown` is
+                  // swallowed so the tap does not blur the selection before
+                  // the click lands (the editor's pill does the same; touch is
+                  // left alone, since cancelling it cancels the click on iOS).
+                  <button
+                    type="button"
+                    class={`comment-pill hub-walk-pill${pill.phrase ? '' : ' hidden'}`}
+                    style={{ left: `${pill.place.left}px`, top: `${pill.place.top}px` }}
+                    aria-label="Comment on this"
+                    title="Comment on this"
+                    onMouseDown={(ev) => ev.preventDefault()}
+                    onClick={openThread}
+                  >
+                    💬
+                  </button>
+                )}
+                {review.options && review.options.length > 0 && (
+                  <WalkOptions
+                    options={review.options}
+                    onPick={(o) => void handlers.onReply(item, o.label, o.id)}
+                  />
+                )}
+              </Fragment>
+            ) : (
+              // The mockup's "What I need from you" block — rendered only when it
+              // says more than the heading already did. A one-line question fits
+              // in the heading, and quoting it again underneath is the card
+              // repeating itself.
+              reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ') && (
+                <div class="hub-walk-askbox">
+                  <h4 class="hub-walk-ask-head">What I need from you</h4>
+                  <blockquote class="hub-walk-ask">{item.ask}</blockquote>
+                </div>
+              )
+            )}
+            {/* Always present, options or not — the candidates are a shortcut,
               never a closed set, and a review item with no options only has
               this. */}
-          <PromptForm
-            className="hub-walk-answer"
-            placeholder={review?.options?.length ? '…or answer in your own words' : 'Reply…'}
-            submitLabel="Send"
-            keepKey={`walk-answer:${item.key}`}
-            onSubmit={(text) => handlers.onReply(item, text)}
-          />
-          <div class="hub-walk-actions">{skip}</div>
-        </Fragment>
+            <PromptForm
+              className="hub-walk-answer"
+              placeholder={review?.options?.length ? '…or answer in your own words' : 'Reply…'}
+              submitLabel="Send"
+              keepKey={`walk-answer:${item.key}`}
+              onSubmit={(text) => handlers.onReply(item, text)}
+            />
+            <div class="hub-walk-actions">{skip}</div>
+          </Fragment>
+        )}
+      </div>
+      {draft !== null && (
+        <aside class="hub-walk-margin">
+          <WalkAskThread item={item} phrase={draft} onAsk={ask} onCancel={() => setDraft(null)} />
+        </aside>
       )}
     </div>
   );

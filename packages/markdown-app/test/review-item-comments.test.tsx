@@ -292,6 +292,29 @@ describe('the walkthrough card: select a phrase, ask on it, wait', () => {
     expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
   });
 
+  it('the thread card opens BESIDE the card, in its own margin column, not inside it', async () => {
+    // The approved mock lays the walkthrough out as a two-column grid at
+    // tablet/laptop widths: the card, and a margin column carrying the thread
+    // (below the card at ≤1100px). That is a DOM fact before it is a CSS one:
+    // the thread must be the stage's second child, never a child of the card.
+    mountWalk(reviewQueue([], [ticketRow()], NOW), walk());
+    const stage = root.querySelector('.hub-walk-stage') as HTMLElement;
+    expect(stage, 'the card sits on a stage').not.toBeNull();
+    expect(stage.querySelector(':scope > .hub-walk-card')).not.toBeNull();
+    // Nothing to the side until a phrase is asked on.
+    expect(stage.querySelector(':scope > .hub-walk-margin')).toBeNull();
+    await select(root.querySelector('.hub-walk-body') as HTMLElement, 'ships the other');
+    (root.querySelector('.hub-walk-pill') as HTMLElement).click();
+    await tick();
+    const margin = stage.querySelector(':scope > .hub-walk-margin') as HTMLElement;
+    expect(margin, 'the margin column appears with the thread').not.toBeNull();
+    expect(margin.querySelector('.hub-walk-thread')).not.toBeNull();
+    expect(root.querySelector('.hub-walk-card .hub-walk-thread')).toBeNull();
+    // The margin follows the card in source order, so at ≤1100px (one
+    // column) it stacks BELOW the card.
+    expect(margin.previousElementSibling?.classList.contains('hub-walk-card')).toBe(true);
+  });
+
   it('a refused ask keeps the thread card and the words', async () => {
     const onAskOnItem = vi.fn().mockResolvedValue(false);
     mountWalk(reviewQueue([], [ticketRow()], NOW), walk({ onAskOnItem }));

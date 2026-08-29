@@ -100,6 +100,23 @@ describe('the review-item comment furniture is thumb-sized and height-frugal', (
     expect(resolved).toMatch(/background:/);
   });
 
+  it('at ≥1101px the stage is two columns — the thread beside the card; one column below', () => {
+    // 1180×820: HEIGHT is the scarce axis, so the thread card takes a margin
+    // column beside the card (approved mock: `minmax(0, 1fr) 300px`) rather
+    // than a slice of the card's height. At ≤1100px the stage is the plain
+    // one-column flow it is at top level, and the margin stacks below.
+    const top = rule('.hub-walk-stage');
+    expect(top, '.hub-walk-stage has no rule').not.toBe('');
+    expect(top).not.toMatch(/grid-template-columns:[^;]*1fr[^;]*px/);
+    const wide = media('(min-width: 1101px)');
+    expect(wide, 'no ≥1101px block').not.toBe('');
+    const stage = rule('.hub-walk-stage', wide);
+    expect(stage, '.hub-walk-stage has no ≥1101px rule').not.toBe('');
+    expect(stage).toMatch(/display:\s*grid/);
+    expect(stage).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+\d+px/);
+    expect(stage).toMatch(/align-items:\s*start/);
+  });
+
   it('the old “Tell me more” box left with its rules', () => {
     // Negative control on the positive assertions above: the extractor
     // reports an empty body for a selector that is genuinely gone.
