@@ -119,8 +119,10 @@ describe('the review-item quality gate', () => {
   let base: string;
   /** What the stub answers next. `null` is "the judge could not answer";
    *  `'throw'` is the judge blowing up. */
-  let verdict: ReviewJudgeVerdict | null | 'throw';
+  let verdict: ReviewJudgeVerdict | null | 'throw' | 'defer';
   let calls: ReviewJudgeInput[];
+  /** Judge calls parked by `'defer'`, released by the test in its own order. */
+  let parked: Array<(v: ReviewJudgeVerdict | null) => void>;
 
   const jj = async <T>(res: Response): Promise<T> => {
     expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
@@ -144,12 +146,14 @@ describe('the review-item quality gate', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'review-gate-'));
     verdict = { ok: true, reason: 'fine' };
     calls = [];
+    parked = [];
     handle = createServer({
       port: 0,
       dataDir,
       reviewJudge: async (input) => {
         calls.push(input);
         if (verdict === 'throw') throw new Error('judge exploded');
+        if (verdict === 'defer') return new Promise((resolve) => parked.push(resolve));
         return verdict;
       },
       // Held items are overdue the instant the loop reads them — the 5-minute
@@ -398,6 +402,42 @@ describe('the review-item quality gate', () => {
       expect(res.held).toBe(true);
       expect(res.heldReason).toBe('No stakes.');
       expect(await queue(workspaceId)).toEqual([]);
+    });
+
+    // Found by codex review: two judge calls in flight for one item — the
+    // filing's and a revision's — can finish in either order, and the
+    // earlier one used to stamp its verdict onto words it never read.
+    it('a verdict that outlives the words it judged is dropped; the revision’s own stands', async () => {
+      verdict = 'defer';
+      const { workspaceId, taskId } = await board();
+      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      // The route is awaiting the judge; the item already exists in the
+      // store, so a revision can land on it now.
+      while (parked.length < 1) await settle(10);
+      const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
+        await get(`/api/workspaces/${workspaceId}/tasks`),
+      );
+      const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id;
+      expect(itemId).toBeTruthy();
+      const revising = post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        ...GOOD,
+        author: FILER,
+      });
+      while (parked.length < 2) await settle(10);
+      // The revision's judge answers first: ok. Then the ORIGINAL filing's
+      // judge comes back holding — about words that are gone.
+      parked[1]?.({ ok: true, reason: 'fine' });
+      const revised = await jj<{ held?: boolean }>(await revising);
+      expect(revised.held).toBeUndefined();
+      parked[0]?.({ ok: false, reason: 'The headline is a ticket id.' });
+      const filed = await jj<{ held?: boolean; item: { judge?: { verdict: string } } }>(
+        await filing,
+      );
+      // The stale verdict is not applied — not to the row, not to the
+      // response, and the item is on the queue.
+      expect(filed.held).toBeUndefined();
+      expect(filed.item.judge?.verdict).toBe('ok');
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([itemId]);
     });
 
     it('a revision re-judges; ok clears the hold and keeps the original filing time', async () => {

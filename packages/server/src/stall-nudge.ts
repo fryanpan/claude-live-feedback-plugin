@@ -508,16 +508,22 @@ export class StallNudger {
     // would read as a new row under the growth rule below, waking the lead to
     // announce what it just did. The frame still carries every row's bucket;
     // it is the ARMING that must not turn on it.
-    // A held item enters the stamp under its TICKET's id, deduped with the
-    // stalled and unfiled rows — one complaint per item, and none when the
-    // same ticket later goes quiet or reads as unfiled over the same held
-    // ask: the lead was already told to get that item revised, and being
-    // told again under a different bucket is the same wake twice. It stays
-    // OUT of the escalation bucket below: a hold is the filer's to end, and
-    // re-saying it every repeat window would bill the lead for the filer's
-    // silence.
+    // A held item enters the stamp twice: under its TICKET's id, deduped
+    // with the stalled and unfiled rows — so the same ticket later going
+    // quiet or reading as unfiled over the same held ask is not a second
+    // wake; the lead was already told to get that item revised — and under
+    // its OWN id, so a second item held on a ticket the lead already heard
+    // about is news (codex review: ticket-only stamping swallowed it). It
+    // stays OUT of the escalation bucket below: a hold is the filer's to
+    // end, and re-saying it every repeat window would bill the lead for
+    // the filer's silence.
+    const held = board.held ?? [];
     const ids = Array.from(
-      new Set([...rows.map((row) => row.id), ...(board.held ?? []).map((row) => row.id)]),
+      new Set([
+        ...rows.map((row) => row.id),
+        ...held.map((row) => row.id),
+        ...held.map((row) => `held:${row.reviewItemId}`),
+      ]),
     ).sort();
     // The oldest row speaks for the board. `0` on a board whose only finding
     // is unreadable rows, which is right: there is no silence to escalate.
@@ -590,8 +596,9 @@ export class StallNudger {
       const key = `${workspaceId}|${item.reviewItemId}`;
       if (this.filersTold.has(key)) continue;
       if (!this.reachable(workspaceId, item.filerAgentId)) continue;
+      let delivered = 0;
       try {
-        send(workspaceId, item.filerAgentId, {
+        delivered = send(workspaceId, item.filerAgentId, {
           event: REVIEW_ITEM_HELD_EVENT,
           workspaceId,
           taskId: item.id,
@@ -607,7 +614,10 @@ export class StallNudger {
         console.error('[stall] filer nudge failed:', err);
         continue;
       }
-      this.filersTold.add(key);
+      // Told means DELIVERED. A filer that dropped between `reachable` and
+      // the send got nothing, and marking the item told would silence every
+      // later pass for a nudge nobody heard (codex review).
+      if (delivered > 0) this.filersTold.add(key);
     }
   }
 
