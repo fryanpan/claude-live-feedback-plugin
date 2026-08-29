@@ -189,33 +189,33 @@ describe('userForIdentity', () => {
 describe('agent rows — one address book for people and helpers', () => {
   it('upsertAgent writes a row of kind agent that resolveAgentId finds by id', () => {
     const store = new Identities({ dataDir });
-    const rec = store.upsertAgent('agent-quick-build', 'Quick Build');
+    const rec = store.upsertAgent('agent-lighthouse', 'Lighthouse');
     expect(rec?.kind).toBe('agent');
-    expect(rec?.displayName).toBe('Quick Build');
-    expect(store.resolveAgentId('agent-quick-build')).toBe('agent-quick-build');
+    expect(rec?.displayName).toBe('Lighthouse');
+    expect(store.resolveAgentId('agent-lighthouse')).toBe('agent-lighthouse');
   });
 
   it('three spellings of one name resolve to the one id the MCP mints', () => {
     // The measured field spellings for one agent: display name, bare slug,
     // and the derived id. All three must land on one row.
     const store = new Identities({ dataDir });
-    store.upsertAgent('agent-quick-build', 'Quick Build');
-    expect(store.resolveAgentId('Quick Build')).toBe('agent-quick-build');
-    expect(store.resolveAgentId('quick-build')).toBe('agent-quick-build');
-    expect(store.resolveAgentId('  QUICK build ')).toBe('agent-quick-build');
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    expect(store.resolveAgentId('Lighthouse')).toBe('agent-lighthouse');
+    expect(store.resolveAgentId('lighthouse')).toBe('agent-lighthouse');
+    expect(store.resolveAgentId('  LIGHThouse ')).toBe('agent-lighthouse');
   });
 
   it('a merged legacy id resolves to the identity it was folded into', () => {
     const store = new Identities({ dataDir });
-    store.upsertAgent('agent-quick-build', 'Quick Build');
-    store.addMergedFrom('agent-quick-build', 'qb-agent');
-    expect(store.resolveAgentId('qb-agent')).toBe('agent-quick-build');
-    expect(store.get('qb-agent')?.id).toBe('agent-quick-build');
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    store.addMergedFrom('agent-lighthouse', 'qb-agent');
+    expect(store.resolveAgentId('qb-agent')).toBe('agent-lighthouse');
+    expect(store.get('qb-agent')?.id).toBe('agent-lighthouse');
   });
 
   it('POSITIVE CONTROL: an unknown name resolves to nothing, not to a guess', () => {
     const store = new Identities({ dataDir });
-    store.upsertAgent('agent-quick-build', 'Quick Build');
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
     expect(store.resolveAgentId('Slow Build')).toBeNull();
     expect(store.resolveAgentId('')).toBeNull();
   });
@@ -236,9 +236,9 @@ describe('agent rows — one address book for people and helpers', () => {
 
   it('keeps a chosen display name across a re-attach that sends none', () => {
     const store = new Identities({ dataDir });
-    store.upsertAgent('agent-quick-build', 'Quick Build');
-    const again = store.upsertAgent('agent-quick-build');
-    expect(again?.displayName).toBe('Quick Build');
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    const again = store.upsertAgent('agent-lighthouse');
+    expect(again?.displayName).toBe('Lighthouse');
     expect(store.list()).toHaveLength(1);
   });
 
@@ -253,10 +253,10 @@ describe('agent rows — one address book for people and helpers', () => {
             email: 'alice@example.com',
             displayName: 'Alice',
           },
-          'agent-quick-build': {
-            id: 'agent-quick-build',
+          'agent-lighthouse': {
+            id: 'agent-lighthouse',
             kind: 'agent',
-            displayName: 'Quick Build',
+            displayName: 'Lighthouse',
           },
           // An agent row with no email is NOT the broken-person case above.
           'agent-no-name': { kind: 'agent' },
@@ -266,8 +266,8 @@ describe('agent rows — one address book for people and helpers', () => {
     const store = new Identities({ dataDir });
     expect(store.loadError).toBeNull();
     expect(store.get(emailIdentityId('alice@example.com'))?.kind).toBe('person');
-    expect(store.get('agent-quick-build')?.kind).toBe('agent');
+    expect(store.get('agent-lighthouse')?.kind).toBe('agent');
     expect(store.get('agent-no-name')?.displayName).toBe('agent-no-name');
-    expect(store.resolveAgentId('Quick Build')).toBe('agent-quick-build');
+    expect(store.resolveAgentId('Lighthouse')).toBe('agent-lighthouse');
   });
 });

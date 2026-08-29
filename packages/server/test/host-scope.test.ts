@@ -823,7 +823,6 @@ describe('workspace share over HTTP', () => {
     expect(r.status).toBe(200);
     const raw = await r.text();
     expect(raw).not.toContain('/Volumes/');
-    expect(raw).not.toContain('tailb53801');
     expect(raw).not.toContain('.ts.net');
     const { meta } = JSON.parse(raw) as { meta: Record<string, unknown> };
     expect(meta.sourceUrl).toBeUndefined();

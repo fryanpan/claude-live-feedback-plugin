@@ -178,7 +178,7 @@ export function declaredAssigneeKind(
  *
  * A task records its owner as a DISPLAY NAME (`Live Feedback`); an
  * attachment records an identity ID (`agent-live-feedback` by default, or
- * whatever the attaching session passed — `quick-build` and the display name
+ * whatever the attaching session passed — `lighthouse` and the display name
  * itself both occur in the field). Comparing the two directly matches almost
  * nothing, which is how the roster half of `resolveOwnerKind` came to be
  * dead in production while every fixture that attached under the display

@@ -468,15 +468,15 @@ describe('attachment routes + lead-addressed delivery', () => {
     // bundle that sends no name still attaches, under its id.
     const wsId = await makeWorkspace('roster-hub');
     const r = await post(`/api/workspaces/${wsId}/attachments`, {
-      agentId: 'agent-quick-build',
-      agentName: 'Quick Build',
+      agentId: 'agent-lighthouse',
+      agentName: 'Lighthouse',
       runtime: 'claude-code-local',
     });
     expect(r.status).toBe(200);
-    const rec = handle.identities.get('agent-quick-build');
+    const rec = handle.identities.get('agent-lighthouse');
     expect(rec?.kind).toBe('agent');
-    expect(rec?.displayName).toBe('Quick Build');
-    expect(handle.identities.resolveAgentId('quick-build')).toBe('agent-quick-build');
+    expect(rec?.displayName).toBe('Lighthouse');
+    expect(handle.identities.resolveAgentId('lighthouse')).toBe('agent-lighthouse');
 
     const old = await post(`/api/workspaces/${wsId}/attachments`, {
       agentId: 'agent-legacy-bundle',
