@@ -105,12 +105,28 @@ fi
 #   CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com \
 #   CF_ACCESS_AUD=<the Access application's AUD tag> \
 #     scripts/launchd/install.sh
+#   CW_PROXIED_TRUSTED_EMAILS=<the operator's email> \
+#     scripts/launchd/install.sh
+#
+# The emails are WHO the operator is. An Access token proves the policy
+# admitted someone — and one application may admit collaborators too — so the
+# verified email must be on this list before the product is served. The server
+# would fall back to CW_OWNER_EMAIL, but this plist does not carry it, so the
+# installer requires the list outright.
 PROXIED_TRUSTED_HOSTS="${CW_PROXIED_TRUSTED_HOSTS:-${LF_PROXIED_TRUSTED_HOSTS:-}}"
+PROXIED_TRUSTED_EMAILS="${CW_PROXIED_TRUSTED_EMAILS:-}"
 if [ -n "${PROXIED_TRUSTED_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "${ACCESS_AUD}" ]; }; then
     echo "error: CW_PROXIED_TRUSTED_HOSTS needs CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD too." >&2
     echo "       Without an Access application in front of those hostnames the server" >&2
     echo "       would serve the WHOLE product to anyone who can reach the tunnel, so it" >&2
     echo "       refuses to honour the list — they would answer 403. Set all three, or none." >&2
+    exit 1
+fi
+if [ -n "${PROXIED_TRUSTED_HOSTS}" ] && [ -z "${PROXIED_TRUSTED_EMAILS}" ]; then
+    echo "error: CW_PROXIED_TRUSTED_HOSTS needs CW_PROXIED_TRUSTED_EMAILS too." >&2
+    echo "       An Access token proves admission, not identity: without an operator" >&2
+    echo "       allowlist every collaborator the same application admits would reach" >&2
+    echo "       the whole product. The server ignores the host list without one." >&2
     exit 1
 fi
 
@@ -179,6 +195,7 @@ sed \
     -e "s|{{SHARE_PUBLIC_HOSTNAME}}|${SHARE_PUBLIC_HOSTNAME}|g" \
     -e "s|{{ACCESS_TUNNEL_HOSTS}}|${ACCESS_TUNNEL_HOSTS}|g" \
     -e "s|{{PROXIED_TRUSTED_HOSTS}}|${PROXIED_TRUSTED_HOSTS}|g" \
+    -e "s|{{PROXIED_TRUSTED_EMAILS}}|${PROXIED_TRUSTED_EMAILS}|g" \
     -e "s|{{ACCESS_TEAM_DOMAIN}}|${ACCESS_TEAM_DOMAIN}|g" \
     -e "s|{{ACCESS_AUD}}|${ACCESS_AUD}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
