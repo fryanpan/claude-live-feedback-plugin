@@ -60,8 +60,6 @@ const STOP_WORDS = new Set([
   'task',
   'tasks',
   'ticket',
-  'goal',
-  'goals',
   'item',
   'page',
   'one',
@@ -120,12 +118,22 @@ export function wordsMatch(a: string, b: string): boolean {
  *  kind words — both are real words in real titles ("Review: Akash — …",
  *  "Wire the results page"), and treating "page" as one once narrowed
  *  "open the results page" to the docs and found nothing. */
+/** The words that name each kind. `task` and `doc` are stop words as well;
+ *  `goal` deliberately is NOT — a doc titled "Goal" or a task called
+ *  "Quarterly goals" needs the word as evidence, so it is dropped from the
+ *  query only when it actually acted as a kind filter (see `rankTitles`). */
+const KIND_WORDS: Record<TitleKind, readonly string[]> = {
+  doc: ['doc', 'docs', 'document'],
+  task: ['task', 'tasks', 'ticket'],
+  goal: ['goal', 'goals'],
+};
+
 export function spokenKind(text: string): TitleKind | undefined {
   const words = new Set(text.toLowerCase().split(/[^a-z]+/));
   const spoken: TitleKind[] = [];
-  if (['doc', 'docs', 'document'].some((w) => words.has(w))) spoken.push('doc');
-  if (['task', 'tasks', 'ticket'].some((w) => words.has(w))) spoken.push('task');
-  if (['goal', 'goals'].some((w) => words.has(w))) spoken.push('goal');
+  if (KIND_WORDS.doc.some((w) => words.has(w))) spoken.push('doc');
+  if (KIND_WORDS.task.some((w) => words.has(w))) spoken.push('task');
+  if (KIND_WORDS.goal.some((w) => words.has(w))) spoken.push('goal');
   // Exactly one kind named is the speaker disambiguating; two is a sentence
   // about both, and no evidence either way.
   return spoken.length === 1 ? spoken[0] : undefined;
@@ -177,11 +185,23 @@ export function rankTitles(query: string, candidates: TitleCandidate[]): ScoredC
   const q = tokenize(query);
   if (q.length === 0 || candidates.length === 0) return [];
   const kind = spokenKind(query);
-  const pool =
-    kind && candidates.some((c) => c.kind === kind)
-      ? candidates.filter((c) => c.kind === kind)
-      : candidates;
-  return rankPool(q, pool);
+  if (kind && candidates.some((c) => c.kind === kind)) {
+    // The kind word did its job selecting the pool; inside the pool it is
+    // not part of any name ("the sign-in GOAL" against goal titles). Left
+    // in, it dilutes the query below the floor for a one-word title.
+    const marker = new Set(KIND_WORDS[kind]);
+    const rest = q.filter((w) => !marker.has(w));
+    const ranked = rankPool(
+      rest.length > 0 ? rest : q,
+      candidates.filter((c) => c.kind === kind),
+    );
+    // A kind word that selected a pool with nothing in it for the query was
+    // a title word after all: "quarterly goals" is a TASK on a board that
+    // also has goals. Only then does the whole index get its turn, with the
+    // word kept as evidence.
+    if ((ranked[0]?.score ?? 0) >= TITLE_FLOOR) return ranked;
+  }
+  return rankPool(q, candidates);
 }
 
 function rankPool(q: string[], candidates: TitleCandidate[]): ScoredCandidate[] {
@@ -695,7 +715,10 @@ export function hubDestinationAsk(
   boardNames: readonly string[] = [],
 ): HubDestination | null {
   const s = transcript.trim().replace(/[.!?]+$/, '');
-  if (GO_HOME.test(s)) return 'home';
+  // "go home in QB": the qualifier is stripped here too, since this form
+  // never reaches `navigationAsk`, which strips it for everything else.
+  const qualifier = boardQualifier(boardNames);
+  if (GO_HOME.test(qualifier ? s.replace(qualifier, '') : s)) return 'home';
   const name = navigationAsk(s, boardNames);
   return name === null ? null : destinationNamed(name);
 }

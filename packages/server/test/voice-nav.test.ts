@@ -47,6 +47,8 @@ describe('hubDestinationAsk: the hub’s own destinations, by explicit phrase', 
 
   it('a trailing "in <board>" names the workspace, not the destination', () => {
     expect(hubDestinationAsk('take me to the homepage in QB', ['QB'])).toBe('home');
+    expect(hubDestinationAsk('go home in QB', ['QB'])).toBe('home');
+    expect(hubDestinationAsk('take me home on the QB board', ['QB'])).toBe('home');
   });
 
   it('is a table, not a substring: a task with "home" in its name is NOT a destination', () => {
@@ -86,6 +88,32 @@ describe('resolveByTitle: goals are candidates too', () => {
     ]);
     expect(r.kind).toBe('hit');
     if (r.kind === 'hit') expect(r.match.id).toBe('g-signin');
+  });
+
+  it('"goal" stays title evidence when it is not a kind filter: a doc called Goal, a task called Quarterly goals', () => {
+    // Both kinds spoken is no filter, and "goal" is then the doc's whole name.
+    const doc = resolveByTitle('goal doc', [
+      { id: 'd-goal', kind: 'doc', title: 'Goal' },
+      { id: 'd-other', kind: 'doc', title: 'Retro notes' },
+    ]);
+    expect(doc.kind).toBe('hit');
+    if (doc.kind === 'hit') expect(doc.match.id).toBe('d-goal');
+    // No goal candidates on the board: the word is not a filter either.
+    const task = resolveByTitle('quarterly goals', [
+      { id: 't-q', kind: 'task', title: 'Quarterly goals' },
+      { id: 't-r', kind: 'task', title: 'Quarterly review' },
+    ]);
+    expect(task.kind).toBe('hit');
+    if (task.kind === 'hit') expect(task.match.id).toBe('t-q');
+    // Goals on the board too: the word selects the goal pool first, and when
+    // nothing there is the thing, the task still wins on its whole name.
+    const busy = resolveByTitle('quarterly goals', [
+      { id: 'g-signin', kind: 'goal', title: 'Sign-in that just works' },
+      { id: 't-q', kind: 'task', title: 'Quarterly goals' },
+      { id: 't-r', kind: 'task', title: 'Quarterly review' },
+    ]);
+    expect(busy.kind).toBe('hit');
+    if (busy.kind === 'hit') expect(busy.match.id).toBe('t-q');
   });
 });
 
