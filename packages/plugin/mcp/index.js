@@ -14184,7 +14184,34 @@ function stalledLine(p) {
     const reasons = p.undetermined?.reasons ?? [];
     parts.push(`${unread} open row(s) could NOT be evaluated (${reasons.length > 0 ? reasons.join(", ") : "reason not reported"}) and are not counted healthy. Read them with list_tasks before treating this board as fine.`);
   }
+  const held = p.heldItems ?? [];
+  if (held.length > 0) {
+    const noun = held.length === 1 ? "review item is" : "review items are";
+    parts.push(`${held.length} ${noun} HELD by the quality gate and off the reader's queue — ` + `${heldRowsClause(held)}. Get each filer to revise_review_item; nobody can answer a held ask.`);
+  }
   return `[workspace.stalled] ${parts.join(" ") || "the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board."}`;
+}
+function heldRowClause(row) {
+  const ask = row.headline ? `"${truncate3(row.headline, 50)}"` : row.reviewItemId ?? "an item";
+  const on = row.title ? ` on "${truncate3(row.title, 40)}"` : "";
+  const id = row.id ? ` (${row.id})` : "";
+  const by = row.filedBy ? ` filed by ${row.filedBy}` : "";
+  const age = row.heldMs === undefined ? "" : ` held ${humanDuration2(row.heldMs)}`;
+  const why = row.reason ? ` — ${truncate3(row.reason, 120)}` : "";
+  return `${ask}${on}${id}${by}${age}${why}`;
+}
+function heldRowsClause(rows) {
+  const shown = rows.slice(0, STALL_ROWS_SHOWN).map(heldRowClause);
+  const rest = rows.length - shown.length;
+  return rest > 0 ? `${shown.join("; ")}; and ${rest} more` : shown.join("; ");
+}
+function reviewItemHeldLine(p) {
+  const ask = p.headline ? `"${truncate3(p.headline, 60)}"` : "a review item you filed";
+  const on = p.title ? ` on "${truncate3(p.title, 40)}"` : "";
+  const ids = p.taskId && p.reviewItemId ? ` (taskId ${p.taskId}, reviewItemId ${p.reviewItemId})` : "";
+  const why = p.reason ? ` — ${p.reason}` : "";
+  const stood = p.overdue === true ? ` It has been held${p.heldMs === undefined ? "" : ` for ${humanDuration2(p.heldMs)}`} and the reader still cannot see it.` : "";
+  return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} Fix the gap named and call revise_review_item now; it is judged again on every revision.`;
 }
 
 // packages/mcp/src/self-authored.ts
@@ -14410,7 +14437,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.126";
+var PLUGIN_VERSION = "0.1.127";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -15584,6 +15611,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "set_review_item_criteria",
+      description: "Set what this board's quality gate judges a review item against — a natural-language prompt the judge reads verbatim before each add_review_item / revise_review_item. Omit `criteria` (or pass an empty string) to restore the default, which asks for a headline in the reader's words, stakes and what to look at in the detail, a cost on every option, inline links, and no raw ids or unexpanded acronyms. get_workspace shows the current text.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          workspaceId: { type: "string" },
+          criteria: {
+            type: "string",
+            description: "The criteria, as prose the judge will read. Up to 4,000 characters. Omit to restore the default."
+          }
+        },
+        required: ["workspaceId"]
+      }
+    },
+    {
       name: "get_workspace",
       description: "Read a board's goals in priority order, with per-goal task counts. First row is the highest band. Call it before deciding what to work on — list_tasks returns goal ids only, so without this the ordering is invisible. Cheap by design: pair it with next_tasks, which carries the tasks themselves.",
       inputSchema: {
@@ -15852,7 +15894,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "add_review_item",
-      description: "Hang a question on a ticket that already exists — the verb for a question that came up while working it, so the ask stays attached to the work that raised it. A ticket carries several at once, each answered on its own, so the title keeps naming the work and a second question needs no second ticket. When you are filing the work and the question together, use review on a create_tasks row instead.",
+      description: "Hang a question on a ticket that already exists — the verb for a question that came up while working it, so the ask stays attached to the work that raised it. A ticket carries several at once, each answered on its own, so the title keeps naming the work and a second question needs no second ticket. When you are filing the work and the question together, use review on a create_tasks row instead. Every item passes a quality gate (the board’s criteria, see set_review_item_criteria): a result with `held: true` means it is on the ticket but OFF the reader’s queue — fix the gap in `heldReason` with revise_review_item, which judges it again.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15900,7 +15942,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "revise_review_item",
-      description: "Rewrite one of your review items in place — the answer to a question somebody asked ON it (a comment anchored to a phrase of its text arrives on the task's thread with the reviewItemId). Pass only the fields that change; the previous words are kept as history and the item returns to the reader's queue marked Revised, with their question quoted and the changed span highlighted. `reply` posts on the thread that asked, in the same call.",
+      description: "Rewrite one of your review items in place — the answer to a question somebody asked ON it (a comment anchored to a phrase of its text arrives on the task's thread with the reviewItemId), or the fix for an item the quality gate HELD (`held: true` on add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Every revision is judged again: a held item reaches the reader's queue when it passes, and an already-queued one returns marked Revised, with their question quoted and the changed span highlighted. `reply` posts on the thread that asked, in the same call.",
       inputSchema: {
         type: "object",
         properties: {
@@ -16702,6 +16744,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
         return declared.isError === true ? err(String(declared.message)) : ok(declared);
       }
+      case "set_review_item_criteria": {
+        const { workspaceId, criteria } = a;
+        const res = await http("PUT", `/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, {
+          reviewItemCriteria: criteria !== undefined && criteria.trim() !== "" ? criteria : null,
+          author: AUTHOR
+        });
+        return ok({
+          workspaceId,
+          criteria: res.reviewItemCriteria.value,
+          isDefault: res.reviewItemCriteria.isDefault
+        });
+      }
       case "attach_doc": {
         const { workspaceId, docId } = a;
         const res = await http("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/docs`, {
@@ -16768,6 +16822,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           workspaceId: res.workspace.id,
           name: res.workspace.name,
           leadAgentId: res.workspace.leadAgentId,
+          ...res.workspace.reviewItemCriteria !== undefined ? { reviewItemCriteria: res.workspace.reviewItemCriteria } : {},
           ...res.retired ? { retired: res.retired } : {},
           goals: res.goalSummary
         });
@@ -16982,7 +17037,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({
           taskId,
           reviewItemId: res.item?.id,
-          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {}
+          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
+          ...heldResult(res)
         });
       }
       case "answer_review_item": {
@@ -17016,7 +17072,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           revised: true,
           ...res.threadId !== undefined ? { threadId: res.threadId } : {},
           ...reply !== undefined && res.threadId !== undefined ? { replied: true } : {},
-          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {}
+          ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
+          ...heldResult(res)
         });
       }
       case "request_more_info": {
@@ -17468,6 +17525,15 @@ async function ackCommentRow(payload) {
   } catch {}
 }
 var HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
+function heldResult(res) {
+  if (res.held !== true)
+    return {};
+  return {
+    held: true,
+    ...res.heldReason !== undefined ? { heldReason: res.heldReason } : {},
+    ...res.message !== undefined ? { message: res.message } : {}
+  };
+}
 async function emitHubChannelMessage(event, rawPayload) {
   const p = rawPayload ?? {};
   if (event === "agent.heartbeat")
@@ -17519,6 +17585,9 @@ async function emitHubChannelMessage(event, rawPayload) {
       break;
     case "workspace.stalled":
       body = stalledLine(p);
+      break;
+    case "workspace.review_item_held":
+      body = reviewItemHeldLine(p);
       break;
     case "agent.attached":
     case "agent.detached":

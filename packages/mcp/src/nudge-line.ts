@@ -68,7 +68,19 @@ export interface StalledRowPayload {
   quietMs?: number;
 }
 
-/** What `workspace.stalled` carries. Three lists, because the lead's next act
+/** One review item the quality gate is holding past its window, as
+ *  `stall-nudge.ts` puts it on the wire. `id` is the ticket's. */
+export interface HeldRowPayload {
+  id?: string;
+  title?: string;
+  reviewItemId?: string;
+  headline?: string;
+  reason?: string;
+  heldMs?: number;
+  filedBy?: string;
+}
+
+/** What `workspace.stalled` carries. Four lists, because the lead's next act
  *  differs for each — see `stalledLine`. */
 export interface StallPayload {
   taskId?: string;
@@ -78,6 +90,19 @@ export interface StallPayload {
   rows?: StalledRowPayload[];
   unfiled?: StalledRowPayload[];
   undetermined?: { count?: number; reasons?: string[] };
+  /** `heldItems`, not `held` — ready_idle spends that name on its counts. */
+  heldItems?: HeldRowPayload[];
+}
+
+/** What `workspace.review_item_held` carries — the filer's own wake. */
+export interface ReviewItemHeldPayload {
+  taskId?: string;
+  title?: string;
+  reviewItemId?: string;
+  headline?: string;
+  reason?: string;
+  overdue?: boolean;
+  heldMs?: number;
 }
 
 /** Mirrors mcp.ts's helper of the same name. Duplicated rather than shared
@@ -289,8 +314,57 @@ export function stalledLine(p: StallPayload): string {
       }) and are not counted healthy. Read them with list_tasks before treating this board as fine.`,
     );
   }
-  // Never empty: the server does not send this frame with all three lists
+  const held = p.heldItems ?? [];
+  if (held.length > 0) {
+    const noun = held.length === 1 ? 'review item is' : 'review items are';
+    parts.push(
+      `${held.length} ${noun} HELD by the quality gate and off the reader's queue — ` +
+        `${heldRowsClause(held)}. Get each filer to revise_review_item; nobody can answer a held ask.`,
+    );
+  }
+  // Never empty: the server does not send this frame with all four lists
   // empty, and a line that could render to a bare slug would be the
   // no-subject wake the whole file exists to prevent.
   return `[workspace.stalled] ${parts.join(' ') || 'the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.'}`;
+}
+
+/** One held item as the lead's line names it: the ask, the ticket, who filed
+ *  it, how long it has been held, and the gap the judge named. */
+function heldRowClause(row: HeldRowPayload): string {
+  const ask = row.headline ? `"${truncate(row.headline, 50)}"` : (row.reviewItemId ?? 'an item');
+  const on = row.title ? ` on "${truncate(row.title, 40)}"` : '';
+  const id = row.id ? ` (${row.id})` : '';
+  const by = row.filedBy ? ` filed by ${row.filedBy}` : '';
+  const age = row.heldMs === undefined ? '' : ` held ${humanDuration(row.heldMs)}`;
+  const why = row.reason ? ` — ${truncate(row.reason, 120)}` : '';
+  return `${ask}${on}${id}${by}${age}${why}`;
+}
+
+function heldRowsClause(rows: readonly HeldRowPayload[]): string {
+  const shown = rows.slice(0, STALL_ROWS_SHOWN).map(heldRowClause);
+  const rest = rows.length - shown.length;
+  return rest > 0 ? `${shown.join('; ')}; and ${rest} more` : shown.join('; ');
+}
+
+/**
+ * Render `workspace.review_item_held` — the quality gate telling the FILER
+ * that one of their items is off the reader's queue until they revise it.
+ *
+ * Two moments send it: the filing itself (the route's tool result already
+ * said so; this is the same fact on the channel, for a session whose tool
+ * result scrolled past) and the stall loop, once the hold has stood past the
+ * window (`overdue`). The line carries the item id and the reason because
+ * the reader's next act is one call with exactly those inputs.
+ */
+export function reviewItemHeldLine(p: ReviewItemHeldPayload): string {
+  const ask = p.headline ? `"${truncate(p.headline, 60)}"` : 'a review item you filed';
+  const on = p.title ? ` on "${truncate(p.title, 40)}"` : '';
+  const ids =
+    p.taskId && p.reviewItemId ? ` (taskId ${p.taskId}, reviewItemId ${p.reviewItemId})` : '';
+  const why = p.reason ? ` — ${p.reason}` : '';
+  const stood =
+    p.overdue === true
+      ? ` It has been held${p.heldMs === undefined ? '' : ` for ${humanDuration(p.heldMs)}`} and the reader still cannot see it.`
+      : '';
+  return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} Fix the gap named and call revise_review_item now; it is judged again on every revision.`;
 }
