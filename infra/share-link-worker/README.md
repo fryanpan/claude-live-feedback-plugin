@@ -38,6 +38,17 @@ With no `SHARE_LINK_KEY` configured the Worker fails closed: every
 `/share/*` request 404s. If share links stop working at the edge but redeem
 fine over the tailnet, check the secret before anything else.
 
+## Deploying
+
+The committed `wrangler.toml` carries placeholder hostnames — the real ones
+stay out of the public repo. Copy it to `wrangler.local.toml` (gitignored),
+fill in the routes, and deploy with that file:
+
+```sh
+npx wrangler deploy -c wrangler.local.toml
+npx wrangler secret put SHARE_LINK_KEY -c wrangler.local.toml < ../../data/share-url.key
+```
+
 ## Hygiene
 
 The signed URL is the credential, so every `/share/*` response — the 302 and
