@@ -1151,7 +1151,7 @@ Every count that went wrong had one.
 ## Restoring a tree in place is indistinguishable from data loss to whoever else is writing in it
 
 - **The entry above is the near-miss; this is the same day's hit.** A second
-  agent was spawned onto task `t-Us2HML0w5cfK` because a roster did not list the
+  agent was spawned onto task `<task-id>` because a roster did not list the
   one already working it, and it hard-reset the worktree it found
   (`.claude/worktrees/git-vs-bound`, branch `fix/git-ops-vs-bound-docs`). The
   reflog recorded `reset: moving to HEAD` and then `reset: moving to
@@ -1167,7 +1167,7 @@ Every count that went wrong had one.
   shares. Same class as the reset above — an operation whose definition of
   "restore" is "whatever HEAD says", run where HEAD is not the only truth.
 - **Against a bound doc it is worse, and that half is measured** (task
-  `t-3bFI5h-F9qRW`; full detail in "A git operation on a bound file is an editor
+  `<task-id>`; full detail in "A git operation on a bound file is an editor
   save, and it goes both ways"). `git checkout -- <file>` inside the 800ms write
   debounce is reasserted by the live doc about a second later, so git exits 0,
   `git status` is clean at that instant, and the tree is dirty again immediately
@@ -1815,16 +1815,16 @@ Every count that went wrong had one.
   premises come from.** Three task bodies written in one day each stated an
   inference from reading a code path as though it were a measured fact. Every
   one was caught only because the agent picking it up measured first.
-- **`t-bawSUgxkPldj` said task threads are always subject-anchored, so grouping
+- **ticket A said task threads are always subject-anchored, so grouping
   earns nothing. 34 of 37 carried a text-range anchor with a snippet** — the 3
   that didn't all came from the browser's own new-thread path. The fix the body
   described (flatten the threads) would have silently redefined
   `resolve_thread` on a task from "this point is handled" to "the whole
   discussion is closed", for every existing agent caller.
-- **`t-4dlrUpp4x1aI` described a live bug that #161 had fixed 1h45m after the
+- **ticket B described a live bug that #161 had fixed 1h45m after the
   body was written.** Accurate when filed; nothing re-checked it before it
   reached the top of the queue.
-- **`t-b-43pR4r6KW6` said a question asked in a thread reply can't reach the
+- **ticket C said a question asked in a thread reply can't reach the
   review strip. It had been reaching it since #143 — three days before the task
   was filed.** The agent found the real defect only because the item was there
   to look at: the wait clock was taken from the newest comment, so an agent
@@ -1840,7 +1840,7 @@ Every count that went wrong had one.
   detail.** Twice here it pointed at a rewrite of something that already
   worked, and once it would have broken a contract that had callers.
 - **A premise decays even when it was right**, so "verify before filing" is not
-  sufficient on its own — `t-4dlrUpp4x1aI` was true at the moment of writing
+  sufficient on its own — ticket B was true at the moment of writing
   and false 105 minutes later. A body needs its measurement **dated**, and the
   reader needs to treat an old date as a reason to re-check rather than as
   provenance.
@@ -3179,6 +3179,49 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   doc. Blast radius was measured before filing — exactly **one** doc carried a
   stale path — because "the rename orphaned the bindings" is the more dramatic
   claim and was not the true one.
+
+## A scripted merge chain must gate every step on the previous one's real exit, and a `| tail` throws that exit away
+
+- **What happened (2026-08-29, PR #450):** a background chain ran
+  `git merge origin/main 2>&1 | tail -2 || abort`. The merge conflicted; the
+  pipe's exit was `tail`'s (0), so the chain carried on: the push was a no-op,
+  `gh pr merge` refused, and the *unconditional* `git push origin --delete
+  <branch>` that followed deleted the head branch of an UNMERGED PR — GitHub
+  auto-closed it. Recovery: resolve the conflict, `git merge --continue`,
+  re-push, `gh pr reopen`, relaunch.
+- **The chain pattern is fine; the gating was the whole defect.** Every
+  step's safety had been delegated to the previous step's exit, and one pipe
+  replaced that exit with a formatter's.
+- **Rules:** `set -o pipefail` at the top of every chain; never pipe a git
+  write into `tail`/`head`; delete a remote branch only after
+  `gh pr view N --json state` says `MERGED`; on `mergeStateStatus: DIRTY`
+  stop and report rather than scripting the merge-of-main.
+- Same family as "An empty result and a silent command are the same bytes,
+  so never chain an irreversible action to one" — that one is about a probe
+  that cannot speak, this one is about a pipe that speaks for the wrong
+  command.
+
+## The pre-push regex scrub scans touched files WHOLE, so a branch is blocked on lines main published weeks ago
+
+- **What happened (2026-08-28/29, twice):** a branch that appended one clean
+  entry to `docs/product/decisions.md` failed the push gate on three lines
+  that were already on `origin/main` (a tailnet host and two task ids from
+  earlier entries). The scanner lists the files a push touches and reads each
+  file end to end — not the added lines — so touching a file makes its whole
+  history the branch's problem. `scripts/scrub-check.py`'s own docstring
+  names this as latent; it is not latent for anyone who edits `decisions.md`
+  or `learnings.md`.
+- **The confusing half:** `--diff-range origin/main..HEAD` (two-dot) also
+  lists every file *main* changed since the branch was cut, so a merge of
+  main "adds" hits in files the branch never touched (`home-brief.ts` on
+  2026-08-29). `origin/main...HEAD` (three-dot, merge-base) or the hook's own
+  `--push-tip HEAD --remote origin` mode is the question the gate actually
+  asks.
+- **What to do:** run the three-dot form before pushing; when the hit is a
+  pre-existing line in a file you touched, anonymise it in the same commit
+  (host → `<host>`, id → prose) and say so in the PR — that is cheaper than
+  arguing with the gate, and the line was a leak anyway. Never `SCRUB_SKIP=1`
+  to get past it.
 
 ## Merge conflict resolution
 - **`git checkout --ours <file>` during a merge discards the AUTO-MERGED hunks too, not just the conflicted ones.** Resolving PR #272's version-string conflict this way on `packages/mcp/src/mcp.ts` silently reverted #276's entire SSE-reconnect implementation (Last-Event-ID cursor, deliverThenCommit, replay.gap handling) — those hunks had auto-merged cleanly and carried no conflict markers, so a grep for `<<<<<<<` showed only the version line and everything looked trivial. The file-level command then replaced the whole auto-merged file with the branch's copy, CI stayed green (the orphaned `sse-cursor.ts` still passed its isolated tests — no test drove its call site), and 0.1.74 shipped to the field without reconnect replay. Caught only because the NEXT branch to merge main (#280) built on the deleted path and its agent diffed both sides before resolving. The rule: `checkout --ours/--theirs` is for generated artifacts you are about to rebuild (`packages/plugin/mcp/index.js`); for SOURCE files, edit only the conflict hunks — and after any merge touching a file main also changed, grep the merged result for a literal from main's side of that file as a positive control. Restored by #280 (d480829).
