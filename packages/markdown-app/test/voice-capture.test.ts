@@ -9,6 +9,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  INDICATOR_LINGER_MS,
+  LONG_ACK_WORDS,
   type OriginFacts,
   type RecognitionLike,
   type RecognitionResultEvent,
@@ -17,6 +19,7 @@ import {
   type VoiceContext,
   createVoiceCapture,
   insecureOriginMessage,
+  lingerFor,
   localhostUrlFor,
   spaceScrollTarget,
   topmostVisibleHeading,
@@ -57,7 +60,7 @@ function keyup(target: EventTarget, code = 'Space'): void {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 /**
- * The document-level hotkey is a HOLD, not a tap (t-Mym15-yQ3QxJ): keydown
+ * The document-level hotkey is a HOLD, not a tap (the accidental-trigger ticket): keydown
  * arms a timer and the recording only starts SPACE_HOLD_ARM_MS later, so a
  * typed space — which is a quick tap wherever it lands — never records.
  * These helpers run under fake timers.
@@ -142,7 +145,7 @@ describe('createVoiceCapture', () => {
   });
 
   it('a Space TAP records nothing, and gets the scroll it was asking for', () => {
-    // The accidental-trigger report (t-Mym15-yQ3QxJ): a typed space is a tap,
+    // The accidental-trigger report (the accidental-trigger ticket): a typed space is a tap,
     // and before this a tap RECORDED — plus a 6s "Didn't catch anything."
     // toast — whenever the guard could not see typing (focus stolen by a
     // re-render, a focused row, plain body). A tap still never reaches the
@@ -869,5 +872,68 @@ describe('createVoiceCapture from the keyboard', () => {
     cap.destroy();
     keydown(button);
     expect(rec.started).toBe(0);
+  });
+});
+
+describe('a long ack stays up long enough to be read', () => {
+  /**
+   * Bryan, 2026-08-29: a "brief status" is a 100-word message. The readout
+   * used to clear itself after one fixed linger, sized for a one-line ack; a
+   * hundred words vanished mid-read. The linger now scales with the words,
+   * and the box takes the long form (`.voice-indicator--long`) so the
+   * stylesheet can cap and scroll it.
+   */
+  it('lingerFor grows with the word count, from the old floor', () => {
+    expect(lingerFor('Heard: "x". Sent to the workspace agent.')).toBe(INDICATOR_LINGER_MS);
+    const hundred = Array.from({ length: 100 }, (_, i) => `word${i}`).join(' ');
+    expect(lingerFor(hundred)).toBeGreaterThan(3 * INDICATOR_LINGER_MS);
+    // …and has a ceiling: a runaway ack must not pin the strip open.
+    const thousand = Array.from({ length: 1000 }, (_, i) => `w${i}`).join(' ');
+    expect(lingerFor(thousand)).toBeLessThanOrEqual(60_000);
+  });
+
+  it('a 100-word ack gets the long form and outlives the default linger', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '';
+    const button = document.createElement('button');
+    const indicator = document.createElement('div');
+    indicator.className = 'hidden';
+    document.body.append(button, indicator);
+    const rec = new FakeRecognition();
+    const brief = Array.from({ length: LONG_ACK_WORDS + 70 }, (_, i) => `w${i}`).join(' ');
+    const cap = createVoiceCapture({
+      button,
+      indicator,
+      getContext: () => ({ surface: 'hub' }),
+      send: () => Promise.resolve({ route: 'fast-path', ack: brief }),
+      createRecognition: () => rec,
+      readOrigin: () => ({
+        isSecureContext: true,
+        protocol: 'https:',
+        hostname: 'example.test',
+        port: '',
+        host: 'example.test',
+        pathname: '/workspaces/w-1',
+        search: '',
+      }),
+    });
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true }),
+    );
+    vi.advanceTimersByTime(SPACE_HOLD_ARM_MS + 10);
+    rec.emit([{ text: 'brief status', final: true }]);
+    document.body.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(indicator.textContent).toContain('w0');
+    expect(indicator.classList.contains('voice-indicator--long')).toBe(true);
+    // Still up after the old fixed linger…
+    vi.advanceTimersByTime(INDICATOR_LINGER_MS + 100);
+    expect(indicator.classList.contains('hidden')).toBe(false);
+    // …and gone once its own linger runs out.
+    vi.advanceTimersByTime(lingerFor(brief));
+    expect(indicator.classList.contains('hidden')).toBe(true);
+    // A short ack afterwards drops the long form again.
+    cap.destroy();
+    vi.useRealTimers();
   });
 });
