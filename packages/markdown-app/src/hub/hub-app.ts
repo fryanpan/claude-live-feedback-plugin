@@ -85,7 +85,6 @@ import {
   reviewRow,
   shouldPollHome,
   tabForNav,
-  unplacedNotice,
   voiceHubContext,
   walkHandoff,
   walkHandoffReady,
@@ -104,7 +103,6 @@ import {
   renderLeadStrip,
   renderQuickActions,
   renderReviewBanner,
-  renderUnplacedStrip,
   renderWorkspaceIdentity,
 } from './hub-render.ts';
 import { hubShortcutKeydown } from './hub-shortcuts.ts';
@@ -403,7 +401,6 @@ function buildShell(root: HTMLElement, name: string): void {
       <section class="hub-board-col">
         <div id="hub-decisions" class="hub-decisions hidden"></div>
         <div id="hub-quick" class="hub-quick"></div>
-        <div id="hub-unplaced" class="hub-unplaced hidden"></div>
         <div id="hub-board" class="hub-board"></div>
         <div id="hub-archived" class="hub-board hidden"></div>
         <div id="hub-activity" class="hub-activity hidden"></div>
@@ -989,16 +986,10 @@ async function main(): Promise<void> {
       knownAgentIds: knownAgentIds(),
       archivedCount: archived.length,
     };
-    // Counted over EVERY task, not over the sections just rendered: the tab
-    // and done-window filters decide what is worth looking at right now, and
-    // a bucket that empties itself when you switch to "My Tasks" is a reading
-    // that lies in the quiet direction — which is the whole failure mode.
-    renderUnplacedStrip(el('hub-unplaced'), unplacedNotice(taskList(), filters.now), {
-      onOpenOldest: (taskId) => {
-        const task = state.tasks.get(taskId);
-        if (task) boardHandlers.onOpenTask(task);
-      },
-    });
+    // No "N tasks have no goal yet" strip above the board any more (Bryan,
+    // 2026-08-29, by voice: it "is taking out space and all of it's not
+    // useful"). Backlog already holds every unplaced row; `unplacedNotice`
+    // stays in the model for the lead's tools, and nothing here draws it.
     // The board's read of the queue is one line now — the full list lives on
     // Home. Two surfaces both claiming to be the queue would drift the first
     // time only one of them learned something.
@@ -1189,9 +1180,9 @@ async function main(): Promise<void> {
     const board = el('hub-board');
     const activity = el('hub-activity');
     // Everything the task list is made of hides with it. Activity used to be
-    // a button that swapped ONE div, so the capture box and the unplaced
-    // strip stayed on screen over a feed they have nothing to do with.
-    for (const id of ['hub-quick', 'hub-unplaced', 'hub-decisions', 'hub-archived']) {
+    // a button that swapped ONE div, so the capture box and the review strip
+    // stayed on screen over a feed they have nothing to do with.
+    for (const id of ['hub-quick', 'hub-decisions', 'hub-archived']) {
       el(id).classList.toggle('hub-hidden-by-view', state.view === 'activity');
     }
     if (state.view === 'activity') {

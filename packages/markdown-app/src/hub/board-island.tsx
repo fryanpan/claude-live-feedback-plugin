@@ -83,9 +83,9 @@ export interface BoardHandlers {
    * pointer question rather than a width one. Omitted → asked of the browser.
    */
   inlineTitleEdit?: () => boolean;
-  /** The way to the restore list. Absent, or an `archivedCount` of zero,
-   *  draws nothing at all — a board that has never archived anything should
-   *  not carry a control saying so. */
+  /** The way to the restore list — a quiet line under the last band. Absent,
+   *  or an `archivedCount` of zero, draws nothing at all: a board that has
+   *  never archived anything should not carry a control saying so. */
   onShowArchived?: () => void;
 }
 
@@ -1034,21 +1034,6 @@ function Board(props: { handlers: BoardHandlers; wrapper: Box<HTMLElement> }) {
   if (!onBoard) return null;
   return (
     <Fragment>
-      {/* The board's meta line: what is true of the LIST rather than of any
-          row in it. One entry so far, and it earns its line only when there is
-          something to point at. */}
-      {handlers.onShowArchived && archivedCount > 0 && (
-        <p class="hub-board-meta">
-          <button
-            type="button"
-            class="hub-linklike hub-board-meta-archived"
-            title="Show archived tasks — each one can be restored"
-            onClick={() => handlers.onShowArchived?.()}
-          >
-            {`${archivedCount} archived`}
-          </button>
-        </p>
-      )}
       {sections.map((section) => (
         // FLAT. `section.depth` is still an honest fact about the goal list,
         // and the stored shape is untouched — but the list renders one level,
@@ -1069,6 +1054,24 @@ function Board(props: { handlers: BoardHandlers; wrapper: Box<HTMLElement> }) {
         </section>
       ))}
       {handlers.onGoalAdd && <GoalAddRow sections={sections} onGoalAdd={handlers.onGoalAdd} />}
+      {/* The board's foot line: what is true of the LIST rather than of any
+          row in it. One entry so far, and it earns its line only when there is
+          something to point at. At the BOTTOM, after the last band and the
+          goal-add row — it sat above the first goal until Bryan (2026-08-29,
+          by voice) said the top slot "is taking out space": what you put down
+          is a thing you go looking for, not the first thing the board says. */}
+      {handlers.onShowArchived && archivedCount > 0 && (
+        <p class="hub-board-foot">
+          <button
+            type="button"
+            class="hub-linklike hub-board-foot-archived"
+            title="Show archived tasks — each one can be restored"
+            onClick={() => handlers.onShowArchived?.()}
+          >
+            {`${archivedCount} archived`}
+          </button>
+        </p>
+      )}
     </Fragment>
   );
 }
