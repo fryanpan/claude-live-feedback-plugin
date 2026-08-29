@@ -41,6 +41,14 @@ flowchart LR
 - **Turns revise in place.** A `transcript` frame carries the WHOLE turn text
   and a `final` flag; a later frame with the same turn number replaces the
   earlier text, which is how a mis-heard word corrects on screen.
+- **Who said it rides the same frame.** The engine's speaker label (`"A"`,
+  `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
+  a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
+  names that voice for the meeting — every turn with the label updates, the
+  strip sends `name_speaker` up the audio socket, and the record and the
+  notes composer read the name from then on. Labels are per SESSION: the
+  same letter is a different person next meeting, so the name map lives on
+  the meeting's index line, never on the doc.
 
 ## Engine choice
 
@@ -60,6 +68,17 @@ the errors. The engine sits behind the `TranscriptionEngine` interface
 (`packages/server/src/transcribe.ts`) so a later switch is a new adapter,
 not a rework.
 
+**Speaker labels** (added 2026-08-29): `speaker_labels=true` on the same
+streaming URL — supported on every streaming model, **+$0.12/hr** on top of
+the $0.15 base (docs: streaming/label-speakers-and-separate-channels). Each
+`Turn` carries `speaker_label`; turns under ~1s of audio carry a placeholder
+(`PENDING`/`UNKNOWN`) the engine adapter maps to "no speaker". A
+`SpeakerRevision` arrives before `Termination` naming turns the whole-session
+pass relabelled; the adapter re-emits those through `onTurn` as settled turns
+with retained text, so the relay needs no second channel. Notes already
+composed keep the label they were composed with — the revision reaches the
+record and the strip, not the composer.
+
 **Key wiring:** `ASSEMBLYAI_API_KEY` env, then Keychain
 (`transcribe-assemblyai.ts` names the service). No key → the socket answers
 `unavailable: not_configured` and the strip says so — a settled state, not
@@ -69,9 +88,12 @@ constructs a real one, so no test run ever opens a metered session.
 ## Persistence
 
 Append-only under `<dataDir>/meetings/<safeDocId>/`: one
-`<meetingId>.jsonl` of settled turns (`{turn, text, ts}`), plus a
-`meetings.jsonl` index whose start/stop lines fold into one record per
-meeting. Nothing deletes; ids sanitized `[^A-Za-z0-9._-] → _`.
+`<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
+`{turn, speaker, ts}` line with no text relabels a turn already written),
+plus a `meetings.jsonl` index whose start/stop lines fold into one record
+per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
+into the record's name map, last word wins. Nothing deletes; ids sanitized
+`[^A-Za-z0-9._-] → _`.
 
 ## Notes composition
 
@@ -109,6 +131,11 @@ stored content.
   reads as settled — a silent failure.
 - **AssemblyAI auth is the bare key as the whole `Authorization` header** —
   no `Bearer` prefix.
+- **A speaker name is applied when a tick COMPOSES, not when it arrives** —
+  the compose runs on the session's promise chain, so a name given right
+  after the quiet timer fires still reaches that tick. Carried (failed)
+  turns keep the raw label and are re-mapped on retry; mapping a display
+  name twice would wrap it ("Speaker Jordan").
 - **Bun has ONE websocket handler per server.** Audio sockets are
   distinguished by `ws.data.kind`; the upgrade for `/audio/` sets it.
 - **Audio frames must be COPIED, not viewed** — Bun reuses the receive
