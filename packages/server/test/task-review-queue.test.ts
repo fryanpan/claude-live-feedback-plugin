@@ -226,6 +226,63 @@ describe('GET /api/workspaces/:id/review-items — ticket-borne rows', () => {
   });
 });
 
+describe('who asked — the ticket-borne row carries an asker like a thread row does', () => {
+  /**
+   * The fresh-eyes finding: a doc-thread row read "Asked by UX Bot 11 minutes
+   * ago" while the task-borne decision beside it read "Asked 11 minutes ago",
+   * because the derived legacy row shipped `askedBy: ''`. The task recorded
+   * its creator on the `task.created` event and nowhere else, so nothing
+   * downstream could name them. Now the row names who filed the ticket.
+   */
+  it('a legacy decision names the actor who filed the ticket', async () => {
+    const ws = await seedWorkspace();
+    const { task } = await jj<{ task: Task }>(
+      await post(`/api/workspaces/${ws}/tasks`, {
+        title: 'keep disk or memory?',
+        assignee: 'Jordan',
+        needs: 'decision',
+        body: DECISION_BODY,
+        options: [{ label: 'Keep the disk one' }, { label: 'Keep memory' }],
+        author: { id: 'agent-harbor', name: 'Harbor agent' },
+      }),
+    );
+    const rows = await queueRows(ws);
+    expect(rows.map((r) => r.reviewItemId)).toEqual(['r-legacy']);
+    expect((rows[0] as { askedBy?: string }).askedBy).toBe('Harbor agent');
+    // The same name, from the store's own reader — one value, not two.
+    expect(handle.tasks.listReviewItems(task.id)[0]?.createdBy).toBe('Harbor agent');
+    // And the board projection carries it, so the Home card's decision row
+    // (built in the browser off the projection) can say the same words.
+    const { tasks } = await jj<{ tasks: Array<{ id: string; createdBy?: string }> }>(
+      await fetch(`${base}/api/workspaces/${ws}/tasks`),
+    );
+    expect(tasks.find((t) => t.id === task.id)?.createdBy).toBe('Harbor agent');
+  });
+
+  it('a row written before the creator was recorded falls back to its first mover', async () => {
+    const ws = await seedWorkspace();
+    // No author on the create — the shape of every row already on disk.
+    const task = await seedDecision(ws);
+    expect(handle.tasks.listReviewItems(task.id)[0]?.createdBy).toBe('');
+    // Positive control for the fallback: once somebody moves the ticket the
+    // row names them, exactly as the Home card always has.
+    const moved = handle.tasks.transition(task.id, 'in-progress', { actor: AGENT });
+    expect(moved.ok).toBe(true);
+    expect(handle.tasks.listReviewItems(task.id)[0]?.createdBy).toBe('Scheduler Agent');
+    const rows = await queueRows(ws);
+    expect((rows[0] as { askedBy?: string }).askedBy).toBe('Scheduler Agent');
+  });
+
+  it('a declared item still names its own author, not the ticket filer', async () => {
+    const ws = await seedWorkspace();
+    const task = await seedAction(ws);
+    const res = handle.tasks.addReviewItem(task.id, REVIEW, { actor: PERSON });
+    expect(res.ok).toBe(true);
+    const rows = await queueRows(ws);
+    expect((rows[0] as { askedBy?: string }).askedBy).toBe('Jordan');
+  });
+});
+
 describe('the Home queue count', () => {
   /**
    * POSITIVE CONTROL, stated as arithmetic rather than as a literal: for a

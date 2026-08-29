@@ -18,6 +18,7 @@ import {
   TASK_STATUS_ORDER,
   type UptimeReport,
   activityRows,
+  answeredByLine,
   appendDictation,
   askedMeta,
   askedMetaLine,
@@ -1859,6 +1860,29 @@ describe('askedMeta — the one provenance line the card head carries', () => {
     expect(askedMeta(bare, T0)).toBe('Asked 1 day ago');
   });
 
+  it('a decision names who filed the ticket when the projection says, before its first mover', () => {
+    const d: ReviewItem = {
+      key: 'decision:d-2',
+      kind: 'decision',
+      title: 'Blue or green?',
+      ask: '',
+      why: '',
+      since: T0 - DAY,
+      decision: {
+        task: task({
+          createdAt: T0 - DAY,
+          createdBy: 'UX Bot',
+          transitions: [
+            { ts: T0 - DAY, from: 'todo', to: 'todo', by: { name: 'Harbor agent', kind: 'agent' } },
+          ],
+        }),
+        blocks: [],
+        hard: false,
+      },
+    };
+    expect(askedMeta(d, T0)).toBe('Asked by UX Bot 1 day ago');
+  });
+
   it('askedMetaLine is the shared spelling for surfaces with their own rows', () => {
     expect(askedMetaLine('Harbor agent', true, T0 - 3_600_000, T0)).toBe(
       'Asked by Harbor agent 1 hour ago',
@@ -2337,5 +2361,25 @@ describe('the detail panel takes its asks through panelAsks', () => {
     expect(hubApp).toContain('state.reviewItems');
     expect(hubApp).toContain('panelAsks(state.reviewItems, task.id)');
     expect(hubApp).not.toContain('state.reviewItems.filter');
+  });
+});
+
+describe('answeredByLine — the one you/name voice every answered record speaks in', () => {
+  /**
+   * The fresh-eyes finding: the doc card said "Answered by you: …" while the
+   * task panel said "Answered by Probe Reviewer: …" for the same reader and
+   * the same answer, because each surface spelled the rule itself — and one
+   * of them never compared against the reader at all.
+   */
+  it('says you when the answerer is the reader', () => {
+    expect(answeredByLine('Jordan', 'Jordan')).toBe('Answered by you: “');
+  });
+  it('names anyone else', () => {
+    expect(answeredByLine('Cara', 'Jordan')).toBe('Answered by Cara: “');
+    expect(answeredByLine('Cara', undefined)).toBe('Answered by Cara: “');
+  });
+  it('claims nobody when the record carries no name', () => {
+    expect(answeredByLine(undefined, 'Jordan')).toBe('Answered: “');
+    expect(answeredByLine('', 'Jordan')).toBe('Answered: “');
   });
 });

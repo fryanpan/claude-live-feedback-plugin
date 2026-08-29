@@ -149,6 +149,83 @@ describe('deterministicBrief', () => {
   });
 });
 
+describe('an answer that was taken back is not news', () => {
+  /**
+   * The fresh-eyes finding: the What's New brief still said "1 decision was
+   * answered" after that answer had been undone. The withdrawal writes its
+   * own event (`decision.answer_withdrawn`), which the brief neither counted
+   * nor read — so the answered row stood alone and the brief asserted a
+   * decision the board no longer held.
+   */
+  const answered = (ts: number, taskId = 't-2') =>
+    ev('decision.answered', ts, { taskId, actor: { name: 'Riley' }, answer: 'Ship it.' });
+  const withdrawn = (ts: number, taskId = 't-2') =>
+    ev('decision.answer_withdrawn', ts, {
+      taskId,
+      actor: { name: 'Riley' },
+      answer: 'Ship it.',
+      answeredBy: 'Riley',
+    });
+
+  it('the withdrawal is a brief-relevant event — it stales the brief that asserted the answer', () => {
+    expect(BRIEF_EVENT_TYPES.has('decision.answer_withdrawn')).toBe(true);
+  });
+
+  it('briefEvents pairs a withdrawal with the answer it undid and drops both', () => {
+    const out = briefEvents([answered(NOW + 1), withdrawn(NOW + 2)], NOW);
+    expect(out).toEqual([]);
+  });
+
+  it('the deterministic brief says nothing was decided once the answer is undone', () => {
+    const md = deterministicBrief(input(briefEvents([answered(NOW + 1), withdrawn(NOW + 2)], NOW)));
+    expect(md).not.toContain('**Decided:**');
+    // Positive control: the answer alone is still news.
+    expect(deterministicBrief(input(briefEvents([answered(NOW + 1)], NOW)))).toContain(
+      '**Decided:** 1 decision was answered',
+    );
+  });
+
+  it('a second answer after the undo counts once, and only the standing one', () => {
+    const rows = briefEvents([answered(NOW + 1), withdrawn(NOW + 2), answered(NOW + 3)], NOW);
+    expect(rows.map((r) => r.ts)).toEqual([NOW + 3]);
+    expect(deterministicBrief(input(rows))).toContain('**Decided:** 1 decision was answered');
+  });
+
+  it('pairs within a task only — undoing one decision leaves another standing', () => {
+    const rows = briefEvents([answered(NOW + 1, 't-1'), withdrawn(NOW + 2, 't-2')], NOW);
+    expect(rows.map((r) => [r.event, r.taskId])).toEqual([
+      ['decision.answered', 't-1'],
+      ['decision.answer_withdrawn', 't-2'],
+    ]);
+  });
+
+  it('a withdrawal of an answer given before the window is reported as a reopening', () => {
+    const rows = briefEvents([answered(NOW - 5), withdrawn(NOW + 2)], NOW);
+    expect(rows.map((r) => r.event)).toEqual(['decision.answer_withdrawn']);
+    const md = deterministicBrief(input(rows));
+    expect(md).not.toContain('**Decided:**');
+    expect(md).toContain(
+      '**Reopened:** an answer was taken back on [Rewrite the retry helper](/workspaces/ws-1?task=t-2).',
+    );
+  });
+
+  it('the digest the model reads carries neither half of an undone answer', () => {
+    const rows = briefEvents([answered(NOW + 1), withdrawn(NOW + 2)], NOW);
+    const { user } = buildBriefPrompt(input(rows), 'x', uncapped(NOW));
+    expect(user).not.toContain('decision.answered');
+    expect(user).not.toContain('Ship it.');
+    // Positive control: a standing withdrawal is a digest line of its own,
+    // and the words it took back ride along so the model can name them.
+    const lone = buildBriefPrompt(
+      input(briefEvents([withdrawn(NOW + 2)], NOW)),
+      'x',
+      uncapped(NOW),
+    );
+    expect(lone.user).toContain('decision.answer_withdrawn');
+    expect(lone.user).toContain('answer: "Ship it."');
+  });
+});
+
 describe('buildBriefPrompt', () => {
   it('carries the instructions, the since label, the digest, and a countless queue line', () => {
     const { system, user } = buildBriefPrompt(

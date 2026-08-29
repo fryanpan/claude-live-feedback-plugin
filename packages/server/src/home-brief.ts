@@ -125,6 +125,10 @@ export const BRIEF_EVENT_TYPES: ReadonlySet<string> = new Set([
   'task.regrouped',
   'task.body_edited',
   'decision.answered',
+  // An undo. Counted so the brief that asserted "1 decision was answered"
+  // goes stale the moment the answer is taken back — and paired against the
+  // answer it undid in `briefEvents`, so neither half is news.
+  'decision.answer_withdrawn',
   'decision.info_requested',
   'workspace.goals_changed',
   'workspace.lead_changed',
@@ -143,9 +147,9 @@ export interface BriefEventRow {
 }
 
 /** The rows a brief covers: relevant types only, strictly after `since`,
- *  oldest first. */
+ *  oldest first — with an answer that was later taken back settled out. */
 export function briefEvents(rows: BriefEventRow[], since: number): BriefEventRow[] {
-  return rows
+  const inWindow = rows
     .filter(
       (r) =>
         typeof r.event === 'string' &&
@@ -154,6 +158,47 @@ export function briefEvents(rows: BriefEventRow[], since: number): BriefEventRow
         r.ts > since,
     )
     .sort((a, b) => (a.ts as number) - (b.ts as number));
+  return settleWithdrawnAnswers(inWindow);
+}
+
+/**
+ * Drop each answer that a later withdrawal on the same task took back, and
+ * the withdrawal with it.
+ *
+ * The brief read "**Decided:** 1 decision was answered" after that answer had
+ * been undone — the undo wrote its own event, and nothing here read it, so
+ * the answered row stood alone and the brief asserted a decision the board
+ * no longer held. An answer and its undo are one non-event to a reader who
+ * has been away: nothing was decided, and saying "answered, then withdrawn"
+ * is bookkeeping they did not ask for.
+ *
+ * Pairing is per task, newest standing answer first — a second answer given
+ * after the undo is untouched. A withdrawal whose answer predates the window
+ * has nothing here to cancel and STAYS: the reader saw that answer stand
+ * before they left, and its reopening is the news.
+ *
+ * `decision.answer_withdrawn` names a task, never a review item, so the
+ * pairing is on task id; the legacy `answer_decision` path is the only one
+ * that writes the withdrawal today, and it carries one answer per task.
+ */
+export function settleWithdrawnAnswers(rows: BriefEventRow[]): BriefEventRow[] {
+  const dropped = new Set<BriefEventRow>();
+  const standing = new Map<string, BriefEventRow[]>();
+  for (const row of rows) {
+    if (typeof row.taskId !== 'string') continue;
+    if (row.event === 'decision.answered') {
+      const list = standing.get(row.taskId) ?? [];
+      list.push(row);
+      standing.set(row.taskId, list);
+    } else if (row.event === 'decision.answer_withdrawn') {
+      const undone = standing.get(row.taskId)?.pop();
+      if (undone) {
+        dropped.add(undone);
+        dropped.add(row);
+      }
+    }
+  }
+  return dropped.size === 0 ? rows : rows.filter((r) => !dropped.has(r));
 }
 
 /**
@@ -266,6 +311,7 @@ export function deterministicBrief(input: BriefInput): string {
   const started: string[] = [];
   const created: string[] = [];
   const answered: string[] = [];
+  const reopened: string[] = [];
   let goalEdits = 0;
   for (const row of input.events) {
     switch (row.event) {
@@ -278,6 +324,11 @@ export function deterministicBrief(input: BriefInput): string {
         break;
       case 'decision.answered':
         answered.push(linked(input, row));
+        break;
+      // Only a withdrawal `settleWithdrawnAnswers` could not pair reaches
+      // here: the answer it undid stood before the window opened.
+      case 'decision.answer_withdrawn':
+        reopened.push(linked(input, row));
         break;
       case 'workspace.goals_changed':
         goalEdits += 1;
@@ -303,6 +354,10 @@ export function deterministicBrief(input: BriefInput): string {
     if (answered.length > 0)
       lines.push(
         `**Decided:** ${answered.length} ${plural(answered.length, 'decision was', 'decisions were')} answered — ${listOf(answered)}.`,
+      );
+    if (reopened.length > 0)
+      lines.push(
+        `**Reopened:** ${plural(reopened.length, 'an answer was', `${reopened.length} answers were`)} taken back on ${listOf(reopened)}.`,
       );
     if (goalEdits > 0)
       lines.push(`**Goals:** edited ${goalEdits === 1 ? 'once' : `${goalEdits} times`}.`);
@@ -423,7 +478,13 @@ export function buildBriefPrompt(
       // title like "X approves the rollout" reads as consent — the brief told
       // a reader he had approved a force-push he had refused. Only the answer
       // carries which way the decision went.
-      const answer = row.event === 'decision.answered' ? answerFragment(row.answer) : '';
+      // A standing withdrawal quotes the words it took back for the same
+      // reason: "an answer was withdrawn" says nothing about WHICH way the
+      // board had been leaning.
+      const answer =
+        row.event === 'decision.answered' || row.event === 'decision.answer_withdrawn'
+          ? answerFragment(row.answer)
+          : '';
       return `- ${when} ${what}${extra}${task ? ` · ${task}` : ''}${who ? ` · by ${who}` : ''}${answer}`;
     })
     .join('\n');
