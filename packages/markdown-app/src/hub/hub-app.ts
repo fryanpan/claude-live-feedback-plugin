@@ -61,6 +61,7 @@ import {
   type ReviewThreadItem,
   type UptimeReport,
   type WalkHold,
+  type WalkSources,
   advanceWalk,
   applyRefresh,
   archivedTasks,
@@ -88,6 +89,7 @@ import {
   unplacedNotice,
   voiceHubContext,
   walkHandoff,
+  walkHandoffReady,
   walkNextUrl,
   walkPosition,
 } from './hub-model.ts';
@@ -96,6 +98,7 @@ import {
   type TaskDiscussion,
   type TaskThread,
   discussionIsBusy,
+  panelAnswerRequest,
   renderActivity,
   renderArchivedList,
   renderHomeBrief,
@@ -1401,8 +1404,9 @@ async function main(): Promise<void> {
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
         // the panel says the same thing the row that sent them here said.
-        // `panelAsks` owns which rows qualify — by taskId, and only the kinds
-        // whose answer path this panel actually implements.
+        // `panelAsks` owns which rows qualify — by taskId, thread-borne and
+        // ticket-borne alike, minus the derived legacy copy of the task's own
+        // decision.
         asks: task ? panelAsks(state.reviewItems, task.id) : [],
         // A blocker is task state (design point 5): when the open task is a
         // person's own open work other tasks wait on, the panel — and only
@@ -1702,6 +1706,13 @@ async function main(): Promise<void> {
   // list, so the first load can resolve before the board has synced — the
   // observer below gives the walk another look at the queue then.
   let autoWalkTick: (() => void) | null = null;
+
+  // Which halves of the queue have landed. The armed walk opens only once
+  // both are in (or the deadline passes): a walk opened on the review-items
+  // half alone aimed at the oldest ask, which the task projection then
+  // ranked to the bottom — "Review all" from the landing page opened on
+  // N of N. See `walkHandoffReady`.
+  const walkSources: WalkSources = { reviewItems: false, projection: false };
 
   async function finishWalkItem(
     item: ReviewItem | null,
@@ -2122,14 +2133,17 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Answer an item the panel's queue got from a THREAD.
+   * Answer an item the panel's queue got from a THREAD or from the TICKET.
    *
-   * Same two routes the walkthrough uses, for the same reason: a declared item
-   * records the answer against its declaring comment, an inferred one is
+   * Same routes the walkthrough uses, for the same reason: a declared thread
+   * item records the answer against its declaring comment, an inferred one is
    * answered by replying, and in both cases the REPLY is what takes the item
-   * out of the queue. The panel used to send this through the plain comment
-   * handler, which has nowhere to put the picked option and left the queue
-   * showing an item that had just been answered.
+   * out of the queue; a ticket-borne item is stamped at the task review-item
+   * route, which drops it from every queue's next read. The panel used to
+   * send this through the plain comment handler, which has nowhere to put the
+   * picked option and left the queue showing an item that had just been
+   * answered. ONE spelling of the destination — `panelAnswerRequest` — so a
+   * card with no thread cannot post at `/threads/undefined/…`.
    */
   async function answerPanelThreadItem(
     task: HubTask,
@@ -2137,26 +2151,18 @@ async function main(): Promise<void> {
     text: string,
     optionId?: string,
   ): Promise<boolean> {
-    const docId = item.docId ?? task.bodyDocId;
-    if (!item.threadId) return false;
-    const doc = encodeURIComponent(docId);
-    const thread = encodeURIComponent(item.threadId);
-    const res =
-      item.declared && item.commentId !== undefined
-        ? await send(`/api/docs/${doc}/threads/${thread}/answer`, 'POST', {
-            author,
-            text,
-            commentId: item.commentId,
-            ...(optionId !== undefined ? { optionId } : {}),
-          })
-        : await send(`/api/docs/${doc}/threads/${thread}/comments`, 'POST', { author, text });
+    const reqSpec = panelAnswerRequest(task, item, text, optionId);
+    if (!reqSpec) return false;
+    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
     if (!res.ok) {
       showToast('Posting the answer failed — your text is still in the box');
       return false;
     }
     showToast('Answer posted');
-    // Both, and in this order: the discussion so the reply appears in the
-    // stream below, the review items so the card it answered leaves the queue.
+    // Both, and in this order: the discussion so a reply appears in the
+    // stream below (a ticket-borne answer writes no comment, but the reload
+    // is cheap and keeps one path), the review items so the card it answered
+    // leaves the queue.
     await loadDiscussion(task, true);
     await loadReviewItems();
     return true;
@@ -2541,6 +2547,10 @@ async function main(): Promise<void> {
       // — only send once boot has painted and stamped msToBoot.
       if (msToBoot > 0) sendLoadReport();
     }
+    // The projection half of the queue is in — an EMPTY board's sync too,
+    // which changes no task and so never reaches the observeDeep tick.
+    walkSources.projection = true;
+    autoWalkTick?.();
   });
 
   // ── Wiring ──────────────────────────────────────────────────────────────
@@ -2924,14 +2934,15 @@ async function main(): Promise<void> {
   // closed, so the flag burns on first use.
   const handoff = walkHandoff(location.search);
   let pendingWalk = handoff.walk && state.pane === 'home';
-  const maybeAutoWalk = (): void => {
+  const maybeAutoWalk = (deadlinePassed = false): void => {
     if (!pendingWalk) return;
-    // An empty queue does NOT burn the flag: on a cold connection the ydoc
-    // task projection (which carries the decisions) can land after the first
-    // review-items load, and a one-shot consumed here would skip a queue
-    // that was seconds from existing. The projection observer and every
-    // review-items load call back in; only the deadline below gives up.
-    if (currentQueue().items.length === 0) return;
+    // Neither half landing alone burns the flag: on a cold connection the
+    // ydoc task projection (decisions, and the tasks threads rank against)
+    // and the review-items list arrive in either order, and a walk opened on
+    // one half aims at a head the other half re-ranks to the bottom. The
+    // projection's onReady, its observer, and every review-items load call
+    // back in; only the deadline below stops waiting.
+    if (!walkHandoffReady(currentQueue(), walkSources, deadlinePassed)) return;
     pendingWalk = false;
     startWalkthrough();
   };
@@ -2945,6 +2956,10 @@ async function main(): Promise<void> {
     // genuinely clear (someone answered since the landing page rendered).
     // Hop to the next board holding items, or stand down on Home.
     setTimeout(() => {
+      if (!pendingWalk) return;
+      // Whatever has landed by now is the queue: open on it. Only a board
+      // with nothing in hand is clear enough to hop.
+      maybeAutoWalk(true);
       if (!pendingWalk) return;
       pendingWalk = false;
       const next = walkNextUrl(handoff.chain);
@@ -2987,7 +3002,10 @@ async function main(): Promise<void> {
   // nobody is looking at was a measured slice of the iPad's 10-second load
   // (the board-observability ticket). loadEvents itself is gated on a visible reader too,
   // so the SSE refresh calls it safely.
-  void loadReviewItems().then(deepLinkTick);
+  void loadReviewItems().then(() => {
+    walkSources.reviewItems = true;
+    deepLinkTick();
+  });
   // A deep link straight to /home needs its payload without a nav tap.
   if (state.pane === 'home') void loadHome();
 }

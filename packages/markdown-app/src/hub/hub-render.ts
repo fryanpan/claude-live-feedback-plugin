@@ -1620,7 +1620,11 @@ export interface PanelReviewItem {
   /** Stable within one task, so the walkthrough can hold a position across a
    *  repaint without the queue having identity of its own. */
   id: string;
-  source: 'task' | 'thread';
+  /** Where the card came from: the task's own decision, a declaration on one
+   *  of its threads, or a review item filed ON the ticket (`add_review_item`,
+   *  a `review` payload on `create_tasks`). The last has no thread — its
+   *  answer goes to the task review-item route, keyed by `reviewItemId`. */
+  source: 'task' | 'thread' | 'task-review';
   shape: ReviewShape;
   headline: string;
   /** The ONE body. A task-borne decision has no `detail` field to read, so
@@ -1643,6 +1647,18 @@ export interface PanelReviewItem {
   /** The comment carrying the declaration, so the answer is written against
    *  the right one on a thread that declared twice. */
   commentId?: string;
+  /** Which row on the ticket, on a `task-review` card — the answer is
+   *  stamped back at this id. */
+  reviewItemId?: string;
+  /**
+   * On a `task-review` card the owner REVISED after the reader asked on a
+   * phrase of it: when, and the question that prompted it (the anchored
+   * thread's first comment). `threadId` above then names that thread — it
+   * lives on this task's doc, so the discussion below the card holds it.
+   * Carried from the server's row, never derived here; absent on a fresh
+   * item. The Home walkthrough renders the same note (`ReviewRevisionNote`).
+   */
+  revision?: { at: number; question?: string };
   /** An agent DECLARED this — it carries a `review` payload — rather than the
    *  queue inferring it from who spoke last. It ranks above an inferred item,
    *  and it is half of what makes the answer route legal; the other half is a
@@ -1779,6 +1795,43 @@ export function panelReviewQueue(
   }
   for (const a of asks ?? []) {
     const r = a.review;
+    if (a.kind === 'task-review') {
+      // A TICKET-borne item: the same card a declared thread item gets, keyed
+      // by the ids its answer posts to and carrying no `threadId` — there is
+      // no thread, and inventing one would aim the focus-scroll and the deep
+      // link at nothing. `panelAsks` has already refused a row without the
+      // payload or the ids; the guard here is what makes THIS function total.
+      if (!a.taskId || !a.reviewItemId || r === undefined) continue;
+      items.push({
+        id: `task-review:${a.taskId}:${a.reviewItemId}`,
+        source: 'task-review',
+        shape: r.shape,
+        headline: r.headline,
+        ...(r.detail !== undefined ? { detail: r.detail } : {}),
+        ...(r.options ? { options: r.options } : {}),
+        askedBy: a.askedBy,
+        since: a.askedAt ?? a.since,
+        ...(a.direct !== undefined ? { direct: a.direct } : {}),
+        reviewItemId: a.reviewItemId,
+        declared: true,
+        asked: true,
+        // A REVISED item keeps what the server said about the revision, and
+        // the thread that asked — so the card can say "this came back
+        // changed" and the focus-scroll can aim at it. A fresh item carries
+        // no thread: there is none, and inventing one would aim the deep link
+        // at nothing.
+        ...(a.state === 'revised'
+          ? {
+              revision: {
+                at: a.revisedAt ?? a.since,
+                ...(a.question !== undefined ? { question: a.question } : {}),
+              },
+              ...(a.threadId ? { threadId: a.threadId } : {}),
+            }
+          : {}),
+      });
+      continue;
+    }
     items.push({
       id: `thread:${a.threadId}`,
       source: 'thread',
@@ -1855,6 +1908,51 @@ export function panelReviewQueue(
     const d = Number(b.direct ?? false) - Number(a.direct ?? false);
     return d !== 0 ? d : a.since - b.since;
   });
+}
+
+/**
+ * Where a panel card's answer gets WRITTEN — path and body, minus the author
+ * the caller adds. The sibling of `reviewReplyRequest` (Home queue), for the
+ * panel's own row shape, and one spelling for the same reason: `hub-app`
+ * built the two thread routes inline, which is exactly how a ticket-borne
+ * card would have posted its answer at `/api/docs/<task doc>/threads/
+ * undefined/…` — a write that lands nowhere while the card says "posted".
+ *
+ * - a `task-review` card → the task review-item answer route. `answeredWith`
+ *   is that entity's spelling of the tapped candidate's id.
+ * - a declared thread card with a comment to stamp → the thread `/answer`
+ *   route, which posts the same reply AND records the candidate.
+ * - any other thread card → a plain thread comment.
+ *
+ * Null when the card holds no address to write to — the task's own decision
+ * included, which answers through `answer_decision` and never comes here.
+ */
+export function panelAnswerRequest(
+  task: Pick<HubTask, 'id' | 'bodyDocId'>,
+  item: PanelReviewItem,
+  text: string,
+  optionId?: string,
+): { path: string; body: Record<string, unknown> } | null {
+  if (item.source === 'task-review') {
+    if (!item.reviewItemId) return null;
+    return {
+      path: `/api/tasks/${encodeURIComponent(task.id)}/review-items/${encodeURIComponent(item.reviewItemId)}/answer`,
+      body: { text, ...(optionId !== undefined ? { answeredWith: optionId } : {}) },
+    };
+  }
+  if (item.source !== 'thread' || !item.threadId) return null;
+  const doc = encodeURIComponent(item.docId ?? task.bodyDocId);
+  const thread = encodeURIComponent(item.threadId);
+  return item.declared && item.commentId !== undefined
+    ? {
+        path: `/api/docs/${doc}/threads/${thread}/answer`,
+        body: {
+          text,
+          commentId: item.commentId,
+          ...(optionId !== undefined ? { optionId } : {}),
+        },
+      }
+    : { path: `/api/docs/${doc}/threads/${thread}/comments`, body: { text } };
 }
 
 /** The verbatim words a tapped option recorded, when the payload still holds

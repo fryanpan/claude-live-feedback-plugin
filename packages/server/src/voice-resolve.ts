@@ -118,19 +118,36 @@ export function wordsMatch(a: string, b: string): boolean {
  *  kind words — both are real words in real titles ("Review: Akash — …",
  *  "Wire the results page"), and treating "page" as one once narrowed
  *  "open the results page" to the docs and found nothing. */
-export function spokenKind(text: string): 'task' | 'doc' | undefined {
+/** The words that name each kind. `task` and `doc` are stop words as well;
+ *  `goal` deliberately is NOT — a doc titled "Goal" or a task called
+ *  "Quarterly goals" needs the word as evidence, so it is dropped from the
+ *  query only when it actually acted as a kind filter (see `rankTitles`). */
+const KIND_WORDS: Record<TitleKind, readonly string[]> = {
+  doc: ['doc', 'docs', 'document'],
+  task: ['task', 'tasks', 'ticket'],
+  goal: ['goal', 'goals'],
+};
+
+export function spokenKind(text: string): TitleKind | undefined {
   const words = new Set(text.toLowerCase().split(/[^a-z]+/));
-  const doc = ['doc', 'docs', 'document'].some((w) => words.has(w));
-  const task = ['task', 'tasks', 'ticket'].some((w) => words.has(w));
-  if (doc === task) return undefined;
-  return doc ? 'doc' : 'task';
+  const spoken: TitleKind[] = [];
+  if (KIND_WORDS.doc.some((w) => words.has(w))) spoken.push('doc');
+  if (KIND_WORDS.task.some((w) => words.has(w))) spoken.push('task');
+  if (KIND_WORDS.goal.some((w) => words.has(w))) spoken.push('goal');
+  // Exactly one kind named is the speaker disambiguating; two is a sentence
+  // about both, and no evidence either way.
+  return spoken.length === 1 ? spoken[0] : undefined;
 }
 
 // ── Title resolution ────────────────────────────────────────────────────────
 
+/** A goal is a candidate too: "open the sign-in goal" used to fall through
+ *  to the model, which had no goal target to answer with. */
+export type TitleKind = 'task' | 'doc' | 'goal';
+
 export interface TitleCandidate {
   id: string;
-  kind: 'task' | 'doc';
+  kind: TitleKind;
   title: string;
 }
 
@@ -168,11 +185,23 @@ export function rankTitles(query: string, candidates: TitleCandidate[]): ScoredC
   const q = tokenize(query);
   if (q.length === 0 || candidates.length === 0) return [];
   const kind = spokenKind(query);
-  const pool =
-    kind && candidates.some((c) => c.kind === kind)
-      ? candidates.filter((c) => c.kind === kind)
-      : candidates;
-  return rankPool(q, pool);
+  if (kind && candidates.some((c) => c.kind === kind)) {
+    // The kind word did its job selecting the pool; inside the pool it is
+    // not part of any name ("the sign-in GOAL" against goal titles). Left
+    // in, it dilutes the query below the floor for a one-word title.
+    const marker = new Set(KIND_WORDS[kind]);
+    const rest = q.filter((w) => !marker.has(w));
+    const ranked = rankPool(
+      rest.length > 0 ? rest : q,
+      candidates.filter((c) => c.kind === kind),
+    );
+    // A kind word that selected a pool with nothing in it for the query was
+    // a title word after all: "quarterly goals" is a TASK on a board that
+    // also has goals. Only then does the whole index get its turn, with the
+    // word kept as evidence.
+    if ((ranked[0]?.score ?? 0) >= TITLE_FLOOR) return ranked;
+  }
+  return rankPool(q, candidates);
 }
 
 function rankPool(q: string[], candidates: TitleCandidate[]): ScoredCandidate[] {
@@ -228,8 +257,12 @@ export function resolveByTitle(query: string, candidates: TitleCandidate[]): Tit
  * often a change ("mark this done and open the notes") and those belong to
  * the agent.
  */
-const NAV_OPENER =
-  /^(?:(?:i(?:'d| would)? (?:want|like|need) to|can you|could you|please|let'?s|lets)\s+)?(?:go to|go into|take me to|bring me to|jump to|navigate to|switch to|open(?: up)?|show(?: me)?|find|pull up|bring up|look at|where is|where's)\s+(.+)$/i;
+const NAV_PREFIX =
+  "(?:(?:i(?:'d| would)? (?:want|like|need) to|can you|could you|please|let'?s|lets)\\s+)?";
+const NAV_OPENER = new RegExp(
+  `^${NAV_PREFIX}(?:go to|go into|take me to|bring me to|jump to|navigate to|switch to|open(?: up)?|show(?: me)?|find|pull up|bring up|look at|where is|where's)\\s+(.+)$`,
+  'i',
+);
 
 /**
  * A trailing "in <board>" names the workspace, which the request already
@@ -619,4 +652,111 @@ export function composeStatus(input: StatusInput): string {
   while (kept.length > 1 && countWords(kept.join(' ')) > VOICE_STATUS_MAX_WORDS)
     kept = kept.slice(0, -1);
   return capWords(kept.join(' '), VOICE_STATUS_MAX_WORDS);
+}
+
+// ── The hub's own destinations ─────────────────────────────────────────────
+
+/**
+ * The hub's four places, as `HubNav` in the client names them
+ * (`packages/markdown-app/src/hub/hub-model.ts`): the URL suffix is the name,
+ * except `tasks`, which is the bare workspace path. Mirrored rather than
+ * imported — the server does not depend on the client package — and pinned
+ * by voice-nav.test.ts against the paths `home-routes.test.ts` proves served.
+ */
+export type HubDestination = 'home' | 'tasks' | 'mine' | 'activity';
+
+/**
+ * What a person calls each destination, after the opener ("take me to") and
+ * a leading "the" are gone. A closed TABLE, matched whole, on purpose: a
+ * regex with "home" in it would swallow "open the home page redesign", which
+ * is a task. Adding a phrase here is adding a row, not widening a pattern.
+ */
+const HUB_DESTINATIONS: Record<HubDestination, readonly string[]> = {
+  home: [
+    'home',
+    'homepage',
+    'home page',
+    'home pane',
+    'home screen',
+    'my home',
+    'my homepage',
+    'my home page',
+    'hub',
+  ],
+  tasks: ['board', 'task board', 'tasks', 'task list', 'all tasks', 'board view'],
+  mine: ['my tasks', 'my task list', 'my tasks tab'],
+  activity: ['activity', 'activity pane', 'activity feed', 'activity tab', 'activity view', 'feed'],
+};
+
+/** "go home" / "take me home" have no "to", so the opener never sees them. */
+const GO_HOME = new RegExp(`^${NAV_PREFIX}(?:go|take me|bring me|head)(?: back)? home$`, 'i');
+
+function destinationNamed(name: string): HubDestination | null {
+  const key = name
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^the /, '');
+  for (const nav of Object.keys(HUB_DESTINATIONS) as HubDestination[]) {
+    if (HUB_DESTINATIONS[nav].includes(key)) return nav;
+  }
+  return null;
+}
+
+/**
+ * The hub destination an utterance asks for, or null when it names none —
+ * including when it names a task or doc whose title merely contains one of
+ * these words. `boardNames` strips a trailing "in <board>" exactly as
+ * `navigationAsk` does.
+ */
+export function hubDestinationAsk(
+  transcript: string,
+  boardNames: readonly string[] = [],
+): HubDestination | null {
+  const s = transcript.trim().replace(/[.!?]+$/, '');
+  // "go home in QB": the qualifier is stripped here too, since this form
+  // never reaches `navigationAsk`, which strips it for everything else.
+  const qualifier = boardQualifier(boardNames);
+  if (GO_HOME.test(qualifier ? s.replace(qualifier, '') : s)) return 'home';
+  const name = navigationAsk(s, boardNames);
+  return name === null ? null : destinationNamed(name);
+}
+
+// ── A goal by its place in the order ───────────────────────────────────────
+
+/** Words that may sit between the ordinal and "goal" without changing the
+ *  ask: "my top PRIORITY goal", "the first goal ON THE LIST". */
+const GOAL_FILLER = new Set(['the', 'my', 'our', 'a', 'priority', 'on', 'list', 'board']);
+
+/**
+ * "open my top goal" → 0; "the second goal" → 1; "the last goal" → the
+ * bottom of the order; "goal number two" → 1. Zero-based index into the
+ * workspace's goals, which `HubWorkspace.goals` holds in priority order, or
+ * null: not a navigation ask, not about a goal, a goal named rather than
+ * counted, or an ordinal past the end (an empty board included).
+ */
+export function goalOrdinalAsk(
+  transcript: string,
+  count: number,
+  boardNames: readonly string[] = [],
+): number | null {
+  const name = navigationAsk(transcript, boardNames);
+  if (name === null || count <= 0) return null;
+  const words = name
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 0 && !GOAL_FILLER.has(w));
+  let ordinal: string | undefined;
+  if (words.length === 2 && words[1] === 'goal') ordinal = words[0];
+  else if (words.length === 2 && words[0] === 'goal') ordinal = words[1];
+  else if (words.length === 3 && words[0] === 'goal' && words[1] === 'number') ordinal = words[2];
+  if (ordinal === undefined) return null;
+  let index: number | undefined;
+  if (ordinal === 'top' || ordinal === 'highest' || ordinal === 'one') index = 0;
+  else if (ordinal === 'last' || ordinal === 'bottom' || ordinal === 'lowest') index = count - 1;
+  else index = ORDINAL_WORDS[ordinal];
+  if (index === undefined || index < 0 || index >= count) return null;
+  return index;
 }

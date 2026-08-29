@@ -19,6 +19,7 @@ import {
   decisionBlurb,
   discussionIsBusy,
   flattenComments,
+  panelAnswerRequest,
   panelReviewQueue,
   renderActivity,
   renderHomeBrief,
@@ -965,6 +966,118 @@ describe('renderTaskDetail — discussion', () => {
     // repaints the panel from inside its own await, and a clear that runs
     // afterwards lands on a textarea that is no longer in the document.
     expect(ta.value).toBe('');
+  });
+
+  /**
+   * A TICKET-borne review item — `add_review_item`, or a `review` payload on
+   * `create_tasks` — renders on the panel as the same card a thread-borne
+   * declaration gets, and answers through the thread-answer handler carrying
+   * its own `reviewItemId`, which is what routes the write to
+   * `POST /api/tasks/:id/review-items/:rid/answer`. It must NOT fall through
+   * to `onAnswer`: that route answers the task's own decision, and this item
+   * is not that decision. Before 2026-08-29 nothing rendered here at all.
+   */
+  it('renders a ticket-borne review item and answers it with its review item id', async () => {
+    const onAnswerThread = vi.fn().mockResolvedValue(true);
+    const onAnswer = vi.fn();
+    const t = task({ id: 't-1', title: 'Ship the widget' });
+    renderTaskDetail(
+      root,
+      t,
+      detailHandlers({
+        asks: [
+          askItem({
+            kind: 'task-review' as const,
+            band: 'declared' as const,
+            docId: undefined,
+            threadId: undefined,
+            reviewItemId: 'r-1',
+            ask: 'Which cache do we keep?',
+            askedBy: 'Helper',
+            review: {
+              shape: 'decision' as const,
+              headline: 'Which cache do we keep?',
+              detail: 'Disk survives a restart; memory is faster.',
+              options: [
+                { id: 'o-disk', label: 'Keep disk' },
+                { id: 'o-mem', label: 'Keep memory' },
+              ],
+            },
+          }),
+        ],
+        now: NOW,
+        onAnswerThread,
+        onAnswer,
+      }),
+      { loading: false, threads: [] },
+    );
+    const card = root.querySelector<HTMLElement>('.hub-decide-card');
+    expect(card?.dataset.reviewItemId).toBe('task-review:t-1:r-1');
+    expect(card?.querySelector('.hub-decide-headline')?.textContent).toBe(
+      'Which cache do we keep?',
+    );
+    expect(card?.querySelector('.hub-decide-body')?.textContent).toContain('Disk survives');
+    const options = [...root.querySelectorAll<HTMLElement>('.hub-decide-option')];
+    expect(options.map((o) => o.textContent)).toEqual(['Keep disk', 'Keep memory']);
+    options[1]?.click();
+    expect(onAnswerThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 't-1' }),
+      expect.objectContaining({ source: 'task-review', reviewItemId: 'r-1' }),
+      'Keep memory',
+      'o-mem',
+    );
+    expect(onAnswer).not.toHaveBeenCalled();
+  });
+
+  it('says a revised ticket-borne item came back changed, and quotes what was asked', () => {
+    renderTaskDetail(
+      root,
+      task({ id: 't-1' }),
+      detailHandlers({
+        asks: [
+          askItem({
+            kind: 'task-review' as const,
+            docId: undefined,
+            threadId: 'th-asked',
+            reviewItemId: 'r-1',
+            state: 'revised' as const,
+            revisedAt: NOW - 5_000,
+            question: 'Does disk survive a reboot?',
+            review: { shape: 'review' as const, headline: 'Which cache?', detail: 'Disk does.' },
+          }),
+        ],
+        now: NOW,
+      }),
+      { loading: false, threads: [] },
+    );
+    const card = root.querySelector<HTMLElement>('.hub-decide-card');
+    expect(card?.querySelector('.hub-decide-k-revised')?.textContent).toBe('Revised');
+    expect(card?.querySelector('.hub-decide-question')?.textContent).toBe(
+      'You asked: “Does disk survive a reboot?”',
+    );
+    // The asking thread is what the deep link and the focus-scroll read.
+    expect(card?.dataset.reviewThreadId).toBe('th-asked');
+    // CONTROL: a fresh item shows neither.
+    renderTaskDetail(
+      root,
+      task({ id: 't-2' }),
+      detailHandlers({
+        asks: [
+          askItem({
+            kind: 'task-review' as const,
+            docId: undefined,
+            threadId: undefined,
+            taskId: 't-2',
+            reviewItemId: 'r-1',
+            review: { shape: 'review' as const, headline: 'Which cache?' },
+          }),
+        ],
+        now: NOW,
+      }),
+      { loading: false, threads: [] },
+    );
+    expect(root.querySelector('.hub-decide-k-revised')).toBeNull();
+    expect(root.querySelector('.hub-decide-question')).toBeNull();
   });
 
   /**
@@ -2357,6 +2470,144 @@ describe('the panel’s review queue', () => {
         ),
       ).toHaveLength(0);
       expect(panelReviewQueue(task(), undefined)).toHaveLength(0);
+    });
+
+    /**
+     * A TICKET-borne row builds a card of its own kind: keyed by the ids its
+     * answer posts to, declared (it carries the payload), asked (a
+     * declaration IS an ask), and ranked with the declared thread items —
+     * after the task's own decision, before an inferred question. `threadId`
+     * stays absent: there is no thread, and inventing one would aim the
+     * focus-scroll and the deep link at nothing.
+     */
+    it('admits a ticket-borne review item as a declared card without a thread', () => {
+      const t = task({ id: 't-1', needs: 'decision', body: 'Ship it Thursday?' });
+      const q = panelReviewQueue(t, [
+        ask({ threadId: 'th-old', since: NOW - 90_000_000 }),
+        ask({
+          kind: 'task-review',
+          docId: undefined,
+          threadId: undefined,
+          reviewItemId: 'r-1',
+          ask: 'Which cache do we keep?',
+          askedBy: 'Helper',
+          since: NOW - 10_000,
+          direct: true,
+          review: {
+            shape: 'decision',
+            headline: 'Which cache do we keep?',
+            detail: 'Disk survives a restart.',
+            options: [{ id: 'o-disk', label: 'Keep disk' }],
+          },
+        } as unknown as ReviewThreadItem),
+      ]);
+      expect(q.map((i) => i.id)).toEqual(['task:t-1', 'task-review:t-1:r-1', 'thread:th-old']);
+      expect(q[1]).toMatchObject({
+        source: 'task-review',
+        reviewItemId: 'r-1',
+        shape: 'decision',
+        headline: 'Which cache do we keep?',
+        detail: 'Disk survives a restart.',
+        options: [{ id: 'o-disk', label: 'Keep disk' }],
+        askedBy: 'Helper',
+        declared: true,
+        asked: true,
+        direct: true,
+      });
+      expect(q[1]?.threadId).toBeUndefined();
+      expect(q[1]?.docId).toBeUndefined();
+    });
+
+    /**
+     * A REVISED ticket-borne row — the owner changed the words after the
+     * reader asked on a phrase — keeps the server's revision note and the
+     * thread that asked, exactly as `reviewQueue` keeps them for the Home
+     * walkthrough. Dropping them rendered a revised item as a fresh request
+     * (codex review, 2026-08-29).
+     */
+    it('carries a revised ticket-borne item’s revision note and asking thread', () => {
+      const q = panelReviewQueue(task({ id: 't-1' }), [
+        ask({
+          kind: 'task-review',
+          docId: undefined,
+          threadId: 'th-asked',
+          reviewItemId: 'r-1',
+          ask: 'Which cache do we keep?',
+          state: 'revised',
+          revisedAt: NOW - 5_000,
+          question: 'Does disk survive a reboot?',
+          revisedRange: { start: 0, end: 4 },
+          review: { shape: 'review', headline: 'Which cache do we keep?', detail: 'Disk does.' },
+        } as unknown as ReviewThreadItem),
+      ]);
+      expect(q[0]).toMatchObject({
+        id: 'task-review:t-1:r-1',
+        threadId: 'th-asked',
+        revision: { at: NOW - 5_000, question: 'Does disk survive a reboot?' },
+      });
+    });
+  });
+
+  /**
+   * ONE spelling of where a panel card's answer gets written, the sibling of
+   * `reviewReplyRequest` on the Home queue. `hub-app` used to build the two
+   * thread routes inline, which is exactly how a ticket-borne card would
+   * have posted its answer as a comment at `/api/docs/<task doc>/threads/
+   * undefined/…` — a write that lands nowhere while the card says "posted".
+   */
+  describe('panelAnswerRequest', () => {
+    const t = task({ id: 't-1', bodyDocId: 'task:t-1' });
+    const base = (over: Record<string, unknown> = {}) =>
+      ({
+        id: 'x',
+        source: 'thread',
+        shape: 'review',
+        headline: 'h',
+        since: NOW,
+        ...over,
+      }) as Parameters<typeof panelAnswerRequest>[1];
+
+    it('answers a ticket-borne card at the task review-item route', () => {
+      const item = base({ source: 'task-review', reviewItemId: 'r-1', declared: true });
+      expect(panelAnswerRequest(t, item, 'Keep disk', 'o-disk')).toEqual({
+        path: '/api/tasks/t-1/review-items/r-1/answer',
+        body: { text: 'Keep disk', answeredWith: 'o-disk' },
+      });
+      // Typed words carry no candidate id — nothing invents one.
+      expect(panelAnswerRequest(t, item, 'Neither')).toEqual({
+        path: '/api/tasks/t-1/review-items/r-1/answer',
+        body: { text: 'Neither' },
+      });
+    });
+
+    it('answers a declared thread card against its declaring comment', () => {
+      const item = base({ threadId: 'th-1', commentId: 'c-1', declared: true });
+      expect(panelAnswerRequest(t, item, 'Green', 'g')).toEqual({
+        path: '/api/docs/task%3At-1/threads/th-1/answer',
+        body: { text: 'Green', commentId: 'c-1', optionId: 'g' },
+      });
+      // A card carried with its own doc id posts there, not on the task doc.
+      expect(
+        panelAnswerRequest(
+          t,
+          base({ threadId: 'th-1', docId: 'doc-9', commentId: 'c-1', declared: true }),
+          'Green',
+        )?.path,
+      ).toBe('/api/docs/doc-9/threads/th-1/answer');
+    });
+
+    it('replies to an inferred thread card as a plain comment', () => {
+      expect(panelAnswerRequest(t, base({ threadId: 'th-1' }), 'On it')).toEqual({
+        path: '/api/docs/task%3At-1/threads/th-1/comments',
+        body: { text: 'On it' },
+      });
+    });
+
+    it('refuses a card with nowhere to write', () => {
+      expect(panelAnswerRequest(t, base(), 'words')).toBeNull();
+      expect(panelAnswerRequest(t, base({ source: 'task-review' }), 'words')).toBeNull();
+      // The task's own decision is not this function's door.
+      expect(panelAnswerRequest(t, base({ source: 'task' }), 'words')).toBeNull();
     });
 
     /**
