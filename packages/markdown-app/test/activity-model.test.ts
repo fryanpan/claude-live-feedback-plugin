@@ -5,8 +5,10 @@ import {
   ACTIVITY_WINDOW_MS,
   type ActivityGroup,
   DARK_AFTER_MS,
+  NOTE_LINE_CAP,
   activityCommentRequest,
   asksOf,
+  firstLine,
   homeActivity,
 } from '../src/hub/activity-model.ts';
 import {
@@ -461,5 +463,65 @@ describe('activityCommentRequest: where a comment on a note goes', () => {
   it('quotes every line of a multi-line phrase', () => {
     const req = activityCommentRequest('t-abc1', 'one\ntwo', 'why?');
     expect(req.body.text).toBe('> one\n> two\n\nwhy?');
+  });
+});
+
+describe('firstLine: the one line the Home pane shows of a note', () => {
+  it('takes the first prose line of a multi-line note', () => {
+    expect(firstLine('Shipped the CSV route\n\nNext: the download tests')).toBe(
+      'Shipped the CSV route',
+    );
+  });
+
+  it('skips blank lines, fence markers and fenced code, and sheds block markers', () => {
+    expect(firstLine('\n\n```\nbun test\n```\n## Where it stands\nrest')).toBe('Where it stands');
+    expect(firstLine('- first bullet\n- second')).toBe('first bullet');
+    expect(firstLine('> quoted words')).toBe('quoted words');
+    expect(firstLine('1. numbered')).toBe('numbered');
+  });
+
+  it('caps at NOTE_LINE_CAP with an ellipsis, and leaves exactly the cap alone', () => {
+    expect(NOTE_LINE_CAP).toBe(200);
+    const exact = 'x'.repeat(NOTE_LINE_CAP);
+    expect(firstLine(exact)).toBe(exact);
+    const over = firstLine(`${'y'.repeat(NOTE_LINE_CAP)}z`);
+    expect(over.length).toBe(NOTE_LINE_CAP);
+    expect(over.endsWith('…')).toBe(true);
+    // A caller's own cap.
+    expect(firstLine('abcdefgh', 5)).toBe('abcd…');
+  });
+
+  it('an empty or all-fence note yields an empty line', () => {
+    expect(firstLine('')).toBe('');
+    expect(firstLine('   \n```\n```\n')).toBe('');
+  });
+});
+
+describe('the Home pane shows a note by its first line, whatever its kind', () => {
+  it('a multi-line turn note contributes its first prose line only', () => {
+    const t = task({
+      id: 't-full',
+      notes: [note(MIN, 'Shipped the CSV route\n\n- writer done\n- download tests next')],
+    });
+    const [g] = groups([t]);
+    expect(g?.notes[0]?.text).toBe('Shipped the CSV route');
+  });
+
+  it('a status note renders like a turn note — its kind passes through and its text is not prefixed', () => {
+    const t = task({
+      id: 't-status',
+      notes: [note(MIN, 'Waiting on CI, then merging', { kind: 'status' })],
+    });
+    const [g] = groups([t]);
+    expect(g?.notes[0]).toMatchObject({ kind: 'status', text: 'Waiting on CI, then merging' });
+  });
+
+  it('a note whose first line repeats an ask in the queue is still dropped', () => {
+    const t = task({
+      id: 't-ask',
+      notes: [note(MIN, 'Which cache do we keep?\n\nRedis is my guess.'), note(2 * MIN, 'Earlier')],
+    });
+    const [g] = groups([t], { asks: [{ taskId: 't-ask', text: 'Which cache do we keep?' }] });
+    expect(g?.notes.map((n) => n.text)).toEqual(['Earlier']);
   });
 });

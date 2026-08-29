@@ -4259,11 +4259,119 @@ a.hub-link-chip:hover {
 .hub-detail-body-head + .hub-detail-body-slot {
   margin-top: 0;
 }
+/* --- The Activity feed: moves, audit rows and every note, in full ---
+   ONE list, newest first (Bryan, 2026-08-29: "all task events as well as
+   agent end of turn updates in one feed"). A note row is the agent's whole
+   message — the Stop hook's end-of-turn text or a posted status — rendered
+   as comment markdown under a small head (agent · kind · age); a denial
+   keeps the pane's "blocked: <shape>" form. No row takes a fixed height
+   (1180×820 has ~750px usable), and a long note folds to six lines behind
+   "more". Selecting words in a note or a row opens the shared thread card
+   (`thread-card.tsx`) UNDER the row: the tab is one column, so there is no
+   margin beside it. Hairlines rather than bullets: a bullet on a
+   ten-line message reads as a list item, not a record. */
 .hub-detail-transitions {
   margin: 0;
-  padding-left: 18px;
+  padding: 0;
+  list-style: none;
   font-size: 13px;
   color: var(--fg-muted);
+}
+.hub-hist-row {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.hub-hist-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.hub-hist-words {
+  color: var(--fg-muted);
+}
+.hub-note-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 2px;
+}
+.hub-note-agent {
+  font-weight: 600;
+  color: var(--fg);
+}
+/* The kind token: uppercase, badge-sized, the way the board's badges are. */
+.hub-note-kind {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.hub-hist-row-denial .hub-note-kind {
+  border-color: color-mix(in srgb, var(--yellow) 55%, transparent);
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+}
+.hub-note-body {
+  font-family: var(--prose);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+.hub-note-body > :first-child {
+  margin-top: 0;
+}
+.hub-note-body > :last-child {
+  margin-bottom: 0;
+}
+.hub-note-body p,
+.hub-note-body ul,
+.hub-note-body pre {
+  margin: 0 0 6px;
+}
+.hub-note-body .acti-shape {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--danger-bg);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+/* The fold: a LINE budget (6 × the body's line-height), never a pixel
+   height, with the last line fading so the cut reads as a cut. */
+.hub-note-body.is-folded {
+  max-height: 8.7em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 70%, transparent);
+  mask-image: linear-gradient(#000 70%, transparent);
+}
+.hub-note-more {
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  min-height: 28px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hub-hist-row .acti-thread {
+  margin-top: 8px;
+}
+/* The phrase an open thread is about, marked the way the editor marks a
+   thread's active range — those rules are scoped to `#editor`. */
+.hub-detail-transitions .thread-range {
+  background: rgba(46, 125, 215, 0.22);
+  border-bottom: 2px solid rgba(46, 125, 215, 0.8);
+  border-radius: 1px;
+  color: inherit;
+}
+.hub-hist-pill {
+  z-index: 800;
 }
 
 /* --- Comments | Activity: the two tabs below the description ---
@@ -4812,6 +4920,17 @@ a.hub-link-chip:hover {
     gap: 10px;
   }
   .acti-pill {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
+  }
+  /* The task panel's Activity feed on a thumb: the fold toggle and the
+     pill take the 44px every comment control takes on this tier. */
+  .hub-note-more {
+    min-height: 44px;
+  }
+  .hub-hist-pill {
     min-width: 44px;
     min-height: 44px;
     width: 44px;

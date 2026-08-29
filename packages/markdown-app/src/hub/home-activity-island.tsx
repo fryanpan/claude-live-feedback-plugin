@@ -14,8 +14,8 @@
  * doc-style. The lines are plain text — not buttons — so a selection can
  * land on them (and a tap on a word selects it); the walkthrough card's
  * comment pill appears beside the words; tapping it opens the REAL thread
- * card (threads.ts `renderThread`) beside the group, or under it on a narrow
- * viewport, quoting the phrase. The header row is the only other tap, and
+ * card (`thread-card.tsx`, shared with the task panel's Activity feed)
+ * beside the group, or under it on a narrow viewport, quoting the phrase. The header row is the only other tap, and
  * it opens the task. No hover hints, no comment box, no counters.
  *
  * Groups are keyed on the task id, so a signal write that changes one task's
@@ -25,8 +25,6 @@ import type { Thread, User } from '@feedback/core';
 import { signal } from '@preact/signals';
 import { render } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { sizeThreadSlots } from '../thread-morph.ts';
-import { ThreadPanel } from '../threads.ts';
 import {
   type ActivityGroup,
   type ActivityInput,
@@ -35,6 +33,7 @@ import {
   homeActivity,
 } from './activity-model.ts';
 import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
+import { NOBODY, type OpenComment, ThreadCard, draftThread } from './thread-card.tsx';
 
 export interface ActivityHandlers {
   /** The header row's one tap: open this task, the way a queue row does. */
@@ -58,24 +57,6 @@ export const homeActivityData = signal<ActivityInput>({ tasks: [], goals: [], no
  *  on it the pane is empty for a reason the reader can act on. */
 export const ACTIVITY_EMPTY =
   'Nothing yet — agents post a line per turn once they restart on 0.1.124.';
-
-/** Who the card's reply box is addressed to when no user was handed over —
- *  a surface mounted before identity resolves. Never posted with. */
-const NOBODY: User = { id: '', name: 'you', kind: 'anon', color: '#888888' };
-
-/** The comment being written or shown on one group. `thread` is null while
- *  the words are still a draft — nothing has been posted yet — and `draft`
- *  is the thread-shaped stand-in the card shows meanwhile. Built ONCE, when
- *  the pill is tapped, and held here rather than rebuilt per paint: the card
- *  keys its DOM on the thread object, and a fresh object on every signal
- *  write (each board event carries a new `now`) would rebuild the card under
- *  the reader's typing. */
-interface OpenComment {
-  taskId: string;
-  phrase: string;
-  thread: Thread | null;
-  draft: Thread;
-}
 
 /**
  * `text` with `mark` wrapped the way a doc marks a thread's range — built
@@ -137,96 +118,6 @@ function NoteLine(props: { note: ActivityNote; mark?: string }) {
   );
 }
 
-/**
- * The real thread card, on the pane. `ThreadPanel.renderThread` is the one
- * card renderer every surface uses (the drawer, the redline margin, the
- * modal), and it is imperative DOM — so, like the walkthrough's PromptForm,
- * Preact owns the box and the card is built into it in a layout effect.
- *
- * Before the first post the card renders a DRAFT thread: the reader's own
- * name in the head, the phrase as the topic, no replies, the reply box. Its
- * Reply is what creates the thread; after that the card shows the thread
- * the server returned, and Reply posts to it.
- */
-function ThreadCard(props: {
-  thread: Thread;
-  user: User;
-  onReply: (text: string) => Promise<boolean>;
-  onFold: () => void;
-}) {
-  const host = useRef<HTMLDivElement | null>(null);
-  // Read at submit/fold time, never captured: the handlers close over the
-  // draft/thread this paint drew, and the box outlives the paint.
-  const latest = useRef(props);
-  latest.current = props;
-  // What the reply box held when the card was last torn down, handed to the
-  // rebuilt card the way `ThreadPanel.render` keeps `pendingReplies` — a
-  // rebuild (the reader's identity resolving, a draft becoming the posted
-  // thread) must never eat words being typed. A successful post empties the
-  // box before the thread changes, so nothing stale is ever restored.
-  const pending = useRef('');
-  const { thread, user } = props;
-  useLayoutEffect(() => {
-    const el = host.current;
-    if (!el) return;
-    const panel = new ThreadPanel({
-      // The panel's own list is never shown — the card is lifted out of it.
-      container: document.createElement('div'),
-      currentUser: user,
-      onThreadClick: (id) => panel.setActive(id),
-      onReply: (_id, text) => latest.current.onReply(text),
-      // One action only on this pane: the card's Resolve foot is hidden by
-      // CSS, and an open thread never offers Re-anchor.
-      onResolve: () => {},
-      onReopen: () => {},
-      onReanchor: () => {},
-      // The card folding shut (a tap on it, or its caret) is the one way a
-      // draft is put away besides Escape.
-      onActiveChange: (id) => {
-        if (id === null) latest.current.onFold();
-      },
-    });
-    panel.markSynced();
-    panel.setThreads([thread]);
-    panel.setActive(thread.id);
-    const card = panel.renderThread(thread);
-    const ta = card.querySelector<HTMLTextAreaElement>('textarea');
-    if (ta && pending.current !== '' && ta.value === '') ta.value = pending.current;
-    pending.current = '';
-    el.replaceChildren(card);
-    // The card's two slots take their height from the face they show; the
-    // margin and the drawer measure after insertion and on resize, so does
-    // this.
-    sizeThreadSlots(el);
-    const onResize = (): void => sizeThreadSlots(el);
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      pending.current = el.querySelector<HTMLTextAreaElement>('textarea')?.value ?? '';
-      el.replaceChildren();
-    };
-  }, [thread, user]);
-  return <div class="acti-thread" ref={host} />;
-}
-
-/** A thread that does not exist yet, shaped for the real card: the reader as
- *  its author, the phrase as its topic, nothing said. */
-function draftThread(taskId: string, phrase: string, user: User, now: number): Thread {
-  return {
-    id: `draft:${taskId}`,
-    status: 'open',
-    // Local only — never posted (`activityCommentRequest` sends a subject
-    // anchor and quotes the phrase). The card's topic line reads whichever
-    // anchor's snippet it is handed, and this is the one kind with a
-    // snippet and nothing else to satisfy.
-    anchor: { kind: 'review-item', reviewItemId: 'draft', snippet: { text: phrase } },
-    commentCount: 0,
-    lastActivity: now,
-    createdBy: user,
-    comments: [],
-  };
-}
-
 function Group(props: {
   group: ActivityGroup;
   handlers: ActivityHandlers;
@@ -236,7 +127,7 @@ function Group(props: {
   onClose: () => void;
 }) {
   const { group, handlers, open, user } = props;
-  const isOpen = open !== null && open.taskId === group.taskId;
+  const isOpen = open !== null && open.key === group.taskId;
   const mark = isOpen ? open.phrase : undefined;
   const openTask = (): void => {
     // A tap that ends a drag across the title is the end of a SELECTION,
@@ -356,7 +247,7 @@ function HomeActivity(props: { handlers: ActivityHandlers; user: User }) {
   const openCard = (): void => {
     if (!pill.phrase || !taskId) return;
     setOpen({
-      taskId,
+      key: taskId,
       phrase: pill.phrase,
       thread: null,
       draft: draftThread(taskId, pill.phrase, props.user, input.now),
