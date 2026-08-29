@@ -446,3 +446,48 @@ events (then `task.noted` joins the stream with its own noise class); the
 or fold); or the stall clock counting a chatty-but-stuck agent as moving
 (then only `status` notes count, and the hook's turn notes go back to being
 telemetry).
+
+## 2026-08-29 — A repeated auto-mode denial becomes ONE allow-rule review item; nothing writes settings
+
+Auto mode re-blocks the same command after every chat approval, so the
+third `git push` block in a week is the first one again. The plugin's
+PermissionDenied hook already posts each block as a `denial` note carrying
+only the command's shape, and the pane shows it; what was missing was the
+exit from the loop. Reversible calls, all in `packages/server/src/allow-rules.ts`:
+
+1. **Threshold 3 in 7 days, per (agent, shape).** `ALLOW_RULE_THRESHOLD` /
+   `ALLOW_RULE_WINDOW_MS`. One denial is a slip, two a coincidence, three a
+   loop. Counted from a tally the server keeps beside the workspace files,
+   not from either copy of the note: the per-agent ring is in-process,
+   capped at 20 notes of every kind and gone on restart, and the task notes
+   are capped at 200 per row from the old end — a busy row posts a turn
+   note every turn, so a week's denials on a chatty task can be evicted
+   before the third arrives (codex review caught this on the first cut).
+2. **One `decision` item per pair, on the task the third denial landed on.**
+   Headline `Allow "<shape>" for <agent> without asking?`; detail says what
+   was blocked, how often, on which tasks, and carries the paste-ready
+   `{ "permissions": { "allow": ["Bash(<shape>:*)"] } }` for
+   `~/.claude/settings.json` or the repo's `.claude/settings.json`, plus one
+   sentence on what it does NOT unlock. A non-Bash tool proposes the tool
+   name; the bare `Bash` shape (a command the hook could not reduce) proposes
+   nothing, because `Bash` alone would allow everything.
+3. **Dedupe and the `never` answer are read from the item itself.** The
+   sidecar (`<dataDir>/allow-rule-proposals.json`) holds each pair's denial
+   timestamps inside the window and which item was last filed; whether that
+   item is still open, or was answered "Never propose again", is read from
+   the review item — one record, the one a person touched. After "Keep
+   blocking" the tally restarts at the answer, so the question returns only
+   after three blocks the person had not yet seen.
+4. **No code path writes a settings file.** The rule is text in the detail;
+   pasting is the person's act, and an agent asked to do it says no. That is
+   what keeps "truly dangerous commands still stop" true.
+
+`docs/architecture/stall-detection.md` is unaffected: a filed item is an
+ordinary review item to the stall clock, and a denial note already counted
+as movement before this.
+
+**What would change the decision:** the threshold proving noisy (raise it,
+or widen the window); a person wanting the rule applied for them (that is a
+product decision about who holds the allowlist, not a bug here); or the
+sidecar and the items drifting (then the sidecar goes and the pair is found
+by scanning the items' headlines).
