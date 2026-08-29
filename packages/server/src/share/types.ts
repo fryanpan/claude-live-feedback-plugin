@@ -150,4 +150,10 @@ export interface ShareConfig {
   publicHostname?: string;
   /** Default TTL for new shares in seconds. Defaults to one week. */
   defaultTtlSeconds?: number;
+  /**
+   * Ceiling on any share's TTL, in seconds — a mint or an extension asking
+   * for more is clamped to this and told so (`ttlClamped` on the reply).
+   * Absent = no ceiling. `CF_SHARE_MAX_TTL` in bin.ts.
+   */
+  maxTtlSeconds?: number;
 }
