@@ -279,6 +279,22 @@ describe('home-activity island rendering', () => {
     host.remove();
   });
 
+  it('a denial tints the refused SHAPE only — "blocked: " stays prose, as the approved mock has it', () => {
+    const t = task({
+      id: 't-dn',
+      notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
+    });
+    const { host, unmount } = mount([t]);
+    const line = host.querySelector('.hub-activity-note-denial') as HTMLElement;
+    expect(line.textContent).toBe('blocked: git rm in this repo · 12m · Bike Map');
+    const shape = line.querySelector('.acti-text code.acti-shape');
+    expect(shape?.textContent).toBe('git rm in this repo');
+    // The prefix is outside the shape.
+    expect(line.querySelector('.acti-text')?.firstChild?.textContent).toBe('blocked: ');
+    unmount();
+    host.remove();
+  });
+
   it('a note that repeats an ask already in the queue above is not said twice', () => {
     const t = task({
       id: 't-ask',
@@ -483,6 +499,55 @@ describe('commenting on a note like a doc', () => {
     host.remove();
   });
 
+  it('a selection that runs across two groups is nobody’s: the pill stays hidden rather than dead', async () => {
+    const { host, unmount } = mount([
+      noteTask(),
+      task({ id: 't-d', title: 'Other task', notes: [note(MIN, 'Other work')] }),
+    ]);
+    const find = (phrase: string): Text => {
+      const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const t = walker.currentNode as Text;
+        if (t.data.includes(phrase)) return t;
+      }
+      throw new Error(`no text node holds “${phrase}”`);
+    };
+    const r = document.createRange();
+    r.setStart(find('download route'), 0);
+    r.setEnd(find('Other work'), 5);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(r);
+    document.dispatchEvent(new Event('selectionchange'));
+    await settle();
+    expect(pillShown(host)).toBe(false);
+    pillIn(host).click();
+    await tick();
+    expect(host.querySelector('.acti-thread')).toBeNull();
+    // Positive control: the same gesture inside ONE group shows it.
+    await select(host, 'Other work');
+    expect(pillShown(host)).toBe(true);
+    window.getSelection()?.removeAllRanges();
+    unmount();
+    host.remove();
+  });
+
+  it('the marked phrase lands inside a denial’s shape', async () => {
+    const { host, unmount } = mount([
+      task({
+        id: 't-dn',
+        notes: [note(12 * MIN, 'git rm in this repo', { kind: 'denial', agent: 'Bike Map' })],
+      }),
+    ]);
+    await select(host, 'git rm');
+    pillIn(host).click();
+    await tick();
+    const mark = host.querySelector('.acti-shape mark.thread-range');
+    expect(mark?.textContent).toBe('git rm');
+    unmount();
+    host.remove();
+  });
+
   it('a second selection replaces the open draft rather than stacking a card', async () => {
     const { host, unmount } = mount([
       noteTask(),
@@ -600,6 +665,14 @@ describe('the activity pane at 1180×820 spends a bounded number of lines', () =
     // The marked phrase gets the editor's range colours, which are scoped to
     // the editor and so have to be restated for the pane.
     expect(rule('.acti-group .thread-range')).toMatch(/background:/);
+  });
+
+  it('a denial’s mono/danger tint is on the shape, not the whole line', () => {
+    const shape = rule('.hub-activity-note-denial .acti-shape');
+    expect(shape, '.hub-activity-note-denial .acti-shape has no rule').not.toBe('');
+    expect(shape).toMatch(/font-family:\s*var\(--mono\)/);
+    expect(shape).toMatch(/background:\s*var\(--danger-bg\)/);
+    expect(rule('.hub-activity-note-denial .acti-text')).not.toMatch(/background:/);
   });
 
   it('the notes sit indented under the title, past the status mark', () => {

@@ -37,6 +37,9 @@ export const DARK_AFTER_MS = 45 * 60_000;
 /** The newest note text repeated this many times in a row reads as `stale`:
  *  the agent is reporting the same wait turn after turn. */
 export const STALE_REPEATS = 3;
+/** What a denial line starts with; the island splits on it to tint the
+ *  refused shape and leave the word as prose. */
+export const DENIAL_PREFIX = 'blocked: ';
 
 /**
  * The one badge a group may wear. `dark` beats `stale` beats `off-band`
@@ -130,7 +133,7 @@ function linesOf(task: HubTask, dropped: ReadonlySet<string>): ActivityNote[] {
     lines.push({
       at: n.at,
       age: '',
-      text: n.kind === 'denial' ? `blocked: ${n.text}` : n.text,
+      text: n.kind === 'denial' ? `${DENIAL_PREFIX}${n.text}` : n.text,
       agent: n.agent,
       kind: n.kind,
     });
@@ -163,29 +166,36 @@ function offBand(task: HubTask, goals: HubGoal[], rank: (goalId: string) => numb
   return false;
 }
 
-/** The newest note's text, repeated `STALE_REPEATS` times in a row. Reads
- *  the task's notes only — a status move between two repeats is not the
- *  agent saying something new. */
-function stale(notes: HubNote[]): boolean {
+/**
+ * The newest note's text, repeated `STALE_REPEATS` times in a row, over the
+ * lines the group SHOWS (newest first): inside the window, and minus any
+ * note the queue above already carries. A badge for repetition the reader
+ * cannot find in the group would be a lie — three "still waiting" lines
+ * from yesterday, or three that ARE the open ask in the queue, are not
+ * what this flag is for. Reads the notes only: a status move between two
+ * repeats is not the agent saying something new.
+ */
+function stale(lines: ActivityNote[]): boolean {
+  const notes = lines.filter((l) => l.kind !== 'move');
   if (notes.length < STALE_REPEATS) return false;
-  const sorted = [...notes].sort((a, b) => b.at - a.at);
-  const head = sameText(sorted[0]?.text ?? '');
+  const head = sameText(notes[0]?.text ?? '');
   if (head === '') return false;
   for (let i = 1; i < STALE_REPEATS; i += 1) {
-    if (sameText(sorted[i]?.text ?? '') !== head) return false;
+    if (sameText(notes[i]?.text ?? '') !== head) return false;
   }
   return true;
 }
 
 function flagOf(
   task: HubTask,
-  newestAt: number,
+  lines: ActivityNote[],
   goals: HubGoal[],
   rank: (goalId: string) => number,
   now: number,
 ): ActivityFlag | undefined {
+  const newestAt = lines[0]?.at ?? now;
   if (task.status === 'in-progress' && now - newestAt >= DARK_AFTER_MS) return 'dark';
-  if (stale(task.notes ?? [])) return 'stale';
+  if (stale(lines)) return 'stale';
   if (offBand(task, goals, rank)) return 'off-band';
   return undefined;
 }
@@ -218,7 +228,7 @@ export function homeActivity(input: ActivityInput): ActivityGroup[] {
       .sort((a, b) => b.at - a.at);
     if (lines.length === 0) continue;
     const newestAt = lines[0]?.at ?? since;
-    const flag = flagOf(task, newestAt, goals, rank, now);
+    const flag = flagOf(task, lines, goals, rank, now);
     groups.push({
       newestAt,
       group: {

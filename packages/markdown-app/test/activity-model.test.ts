@@ -181,6 +181,49 @@ describe('homeActivity', () => {
       expect(groups([brokenRun])[0]?.flag).toBeUndefined();
     });
 
+    it('stale reads only the notes the group SHOWS: a repeat the queue above already carries does not count', () => {
+      // The three repeats are the open ask in the review queue, so the pane
+      // drops them — a badge for repetition the reader cannot see anywhere in
+      // the group would be a lie.
+      const t = task({
+        id: 't-ask',
+        status: 'todo',
+        notes: [
+          note(1 * MIN, 'Still waiting on login'),
+          note(2 * MIN, 'Still waiting on login'),
+          note(3 * MIN, 'Still waiting on login'),
+          note(10 * MIN, 'Migrated the cache'),
+        ],
+      });
+      const out = groups([t], { asks: [{ taskId: 't-ask', text: 'Still waiting on login' }] });
+      expect(out[0]?.notes.map((n) => n.text)).toEqual(['Migrated the cache']);
+      expect(out[0]?.flag).toBeUndefined();
+      // The same three repeats with nothing in the queue are stale.
+      expect(groups([t])[0]?.flag).toBe('stale');
+    });
+
+    it('stale reads only notes inside the window: yesterday’s repeats do not flag today’s move', () => {
+      const t = task({
+        status: 'in-progress',
+        notes: [
+          note(28 * HOUR, 'Still waiting on login'),
+          note(29 * HOUR, 'Still waiting on login'),
+          note(30 * HOUR, 'Still waiting on login'),
+        ],
+        transitions: [
+          {
+            ts: NOW - 10 * MIN,
+            from: 'todo',
+            to: 'in-progress',
+            by: { name: 'Quick Build', kind: 'agent' },
+          },
+        ],
+      });
+      const out = groups([t]);
+      expect(out[0]?.notes.map((n) => n.text)).toEqual(['→ in-progress']);
+      expect(out[0]?.flag).toBeUndefined();
+    });
+
     it('stale reads the notes only — a status move between repeats does not break the run', () => {
       const t = task({
         status: 'todo',

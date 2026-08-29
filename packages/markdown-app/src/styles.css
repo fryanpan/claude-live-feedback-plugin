@@ -2525,10 +2525,11 @@ body.hub-body {
 .hub-activity-note .acti-text {
   color: var(--fg);
 }
-/* A denial reads as the refusal it was: the shape tinted the way the
-   blocked note is. A move ("→ in-progress", "handed to X") stays muted —
-   it is movement, not a message. */
-.hub-activity-note-denial .acti-text {
+/* A denial reads as the refusal it was: the refused SHAPE tinted, as the
+   approved mock draws it, with "blocked:" left as prose. A move
+   ("→ in-progress", "handed to X") stays muted — it is movement, not a
+   message. */
+.hub-activity-note-denial .acti-shape {
   font-family: var(--mono);
   font-size: 11.5px;
   background: var(--danger-bg);

@@ -31,6 +31,7 @@ import {
   type ActivityGroup,
   type ActivityInput,
   type ActivityNote,
+  DENIAL_PREFIX,
   homeActivity,
 } from './activity-model.ts';
 import { selectWordAtPoint, useSelectionPill } from './selection-pill.ts';
@@ -89,12 +90,34 @@ function Marked(props: { text: string; mark?: string }) {
   );
 }
 
+/**
+ * A denial's text, the way the approved mock draws it: the word as prose,
+ * the refused SHAPE tinted. Each half is marked on its own, so a phrase
+ * that straddles the boundary renders unmarked rather than half-marked.
+ */
+function DenialText(props: { text: string; mark?: string }) {
+  const { text, mark } = props;
+  if (!text.startsWith(DENIAL_PREFIX)) return <Marked text={text} mark={mark} />;
+  return (
+    <>
+      <Marked text={DENIAL_PREFIX} mark={mark} />
+      <code class="acti-shape">
+        <Marked text={text.slice(DENIAL_PREFIX.length)} mark={mark} />
+      </code>
+    </>
+  );
+}
+
 function NoteLine(props: { note: ActivityNote; mark?: string }) {
   const { note, mark } = props;
   return (
     <div class={`hub-activity-note hub-activity-note-${note.kind}`}>
       <span class="acti-text">
-        <Marked text={note.text} mark={mark} />
+        {note.kind === 'denial' ? (
+          <DenialText text={note.text} mark={mark} />
+        ) : (
+          <Marked text={note.text} mark={mark} />
+        )}
       </span>
       {' · '}
       <span class="acti-age">{note.age}</span>
@@ -302,8 +325,14 @@ function HomeActivity(props: { handlers: ActivityHandlers; user: User }) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
+  // The group the selection sits in. A drag that runs from one group into
+  // the next has no single group — its common ancestor is the list — and
+  // the words it holds are two tasks' worth; the pill stays hidden for it
+  // rather than sitting there as a dead tap.
+  const taskId = pill.phrase
+    ? pill.at?.closest<HTMLElement>('.acti-group')?.dataset.taskId
+    : undefined;
   const openCard = (): void => {
-    const taskId = pill.at?.closest<HTMLElement>('.acti-group')?.dataset.taskId;
     if (!pill.phrase || !taskId) return;
     setOpen({ taskId, phrase: pill.phrase, thread: null });
     pill.clear();
@@ -337,7 +366,7 @@ function HomeActivity(props: { handlers: ActivityHandlers; user: User }) {
           left alone, since cancelling it cancels the click on iOS). */}
       <button
         type="button"
-        class={`comment-pill acti-pill${pill.phrase ? '' : ' hidden'}`}
+        class={`comment-pill acti-pill${taskId ? '' : ' hidden'}`}
         style={{ left: `${pill.place.left}px`, top: `${pill.place.top}px` }}
         aria-label="Comment on this"
         onMouseDown={(ev) => ev.preventDefault()}
