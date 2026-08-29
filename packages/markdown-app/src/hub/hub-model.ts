@@ -147,6 +147,33 @@ export interface HubTask {
    *  decision — see `decisionAskedBy`. */
   createdBy?: string;
   updatedAt: number;
+  /**
+   * The ticket's review items as the server projects them (`projectReviews`
+   * — display names only). The panel's QUEUE still comes from the
+   * review-items route, which is where "waiting on the reader" is decided;
+   * this array is read for the one thing that route deliberately omits: an
+   * item the quality gate is HOLDING, which the ticket shows with its reason
+   * so the reader can see a question is coming. Absent when there are none,
+   * and on a projection from a server older than the field.
+   */
+  reviews?: HubReviewItem[];
+}
+
+/** A projected review item, as far as the hub reads it. */
+export interface HubReviewItem {
+  id: string;
+  review: { headline: string; detail?: string };
+  createdBy?: string;
+  /** Present when it has been answered; the hold is moot then. */
+  answer?: { text: string };
+  /** The quality gate's verdict on the current words. `held` is the one
+   *  that shows on the ticket. */
+  judge?: { at: number; verdict: 'ok' | 'held' | 'unavailable'; reason: string };
+}
+
+/** Review items the quality gate is holding — on the ticket, off the queue. */
+export function heldReviewItems(task: HubTask): HubReviewItem[] {
+  return (task.reviews ?? []).filter((r) => r.answer === undefined && r.judge?.verdict === 'held');
 }
 
 export interface HubSubgoal {
