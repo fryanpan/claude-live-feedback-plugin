@@ -234,6 +234,37 @@ describe('review-item comments and revisions', () => {
       expect((await queueRows(ws, task.id)).map((r) => r.state)).toEqual(['open']);
     });
 
+    it('refuses a second question while the item is already waiting, naming the open thread', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedTask(ws);
+      const itemId = await seedItem(task.id);
+      const threadId = await ask(task.id, itemId);
+      expect(await queueRows(ws, task.id)).toEqual([]);
+
+      const again = await post(`/api/docs/task:${task.id}/threads`, {
+        anchor: anchorFor(itemId),
+        text: 'What about a cold cache?',
+        author: PERSON,
+      });
+      expect(again.status).toBe(409);
+      const body = (await again.json()) as { error?: string; message?: string; threadId?: string };
+      expect(body.error).toBe('waiting');
+      expect(body.threadId).toBe(threadId);
+      expect(body.message).toContain('Already waiting on');
+
+      // Nothing extra was written — still exactly one info request, and the
+      // second question never became a thread.
+      const item = await storedItem(ws, task.id, itemId);
+      expect(item.infoRequests?.length).toBe(1);
+      expect(item.infoRequests?.[0]?.text).toBe('Twice per what — per night?');
+      expect(await queueRows(ws, task.id)).toEqual([]);
+
+      // POSITIVE CONTROL: revise, and asking again succeeds — this is the
+      // same scenario the sibling "second question after a revision" test
+      // already covers end to end (stays green below), proving the refusal
+      // above is keyed on 'waiting' rather than on "has ever been asked".
+    });
+
     it('404s an item the ticket does not carry, and 400s the anchor on a non-task doc', async () => {
       const ws = await seedWorkspace();
       const task = await seedTask(ws);

@@ -23,6 +23,7 @@ import {
   readReviewPayload,
   reviewGapAdvice,
   reviewIdOf,
+  reviewItemState,
   reviewPayloadMessage,
   suggestOps,
   summaryHash,
@@ -7819,6 +7820,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const wanted = anchor.reviewItemId;
               const item = taskStore.listReviewItems(taskId).find((r) => r.id === wanted);
               if (!item) return j(404, { error: 'unknown-review-item' });
+              // One open question at a time. A second anchored ask while the
+              // item is already `waiting` would orphan the first — `revise`
+              // only reads the NEWEST threaded question (`latestThreadedQuestion`),
+              // so a buried one could never be answered. Refused before the
+              // thread is created (not just before the info-request stamp),
+              // so a refusal never leaves an orphan thread with nothing
+              // recorded against it.
+              if (reviewItemState(item) === 'waiting') {
+                const openThreadId = latestThreadedQuestion(item)?.threadId;
+                const owner = item.createdBy.trim() || 'the owner';
+                return j(409, {
+                  error: 'waiting',
+                  message: `Already waiting on ${owner} — add to the open thread instead`,
+                  ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
+                });
+              }
               const range = locateReviewItemRange(item.review.detail, {
                 text: anchor.snippet.text,
                 ...(anchor.start !== undefined ? { start: anchor.start } : {}),

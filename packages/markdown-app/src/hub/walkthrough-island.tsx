@@ -692,7 +692,6 @@ function WalkCard(props: {
   // no pill at all rather than a pill that opens nothing.
   const anchorable = reviewItemAnchorTarget(item) !== null;
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const pill = useSelectionPill(bodyRef, anchorable);
   // The phrase the thread card is open on, and the question this card sent
   // (until the server's row catches up — the hold in hub-app carries
   // `item.waiting` across repaints; this is the same fact one render early).
@@ -704,6 +703,11 @@ function WalkCard(props: {
   // note would be stale.
   const waiting =
     item.waiting ?? (asked && !(item.revision && item.revision.at >= asked.at) ? asked : null);
+  // A second question cannot be filed while the item is already waiting on
+  // its owner — the server refuses it (409 `waiting`), and a pill that only
+  // bounces is worse than none. Computed from the SAME `waiting` the note
+  // reads, so the two can never disagree about whose turn it is.
+  const pill = useSelectionPill(bodyRef, anchorable && !waiting);
   const openThread = (): void => {
     if (!pill.phrase) return;
     setDraft(pill.phrase);
@@ -801,12 +805,14 @@ function WalkCard(props: {
                   bodyRef={bodyRef}
                   mark={revisedPhrase(item)}
                 />
-                {anchorable && (
+                {anchorable && !waiting && (
                   // The editor's pill, on the card: fixed-position, placed by
                   // the hook beside the selection's end. `mousedown` is
                   // swallowed so the tap does not blur the selection before
                   // the click lands (the editor's pill does the same; touch is
                   // left alone, since cancelling it cancels the click on iOS).
+                  // Absent entirely while the item is waiting on its owner —
+                  // see the note where `waiting` is computed above.
                   <button
                     type="button"
                     class={`comment-pill hub-walk-pill${pill.phrase ? '' : ' hidden'}`}
