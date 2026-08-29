@@ -1,7 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { walkHandoff, walkNextUrl } from '../src/hub/hub-model';
+import {
+  CHORES_ID,
+  type HubTask,
+  type ReviewQueue,
+  type ReviewThreadItem,
+  reviewQueue,
+  walkHandoff,
+  walkHandoffReady,
+  walkNextUrl,
+  walkPosition,
+} from '../src/hub/hub-model';
 
 // The landing page's review chip and "Review all" bar (the walkthrough
 // handoff ticket) hand
@@ -55,7 +65,7 @@ describe('hub-app wires the handoff', () => {
   it('auto-opens the walkthrough after the first review-items load', () => {
     // `deepLinkTick` bundles the ?walk= flag with the ?item= boot deep link —
     // both wait on the same queue, so they share every retry hook.
-    expect(src).toMatch(/loadReviewItems\(\)\.then\(deepLinkTick\)/);
+    expect(src).toMatch(/loadReviewItems\(\)\.then\([\s\S]{0,120}deepLinkTick\(\)/);
     expect(src).toMatch(/const deepLinkTick[\s\S]{0,80}maybeAutoWalk\(\)/);
   });
 
@@ -74,5 +84,125 @@ describe('hub-app wires the handoff', () => {
 
   it('an empty queue leaves the flag armed until the deadline', () => {
     expect(src).toContain('WALK_HANDOFF_DEADLINE_MS');
+  });
+});
+
+// ── Where the handoff walk STARTS ──────────────────────────────────────────
+//
+// The walk aims by item KEY (walkPosition), and the key is chosen from the
+// queue as it stands when the walk opens. On a cold load the two halves of
+// the queue land separately: the REST review-items list and the ydoc task
+// projection. A queue built from review items alone has no tasks to rank
+// against, so every item takes the tail rank ordered by age — and a walk that
+// opened on it aimed at the OLDEST ask. When the projection landed, the key
+// followed that ask to its real rank, which is the bottom of the queue:
+// "Review all" opened on N of N. All fixtures are synthetic.
+
+const NOW = 1_700_000_000_000;
+
+function task(id: string, order: number): HubTask {
+  return {
+    id,
+    title: `Task ${id}`,
+    status: 'todo',
+    assignee: 'agent',
+    goal: CHORES_ID,
+    order,
+    after: [],
+    links: [],
+    transitions: [],
+    bodyDocId: `task:${id}`,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
+
+function ask(taskId: string, ageMs: number): ReviewThreadItem {
+  return {
+    kind: 'task-thread',
+    docId: `task:${taskId}`,
+    threadId: `th-${taskId}`,
+    taskId,
+    title: `Task ${taskId}`,
+    ask: `Question on ${taskId}?`,
+    askedBy: 'Helper',
+    since: NOW - ageMs,
+    band: 'declared',
+    commentId: `c-${taskId}`,
+    review: { shape: 'review', headline: `Question on ${taskId}?`, detail: '' },
+  };
+}
+
+// Board order is t-1, t-2, t-3; the OLDEST ask is on the LAST task.
+const tasks = [task('t-1', 1), task('t-2', 2), task('t-3', 3)];
+const asks = [ask('t-1', 60_000), ask('t-2', 120_000), ask('t-3', 180_000)];
+const reviewItemsOnly = () => reviewQueue([], asks, NOW);
+const fullQueue = () => reviewQueue(tasks, asks, NOW);
+
+/** What `startWalkthrough` does: aim at the head of the queue it sees. */
+const startAt = (queue: ReviewQueue) => ({ index: 0, key: queue.items[0]?.key ?? null });
+
+describe('the handoff walk starts at item 1', () => {
+  it('the mechanism: a walk opened on review items alone lands on the tail once tasks rank it', () => {
+    const aim = startAt(reviewItemsOnly());
+    // The premise the bug rests on — without tasks, the oldest ask is first.
+    expect(aim.key).toBe('task-thread:task:t-3:th-t-3');
+    expect(walkPosition(fullQueue(), aim.index, aim.key)).toBe(2); // "3 of 3"
+  });
+
+  it('waits for both halves of the queue before opening', () => {
+    const partial = reviewItemsOnly();
+    expect(partial.items).toHaveLength(3);
+    expect(walkHandoffReady(partial, { reviewItems: true, projection: false })).toBe(false);
+    expect(walkHandoffReady(fullQueue(), { reviewItems: false, projection: true })).toBe(false);
+    const full = fullQueue();
+    expect(walkHandoffReady(full, { reviewItems: true, projection: true })).toBe(true);
+    // Entering from Home with a 3-item queue: item 1 of 3.
+    const aim = startAt(full);
+    expect(walkPosition(full, aim.index, aim.key)).toBe(0);
+    expect(full.items[0]?.key).toBe('task-thread:task:t-1:th-t-1');
+  });
+
+  it('an empty queue is never ready — the flag stays armed for the projection', () => {
+    expect(
+      walkHandoffReady(reviewQueue([], [], NOW), { reviewItems: true, projection: true }),
+    ).toBe(false);
+  });
+
+  it('the deadline opens on whatever has landed rather than hopping a board that has items', () => {
+    const partial = reviewItemsOnly();
+    expect(walkHandoffReady(partial, { reviewItems: true, projection: false }, true)).toBe(true);
+    expect(
+      walkHandoffReady(reviewQueue([], [], NOW), { reviewItems: true, projection: false }, true),
+    ).toBe(false);
+  });
+
+  // Positive control: a deep link (`?item=<key>`) aims by key and is NOT
+  // gated on the sources — `maybeOpenBootItem` waits for that item itself.
+  it('a deep link to item 2 still opens item 2', () => {
+    const full = fullQueue();
+    const key = full.items[1]?.key ?? null;
+    expect(key).toBe('task-thread:task:t-2:th-t-2');
+    // openInQueue(item, idx) — and the key keeps the aim across a re-rank.
+    expect(walkPosition(full, 1, key)).toBe(1); // "2 of 3"
+    expect(walkPosition(reviewItemsOnly(), 1, key)).toBe(1);
+  });
+});
+
+describe('hub-app gates the auto-walk on both sources', () => {
+  const src = readFileSync(join(__dirname, '..', 'src', 'hub', 'hub-app.ts'), 'utf8');
+
+  it('maybeAutoWalk asks walkHandoffReady, not queue length', () => {
+    expect(src).toMatch(/const maybeAutoWalk[\s\S]{0,900}walkHandoffReady\(/);
+  });
+
+  it('the ydoc sync (onReady, empty doc included) marks the projection landed and re-ticks', () => {
+    expect(src).toMatch(
+      /client\.onReady\([\s\S]{0,600}walkSources\.projection = true[\s\S]{0,200}autoWalkTick\?\.\(\)/,
+    );
+  });
+
+  it('the first review-items load marks that half landed before ticking', () => {
+    expect(src).toMatch(/walkSources\.reviewItems = true[\s\S]{0,120}deepLinkTick\(\)/);
   });
 });
