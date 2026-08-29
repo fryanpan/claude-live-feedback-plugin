@@ -249,14 +249,19 @@ function ReviewCard(props: {
   const { task, item, handlers, now, shown } = props;
   const [busy, setBusy] = useState(false);
 
-  // Answering a thread-borne item is a REPLY on its thread, so the agent
-  // watching it hears the answer; answering the task's own decision goes
-  // through `answer_decision`. Same card, two destinations — which is the
-  // whole reason the item carries `threadId`.
+  // Answering the task's own decision goes through `answer_decision`; every
+  // other card — a thread-borne item, answered by a REPLY on its thread so the
+  // agent watching it hears it, or a ticket-borne item, answered at the task
+  // review-item route — goes through the item handler, which reads the
+  // destination off the item (`panelAnswerRequest`). Keyed on `source`, not
+  // on `threadId`: a ticket-borne card has no thread, and the old test sent it
+  // to the decision route, where its answer would have landed on the WRONG
+  // question.
   const answer = (text: string, optionId?: string): Promise<boolean> | undefined => {
-    const sent = item.threadId
-      ? handlers.onAnswerThread?.(task, item, text, optionId)
-      : handlers.onAnswer(task, text, optionId);
+    const sent =
+      item.source === 'task'
+        ? handlers.onAnswer(task, text, optionId)
+        : handlers.onAnswerThread?.(task, item, text, optionId);
     return sent;
   };
 
@@ -293,6 +298,10 @@ function ReviewCard(props: {
         >
           {item.shape === 'decision' ? 'Decision' : 'Question'}
         </span>
+        {/* The owner revised the words after the reader asked on them: the
+            item is back in the queue and says so, beside its kind rather than
+            instead of it — the walkthrough's own treatment. */}
+        {item.revision && <span class="hub-decide-k hub-decide-k-revised">Revised</span>}
         {!(echoesTitle && bodyMarkdown !== '') && (
           <p class="hub-decide-headline">{item.headline}</p>
         )}
@@ -300,6 +309,12 @@ function ReviewCard(props: {
           {askedMetaLine(item.askedBy, item.asked ?? true, item.since, now)}
         </p>
       </div>
+      {/* The reader asked in their own words; the card gives those words
+          back so "what did I ask?" is answered before "what changed?". The
+          thread itself is in the discussion below — this is its panel. */}
+      {item.revision?.question !== undefined && (
+        <blockquote class="hub-decide-question">{`You asked: “${item.revision.question}”`}</blockquote>
+      )}
       {bodyMarkdown !== '' && (
         <div
           class="hub-decide-body"

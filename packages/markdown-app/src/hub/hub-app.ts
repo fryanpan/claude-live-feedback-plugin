@@ -93,6 +93,7 @@ import {
   type TaskDiscussion,
   type TaskThread,
   discussionIsBusy,
+  panelAnswerRequest,
   renderActivity,
   renderArchivedList,
   renderHomeBrief,
@@ -1348,8 +1349,9 @@ async function main(): Promise<void> {
         ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
         // This task's rows from the review queue the strip already reads, so
         // the panel says the same thing the row that sent them here said.
-        // `panelAsks` owns which rows qualify — by taskId, and only the kinds
-        // whose answer path this panel actually implements.
+        // `panelAsks` owns which rows qualify — by taskId, thread-borne and
+        // ticket-borne alike, minus the derived legacy copy of the task's own
+        // decision.
         asks: task ? panelAsks(state.reviewItems, task.id) : [],
         // A blocker is task state (design point 5): when the open task is a
         // person's own open work other tasks wait on, the panel — and only
@@ -2069,14 +2071,17 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Answer an item the panel's queue got from a THREAD.
+   * Answer an item the panel's queue got from a THREAD or from the TICKET.
    *
-   * Same two routes the walkthrough uses, for the same reason: a declared item
-   * records the answer against its declaring comment, an inferred one is
+   * Same routes the walkthrough uses, for the same reason: a declared thread
+   * item records the answer against its declaring comment, an inferred one is
    * answered by replying, and in both cases the REPLY is what takes the item
-   * out of the queue. The panel used to send this through the plain comment
-   * handler, which has nowhere to put the picked option and left the queue
-   * showing an item that had just been answered.
+   * out of the queue; a ticket-borne item is stamped at the task review-item
+   * route, which drops it from every queue's next read. The panel used to
+   * send this through the plain comment handler, which has nowhere to put the
+   * picked option and left the queue showing an item that had just been
+   * answered. ONE spelling of the destination — `panelAnswerRequest` — so a
+   * card with no thread cannot post at `/threads/undefined/…`.
    */
   async function answerPanelThreadItem(
     task: HubTask,
@@ -2084,26 +2089,18 @@ async function main(): Promise<void> {
     text: string,
     optionId?: string,
   ): Promise<boolean> {
-    const docId = item.docId ?? task.bodyDocId;
-    if (!item.threadId) return false;
-    const doc = encodeURIComponent(docId);
-    const thread = encodeURIComponent(item.threadId);
-    const res =
-      item.declared && item.commentId !== undefined
-        ? await send(`/api/docs/${doc}/threads/${thread}/answer`, 'POST', {
-            author,
-            text,
-            commentId: item.commentId,
-            ...(optionId !== undefined ? { optionId } : {}),
-          })
-        : await send(`/api/docs/${doc}/threads/${thread}/comments`, 'POST', { author, text });
+    const reqSpec = panelAnswerRequest(task, item, text, optionId);
+    if (!reqSpec) return false;
+    const res = await send(reqSpec.path, 'POST', { ...reqSpec.body, author });
     if (!res.ok) {
       showToast('Posting the answer failed — your text is still in the box');
       return false;
     }
     showToast('Answer posted');
-    // Both, and in this order: the discussion so the reply appears in the
-    // stream below, the review items so the card it answered leaves the queue.
+    // Both, and in this order: the discussion so a reply appears in the
+    // stream below (a ticket-borne answer writes no comment, but the reload
+    // is cheap and keeps one path), the review items so the card it answered
+    // leaves the queue.
     await loadDiscussion(task, true);
     await loadReviewItems();
     return true;
