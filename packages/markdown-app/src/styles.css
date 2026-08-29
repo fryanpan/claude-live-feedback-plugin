@@ -4036,6 +4036,23 @@ a.hub-link-chip:hover {
   color: var(--accent);
   background: var(--accent-wash, rgba(59, 111, 212, 0.07));
 }
+/* The owner revised the item after the reader asked on it — the same
+   resolved-range green as `.hub-walk-k-revised`, beside the kind badge. */
+.hub-decide-k-revised {
+  color: #1f7a3a;
+  background: rgba(45, 164, 78, 0.12);
+}
+/* A revised item's question, quoted under the head — the walkthrough's
+   `.hub-walk-question-text`, on the panel's card. */
+.hub-decide-question {
+  margin: 0 0 10px;
+  padding: 0 0 0 8px;
+  border-left: 2px solid rgba(45, 164, 78, 0.45);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
 .hub-decide-headline {
   margin: 0;
   flex: 1;
