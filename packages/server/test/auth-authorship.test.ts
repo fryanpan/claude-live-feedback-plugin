@@ -152,10 +152,31 @@ describe('with CW_REQUIRE_EMAIL_AUTH on', () => {
 });
 
 describe('with the flag off (the default)', () => {
-  it('attributes a cookie-carrying request exactly as it does today', async () => {
+  it('a verified session still wins over the claimed body — the flag governs REQUIREMENT, not attribution', async () => {
+    // Bryan, 2026-08-29: a verified name is never worse than a typed one.
+    // Signing in without the requirement on used to change nothing about
+    // who a comment was attributed to, so the browser kept minting anon-*
+    // for a person the server had just verified.
     const { base, dataDir } = boot();
     const cookie = await signIn(base, 'reviewer@example.com');
     await commentAsBryan(base, dataDir, 'flagoff-doc', cookie);
+    const [row] = rowsFor(dataDir, 'comment');
+    expect(row?.actorId).toBe(emailIdentityId('reviewer@example.com'));
+    expect(row?.actorName).toBe('Reviewer');
+    // On the thread too, not only in the activity stream.
+    const listed = await fetch(`${base}/api/docs/flagoff-doc/threads`);
+    const { threads } = (await listed.json()) as {
+      threads: Array<{ comments: Array<{ author: { id: string; name: string } }> }>;
+    };
+    expect(threads[0]?.comments[0]?.author).toMatchObject({
+      id: emailIdentityId('reviewer@example.com'),
+      name: 'Reviewer',
+    });
+  });
+
+  it('POSITIVE CONTROL: with no cookie the body is trusted, flag off', async () => {
+    const { base, dataDir } = boot();
+    await commentAsBryan(base, dataDir, 'flagoff-nocookie-doc');
     expect(rowsFor(dataDir, 'comment')[0]?.actorId).toBe('known-bryan');
   });
 });

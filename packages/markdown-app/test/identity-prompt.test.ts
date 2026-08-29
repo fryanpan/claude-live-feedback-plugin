@@ -106,3 +106,54 @@ describe('ensureUserIdentity', () => {
     expect(user.name).toBe('Casey');
   });
 });
+
+describe('ensureUserIdentity follows the signed-in session', () => {
+  it('a verified session is the identity, with no prompt and no anon id', async () => {
+    const s = mockStorage();
+    const user = await ensureUserIdentity(null, s, {
+      fetchSession: async () => ({
+        authenticated: true,
+        user: { id: 'user-abc123', name: 'Reviewer', kind: 'known', color: '#123456' },
+      }),
+    });
+    expect(user.id).toBe('user-abc123');
+    expect(user.name).toBe('Reviewer');
+    expect(document.querySelector('.identity-prompt')).toBeNull();
+    // The name is stored where the chip and the rest of the app read it.
+    expect(s.get('feedback-user-name')).toBe('Reviewer');
+  });
+
+  it('the signed-in name wins over a name this browser typed earlier', async () => {
+    const s = mockStorage();
+    s.set('feedback-user-name', 'Casey');
+    const user = await ensureUserIdentity(null, s, {
+      fetchSession: async () => ({
+        authenticated: true,
+        user: { id: 'user-abc123', name: 'Reviewer', kind: 'known', color: '#123456' },
+      }),
+    });
+    expect(user.name).toBe('Reviewer');
+    expect(user.id).toBe('user-abc123');
+  });
+
+  it('POSITIVE CONTROL: not signed in falls back to the stored name and stable anon id', async () => {
+    const s = mockStorage();
+    s.set('feedback-user-name', 'Casey');
+    const user = await ensureUserIdentity(null, s, {
+      fetchSession: async () => ({ authenticated: false }),
+    });
+    expect(user.name).toBe('Casey');
+    expect(user.id.startsWith('anon-')).toBe(true);
+  });
+
+  it('a session lookup that throws is not signed in', async () => {
+    const s = mockStorage();
+    s.set('feedback-user-name', 'Casey');
+    const user = await ensureUserIdentity(null, s, {
+      fetchSession: async () => {
+        throw new Error('offline');
+      },
+    });
+    expect(user.name).toBe('Casey');
+  });
+});
