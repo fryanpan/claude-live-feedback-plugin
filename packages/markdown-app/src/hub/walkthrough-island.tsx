@@ -54,9 +54,12 @@ import {
   askedMeta,
   reviewCardHeadline,
   reviewHeadline,
+  reviewItemAnchorTarget,
   reviewItemBadge,
   reviewRowTitle,
+  revisedPhrase,
 } from './hub-model.ts';
+import { markPhrase, pillPlace, selectedPhraseIn, unmarkPhrase } from './review-item-phrase.ts';
 
 // ── The contract with the vanilla loader ───────────────────────────────────
 
@@ -69,10 +72,12 @@ export interface WalkthroughHandlers {
    *  refused write must leave the reader on the card with their words still in
    *  the box, which is the one direction that cannot lose anything. */
   onAnswer: (task: HubTask, text: string, optionId?: string) => Promise<boolean>;
-  /** "I can't answer this yet" — a question back to the asker, not an answer.
-   *  Deliberately does NOT advance: the decision stays open and this card is
-   *  still the one that needs you. */
-  onMoreInfo: (task: HubTask, question: string) => Promise<boolean>;
+  /** A question asked ON a phrase of a ticket-borne review item — doc-style,
+   *  the way "Tell me more" now works (Bryan, 2026-08-29). Opens a thread
+   *  anchored to that phrase of that item; the item then waits on its owner.
+   *  Deliberately does NOT advance: nothing was answered, and the card stays
+   *  where the reader is with the note that it is waiting. */
+  onAskOnItem: (item: ReviewItem, phrase: { text: string }, question: string) => Promise<boolean>;
   /** Answer a thread without leaving the queue. Posts a reply on the thread the
    *  item came from, wherever that thread lives. `optionId` rides along when
    *  the reply came from tapping one of a declared item's candidates — the same
@@ -82,6 +87,9 @@ export interface WalkthroughHandlers {
   /** Go to the exact place instead of answering here — the task's discussion at
    *  that thread, the doc anchored on that comment. */
   onOpenItem: (item: ReviewItem) => void;
+  /** Go to the thread a revised item's question lives on — the reader's
+   *  question and the owner's reply, where they were written. */
+  onOpenThread: (item: ReviewItem) => void;
   /** Move to another position in the queue (skip forward, step back). */
   onStep: (index: number) => void;
   onClose: () => void;
@@ -123,9 +131,10 @@ export interface WalkthroughView {
  *  these to anything. */
 const IDLE_HANDLERS: WalkthroughHandlers = {
   onAnswer: () => Promise.resolve(false),
-  onMoreInfo: () => Promise.resolve(false),
+  onAskOnItem: () => Promise.resolve(false),
   onReply: () => Promise.resolve(false),
   onOpenItem: () => {},
+  onOpenThread: () => {},
   onStep: () => {},
   onClose: () => {},
 };
@@ -373,6 +382,10 @@ function WalkCardHead(props: { item: ReviewItem; now: number }) {
   return (
     <div class="hub-walk-card-head">
       <span class={`hub-walk-k hub-walk-k-${badge.tone}`}>{badge.label}</span>
+      {/* The owner revised the words after the reader asked on them: the
+          item is back in the queue and says so, beside its kind rather than
+          instead of it. */}
+      {item.revision && <span class="hub-walk-k hub-walk-k-revised">Revised</span>}
       {/* The QUESTION, not the subject — the same title the queue row shows, so
           tapping a row and stepping onto it cannot read as two different items.
           A DECLARED headline is already a heading and goes through untouched —
@@ -475,17 +488,37 @@ function WalkReviewBody(props: {
   review: NonNullable<ReviewItem['review']>;
   expanded: boolean;
   onExpand: () => void;
+  /** The body's node, for whoever reads the selection inside it. */
+  bodyRef?: MutableRef<HTMLDivElement | null>;
+  /** The revised phrase to mark — the editor's resolved-range treatment on
+   *  the words the owner changed. Left unmarked when it cannot be found. */
+  mark?: string;
 }) {
+  const own = useRef<HTMLDivElement | null>(null);
+  const bodyRef = props.bodyRef ?? own;
   const markdown = reviewItemBodyMarkdown(props.review);
+  const html = markdown === '' ? '' : renderCommentMarkdown(markdown);
+  const mark = props.mark;
+  // After the HTML is in place (and again whenever it or the phrase
+  // changes): take the old mark out, put the new one in. A mark is
+  // presentation over Preact-owned innerHTML — Preact only rewrites that
+  // string when it changes, so the wrapping survives an ordinary repaint.
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    if (mark) markPhrase(el, mark);
+    else unmarkPhrase(el);
+  }, [bodyRef, html, mark]);
   if (markdown === '') return null;
   const clamped =
     !props.expanded && markdown.split(/\s+/).length > REVIEW_LIMITS.detailTargetWords.review;
   return (
     <Fragment>
       <div
+        ref={bodyRef}
         class={clamped ? 'hub-walk-body hub-walk-body-clamp' : 'hub-walk-body'}
         // biome-ignore lint/security/noDangerouslySetInnerHtml: renderCommentMarkdown escapes first and re-adds only known-safe tags.
-        dangerouslySetInnerHTML={{ __html: renderCommentMarkdown(markdown) }}
+        dangerouslySetInnerHTML={{ __html: html }}
       />
       {clamped && (
         <button type="button" class="hub-walk-body-expand" onClick={props.onExpand}>
@@ -493,6 +526,142 @@ function WalkReviewBody(props: {
         </button>
       )}
     </Fragment>
+  );
+}
+
+/**
+ * A revised item's question, quoted under the headline, with the way to the
+ * thread it was asked on. The reader asked in their own words; the card
+ * gives those words back so "what did I ask?" is answered before "what
+ * changed?" — the mark in the body answers that one.
+ */
+function WalkRevision(props: { item: ReviewItem; handlers: WalkthroughHandlers }) {
+  const rev = props.item.revision;
+  if (!rev) return null;
+  return (
+    <div class="hub-walk-question">
+      {rev.question !== undefined && (
+        <blockquote class="hub-walk-question-text">{`You asked: “${rev.question}”`}</blockquote>
+      )}
+      {rev.threadId !== undefined && (
+        <button
+          type="button"
+          class="hub-walk-thread-link"
+          onClick={() => props.handlers.onOpenThread(props.item)}
+        >
+          See thread ↗
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Waiting on Helper" — the item is the owner's to move now. Subtle on
+ * purpose: the card stays exactly where it was (no collapse, no advance), and
+ * this one line is the only thing that changed. The question is quoted so the
+ * reader can see what they sent without opening the thread.
+ */
+function WalkWaiting(props: { waiting: { question: string; owner: string } }) {
+  return (
+    <p class="hub-walk-waiting">
+      {`Waiting on ${props.waiting.owner} — you asked: “${props.waiting.question}”`}
+    </p>
+  );
+}
+
+/**
+ * The selection → pill → thread pattern the review-doc editor uses, on the
+ * card's rendered detail.
+ *
+ * Not the editor's pill (app.ts `positionPill`): that one keys off a
+ * ProseMirror selection resolvable to Yjs offsets, and the card's body is
+ * server-fetched markdown rendered to static HTML. What the two share is
+ * the shape — select words, a pill appears beside them, tapping it opens a
+ * place to write — and the `.comment-pill` dressing. The pill sends the
+ * WORDS; the server locates them in the item's source.
+ *
+ * Keys off `selectionchange` on the document, debounced the way the editor's
+ * is, and only ever reads a selection inside the body node — a selection
+ * anywhere else on the page hides the pill.
+ */
+function useSelectionPill(
+  body: MutableRef<HTMLDivElement | null>,
+  enabled: boolean,
+): { phrase: string | null; place: { left: number; top: number }; clear: () => void } {
+  const [phrase, setPhrase] = useState<string | null>(null);
+  const [place, setPlace] = useState({ left: 8, top: 8 });
+  // A LAYOUT effect: the listener has to be on the document before the first
+  // selection can happen, and a passive effect lands a frame after mount —
+  // a phrase selected in that frame would never show the pill.
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = (): void => {
+      const el = body.current;
+      const found = el ? selectedPhraseIn(el) : null;
+      if (found && el) {
+        setPlace(pillPlace(found.range, el));
+        setPhrase(found.text);
+      } else {
+        setPhrase(null);
+      }
+    };
+    const onChange = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(read, 120);
+    };
+    document.addEventListener('selectionchange', onChange);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('selectionchange', onChange);
+    };
+  }, [body, enabled]);
+  return { phrase, place, clear: () => setPhrase(null) };
+}
+
+/**
+ * The thread card that opens off the pill: the phrase quoted the way a doc
+ * thread quotes its range, one box for the question, Ask and Cancel. Its
+ * `PromptForm` keeps its node across a repaint like the answer box does, so
+ * a board event mid-sentence loses nothing.
+ */
+function WalkAskThread(props: {
+  item: ReviewItem;
+  phrase: string;
+  onAsk: (question: string) => Promise<boolean>;
+  onCancel: () => void;
+}) {
+  // The card lives in the stage's margin column — beside the card at
+  // tablet/laptop widths, BELOW the whole card (options, answer box, Skip)
+  // at ≤1100px, where a tap on the pill could otherwise open it off-screen.
+  // Bring it into view once, on open; `nearest` moves nothing when it is
+  // already visible.
+  const self = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    self.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
+  return (
+    <div class="hub-walk-thread" ref={self}>
+      <blockquote class="hub-walk-thread-quote">{props.phrase}</blockquote>
+      <PromptForm
+        className="hub-walk-thread-form"
+        placeholder="Ask about this…"
+        submitLabel="Ask"
+        submitClass="hub-btn"
+        keepKey={`walk-ask:${props.item.key}`}
+        onSubmit={props.onAsk}
+      />
+      <div class="hub-walk-thread-actions">
+        <button
+          type="button"
+          class="hub-btn hub-btn-ghost hub-walk-thread-cancel"
+          onClick={props.onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -518,14 +687,42 @@ function WalkCard(props: {
   // them, because there was nowhere else to keep them; here the instance is
   // the place, and it outlives every repaint of this item.
   const [bodyExpanded, setBodyExpanded] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
-  const infoForm = useRef<HTMLFormElement | null>(null);
-  // Opening the ask box puts the caret in it. In a layout effect rather than
-  // in the click handler, because the box is only un-hidden by the render the
-  // click schedules, and focusing a `display: none` control is a no-op.
-  useLayoutEffect(() => {
-    if (infoOpen) infoForm.current?.querySelector('textarea')?.focus();
-  }, [infoOpen]);
+  // Commenting on a phrase of the item, doc-style. Only a TICKET-borne item
+  // has a phrase to anchor to (`reviewItemAnchorTarget`); the others render
+  // no pill at all rather than a pill that opens nothing.
+  const anchorable = reviewItemAnchorTarget(item) !== null;
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  // The phrase the thread card is open on, and the question this card sent
+  // (until the server's row catches up — the hold in hub-app carries
+  // `item.waiting` across repaints; this is the same fact one render early).
+  const [draft, setDraft] = useState<string | null>(null);
+  const [asked, setAsked] = useState<{ question: string; owner: string; at: number } | null>(null);
+  const owner = item.thread?.askedBy ?? 'the owner';
+  // The waiting note: the hold's word first; else this card's own, unless
+  // a revision has landed since — then it is the reader's turn again and the
+  // note would be stale.
+  const waiting =
+    item.waiting ?? (asked && !(item.revision && item.revision.at >= asked.at) ? asked : null);
+  // A second question cannot be filed while the item is already waiting on
+  // its owner — the server refuses it (409 `waiting`), and a pill that only
+  // bounces is worse than none. Computed from the SAME `waiting` the note
+  // reads, so the two can never disagree about whose turn it is.
+  const pill = useSelectionPill(bodyRef, anchorable && !waiting);
+  const openThread = (): void => {
+    if (!pill.phrase) return;
+    setDraft(pill.phrase);
+    pill.clear();
+    window.getSelection()?.removeAllRanges();
+  };
+  const ask = async (question: string): Promise<boolean> => {
+    if (draft === null) return false;
+    const ok = await handlers.onAskOnItem(item, { text: draft }, question);
+    if (ok) {
+      setAsked({ question, owner, at: Date.now() });
+      setDraft(null);
+    }
+    return ok;
+  };
 
   // Only a decision gets the answer furniture — the thread kinds get a reply
   // path instead. (A blocker never reaches this queue at all: it is task
@@ -543,113 +740,128 @@ function WalkCard(props: {
   );
 
   return (
-    <div class={`hub-walk-card hub-walk-${item.kind}`}>
-      {/* First thing on the card, above the new item: what you just finished.
+    // The stage (approved mock `.demo-doc-layout`): the card, and a margin
+    // column that holds the thread a pill opens — beside the card at
+    // ≥1101px, where height is the scarce axis, stacked below it at ≤1100px.
+    <div class="hub-walk-stage">
+      <div class={`hub-walk-card hub-walk-${item.kind}`}>
+        {/* First thing on the card, above the new item: what you just finished.
           It belongs here rather than in a toast because this is read on a
           phone, where a toast is gone before the thumb has come back down. */}
-      {progress.last && <AdvancedBanner last={progress.last} handlers={handlers} />}
-      {/* ONE anatomy (approved design): head row — kind badge, headline, goal
+        {progress.last && <AdvancedBanner last={progress.last} handlers={handlers} />}
+        {/* ONE anatomy (approved design): head row — kind badge, headline, goal
           chip, asked-by meta — then one markdown body. */}
-      <WalkCardHead item={item} now={now} />
-      {/* The same pointer out on every kind. Answering here is the point —
+        <WalkCardHead item={item} now={now} />
+        {/* Under the headline: what the reader asked, when the item came back
+          revised — and the way to the thread. */}
+        <WalkRevision item={item} handlers={handlers} />
+        {/* The same pointer out on every kind. Answering here is the point —
           going through the queue must not mean leaving the queue on every
           item — but a comment sometimes only makes sense in place. */}
-      <WalkWhere item={item} handlers={handlers} />
+        <WalkWhere item={item} handlers={handlers} />
+        {waiting && draft === null && <WalkWaiting waiting={waiting} />}
 
-      {row ? (
-        <Fragment>
-          <WalkTaskBody task={row.task} />
-          {row.task.infoRequests && row.task.infoRequests.length > 0 && (
-            <p class="hub-walk-asked">
-              {`You already asked: “${row.task.infoRequests[row.task.infoRequests.length - 1]?.text ?? ''}”`}
-            </p>
-          )}
-          {row.task.options && row.task.options.length > 0 && (
-            <WalkOptions
-              options={row.task.options}
-              onPick={(o) => void handlers.onAnswer(row.task, o.label, o.id)}
-            />
-          )}
-          {/* Always present, options or not: the candidates are a shortcut,
-              never a closed set. */}
-          <PromptForm
-            className="hub-walk-answer"
-            placeholder="…or answer in your own words — the agent gets your text verbatim"
-            submitLabel="Send"
-            keepKey={`walk-answer:${row.task.id}`}
-            onSubmit={(text) => handlers.onAnswer(row.task, text)}
-          />
-          {/* "I can't answer this yet" has no card in the mockup, because the
-              mockup has no such concept — and this is the only surface that
-              offers it, so dropping it to match would delete the capability
-              rather than restyle it. Collapsed behind a ghost control in the
-              actions row: the card reads as the mockup does until a stuck
-              reviewer goes looking. */}
-          <div class="hub-walk-actions">
-            {skip}
-            <button
-              type="button"
-              class="hub-btn hub-btn-ghost hub-walk-more"
-              aria-expanded={infoOpen ? 'true' : 'false'}
-              onClick={() => setInfoOpen((open) => !open)}
-            >
-              Tell me more
-            </button>
-          </div>
-          <PromptForm
-            className="hub-walk-info"
-            placeholder="Not enough to decide? Ask for what's missing…"
-            submitLabel="Send question"
-            submitClass="hub-btn"
-            keepKey={`walk-info:${row.task.id}`}
-            hidden={!infoOpen}
-            formRef={infoForm}
-            onSubmit={(text) => handlers.onMoreInfo(row.task, text)}
-          />
-        </Fragment>
-      ) : (
-        <Fragment>
-          {review ? (
-            // A DECLARED review item. Everything below was written by the agent
-            // for this card, so none of it is derived, clipped or guessed at —
-            // which is the whole reason declaring exists.
-            <Fragment>
-              <WalkReviewBody
-                review={review}
-                expanded={bodyExpanded}
-                onExpand={() => setBodyExpanded(true)}
+        {row ? (
+          <Fragment>
+            <WalkTaskBody task={row.task} />
+            {row.task.infoRequests && row.task.infoRequests.length > 0 && (
+              <p class="hub-walk-asked">
+                {`You already asked: “${row.task.infoRequests[row.task.infoRequests.length - 1]?.text ?? ''}”`}
+              </p>
+            )}
+            {row.task.options && row.task.options.length > 0 && (
+              <WalkOptions
+                options={row.task.options}
+                onPick={(o) => void handlers.onAnswer(row.task, o.label, o.id)}
               />
-              {review.options && review.options.length > 0 && (
-                <WalkOptions
-                  options={review.options}
-                  onPick={(o) => void handlers.onReply(item, o.label, o.id)}
+            )}
+            {/* Always present, options or not: the candidates are a shortcut,
+              never a closed set. */}
+            <PromptForm
+              className="hub-walk-answer"
+              placeholder="…or answer in your own words — the agent gets your text verbatim"
+              submitLabel="Send"
+              keepKey={`walk-answer:${row.task.id}`}
+              onSubmit={(text) => handlers.onAnswer(row.task, text)}
+            />
+            {/* The "Tell me more" box that sat here is gone (Bryan, 2026-08-29:
+              "maybe instead we can let me comment directly on the review item
+              like in a doc"). Asking back is a comment on a phrase of a
+              declared item now — the pill below — and a legacy decision's
+              words are the task body, reached through its discussion. */}
+            <div class="hub-walk-actions">{skip}</div>
+          </Fragment>
+        ) : (
+          <Fragment>
+            {review ? (
+              // A DECLARED review item. Everything below was written by the agent
+              // for this card, so none of it is derived, clipped or guessed at —
+              // which is the whole reason declaring exists.
+              <Fragment>
+                <WalkReviewBody
+                  review={review}
+                  expanded={bodyExpanded}
+                  onExpand={() => setBodyExpanded(true)}
+                  bodyRef={bodyRef}
+                  mark={revisedPhrase(item)}
                 />
-              )}
-            </Fragment>
-          ) : (
-            // The mockup's "What I need from you" block — rendered only when it
-            // says more than the heading already did. A one-line question fits
-            // in the heading, and quoting it again underneath is the card
-            // repeating itself.
-            reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ') && (
-              <div class="hub-walk-askbox">
-                <h4 class="hub-walk-ask-head">What I need from you</h4>
-                <blockquote class="hub-walk-ask">{item.ask}</blockquote>
-              </div>
-            )
-          )}
-          {/* Always present, options or not — the candidates are a shortcut,
+                {anchorable && !waiting && (
+                  // The editor's pill, on the card: fixed-position, placed by
+                  // the hook beside the selection's end. `mousedown` is
+                  // swallowed so the tap does not blur the selection before
+                  // the click lands (the editor's pill does the same; touch is
+                  // left alone, since cancelling it cancels the click on iOS).
+                  // Absent entirely while the item is waiting on its owner —
+                  // see the note where `waiting` is computed above.
+                  <button
+                    type="button"
+                    class={`comment-pill hub-walk-pill${pill.phrase ? '' : ' hidden'}`}
+                    style={{ left: `${pill.place.left}px`, top: `${pill.place.top}px` }}
+                    aria-label="Comment on this"
+                    title="Comment on this"
+                    onMouseDown={(ev) => ev.preventDefault()}
+                    onClick={openThread}
+                  >
+                    💬
+                  </button>
+                )}
+                {review.options && review.options.length > 0 && (
+                  <WalkOptions
+                    options={review.options}
+                    onPick={(o) => void handlers.onReply(item, o.label, o.id)}
+                  />
+                )}
+              </Fragment>
+            ) : (
+              // The mockup's "What I need from you" block — rendered only when it
+              // says more than the heading already did. A one-line question fits
+              // in the heading, and quoting it again underneath is the card
+              // repeating itself.
+              reviewHeadline(item.ask) !== item.ask.trim().replace(/\s+/g, ' ') && (
+                <div class="hub-walk-askbox">
+                  <h4 class="hub-walk-ask-head">What I need from you</h4>
+                  <blockquote class="hub-walk-ask">{item.ask}</blockquote>
+                </div>
+              )
+            )}
+            {/* Always present, options or not — the candidates are a shortcut,
               never a closed set, and a review item with no options only has
               this. */}
-          <PromptForm
-            className="hub-walk-answer"
-            placeholder={review?.options?.length ? '…or answer in your own words' : 'Reply…'}
-            submitLabel="Send"
-            keepKey={`walk-answer:${item.key}`}
-            onSubmit={(text) => handlers.onReply(item, text)}
-          />
-          <div class="hub-walk-actions">{skip}</div>
-        </Fragment>
+            <PromptForm
+              className="hub-walk-answer"
+              placeholder={review?.options?.length ? '…or answer in your own words' : 'Reply…'}
+              submitLabel="Send"
+              keepKey={`walk-answer:${item.key}`}
+              onSubmit={(text) => handlers.onReply(item, text)}
+            />
+            <div class="hub-walk-actions">{skip}</div>
+          </Fragment>
+        )}
+      </div>
+      {draft !== null && (
+        <aside class="hub-walk-margin">
+          <WalkAskThread item={item} phrase={draft} onAsk={ask} onCancel={() => setDraft(null)} />
+        </aside>
       )}
     </div>
   );

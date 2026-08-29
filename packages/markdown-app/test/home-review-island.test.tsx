@@ -30,6 +30,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const handlers = (): ReviewStripHandlers => ({
   onReview: vi.fn(),
   onOpen: vi.fn(),
+  onOpenThread: vi.fn(),
   onWalkthrough: vi.fn(),
 });
 

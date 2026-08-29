@@ -24,7 +24,7 @@
  * panes can hold anchors and editor mounts through a repaint).
  */
 import { signal } from '@preact/signals';
-import { render } from 'preact';
+import { Fragment, render } from 'preact';
 import {
   type ReviewItem,
   type ReviewKind,
@@ -50,6 +50,10 @@ export interface ReviewStripHandlers {
    *  Now reached from the card's own pointer out, and from a SETTLED row —
    *  which has left the queue, so there is no card left to open it in. */
   onOpen: (item: ReviewItem) => void;
+  /** Go to the thread a REVISED item's question lives on — the reader's
+   *  question and the owner's reply, where they were written. Offered on the
+   *  row itself, beside the tap that opens the card. */
+  onOpenThread: (item: ReviewItem) => void;
   /** Go through all of them, one at a time. */
   onWalkthrough: () => void;
 }
@@ -89,23 +93,70 @@ function ReviewRow(props: {
   handlers: ReviewStripHandlers;
 }) {
   const { item, index, now, handlers } = props;
-  return (
-    <button
-      type="button"
-      class={`hub-review-row hub-review-${item.kind}${index === 0 ? ' hub-review-row-current' : ''}`}
-      title={`${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''}${item.why ? ` · ${item.why}` : ''}`}
-      // Into the queue's own card at this row, not out to the task or the doc.
-      // The index rides along so the card opens where the reader was pointing;
-      // the card re-resolves it by key on every repaint from there.
-      onClick={() => handlers.onReview(item, index)}
-    >
+  const rev = item.revision;
+  const className = `hub-review-row hub-review-${item.kind}${index === 0 ? ' hub-review-row-current' : ''}${rev ? ' hub-review-row-revised' : ''}`;
+  const title = `${REVIEW_KIND_LABEL[item.kind]}: ${item.title}${item.ask ? ` — ${item.ask}` : ''}${item.why ? ` · ${item.why}` : ''}`;
+  // Into the queue's own card at this row, not out to the task or the doc.
+  // The index rides along so the card opens where the reader was pointing;
+  // the card re-resolves it by key on every repaint from there.
+  const open = (): void => handlers.onReview(item, index);
+  const inner = (
+    <Fragment>
+      {/* The owner revised this after the reader asked on it: marked, with
+          the reader's own question under the title so "what did I ask?" is
+          answered on the row. */}
+      {rev && <span class="hub-walk-k hub-walk-k-revised hub-review-row-badge">Revised</span>}
       <span class="hub-review-row-title">{reviewRowTitle(item)}</span>
+      {rev?.question !== undefined && (
+        <span class="hub-review-row-quote">{`You asked: “${rev.question}”`}</span>
+      )}
       {/* The asked-by meta, in the same spelling the card head uses — one
           clock, one sentence, so the row and the card it opens can never
           disagree. Everything the author wrote lives in the card's one body
           (approved design); the row is title + meta and nothing else. */}
       <span class="hub-review-row-sub">{askedMeta(item, now)}</span>
-    </button>
+    </Fragment>
+  );
+  if (!rev) {
+    return (
+      <button type="button" class={className} title={title} onClick={open}>
+        {inner}
+      </button>
+    );
+  }
+  // A revised row carries a second control — the way to the thread — and a
+  // button may not hold a button, so this row is a div acting as one: same
+  // class, same tap, Enter and Space, and the link stops the tap from also
+  // opening the card.
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: a <button> may not contain the See-thread <button>; the div carries the role, the tab stop and the keys a button has.
+    <div
+      role="button"
+      tabIndex={0}
+      class={className}
+      title={title}
+      onClick={open}
+      onKeyDown={(ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          open();
+        }
+      }}
+    >
+      {inner}
+      {rev.threadId !== undefined && (
+        <button
+          type="button"
+          class="hub-review-thread-link"
+          onClick={(ev) => {
+            ev.stopPropagation();
+            handlers.onOpenThread(item);
+          }}
+        >
+          See thread ↗
+        </button>
+      )}
+    </div>
   );
 }
 
