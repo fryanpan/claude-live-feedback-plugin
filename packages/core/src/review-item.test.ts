@@ -5,6 +5,7 @@ import {
   type TaskReviewItem,
   answerFromReply,
   checkReviewPayload,
+  isReviewItemHeld,
   isReviewItemOpen,
   pendingDeclaration,
   readReviewPayload,
@@ -1007,5 +1008,61 @@ describe('answerFromReply', () => {
     expect(
       answerFromReply({ shape: 'decision', headline: 'Which way?' }, 'The second one'),
     ).toEqual({});
+  });
+});
+
+describe('the quality gate’s verdict on a review item', () => {
+  function item(over: Record<string, unknown> = {}): unknown {
+    return {
+      id: 'ri-7c1d',
+      review: decision(),
+      createdAt: 1700000000000,
+      createdBy: 'Scheduler Agent',
+      ...over,
+    };
+  }
+
+  it('reads a held verdict back with its reason and clock', () => {
+    const read = readTaskReviewItem(
+      item({ judge: { at: 1700000001000, verdict: 'held', reason: 'Headline is a ticket id.' } }),
+    );
+    expect(read?.judge).toEqual({
+      at: 1700000001000,
+      verdict: 'held',
+      reason: 'Headline is a ticket id.',
+    });
+    expect(read ? isReviewItemHeld(read) : null).toBe(true);
+  });
+
+  it('an ok or unavailable verdict is recorded but does not hold the item', () => {
+    for (const verdict of ['ok', 'unavailable']) {
+      const read = readTaskReviewItem(item({ judge: { at: 1, verdict, reason: 'r' } }));
+      expect(read?.judge?.verdict).toBe(verdict);
+      expect(read ? isReviewItemHeld(read) : null).toBe(false);
+    }
+  });
+
+  it('drops a verdict it cannot read rather than the row — an unreadable verdict is a pass', () => {
+    for (const judge of [
+      null,
+      'held',
+      { verdict: 'nonsense', at: 1 },
+      { at: 'x', verdict: 'held' },
+    ]) {
+      const read = readTaskReviewItem(item({ judge }));
+      expect(read?.id).toBe('ri-7c1d');
+      expect(read?.judge).toBeUndefined();
+      expect(read ? isReviewItemHeld(read) : null).toBe(false);
+    }
+  });
+
+  it('an answered item is never held — the answer is the fact that closes it', () => {
+    const read = readTaskReviewItem(
+      item({
+        judge: { at: 1, verdict: 'held', reason: 'r' },
+        answer: { text: 'Keep it', by: 'Jordan', ts: 2 },
+      }),
+    );
+    expect(read ? isReviewItemHeld(read) : null).toBe(false);
   });
 });
