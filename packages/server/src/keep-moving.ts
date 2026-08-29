@@ -28,6 +28,15 @@ export interface TaskRow {
   updatedAt?: number;
   bodyWrittenAt?: number;
   titleWrittenAt?: number;
+  /**
+   * The agent's own notes on the row (`TaskNote` in tasks.ts: a turn's
+   * closing message, a denial, an explicit status). `task.noted` is kept OFF
+   * the workspace event stream on purpose — one frame per turn would wake
+   * every attached agent — so the stream cannot say a builder reported; the
+   * row's notes can. Any kind counts: the question is whether the agent
+   * holding the row is still there, and a note is the agent saying so.
+   */
+  notes?: Array<{ ts: number; kind?: string; text?: string; agent?: string; sessionId?: string }>;
 }
 export interface EventRow {
   taskId?: string;
@@ -55,7 +64,8 @@ export interface Classified {
   bucket: Bucket;
   /** ms in the current bucket (entered current status, or created). */
   ageMs: number;
-  /** ms since ANY activity touched it (transition or board event). */
+  /** ms since ANY activity touched it (transition, board event, thread
+   *  comment, or the agent's own note on the row). */
   sinceActivityMs: number;
   stalled: boolean;
   blockers?: string[];
@@ -83,6 +93,16 @@ export interface Classified {
 function enteredStatusAt(t: TaskRow): number {
   const last = t.transitions?.[t.transitions.length - 1];
   return last?.ts ?? t.createdAt;
+}
+
+/** The newest note on the row, of any kind; 0 when it has none. Read off the
+ *  row rather than the events, because that is the only place a note lives
+ *  (see `TaskRow.notes`). Notes append in arrival order but carry the
+ *  poster's clock, so the max is taken rather than the last. */
+function newestNoteAt(t: TaskRow): number {
+  let newest = 0;
+  for (const n of t.notes ?? []) if (typeof n.ts === 'number' && n.ts > newest) newest = n.ts;
+  return newest;
 }
 
 export function classifyOpenTasks(
@@ -134,7 +154,12 @@ export function classifyOpenTasks(
     const ageMs = now - enteredStatusAt(t);
     const sinceActivityMs =
       now -
-      Math.max(enteredStatusAt(t), lastEventByTask.get(t.id) ?? 0, threadActivity?.get(t.id) ?? 0);
+      Math.max(
+        enteredStatusAt(t),
+        lastEventByTask.get(t.id) ?? 0,
+        threadActivity?.get(t.id) ?? 0,
+        newestNoteAt(t),
+      );
     // A deliberately-deferred row does not reach this loop at all: parking
     // moves it to `triage` (2026-08-27), and the status filter above keeps
     // only `todo` and `in-progress`. The `parked` bucket that used to sit
