@@ -12,6 +12,7 @@ import { createPluginRefresher } from './plugin-refresh.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
+import { TTL_FORMAT_HINT, parseTtl } from './share/ttl.ts';
 import { KEYCHAIN_SERVICE, ThreadSummarizer } from './summarize.ts';
 import {
   KEYCHAIN_SERVICE as ASSEMBLYAI_KEYCHAIN_SERVICE,
@@ -213,6 +214,18 @@ const accessShareConfigured = Boolean(
   process.env.CF_SHARE_BASE_HOSTNAME && process.env.CF_ACCOUNT_ID && cfAccessTeam,
 );
 const publicHostname = process.env.CF_SHARE_PUBLIC_HOSTNAME;
+// Optional ceiling on every share's TTL, in the same grammar `share_link`
+// takes (`30d`, `72h`). A mint or extension asking for more is clamped and
+// told so. Unset = no ceiling; a value the grammar cannot read is a startup
+// error rather than a silently absent ceiling.
+const maxTtlRaw = process.env.CF_SHARE_MAX_TTL;
+const maxTtlSeconds = maxTtlRaw ? parseTtl(maxTtlRaw) : null;
+if (maxTtlRaw && (maxTtlSeconds === null || maxTtlSeconds <= 0)) {
+  console.error(
+    `CF_SHARE_MAX_TTL=${JSON.stringify(maxTtlRaw)} is not a positive duration — ${TTL_FORMAT_HINT}`,
+  );
+  process.exit(1);
+}
 const shareConfig =
   accessShareConfigured || publicHostname
     ? {
@@ -222,6 +235,7 @@ const shareConfig =
           ? { baseHostname: process.env.CF_SHARE_BASE_HOSTNAME }
           : {}),
         ...(publicHostname ? { publicHostname } : {}),
+        ...(maxTtlSeconds ? { maxTtlSeconds } : {}),
       }
     : null;
 const share = shareConfig

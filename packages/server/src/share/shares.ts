@@ -38,6 +38,16 @@ export class Shares {
   private readonly dataDir: string;
   private readonly cfApi: CfApi | null;
   private readonly config: ShareConfig;
+
+  /** The TTL ceiling the routes clamp to; undefined = none configured. */
+  get maxTtlSeconds(): number | undefined {
+    return this.config.maxTtlSeconds;
+  }
+
+  /** What a link mint gets when the caller names no TTL. */
+  get defaultLinkTtlSeconds(): number {
+    return this.config.defaultTtlSeconds ?? DEFAULT_LINK_TTL_SECONDS;
+  }
   private shares: Share[] = [];
   private urlKeyCache: string | null = null;
 
