@@ -101,7 +101,13 @@ function note(over: Partial<ReviewThreadItem> = {}): ReviewThreadItem {
 const q0 = (tasks: HubTask[]) => reviewQueue(tasks, [], NOW);
 
 function strip(over: Partial<ReviewStripHandlers> = {}): ReviewStripHandlers {
-  return { onReview: vi.fn(), onOpen: vi.fn(), onWalkthrough: vi.fn(), ...over };
+  return {
+    onReview: vi.fn(),
+    onOpen: vi.fn(),
+    onOpenThread: vi.fn(),
+    onWalkthrough: vi.fn(),
+    ...over,
+  };
 }
 
 /**
@@ -125,9 +131,10 @@ function renderHomeReview(
 function walk(over: Partial<WalkthroughHandlers> = {}): WalkthroughHandlers {
   return {
     onAnswer: vi.fn(),
-    onMoreInfo: vi.fn(),
     onReply: vi.fn(),
+    onAskOnItem: vi.fn(),
     onOpenItem: vi.fn(),
+    onOpenThread: vi.fn(),
     onStep: vi.fn(),
     onClose: vi.fn(),
     ...over,
@@ -563,29 +570,26 @@ describe('renderReviewWalkthrough — decisions', () => {
     expect(onAnswer).toHaveBeenCalledWith(taskAt(q, i), 'Yes, rename it');
   });
 
-  it('asking for more information is not an answer', () => {
-    const onMoreInfo = vi.fn();
-    const onAnswer = vi.fn();
+  // "Tell me more" is gone (Bryan, 2026-08-29: "maybe instead we can let me
+  // comment directly on the review item like in a doc"). Asking back is now a
+  // comment on a phrase of the item — review-item-comments.test.tsx — and the
+  // decision card offers only the answer box and the skip.
+  it('the "Tell me more" box is gone from the decision card', () => {
     const { q } = queueOfThree();
-    renderReviewWalkthrough(root, q, 0, walk({ onMoreInfo, onAnswer }));
-    const form = root.querySelector('.hub-walk-info') as HTMLFormElement;
-    (form.querySelector('textarea') as HTMLTextAreaElement).value = 'What does green cost us?';
-    form.dispatchEvent(new Event('submit', { cancelable: true }));
-    expect(onMoreInfo).toHaveBeenCalledWith(taskAt(q, 0), 'What does green cost us?');
-    expect(onAnswer).not.toHaveBeenCalled();
+    renderReviewWalkthrough(root, q, 0, walk());
+    expect(root.querySelector('.hub-walk-info')).toBeNull();
+    expect(root.querySelector('.hub-walk-more')).toBeNull();
+    expect(root.querySelector('.hub-walk-answer')).not.toBeNull();
   });
 
-  it('an empty answer or question submits nothing', () => {
+  it('an empty answer submits nothing', () => {
     const h = walk();
     const { q } = queueOfThree();
     renderReviewWalkthrough(root, q, 0, h);
-    for (const sel of ['.hub-walk-answer', '.hub-walk-info']) {
-      const form = root.querySelector(sel) as HTMLFormElement;
-      (form.querySelector('textarea') as HTMLTextAreaElement).value = '   ';
-      form.dispatchEvent(new Event('submit', { cancelable: true }));
-    }
+    const form = root.querySelector('.hub-walk-answer') as HTMLFormElement;
+    (form.querySelector('textarea') as HTMLTextAreaElement).value = '   ';
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(h.onAnswer).not.toHaveBeenCalled();
-    expect(h.onMoreInfo).not.toHaveBeenCalled();
   });
 
   // The board repaints the walkthrough on every SSE event — a task moving, a
@@ -617,26 +621,6 @@ describe('renderReviewWalkthrough — decisions', () => {
       expect((root.querySelector('.hub-walk-answer textarea') as HTMLTextAreaElement).value).toBe(
         'Green, because',
       );
-    });
-
-    it('the more-info box keeps its draft AND stays open', async () => {
-      const { q } = queueOfThree();
-      renderReviewWalkthrough(root, q, 0, walk());
-      (root.querySelector('.hub-walk-more') as HTMLElement).click();
-      await tick();
-      const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
-      expect(info.classList.contains('hidden')).toBe(false);
-      (info.querySelector('textarea') as HTMLTextAreaElement).value = 'What does green cost';
-      await repaint();
-      const rebuilt = root.querySelector('.hub-walk-info') as HTMLFormElement;
-      expect((rebuilt.querySelector('textarea') as HTMLTextAreaElement).value).toBe(
-        'What does green cost',
-      );
-      // A restored draft inside a re-hidden panel is still a lost draft.
-      expect(rebuilt.classList.contains('hidden')).toBe(false);
-      expect(
-        (root.querySelector('.hub-walk-more') as HTMLElement).getAttribute('aria-expanded'),
-      ).toBe('true');
     });
 
     it('a draft never follows the reader onto a different card', async () => {
@@ -1133,13 +1117,6 @@ describe('the walkthrough composers are markdown editors', () => {
     expect(renderedHtml(ta)).not.toContain('final');
   });
 
-  it('the Tell me more box is the same editor', () => {
-    renderReviewWalkthrough(root, reviewQueue([decision()], [], NOW), 0, walk());
-    const info = root.querySelector('.hub-walk-info') as HTMLFormElement;
-    const ta = info.querySelector('textarea') as HTMLTextAreaElement;
-    expect(surfaceOf(ta)?.querySelector('.ProseMirror')).not.toBeNull();
-  });
-
   /**
    * The riskiest thing in the island: `attachMarkdownComposer` REPLACES the
    * textarea with a wrapper and re-parents it, which is a DOM mutation inside
@@ -1562,30 +1539,5 @@ describe('the walkthrough island contract', () => {
     // second was enough to lose the keyboard.
     expect(document.activeElement).toBe(ta);
     expect(ta.selectionStart).toBe(4);
-  });
-});
-
-/**
- * The other expansion on the card — "Tell me more", which opens the
- * ask-for-what's-missing box on a decision. Same failure, same fix: the open
- * state lived in the DOM a repaint replaces, and survived only when the
- * textarea underneath happened to hold a draft or the focus. On iOS the
- * programmatic focus is the part that is not guaranteed, so opening the box
- * and reading the question for a second was enough to lose it.
- */
-describe('renderReviewWalkthrough — "Tell me more" survives a repaint', () => {
-  it('stays open across a repaint with nothing typed and no focus', async () => {
-    const q = q0([decision({ title: 'Ship now or wait?' })]);
-    renderReviewWalkthrough(root, q, 0, walk());
-    const more = root.querySelector('.hub-walk-more') as HTMLButtonElement;
-    more.click();
-    await tick();
-    expect((root.querySelector('.hub-walk-info') as HTMLElement).classList).not.toContain('hidden');
-    // Nothing typed, and the focus is elsewhere — the reader is reading.
-    (document.activeElement as HTMLElement | null)?.blur();
-    await repaint();
-    const info = root.querySelector('.hub-walk-info') as HTMLElement;
-    expect(info.classList.contains('hidden')).toBe(false);
-    expect(root.querySelector('.hub-walk-more')?.getAttribute('aria-expanded')).toBe('true');
   });
 });

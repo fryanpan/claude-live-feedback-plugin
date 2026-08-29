@@ -16,11 +16,14 @@ import {
   contentKind,
   emailIdentityId,
   isEmailLike,
+  latestThreadedQuestion,
+  locateReviewItemRange,
   normalizeEmail,
   pendingDeclaration,
   readReviewPayload,
   reviewGapAdvice,
   reviewIdOf,
+  reviewItemState,
   reviewPayloadMessage,
   suggestOps,
   summaryHash,
@@ -5781,6 +5784,80 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
+        // revise_review_item: the owner's answer to a question asked ON the
+        // item — the words made clearer in place, the old words kept, and an
+        // optional reply on the thread that asked. Refusals happen before
+        // any write: a reply with no thread to land on is refused here rather
+        // than dropped after the revision applied, because "revised, and the
+        // reply went nowhere" is the accepted-and-discarded shape this repo
+        // keeps re-shipping.
+        const taskReviewReviseMatch = pathname.match(
+          /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/revise$/,
+        );
+        if (taskReviewReviseMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewReviseMatch[1] ?? '');
+          const reviewItemId = decodeURIComponent(taskReviewReviseMatch[2] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const task = taskStore.getTask(taskId);
+          if (!task) return j(404, { error: 'not-found' });
+          const reply = body?.reply;
+          if (reply !== undefined && (typeof reply !== 'string' || reply.trim() === '')) {
+            return j(400, { error: 'reply must be a non-empty string' });
+          }
+          const rawRange = body?.revisedRange as { start?: unknown; end?: unknown } | undefined;
+          let revisedRange: { start: number; end: number } | undefined;
+          if (rawRange !== undefined) {
+            const start = rawRange?.start;
+            const end = rawRange?.end;
+            if (
+              typeof start !== 'number' ||
+              typeof end !== 'number' ||
+              !Number.isInteger(start) ||
+              !Number.isInteger(end) ||
+              start < 0 ||
+              end < start
+            ) {
+              return j(400, {
+                error: 'revisedRange must be {start, end} offsets with start <= end',
+              });
+            }
+            revisedRange = { start, end };
+          }
+          if (reply !== undefined) {
+            const item = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
+            if (item && !latestThreadedQuestion(item)?.threadId) {
+              return j(400, {
+                error: 'no-thread',
+                message:
+                  'nobody has asked on this item, so there is no thread for the reply — revise without `reply`, or post_reply on the thread you mean',
+              });
+            }
+          }
+          const res = taskStore.reviseReviewItem(
+            taskId,
+            reviewItemId,
+            { headline: body?.headline, detail: body?.detail, options: body?.options },
+            { actor: author, ...(revisedRange ? { revisedRange } : {}) },
+          );
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          let thread: Thread | null = null;
+          if (reply !== undefined && res.threadId) {
+            const docId = taskProjection.ensureBodyRoom(res.task);
+            thread = await rooms.postComment(docId, res.threadId, author, reply, undefined, {
+              generate: !visitor,
+            });
+          }
+          return j(200, {
+            task: res.task,
+            item: res.item,
+            ...(res.threadId !== undefined ? { threadId: res.threadId } : {}),
+            ...(thread ? { thread } : {}),
+            ...(res.advice !== undefined ? { reviewAdvice: res.advice } : {}),
+          });
+        }
         // set_task_dependencies: edit `after` / `afterEnforce` on a task that
         // already exists. Until this route, `after` could only be set at
         // creation — so a decision filed after the work it gates could never
@@ -7700,7 +7777,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const body = await safeJson(req);
             const user = authorFor(body?.author);
             const text = body?.text as string | undefined;
-            const anchor = body?.anchor as Anchor | undefined;
+            let anchor = body?.anchor as Anchor | undefined;
             if (!user || !text || !anchor) {
               return j(400, { error: 'author + text + anchor required' });
             }
@@ -7712,12 +7789,91 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller that wrote it has to be the one that hears about it.
             const anchorCheck = anchors.validateAnchor(anchor);
             if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
+            // A thread on a PHRASE of a review item — the doc-style question
+            // asked back at an ask. The anchor names an item this task must
+            // carry, and its offsets must spell its snippet in the item's
+            // current detail (or be absent, in which case the phrase is
+            // located here). The write below is two writes: the thread, and
+            // the question recorded on the item — which is what takes the
+            // item off the reader's queue while the owner revises it.
+            let itemAsk:
+              | {
+                  taskId: string;
+                  reviewItemId: string;
+                  range: ReturnType<typeof locateReviewItemRange>;
+                }
+              | undefined;
+            if (anchor.kind === 'review-item') {
+              if (!docId.startsWith('task:')) {
+                return j(400, {
+                  error: 'a review-item anchor belongs on a task doc (task:<taskId>)',
+                });
+              }
+              const taskId = docId.slice('task:'.length);
+              if (!taskStore.getTask(taskId)) return j(404, { error: 'task not found' });
+              if (anchor.reviewItemId === 'r-legacy') {
+                return j(400, {
+                  error:
+                    "the legacy decision's words are the task body — anchor a text-range there instead",
+                });
+              }
+              const wanted = anchor.reviewItemId;
+              const item = taskStore.listReviewItems(taskId).find((r) => r.id === wanted);
+              if (!item) return j(404, { error: 'unknown-review-item' });
+              // One open question at a time. A second anchored ask while the
+              // item is already `waiting` would orphan the first — `revise`
+              // only reads the NEWEST threaded question (`latestThreadedQuestion`),
+              // so a buried one could never be answered. Refused before the
+              // thread is created (not just before the info-request stamp),
+              // so a refusal never leaves an orphan thread with nothing
+              // recorded against it.
+              if (reviewItemState(item) === 'waiting') {
+                const openThreadId = latestThreadedQuestion(item)?.threadId;
+                const owner = item.createdBy.trim() || 'the owner';
+                return j(409, {
+                  error: 'waiting',
+                  message: `Already waiting on ${owner} — add to the open thread instead`,
+                  ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
+                });
+              }
+              const range = locateReviewItemRange(item.review.detail, {
+                text: anchor.snippet.text,
+                ...(anchor.start !== undefined ? { start: anchor.start } : {}),
+                ...(anchor.end !== undefined ? { end: anchor.end } : {}),
+              });
+              if (!range) {
+                return j(400, {
+                  error:
+                    "anchor.start/end do not spell anchor.snippet.text in the item's current detail",
+                });
+              }
+              // Store the LOCATED anchor, so a snippet-only ask still renders
+              // at its offsets.
+              anchor = {
+                kind: 'review-item',
+                reviewItemId: item.id,
+                snippet: { text: range.text },
+                ...(range.start !== undefined && range.end !== undefined
+                  ? { start: range.start, end: range.end }
+                  : {}),
+              };
+              itemAsk = { taskId, reviewItemId: item.id, range };
+            }
             const declared = reviewFromBody(body?.review, text);
             if (!declared.ok) return j(400, { error: declared.error });
             const t = await rooms.postComment(docId, null, user, text, anchor, {
               generate: !visitor,
               ...(declared.review ? { review: declared.review } : {}),
             });
+            if (t && itemAsk?.range) {
+              const asked = taskStore.requestMoreInfoOnReview(
+                itemAsk.taskId,
+                itemAsk.reviewItemId,
+                text,
+                { actor: user, threadId: t.id, range: itemAsk.range },
+              );
+              if (asked.ok) taskProjection.ensureWorkspace(asked.task.workspaceId);
+            }
             if (t && declared.review) announceThreadReview(docId, t.id, declared.review, user);
             const handoff = threadUrl(docId, Boolean(visitor));
             return t

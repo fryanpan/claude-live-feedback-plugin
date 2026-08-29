@@ -845,6 +845,19 @@ export interface ReviewThreadItem {
    *  server's payload, in which case the row falls back to `since` — the
    *  pre-existing wording. */
   askedAt?: number;
+  /**
+   * On a `task-review` row: `open`, or `revised` — the owner changed the
+   * item's words after the reader asked on a phrase of it (2026-08-29). A
+   * `waiting` item — asked on, not yet revised — is exactly what the route
+   * omits, since it is the owner's turn. Absent from an older server.
+   */
+  state?: 'open' | 'revised';
+  /** On a revised row: when, what the reader had asked (the anchored
+   *  thread's first comment), and which span of the NEW detail changed.
+   *  `threadId` above names the thread that asked. */
+  revisedAt?: number;
+  question?: string;
+  revisedRange?: { start: number; end: number };
 }
 
 /**
@@ -919,6 +932,30 @@ export interface ReviewItem {
    *  the row RENDERS (the authored card vs the derived line) — never whether
    *  it is in the queue, which is the server's membership call. */
   review?: ReviewPayload;
+  /**
+   * The owner revised this item's words in answer to a question the reader
+   * asked on a phrase of it. The row comes back marked Revised, quoting the
+   * question, with the changed span highlighted and a way to the thread.
+   * Read off the server row; never set client-side.
+   */
+  revision?: ReviewRevisionNote;
+  /**
+   * The reader just asked on this item and it is the owner's turn. Set ONLY
+   * by the walkthrough's hold (`holdWaitingItem`): the server drops a waiting
+   * item from the queue, and the card the reader asked from must not vanish
+   * under them — so the item is kept on its card, with this note, until they
+   * step off it. Nothing else reads it, and a re-fetch never carries it.
+   */
+  waiting?: { question: string; owner: string };
+}
+
+export interface ReviewRevisionNote {
+  at: number;
+  /** The reader's question, as the anchored thread's first comment. */
+  question?: string;
+  threadId?: string;
+  /** The span of the CURRENT `review.detail` that changed, when known. */
+  range?: { start: number; end: number };
 }
 
 /** A declared item's headline is authored to fit and validated at the API, so
@@ -1176,6 +1213,16 @@ export function reviewQueue(
           why: '',
           since: t.since,
           thread: t,
+          ...(t.state === 'revised'
+            ? {
+                revision: {
+                  at: t.revisedAt ?? t.since,
+                  ...(t.question !== undefined ? { question: t.question } : {}),
+                  ...(t.threadId !== undefined ? { threadId: t.threadId } : {}),
+                  ...(t.revisedRange ? { range: t.revisedRange } : {}),
+                },
+              }
+            : {}),
         },
         // Ranks with the task-thread band: it is a question about the WORK,
         // and it inherits the task's own priority when the board read holds
@@ -1303,6 +1350,84 @@ export function reviewReplyRequest(
         },
       }
     : { path: `/api/docs/${doc}/threads/${thread}/comments`, body: { text } };
+}
+
+/**
+ * What a question asked ON a review item anchors to: the item, on its task's
+ * doc. Only a TICKET-borne item has one — a thread-borne declaration's words
+ * live in a comment, and a legacy decision's words are the task body, which
+ * the server refuses to anchor this way. Null means "no pill on this card".
+ */
+export function reviewItemAnchorTarget(
+  item: ReviewItem,
+): { docId: string; taskId: string; reviewItemId: string } | null {
+  const t = item.thread;
+  if (!t || t.kind !== 'task-review' || !t.taskId || !t.reviewItemId) return null;
+  if (t.reviewItemId === LEGACY_REVIEW_ITEM_ID) return null;
+  return { docId: `task:${t.taskId}`, taskId: t.taskId, reviewItemId: t.reviewItemId };
+}
+
+/**
+ * Where a question on a phrase of an item gets WRITTEN: a thread on the
+ * task's doc with a `review-item` anchor. Snippet only, no offsets — the
+ * card renders the detail as HTML, and the server locates the phrase in the
+ * markdown source itself (uniquely, or it stores the words alone). Mirrors
+ * `reviewReplyRequest`: one spelling, minus the author the caller adds.
+ */
+export function reviewItemAskRequest(
+  item: ReviewItem,
+  phrase: string,
+  question: string,
+): { path: string; body: Record<string, unknown> } | null {
+  const target = reviewItemAnchorTarget(item);
+  if (!target) return null;
+  return {
+    path: `/api/docs/${encodeURIComponent(target.docId)}/threads`,
+    body: {
+      text: question,
+      anchor: { kind: 'review-item', reviewItemId: target.reviewItemId, snippet: { text: phrase } },
+    },
+  };
+}
+
+/** The words of the current detail that a revision changed, when the range
+ *  is known and still spells something. Undefined otherwise — the card then
+ *  quotes the question without a mark rather than marking the wrong words. */
+export function revisedPhrase(item: ReviewItem): string | undefined {
+  const range = item.revision?.range;
+  const detail = item.review?.detail;
+  if (!range || detail === undefined) return undefined;
+  const phrase = detail.slice(range.start, range.end);
+  return phrase.trim() === '' ? undefined : phrase;
+}
+
+/** The walkthrough's hold on an item the reader just asked on. */
+export interface WalkHold {
+  key: string;
+  /** Where the card stood when the ask was sent. */
+  index: number;
+  /** The item as it read then, carrying `waiting`. */
+  item: ReviewItem;
+}
+
+/**
+ * Keep an asked-on item on its card while the queue has dropped it.
+ *
+ * The server takes a waiting item off the queue at once (it is the owner's
+ * turn), and the walkthrough re-derives its queue on every paint — so without
+ * this the card the reader just typed a question into would be replaced by
+ * the next item before they had read the "waiting" note, which reads as the
+ * page losing the thing they were doing. The copy goes back at the position
+ * it held; the total is left as the server's count, because the hold is a
+ * display ledger and not a queue row. Returns the queue itself (same object)
+ * when there is nothing to hold or the item is back on its own.
+ */
+export function holdWaitingItem(queue: ReviewQueue, hold: WalkHold | null): ReviewQueue {
+  if (!hold) return queue;
+  if (queue.items.some((i) => i.key === hold.key)) return queue;
+  const items = queue.items.slice();
+  items.splice(Math.min(Math.max(0, hold.index), items.length), 0, hold.item);
+  return { ...queue, items };
 }
 
 /** "Blocking 2 tasks" / "Hard-blocking 1 task". One phrasing everywhere a

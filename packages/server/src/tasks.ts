@@ -11,12 +11,16 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import {
+  type ReviewItemRange,
+  type ReviewItemRevision,
   type ReviewPayload,
   type TaskReviewItem,
   agentIdCandidates,
   agentIdForName,
+  changedRange,
   checkReviewPayload,
   isReviewItemOpen,
+  latestThreadedQuestion,
   readReviewPayload,
   readTaskReviewItem,
   reviewFromDecisionTask,
@@ -1754,7 +1758,26 @@ export interface VoiceRequestEvent {
   ts: number;
 }
 
+/**
+ * A review item's words changed in place — the owner's half of the
+ * doc-style exchange: a person asks on a phrase, the owner revises. The
+ * item is back on the queue after this, marked, which is what a lead
+ * watching the feed needs to know.
+ */
+export interface ReviewItemRevisedEvent {
+  type: 'review_item.revised';
+  workspaceId: string;
+  taskId: string;
+  reviewItemId: string;
+  /** The anchored thread this revision answers, when there was one. */
+  threadId?: string;
+  actor: TaskActor;
+  links: Ref[];
+  ts: number;
+}
+
 export type TaskStoreEvent =
+  | ReviewItemRevisedEvent
   | TaskCreatedEvent
   | TaskTransitionedEvent
   | TaskGateRefusedEvent
@@ -1966,6 +1989,30 @@ export type AnswerTaskReviewResult =
 export type RequestInfoOnReviewResult =
   | { ok: true; task: Task; item: TaskReviewItem }
   | { ok: false; error: 'not-found' | 'unknown-review-item' | 'not-a-decision' };
+
+export type ReviseReviewItemResult =
+  | {
+      ok: true;
+      task: Task;
+      item: TaskReviewItem;
+      /** The anchored thread the revision answers, when a question was asked
+       *  doc-style — where a reply belongs. */
+      threadId?: string;
+      advice?: string;
+    }
+  | {
+      ok: false;
+      error:
+        | 'not-found'
+        | 'unknown-review-item'
+        | 'not-revisable'
+        | 'answered'
+        | 'empty-patch'
+        | 'bad-review'
+        | 'bad-range';
+      /** The verbatim refusal, present for 'bad-review', 'answered' and 'bad-range'. */
+      message?: string;
+    };
 
 export type SetDependenciesResult =
   | {
@@ -4002,7 +4049,18 @@ export class TaskStore {
     taskId: string,
     reviewItemId: string,
     question: string,
-    opts: { actor: { id: string; name: string; kind?: string } },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /**
+       * The thread the question was asked on, with the phrase it is about,
+       * when it was asked doc-style — by selecting words of the item and
+       * commenting. Same storage as the typed question, one field richer:
+       * that is what makes the item's state derivable from one list rather
+       * than reconciled across two.
+       */
+      threadId?: string;
+      range?: ReviewItemRange;
+    },
   ): RequestInfoOnReviewResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
@@ -4024,7 +4082,16 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
-    item.infoRequests = [...(item.infoRequests ?? []), { text: question, by: actor.name, ts }];
+    item.infoRequests = [
+      ...(item.infoRequests ?? []),
+      {
+        text: question,
+        by: actor.name,
+        ts,
+        ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
+        ...(opts.range !== undefined ? { range: opts.range } : {}),
+      },
+    ];
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
@@ -4038,6 +4105,124 @@ export class TaskStore {
       ts,
     });
     return { ok: true, task, item };
+  }
+
+  /**
+   * Rewrite ONE review item's words in place, keeping what they were.
+   *
+   * The owner's answer to a question asked on the item: not a reply that
+   * leaves the ask as confusing as it was, but the ask itself made clearer.
+   * `patch` names only the fields that change; the merged payload passes the
+   * SAME gate a new item does (`checkReviewPayload`), so a revision cannot
+   * smuggle in what a filing would have been refused.
+   *
+   * The previous text goes onto `revisions` — user content is never
+   * overwritten in place — stamped with the anchored thread it answers (the
+   * newest doc-style question) and with where the change landed in the new
+   * text: the caller's `revisedRange` if given, else the prefix/suffix diff
+   * of the detail. `reviewItemState` reads the item as `revised` from here,
+   * which is what puts it back on the queue.
+   *
+   * The derived legacy row (`r-legacy`) is refused: its words are the task's
+   * title and body, and rewriting those is `rewrite_task`'s job. So is an
+   * ANSWERED item: the answer was given to the words on it, and rewriting
+   * them under it would leave a decision on record about text nobody can see
+   * — and `reviewItemState` reads `answer` first, so the mismatch would never
+   * surface as a re-queue either. File a fresh item instead.
+   */
+  reviseReviewItem(
+    taskId: string,
+    reviewItemId: string,
+    patch: { headline?: unknown; detail?: unknown; options?: unknown },
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      revisedRange?: { start: number; end: number };
+    },
+  ): ReviseReviewItemResult {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (reviewItemId === LEGACY_REVIEW_ITEM_ID) return { ok: false, error: 'not-revisable' };
+    const item = task.reviews?.find((r) => r.id === reviewItemId);
+    if (!item) return { ok: false, error: 'unknown-review-item' };
+    if (item.answer) {
+      return {
+        ok: false,
+        error: 'answered',
+        message: `review item ${reviewItemId} is already answered — the answer is to the words it has; add a new item instead of rewriting these`,
+      };
+    }
+
+    const touches = (['headline', 'detail', 'options'] as const).filter(
+      (k) => patch[k] !== undefined,
+    );
+    if (touches.length === 0) return { ok: false, error: 'empty-patch' };
+
+    // Merge onto the stored payload, then run the one gate. `answeredWith` /
+    // `answeredAt` are not on an open item, and a closed item is not revised
+    // here — its answer would be an answer to words nobody can see anymore.
+    const merged: Record<string, unknown> = { ...item.review };
+    for (const k of touches) merged[k] = patch[k];
+    const check = checkReviewPayload(merged);
+    if (!check.ok) {
+      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+    }
+    const next = readReviewPayload(merged);
+    if (!next) return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+
+    const ts = Date.now();
+    const actor: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    // An explicit range is offsets into the NEW detail; one that runs past it
+    // would be served to the queue as-is and highlight to the end of whatever
+    // text is there. The derived range is bounded by construction.
+    const detailLength = (next.detail ?? '').length;
+    if (opts.revisedRange && opts.revisedRange.end > detailLength) {
+      return {
+        ok: false,
+        error: 'bad-range',
+        message: `revisedRange ${opts.revisedRange.start}–${opts.revisedRange.end} runs past the new detail (${detailLength} characters)`,
+      };
+    }
+    const question = latestThreadedQuestion(item);
+    const range =
+      opts.revisedRange ??
+      (next.detail !== item.review.detail
+        ? changedRange(item.review.detail ?? '', next.detail ?? '')
+        : undefined);
+    const previous: ReviewItemRevision = {
+      at: ts,
+      by: actor.name,
+      headline: item.review.headline,
+      ...(item.review.detail !== undefined ? { detail: item.review.detail } : {}),
+      ...(item.review.options !== undefined ? { options: item.review.options } : {}),
+      ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
+      ...(range !== undefined ? { revisedRange: range } : {}),
+    };
+    item.revisions = [...(item.revisions ?? []), previous];
+    item.review = next;
+    task.updatedAt = ts;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'review_item.revised',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      reviewItemId,
+      ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
+      actor,
+      links: task.links,
+      ts,
+    });
+    const advice = reviewGapAdvice(check.gaps);
+    return {
+      ok: true,
+      task,
+      item,
+      ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
+      ...(advice !== undefined ? { advice } : {}),
+    };
   }
 
   /**
