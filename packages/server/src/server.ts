@@ -7344,11 +7344,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (rest === 'threads' && req.method === 'GET') {
             const status = url.searchParams.get('status') as 'open' | 'resolved' | null;
-            return j(200, {
-              threads: rooms
-                .listThreads(docId, status ? { status } : undefined)
-                .map((t) => withTaskChips(docId, t)),
-            });
+            const filter = status ? { status } : undefined;
+            const threads: Array<Thread & { docId?: string }> = rooms
+              .listThreads(docId, filter)
+              .map((t) => withTaskChips(docId, t));
+            // A `.md` diff member's companion editor doc holds the threads
+            // the reviewer left in the File view. The agent asked about the
+            // member because that is the id it was handed; answer for the
+            // file, and tag each companion thread with the doc it lives on
+            // so a reply lands there. Member threads keep their shape.
+            const companionId = rooms.companionOf(docId);
+            if (companionId) {
+              for (const t of rooms.listThreads(companionId, filter)) {
+                threads.push({ ...withTaskChips(companionId, t), docId: companionId });
+              }
+              threads.sort((a, b) => b.lastActivity - a.lastActivity);
+            }
+            return j(200, { threads });
           }
           // Task-chip resolution (§3.3 rule 2): how a chip inside a doc
           // resolves for a DOC-scoped invite, which never gets the workspace
