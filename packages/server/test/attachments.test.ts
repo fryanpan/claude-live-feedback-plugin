@@ -462,6 +462,30 @@ describe('attachment routes + lead-addressed delivery', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it('attaching writes the agent into the roster under the name it sent', async () => {
+    // One address book for people and helpers: the attach is where an agent
+    // first says who it is, so the roster row is written here — and an older
+    // bundle that sends no name still attaches, under its id.
+    const wsId = await makeWorkspace('roster-hub');
+    const r = await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-lighthouse',
+      agentName: 'Lighthouse',
+      runtime: 'claude-code-local',
+    });
+    expect(r.status).toBe(200);
+    const rec = handle.identities.get('agent-lighthouse');
+    expect(rec?.kind).toBe('agent');
+    expect(rec?.displayName).toBe('Lighthouse');
+    expect(handle.identities.resolveAgentId('lighthouse')).toBe('agent-lighthouse');
+
+    const old = await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-legacy-bundle',
+      runtime: 'claude-code-local',
+    });
+    expect(old.status).toBe(200);
+    expect(handle.identities.get('agent-legacy-bundle')?.displayName).toBe('agent-legacy-bundle');
+  });
+
   it('POST attach → GET list round-trips every param, including endpoint + capabilities', async () => {
     const wsId = await makeWorkspace('routes-hub');
     const r = await post(`/api/workspaces/${wsId}/attachments`, {

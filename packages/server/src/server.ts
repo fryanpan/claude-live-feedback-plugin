@@ -28,7 +28,14 @@ import {
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
-import { classifyActor, registerOwnerIdentity } from './activity.ts';
+import {
+  classifyActor,
+  identityLinks,
+  ownerIdentityIds,
+  registerOwnerIdentity,
+  resolveIdentityId,
+  setIdentityRoster,
+} from './activity.ts';
 import {
   AgentWatches,
   SHARED_AGENT_IDS,
@@ -173,8 +180,11 @@ import {
   ASSIGNEE_REQUIRED_ERROR,
   ASSIGNEE_REQUIRED_HANDOVER_MESSAGE,
   ASSIGNEE_REQUIRED_MESSAGE,
+  AUTHOR_REQUIRED_ERROR,
+  AUTHOR_REQUIRED_MESSAGE,
   BAD_ASSIGNEE_KIND_ERROR,
   BAD_ASSIGNEE_KIND_MESSAGE,
+  isCategoryAuthor,
   parseAssigneeKind,
   resolveAssignee,
 } from './task-owner.ts';
@@ -854,6 +864,9 @@ export interface ServerHandle {
   /** Per-agent durable watch sets (agent-watches.ts). Exposed so tests can
    *  read the store the route wrote, not only the route's answer. */
   agentWatches: AgentWatches;
+  /** The fleet address book (identities.ts) — people and agents. Exposed
+   *  for the same reason `agentWatches` is. */
+  identities: Identities;
   /** Open builder dispatches and their worktree watchers
    *  (dispatch-registry.ts). Exposed for the same reason `agentWatches` is. */
   dispatches: DispatchRegistry;
@@ -2908,6 +2921,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   if (identities.loadError) {
     console.error(`[identities] ${identities.loadError}`);
   }
+  // Agents are roster rows too: an attach writes one, and the seat claim
+  // names the lead by it. See identities.ts. The activity readers resolve
+  // through the same roster, so an old actor id reads as the identity it
+  // was merged into.
+  taskStore.setAgentRoster(identities);
+  setIdentityRoster(identities);
   // Teach the owner check which anonymous session ids belong to a known
   // person. Logged either way: a link file that failed to parse and one that
   // was never written both leave the map empty, and the difference is
@@ -2961,10 +2980,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // identity becomes `user-<hash>` the owner-activity view quietly reads
   // empty with nothing anywhere reporting it. See activity.ts.
   if (opts.ownerEmail && isEmailLike(opts.ownerEmail)) {
-    registerOwnerIdentity(emailIdentityId(opts.ownerEmail));
+    const ownerId = emailIdentityId(opts.ownerEmail);
+    registerOwnerIdentity(ownerId);
     // Named so the identity exists in the roster before its first write,
     // rather than appearing the first time the owner happens to log in.
     identities.upsertByEmail(opts.ownerEmail);
+    // The owner's legacy spellings fold into the owner's roster row: the
+    // pre-email id, and every link-file id whose target is an owner id. So
+    // every reader that resolves through the roster — activity rows, the
+    // home brief, the weekly-review projections — lands on ONE identity for
+    // the owner. Read-time only; nothing on disk is rewritten.
+    const owners = new Set(ownerIdentityIds());
+    identities.addMergedFrom(ownerId, 'known-bryan');
+    for (const [from, to] of Object.entries(identityLinks())) {
+      if (owners.has(to) || owners.has(resolveIdentityId(to))) {
+        identities.addMergedFrom(ownerId, from);
+      }
+    }
   } else if (opts.ownerEmail) {
     console.error(`[identities] CW_OWNER_EMAIL is not an address: ${opts.ownerEmail}`);
   }
@@ -3292,9 +3324,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          *
          * Order matters and each rung has a reason:
          *
-         *  1. A proven identity, when email identity is in effect. It
-         *     outranks the body precisely because the body is the thing it
-         *     exists to stop being authoritative.
+         *  1. A proven identity. It outranks the body precisely because the
+         *     body is the thing it exists to stop being authoritative — and
+         *     it does so whether or not `CW_REQUIRE_EMAIL_AUTH` is on: the
+         *     flag governs whether a session is REQUIRED, never whether a
+         *     verified one is believed (Bryan, 2026-08-29 — a verified name
+         *     is never worse than a typed one).
          *  2. A share visitor with nothing proven stays a `guest-` — that
          *     path is the template this work copies, not a thing it replaces,
          *     and link mode keeps minting guests.
@@ -3303,8 +3338,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          *     lands on, so a request with no session behaves identically
          *     whichever way the flag is set.
          *
-         * Rung 1 is behind `CW_REQUIRE_EMAIL_AUTH` (default off), so with the
-         * flag off this function is byte-for-byte what it was.
+         * With no session presented, this function is byte-for-byte what it
+         * was whichever way the flag is set.
          */
         const authorFor = (claimed: unknown): User | undefined => {
           // Rung 0: a verified widget popup-token. NOT behind the flag,
@@ -3314,10 +3349,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // cookie can never reach. An invalid token never lands here: the
           // gate below 401s it before any route runs.
           if (widgetIdentity) return userForIdentity(widgetIdentity);
-          if (requireEmailAuth) {
-            const proven = provenIdentityFor();
-            if (proven) return userForIdentity(proven);
-          }
+          const proven = provenIdentityFor();
+          if (proven) return userForIdentity(proven);
           if (visitor) {
             return sanitizeVisitorAuthor(claimed, {
               // The SHARE, not the doc: two links to the same doc are two
@@ -3331,7 +3364,39 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               shareKey: visitorShareId ?? visitor.workspaceId ?? '',
             });
           }
-          return claimed as User | undefined;
+          return stampRosterAgent(claimed as User | undefined);
+        };
+
+        /**
+         * A write signed by a roster AGENT is stamped with the roster's
+         * name and canonical id — the board's record of who holds the seat
+         * names the lead, not the launch env of whichever process happened
+         * to sign. Mirrors `userForIdentity` for people. An author the
+         * roster does not know (a person's typed name, an old bundle's id
+         * nothing attached under) passes through exactly as claimed.
+         */
+        /** The 400 every comment route answers the shared category with.
+         *  One message, the same fix named, so a peer launched without a
+         *  name learns it from the first refusal rather than from silence. */
+        const refuseCategoryAuthor = (): Response =>
+          j(400, { error: AUTHOR_REQUIRED_ERROR, message: AUTHOR_REQUIRED_MESSAGE });
+
+        const stampRosterAgent = (claimed: User | undefined): User | undefined => {
+          if (!claimed || typeof claimed !== 'object' || typeof claimed.id !== 'string') {
+            return claimed;
+          }
+          const rec = identities.get(claimed.id);
+          if (!rec || rec.kind !== 'agent') return claimed;
+          // A row written by an older bundle's attach carries no name — its
+          // display name is its id. The claim on THIS write is the launch
+          // env's name, which is exactly the source the roster wants, so
+          // learn it here rather than overwrite a real name with an id.
+          const claimedName = typeof claimed.name === 'string' ? claimed.name.trim() : '';
+          if (rec.displayName === rec.id && claimedName && claimedName !== rec.id) {
+            const learned = identities.upsertAgent(rec.id, claimedName);
+            return { ...claimed, id: rec.id, name: learned?.displayName ?? claimedName };
+          }
+          return { ...claimed, id: rec.id, name: rec.displayName };
         };
 
         /**
@@ -4647,13 +4712,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // row is not work to pick up, so it leaves the queue unless a caller
           // asks for it by name.
           const includeArchived = url.searchParams.get('includeArchived') === 'true';
+          const wantedOwner = url.searchParams.get('assignee') || undefined;
           const rows = buildQueue(
             taskStore.listTasks(workspaceId, { includeArchived }),
             workspace.goals,
             {
-              ...(url.searchParams.get('assignee')
-                ? { assignee: url.searchParams.get('assignee') ?? '' }
-                : {}),
+              ...(wantedOwner !== undefined ? { assignee: wantedOwner } : {}),
+              // By id as well as by name: the store's matcher finds every
+              // spelling the roster folds into one agent, and `idOf` puts
+              // that id on the row.
+              owner: {
+                ...(wantedOwner !== undefined
+                  ? { matches: taskStore.ownerMatcher(wantedOwner) }
+                  : {}),
+                idOf: (t) => taskStore.ownerIdOf(t),
+              },
               ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
                 ? { limit: Number(limitRaw) }
                 : {}),
@@ -6358,6 +6431,83 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           return j(405, { error: 'method not allowed' });
         }
+        // Fold one agent id into another — the rename verb. The roster
+        // records the merge (old ids resolve forever), every board the old
+        // id led hands its seat over, the attachment records re-key, and
+        // the durable watch set moves so deliveries follow the new id.
+        // `dryRun` answers what WOULD move and touches nothing. Never
+        // rewrites activity.jsonl or a ydoc: history resolves at read.
+        const agentMergeMatch = pathname.match(/^\/api\/agents\/([^/]+)\/merge$/);
+        if (agentMergeMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          // Loopback only, on the PEER ADDRESS — the deploy route's gate and
+          // its reasoning (the Host header is client-controlled). A merge
+          // moves lead seats and re-keys an agent's deliveries fleet-wide;
+          // that is an operator action run from the box, not something any
+          // tailnet client should be able to do to a board it can see.
+          if (!isLoopbackAddress(server.requestIP(req)?.address)) {
+            return j(403, {
+              error:
+                'agent merges must be run from this machine (loopback only) — a merge moves lead seats and re-keys deliveries',
+            });
+          }
+          const from = decodeURIComponent(agentMergeMatch[1] ?? '');
+          const body = await safeJson(req);
+          const into = typeof body?.into === 'string' ? body.into.trim() : '';
+          if (!isValidAgentId(from) || !isValidAgentId(into)) {
+            return j(400, { error: 'bad agentId', message: 'both ids must be agent ids' });
+          }
+          if (from === into) return j(400, { error: 'self-merge' });
+          if (SHARED_AGENT_IDS.has(into)) {
+            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
+          }
+          const dryRun = body?.dryRun === true;
+          const actor = authorFor(body?.author) ?? { id: into, name: into, kind: 'known' };
+          // The roster half is skipped for the SHARED id on purpose: the
+          // seat and attachments move (a board led by "Agent" gets a real
+          // lead), but the old comments signed by it stay unattributed —
+          // there is no proof who wrote them.
+          const fromShared = SHARED_AGENT_IDS.has(from);
+          // A `from` that resolves to a PERSON — `known-bryan`, the owner's
+          // own id, an anon id the link file folded — is refused on the dry
+          // run too, so the report never promises a fold the write refuses.
+          const fromResolved = identities.get(from);
+          if (fromResolved && fromResolved.kind !== 'agent') {
+            return j(400, {
+              error: 'from-not-agent',
+              message: `${from} resolves to a person (${fromResolved.id}); only agent ids merge`,
+            });
+          }
+          let roster: { folded: boolean; mergedFrom: string[] } = { folded: false, mergedFrom: [] };
+          if (!fromShared) {
+            const target = identities.get(into) ?? identities.upsertAgent(into);
+            if (!target || target.kind !== 'agent') {
+              return j(400, { error: 'into-not-agent', message: `${into} is not an agent` });
+            }
+            if (!dryRun) {
+              const merged = identities.mergeAgent(from, target.id);
+              if (!merged.ok) return j(400, { error: merged.error });
+              roster = { folded: true, mergedFrom: merged.into.mergedFrom };
+            } else {
+              roster = { folded: true, mergedFrom: [...new Set([...target.mergedFrom, from])] };
+            }
+          }
+          const boards = taskStore.mergeAgent(from, into, { actor, dryRun });
+          const watches = dryRun
+            ? agentWatches.list(from, () => true).watches.map((w) => w.key)
+            : agentWatches.rekey(from, into).moved;
+          return j(200, {
+            from,
+            into,
+            dryRun,
+            roster,
+            seats: boards.seats,
+            seatsSkipped: boards.seatsSkipped,
+            attachments: boards.attachments,
+            comments: boards.comments,
+            watches,
+          });
+        }
         // --- REST: builder dispatches ---
         // The lead's statement that a builder is working a task in a private
         // worktree, so the stall loop can read worktree churn as the row
@@ -6651,6 +6801,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = taskStore.attachAgent(workspaceId, {
             agentId: agentId.trim(),
+            // The display name the session runs under. Absent from older
+            // bundles, which attach under their id.
+            ...(typeof body?.agentName === 'string' && body.agentName.trim().length > 0
+              ? { agentName: body.agentName.trim() }
+              : {}),
             runtime,
             capabilities: Array.isArray(body?.capabilities)
               ? (body.capabilities as unknown[]).filter((c): c is string => typeof c === 'string')
@@ -6671,7 +6826,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 ? body.processId.trim()
                 : undefined,
           });
-          if (!res.ok) return j(404, res);
+          if (!res.ok) {
+            // 409: the id is real but no longer the one to use — the body
+            // names the survivor, and a 400 would read as a malformed request.
+            const status =
+              res.error === 'workspace-not-found' ? 404 : res.error === 'merged-away' ? 409 : 400;
+            return j(status, res);
+          }
           return j(200, res);
         }
         const wsAgentHeartbeatMatch = pathname.match(
@@ -7211,6 +7372,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const user = authorFor(body?.author);
               const text = body?.text as string | undefined;
               if (!user || !text) return j(400, { error: 'author + text required' });
+              if (isCategoryAuthor(user)) return refuseCategoryAuthor();
               const declared = reviewFromBody(body?.review, text);
               if (!declared.ok) return j(400, { error: declared.error });
               // A person's plain reply IS the answer to the ask it lands on.
@@ -7387,6 +7549,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (threadRest === '/resolve' && req.method === 'POST') {
               const body = await safeJson(req);
               const author = authorFor(body?.author);
+              if (isCategoryAuthor(author)) return refuseCategoryAuthor();
               // Resolve is a thread change, so it schedules a summary — and a
               // visitor must not be able to spend the API key by clicking it.
               const t = rooms.resolve(docId, threadId, author, { generate: !visitor });
@@ -7395,6 +7558,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (threadRest === '/reopen' && req.method === 'POST') {
               const body = await safeJson(req);
               const author = authorFor(body?.author);
+              if (isCategoryAuthor(author)) return refuseCategoryAuthor();
               const t = rooms.reopen(docId, threadId, author, { generate: !visitor });
               return t ? j(200, { thread: t }) : j(404, { error: 'thread not found' });
             }
@@ -7455,6 +7619,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (!user || !text || !anchor) {
               return j(400, { error: 'author + text + anchor required' });
             }
+            if (isCategoryAuthor(user)) return refuseCategoryAuthor();
             // Validate BEFORE the write. An anchor whose startRel/endRel
             // don't decode is accepted silently by the CRDT and then kills
             // the re-anchor sweep from inside a Yjs observer, i.e. on
@@ -8358,6 +8523,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     tasks: taskStore,
     projection: taskProjection,
     agentWatches,
+    identities,
     dispatches,
     shares,
     sweepDeadShares,

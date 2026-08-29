@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AgentWatches,
@@ -279,3 +279,337 @@ describe('/api/agents/:agentId/watches', () => {
     expect(handle?.agentWatches.list('agent-alpha', () => true).watches).toEqual([]);
   });
 });
+
+/**
+ * A merge re-keys the durable watch set — and the only assertion worth
+ * having is DELIVERY under the new id. A re-keyed entry that never carries a
+ * comment is the silent-loss shape this store exists to end, one layer down.
+ */
+describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new id', () => {
+  let handle: ServerHandle | null = null;
+  let dataDir: string | null = null;
+
+  afterEach(async () => {
+    await handle?.stop();
+    handle = null;
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+    dataDir = null;
+  });
+
+  it('a comment posted after the merge reaches the new id, and the old id holds nothing', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-'));
+    handle = createServer({ port: 0, dataDir });
+    const base = `http://localhost:${handle.port}`;
+    const post = async (path: string, body: unknown) => {
+      const res = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { host: `localhost:${handle?.port ?? 0}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    };
+    const get = async (path: string) => {
+      const res = await fetch(`${base}${path}`, {
+        headers: { host: `localhost:${handle?.port ?? 0}` },
+      });
+      return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    };
+
+    // A board led by a THIRD agent, so the merged agent is addressed only
+    // through its durable watch — not through the lead seat.
+    const created = await post('/api/workspaces', {
+      name: 'merge-hub',
+      goal: 'Ship it.',
+      leadAgentId: 'agent-lead',
+    });
+    const wsId = (created.json.workspace as { id: string }).id;
+    const file = join(dataDir, 'watched.md');
+    writeFileSync(file, '# Watched\n\nBody.\n');
+    expect((await post('/api/docs', { docId: 'watched', sourceUrl: file })).status).toBe(200);
+    expect((await post(`/api/workspaces/${wsId}/docs`, { docId: 'watched' })).status).toBe(200);
+
+    // The old identity attaches (a bystander) and persists its board watch.
+    expect(
+      (
+        await post(`/api/workspaces/${wsId}/attachments`, {
+          agentId: 'agent-old',
+          agentName: 'Old Name',
+          runtime: 'claude-code-local',
+        })
+      ).status,
+    ).toBe(200);
+    expect((await post('/api/agents/agent-old/watches', { add: [`ws:${wsId}`] })).status).toBe(200);
+
+    const comment = (text: string) =>
+      post('/api/docs/watched/threads', {
+        author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+        text,
+        anchor: { kind: 'subject' },
+      });
+    const queuedFor = async (agentId: string): Promise<string[]> => {
+      const r = await post(`/api/workspaces/${wsId}/attachments`, {
+        agentId,
+        runtime: 'claude-code-local',
+      });
+      expect(r.status).toBe(200);
+      const rows = (r.json.queuedComments as Array<{ id: string; text: string }>) ?? [];
+      // Receipt each row the way the MCP does, so a later attach is not
+      // re-offered what this one already took.
+      for (const q of rows) {
+        expect((await post(`/api/workspaces/${wsId}/comment-queue/${q.id}/ack`, {})).status).toBe(
+          200,
+        );
+      }
+      return rows.map((q) => q.text);
+    };
+
+    // POSITIVE CONTROL: before the merge, the watch delivers to the old id.
+    expect((await comment('first, to the old id')).status).toBe(200);
+    expect(await queuedFor('agent-old')).toEqual(['first, to the old id']);
+
+    const merged = await post('/api/agents/agent-old/merge', {
+      into: 'agent-new',
+      author: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+    });
+    expect(merged.status, JSON.stringify(merged.json)).toBe(200);
+    expect(merged.json.watches).toEqual([`ws:${wsId}`]);
+
+    // The set is under the new id now, and only there.
+    const restored = await get('/api/agents/agent-new/watches');
+    expect((restored.json.watches as Array<{ key: string }>).map((w) => w.key)).toEqual([
+      `ws:${wsId}`,
+    ]);
+    expect((await get('/api/agents/agent-old/watches')).json.watches).toEqual([]);
+
+    // END TO END: a comment after the merge is queued for the NEW id.
+    expect((await comment('second, to the new id')).status).toBe(200);
+    expect(await queuedFor('agent-new')).toEqual(['second, to the new id']);
+    // …and not for the old one: nothing is addressed to it any more, and
+    // it cannot even attach — the id was merged away, and the refusal names
+    // the survivor.
+    const stale = await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: 'agent-old',
+      runtime: 'claude-code-local',
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.json.error).toBe('merged-away');
+    expect(stale.json.into).toBe('agent-new');
+    expect(handle.tasks.listQueuedComments(wsId).map((q) => q.agentId)).not.toContain('agent-old');
+
+    // The roster folded the old id into the new one.
+    expect(handle.identities.get('agent-old')?.id).toBe('agent-new');
+    expect(handle.identities.get('agent-new')?.mergedFrom).toEqual(['agent-old']);
+  });
+
+  it('refuses to merge INTO the shared identity, and refuses a self-merge', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-refuse-'));
+    handle = createServer({ port: 0, dataDir });
+    const base = `http://localhost:${handle.port}`;
+    const merge = async (from: string, body: unknown) => {
+      const res = await fetch(`${base}/api/agents/${from}/merge`, {
+        method: 'POST',
+        headers: { host: `localhost:${handle?.port ?? 0}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return res.status;
+    };
+    expect(await merge('agent-old', { into: 'known-agent' })).toBe(400);
+    expect(await merge('agent-old', { into: 'agent-old' })).toBe(400);
+    expect(await merge('agent-old', {})).toBe(400);
+  });
+});
+
+/**
+ * Security review of the merge verb (PR #440). Three findings, each with its
+ * own test because each one was invisible to the test above:
+ *  - an UN-ACKED backlog stayed keyed to the old id (the e2e test acked
+ *    every row before merging, so it could not see this);
+ *  - `from` could be an id a PERSON row already folds (`known-bryan`, or an
+ *    anon id from the link file), so two rows claimed it;
+ *  - any tailnet caller could move a lead seat — the route only refused
+ *    share visitors, and a deploy-grade action deserves the deploy gate.
+ */
+describe('POST /api/agents/:id/merge — review findings', () => {
+  let handle: ServerHandle | null = null;
+  let dataDir: string | null = null;
+
+  afterEach(async () => {
+    await handle?.stop();
+    handle = null;
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+    dataDir = null;
+  });
+
+  const req = async (path: string, init: { method?: string; body?: unknown } = {}) => {
+    const port = handle?.port ?? 0;
+    const res = await fetch(`http://localhost:${port}${path}`, {
+      method: init.method ?? (init.body === undefined ? 'GET' : 'POST'),
+      headers: { host: `localhost:${port}`, 'content-type': 'application/json' },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    });
+    return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+  };
+
+  /** A board led by a third agent, a watched doc, and `agent-old` attached
+   *  with a durable board watch — the shape of the e2e test above. */
+  async function seed(): Promise<string> {
+    const created = await req('/api/workspaces', {
+      body: { name: 'merge-hub', goal: 'Ship it.', leadAgentId: 'agent-lead' },
+    });
+    const wsId = (created.json.workspace as { id: string }).id;
+    const file = join(dataDir as string, 'watched.md');
+    writeFileSync(file, '# Watched\n\nBody.\n');
+    expect((await req('/api/docs', { body: { docId: 'watched', sourceUrl: file } })).status).toBe(
+      200,
+    );
+    expect((await req(`/api/workspaces/${wsId}/docs`, { body: { docId: 'watched' } })).status).toBe(
+      200,
+    );
+    expect(
+      (
+        await req(`/api/workspaces/${wsId}/attachments`, {
+          body: { agentId: 'agent-old', agentName: 'Old Name', runtime: 'claude-code-local' },
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await req('/api/agents/agent-old/watches', { body: { add: [`ws:${wsId}`] } })).status,
+    ).toBe(200);
+    return wsId;
+  }
+
+  it('an un-acked backlog follows the merge to the new id', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-backlog-'));
+    handle = createServer({ port: 0, dataDir });
+    const wsId = await seed();
+
+    // A comment lands while nobody is attached to receive it: queued for
+    // agent-old, and NOT acked — the case the e2e test cannot reach.
+    expect(
+      (
+        await req('/api/docs/watched/threads', {
+          body: {
+            author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+            text: 'posted before the merge, never acked',
+            anchor: { kind: 'subject' },
+          },
+        })
+      ).status,
+    ).toBe(200);
+    // POSITIVE CONTROL: the row is on the books for the old id (the lead is
+    // addressed too; that row is not under test).
+    const addressees = () => handle?.tasks.listQueuedComments(wsId).map((q) => q.agentId) ?? [];
+    expect(addressees()).toContain('agent-old');
+    expect(addressees()).not.toContain('agent-new');
+
+    const merged = await req('/api/agents/agent-old/merge', {
+      body: { into: 'agent-new', author: { id: 'agent-new', name: 'New Name', kind: 'agent' } },
+    });
+    expect(merged.status, JSON.stringify(merged.json)).toBe(200);
+    // The response says the backlog moved, per board — same shape as seats.
+    expect(merged.json.comments).toEqual([wsId]);
+
+    // The new id's first attach hands the row over…
+    const attached = await req(`/api/workspaces/${wsId}/attachments`, {
+      body: { agentId: 'agent-new', runtime: 'claude-code-local' },
+    });
+    expect(attached.status).toBe(200);
+    expect(
+      ((attached.json.queuedComments as Array<{ text: string }>) ?? []).map((q) => q.text),
+    ).toEqual(['posted before the merge, never acked']);
+    // …and the old id holds nothing: the row was moved, not copied.
+    expect(addressees()).not.toContain('agent-old');
+    expect(addressees().filter((id) => id === 'agent-new')).toHaveLength(1);
+  });
+
+  it('a dry run reports the backlog it WOULD move and moves nothing', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-backlog-dry-'));
+    handle = createServer({ port: 0, dataDir });
+    const wsId = await seed();
+    expect(
+      (
+        await req('/api/docs/watched/threads', {
+          body: {
+            author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+            text: 'still here after the dry run',
+            anchor: { kind: 'subject' },
+          },
+        })
+      ).status,
+    ).toBe(200);
+    const dry = await req('/api/agents/agent-old/merge', {
+      body: { into: 'agent-new', dryRun: true },
+    });
+    expect(dry.status).toBe(200);
+    expect(dry.json.comments).toEqual([wsId]);
+    const addressees = handle.tasks.listQueuedComments(wsId).map((q) => q.agentId);
+    expect(addressees).toContain('agent-old');
+    expect(addressees).not.toContain('agent-new');
+  });
+
+  it('refuses a `from` that a person row already folds, including a link-file anon id', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-person-'));
+    // Boot seeding folds `known-bryan` into the owner's email identity.
+    handle = createServer({ port: 0, dataDir, ownerEmail: 'owner@example.com' });
+    const owner = handle.identities.byEmail('owner@example.com');
+    expect(owner?.kind).toBe('person');
+    // POSITIVE CONTROL: the id under test really does resolve to a person.
+    expect(handle.identities.get('known-bryan')?.id).toBe(owner?.id);
+    handle.identities.addMergedFrom(owner?.id ?? '', 'anon-x1');
+    expect(handle.identities.get('anon-x1')?.kind).toBe('person');
+
+    for (const from of ['known-bryan', 'anon-x1', owner?.id ?? '']) {
+      const r = await req(`/api/agents/${encodeURIComponent(from)}/merge`, {
+        body: { into: 'agent-evil', author: { id: 'agent-evil', name: 'Evil', kind: 'agent' } },
+      });
+      expect(r.status, `${from}: ${JSON.stringify(r.json)}`).toBe(400);
+      expect(r.json.error).toBe('from-not-agent');
+      // Nothing claimed the id: the owner still resolves to the owner.
+      expect(handle.identities.get(from)?.id).toBe(owner?.id);
+    }
+    // The agent row the attempt would have created must not exist either.
+    expect(handle.identities.get('agent-evil')?.mergedFrom ?? []).toEqual([]);
+  });
+
+  it('is loopback-only, like /api/deploy — a tailnet caller cannot move a seat', async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-loopback-'));
+    handle = createServer({ port: 0, dataDir });
+    const wsId = await seed();
+    const addrs = nonLoopbackIPv4();
+    if (addrs.length === 0) {
+      // Stated, not silently skipped: this machine cannot host the scenario.
+      expect(addrs).toEqual([]);
+      return;
+    }
+    const from = addrs[0] as string;
+    const port = handle.port;
+    const res = await fetch(`http://${from}:${port}/api/agents/agent-old/merge`, {
+      method: 'POST',
+      // The spoof attempt is the test: a Host-based gate would let this in.
+      headers: { host: `localhost:${port}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ into: 'agent-new' }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toContain('loopback');
+    // The refusal happened before the work: nothing moved.
+    expect(handle.tasks.listAttachments(wsId).map((a) => a.agentId)).toEqual(['agent-old']);
+    // POSITIVE CONTROL on the same address: an ordinary trusted-local read works.
+    const ok = await fetch(`http://${from}:${port}/api/docs`, {
+      headers: { host: `localhost:${port}` },
+    });
+    expect(ok.status).toBe(200);
+    // …and the loopback caller still can.
+    const local = await req('/api/agents/agent-old/merge', { body: { into: 'agent-new' } });
+    expect(local.status).toBe(200);
+  });
+});
+
+function nonLoopbackIPv4(): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const i of list ?? []) {
+      if (i.family === 'IPv4' && !i.internal) out.push(i.address);
+    }
+  }
+  return out;
+}

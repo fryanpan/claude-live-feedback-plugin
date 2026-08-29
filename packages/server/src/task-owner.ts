@@ -18,6 +18,7 @@
  */
 import { agentIdCandidates } from '@feedback/core';
 import { classifyActor } from './activity.ts';
+import { SHARED_AGENT_IDS } from './agent-watches.ts';
 
 /** The old default. It names a category, not somebody, so it is not an owner. */
 export const GENERIC_ASSIGNEE = 'agent';
@@ -63,6 +64,32 @@ export function resolveAssignee(
   author: { name?: string } | undefined,
 ): string | null {
   return named(explicit) ?? named(author?.name);
+}
+
+// ── Is this author anybody at all? ─────────────────────────────────────────
+
+export const AUTHOR_REQUIRED_ERROR = 'author-required';
+
+/** The comment-route form of the same refusal `ASSIGNEE_REQUIRED_MESSAGE`
+ *  makes for tasks, naming the same fix. */
+export const AUTHOR_REQUIRED_MESSAGE =
+  'This session has no identity — its writes would be signed by the shared "agent" ' +
+  'category that every unnamed session collapses into, and a category is not an author. ' +
+  'Set CW_AGENT_NAME in the launch environment (needs a session restart) and try again.';
+
+/**
+ * Whether an author is the shared CATEGORY rather than somebody: the id
+ * every unnamed session resolves to, or the bare word as a name under any
+ * id. Measured on the live corpus 2026-08-29: 1,031 comments signed this
+ * way, produced by sessions that are no longer distinguishable. Every write
+ * route refuses it so no more are added; the existing rows stay and render
+ * as "Unnamed agent" (see `authorLabel` in core).
+ */
+export function isCategoryAuthor(author: { id?: unknown; name?: unknown } | undefined): boolean {
+  if (!author) return false;
+  const id = typeof author.id === 'string' ? author.id.trim() : '';
+  const name = typeof author.name === 'string' ? author.name.trim().toLowerCase() : '';
+  return SHARED_AGENT_IDS.has(id) || name === GENERIC_ASSIGNEE;
 }
 
 // ── Is the owner a person or an agent? ─────────────────────────────────────
@@ -151,7 +178,7 @@ export function declaredAssigneeKind(
  *
  * A task records its owner as a DISPLAY NAME (`Live Feedback`); an
  * attachment records an identity ID (`agent-live-feedback` by default, or
- * whatever the attaching session passed — `quick-build` and the display name
+ * whatever the attaching session passed — `lighthouse` and the display name
  * itself both occur in the field). Comparing the two directly matches almost
  * nothing, which is how the roster half of `resolveOwnerKind` came to be
  * dead in production while every fixture that attached under the display
