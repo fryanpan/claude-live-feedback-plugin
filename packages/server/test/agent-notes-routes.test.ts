@@ -206,6 +206,62 @@ describe('agent notes routes', () => {
     expect(handle.tasks.getTask(older)?.notes ?? []).toHaveLength(0);
   });
 
+  it('the latest claimant wins over the stored assignee on a handed-over row', async () => {
+    const OTHER = { id: 'agent-nomad', name: 'Nomad', kind: 'agent' };
+    const wsId = await boardWithLead();
+    await post(`/api/workspaces/${wsId}/attachments`, {
+      agentId: OTHER.id,
+      runtime: 'claude-code-local',
+    });
+    // Assigned to the lead, but Nomad is the one who took it in-progress.
+    const handed = await inProgressRow(wsId, 'Handed over');
+    await jj(
+      await post(`/api/tasks/${handed}/transition`, {
+        to: 'todo',
+        author: PERSON,
+        workspaceId: wsId,
+      }),
+    );
+    await jj(
+      await post(`/api/tasks/${handed}/transition`, {
+        to: 'in-progress',
+        author: OTHER,
+        workspaceId: wsId,
+      }),
+    );
+
+    const mine = await note(OTHER.name, 'Nomad is on it');
+    expect(await mine.json()).toMatchObject({ taskId: handed });
+    const theirs = await note(LEAD.name, 'Lead is elsewhere');
+    const body = (await theirs.json()) as { taskId?: string };
+    expect(body.taskId).toBeUndefined();
+    await settle();
+    expect(handle.tasks.getTask(handed)?.notes?.map((n) => n.text)).toEqual(['Nomad is on it']);
+  });
+
+  it('a person moving the row in-progress leaves it with its assignee (positive control)', async () => {
+    const wsId = await boardWithLead();
+    const { task } = await jj<{ task: { id: string } }>(
+      await post(`/api/workspaces/${wsId}/tasks`, {
+        title: 'Moved by a person',
+        body: 'Agent can pick this up so that the queue keeps moving.',
+        assignee: LEAD.name,
+        assigneeKind: 'agent',
+        author: PERSON,
+      }),
+    );
+    // A person-filed row is already `todo`; the person moves it in-progress.
+    await jj(
+      await post(`/api/tasks/${task.id}/transition`, {
+        to: 'in-progress',
+        author: PERSON,
+        workspaceId: wsId,
+      }),
+    );
+    const r = await note(LEAD.name, 'Picked it up');
+    expect(await r.json()).toMatchObject({ taskId: task.id });
+  });
+
   it('keeps a note from an agent with no current task in the per-agent ring only', async () => {
     const wsId = await boardWithLead();
     const taskId = await inProgressRow(wsId, 'Someone else’s row');
