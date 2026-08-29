@@ -106,12 +106,13 @@ describe('oneLine — a closing message reduced to one safe line', () => {
     );
     expect(oneLine('ran ./scripts/x.sh, then ../other/y.sh')).toBe('ran x.sh, then y.sh');
   });
-  it('reduces a fenced-code fallback the same way as prose, not just whitespace', () => {
-    // Security review: the in-fence branch used to skip stripInline/
-    // reduceLocator entirely and only collapse whitespace.
+  it('keeps only the command shape of a fenced-code fallback', () => {
+    // Security review: the in-fence branch used to echo the line (first
+    // only whitespace-collapsed, then prose-reduced) — and a prose reducer
+    // cannot know that the bare word after `-u` is a password.
     const out = oneLine('```\ncurl -u admin:hunter2 https://host.example/x\n```');
-    expect(out).not.toContain('host.example');
-    expect(out).toContain('[url]');
+    expect(out).toBe('curl -u');
+    expect(oneLine('```sh\nAWS_SECRET_ACCESS_KEY=abcd1234 aws s3 ls\n```')).toBe('aws s3');
   });
   it('reduces scheme-less tailnet/local hosts, localhost, and bare IPv4 to [url]', () => {
     const out = oneLine(

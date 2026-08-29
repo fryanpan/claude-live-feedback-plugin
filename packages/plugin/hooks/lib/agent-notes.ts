@@ -207,11 +207,11 @@ export function oneLine(text: unknown, cap = NOTE_TEXT_CAP): string {
       continue;
     }
     const secondary = inFence || HEADING_RE.test(t);
-    // Fenced code goes through the same reduction as prose (`stripInline`),
-    // not just a whitespace collapse — a fenced fallback is what a closing
-    // message falls back to when it's ONLY a code block, and that block
-    // routinely IS the command that was run, URLs and hosts included.
-    const s = stripInline(t);
+    // A fenced line is a command, not prose: when the closing message is
+    // ONLY a code block, that block routinely IS the command that was run,
+    // credentials and all, and no prose reducer knows `hunter2` after `-u`
+    // is a password. So a fenced fallback keeps just the command's shape.
+    const s = inFence ? commandShape(t) : stripInline(t);
     if (s === '') continue;
     if (!secondary) return capText(s, cap);
     if (fallback === '') fallback = s;
