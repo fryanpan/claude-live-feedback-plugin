@@ -84,6 +84,9 @@ export async function declareWorkspaceLead(
     //    leave setLeadAgent re-delivering to a lead the server cannot see.
     attached = (await deps.http('POST', `${path}/attachments`, {
       agentId: deps.self.id,
+      // The roster row is written from this: the name every surface then
+      // uses for this agent, rather than whatever each one derives.
+      agentName: deps.self.name,
       runtime: deps.runtime,
       pluginVersion: deps.pluginVersion,
       processId: deps.processId,

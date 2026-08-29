@@ -28,6 +28,13 @@
  *   itself is a later commit; the field and its resolution live here now so
  *   readers already resolve through it, and so the merge script has somewhere
  *   to write that never rewrites a stored ydoc or activity row.
+ * - **Agents are rows too (`kind: 'agent'`).** Until they were, the roster
+ *   was one address book for people and a different, per-board one
+ *   (`attachments`) for helpers — so a helper's display name was whatever
+ *   its launch env said that day, and three spellings of one agent were
+ *   three agents. An agent row has no email; its id is the one the MCP mints
+ *   (`agentIdForName`), written on attach, and `resolveAgentId` maps every
+ *   spelling a task or attachment could hold back onto it.
  * - **Sessions are revocable without touching the cookie.** `sessionsValidFrom`
  *   is a watermark: a session cookie issued before it is refused. That makes
  *   "log me out everywhere" one field write, and it costs no per-session
@@ -39,12 +46,14 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 import {
   type User,
+  agentIdCandidates,
   emailDisplayName,
   emailIdentityId,
   hashToColor,
   isEmailLike,
   normalizeEmail,
 } from '@feedback/core';
+import { SHARED_AGENT_IDS } from './agent-watches.ts';
 
 const FILENAME = 'identities.json';
 const FORMAT_VERSION = 1;
@@ -54,12 +63,20 @@ const FORMAT_VERSION = 1;
 const MAX_NAME = 40;
 
 export type IdentityStatus = 'active' | 'archived';
+export type IdentityKind = 'person' | 'agent';
+
+/** The shape of an agent id — the watches store's rule, for the same field. */
+const AGENT_ID_RE = /^[^\s/\\]{1,200}$/;
 
 export interface IdentityRecord {
-  /** `user-<hash>`, derived from the email — see `emailIdentityId`. */
+  /** `user-<hash>`, derived from the email — see `emailIdentityId` — or, for
+   *  an agent, the id its MCP process mints from `CW_AGENT_NAME`. */
   id: string;
-  /** Normalized address. The one field the id cannot be recovered from. */
-  email: string;
+  /** Person or agent. Rows written before the field existed were all people. */
+  kind: IdentityKind;
+  /** Normalized address. The one field a person's id cannot be recovered
+   *  from. Absent on agent rows, which have no mailbox. */
+  email?: string;
   displayName: string;
   /** `#rrggbb`. Derived from the id on creation, overridable afterwards. */
   color: string;
@@ -168,6 +185,7 @@ export class Identities {
     }
     const record: IdentityRecord = {
       id,
+      kind: 'person',
       email: normalized,
       displayName: cleanName(patch.displayName) ?? emailDisplayName(normalized),
       color: cleanColor(patch.color) ?? hashToColor(id),
@@ -180,6 +198,83 @@ export class Identities {
     this.state.identities[id] = record;
     this.save();
     return record;
+  }
+
+  /**
+   * The roster row for an agent, creating it on first sight — called from
+   * every attach, so the roster is written where the agent first says who
+   * it is. Idempotent like `upsertByEmail`, and for the same reason a name
+   * the row already holds is never overwritten by an ABSENT one: an older
+   * bundle attaches without `agentName`, and that must not erase the name a
+   * newer session wrote. A name that IS sent wins, because the launch env is
+   * the one place a rename happens.
+   *
+   * Returns null for the shared category identity. `known-agent` is what
+   * every session with no `CW_AGENT_NAME` collapses into; a roster row for
+   * it would give a category a display name and every other surface a
+   * reason to treat it as somebody.
+   */
+  upsertAgent(id: string, displayName?: string): IdentityRecord | null {
+    const trimmed = id.trim();
+    if (!AGENT_ID_RE.test(trimmed) || SHARED_AGENT_IDS.has(trimmed)) return null;
+    const now = this.now();
+    const existing = this.state.identities[trimmed];
+    if (existing) {
+      if (existing.kind !== 'agent') return null;
+      const name = cleanName(displayName) ?? existing.displayName;
+      if (name === existing.displayName) return existing;
+      const updated: IdentityRecord = { ...existing, displayName: name, updatedAt: now };
+      this.state.identities[trimmed] = updated;
+      this.save();
+      return updated;
+    }
+    const record: IdentityRecord = {
+      id: trimmed,
+      kind: 'agent',
+      displayName: cleanName(displayName) ?? trimmed,
+      color: hashToColor(trimmed),
+      status: 'active',
+      mergedFrom: [],
+      createdAt: now,
+      updatedAt: now,
+      sessionsValidFrom: 0,
+    };
+    this.state.identities[trimmed] = record;
+    this.save();
+    return record;
+  }
+
+  /**
+   * The canonical agent id behind ANY spelling a board could hold — the id
+   * itself, a legacy id folded in through `mergedFrom`, the display name, or
+   * one of the `agentIdCandidates` derivations a task's `assignee` or an
+   * attachment key was written with. Null when nothing matches: an owner the
+   * roster does not know stays unknown, never a guess (see task-owner.ts on
+   * why a wrong attribution is worse than an absent one). Person rows are
+   * never returned — this answers "which agent", and a person who shares a
+   * name with one is a different question.
+   */
+  resolveAgentId(idOrName: string): string | null {
+    const raw = idOrName.trim();
+    if (raw === '') return null;
+    const exact = this.state.identities[raw];
+    if (exact?.kind === 'agent') return exact.id;
+    const keys = new Set<string>([raw.toLowerCase(), ...agentIdCandidates(raw)]);
+    for (const rec of Object.values(this.state.identities)) {
+      if (rec.kind !== 'agent') continue;
+      if (keys.has(rec.id.toLowerCase())) return rec.id;
+      if (keys.has(rec.displayName.trim().toLowerCase())) return rec.id;
+      for (const legacy of rec.mergedFrom) {
+        if (keys.has(legacy.toLowerCase())) return rec.id;
+      }
+    }
+    return null;
+  }
+
+  /** The display name the roster holds for an id, resolving legacy ids the
+   *  same way `get` does; null for an id the roster does not know. */
+  displayNameFor(id: string): string | null {
+    return this.get(id)?.displayName ?? null;
   }
 
   /**
@@ -306,6 +401,26 @@ function cleanColor(color: string | undefined): string | null {
 function sanitize(key: string, rec: unknown, now: number): IdentityRecord | null {
   if (!rec || typeof rec !== 'object') return null;
   const r = rec as Partial<IdentityRecord>;
+  if (r.kind === 'agent') {
+    // An agent row is keyed on the id the MCP minted; there is no address to
+    // re-derive it from, so the stored key IS the id.
+    const id = typeof r.id === 'string' && r.id.trim() ? r.id.trim() : key;
+    if (!AGENT_ID_RE.test(id) || SHARED_AGENT_IDS.has(id)) return null;
+    return {
+      id,
+      kind: 'agent',
+      displayName: cleanName(r.displayName) ?? id,
+      color: cleanColor(r.color) ?? hashToColor(id),
+      status: r.status === 'archived' ? 'archived' : 'active',
+      mergedFrom: Array.isArray(r.mergedFrom)
+        ? Array.from(new Set(r.mergedFrom.filter((m): m is string => typeof m === 'string')))
+        : [],
+      createdAt: typeof r.createdAt === 'number' ? r.createdAt : now,
+      updatedAt: typeof r.updatedAt === 'number' ? r.updatedAt : now,
+      sessionsValidFrom: typeof r.sessionsValidFrom === 'number' ? r.sessionsValidFrom : 0,
+      ...(typeof r.archivedReason === 'string' ? { archivedReason: r.archivedReason } : {}),
+    };
+  }
   const email = typeof r.email === 'string' ? normalizeEmail(r.email) : '';
   if (!isEmailLike(email)) return null;
   // The id is DERIVED, so a stored one that disagrees with the address is a
@@ -319,6 +434,7 @@ function sanitize(key: string, rec: unknown, now: number): IdentityRecord | null
   }
   return {
     id,
+    kind: 'person',
     email,
     displayName: cleanName(r.displayName) ?? emailDisplayName(email),
     color: cleanColor(r.color) ?? hashToColor(id),

@@ -3572,6 +3572,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
           {
             agentId: agentId ?? AUTHOR.id,
+            // Only when attaching as ITSELF: the roster row for somebody
+            // else's id must not be named after this session.
+            ...(agentId === undefined || agentId === AUTHOR.id ? { agentName: AUTHOR.name } : {}),
             runtime: runtime ?? 'claude-code-local',
             ...(capabilities !== undefined ? { capabilities } : {}),
             // What this session can actually DO is decided by the bundle it
@@ -3983,6 +3986,7 @@ async function ensureWatchesRestored(): Promise<void> {
             `/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`,
             {
               agentId: AUTHOR.id,
+              agentName: AUTHOR.name,
               runtime: 'claude-code-local',
               pluginVersion: PLUGIN_VERSION,
               processId: PROCESS_ID,
