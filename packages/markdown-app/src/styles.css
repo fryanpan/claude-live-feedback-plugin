@@ -3177,6 +3177,12 @@ body.hub-body {
   word-break: break-word;
   cursor: text;
 }
+/* "Untitled task" is the stand-in a row filed from the Board's New task
+   button carries until a name is typed: muted while the row has no name,
+   plain the paint after one lands (task-detail-island toggles the class). */
+.hub-detail-title-placeholder {
+  color: var(--fg-muted);
+}
 .hub-detail-head-actions {
   display: flex;
   gap: 8px;
@@ -5487,10 +5493,10 @@ body.is-reading-width #editor > .ProseMirror {
   --edit-alpha: 12%;
 }
 #editor > .ProseMirror .edit-wash-2 {
-  --edit-alpha: 9%;
+  --edit-alpha: 10%;
 }
 #editor > .ProseMirror .edit-wash-3 {
-  --edit-alpha: 6%;
+  --edit-alpha: 8%;
 }
 /* The wash is the live session, not the record: a printed huddle doc is
    plain prose. */

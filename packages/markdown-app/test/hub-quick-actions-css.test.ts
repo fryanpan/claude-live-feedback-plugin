@@ -117,6 +117,19 @@ describe('the pair sits in the slot the box had', () => {
   });
 });
 
+describe('an unnamed task reads as a stand-in, not a title', () => {
+  it('mutes the placeholder in the WORKSPACE HUB section', () => {
+    // task-detail-island toggles this class while `task.untitled` is set;
+    // happy-dom cannot see whether a rule exists for it, so this does.
+    const hub = section(/\/\* =+ WORKSPACE HUB =+/);
+    const placeholder = rule('.hub-detail-title-placeholder', declarationsOnly(hub));
+    expect(placeholder, 'the placeholder class has no rule').not.toBe('');
+    expect(placeholder).toMatch(/color:\s*var\(--fg-muted\)/);
+    // Control: the title rule it modifies is in the same section.
+    expect(rule('.hub-detail-title', declarationsOnly(hub))).toMatch(/font-weight/);
+  });
+});
+
 describe('the editor names a huddle in its crumb', () => {
   it('styles the label in the TOP BAR section rather than at the end of the file', () => {
     const topbar = section(/\/\* =+ TOP BAR =+/);

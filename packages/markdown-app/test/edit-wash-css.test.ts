@@ -50,13 +50,16 @@ describe('recent-edit wash styling', () => {
     expect(wash).toMatch(
       /background:\s*color-mix\(in srgb, var\(--edit-color.*\) var\(--edit-alpha\)/,
     );
-    // Most recent = strongest; all three inside the ~10-12% pastel band.
+    // Most recent = strongest; the top two sit in the ~10-12% pastel band
+    // and the oldest of the three never fades below the mock's own 8% floor,
+    // or a rank-3 section reads as unwashed beside the other two.
     const alpha = (rank: number) =>
       Number(/--edit-alpha:\s*(\d+)%/.exec(rule(`#editor > .ProseMirror .edit-wash-${rank}`))?.[1]);
     expect(alpha(1)).toBeGreaterThan(alpha(2));
     expect(alpha(2)).toBeGreaterThan(alpha(3));
     expect(alpha(1)).toBeLessThanOrEqual(12);
-    expect(alpha(3)).toBeGreaterThanOrEqual(6);
+    expect(alpha(2)).toBeGreaterThanOrEqual(10);
+    expect(alpha(3)).toBeGreaterThanOrEqual(8);
   });
 
   it('keeps the text where it was — the bar sits in the editor gutter', () => {
