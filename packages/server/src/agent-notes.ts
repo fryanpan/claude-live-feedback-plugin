@@ -124,11 +124,15 @@ function latestClaim(task: Task): Task['transitions'][number] | undefined {
 
 /**
  * The row `agentName` is working now: the in-progress row, across every
- * workspace, whose owner is the agent (by any spelling the roster folds) or
- * whose latest claim was made by the agent's derived id — and of those, the
- * one claimed most recently. A row handed back and retaken belongs to
- * whoever took it last; an agent holding two rows is reported on the one it
- * took last.
+ * workspace, that is the agent's — and of those, the one claimed most
+ * recently. A row handed back and retaken belongs to whoever took it last;
+ * an agent holding two rows is reported on the one it took last.
+ *
+ * Whose a row is: when its latest in-progress claim was made by an AGENT,
+ * that claimant — the stored assignee is stale the moment another agent takes
+ * the row over, and a note from the old owner must not land on the new
+ * worker's row. When a person moved it (or nothing records who did), the
+ * assignee, by any spelling the roster folds.
  */
 export function resolveCurrentTask(store: TaskStore, agentName: string): Task | undefined {
   const owned = store.ownerMatcher(agentName);
@@ -145,7 +149,9 @@ export function resolveCurrentTask(store: TaskStore, agentName: string): Task | 
   let best: { task: Task; at: number } | undefined;
   for (const ws of store.listWorkspaces()) {
     for (const task of store.listTasks(ws.id, { status: 'in-progress' })) {
-      if (!owned(task) && !claimedBy(task)) continue;
+      const claim = latestClaim(task);
+      const mine = claim?.by.kind === 'agent' ? claimedBy(task) : owned(task);
+      if (!mine) continue;
       const at = latestClaim(task)?.ts ?? task.updatedAt;
       if (!best || at > best.at) best = { task, at };
     }
