@@ -257,9 +257,7 @@ describe('fullNote — the whole closing message, reduced line by line', () => {
     );
     expect(jwt).toBe('got [token] back');
     expect(fullNote('twilio is 0a1b2c3d4e5f60718293a4b5c6d7e8f9')).toBe('twilio is [redacted]');
-    expect(fullNote('rk_live_FAKE0 and pk_test_FAKE0')).toBe(
-      '[token] and [token]',
-    );
+    expect(fullNote('rk_live_FAKE0 and pk_test_FAKE0')).toBe('[token] and [token]');
     // a base64 blob with `/` or `+` in it, as an AWS secret or a PEM line is
     // (the canonical AWS example key, with its one digit)
     expect(fullNote('secret was wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY there')).toBe(
