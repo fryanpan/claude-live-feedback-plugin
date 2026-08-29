@@ -258,9 +258,15 @@ describe('voice routing (§3.8)', () => {
       expect(body.navigate).toBe(`/review/${encodeURIComponent(docId)}`);
     });
 
-    it('a lookup naming an id that does not exist answers honestly, with no navigation', async () => {
+    it('a lookup that resolves nothing on a board with NO lead says what to do, and delivers nothing', async () => {
+      // No agent has attached yet, so the seat is empty — the one case the
+      // fallback below has nobody to fall back to. The old copy here was
+      // "Lookup — nothing in this workspace matched", a dead end that named
+      // no next step (Bryan, 2026-08-29: "never say lookup failed").
+      expect(handle.tasks.getWorkspace(hubId)?.leadAgentId).toBeUndefined();
       completeImpl = () =>
         Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: 't-invented' }));
+      const before = handle.tasks.listQueuedVoice(hubId).length;
       const r = await voice({
         transcript: 'open the flux capacitor task',
         author: PERSON,
@@ -268,8 +274,16 @@ describe('voice routing (§3.8)', () => {
       const body = (await r.json()) as { route: string; ack: string; navigate?: string };
       expect(body.route).toBe('fast-path');
       expect(body.navigate).toBeUndefined();
-      expect(body.ack).toContain('nothing');
       expect(body.ack).toContain('open the flux capacitor task');
+      expect(body.ack).toContain('no lead agent is registered for this workspace');
+      expect(body.ack.toLowerCase()).not.toContain('lookup');
+      // Nothing delivered: no queue row for a lead that does not exist. (The
+      // positive control is the lead-live case below, where the same call
+      // adds exactly the row this one must not.)
+      expect(handle.tasks.listQueuedVoice(hubId).length).toBe(before);
+      expect(handle.tasks.listQueuedVoice(hubId).map((q) => q.transcript)).not.toContain(
+        'open the flux capacitor task',
+      );
     });
   });
 
@@ -389,6 +403,78 @@ describe('voice routing (§3.8)', () => {
       agentStream = await openWorkspaceStream(base, hubId);
       const back = await voice({ transcript: 'rename the crawler task', author: PERSON });
       expect(((await back.json()) as { route: string }).route).toBe('agent');
+    });
+
+    describe('a lookup that resolves nothing falls back to the LEAD agent', () => {
+      const missing = () =>
+        Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: 't-invented' }));
+
+      it('with the lead live: delivered to the lead, queued as its record, ack names the lead', async () => {
+        expect(handle.tasks.getWorkspace(hubId)?.leadAgentId).toBe('agent-search-revamp');
+        expect(handle.tasks.hasLiveLeadAttachment(hubId)).toBe(true);
+        completeImpl = missing;
+        const seen: TaskStoreEvent[] = [];
+        const off = handle.tasks.onEvent((ev) => seen.push(ev));
+        const r = await voice({
+          transcript: 'open the flux capacitor task',
+          context: { surface: 'hub' },
+          author: PERSON,
+        });
+        off();
+        expect(r.status).toBe(200);
+        const body = (await r.json()) as { route: string; ack: string; navigate?: string };
+        expect(body.route).toBe('agent');
+        expect(body.navigate).toBeUndefined();
+        expect(body.ack).toContain('open the flux capacitor task');
+        expect(body.ack).toContain('lead agent');
+        expect(body.ack.toLowerCase()).not.toContain('lookup');
+        const ev = seen.find((e) => e.type === 'voice.request');
+        expect(ev).toBeDefined();
+        if (ev?.type === 'voice.request') {
+          expect(ev.route).toBe('agent');
+          expect(ev.transcript).toBe('open the flux capacitor task');
+          expect(ev.queueId).toBeDefined();
+        }
+        // The queue is the record, exactly as it is for a change.
+        expect(handle.tasks.listQueuedVoice(hubId).map((q) => q.transcript)).toContain(
+          'open the flux capacitor task',
+        );
+      });
+
+      it('with the lead registered but away: queued for the lead, and the ack says so', async () => {
+        await agentStream?.close();
+        agentStream = null;
+        completeImpl = missing;
+        const r = await voice({ transcript: 'find the crawler budget note', author: PERSON });
+        const body = (await r.json()) as { route: string; ack: string; navigate?: string };
+        expect(body.route).toBe('agent-queued');
+        expect(body.navigate).toBeUndefined();
+        expect(body.ack).toContain('lead agent');
+        expect(body.ack.toLowerCase()).toContain('queued');
+        expect(handle.tasks.listQueuedVoice(hubId).map((q) => q.transcript)).toContain(
+          'find the crawler budget note',
+        );
+        agentStream = await openWorkspaceStream(base, hubId);
+      });
+
+      it('a lookup that DOES resolve still navigates — it never reaches the lead', async () => {
+        completeImpl = () =>
+          Promise.resolve(JSON.stringify({ kind: 'lookup', target: 'task', id: taskId }));
+        const before = handle.tasks.listQueuedVoice(hubId).length;
+        const seen: TaskStoreEvent[] = [];
+        const off = handle.tasks.onEvent((ev) => seen.push(ev));
+        const r = await voice({ transcript: 'take me to the results page', author: PERSON });
+        off();
+        const body = (await r.json()) as { route: string; ack: string; navigate?: string };
+        expect(body.route).toBe('fast-path');
+        expect(body.navigate).toBe(`/workspaces/${hubId}?task=${taskId}`);
+        expect(body.ack).not.toContain('lead agent');
+        // Audited, but not handed over: no new queue row, and the audit row
+        // says fast-path (which the MCP drops).
+        expect(handle.tasks.listQueuedVoice(hubId).length).toBe(before);
+        const ev = seen.find((e) => e.type === 'voice.request');
+        expect(ev?.type === 'voice.request' && ev.route).toBe('fast-path');
+      });
     });
   });
 
@@ -624,7 +710,7 @@ describe('voice routing (§3.8)', () => {
 
     it('a model-named id that disagrees with the context is refused', () => {
       expect(
-        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-someone-elses"}'),
+        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-not-mine"}'),
       ).toBeNull();
       // Naming the id it was TOLD to name is the compliant shape; what the
       // rule refuses is a target the speaker never had in view.
