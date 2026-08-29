@@ -1719,6 +1719,34 @@ export class Rooms {
     return { ok: true, docId: room.docId, meta: room.meta };
   }
 
+  /**
+   * The companion editor doc of a `.md` diff member, if one has been opened
+   * (`openEditableFile`), or undefined. The ids are deterministic — member
+   * `<setId>:<relPath>`, companion `<setId>:edit:<relPath>` — so this is a
+   * lookup, not a search.
+   */
+  companionOf(docId: string): string | undefined {
+    const meta = this.rooms.get(docId)?.meta;
+    if (!meta || meta.type !== 'diff' || !meta.relPath) return undefined;
+    const reviewId = reviewIdOf(meta);
+    if (!reviewId) return undefined;
+    const companionId = memberDocId(`${reviewId}:edit`, meta.relPath);
+    return this.rooms.has(companionId) ? companionId : undefined;
+  }
+
+  /**
+   * The diff member a companion editor doc belongs to, or undefined when
+   * `docId` is not a companion. Inverse of `companionOf`.
+   */
+  memberOfCompanion(docId: string): string | undefined {
+    const meta = this.rooms.get(docId)?.meta;
+    if (!meta || meta.type !== 'markdown' || !meta.relPath) return undefined;
+    const reviewId = reviewIdOf(meta);
+    if (!reviewId || docId !== memberDocId(`${reviewId}:edit`, meta.relPath)) return undefined;
+    const memberId = memberDocId(reviewId, meta.relPath);
+    return this.rooms.get(memberId)?.meta.type === 'diff' ? memberId : undefined;
+  }
+
   buildWorkspaceTree(setId: string): WorkspaceTree {
     const decorate = this.cfg.decorateDocMeta;
     const root: WorkspaceDirNode = { type: 'dir', name: '', openCount: 0, children: [] };
@@ -3849,6 +3877,14 @@ export class Rooms {
     // See event-id.ts.
     payload.eid = newEventId();
     this.cfg.sse.broadcast(room.docId, payload);
+    // A companion editor doc (openEditableFile) is the same FILE as its diff
+    // member, opened for prose; the reviewer comments in whichever view they
+    // are reading, and the agent watching the member never learned the
+    // companion's id — nothing hands it back. So a companion's events ride
+    // the member's own channel too. Same eid on every copy, so a watcher
+    // holding both collapses them.
+    const memberId = this.memberOfCompanion(room.docId);
+    if (memberId) this.cfg.sse.broadcast(memberId, payload);
     // Double-broadcast on the REVIEW's channel — the `setId` a diff review or
     // folder bind stamps on each member — so an agent can watch ONE stream per
     // review instead of one per file.
