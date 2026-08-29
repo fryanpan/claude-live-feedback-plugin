@@ -743,7 +743,7 @@ function WalkCard(props: {
     // The stage (approved mock `.demo-doc-layout`): the card, and a margin
     // column that holds the thread a pill opens — beside the card at
     // ≥1101px, where height is the scarce axis, stacked below it at ≤1100px.
-    <div class="hub-walk-stage">
+    <div class={draft !== null ? 'hub-walk-stage hub-walk-stage-open' : 'hub-walk-stage'}>
       <div class={`hub-walk-card hub-walk-${item.kind}`}>
         {/* First thing on the card, above the new item: what you just finished.
           It belongs here rather than in a toast because this is read on a
