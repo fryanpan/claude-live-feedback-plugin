@@ -16,6 +16,7 @@ import {
   contentKind,
   emailIdentityId,
   isEmailLike,
+  normalizeEmail,
   pendingDeclaration,
   readReviewPayload,
   reviewGapAdvice,
@@ -606,6 +607,22 @@ export interface ServerOptions {
    */
   proxiedTrustedHosts?: string[];
   /**
+   * WHO may come through `proxiedTrustedHosts`, by the email Cloudflare
+   * Access verified — folded the way the roster folds addresses.
+   *
+   * A valid token proves the Access policy admitted someone, never who. One
+   * application (one AUD) may cover the collaboration hostnames too, and
+   * then a collaborator's token is exactly as valid at the operator's door.
+   * So after the token, the verified email must be on this list or the
+   * request is refused with a bare 403 that echoes nothing. Independent of
+   * `requireEmailAuth`, which governs sessions, not this gate.
+   *
+   * EMPTY means `proxiedTrustedHosts` is ignored entirely — a door that
+   * cannot tell the operator from a collaborator must not open. bin.ts
+   * defaults it to `CW_OWNER_EMAIL`.
+   */
+  proxiedTrustedEmails?: string[];
+  /**
    * Browser origins allowed to call the API cross-origin, beyond the server's
    * own origin and loopback (which the widget on a dev server needs). Matched
    * exactly. Anything else gets no CORS headers, so the browser blocks it —
@@ -1024,11 +1041,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * The verifier for the operator's own proxied hostnames — the same static
    * audience verifier, for the same reason: the hostname has its own Access
    * application, and the per-share resolver cannot answer for it. Null, and
-   * the whole list ignored, unless Access really is configured; bin.ts also
-   * refuses at boot, but this check is the one in the request path.
+   * the whole list ignored, unless Access really is configured AND somebody
+   * is named as the operator; bin.ts also refuses at boot, but this check is
+   * the one in the request path.
    */
-  const proxiedTrustedHosts = opts.proxiedTrustedHosts ?? [];
-  const proxiedTrustedVerifier = proxiedTrustedHosts.length > 0 ? staticAccessVerifier : null;
+  const proxiedTrustedEmails = new Set(
+    (opts.proxiedTrustedEmails ?? []).map((e) => normalizeEmail(e)).filter((e) => e !== ''),
+  );
+  const proxiedTrustedVerifier =
+    (opts.proxiedTrustedHosts ?? []).length > 0 && proxiedTrustedEmails.size > 0
+      ? staticAccessVerifier
+      : null;
+  // The list as the gate and the origin policy see it: EMPTY unless everything
+  // needed to honour it exists, so a half-configured deployment answers
+  // 403 unknown_host rather than reaching a branch that then has to refuse.
+  const proxiedTrustedHosts = proxiedTrustedVerifier ? (opts.proxiedTrustedHosts ?? []) : [];
 
   const sse = new SseHub();
   // Pick up where the last clean shutdown left off, so a deploy is silent on
@@ -2801,23 +2828,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // write and every websocket handshake.
     const ourNames = localHostnames();
     const viaProxy = req.headers.has('cf-ray');
-    // The operator's own proxied hostname is the LOCAL surface too — the
-    // same product, behind an Access token the host gate has already
-    // demanded by the time any route consults this policy. It gets the same
-    // dev-server allowances a TRUSTED_HOSTS name gets, and its own name joins
-    // the local set exactly as a trusted host's does. Fails closed with the
-    // gate: no Access verifier, no local surface.
-    const isLocalSurface =
-      isTrustedLocalHost(host, {
-        lanHosts: ourNames,
-        extraHosts: opts.trustedHosts ?? [],
-        viaProxy,
-      }) ||
-      isProxiedTrustedHost(host, {
-        viaProxy,
-        proxiedTrustedHosts,
-        accessFronted: proxiedTrustedVerifier !== null,
-      });
+    const isLocalSurface = isTrustedLocalHost(host, {
+      lanHosts: ourNames,
+      extraHosts: opts.trustedHosts ?? [],
+      viaProxy,
+    });
+    // The operator's own proxied hostname serves the same product, but it is
+    // NOT the local surface for origin purposes. Through the tunnel the
+    // browser's `localhost` is the VISITOR'S machine, and a LAN name resolves
+    // on the visitor's network, so every allowance that makes sense for a
+    // TRUSTED_HOSTS name — loopback, LAN names, any port on our own names —
+    // would here trust a page the operator merely has open. Same-origin plus
+    // the origins the operator configured by name, nothing else. (The
+    // configured ones are the one deliberate cross-origin grant, and they
+    // are the operator's own call.)
+    const isProxiedLocal = isProxiedTrustedHost(host, {
+      viaProxy,
+      proxiedTrustedHosts,
+      accessFronted: proxiedTrustedVerifier !== null,
+    });
     return {
       // Canonicalized, not concatenated. A proxy may forward Host with an
       // explicit default port (`feedback.example.com:443`) while the browser
@@ -2826,14 +2855,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // foreign and 403 its websocket. URL.origin drops the default port.
       requestOrigin: canonicalOrigin(scheme, host),
       localHostnames: isLocalSurface
-        ? [
-            ...LOOPBACK_HOSTS,
-            ...ourNames,
-            ...(opts.trustedHosts ?? []),
-            ...(proxiedTrustedVerifier ? proxiedTrustedHosts : []),
-          ].filter((h) => h !== '')
+        ? [...LOOPBACK_HOSTS, ...ourNames, ...(opts.trustedHosts ?? [])].filter((h) => h !== '')
         : [],
-      allowedOrigins: isLocalSurface ? (opts.allowedOrigins ?? []) : [],
+      allowedOrigins: isLocalSurface || isProxiedLocal ? (opts.allowedOrigins ?? []) : [],
     };
   };
 
@@ -3444,6 +3468,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             const result = await proxiedTrustedVerifier(req);
             if (!result.ok) return j(result.status, { error: result.error });
+            // A token is admission, not identity. The Access policy this
+            // server cannot read may admit collaborators through the same
+            // application, and their tokens verify exactly as the operator's
+            // does. The verified email is the only thing that says WHO, so it
+            // must be on the allowlist — folded the way the roster folds — or
+            // the door stays shut. The body names nothing: not the email, not
+            // that an allowlist exists.
+            const who = result.email ? normalizeEmail(result.email) : '';
+            if (who === '' || !proxiedTrustedEmails.has(who)) {
+              return j(403, { error: 'forbidden' });
+            }
             accessEmail = result.email ?? null;
             // Nothing else: no `visitor`, no scope. From here on the request
             // is what a loopback request is.

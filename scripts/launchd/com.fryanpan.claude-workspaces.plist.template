@@ -62,6 +62,14 @@
              answer 403 unknown_host. Empty (the default) leaves it off. -->
         <key>CW_PROXIED_TRUSTED_HOSTS</key>
         <string>{{PROXIED_TRUSTED_HOSTS}}</string>
+        <!-- WHO the operator is, by the email Cloudflare Access verified. A
+             token proves the Access policy admitted someone; one application
+             may admit collaborators too, so this list is what makes the
+             hostnames above the operator's door. Required with them (the
+             server falls back to CW_OWNER_EMAIL, which this plist does not
+             carry): empty, the host list is ignored. -->
+        <key>CW_PROXIED_TRUSTED_EMAILS</key>
+        <string>{{PROXIED_TRUSTED_EMAILS}}</string>
         <key>CF_ACCESS_TEAM_DOMAIN</key>
         <string>{{ACCESS_TEAM_DOMAIN}}</string>
         <key>CF_ACCESS_AUD</key>

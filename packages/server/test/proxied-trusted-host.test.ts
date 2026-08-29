@@ -14,15 +14,19 @@
  *
  * Three lists, and none of them may leak into another. So the suites are:
  *
- *   A. With Access in front, does a token holder reach the PRODUCT (not merely
- *      the share surface), and is everything else at the door still refused?
- *   B. Without Access — team domain unset, or no static AUD — is the list
- *      IGNORED rather than honoured? This is the test that must go red if the
- *      guard is removed: an "it works" test alone passes against a build with
- *      no gate at all.
+ *   A. With Access in front, does the OPERATOR reach the PRODUCT (not merely
+ *      the share surface), and is everyone else at the door refused — no
+ *      token, the wrong app, and above all a collaborator the SAME Access
+ *      application admits? A token is admission, not identity; the verified
+ *      email against the operator allowlist is what says who.
+ *   B. Without Access — team domain unset, no static AUD — or without an
+ *      operator allowlist, is the list IGNORED rather than honoured? These
+ *      are the tests that must go red if a guard is removed: an "it works"
+ *      test alone passes against a build with no gate at all.
  *   C. Does a `TRUSTED_HOSTS` entry stay refused through the proxy (the lists
  *      are separate), and does a host in BOTH opt-in lists stay collab?
- *   D. Is the browser-origin policy wired the way it is for `TRUSTED_HOSTS`?
+ *   D. Is the browser-origin policy same-origin plus `ALLOWED_ORIGINS` and
+ *      nothing else? Through the tunnel, the visitor's localhost is not ours.
  *
  * The predicates are unit-tested in host-guard.test.ts. These drive the real
  * route table, because the route layer is the part nothing type-checks.
@@ -48,9 +52,16 @@ const COLLAB_HOST = 'collab.example.com';
 const LINK_HOST = 'links.example.com';
 /** Cloudflare stamps this on everything it proxies; its presence IS the hop. */
 const CF_RAY = { 'cf-ray': '8a1b2c3d4e5f-SJC' };
+/** The one identity the operator allowlist admits… */
+const OPERATOR_EMAIL = 'Operator@Example.com';
+/** …and a collaborator the SAME Access application also admits. */
+const COLLABORATOR_EMAIL = 'collaborator@partner.example';
+/** An ALLOWED_ORIGINS entry — the one cross-origin grant that survives. */
+const ALLOWED_ORIGIN = 'https://studio.example.net';
 
 let jwks: JSONWebKeySet;
-let signJwt: (aud: string) => Promise<string>;
+/** A token for `aud`, carrying `email` — `null` for a token with NO email claim. */
+let signJwt: (aud: string, email?: string | null) => Promise<string>;
 
 beforeAll(async () => {
   const { publicKey, privateKey } = await generateKeyPair('RS256');
@@ -59,8 +70,8 @@ beforeAll(async () => {
   publicJwk.alg = 'RS256';
   publicJwk.use = 'sig';
   jwks = { keys: [publicJwk] };
-  signJwt = (aud: string) =>
-    new SignJWT({ email: 'operator@example.com' })
+  signJwt = (aud: string, email: string | null = OPERATOR_EMAIL) =>
+    new SignJWT(email === null ? {} : { email })
       .setProtectedHeader({ alg: 'RS256', kid: KID })
       .setIssuer(`https://${TEAM_DOMAIN}`)
       .setAudience(aud)
@@ -108,6 +119,11 @@ describe('a proxied trusted host, with Access in front of it', () => {
       // test in suite C is that the grant still differs by list.
       accessTunnelHosts: [COLLAB_HOST],
       proxiedTrustedHosts: [PROXIED_HOST],
+      // Lower-cased here, mixed-case in the token: the allowlist folds the
+      // way the roster folds, or the operator locks themself out over a
+      // capital letter.
+      proxiedTrustedEmails: [OPERATOR_EMAIL.toLowerCase()],
+      allowedOrigins: [ALLOWED_ORIGIN],
     });
     jwt = await signJwt(OPERATOR_AUD);
   });
@@ -167,6 +183,56 @@ describe('a proxied trusted host, with Access in front of it', () => {
       expect(await r.json()).toEqual({ error: 'unknown_host' });
     });
 
+    it('a token is admission, not identity — a collaborator the SAME app admits is refused', async () => {
+      // One Access application (one AUD) may cover both hostnames, so a
+      // collaborator's perfectly valid token reaches this door too. What
+      // makes it the operator's door is the email allowlist: the verified
+      // claim must name an operator, or every operator verb is refused with
+      // a body that does not echo who was refused.
+      const asCollaborator = {
+        host: PROXIED_HOST,
+        ...CF_RAY,
+        'cf-access-jwt-assertion': await signJwt(OPERATOR_AUD, COLLABORATOR_EMAIL),
+      };
+      const list = await get(h, '/api/docs', asCollaborator);
+      expect(list.status).toBe(403);
+      expect(await list.json()).toEqual({ error: 'forbidden' });
+      const create = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+        method: 'POST',
+        headers: { ...asCollaborator, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Should not exist' }),
+      });
+      expect(create.status).toBe(403);
+      expect(await create.json()).toEqual({ error: 'forbidden' });
+      const deploy = await fetch(`http://localhost:${h.port}/api/deploy`, {
+        method: 'POST',
+        headers: asCollaborator,
+      });
+      expect(deploy.status).toBe(403);
+      expect(await deploy.json()).toEqual({ error: 'forbidden' });
+    });
+
+    it('a token with NO email claim names nobody, and nobody is not the operator', async () => {
+      const r = await get(h, '/api/docs', {
+        host: PROXIED_HOST,
+        ...CF_RAY,
+        'cf-access-jwt-assertion': await signJwt(OPERATOR_AUD, null),
+      });
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'forbidden' });
+    });
+
+    it('the operator reaches the deploy verb itself — the gate, not the deployer, is under test', async () => {
+      // 501 is "no deployer on this server", which sits BEHIND the host gate
+      // and the identity check: reaching it is the positive control for the
+      // collaborator's 403 above.
+      const r = await fetch(`http://localhost:${h.port}/api/deploy`, {
+        method: 'POST',
+        headers: { host: PROXIED_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt },
+      });
+      expect(r.status).toBe(501);
+    });
+
     it('still refuses a proxied host that is NOT on the list — token or no token', async () => {
       for (const host of ['unlisted.example.com', `attacker.${PROXIED_HOST}`, 'localhost']) {
         const r = await get(h, '/api/docs', { host, ...CF_RAY, 'cf-access-jwt-assertion': jwt });
@@ -222,14 +288,56 @@ describe('a proxied trusted host, with Access in front of it', () => {
     });
   });
 
-  describe('D. the browser-origin policy, wired like TRUSTED_HOSTS', () => {
-    it('treats a dev server on the proxied host name as local, and refuses a stranger', async () => {
-      const auth = { host: PROXIED_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt };
-      const own = await get(h, '/api/docs', { ...auth, origin: `http://${PROXIED_HOST}:5173` });
+  describe('D. the browser-origin policy: same-origin and ALLOWED_ORIGINS, nothing else', () => {
+    // Through the tunnel, "localhost" in the visitor's browser is the
+    // VISITOR'S machine, not this one — so the loopback / LAN / dev-server
+    // allowances that make sense for a TRUSTED_HOSTS name are exactly wrong
+    // here. A page at http://localhost:3000 on the operator's laptop is not
+    // ours to trust.
+    const auth = () => ({ host: PROXIED_HOST, ...CF_RAY, 'cf-access-jwt-assertion': jwt });
+
+    it('reflects its own origin and a configured one', async () => {
+      // No x-forwarded-proto in the fixture, so the request origin is plain
+      // http on the host — the browser's Origin for a same-origin page.
+      const own = await get(h, '/api/docs', { ...auth(), origin: `http://${PROXIED_HOST}` });
       expect(own.status).toBe(200);
-      expect(own.headers.get('access-control-allow-origin')).toBe(`http://${PROXIED_HOST}:5173`);
-      const evil = await get(h, '/api/docs', { ...auth, origin: 'http://evil.example.com' });
-      expect(evil.headers.get('access-control-allow-origin')).toBeNull();
+      expect(own.headers.get('access-control-allow-origin')).toBe(`http://${PROXIED_HOST}`);
+      const configured = await get(h, '/api/docs', { ...auth(), origin: ALLOWED_ORIGIN });
+      expect(configured.headers.get('access-control-allow-origin')).toBe(ALLOWED_ORIGIN);
+    });
+
+    it('does NOT reflect loopback, a LAN name, a dev port on its own name, or a stranger', async () => {
+      for (const origin of [
+        'http://localhost:3000',
+        'http://127.0.0.1:5173',
+        `http://${LAN_ALIAS}:3000`,
+        `http://${PROXIED_HOST}:5173`,
+        'http://evil.example.com',
+      ]) {
+        const r = await get(h, '/api/docs', { ...auth(), origin });
+        expect(r.headers.get('access-control-allow-origin'), origin).toBeNull();
+      }
+    });
+
+    it('refuses a cross-origin write from the visitor’s localhost — the CSRF half', async () => {
+      const r = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+        method: 'POST',
+        headers: { ...auth(), origin: 'http://localhost:3000', 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'CSRF' }),
+      });
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'origin_not_allowed' });
+      // POSITIVE CONTROL: the same write from the page's own origin lands.
+      const own = await fetch(`http://localhost:${h.port}/api/workspaces`, {
+        method: 'POST',
+        headers: {
+          ...auth(),
+          origin: `http://${PROXIED_HOST}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'Same origin' }),
+      });
+      expect(own.status).toBe(200);
     });
   });
 });
@@ -284,6 +392,45 @@ describe('B. the opt-in fails closed', () => {
     ).toBe(200);
   });
 
+  it('with NO operator allowlist, the list is ignored — a token is not an identity', async () => {
+    // Access proves admission by a policy the server cannot see. With nobody
+    // named as the operator there is no way to tell the operator from anyone
+    // else that policy admits, so the door does not open at all: 403
+    // unknown_host, exactly as if the host had never been listed.
+    const h = spinUp({
+      cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
+      share: { config: { publicHostname: LINK_HOST } },
+      proxiedTrustedHosts: [PROXIED_HOST],
+    });
+    const r = await get(h, '/api/docs', {
+      host: PROXIED_HOST,
+      ...CF_RAY,
+      'cf-access-jwt-assertion': await signJwt(OPERATOR_AUD),
+    });
+    expect(r.status).toBe(403);
+    expect(await r.json()).toEqual({ error: 'unknown_host' });
+    expect((await get(h, '/api/docs', { host: `localhost:${h.port}` })).status).toBe(200);
+  });
+
+  it('with a team domain but NO audience at all, the list is ignored', async () => {
+    // What bin.ts hands over when CF_ACCESS_TEAM_DOMAIN is set and
+    // CF_ACCESS_AUD is not. It used to be a placeholder STRING, which made
+    // the static verifier look configured; the refusal must not depend on
+    // bin.ts remembering to empty the host lists.
+    const h = spinUp({
+      cfAccess: { teamDomain: TEAM_DOMAIN, jwks },
+      proxiedTrustedHosts: [PROXIED_HOST],
+      proxiedTrustedEmails: [OPERATOR_EMAIL],
+      accessTunnelHosts: [COLLAB_HOST],
+    });
+    const token = await signJwt(OPERATOR_AUD);
+    for (const host of [PROXIED_HOST, COLLAB_HOST]) {
+      const r = await get(h, '/api/docs', { host, ...CF_RAY, 'cf-access-jwt-assertion': token });
+      expect(r.status, host).toBe(403);
+      expect(await r.json(), host).toEqual({ error: 'unknown_host' });
+    }
+  });
+
   it('WITHOUT the opt-in, the hostname answers exactly what it always did', async () => {
     const h = spinUp({ cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks } });
     const jwt = await signJwt(OPERATOR_AUD);
@@ -304,6 +451,7 @@ describe('B. the opt-in fails closed', () => {
       cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
       accessTunnelHosts: [COLLAB_HOST],
       proxiedTrustedHosts: [COLLAB_HOST],
+      proxiedTrustedEmails: [OPERATOR_EMAIL],
     });
     const jwt = await signJwt(OPERATOR_AUD);
     const r = await get(h, '/api/docs', {

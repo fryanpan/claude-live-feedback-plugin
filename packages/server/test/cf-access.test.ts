@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { type ElementAnchor, type User, emailIdentityId } from '@feedback/core';
 import { type JSONWebKeySet, type JWK, SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { activityLogPath } from '../src/activity.ts';
-import type { CfAccessOptions } from '../src/middleware/cf-access.ts';
+import { type CfAccessOptions, createCfAccessVerifier } from '../src/middleware/cf-access.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const TEAM_DOMAIN = 'test.cloudflareaccess.com';
@@ -269,5 +269,67 @@ describe('server with cfAccess unset (default)', () => {
   it('serves requests without any auth check', async () => {
     const r = await fetch(`http://localhost:${handle.port}/api/docs`);
     expect(r.status).toBe(200);
+  });
+});
+
+/**
+ * The verifier on its own: what a token must carry, and what a refusal says.
+ *
+ * `exp` is REQUIRED. jose checks an expiry that is present; it does not
+ * demand one, so a token minted without `exp` would verify forever — and a
+ * token that never expires is a credential that never gets revoked. And a
+ * refusal names nothing: jose's messages describe exactly which check failed,
+ * which is a probe's guide to what the next token needs.
+ */
+describe('createCfAccessVerifier — required claims and what a refusal says', () => {
+  let jwks: JSONWebKeySet;
+  let privateKey: CryptoKey;
+  const mint = (build: (j: SignJWT) => SignJWT) =>
+    build(
+      new SignJWT({ email: 'alice@partner-org.example' })
+        .setProtectedHeader({ alg: 'RS256', kid: KID })
+        .setIssuer(`https://${TEAM_DOMAIN}`)
+        .setAudience(AUDIENCE)
+        .setIssuedAt(),
+    ).sign(privateKey);
+  const req = (token: string) =>
+    new Request('http://localhost/api/docs', { headers: { 'cf-access-jwt-assertion': token } });
+
+  beforeAll(async () => {
+    const pair = await generateKeyPair('RS256');
+    privateKey = pair.privateKey as CryptoKey;
+    const publicJwk = (await exportJWK(pair.publicKey)) as JWK;
+    publicJwk.kid = KID;
+    publicJwk.alg = 'RS256';
+    publicJwk.use = 'sig';
+    jwks = { keys: [publicJwk] };
+  });
+
+  it('refuses a token with no exp — one that never expires is never revoked', async () => {
+    const verify = createCfAccessVerifier({ teamDomain: TEAM_DOMAIN, audience: AUDIENCE, jwks });
+    const noExp = await mint((j) => j);
+    const r = await verify(req(noExp));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(401);
+    // POSITIVE CONTROL: the same token WITH an expiry is accepted.
+    const withExp = await mint((j) => j.setExpirationTime(Math.floor(Date.now() / 1000) + 60));
+    expect((await verify(req(withExp))).ok).toBe(true);
+  });
+
+  it('says only that the token was invalid — never which check failed', async () => {
+    const verify = createCfAccessVerifier({ teamDomain: TEAM_DOMAIN, audience: AUDIENCE, jwks });
+    const wrongAud = await mint((j) =>
+      j.setAudience('some-other-app').setExpirationTime(Math.floor(Date.now() / 1000) + 60),
+    );
+    const r = await verify(req(wrongAud));
+    expect(r).toEqual({ ok: false, status: 401, error: 'access_token_invalid' });
+  });
+
+  it('with no audience configured, refuses every token — nothing to check it against', async () => {
+    const verify = createCfAccessVerifier({ teamDomain: TEAM_DOMAIN, jwks });
+    const fine = await mint((j) => j.setExpirationTime(Math.floor(Date.now() / 1000) + 60));
+    const r = await verify(req(fine));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(401);
   });
 });
