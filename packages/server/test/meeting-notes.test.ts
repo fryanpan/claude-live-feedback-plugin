@@ -134,12 +134,15 @@ describe('pause ticker', () => {
     expect(schedule.armed).toBe(0);
   });
 
-  it('carries the engine\'s speaker label on a settled turn', () => {
+  it("carries the engine's speaker label on a settled turn", () => {
     const { schedule, ticks, ticker } = setup();
     ticker.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'A' });
     ticker.onTurn({ turn: 1, text: 'Sure.', final: true });
     schedule.fire();
-    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'Take it?', speaker: 'A' }, { turn: 1, text: 'Sure.' }]);
+    expect(ticks[0]?.turns).toEqual([
+      { turn: 0, text: 'Take it?', speaker: 'A' },
+      { turn: 1, text: 'Sure.' },
+    ]);
   });
 
   it('end() with nothing pending emits nothing', () => {
@@ -251,7 +254,14 @@ describe('notes session', () => {
     const notes = await createStubNotesComposer().compose({
       docId: 'd',
       meetingId: 'm',
-      tick: { tick: 1, reason: 'pause', turns: [{ turn: 0, text: 'Take it?', speaker: 'Jordan' }, { turn: 1, text: 'Sure.' }] },
+      tick: {
+        tick: 1,
+        reason: 'pause',
+        turns: [
+          { turn: 0, text: 'Take it?', speaker: 'Jordan' },
+          { turn: 1, text: 'Sure.' },
+        ],
+      },
       previous: null,
     });
     expect(notes).toBe('## Notes\n- Jordan: Take it?\n- Sure.');

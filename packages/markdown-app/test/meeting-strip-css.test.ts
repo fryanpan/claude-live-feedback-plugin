@@ -89,6 +89,28 @@ describe('the editor pane reserves a row for the strip', () => {
   });
 });
 
+describe('the speaker tag', () => {
+  const tag = rule('.meeting-speaker', declarationsOnly(SECTION));
+
+  it('lives in the strip section, muted and smaller than the words it labels', () => {
+    expect(tag, 'no .meeting-speaker rule in the MEETING section').not.toBe('');
+    expect(tag).toMatch(/color:\s*var\(--fg-muted\)/);
+    expect(tag).toMatch(/font-size:\s*1[01](\.\d+)?px/);
+    // A button that reads as a tag: no UA chrome.
+    expect(tag).toMatch(/border-radius:\s*var\(--radius-pill\)/);
+    expect(tag).toMatch(/cursor:\s*pointer/);
+  });
+
+  it('is tappable at the 36px floor without being 36px tall', () => {
+    // The tag sits inside a 1.45em line, so its box cannot meet the floor;
+    // the hit area comes from a pseudo-element that reaches past the box.
+    expect(tag).toMatch(/position:\s*relative/);
+    const hit = rule('.meeting-speaker::before', declarationsOnly(SECTION));
+    expect(hit).toMatch(/position:\s*absolute/);
+    expect(hit).toMatch(/inset:\s*-1[0-9]px/);
+  });
+});
+
 describe('at 1180x820 the strip is one 40px bar', () => {
   const strip = rule('.meeting-strip', declarationsOnly(SECTION));
 
