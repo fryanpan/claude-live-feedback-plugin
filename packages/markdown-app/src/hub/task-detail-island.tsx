@@ -67,6 +67,7 @@ import {
   answeredByLine,
   askedMetaLine,
   blockedNoteLine,
+  heldReviewItems,
   isTaskArchived,
   taskActivity,
 } from './hub-model.ts';
@@ -394,6 +395,32 @@ function ReviewCard(props: {
  * swap which question is under the reader mid-thought; the numeric index is
  * only the fallback for when the kept item itself left the queue.
  */
+/**
+ * Review items the quality gate is HOLDING on this ticket: filed, judged not
+ * yet good enough for the reader's queue, and waiting on their filer to
+ * revise. Shown on the ticket — with the judge's reason — so the reader can
+ * see a question is coming and why it has not arrived; NOT a card, because
+ * there is nothing for the reader to answer yet. Absent when nothing is held.
+ */
+function HeldReviewNote(props: { task: HubTask }) {
+  const held = heldReviewItems(props.task);
+  if (held.length === 0) return null;
+  return (
+    <section class="hub-decide hub-decide--held" aria-label="Review items being revised">
+      {held.map((item) => (
+        <p class="hub-decide-held" key={item.id} data-review-item-id={item.id}>
+          <span class="hub-decide-held-kicker">Held</span>
+          <span class="hub-decide-held-ask">{item.review.headline}</span>
+          <span class="hub-decide-held-why">
+            {item.judge?.reason ? `${item.judge.reason} — ` : ''}
+            the agent has been asked to revise it before it reaches your queue.
+          </span>
+        </p>
+      ))}
+    </section>
+  );
+}
+
 function ReviewRegion(props: {
   task: HubTask;
   handlers: DetailHandlers;
@@ -1170,6 +1197,7 @@ function TaskDetailPanel(props: {
           together. There used to be two regions here, each rendering one item
           and each blind to the other. */}
       <ReviewRegion task={task} handlers={handlers} now={now} discussion={discussion} />
+      <HeldReviewNote task={task} />
 
       {/* A heading above the description, because it is a SECTION and
           everything around it now announces itself. Without one the body ran

@@ -3836,6 +3836,36 @@ a.hub-link-chip:hover {
 .hub-decide--answered .hub-detail-answered {
   margin-bottom: 0;
 }
+/* A review item the quality gate is HOLDING: on the ticket, off the reader's
+   queue, waiting on its filer to revise. A note, not a card — nothing here
+   is answerable — so it reads as a status line with the judge's reason. */
+.hub-decide--held {
+  padding: 0;
+}
+.hub-decide-held {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-hover);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.hub-decide-held-kicker {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  margin-right: 8px;
+}
+.hub-decide-held-ask {
+  font-weight: 600;
+}
+.hub-decide-held-why {
+  display: block;
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
 /* A refusal said next to the control that refused. `role="alert"`, so it is
    announced rather than only drawn. */
 .hub-form-error {

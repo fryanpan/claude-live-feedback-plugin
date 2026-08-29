@@ -658,3 +658,49 @@ describe('commenting on the feed like a doc', () => {
     expect(host.querySelector('.acti-thread')).toBeNull();
   });
 });
+
+describe('a review item the quality gate is holding shows on the ticket', () => {
+  it('renders the ask, the judge’s reason, and that the agent was asked to revise', () => {
+    const host = mount();
+    repaint(
+      task({
+        reviews: [
+          {
+            id: 'ri-1',
+            review: { headline: 'Which index do we rebuild?' },
+            judge: { at: NOW, verdict: 'held', reason: 'No option names its cost.' },
+          },
+        ],
+      }),
+      EMPTY,
+    );
+    const note = host.querySelector('.hub-decide-held');
+    expect(note).not.toBeNull();
+    expect(note?.getAttribute('data-review-item-id')).toBe('ri-1');
+    expect(note?.textContent).toContain('Held');
+    expect(note?.textContent).toContain('Which index do we rebuild?');
+    expect(note?.textContent).toContain('No option names its cost. — ');
+    expect(note?.textContent).toContain('the agent has been asked to revise');
+    // Not a card: there is nothing for the reader to answer yet.
+    expect(host.querySelector('.hub-decide-card')).toBeNull();
+  });
+
+  it('renders nothing for a passed item, or a task with no reviews (control)', () => {
+    const host = mount();
+    repaint(
+      task({
+        reviews: [
+          {
+            id: 'ri-2',
+            review: { headline: 'Which index do we rebuild?' },
+            judge: { at: NOW, verdict: 'ok', reason: 'fine' },
+          },
+        ],
+      }),
+      EMPTY,
+    );
+    expect(host.querySelector('.hub-decide-held')).toBeNull();
+    repaint(task(), EMPTY);
+    expect(host.querySelector('.hub-decide-held')).toBeNull();
+  });
+});

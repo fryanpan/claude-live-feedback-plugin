@@ -31,6 +31,7 @@ import {
   dropTarget,
   goalLabel,
   goalRank,
+  heldReviewItems,
   humanBlockerRows,
   initialsOf,
   panelAsks,
@@ -2218,5 +2219,47 @@ describe('answeredByLine — the one you/name voice every answered record speaks
   it('claims nobody when the record carries no name', () => {
     expect(answeredByLine(undefined, 'Jordan')).toBe('Answered: “');
     expect(answeredByLine('', 'Jordan')).toBe('Answered: “');
+  });
+});
+
+describe('heldReviewItems', () => {
+  const base = {
+    id: 't-1',
+    title: 'Rebuild the index nightly',
+    status: 'todo' as const,
+    assignee: 'agent',
+    goal: CHORES_ID,
+    order: 1,
+    after: [],
+    links: [],
+    transitions: [],
+    bodyDocId: 'task:t-1',
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const item = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    review: { headline: 'ok?' },
+    ...over,
+  });
+
+  it('is the open items the quality gate holds — not the passed, unjudged or answered ones', () => {
+    const held = heldReviewItems({
+      ...base,
+      reviews: [
+        item('ri-held', { judge: { at: 2, verdict: 'held', reason: 'No stakes.' } }),
+        item('ri-ok', { judge: { at: 2, verdict: 'ok', reason: 'fine' } }),
+        item('ri-unjudged'),
+        item('ri-answered', {
+          judge: { at: 2, verdict: 'held', reason: 'No stakes.' },
+          answer: { text: 'fine' },
+        }),
+      ],
+    });
+    expect(held.map((r) => r.id)).toEqual(['ri-held']);
+  });
+
+  it('is empty on a task with no reviews field — an older projection', () => {
+    expect(heldReviewItems(base)).toEqual([]);
   });
 });
