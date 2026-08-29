@@ -210,6 +210,14 @@ export function projectTask(
    * absent value as `unknown`, which is what it is.
    */
   ownerKind?: OwnerKind,
+  /**
+   * The owner's roster id, resolved by the server for the same reason as
+   * `ownerKind`: the roster never enters a ydoc. Defaults to what the row
+   * stored; the projection loop passes the read-time resolution so rows
+   * older than the field, and rows whose id was merged away, carry the
+   * surviving id.
+   */
+  assigneeId: string | undefined = task.assigneeId,
 ): Record<string, unknown> {
   return {
     id: task.id,
@@ -227,6 +235,7 @@ export function projectTask(
     title: decodeEntities(task.title),
     status: task.status,
     assignee: task.assignee,
+    ...(assigneeId !== undefined ? { assigneeId } : {}),
     ...(ownerKind !== undefined ? { ownerKind } : {}),
     ...(task.needs !== undefined ? { needs: task.needs } : {}),
     // Options and info-requests are workspace CONTENT — the board's decision
@@ -382,10 +391,21 @@ export class TaskProjection {
    * rather than once per row.
    */
   ownerKindReader(workspaceId: string): (task: Task) => OwnerKind {
-    const isAttachedAgent = attachedAgentTest(
-      this.tasks.listAttachments(workspaceId).map((a) => a.agentId),
-    );
-    return (task) => resolveOwnerKind(task.assignee, task.assigneeKind, isAttachedAgent);
+    const attached = this.tasks.listAttachments(workspaceId).map((a) => a.agentId);
+    const isAttachedAgent = attachedAgentTest(attached);
+    // The same roster, read by ID: an owner typed under a spelling only the
+    // identity roster knows (a merged-away name, a display name the
+    // attachment id shares nothing with) is still the attached agent when
+    // both resolve to one id.
+    const attachedIds = new Set(attached.map((id) => this.tasks.resolveAgentId(id) ?? id));
+    return (task) => {
+      const ownerId = this.tasks.ownerIdOf(task);
+      return resolveOwnerKind(
+        task.assignee,
+        task.assigneeKind,
+        (name) => isAttachedAgent(name) || (ownerId !== undefined && attachedIds.has(ownerId)),
+      );
+    };
   }
 
   /**
@@ -408,9 +428,14 @@ export class TaskProjection {
    * name" — never "away", and never a guess.
    */
   ownerSessionReader(workspaceId: string): (task: Task) => OwnerSession | undefined {
-    const resolve = attachedAgentResolver(this.tasks.listAttachments(workspaceId));
+    const attachments = this.tasks.listAttachments(workspaceId);
+    const resolve = attachedAgentResolver(attachments);
+    const byId = new Map(
+      attachments.map((a) => [this.tasks.resolveAgentId(a.agentId) ?? a.agentId, a] as const),
+    );
     return (task) => {
-      const att = resolve(task.assignee);
+      const ownerId = this.tasks.ownerIdOf(task);
+      const att = resolve(task.assignee) ?? (ownerId !== undefined ? byId.get(ownerId) : undefined);
       if (!att) return undefined;
       return {
         agentId: att.agentId,
@@ -606,7 +631,10 @@ export class TaskProjection {
     const want = new Map(
       this.tasks
         .listTasks(workspaceId, { includeArchived: true })
-        .map((t) => [t.id, projectTask(t, this.commentCount(t.id), ownerKindOf(t))]),
+        .map((t) => [
+          t.id,
+          projectTask(t, this.commentCount(t.id), ownerKindOf(t), this.tasks.ownerIdOf(t)),
+        ]),
     );
     // Each band rides out decorated with its goal ROW's status (and done
     // attribution), read through the store's public API. The board renders

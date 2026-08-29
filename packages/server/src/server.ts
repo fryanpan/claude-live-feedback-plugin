@@ -4573,13 +4573,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // row is not work to pick up, so it leaves the queue unless a caller
           // asks for it by name.
           const includeArchived = url.searchParams.get('includeArchived') === 'true';
+          const wantedOwner = url.searchParams.get('assignee') || undefined;
           const rows = buildQueue(
             taskStore.listTasks(workspaceId, { includeArchived }),
             workspace.goals,
             {
-              ...(url.searchParams.get('assignee')
-                ? { assignee: url.searchParams.get('assignee') ?? '' }
-                : {}),
+              ...(wantedOwner !== undefined ? { assignee: wantedOwner } : {}),
+              // By id as well as by name: the store's matcher finds every
+              // spelling the roster folds into one agent, and `idOf` puts
+              // that id on the row.
+              owner: {
+                ...(wantedOwner !== undefined
+                  ? { matches: taskStore.ownerMatcher(wantedOwner) }
+                  : {}),
+                idOf: (t) => taskStore.ownerIdOf(t),
+              },
               ...(limitRaw !== null && Number.isFinite(Number(limitRaw))
                 ? { limit: Number(limitRaw) }
                 : {}),
