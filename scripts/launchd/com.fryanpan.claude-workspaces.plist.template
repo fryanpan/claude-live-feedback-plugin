@@ -33,6 +33,17 @@
              See docs/process/tailnet-https.md. -->
         <key>CW_PUBLIC_BASE_URL</key>
         <string>{{PUBLIC_BASE_URL}}</string>
+        <!-- Email sign-in. Set to 1 and a session means a verified person;
+             empty (the default) keeps sessions anonymous. Plain pass-through,
+             like everything below: launchd inherits no shell environment, so
+             a variable the template never learned cannot reach the server. -->
+        <key>CW_REQUIRE_EMAIL_AUTH</key>
+        <string>{{REQUIRE_EMAIL_AUTH}}</string>
+        <!-- The operator's own address: what the owner check matches once
+             they sign in by email, and the fallback operator allowlist for
+             CW_PROXIED_TRUSTED_HOSTS below. Empty leaves both unset. -->
+        <key>CW_OWNER_EMAIL</key>
+        <string>{{OWNER_EMAIL}}</string>
         <!-- Link-mode sharing: the single public hostname the Cloudflare
              tunnel serves /s/<token> links on. Empty disables link mode.
              Baked in like the base URL above because the rename reinstall
@@ -52,6 +63,25 @@
              default) leaves the feature off. -->
         <key>CF_ACCESS_TUNNEL_HOSTS</key>
         <string>{{ACCESS_TUNNEL_HOSTS}}</string>
+        <!-- The OPERATOR'S OWN public hostnames: served through the tunnel,
+             gated by a Cloudflare Access application over each one, and then
+             the WHOLE product — what loopback and the tailnet name get. A
+             third list, kept apart from TRUSTED_HOSTS (LAN names, refused
+             through the proxy) and from the collaboration list above (share
+             surface only). Same all-or-none rule: without CF_ACCESS_TEAM_DOMAIN
+             and CF_ACCESS_AUD the server ignores it and those hostnames
+             answer 403 unknown_host. Empty (the default) leaves it off. -->
+        <key>CW_PROXIED_TRUSTED_HOSTS</key>
+        <string>{{PROXIED_TRUSTED_HOSTS}}</string>
+        <!-- WHO the operator is, by the email Cloudflare Access verified. A
+             token proves the Access policy admitted someone; one application
+             may admit collaborators too, so this list is what makes the
+             hostnames above the operator's door. The server falls back to
+             CW_OWNER_EMAIL above, but the installer requires this list
+             explicitly whenever the hosts are set — explicit beats fallback.
+             Empty with no owner email, the host list is ignored. -->
+        <key>CW_PROXIED_TRUSTED_EMAILS</key>
+        <string>{{PROXIED_TRUSTED_EMAILS}}</string>
         <key>CF_ACCESS_TEAM_DOMAIN</key>
         <string>{{ACCESS_TEAM_DOMAIN}}</string>
         <key>CF_ACCESS_AUD</key>

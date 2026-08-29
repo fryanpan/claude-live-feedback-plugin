@@ -15,8 +15,14 @@ export interface CfAccessOptions {
    *   - a function: resolve AUD per Host header — used by the share module so
    *     each share-<slug>.tunnel.fryanpan.com gets its own AUD without restarts.
    *     Return null when the host has no active share (request is rejected).
+   *   - absent: a team domain with NO audience to check against. Every token
+   *     is refused. This is what bin.ts hands over when CF_ACCESS_TEAM_DOMAIN
+   *     is set and CF_ACCESS_AUD is not; it used to be a placeholder STRING,
+   *     which made every "is a static audience configured?" check answer yes
+   *     and left the fail-closed rules depending on bin.ts emptying the host
+   *     lists. An absent audience answers no by its type.
    */
-  audience: string | ((host: string) => string | null);
+  audience?: string | ((host: string) => string | null);
   /** For tests: pass a static JWKS instead of fetching from the team domain. */
   jwks?: JSONWebKeySet;
 }
@@ -51,16 +57,28 @@ export function createCfAccessVerifier(opts: CfAccessOptions): CfAccessVerifier 
       const resolved = opts.audience(host);
       if (!resolved) return { ok: false, status: 401, error: 'no_share_for_host' };
       audience = resolved;
-    } else {
+    } else if (typeof opts.audience === 'string') {
       audience = opts.audience;
+    } else {
+      return { ok: false, status: 401, error: 'no_audience_configured' };
     }
     try {
-      const { payload } = await jwtVerify(token, getKey, { issuer, audience });
+      // `exp` is REQUIRED, not merely checked when present: jose enforces an
+      // expiry it finds and says nothing about one that is missing, and a
+      // token that never expires is a credential that is never revoked.
+      const { payload } = await jwtVerify(token, getKey, {
+        issuer,
+        audience,
+        requiredClaims: ['exp'],
+      });
       const email = typeof payload.email === 'string' ? payload.email : undefined;
       return { ok: true, email };
-    } catch (err) {
-      const error = err instanceof Error ? err.message : 'invalid_jwt';
-      return { ok: false, status: 401, error };
+    } catch {
+      // Generic on purpose. jose's messages name the check that failed
+      // ("unexpected aud", "exp timestamp check failed"), which is a guide to
+      // what the next forged token needs. The operator reads the real reason
+      // in Cloudflare's own logs; a caller learns only that it did not pass.
+      return { ok: false, status: 401, error: 'access_token_invalid' };
     }
   };
 }
