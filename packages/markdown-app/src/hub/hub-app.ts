@@ -2610,6 +2610,11 @@ async function main(): Promise<void> {
       voiceHubContext(
         state.detailTaskId,
         document.activeElement?.closest<HTMLElement>('.hub-task-row')?.dataset.taskId,
+        // The review item the panel is aimed at, so "pick the second one"
+        // answers THAT one when the ticket has several.
+        state.detailThreadId,
+        // Or the ticket's own single review row, when the panel is open on it.
+        state.reviewItems,
       ),
     send: async (transcript, context) => {
       const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/voice`, 'POST', {
