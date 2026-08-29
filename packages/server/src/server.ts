@@ -813,6 +813,9 @@ export interface ServerHandle {
   /** Per-agent durable watch sets (agent-watches.ts). Exposed so tests can
    *  read the store the route wrote, not only the route's answer. */
   agentWatches: AgentWatches;
+  /** The fleet address book (identities.ts) — people and agents. Exposed
+   *  for the same reason `agentWatches` is. */
+  identities: Identities;
   /** Open builder dispatches and their worktree watchers
    *  (dispatch-registry.ts). Exposed for the same reason `agentWatches` is. */
   dispatches: DispatchRegistry;
@@ -2802,6 +2805,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   if (identities.loadError) {
     console.error(`[identities] ${identities.loadError}`);
   }
+  // Agents are roster rows too: an attach writes one, and the seat claim
+  // names the lead by it. See identities.ts.
+  taskStore.setAgentRoster(identities);
   // Teach the owner check which anonymous session ids belong to a known
   // person. Logged either way: a link file that failed to parse and one that
   // was never written both leave the map empty, and the difference is
@@ -6512,6 +6518,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           const res = taskStore.attachAgent(workspaceId, {
             agentId: agentId.trim(),
+            // The display name the session runs under. Absent from older
+            // bundles, which attach under their id.
+            ...(typeof body?.agentName === 'string' && body.agentName.trim().length > 0
+              ? { agentName: body.agentName.trim() }
+              : {}),
             runtime,
             capabilities: Array.isArray(body?.capabilities)
               ? (body.capabilities as unknown[]).filter((c): c is string => typeof c === 'string')
@@ -8219,6 +8230,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     tasks: taskStore,
     projection: taskProjection,
     agentWatches,
+    identities,
     dispatches,
     shares,
     sweepDeadShares,

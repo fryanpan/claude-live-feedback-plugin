@@ -249,6 +249,15 @@ describe('POSITIVE CONTROL — handing the seat to somebody else is unchanged', 
   });
 });
 
+describe('the attach carries the agent NAME, not only its id', () => {
+  it('sends agentName so the roster row is written under the display name', async () => {
+    const { calls, deps } = harness();
+    await declareWorkspaceLead({ workspaceId: WS }, deps);
+    const attach = calls.find((c) => c.path?.endsWith('/attachments'));
+    expect((attach?.body as { agentName?: string }).agentName).toBe(SELF.name);
+  });
+});
+
 describe('POSITIVE CONTROL — the legacy payload keeps its meaning', () => {
   it('an explicit self id behaves identically to the omitted form', async () => {
     const omitted = harness();

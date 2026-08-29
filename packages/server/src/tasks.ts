@@ -976,6 +976,17 @@ export function isAttachmentRuntime(v: unknown): v is AttachmentRuntime {
  * minimal-share commit), so the endpoint's only exits are the attachments
  * sidecar and owner REST, with visitor redaction — the private-meta pattern.
  */
+/**
+ * The slice of the fleet address book the store needs (identities.ts
+ * implements it). An interface rather than the class so tasks.ts stays free
+ * of identities.ts and the dependency runs one way.
+ */
+export interface AgentRoster {
+  upsertAgent(id: string, displayName?: string): unknown;
+  resolveAgentId(idOrName: string): string | null;
+  displayNameFor(id: string): string | null;
+}
+
 export interface AgentAttachment {
   workspaceId: string;
   agentId: string;
@@ -2225,6 +2236,7 @@ export class TaskStore {
   private debounceMs: number;
   private attachmentThresholds: AttachmentThresholds;
   private deliveryProbe: DeliveryProbe | undefined;
+  private roster: AgentRoster | undefined;
   private readonly voiceAckGraceMs: number;
   private readonly commentAckGraceMs: number;
   private agentStreamProbe: AgentStreamProbe | undefined;
@@ -2281,6 +2293,17 @@ export class TaskStore {
 
   setDeliveryProbe(probe: DeliveryProbe | undefined): void {
     this.deliveryProbe = probe;
+  }
+
+  /**
+   * Wire the fleet's address book (identities.ts). Optional for the same
+   * reason the probes are: a store-only test needs no roster, and left
+   * unwired every attach and seat claim behaves exactly as it did. With it
+   * wired, an attach writes the agent's roster row and a seat claim names
+   * the lead by its roster display name rather than by its id.
+   */
+  setAgentRoster(roster: AgentRoster | undefined): void {
+    this.roster = roster;
   }
 
   /**
@@ -5087,6 +5110,10 @@ export class TaskStore {
     workspaceId: string,
     opts: {
       agentId: string;
+      /** The display name the session runs under (`CW_AGENT_NAME`). Written
+       *  to the roster so every surface names this agent the same way; an
+       *  older bundle sends none and attaches under its id. */
+      agentName?: string;
       runtime: AttachmentRuntime;
       capabilities?: string[];
       endpoint?: string;
@@ -5120,6 +5147,9 @@ export class TaskStore {
     };
     state.attachments.set(opts.agentId, attachment);
     this.scheduleAttachmentsSave(workspaceId);
+    // The attach is where an agent first says who it is, so the roster row
+    // is written here — one address book, not a per-board one.
+    this.roster?.upsertAgent(opts.agentId, opts.agentName);
     // Claim an EMPTY seat only. A board created before this field existed —
     // or by a person — would otherwise stay a dead letter forever, but an
     // occupied seat is a standing decision and a second agent attaching is
@@ -5132,7 +5162,11 @@ export class TaskStore {
       this.assignLead(
         state,
         opts.agentId,
-        { id: opts.agentId, name: opts.agentId, kind: 'agent' },
+        {
+          id: opts.agentId,
+          name: this.roster?.displayNameFor(opts.agentId) ?? opts.agentName ?? opts.agentId,
+          kind: 'agent',
+        },
         now,
       );
     }
