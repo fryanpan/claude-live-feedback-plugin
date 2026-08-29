@@ -1,6 +1,7 @@
 import { decodeEntities, listThreads, prose, readTaskReviewItem } from '@feedback/core';
 import type { TaskReviewItem } from '@feedback/core';
 import * as Y from 'yjs';
+import { TASK_NOTES_READ_CAP } from './agent-notes.ts';
 import type { Rooms } from './rooms.ts';
 import {
   type OwnerKind,
@@ -185,6 +186,24 @@ function projectReviews(reviews: TaskReviewItem[] | undefined): {
   return rows.length > 0 ? { reviews: rows } : {};
 }
 
+/**
+ * The agent's own one-liners on the row, NEWEST FIRST and capped at
+ * `TASK_NOTES_READ_CAP` — the pane reads "what did this agent do lately",
+ * and a row worked for a week has more history than any pane wants. Display
+ * fields only: the session id stays in the store, like actor ids do on
+ * transitions. Absent when there are none, so a row without notes projects
+ * exactly as it did before the field existed.
+ */
+function projectNotes(notes: Task['notes']): { notes?: Record<string, unknown>[] } {
+  if (!notes || notes.length === 0) return {};
+  return {
+    notes: notes
+      .slice(-TASK_NOTES_READ_CAP)
+      .reverse()
+      .map((n) => ({ at: n.ts, kind: n.kind, text: n.text, agent: n.agent })),
+  };
+}
+
 /** The plain-JSON shape of one task inside the `tasks` Y.Map — the §3.3
  *  visitor-contract fields, stated here so it's a decision, not an
  *  accident. No actor ids (display names only); the body is the capped
@@ -293,6 +312,7 @@ export function projectTask(
       // transitions recorded, and no surface reads it.
       ...(t.usage !== undefined ? { usage: t.usage } : {}),
     })),
+    ...projectNotes(task.notes),
     bodyDocId: taskBodyDocId(task.id),
     ...projectBody(task.body),
     createdAt: task.createdAt,

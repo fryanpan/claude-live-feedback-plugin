@@ -103,6 +103,18 @@ export const READY_TICK_DEFAULT_MS = 60_000;
  *  event off the event name alone — one name would make the two
  *  indistinguishable in the lead's channel. */
 export const READY_IDLE_EVENT = 'workspace.ready_idle';
+
+/**
+ * Whether a store event counts as THE BOARD MOVING — what restarts a
+ * board's idle clock. Liveness does not: `agent.*` (attached / detached /
+ * heartbeat) is the session being there, and `task.noted` is the session
+ * ending a turn — one per turn from any agent holding a row, so counting it
+ * would suppress the wake for exactly as long as a builder keeps talking
+ * without moving anything, which is the state the wake exists to catch.
+ */
+export function isBoardActivity(type: string): boolean {
+  return !type.startsWith('agent.') && type !== 'task.noted';
+}
 export const REVIEW_ANSWERED_EVENT = 'workspace.review_answered';
 
 /** A ready row, reduced to what a wake needs to say. */

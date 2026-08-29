@@ -99,7 +99,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.124';
+const PLUGIN_VERSION = '0.1.125';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4553,6 +4553,12 @@ interface HubEventPayload {
 async function emitHubChannelMessage(event: string, rawPayload: unknown): Promise<void> {
   const p = (rawPayload ?? {}) as HubEventPayload;
   if (event === 'agent.heartbeat') return;
+  // A per-turn note from another agent's Stop hook. The server keeps it off
+  // the workspace stream (server.ts, the broadcast listener); this is the
+  // belt to that suspender, so a replayed or older-server frame still does
+  // not cost this session a wake turn — and, relayed, its own Stop hook
+  // would post a note that wakes the first agent back.
+  if (event === 'task.noted') return;
   if (p.actor?.id === AUTHOR.id) return;
 
   const by = p.actor?.name ? ` by ${p.actor.name}` : '';

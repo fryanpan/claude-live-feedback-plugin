@@ -20,6 +20,7 @@ import {
   READY_IDLE_DEFAULT_MS,
   ReadyWorkNudger,
   type ReadyWorkSnapshot,
+  isBoardActivity,
 } from '../src/ready-nudge.ts';
 
 const MIN = 60_000;
@@ -850,5 +851,23 @@ describe('a task captured from a meeting wakes the lead immediately', () => {
     world.reachable.clear();
     nudger.taskReady({ workspaceId: 'w-search', taskId: 't-cap', taskTitle: 'x' });
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('isBoardActivity — what restarts a board’s idle clock', () => {
+  it('counts a row moving and not liveness: agent.* and the per-turn note', () => {
+    // A builder ending turns while nothing on the board changes is exactly
+    // the state the ready-idle wake exists to catch.
+    for (const type of [
+      'task.created',
+      'task.transitioned',
+      'decision.answered',
+      'workspace.goals_changed',
+    ]) {
+      expect(isBoardActivity(type), type).toBe(true);
+    }
+    for (const type of ['agent.attached', 'agent.heartbeat', 'agent.detached', 'task.noted']) {
+      expect(isBoardActivity(type), type).toBe(false);
+    }
   });
 });

@@ -14409,7 +14409,7 @@ var AUTHOR = resolveAgentAuthor(process.env);
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.124";
+var PLUGIN_VERSION = "0.1.125";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -17431,6 +17431,8 @@ var HUB_EVENT_RE = /^(task|decision|workspace|agent|voice)\./;
 async function emitHubChannelMessage(event, rawPayload) {
   const p = rawPayload ?? {};
   if (event === "agent.heartbeat")
+    return;
+  if (event === "task.noted")
     return;
   if (p.actor?.id === AUTHOR.id)
     return;

@@ -16,6 +16,7 @@ import {
   type ReviewPayload,
   type TaskReviewItem,
   agentIdCandidates,
+  agentIdForName,
   changedRange,
   checkReviewPayload,
   isReviewItemOpen,
@@ -456,6 +457,33 @@ export interface TaskEvidenceAmendment {
   supersedes?: TaskEvidence;
 }
 
+/**
+ * One line an agent's session posted about this row — the closing sentence
+ * of a turn, or the shape of a tool call auto mode refused. Written by the
+ * plugin's Stop / PermissionDenied hooks through `POST /api/agent-notes`,
+ * never by a person, and pinned to whichever row was the agent's current
+ * claim when it arrived. Stored VERBATIM: the hook is what reduces a message
+ * to one line and keeps paths and tokens out; the server does not filter.
+ */
+export interface TaskNote {
+  /** When the session reported it — the hook's clock, not the server's. */
+  ts: number;
+  kind: 'turn' | 'denial';
+  text: string;
+  /** The agent's display name, as the hook's environment spelled it. */
+  agent: string;
+  /** The Claude Code session that posted it. Kept for the pane; never
+   *  projected into the board room. */
+  sessionId?: string;
+}
+
+/** How many notes a row keeps on disk. The read is capped separately
+ *  (`TASK_NOTES_READ_CAP` in agent-notes.ts); this bounds the sidecar, which
+ *  is rewritten whole on every save — a row worked for a week at a note per
+ *  turn would otherwise grow without limit. Notes are session telemetry,
+ *  not user content, so the oldest fall off rather than being archived. */
+export const TASK_NOTES_STORE_CAP = 200;
+
 export interface TaskTransition {
   ts: number;
   from: TaskStatus;
@@ -718,6 +746,10 @@ export interface Task {
      migration strips it, because rewriting every row is the larger risk. */
   /** Append-only audit trail. */
   transitions: TaskTransition[];
+  /** The agent's own one-liners about this row (see `TaskNote`), append
+   *  order, bounded by `TASK_NOTES_STORE_CAP`. Absent on every row written
+   *  before the field existed, which reads as none. */
+  notes?: TaskNote[];
   createdAt: number;
   updatedAt: number;
   /**
@@ -1677,6 +1709,22 @@ export type VoiceRoute = 'fast-path' | 'fast-path-action' | 'agent' | 'agent-que
 /** §3.6: every voice utterance emits `voice.request` — transcript, chosen
  *  route, ack text — which is what makes "voice always answers" a checkable
  *  artifact rather than a promise (§2.4). */
+/**
+ * An agent's session posted a one-line note onto its current row (see
+ * `TaskNote`). Carries the note's text so the audit log is the trail; carries
+ * `actor` so the emit choke point reads it as observed work — a turn ending
+ * is the agent alive, and the work clock should say so.
+ */
+export interface TaskNotedEvent {
+  type: 'task.noted';
+  workspaceId: string;
+  taskId: string;
+  actor: TaskActor;
+  kind: TaskNote['kind'];
+  text: string;
+  ts: number;
+}
+
 export interface VoiceRequestEvent {
   type: 'voice.request';
   workspaceId: string;
@@ -1740,6 +1788,7 @@ export type TaskStoreEvent =
   | TaskArchivedEvent
   | TaskRestoredEvent
   | TaskRegroupedEvent
+  | TaskNotedEvent
   | DecisionAnsweredEvent
   | DecisionAnswerWithdrawnEvent
   | DecisionInfoRequestedEvent
@@ -3528,6 +3577,49 @@ export class TaskStore {
       ts: entry.ts,
     });
     return { ok: true, task, blockers };
+  }
+
+  /**
+   * Pin an agent's one-liner to a row. No status change and no gate: the
+   * note records what the session said or was refused, not where the row
+   * is. Bounded at `TASK_NOTES_STORE_CAP` from the old end, emitted as
+   * `task.noted` so the board re-projects, the audit log has it, and the
+   * actor's work clock moves — but NOT broadcast on the workspace stream
+   * (server.ts keeps it off), because one frame per turn would wake every
+   * other attached agent.
+   */
+  appendNote(
+    taskId: string,
+    input: { kind: TaskNote['kind']; text: string; agent: string; ts: number; sessionId?: string },
+  ): { ok: true; task: Task; note: TaskNote } | { ok: false; error: 'not-found' } {
+    // Tasks only: `resolveCurrentTask` never hands this a goal row, and a
+    // goal's trail is its children's, not a session's one-liners.
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    const note: TaskNote = {
+      ts: input.ts,
+      kind: input.kind,
+      text: input.text,
+      agent: input.agent,
+      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+    };
+    const notes = task.notes ?? [];
+    notes.push(note);
+    if (notes.length > TASK_NOTES_STORE_CAP) notes.splice(0, notes.length - TASK_NOTES_STORE_CAP);
+    task.notes = notes;
+    const now = Date.now();
+    task.updatedAt = now;
+    this.scheduleSave(task.workspaceId);
+    this.emit({
+      type: 'task.noted',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      actor: { id: agentIdForName(input.agent), name: input.agent, kind: 'agent' },
+      kind: note.kind,
+      text: note.text,
+      ts: now,
+    });
+    return { ok: true, task, note };
   }
 
   /**
