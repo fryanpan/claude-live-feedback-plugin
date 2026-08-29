@@ -87,6 +87,11 @@ export interface TaskDetailView {
   task: HubTask | null;
   /** The task's comments, as fetched. Absent while the app has not asked. */
   discussion?: TaskDiscussion;
+  /** Which tab the panel OPENS on — read once, when the panel for this task
+   *  mounts; the reader's own switches win after that. Absent means
+   *  Comments. The Home activity pane's title tap asks for Activity, since
+   *  the reader was already looking at what happened to the task. */
+  tab?: DetailTab;
   /** Aimed at the task this paint draws — see the head of the file for why
    *  these travel with the data rather than being bound at mount. */
   handlers: DetailHandlers;
@@ -109,7 +114,7 @@ export const taskDetailData = signal<TaskDetailView>({
 });
 
 /** The two tabs at the bottom of the panel, and which one is showing. */
-type DetailTab = 'comments' | 'activity';
+export type DetailTab = 'comments' | 'activity';
 const DETAIL_TABS: { id: DetailTab; label: string }[] = [
   { id: 'comments', label: 'Comments' },
   { id: 'activity', label: 'Activity' },
@@ -580,6 +585,7 @@ function TaskDetailPanel(props: {
   task: HubTask;
   discussion?: TaskDiscussion;
   handlers: DetailHandlers;
+  initialTab?: DetailTab;
 }) {
   const { host, task, discussion, handlers } = props;
   const now = handlers.now ?? Date.now();
@@ -589,7 +595,7 @@ function TaskDetailPanel(props: {
   const fieldsRef = useRef<HTMLDListElement | null>(null);
   const slotRef = useRef<HTMLDivElement | null>(null);
   const tabsRef = useRef<HTMLDivElement | null>(null);
-  const [tab, setTab] = useState<DetailTab>('comments');
+  const [tab, setTab] = useState<DetailTab>(props.initialTab ?? 'comments');
   // Full screen is a preference of the READER, not of the task, so it lives on
   // the container and survives both a repaint and a move to another task.
   const [full, setFull] = useState(host.classList.contains('hub-detail--full'));
@@ -912,7 +918,7 @@ function TaskDetailPanel(props: {
  * panel are siblings under different subtrees.
  */
 function TaskDetail(props: { host: HTMLElement }) {
-  const { task, discussion, handlers } = taskDetailData.value;
+  const { task, discussion, handlers, tab } = taskDetailData.value;
   const { host } = props;
   useLayoutEffect(() => {
     host.classList.toggle('hidden', task === null);
@@ -944,6 +950,7 @@ function TaskDetail(props: { host: HTMLElement }) {
       task={task}
       discussion={discussion}
       handlers={handlers}
+      initialTab={tab}
     />
   );
 }
