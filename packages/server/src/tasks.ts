@@ -1953,8 +1953,15 @@ export type ReviseReviewItemResult =
     }
   | {
       ok: false;
-      error: 'not-found' | 'unknown-review-item' | 'not-revisable' | 'empty-patch' | 'bad-review';
-      /** The gate's verbatim refusal, present exactly when `error` is 'bad-review'. */
+      error:
+        | 'not-found'
+        | 'unknown-review-item'
+        | 'not-revisable'
+        | 'answered'
+        | 'empty-patch'
+        | 'bad-review'
+        | 'bad-range';
+      /** The verbatim refusal, present for 'bad-review', 'answered' and 'bad-range'. */
       message?: string;
     };
 
@@ -4025,7 +4032,11 @@ export class TaskStore {
    * which is what puts it back on the queue.
    *
    * The derived legacy row (`r-legacy`) is refused: its words are the task's
-   * title and body, and rewriting those is `rewrite_task`'s job.
+   * title and body, and rewriting those is `rewrite_task`'s job. So is an
+   * ANSWERED item: the answer was given to the words on it, and rewriting
+   * them under it would leave a decision on record about text nobody can see
+   * — and `reviewItemState` reads `answer` first, so the mismatch would never
+   * surface as a re-queue either. File a fresh item instead.
    */
   reviseReviewItem(
     taskId: string,
@@ -4041,6 +4052,13 @@ export class TaskStore {
     if (reviewItemId === LEGACY_REVIEW_ITEM_ID) return { ok: false, error: 'not-revisable' };
     const item = task.reviews?.find((r) => r.id === reviewItemId);
     if (!item) return { ok: false, error: 'unknown-review-item' };
+    if (item.answer) {
+      return {
+        ok: false,
+        error: 'answered',
+        message: `review item ${reviewItemId} is already answered — the answer is to the words it has; add a new item instead of rewriting these`,
+      };
+    }
 
     const touches = (['headline', 'detail', 'options'] as const).filter(
       (k) => patch[k] !== undefined,
@@ -4065,6 +4083,17 @@ export class TaskStore {
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
+    // An explicit range is offsets into the NEW detail; one that runs past it
+    // would be served to the queue as-is and highlight to the end of whatever
+    // text is there. The derived range is bounded by construction.
+    const detailLength = (next.detail ?? '').length;
+    if (opts.revisedRange && opts.revisedRange.end > detailLength) {
+      return {
+        ok: false,
+        error: 'bad-range',
+        message: `revisedRange ${opts.revisedRange.start}–${opts.revisedRange.end} runs past the new detail (${detailLength} characters)`,
+      };
+    }
     const question = latestThreadedQuestion(item);
     const range =
       opts.revisedRange ??
