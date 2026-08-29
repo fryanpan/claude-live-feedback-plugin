@@ -583,6 +583,44 @@ describe('renderTaskDetail', () => {
     );
   });
 
+  it("says Answered by you when the task's own answer is the reader's — same voice as a thread record", () => {
+    const d = task({
+      needs: 'decision',
+      assignee: 'human',
+      answer: { text: 'Option B', by: 'Jordan', ts: NOW },
+    });
+    renderTaskDetail(root, d, {
+      onClose: vi.fn(),
+      onStatusSet: vi.fn(),
+      onTitleCommit: vi.fn(),
+      onAnswer: vi.fn(),
+      onAssign: vi.fn(),
+      selfName: 'Jordan',
+    });
+    expect(root.querySelector('.hub-detail-answer')?.textContent).toBe(
+      'Answered by you: “Option B”',
+    );
+  });
+
+  it("names who filed the ticket on the task's own decision card, as a thread card names its asker", () => {
+    const d = task({
+      needs: 'decision',
+      assignee: 'human',
+      body: 'Blue or green? Blocked until answered: the banner.',
+      createdBy: 'UX Bot',
+      createdAt: NOW - 3_600_000,
+    });
+    renderTaskDetail(root, d, {
+      onClose: vi.fn(),
+      onStatusSet: vi.fn(),
+      onTitleCommit: vi.fn(),
+      onAnswer: vi.fn(),
+      onAssign: vi.fn(),
+      now: NOW,
+    });
+    expect(root.querySelector('.hub-decide-meta')?.textContent).toBe('Asked by UX Bot 1 hour ago');
+  });
+
   it('renders the recorded answer instead of the form once answered', () => {
     const d = task({
       needs: 'decision',
