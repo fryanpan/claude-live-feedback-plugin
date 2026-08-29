@@ -60,6 +60,14 @@ BUN_DIR="$(dirname "${BUN_BIN}")"
 # working; the new name wins when both are set.
 PUBLIC_BASE_URL="${CW_PUBLIC_BASE_URL:-${LF_PUBLIC_BASE_URL:-}}"
 
+# Email sign-in and the operator's own address. Plain pass-throughs, same
+# contract as the base URL: baked into the plist because launchd inherits no
+# shell environment, empty by default, and reverted by a reinstall without
+# them. Without a slot here prod could never turn sign-in on, and the
+# CW_OWNER_EMAIL fallback for the operator allowlist below could never apply.
+REQUIRE_EMAIL_AUTH="${CW_REQUIRE_EMAIL_AUTH:-}"
+OWNER_EMAIL="${CW_OWNER_EMAIL:-}"
+
 # Link-mode sharing hostname, same contract as the base URL: baked into the
 # plist because launchd inherits no shell environment, and empty (the default)
 # keeps link mode off. Re-running the installer without it reverts sharing —
@@ -93,14 +101,55 @@ if [ -n "${ACCESS_TUNNEL_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "
     exit 1
 fi
 
+# The operator's OWN public hostnames: through the tunnel, behind an Access
+# application, and then the whole product — not the share surface. A third
+# list, separate from TRUSTED_HOSTS and from the collaboration list above,
+# because it grants the most. Same contract: baked into the plist, empty by
+# default, reverted by a reinstall without it, and the same all-or-none rule
+# with the team domain and the AUD. Dual-read like the base URL — the domain
+# plan spells it `LF_`; the new name wins when both are set.
+#
+#   CW_PROXIED_TRUSTED_HOSTS=workspaces.example.com \
+#   CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com \
+#   CF_ACCESS_AUD=<the Access application's AUD tag> \
+#     scripts/launchd/install.sh
+#   CW_PROXIED_TRUSTED_EMAILS=<the operator's email> \
+#     scripts/launchd/install.sh
+#
+# The emails are WHO the operator is. An Access token proves the policy
+# admitted someone — and one application may admit collaborators too — so the
+# verified email must be on this list before the product is served. The server
+# falls back to CW_OWNER_EMAIL (carried above), but the installer still
+# requires the list outright whenever the hosts are set: explicit beats
+# fallback for the one setting that opens the whole product from outside.
+PROXIED_TRUSTED_HOSTS="${CW_PROXIED_TRUSTED_HOSTS:-${LF_PROXIED_TRUSTED_HOSTS:-}}"
+PROXIED_TRUSTED_EMAILS="${CW_PROXIED_TRUSTED_EMAILS:-}"
+if [ -n "${PROXIED_TRUSTED_HOSTS}" ] && { [ -z "${ACCESS_TEAM_DOMAIN}" ] || [ -z "${ACCESS_AUD}" ]; }; then
+    echo "error: CW_PROXIED_TRUSTED_HOSTS needs CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD too." >&2
+    echo "       Without an Access application in front of those hostnames the server" >&2
+    echo "       would serve the WHOLE product to anyone who can reach the tunnel, so it" >&2
+    echo "       refuses to honour the list — they would answer 403. Set all three, or none." >&2
+    exit 1
+fi
+if [ -n "${PROXIED_TRUSTED_HOSTS}" ] && [ -z "${PROXIED_TRUSTED_EMAILS}" ]; then
+    echo "error: CW_PROXIED_TRUSTED_HOSTS needs CW_PROXIED_TRUSTED_EMAILS too." >&2
+    echo "       An Access token proves admission, not identity: without an operator" >&2
+    echo "       allowlist every collaborator the same application admits would reach" >&2
+    echo "       the whole product. The server ignores the host list without one." >&2
+    exit 1
+fi
+
 echo "[install] label:    ${LABEL}"
 echo "[install] repo:     ${REPO_DIR}"
 echo "[install] bun:      ${BUN_BIN}"
 echo "[install] plist:    ${PLIST_DEST}"
 echo "[install] logs:     ${LOG_DIR}/${LABEL}.{out,err}.log"
 echo "[install] links:    ${PUBLIC_BASE_URL:-<discovered host>:<port> over http}"
+echo "[install] sign-in:  ${REQUIRE_EMAIL_AUTH:+required}${REQUIRE_EMAIL_AUTH:-<anonymous sessions>}"
+echo "[install] owner:    $([ -n "${OWNER_EMAIL}" ] && echo 'email set' || echo '<unset>')"
 echo "[install] sharing:  ${SHARE_PUBLIC_HOSTNAME:-<link mode off>}"
 echo "[install] collab:   ${ACCESS_TUNNEL_HOSTS:-<off>}"
+echo "[install] operator: ${PROXIED_TRUSTED_HOSTS:-<off>}"
 
 DOMAIN="gui/$(id -u)"
 
@@ -154,8 +203,12 @@ sed \
     -e "s|{{HOME_DIR}}|${HOME}|g" \
     -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
     -e "s|{{PUBLIC_BASE_URL}}|${PUBLIC_BASE_URL}|g" \
+    -e "s|{{REQUIRE_EMAIL_AUTH}}|${REQUIRE_EMAIL_AUTH}|g" \
+    -e "s|{{OWNER_EMAIL}}|${OWNER_EMAIL}|g" \
     -e "s|{{SHARE_PUBLIC_HOSTNAME}}|${SHARE_PUBLIC_HOSTNAME}|g" \
     -e "s|{{ACCESS_TUNNEL_HOSTS}}|${ACCESS_TUNNEL_HOSTS}|g" \
+    -e "s|{{PROXIED_TRUSTED_HOSTS}}|${PROXIED_TRUSTED_HOSTS}|g" \
+    -e "s|{{PROXIED_TRUSTED_EMAILS}}|${PROXIED_TRUSTED_EMAILS}|g" \
     -e "s|{{ACCESS_TEAM_DOMAIN}}|${ACCESS_TEAM_DOMAIN}|g" \
     -e "s|{{ACCESS_AUD}}|${ACCESS_AUD}|g" \
     "${TEMPLATE}" > "${PLIST_DEST}"
