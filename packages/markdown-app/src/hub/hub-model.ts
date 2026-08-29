@@ -73,6 +73,11 @@ export interface HubInfoRequest {
 export interface HubTask {
   id: string;
   title: string;
+  /** Filed with no name yet (the Board's "New task"): `title` holds the
+   *  server's placeholder, and this says so — the panel shows it muted and
+   *  opens the rename on an EMPTY input. The server clears it the moment a
+   *  real title lands through any door. */
+  untitled?: boolean;
   status: TaskStatus;
   assignee: string;
   /**
@@ -1616,155 +1621,6 @@ export function walkNextUrl(chain: string[]): string | null {
   if (!next) return null;
   const tail = rest.length ? `&then=${rest.map(encodeURIComponent).join(',')}` : '';
   return `/workspaces/${encodeURIComponent(next)}/home?walk=1${tail}`;
-}
-
-// ── Quick capture ──────────────────────────────────────────────────────────
-
-/** Longer than this and the line stops being a title. Chosen to fit a phone
- *  row without wrapping twice, which is where the board is read. */
-const QUICK_TITLE_MAX = 90;
-
-export interface QuickAdd {
-  title: string;
-  /** The speaker's own words, whole, whenever the title had to lose any of
-   *  them. Never a rewrite. */
-  body?: string;
-}
-
-/**
- * One box of prose → a task.
- *
- * Bryan: "I also can't create new tasks easily in the workspace, which is why
- * I'm doing them here. I want a quick typing or voice option to create a
- * task, mostly by just discussing it with you." The thing that makes capture
- * expensive is being asked to compose a title — and the board's own contract
- * asks for a user story, which is more composition still. So capture takes
- * whatever he says and NEVER discards a word of it: the first line becomes
- * the title, and if anything at all was left over — more lines, or a first
- * line too long to be a title — the full text is kept verbatim as the body
- * for whoever refines it.
- *
- * Deliberately not an LLM call. Capture has to work with no network, no key,
- * and no attached agent, because the moment it can fail is the moment the
- * idea goes back into chat.
- */
-export function parseQuickAdd(raw: string): QuickAdd | null {
-  const text = raw.trim();
-  if (text === '') return null;
-  const lines = text.split('\n');
-  const first = (lines[0] ?? '').trim();
-  const multiline = lines.length > 1;
-  if (first.length <= QUICK_TITLE_MAX) {
-    return multiline ? { title: first, body: text } : { title: first };
-  }
-  // Clip on a word boundary when there is one nearby; the whole utterance
-  // survives in the body either way.
-  const cut = first.slice(0, QUICK_TITLE_MAX);
-  const space = cut.lastIndexOf(' ');
-  return {
-    title: `${(space > QUICK_TITLE_MAX * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`,
-    body: text,
-  };
-}
-
-/**
- * A finished utterance joins whatever is already in the capture box.
- *
- * Dictation APPENDS rather than replaces, and the reason is the same one
- * `parseQuickAdd` exists for: someone types half an idea, then finishes it out
- * loud. Replacing would eat the typed half, which is the single failure this
- * box was built to make impossible.
- *
- * The transcript is also accumulated separately as `quote`, so the task can
- * carry the speaker's own words even after the box is edited. Only the SPOKEN
- * half is ever quoted — typed text is already the task, and was never a quote
- * of anyone.
- */
-export function appendDictation(
-  existing: string,
-  transcript: string,
-  priorQuote?: string,
-): { text: string; quote: string } {
-  const said = transcript.trim();
-  const quote = [priorQuote?.trim(), said].filter(Boolean).join(' ');
-  if (said === '') return { text: existing, quote };
-  return { text: existing.trim() === '' ? said : `${existing.trimEnd()} ${said}`, quote };
-}
-
-/** The words of a phrase, lowercased, for comparing one utterance against
- *  what the box still holds. Punctuation is not evidence either way. */
-function spokenWords(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
-}
-
-/** How much of the utterance the box must still hold for the quote to stay
- *  attached to it. Half is a deliberately blunt line: it is comfortably
- *  clear of a corrected word or two, and comfortably short of a sentence
- *  about different work. */
-const QUOTE_RETAINED_MIN = 0.5;
-
-/**
- * The quote that survives an edit to the capture box.
- *
- * The person who dictated can do two very different things to the text, and
- * only one of them should cost the quote. Fixing a misheard word ("mike" →
- * "mic") must KEEP it — the agent seeing both what was said and what was
- * meant is the entire reason to carry one. Selecting the whole box and typing
- * a different idea must DROP it, because filing that task with the previous
- * utterance attaches words to a person about work they never mentioned. That
- * second case is not distinguishable by "the box went empty": a select-all
- * retype fires ONE input event whose value is already the new text.
- *
- * So the test is how much of the utterance the box still holds, and the rule
- * is deliberately one-directional: when the overlap is unclear the quote is
- * DROPPED. Losing the record of what someone said costs the agent some
- * phrasing; misattributing words to them is a claim about a person that they
- * never made, and that is the worse failure of the two.
- */
-export function quoteAfterEdit(text: string, spoken: string): string {
-  const quote = spoken.trim();
-  const said = spokenWords(quote);
-  if (said.length === 0) return '';
-  const inBox = new Set(spokenWords(text));
-  const kept = said.filter((w) => inBox.has(w)).length;
-  return kept / said.length >= QUOTE_RETAINED_MIN ? quote : '';
-}
-
-/**
- * The quote left over once a captured task has taken its own words away.
- *
- * The box stays live while the capture is in flight — deliberately, so an
- * idea can be dictated the moment it arrives rather than after a round trip —
- * and dictation APPENDS, so by the time the POST resolves the accumulated
- * quote can hold utterances the filed task never carried. Clearing it
- * wholesale files the next task with no record of what was said, which is
- * exactly the failure the quote exists to prevent, one task later.
- *
- * Mirrors the text reset beside it: remove what was sent, keep the rest. A
- * quote that no longer starts with what was filed had already been dropped
- * and re-accumulated, so there is nothing of that task's left to remove.
- */
-export function quoteAfterCapture(spoken: string, filed: string | undefined): string {
-  const rest = spoken.trim();
-  const sent = filed?.trim() ?? '';
-  if (sent === '') return rest;
-  if (rest === sent) return '';
-  return rest.startsWith(`${sent} `) ? rest.slice(sent.length + 1).trim() : rest;
-}
-
-/**
- * The verbatim quote to file with a captured task, if any.
- *
- * A misheard word fixed before filing must NOT drop the quote — the agent
- * seeing both what was typed and what was said is the point of keeping one.
- * But a quote whose utterance the person edited away — cleared, or replaced
- * with a different idea — would attribute words to them about work they never
- * mentioned, so the caller passes every edit through `quoteAfterEdit` and this
- * returns nothing once that has dropped it.
- */
-export function quoteForCapture(spoken: string | undefined): string | undefined {
-  const quote = spoken?.trim();
-  return quote ? quote : undefined;
 }
 
 // ── Status control ─────────────────────────────────────────────────────────

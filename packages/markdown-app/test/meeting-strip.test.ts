@@ -151,7 +151,10 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function mount(capture?: () => Promise<MeetingCaptureStart>): Harness {
+function mount(
+  capture?: () => Promise<MeetingCaptureStart>,
+  extra: { autoStart?: boolean } = {},
+): Harness {
   const root = document.createElement('div');
   document.body.append(root);
   const sockets: FakeSocket[] = [];
@@ -174,6 +177,7 @@ function mount(capture?: () => Promise<MeetingCaptureStart>): Harness {
       return s;
     },
     startCapture: capture ?? (() => Promise.resolve({ ok: true, capture: { stop } })),
+    ...extra,
   });
   cleanups.push(() => strip.destroy());
   const q = (sel: string) => root.querySelector(sel)?.textContent ?? '';
@@ -402,6 +406,99 @@ describe('the strip when no words are coming', () => {
     h.sockets[0]?.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 });
     expect(h.root.dataset.state).toBe('idle');
     expect(h.root.classList.contains('is-live')).toBe(false);
+  });
+});
+
+describe('the strip opened by the Board’s huddle button', () => {
+  // The button's click is the person's gesture, and a full navigation does not
+  // carry it into the editor — so the editor is TOLD, and starts at once.
+  it('starts the meeting on mount without a press when asked to', async () => {
+    const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: { stop: vi.fn() } }));
+    const h = mount(capture, { autoStart: true });
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(h.root.dataset.state).toBe('requesting');
+    await settle();
+    expect(h.sockets).toHaveLength(1);
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
+    expect(h.root.dataset.state).toBe('recording');
+    expect(h.toggle().textContent).toBe('Stop');
+  });
+
+  it('stays at rest when not asked — a plain doc never opens a mic on its own', () => {
+    const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: { stop: vi.fn() } }));
+    const h = mount(capture);
+    expect(capture).not.toHaveBeenCalled();
+    expect(h.root.dataset.state).toBe('idle');
+  });
+
+  it('offers ONE tap target when the browser wants a gesture, and that tap starts it', async () => {
+    // Safari refuses getUserMedia with no user activation and names it the
+    // same way it names a real denial. The strip cannot tell them apart, so
+    // it asks for the tap rather than reporting a refusal nobody made.
+    let refuse = true;
+    const capture = vi.fn(() =>
+      refuse
+        ? Promise.resolve({
+            ok: false as const,
+            kind: 'denied' as const,
+            message: 'Microphone permission refused — allow the mic.',
+          })
+        : Promise.resolve({ ok: true as const, capture: { stop: vi.fn() } }),
+    );
+    const h = mount(capture, { autoStart: true });
+    await settle();
+    expect(h.root.dataset.state).toBe('blocked');
+    expect(h.toggle().textContent).toBe('Tap to start the mic');
+    expect(h.toggle().disabled).toBe(false);
+    expect(h.note()).toMatch(/tap/i);
+    expect(h.note()).not.toMatch(/refused/i);
+    // No sheet, no second control: the strip's own button is the target.
+    expect(h.root.querySelectorAll('button')).toHaveLength(1);
+
+    refuse = false;
+    h.toggle().click();
+    expect(capture).toHaveBeenCalledTimes(2);
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
+    expect(h.root.dataset.state).toBe('recording');
+    expect(h.toggle().textContent).toBe('Stop');
+  });
+
+  it('reports a refusal honestly once the tap itself is refused', async () => {
+    const capture = vi.fn(() =>
+      Promise.resolve({
+        ok: false as const,
+        kind: 'denied' as const,
+        message: 'Microphone permission refused — allow the mic.',
+      }),
+    );
+    const h = mount(capture, { autoStart: true });
+    await settle();
+    expect(h.toggle().textContent).toBe('Tap to start the mic'); // presence
+    h.toggle().click();
+    await settle();
+    // A press IS a gesture, so a refusal now is a real one.
+    expect(h.note()).toContain('Microphone permission refused');
+    expect(h.toggle().textContent).toBe('Start');
+  });
+
+  it('does not offer a tap for an origin that gives no mic at all', async () => {
+    const h = mount(
+      () =>
+        Promise.resolve({
+          ok: false,
+          kind: 'insecure',
+          message: 'Voice needs https or localhost — open http://localhost:8787/review/d1',
+        }),
+      { autoStart: true },
+    );
+    await settle();
+    expect(h.root.dataset.state).toBe('blocked');
+    // A tap would not help; the explanation is the whole answer.
+    expect(h.toggle().textContent).toBe('Start');
+    expect(h.note()).toContain('http://localhost:8787/review/d1');
   });
 });
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { hubShortcutKeydown } from '../src/hub/hub-shortcuts.ts';
 
 // The regression this file pins: opening a task detail moves focus INTO the
@@ -211,31 +211,37 @@ describe('hub row shortcuts with the detail panel focused (the #250 focus steal)
 // deliberately owns a meta/ctrl/alt chord, so every one of them passes
 // through untouched. Shift is NOT a bail: `?` is Shift+/ on most layouts.
 describe('modifier chords pass through (the Cmd+C steal)', () => {
-  it('Cmd+C neither focuses the capture box nor preventDefaults', () => {
+  it('Cmd+C neither presses New task nor preventDefaults', () => {
     const f = fixture(null);
-    const box = document.createElement('textarea');
-    box.className = 'hub-quick-input';
-    document.body.append(box);
+    const btn = document.createElement('button');
+    btn.className = 'hub-quick-new';
+    const pressed = vi.fn();
+    btn.addEventListener('click', pressed);
+    document.body.append(btn);
     f.rows[0]?.focus();
 
     const ev = press('c', f.handler, { metaKey: true });
+    expect(pressed).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(f.rows[0]);
     expect(ev.defaultPrevented).toBe(false);
 
-    // Positive control: bare `c` still opens capture, so the assertion above
-    // is measuring the modifier and not a missing box.
+    // Positive control: bare `c` still files a task, so the assertion above
+    // is measuring the modifier and not a missing button.
     const bare = press('c', f.handler);
-    expect(document.activeElement).toBe(box);
+    expect(pressed).toHaveBeenCalledTimes(1);
     expect(bare.defaultPrevented).toBe(true);
   });
 
   it('Ctrl+C is left alone too', () => {
     const f = fixture(null);
-    const box = document.createElement('textarea');
-    box.className = 'hub-quick-input';
-    document.body.append(box);
+    const btn = document.createElement('button');
+    btn.className = 'hub-quick-new';
+    const pressed = vi.fn();
+    btn.addEventListener('click', pressed);
+    document.body.append(btn);
     f.rows[0]?.focus();
     press('c', f.handler, { ctrlKey: true });
+    expect(pressed).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(f.rows[0]);
   });
 

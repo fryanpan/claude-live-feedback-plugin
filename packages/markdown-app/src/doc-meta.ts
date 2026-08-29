@@ -32,6 +32,7 @@ export async function fetchDocMeta(docId: string): Promise<DocMeta> {
         workspaceId?: string;
         relPath?: string;
         diffTarget?: string;
+        huddle?: boolean;
       };
       // Top-level, NOT under `meta`: `meta.workspaceId` is the GROUPING id of
       // a diff review / folder browse, which is a different thing from the
@@ -50,6 +51,7 @@ export async function fetchDocMeta(docId: string): Promise<DocMeta> {
       // the index. A board with no NAME is still a board — `backLinkFor` falls
       // back to showing the id.
       ...(backId ? { backTo: { workspaceId: backId, name: data.backTo?.name ?? '' } } : {}),
+      ...(data.meta?.huddle === true ? { huddle: true } : {}),
     };
   } catch {
     return fallback;

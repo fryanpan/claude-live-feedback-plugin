@@ -379,6 +379,14 @@ export function initialTaskStatus(
   return actor !== undefined && classifyActor(actor) === 'agent' ? 'triage' : 'todo';
 }
 
+/**
+ * The title an UNNAMED row carries. A placeholder, not a name: the board
+ * refuses a blank title at every door, and a row a person is about to type
+ * into still has to be a row. `Task.untitled` is what says the placeholder is
+ * in place; the literal itself is never compared against to decide that.
+ */
+export const UNTITLED_TASK_TITLE = 'Untitled task';
+
 /** Reserved catch-all section id for no-goal work. Never in `goals[]`. */
 export const CHORES_GOAL_ID = 'chores';
 
@@ -546,6 +554,17 @@ export interface Task {
    */
   kind?: 'task' | 'goal';
   title: string;
+  /**
+   * The row was filed with NO title — the Board's "New task" button, which
+   * opens the detail panel for the person to type into — and carries
+   * `UNTITLED_TASK_TITLE` as a placeholder so every reader that expects a
+   * non-empty title keeps working. The hub draws a flagged row as empty.
+   *
+   * Cleared by `applyTitle` the moment the row is named, and nowhere else:
+   * the flag means "nobody has said what this is yet", and only a title
+   * write can change that. Absent means the title is real.
+   */
+  untitled?: boolean;
   /** Markdown snapshot of the description. The live CRDT body room
    *  (`task:<taskId>`) arrives with the projection commit; this snapshot is
    *  for search/export and never re-seeds a live fragment (§3.3). */
@@ -890,6 +909,9 @@ export function isGoalRow(row: { kind?: 'task' | 'goal' }): row is GoalRow & { k
 
 export interface CreateTaskOpts {
   title: string;
+  /** File the row as UNNAMED: `title` is the placeholder and the row is
+   *  flagged `untitled` until somebody names it. See `Task.untitled`. */
+  untitled?: boolean;
   body?: string;
   assignee?: string;
   /** Declares whether `assignee` is a person or an agent. Omitted, the store
@@ -3269,6 +3291,10 @@ export class TaskStore {
     // recorded, and the head clause would be dead for the whole life of every
     // task that was never renamed — which is most of them.
     this.applyTitle(task, task.title);
+    // The create is the ONE title write that is not a naming: it stamps the
+    // placeholder. Flagged after the choke point, which clears the flag on
+    // every write it sees, so the create is the only door that can set it.
+    if (opts.untitled) task.untitled = true;
 
     // An OMITTED goal means "needs placing": the task lands at the bottom of
     // Backlog (the resting state; the human is never blocked on placement)
@@ -4343,6 +4369,15 @@ export class TaskStore {
    * capture still lands.
    */
   private applyTitle(task: Task, title: string): void {
+    // A named row is no longer untitled — UNCONDITIONALLY. A person naming
+    // the row is the signal, whatever text they gave; the placeholder
+    // literal is never compared against. This used to clear only when the
+    // text differed from the stored title, and an unnamed row's stored
+    // title IS the placeholder, so naming it "Untitled task" kept the flag
+    // — and a flagged row's rename box shows blank, so it could never be
+    // named again. The create (the one write that is a stamp, not a naming)
+    // flags the row after this returns.
+    task.untitled = undefined;
     task.title = title;
     task.titleWrittenAt = Date.now();
     task.titleHead = bodyHead(task.body);
@@ -4361,12 +4396,18 @@ export class TaskStore {
   ): RenameTaskResult {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
-    if (task.title === title) return { ok: true, task, changed: false };
+    // A same-text rename is a no-op — UNLESS the row is unnamed, where the
+    // stored title is only the placeholder and the write is the person
+    // naming it. That write must reach the choke point to clear the flag.
+    if (task.title === title && !task.untitled) return { ok: true, task, changed: false };
     const titleFrom = task.title;
     this.applyTitle(task, title);
     const ts = Date.now();
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
+    // Naming an unnamed row with its own placeholder text changed the flag,
+    // not the title: nothing to retitle in the feed.
+    if (titleFrom === task.title) return { ok: true, task, changed: true };
     // Attributed, with both ends: after a rename the old title — the only
     // name the person who filed the row would recognise — survives nowhere
     // else on the board. “changed: false” returns above emit nothing.
@@ -4435,7 +4476,9 @@ export class TaskStore {
     const ts = Date.now();
     const titleFrom = task.title;
     const nextTitle = opts.title?.trim();
-    if (nextTitle && nextTitle !== titleFrom) this.applyTitle(task, nextTitle);
+    // An unnamed row's stored title is the placeholder; a shaping pass that
+    // hands back the same text is still the row being named.
+    if (nextTitle && (nextTitle !== titleFrom || task.untitled)) this.applyTitle(task, nextTitle);
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
     this.scheduleSave(task.workspaceId);
