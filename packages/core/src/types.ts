@@ -392,6 +392,12 @@ export interface ThreadWebhookPayload {
    *  `actor` must NOT fall back to a comment author: that fallback is how
    *  17 resolves in the field were attributed to the thread's creator. */
   actor?: User;
+  /** The review item this thread is a comment ON, when its anchor is a
+   *  `review-item` anchor. Repeated here from `thread.anchor.reviewItemId` so
+   *  a consumer that reads only the frame's own fields — the MCP channel
+   *  renderer, a webhook — learns WHICH item to revise without walking the
+   *  thread. Absent on every other thread. */
+  reviewItemId?: string;
   /** monotonically-increasing sequence within a doc. NOT unique across a
    *  server restart — the counter lives on the in-memory room and starts at 0
    *  again on every start. Use `eid` to identify an event. */

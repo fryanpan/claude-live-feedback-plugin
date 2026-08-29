@@ -99,7 +99,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.123';
+const PLUGIN_VERSION = '0.1.124';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -4450,8 +4450,16 @@ async function ackCommentRow(payload: unknown): Promise<void> {
 interface ChannelPayload {
   docId?: string;
   threadId?: string;
+  /** A comment ON a review item: the item's id, stamped by the server at the
+   *  top level (also on `thread.anchor` for a `review-item` anchor). */
+  reviewItemId?: string;
   thread?: {
-    anchor?: { snippet?: { text?: string }; original?: { snippet?: { text?: string } } };
+    anchor?: {
+      kind?: string;
+      reviewItemId?: string;
+      snippet?: { text?: string };
+      original?: { snippet?: { text?: string } };
+    };
     status?: string;
     comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
   };
@@ -4747,6 +4755,14 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   const threadId = p.threadId ?? '';
   const snippet =
     p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? '';
+  // A comment ON one of this agent's review items. The server stamps the id
+  // at the top level; an older server sends only the anchor. Named in the
+  // readable line, not just the meta, because the line is what the agent
+  // reads — and "which item do they mean" is the lookup revise_review_item
+  // should not need.
+  const reviewItemId =
+    p.reviewItemId ??
+    (p.thread?.anchor?.kind === 'review-item' ? p.thread.anchor.reviewItemId : undefined);
   // Resolve/reopen are STATUS changes, not speech: the person who clicked is
   // `actor` on the frame, never any comment author. The old comments[0]
   // fallback named the thread's CREATOR as the resolver, and the
@@ -4763,9 +4779,12 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   // Human-readable body — what the agent reads in their context.
   const action = event.startsWith('thread.') ? event.slice('thread.'.length) : event;
   const header = snippet ? `on "${truncate(snippet, 60)}"` : '';
+  const onItem = reviewItemId
+    ? ` on review item ${reviewItemId}${snippet ? ` "${truncate(snippet, 60)}"` : ''} —`
+    : '';
   const body = text
-    ? `[${action}] ${author ? `${author}: ` : ''}${text}`
-    : `[${action}]${author ? ` by ${author} —` : ''} thread ${threadId} ${header}`.trim();
+    ? `[${action}]${onItem} ${author ? `${author}: ` : ''}${text}`
+    : `[${action}]${onItem}${author ? ` by ${author} —` : ''} thread ${threadId} ${header}`.trim();
 
   await server.notification({
     method: 'notifications/claude/channel',
@@ -4776,6 +4795,7 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
       meta: {
         doc_id: docId,
         thread_id: threadId,
+        ...(reviewItemId ? { review_item_id: reviewItemId } : {}),
         event,
         author,
         anchor_text: snippet,

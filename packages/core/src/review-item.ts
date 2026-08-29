@@ -362,8 +362,13 @@ export interface ReviewItemRevision {
  *
  * DERIVED, never stored, for the reason `isReviewItemOpen` gives: a status
  * field is a second spelling of facts the item already carries, free to
- * disagree with them. Here the facts are the question's clock and the
- * revision's clock, and a revision at or after the question answers it.
+ * disagree with them. Here the facts are the thread each revision was made
+ * against and the two clocks: a revision stamped with the latest question's
+ * thread answers it, and so does one made strictly after it. The stamp
+ * decides first because the clocks can TIE — a revision and the next
+ * question in the same millisecond, measured four runs in five at the route
+ * level — and a tie read by the clocks alone put the item back on the queue
+ * with its new question unanswered.
  */
 export type ReviewItemState = 'open' | 'waiting' | 'revised' | 'answered';
 
@@ -371,7 +376,12 @@ export function reviewItemState(item: TaskReviewItem): ReviewItemState {
   if (item.answer) return 'answered';
   const question = latestThreadedQuestion(item);
   const revision = item.revisions?.at(-1);
-  if (question && (!revision || revision.at < question.ts)) return 'waiting';
+  if (question) {
+    const answered =
+      revision !== undefined &&
+      (revision.threadId === question.threadId || revision.at > question.ts);
+    if (!answered) return 'waiting';
+  }
   if (revision) return 'revised';
   return 'open';
 }
