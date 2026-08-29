@@ -1114,26 +1114,37 @@ function compareAsk(a: AskRank, b: AskRank): number {
 /**
  * This task's rows, as the DETAIL PANEL is allowed to use them.
  *
- * Two filters, and the second is the one that had to be written down. Rows are
- * matched by `taskId` — a doc-thread row has none and correctly never matches.
- * And `task-review` rows are held back, because the panel answers an ask by
- * posting a comment on `item.threadId`, which a ticket-borne row does not
- * have: its option buttons would file a stray discussion comment and record no
- * answer, and since every ticket row is `direct` it would always win the lead
- * and always render on top — putting a dead copy of the option buttons above
- * the live ones on a legacy decision, and, on a ticket that is not a decision,
- * being the ONLY answer control on screen while answering nothing.
+ * Rows are matched by `taskId` — a doc-thread row has none and correctly
+ * never matches. A TICKET-borne row (`task-review`) passes the same door
+ * `reviewQueue` holds for the Home queue: it needs the two ids its answer
+ * posts to and the payload the card renders, and the DERIVED legacy row
+ * (`r-legacy`) stays out because the task's own `needs: 'decision'` already
+ * renders that question as the panel's first card — admitting the copy would
+ * put a second set of option buttons under the live ones.
+ *
+ * This held the kind back wholesale until 2026-08-29, from when the panel
+ * answered every card by commenting on `item.threadId` — a ticket-borne row
+ * has none, so its buttons would have filed a stray comment and recorded
+ * nothing. The Home queue admitted the kind on 2026-08-24, and opening one
+ * of its rows lands HERE; the panel then showed no card at all, which a
+ * fresh-eyes pass found as "`add_review_item` is a silent no-op". The panel
+ * now answers the kind at `POST /api/tasks/:id/review-items/:rid/answer`
+ * (`panelAnswerRequest` in hub-render), so the door is the same as Home's.
  *
  * A function rather than an inline filter in the app so the rule has one home
- * and a test can hold it. `reviewQueue` skips the same kind for its own
- * reasons; those two guards being separate is exactly how one of them was
- * added and the other forgotten.
- *
- * This comes back when the panel implements the ticket-borne answer path
- * (`POST /api/tasks/:id/review-items/:reviewItemId/answer`).
+ * and a test can hold it — the two guards being separate is exactly how one
+ * of them was updated and the other forgotten.
  */
 export function panelAsks(items: ReviewThreadItem[], taskId: string): ReviewThreadItem[] {
-  return items.filter((i) => i.kind !== 'task-review' && i.taskId === taskId);
+  return items.filter((i) => {
+    if (i.taskId !== taskId) return false;
+    if (i.kind !== 'task-review') return true;
+    return (
+      i.reviewItemId !== undefined &&
+      i.reviewItemId !== LEGACY_REVIEW_ITEM_ID &&
+      i.review !== undefined
+    );
+  });
 }
 
 export function reviewQueue(
