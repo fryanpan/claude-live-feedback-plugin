@@ -440,6 +440,64 @@ describe('the review-item quality gate', () => {
       expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([itemId]);
     });
 
+    // Found by codex review, second pass: the stale branch always said
+    // "passed", even when the newer call had just HELD the item.
+    it('a stale verdict does not un-say a hold the newer call just placed', async () => {
+      verdict = 'defer';
+      const { workspaceId, taskId } = await board();
+      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      while (parked.length < 1) await settle(10);
+      const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
+        await get(`/api/workspaces/${workspaceId}/tasks`),
+      );
+      const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id;
+      const revising = post(`/api/tasks/${taskId}/review-items/${itemId}/revise`, {
+        ...BAD,
+        headline: 'cfg ri-78?',
+        author: FILER,
+      });
+      while (parked.length < 2) await settle(10);
+      parked[1]?.({ ok: false, reason: 'Still a ticket id.' });
+      const revised = await jj<{ held?: boolean; heldReason?: string }>(await revising);
+      expect(revised.held).toBe(true);
+      parked[0]?.({ ok: true, reason: 'fine' });
+      const filed = await jj<{ held?: boolean; heldReason?: string }>(await filing);
+      // The filing's response reports the hold that stands, with its reason.
+      expect(filed.held).toBe(true);
+      expect(filed.heldReason).toBe('Still a ticket id.');
+      expect(await queue(workspaceId)).toEqual([]);
+    });
+
+    // Found by codex review, second pass: with the judge turned off, a
+    // revision of an item held earlier returned the held row unchanged —
+    // off the queue forever, with nothing left that could clear it.
+    it('with the judge off, revising a held item releases it', async () => {
+      verdict = { ok: false, reason: 'No stakes.' };
+      const { workspaceId, taskId } = await board();
+      const filed = await jj<{ item: { id: string } }>(
+        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+      );
+      expect(await queue(workspaceId)).toEqual([]);
+      // The same data, a server with no judge: the key was removed.
+      await handle.stop();
+      handle = createServer({ port: 0, dataDir, heldReviewItemMs: 0 });
+      base = `http://localhost:${handle.port}`;
+      const revised = await jj<{ held?: boolean; item: { judge?: { verdict: string } } }>(
+        await post(`/api/tasks/${taskId}/review-items/${filed.item.id}/revise`, {
+          ...GOOD,
+          author: FILER,
+        }),
+      );
+      expect(revised.held).toBeUndefined();
+      expect(revised.item.judge?.verdict).toBe('unavailable');
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([filed.item.id]);
+      // The control: an item never held is left unjudged with the gate off.
+      const fresh = await jj<{ item: { judge?: unknown } }>(
+        await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }),
+      );
+      expect(fresh.item.judge).toBeUndefined();
+    });
+
     it('a revision re-judges; ok clears the hold and keeps the original filing time', async () => {
       verdict = { ok: false, reason: 'No stakes.' };
       const { workspaceId, taskId } = await board();
