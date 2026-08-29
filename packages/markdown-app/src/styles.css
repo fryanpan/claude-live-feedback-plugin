@@ -2116,13 +2116,33 @@ body.hub-body {
   flex-direction: column;
   gap: 16px;
 }
-/* One heading style across both sections (approved): 16px, 650, normal case,
-   ink. */
+/* The three Home sections stack in #hub-home-page (the walkthrough hides
+   them as one). They used to butt against each other, and their headings
+   were 16px/650 ink — the same weight as the row titles beneath, so the
+   three sections read as one grey run (Bryan, 2026-08-29: "too much bold …
+   not enough separation between the review and recent activity"). Each
+   section after the first now sits below a hairline with air on both sides
+   of it. */
+#hub-home-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+#hub-home-page > * + * {
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+/* One heading style across the sections: a small uppercase kicker in muted
+   ink (the `.hub-decide-kicker` treatment), letter-spaced so it reads as a
+   label and never competes with the titles it introduces. Titles carry the
+   words; the heading only names the section. */
 .hub-home-heading {
   margin: 0;
-  font-size: 16px;
-  font-weight: 650;
-  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-muted);
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -2282,8 +2302,12 @@ body.hub-body {
 .hub-review-row:hover {
   background: var(--bg-hover);
 }
+/* Medium, not bold: every row on Home is a title, so emphasising them all
+   emphasises none. The one cue a row may carry is its marker — the current
+   row's wash, the Revised badge, the status mark or flag on an activity
+   group — never the whole title. */
 .hub-review-row-title {
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.35;
   color: var(--fg);
   overflow-wrap: anywhere;
