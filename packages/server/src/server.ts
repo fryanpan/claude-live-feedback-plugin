@@ -6410,6 +6410,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         const agentMergeMatch = pathname.match(/^\/api\/agents\/([^/]+)\/merge$/);
         if (agentMergeMatch && req.method === 'POST') {
           if (visitor) return j(403, { error: 'not available to share visitors' });
+          // Loopback only, on the PEER ADDRESS — the deploy route's gate and
+          // its reasoning (the Host header is client-controlled). A merge
+          // moves lead seats and re-keys an agent's deliveries fleet-wide;
+          // that is an operator action run from the box, not something any
+          // tailnet client should be able to do to a board it can see.
+          if (!isLoopbackAddress(server.requestIP(req)?.address)) {
+            return j(403, {
+              error:
+                'agent merges must be run from this machine (loopback only) — a merge moves lead seats and re-keys deliveries',
+            });
+          }
           const from = decodeURIComponent(agentMergeMatch[1] ?? '');
           const body = await safeJson(req);
           const into = typeof body?.into === 'string' ? body.into.trim() : '';
@@ -6427,6 +6438,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // lead), but the old comments signed by it stay unattributed —
           // there is no proof who wrote them.
           const fromShared = SHARED_AGENT_IDS.has(from);
+          // A `from` that resolves to a PERSON — `known-bryan`, the owner's
+          // own id, an anon id the link file folded — is refused on the dry
+          // run too, so the report never promises a fold the write refuses.
+          const fromResolved = identities.get(from);
+          if (fromResolved && fromResolved.kind !== 'agent') {
+            return j(400, {
+              error: 'from-not-agent',
+              message: `${from} resolves to a person (${fromResolved.id}); only agent ids merge`,
+            });
+          }
           let roster: { folded: boolean; mergedFrom: string[] } = { folded: false, mergedFrom: [] };
           if (!fromShared) {
             const target = identities.get(into) ?? identities.upsertAgent(into);
@@ -6451,7 +6472,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             dryRun,
             roster,
             seats: boards.seats,
+            seatsSkipped: boards.seatsSkipped,
             attachments: boards.attachments,
+            comments: boards.comments,
             watches,
           });
         }
@@ -6773,7 +6796,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 ? body.processId.trim()
                 : undefined,
           });
-          if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          if (!res.ok) {
+            // 409: the id is real but no longer the one to use — the body
+            // names the survivor, and a 400 would read as a malformed request.
+            const status =
+              res.error === 'workspace-not-found' ? 404 : res.error === 'merged-away' ? 409 : 400;
+            return j(status, res);
+          }
           return j(200, res);
         }
         const wsAgentHeartbeatMatch = pathname.match(
