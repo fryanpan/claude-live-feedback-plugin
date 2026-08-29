@@ -24,15 +24,20 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { TaskStore } from '../src/tasks.ts';
 import {
+  CHOICE_WINDOW_MS,
   VOICE_STATUS_MAX_WORDS,
+  VoiceRouter,
   answerBody,
+  capWords,
   composeStatus,
   countWords,
   navigationAsk,
   parseOrdinal,
   resolveByTitle,
   statusAsk,
+  wordsMatch,
 } from '../src/voice.ts';
 
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known', color: '#2e7dd7' };
@@ -47,7 +52,7 @@ const DECOY = 'Review: billing export';
 
 describe('navigationAsk: which utterances are "take me to …"', () => {
   it('extracts the name from Bryan’s phrasing, dropping the board qualifier', () => {
-    const q = navigationAsk("I want to go to the 'Akash review doc' in QB");
+    const q = navigationAsk("I want to go to the 'Akash review doc' in QB", ['QB']);
     expect(q).not.toBeNull();
     expect(q?.toLowerCase()).toContain('akash');
     expect(q?.toLowerCase()).not.toContain('qb');
@@ -62,6 +67,7 @@ describe('navigationAsk: which utterances are "take me to …"', () => {
 
 describe('resolveByTitle: vague words against the index', () => {
   const doc = (id: string, title: string) => ({ id, kind: 'doc' as const, title });
+  const task = (id: string, title: string) => ({ id, kind: 'task' as const, title });
 
   it('Bryan’s phrase finds the Akash review over a decoy sharing one word', () => {
     const r = resolveByTitle('akash review', [doc('d-akash', AKASH), doc('d-decoy', DECOY)]);
@@ -86,13 +92,64 @@ describe('resolveByTitle: vague words against the index', () => {
     expect(r.kind).toBe('none');
   });
 
-  it('a one-word difference in spelling still matches (speech is not typing)', () => {
-    const r = resolveByTitle('keep placeholder', [
-      doc('o-1', 'Keep placeholders'),
-      doc('o-2', 'Drop placeholders'),
+  it('a slip in a LONG word still matches (speech is not typing); a short one does not', () => {
+    // "onbording" — one letter dropped from a ten-letter word — is still the
+    // word. Below five letters a slip is not tolerated at all: "akesh" is a
+    // different name, not a mis-heard "akash", and guessing there is how a
+    // four-letter "test" used to open "Testimonials".
+    const r = resolveByTitle('onbording flow', [doc('d-akash', AKASH), doc('d-decoy', DECOY)]);
+    expect(r.kind).toBe('hit');
+    if (r.kind === 'hit') expect(r.match.id).toBe('d-akash');
+    expect(wordsMatch('onbording', 'onboarding')).toBe(true);
+    expect(wordsMatch('akash', 'akesh')).toBe(false);
+  });
+
+  it('a four-letter prefix is not a match: "test" opens neither Testing nor Testimonials', () => {
+    expect(wordsMatch('test', 'testimonials')).toBe(false);
+    expect(wordsMatch('test', 'testing')).toBe(false);
+    // Plural-length prefixes still are: the shorter word is long enough to
+    // be its own evidence.
+    expect(wordsMatch('placeholder', 'placeholders')).toBe(true);
+    const r = resolveByTitle('test doc', [
+      doc('d-testing', 'Testing the widget'),
+      doc('d-quotes', 'Testimonials page'),
+    ]);
+    expect(r.kind).toBe('none');
+  });
+
+  it('a spoken "doc" / "task" filters by kind: "the mobile doc" is not the task called Mobile', () => {
+    const r = resolveByTitle('mobile doc', [
+      task('t-mobile', 'Mobile'),
+      doc('d-layouts', 'Design: mobile layouts'),
     ]);
     expect(r.kind).toBe('hit');
-    if (r.kind === 'hit') expect(r.match.id).toBe('o-1');
+    if (r.kind === 'hit') expect(r.match.id).toBe('d-layouts');
+    const t = resolveByTitle('mobile task', [
+      task('t-mobile', 'Mobile'),
+      doc('d-layouts', 'Design: mobile layouts'),
+    ]);
+    expect(t.kind).toBe('hit');
+    if (t.kind === 'hit') expect(t.match.id).toBe('t-mobile');
+  });
+
+  it('two titles that both cover the query are a QUESTION, not a tie-break on length', () => {
+    const r = resolveByTitle('results page', [
+      task('t-wire', 'Wire the results page'),
+      task('t-fold', 'Fold the plan into the results page'),
+    ]);
+    expect(r.kind).toBe('ambiguous');
+  });
+});
+
+describe('navigationAsk: the board qualifier', () => {
+  it('strips a trailing "in <board>" only for a board it KNOWS the name of', () => {
+    // "open sign in flow" used to lose " in flow" and tie with "Signals".
+    expect(navigationAsk('open sign in flow', ['QB'])).toBe('sign in flow');
+    expect(navigationAsk("I want to go to the 'Akash review doc' in QB", ['QB'])).toBe(
+      'the Akash review doc',
+    );
+    expect(navigationAsk('open the akash doc in the QB board', ['QB'])).toBe('the akash doc');
+    expect(navigationAsk('open the akash doc in QB')).toBe('the akash doc in QB');
   });
 });
 
@@ -108,6 +165,28 @@ describe('parseOrdinal: "the second one"', () => {
   it('refuses an ordinal past the end, and a label', () => {
     expect(parseOrdinal('the third one', 2)).toBeNull();
     expect(parseOrdinal('choose keep placeholders', 2)).toBeNull();
+  });
+
+  it('survives navigation filler — "go to the second one" answers a "which one?"', () => {
+    expect(parseOrdinal('go to the second one', 2)).toBe(1);
+    expect(parseOrdinal('open the second one', 2)).toBe(1);
+    expect(parseOrdinal('show me the first one', 2)).toBe(0);
+    expect(parseOrdinal('take me to the first', 2)).toBe(0);
+  });
+});
+
+describe('countWords / capWords: one counter', () => {
+  it('a dash or an arrow is not a word to either of them', () => {
+    // capWords used to count "—" as a word while countWords did not, so a
+    // brief that countWords called 100 words could still end in "…".
+    expect(capWords('one — two → three', 3)).toBe('one — two → three');
+    const dashed = Array.from({ length: 100 }, (_, i) => (i % 10 === 9 ? `w${i} —` : `w${i}`)).join(
+      ' ',
+    );
+    expect(countWords(dashed)).toBe(100);
+    expect(capWords(dashed, VOICE_STATUS_MAX_WORDS)).toBe(dashed);
+    expect(capWords('a — b → c d', 2)).toBe('a — b…');
+    expect(countWords(capWords('a — b → c d', 2))).toBe(2);
   });
 });
 
@@ -189,6 +268,10 @@ describe('voice, smoothly (route)', () => {
    *  review (free words). */
   let decisionDocId: string;
   let decisionDocId2: string;
+  /** Untouched until the "which one?" context test: it must still be OPEN. */
+  let decisionDocId3: string;
+  /** Likewise, for "answer: the second one". */
+  let decisionDocId4: string;
   let reviewDocId: string;
   let reviewThreadId: string;
   let twoItemDocId: string;
@@ -314,6 +397,10 @@ describe('voice, smoothly (route)', () => {
     await declare(decisionDocId, DECISION);
     decisionDocId2 = await newDoc('decision-two', 'Empty board decision, again');
     await declare(decisionDocId2, DECISION);
+    decisionDocId3 = await newDoc('decision-three', 'Empty board decision, third');
+    await declare(decisionDocId3, DECISION);
+    decisionDocId4 = await newDoc('decision-four', 'Empty board decision, fourth');
+    await declare(decisionDocId4, DECISION);
     reviewDocId = await newDoc('review-one', 'Auth rollout notes');
     reviewThreadId = await declare(reviewDocId, {
       shape: 'review',
@@ -403,6 +490,50 @@ describe('voice, smoothly (route)', () => {
     expect(stale.navigate).toBeUndefined();
   });
 
+  it('a "which one?" asked on the board is DROPPED once the speaker moves into a doc', async () => {
+    // Ask on the hub, tap into a decision doc, say "pick the second one":
+    // that is an answer to the decision, not to the stale question.
+    const asked = await say('open the akash review', { surface: 'hub' });
+    expect(asked.navigate).toBeUndefined();
+    calls.n = 0;
+    const picked = await say('pick the second one', { surface: 'doc', docId: decisionDocId3 });
+    expect(picked.navigate).toBeUndefined();
+    expect(picked.route).toBe('fast-path-action');
+    expect(picked.ack).toContain('Drop placeholders');
+    expect(calls.n).toBe(0);
+    const r = await local(`/api/docs/${decisionDocId3}/threads`);
+    const { threads } = (await r.json()) as {
+      threads: Array<{ id: string; comments: StoredComment[] }>;
+    };
+    expect(threads[0]?.comments.find((c) => c.review)?.review?.answeredWith).toBe('drop');
+  });
+
+  it('a "which one?" expires after thirty seconds', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'voice-choice-ttl-'));
+    const store = new TaskStore({ dataDir: dir, debounceMs: 1 });
+    const ws = store.createWorkspace('ttl');
+    expect(store.createTask(ws.id, { title: AKASH }).ok).toBe(true);
+    expect(store.createTask(ws.id, { title: AKASH_TWIN }).ok).toBe(true);
+    let now = 1_700_000_000_000;
+    const router = new VoiceRouter({ tasks: store, now: () => now });
+    const actor = { id: 'known-jordan', name: 'Jordan' };
+    const asked = await router.handle(ws.id, {
+      transcript: 'open the akash review',
+      actor,
+      context: { surface: 'hub' },
+    });
+    expect(asked.ok && asked.ack.includes('Did you mean')).toBe(true);
+    now += CHOICE_WINDOW_MS + 1_000;
+    const late = await router.handle(ws.id, {
+      transcript: 'the second one',
+      actor,
+      context: { surface: 'hub' },
+    });
+    expect(late.ok && late.navigate).toBeFalsy();
+    expect(CHOICE_WINDOW_MS).toBeLessThanOrEqual(30_000);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   // ── 2. brief status ──────────────────────────────────────────────────────
 
   it('"brief status" on the board answers in ≤100 words, from the store, no model', async () => {
@@ -465,7 +596,8 @@ describe('voice, smoothly (route)', () => {
     });
     expect(body.route).toBe('fast-path-action');
     expect(body.ack).toContain('Roll the token change out to every task?');
-    expect(body.ack).toContain('yes but only for the auth task');
+    // The same shape a picked option gets: what was recorded, then where.
+    expect(body.ack).toContain('Answered "yes but only for the auth task" on');
     expect(calls.n).toBe(0);
     const comments = await commentsOf(reviewDocId, reviewThreadId);
     const declared = comments.find((c) => c.review);
@@ -474,8 +606,26 @@ describe('voice, smoothly (route)', () => {
     expect(comments.map((c) => c.text)).toContain('yes but only for the auth task');
   });
 
-  it('a ticket-borne review item answers through the task store', async () => {
+  it('a ticket merely HIGHLIGHTED, not open: a pick is not guessed — the ack asks', async () => {
+    // The hub sends `{surface:'task', taskId}` for a keyboard-focused row
+    // too. A row is not a review item the speaker is IN; without the item
+    // open the answer would land on whatever the cursor happened to rest on.
+    completeImpl = () => Promise.resolve(JSON.stringify({ kind: 'change' }));
     const body = await say('pick the second one', { surface: 'task', taskId: ticketTaskId });
+    expect(body.route).not.toBe('fast-path-action');
+    expect(body.ack.toLowerCase()).toContain('which review item');
+    const item = handle.tasks
+      .listReviewItems(ticketTaskId)
+      .find((i) => i.id === ticketReviewItemId);
+    expect(item?.answer).toBeUndefined();
+  });
+
+  it('a ticket-borne review item answers through the task store', async () => {
+    const body = await say('pick the second one', {
+      surface: 'task',
+      taskId: ticketTaskId,
+      reviewItemId: ticketReviewItemId,
+    });
     expect(body.route).toBe('fast-path-action');
     expect(body.ack).toContain('Drop placeholders');
     const item = handle.tasks
@@ -483,6 +633,17 @@ describe('voice, smoothly (route)', () => {
       .find((i) => i.id === ticketReviewItemId);
     expect(item?.answer?.answeredWith).toBe('drop');
     expect(item?.answer?.text).toBe('Drop placeholders');
+  });
+
+  it('"answer: the second one" is a pick, not the literal words', async () => {
+    const body = await say('answer: the second one', { surface: 'doc', docId: decisionDocId4 });
+    expect(body.route).toBe('fast-path-action');
+    expect(body.ack).toContain('Answered "Drop placeholders" on');
+    const r = await local(`/api/docs/${decisionDocId4}/threads`);
+    const { threads } = (await r.json()) as {
+      threads: Array<{ id: string; comments: StoredComment[] }>;
+    };
+    expect(threads[0]?.comments.find((c) => c.review)?.review?.answeredWith).toBe('drop');
   });
 
   it('two open items and no thread in view: an ordinal is NOT guessed', async () => {

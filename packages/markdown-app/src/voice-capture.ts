@@ -27,6 +27,8 @@ export interface VoiceContext {
   /** The thread the speaker has open — the review item they are "in", so a
    *  spoken answer lands on it rather than on whichever item is first. */
   threadId?: string;
+  /** Same, for a review item that hangs on the ticket rather than a thread. */
+  reviewItemId?: string;
   docId?: string;
   taskId?: string;
   visibleHeading?: string;

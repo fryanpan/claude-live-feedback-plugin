@@ -61,14 +61,25 @@ import {
 export {
   VOICE_STATUS_MAX_WORDS,
   answerBody,
+  capWords,
   composeStatus,
   countWords,
   navigationAsk,
   parseOrdinal,
   pickByLabel,
   resolveByTitle,
+  spokenKind,
   statusAsk,
+  wordsMatch,
 } from './voice-resolve.ts';
+
+/**
+ * How long a "which one?" stays answerable. Thirty seconds is a person
+ * hearing the question and saying "the second one"; anything longer and the
+ * next utterance is about something else — it was 90s, and a question asked
+ * on the board could still catch a pick made inside a doc a minute later.
+ */
+export const CHOICE_WINDOW_MS = 30_000;
 
 export type VoiceSurface = 'hub' | 'doc' | 'task';
 
@@ -976,6 +987,12 @@ export function resolveVoiceAction(args: {
  * the guardrail re-checks rather than trusts); the thread / row the speaker
  * has OPEN; the only item there is. Several items and no pin is nothing.
  */
+/** Where a "which one?" was asked from — surface, doc, task — so an answer
+ *  said from somewhere else is not taken as one. */
+function choiceAnchor(context: VoiceContext | undefined): string {
+  return context ? `${context.surface}\0${context.docId ?? ''}\0${context.taskId ?? ''}` : '';
+}
+
 function pickReviewItem(
   items: VoiceReviewItem[],
   context: VoiceContext,
@@ -992,6 +1009,13 @@ function pickReviewItem(
     );
     if (pinned) return pinned;
   }
+  // The one item there is — but only on the DOC surface, where the speaker
+  // is looking at the item itself. On the task surface `taskId` may be a
+  // keyboard-highlighted ROW, not an open panel, and "answer: yes" would
+  // land on whatever the cursor rested on. There, the hub sends a pin
+  // (`threadId` / `reviewItemId`) only with the panel open, and no pin means
+  // no item.
+  if (context.surface !== 'doc') return undefined;
   const [only, ...rest] = items;
   return only && rest.length === 0 ? only : undefined;
 }
@@ -1020,10 +1044,16 @@ export class VoiceRouter {
   /**
    * "Did you mean A or B?" — the two the router offered, per speaker, so the
    * NEXT utterance ("the second one", "the billing one") can answer. Consumed
-   * by whatever is said next, and expired after `RETRY_WINDOW_MS`: a choice
-   * offered a minute ago is not what a fresh sentence is about.
+   * by whatever is said next, expired after `CHOICE_WINDOW_MS`, and DROPPED
+   * when the speaker's context changes: a question asked on the board is not
+   * what "pick the second one" means once they have tapped into a decision
+   * doc — there it is an answer to the decision, and it used to navigate.
    */
-  private pendingChoices = new Map<string, { candidates: ScoredCandidate[]; at: number }>();
+  private pendingChoices = new Map<
+    string,
+    { candidates: ScoredCandidate[]; at: number; anchor: string }
+  >();
+  private now: () => number;
 
   constructor(opts: {
     tasks: TaskStore;
@@ -1039,7 +1069,10 @@ export class VoiceRouter {
     /** What is waiting on a person board-wide — the Home queue, as the
      *  review-items route ships it. Feeds "brief status" only. */
     queue?: (workspaceId: string) => StatusQueueRow[];
+    /** The clock, for the "which one?" window. Tests move it. */
+    now?: () => number;
   }) {
+    this.now = opts.now ?? Date.now;
     this.tasks = opts.tasks;
     this.complete = opts.complete;
     this.docResource = opts.docResource;
@@ -1303,14 +1336,11 @@ export class VoiceRouter {
         // The ack says what was RECORDED — the option or the words, and on
         // which item — because the person holding the mic is the only
         // verifier this design has (Bryan: "Answered 'Keep placeholders' on
-        // <headline>").
+        // <headline>"). One shape for an option and for free words: what
+        // landed, then where. Only the verb changes for a plain reply.
         const headline = `"${plan.headline}"`;
-        const ack =
-          plan.optionId !== undefined
-            ? `${heard(transcript)} Answered "${plan.text}" on ${headline}.`
-            : target.kind === 'thread' && target.mode === 'reply'
-              ? `${heard(transcript)} Replied on ${headline}: "${plan.text}".`
-              : `${heard(transcript)} Answered ${headline}: "${plan.text}".`;
+        const verb = target.kind === 'thread' && target.mode === 'reply' ? 'Replied' : 'Answered';
+        const ack = `${heard(transcript)} ${verb} "${plan.text}" on ${headline}.`;
         if (target.kind === 'ticket') {
           return this.once(
             workspaceId,
@@ -1505,23 +1535,29 @@ export class VoiceRouter {
      *  rather than the whole board, and validated exactly as before. */
     let narrowTo: ScoredCandidate[] | undefined;
     try {
-      direct = this.answerPendingChoice(workspaceId, transcript, actor);
+      direct = this.answerPendingChoice(workspaceId, transcript, actor, context);
       if (!direct && statusAsk(transcript)) {
         direct = this.statusResult(workspaceId, workspace.name, resource);
       }
       if (!direct) {
-        const name = navigationAsk(transcript);
+        const name = navigationAsk(transcript, [workspace.name]);
         if (name !== null) {
           const r = resolveByTitle(name, this.titleIndex(workspaceId));
           if (r.kind === 'hit') direct = this.openCandidate(workspaceId, transcript, r.match);
           else if (r.kind === 'ambiguous')
-            direct = this.askWhich(workspaceId, transcript, actor, r.matches);
+            direct = this.askWhich(workspaceId, transcript, actor, context, r.matches);
           else narrowTo = r.top;
         }
       }
       // A spoken pick or answer on the review item in view needs no model
-      // either: the words are the speaker's, the option is the store's.
-      if (!direct) classification = this.directPick(transcript, context, resource);
+      // either: the words are the speaker's, the option is the store's. A
+      // pick with no item to land on is answered with a question, not a
+      // guess — and not a model call either, which could only guess too.
+      if (!direct) {
+        const picked = this.directPick(transcript, context, resource);
+        if (picked && 'direct' in picked) direct = picked.direct;
+        else if (picked) classification = picked.classification;
+      }
     } catch (err) {
       console.error('[voice] direct read failed:', err instanceof Error ? err.message : err);
     }
@@ -1753,11 +1789,13 @@ export class VoiceRouter {
     workspaceId: string,
     transcript: string,
     actor: VoiceActor,
+    context: VoiceContext | undefined,
     matches: [ScoredCandidate, ScoredCandidate],
   ): VoiceResult {
     this.pendingChoices.set(`${workspaceId}\0${actor.id}`, {
       candidates: matches,
-      at: Date.now(),
+      at: this.now(),
+      anchor: choiceAnchor(context),
     });
     return {
       route: 'fast-path',
@@ -1769,18 +1807,22 @@ export class VoiceRouter {
    * The answer to a standing "which one?", if the utterance is one — by
    * ordinal ("the second one") or by name ("the billing one"). Any utterance
    * consumes the pending pair, so a stale question cannot catch a later,
-   * unrelated "the first one".
+   * unrelated "the first one"; a pair asked from a different surface, doc or
+   * task than the speaker is on now is dropped unread, because "the second
+   * one" said INSIDE a decision doc is that decision's second option.
    */
   private answerPendingChoice(
     workspaceId: string,
     transcript: string,
     actor: VoiceActor,
+    context: VoiceContext | undefined,
   ): VoiceResult | undefined {
     const key = `${workspaceId}\0${actor.id}`;
     const pending = this.pendingChoices.get(key);
     if (!pending) return undefined;
     this.pendingChoices.delete(key);
-    if (Date.now() - pending.at > RETRY_WINDOW_MS) return undefined;
+    if (this.now() - pending.at > CHOICE_WINDOW_MS) return undefined;
+    if (pending.anchor !== choiceAnchor(context)) return undefined;
     const ordinal = parseOrdinal(transcript, pending.candidates.length);
     const chosen =
       ordinal !== null
@@ -1853,45 +1895,59 @@ export class VoiceRouter {
    * A spoken pick or answer on the review item in view, resolved from the
    * speaker's words alone — no model. Returns the same classification shape
    * the model would, carrying a `pick`, so it passes through the SAME
-   * guardrail (`resolveVoiceAction`) and the same executor.
+   * guardrail (`resolveVoiceAction`) and the same executor — or, when the
+   * words are plainly a pick but no item can take it, a direct ASK.
    *
    *  - "pick the second one" → the item's second option, by ordinal;
    *  - "choose keep placeholders" → the option whose label those words
    *    resolve to, across every item in view when the label is unique;
+   *  - "answer: the second one" / "answer: keep placeholders" → the same,
+   *    read from the words after the prefix: a pick said with the prefix is
+   *    still a pick, not those four words posted verbatim;
    *  - "answer: yes but only for the auth task" → the words after the prefix.
    *
-   * Which item: the one the speaker has open (context), else the only one.
-   * An ordinal over several items with nothing open is NOT guessed.
+   * Which item: the one the speaker has open (context), else — on the doc
+   * surface only — the only one. An ordinal or an answer with several items
+   * and nothing open, or on a ticket that is highlighted rather than open,
+   * is NOT guessed: the ack asks them to open the item.
    */
   private directPick(
     transcript: string,
     context: VoiceContext | undefined,
     resource: VoiceResource | undefined,
-  ): VoiceClassification | null {
+  ): { classification: VoiceClassification } | { direct: VoiceResult } | null {
     if (!resource || !context) return null;
     const items = resource.kind === 'doc' ? resource.reviewItems : (resource.reviewItems ?? []);
     if (items.length === 0) return null;
     const pinned = pickReviewItem(items, context);
-    const action = (pick: VoicePick): VoiceClassification => ({
-      kind: 'action',
-      action: 'answer-review',
-      id: resource.id,
-      pick,
+    const action = (pick: VoicePick): { classification: VoiceClassification } => ({
+      classification: { kind: 'action', action: 'answer-review', id: resource.id, pick },
     });
+    const ask = (): { direct: VoiceResult } => ({
+      direct: {
+        route: 'fast-path',
+        ack: `${heard(transcript)} Which review item? Open the one you mean and say that again.`,
+      },
+    });
+    const optionOf = (item: VoiceReviewItem, words: string): VoiceReviewOption | undefined => {
+      if (!item.options?.length) return undefined;
+      const ordinal = parseOrdinal(words, item.options.length);
+      return ordinal !== null
+        ? item.options[ordinal]
+        : (pickByLabel(words, item.options) ?? undefined);
+    };
+    const chosen = (item: VoiceReviewItem, option: VoiceReviewOption) =>
+      action({ itemKey: reviewItemKey(item), optionId: option.id, optionLabel: option.label });
+
     const text = answerBody(transcript);
     if (text !== null) {
-      return pinned ? action({ itemKey: reviewItemKey(pinned), text }) : null;
+      if (!pinned) return ask();
+      const option = optionOf(pinned, text);
+      return option ? chosen(pinned, option) : action({ itemKey: reviewItemKey(pinned), text });
     }
-    if (pinned?.options?.length) {
-      const ordinal = parseOrdinal(transcript, pinned.options.length);
-      const option = ordinal !== null ? pinned.options[ordinal] : undefined;
-      if (option) {
-        return action({
-          itemKey: reviewItemKey(pinned),
-          optionId: option.id,
-          optionLabel: option.label,
-        });
-      }
+    if (pinned) {
+      const option = optionOf(pinned, transcript);
+      if (option) return chosen(pinned, option);
     }
     // By label — across every item in view, and only when exactly one item
     // offers the label those words resolve to.
@@ -1900,13 +1956,14 @@ export class VoiceRouter {
       return option ? [{ item, option }] : [];
     });
     const [hit, ...rest] = hits;
-    if (hit && rest.length === 0 && (!pinned || pinned === hit.item)) {
-      return action({
-        itemKey: reviewItemKey(hit.item),
-        optionId: hit.option.id,
-        optionLabel: hit.option.label,
-      });
-    }
+    if (hit && rest.length === 0 && (!pinned || pinned === hit.item))
+      return chosen(hit.item, hit.option);
+    // Plainly a pick — an ordinal some item could take, or a label several
+    // offer — with nowhere to land. Ask; never guess.
+    const ordinalSomewhere = items.some(
+      (item) => !!item.options?.length && parseOrdinal(transcript, item.options.length) !== null,
+    );
+    if (!pinned && (ordinalSomewhere || hits.length > 1)) return ask();
     return null;
   }
 

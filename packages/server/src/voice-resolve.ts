@@ -92,15 +92,36 @@ function trigramSimilarity(a: string, b: string): number {
   return (2 * shared) / (ta.size + tb.size);
 }
 
+/** A prefix shorter than this is not evidence: "test" is the start of
+ *  "testing" AND "testimonials", and a four-letter match once opened the
+ *  wrong one. Five letters ("place" / "placeholders") is where a prefix
+ *  starts to mean the word. */
+const PREFIX_MIN = 5;
+
 /**
- * Do two spoken words mean the same title word? Exact, or one is a prefix of
- * the other past four letters ("placeholder" / "placeholders"), or close
- * enough in trigrams that a transcription slip would explain it.
+ * Do two spoken words mean the same title word? Exact, or the shorter is a
+ * prefix of the other and at least `PREFIX_MIN` letters ("placeholder" /
+ * "placeholders"), or close enough in trigrams that a transcription slip in
+ * a LONG word would explain it ("onbording" / "onboarding"). Short words get
+ * no slip tolerance: at four or five letters, one changed letter is a
+ * different word ("akash" / "akesh"), and the trigram test says so.
  */
 export function wordsMatch(a: string, b: string): boolean {
   if (a === b) return true;
-  if (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
-  return a.length >= 4 && b.length >= 4 && trigramSimilarity(a, b) >= 0.75;
+  const shorter = Math.min(a.length, b.length);
+  if (shorter >= PREFIX_MIN && (a.startsWith(b) || b.startsWith(a))) return true;
+  return shorter >= 4 && trigramSimilarity(a, b) >= 0.75;
+}
+
+/** The KIND of thing the speaker named, when they said so: "the mobile DOC"
+ *  is a doc even when a task is called Mobile. `review` is not a kind word —
+ *  it is a real word in real titles ("Review: Akash — …"). */
+export function spokenKind(text: string): 'task' | 'doc' | undefined {
+  const words = new Set(text.toLowerCase().split(/[^a-z]+/));
+  const doc = ['doc', 'docs', 'document', 'page'].some((w) => words.has(w));
+  const task = ['task', 'tasks', 'ticket'].some((w) => words.has(w));
+  if (doc === task) return undefined;
+  return doc ? 'doc' : 'task';
 }
 
 // ── Title resolution ────────────────────────────────────────────────────────
@@ -131,13 +152,28 @@ export const TITLE_MARGIN = 0.15;
  * Score = 0.6 × (how much of the QUERY the title accounts for) + 0.4 × (how
  * much of the TITLE the query accounts for). Query words are weighted by
  * rarity across the index, so "akash" (one title) outweighs "review" (many).
- * The title-coverage term is the tie-breaker between "Wire the results page"
- * and "Fold the plan into the results page" for the query "results page":
- * both cover the query, the shorter title is the one the speaker meant.
+ * The title-coverage term prefers the title with the least left over — for
+ * "results page", "Wire the results page" (0.8) over "Fold the plan into the
+ * results page" (0.7) — but that gap is INSIDE `TITLE_MARGIN`, so the
+ * resolver asks rather than picks; the term only decides when the titles
+ * differ by more than one clause.
+ *
+ * A spoken kind word ("the mobile DOC") keeps only candidates of that kind,
+ * provided there are any: the word is the speaker disambiguating, and it
+ * used to be thrown away as a stop word.
  */
 export function rankTitles(query: string, candidates: TitleCandidate[]): ScoredCandidate[] {
   const q = tokenize(query);
   if (q.length === 0 || candidates.length === 0) return [];
+  const kind = spokenKind(query);
+  const pool =
+    kind && candidates.some((c) => c.kind === kind)
+      ? candidates.filter((c) => c.kind === kind)
+      : candidates;
+  return rankPool(q, pool);
+}
+
+function rankPool(q: string[], candidates: TitleCandidate[]): ScoredCandidate[] {
   const titleTokens = candidates.map((c) => tokenize(c.title));
   const n = candidates.length;
   const df = new Map<string, number>();
@@ -193,19 +229,38 @@ export function resolveByTitle(query: string, candidates: TitleCandidate[]): Tit
 const NAV_OPENER =
   /^(?:(?:i(?:'d| would)? (?:want|like|need) to|can you|could you|please|let'?s|lets)\s+)?(?:go to|go into|take me to|bring me to|jump to|navigate to|switch to|open(?: up)?|show(?: me)?|find|pull up|bring up|look at|where is|where's)\s+(.+)$/i;
 
-/** A trailing "in <board>" names the workspace, which the request already
- *  carries; it is not part of the item's name. Two words at most, so an "in"
- *  inside a title ("Sign in flow") survives. */
-const BOARD_QUALIFIER = /\s+(?:in|on)\s+(?:the\s+)?[\w-]+(?:\s+(?:board|workspace|hub))?\s*$/i;
+/**
+ * A trailing "in <board>" names the workspace, which the request already
+ * carries; it is not part of the item's name. Only a board the caller KNOWS
+ * the name of is stripped: an unanchored "in <word>" once took " in flow"
+ * off "open sign in flow" and left "sign" to tie with "Signals dashboard".
+ */
+function boardQualifier(boardNames: readonly string[]): RegExp | null {
+  const names = boardNames.map((n) => n.trim()).filter((n) => n.length > 0);
+  if (names.length === 0) return null;
+  const alt = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return new RegExp(
+    `\\s+(?:in|on)\\s+(?:the\\s+)?(?:${alt})(?:\\s+(?:board|workspace|hub))?\\s*$`,
+    'i',
+  );
+}
 
 /** The name of the thing a navigation ask names, or null when the utterance
- *  is not one. Quotes are dropped; a trailing board qualifier is dropped. */
-export function navigationAsk(transcript: string): string | null {
+ *  is not one. Quotes are dropped; a trailing "in <board>" is dropped when
+ *  `boardNames` holds that board. */
+export function navigationAsk(
+  transcript: string,
+  boardNames: readonly string[] = [],
+): string | null {
   const s = transcript.trim().replace(/[.!?]+$/, '');
   const m = NAV_OPENER.exec(s);
   if (!m?.[1]) return null;
-  let name = m[1].replace(/["'“”‘’]/g, ' ').trim();
-  if (tokenize(name).length > 1) name = name.replace(BOARD_QUALIFIER, '');
+  let name = m[1]
+    .replace(/["'“”‘’]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const qualifier = boardQualifier(boardNames);
+  if (qualifier && tokenize(name).length > 1) name = name.replace(qualifier, '');
   name = name.trim();
   return name.length > 0 ? name : null;
 }
@@ -261,12 +316,23 @@ const ORDINAL_WORDS: Record<string, number> = {
   six: 5,
 };
 
-/** Words that surround a pick without naming it: "PICK THE second ONE". */
+/** Words that surround a pick without naming it: "PICK THE second ONE",
+ *  "GO TO THE second ONE" — the navigation openers are filler here too,
+ *  because the pick may be answering a "which one?" about where to go. */
 const PICK_FILLER = new Set([
   'pick',
   'choose',
   'select',
   'go',
+  'to',
+  'into',
+  'open',
+  'show',
+  'me',
+  'jump',
+  'navigate',
+  'switch',
+  'bring',
   'with',
   'take',
   'the',
@@ -375,15 +441,29 @@ export function answerBody(transcript: string): string | null {
  *  message."* The composer stays under it; the client's strip holds it. */
 export const VOICE_STATUS_MAX_WORDS = 100;
 
+/** A token that counts as a word: has a letter or digit in it. "—" and "→"
+ *  are punctuation the composer puts between words, not words. ONE predicate
+ *  for counting and for cutting — they once disagreed, and a brief that
+ *  counted as 100 words could still be cut mid-sentence. */
+const isWord = (token: string): boolean => /[a-z0-9]/i.test(token);
+
 export function countWords(text: string): number {
-  return text.split(/\s+/).filter((w) => /[a-z0-9]/i.test(w)).length;
+  return text.split(/\s+/).filter(isWord).length;
 }
 
-/** Cut `text` to `max` words on a word boundary, marking the cut. */
+/** Cut `text` to `max` words on a word boundary, marking the cut. Counted
+ *  the way `countWords` counts, so a text it calls `max` words is not cut. */
 export function capWords(text: string, max: number): string {
-  const words = text.trim().split(/\s+/);
-  if (words.length <= max) return text.trim();
-  return `${words.slice(0, max).join(' ')}…`;
+  const tokens = text.trim().split(/\s+/);
+  let seen = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    if (!isWord(tokens[i] ?? '')) continue;
+    seen++;
+    if (seen === max && tokens.slice(i + 1).some(isWord)) {
+      return `${tokens.slice(0, i + 1).join(' ')}…`;
+    }
+  }
+  return text.trim();
 }
 
 export interface StatusTask {
@@ -518,7 +598,6 @@ export function composeStatus(input: StatusInput): string {
       `Done recently: ${listTitles(done, 3)}${newest?.doneAt ? ` (latest ${ago(newest.doneAt, now)})` : ''}.`,
     );
   }
-  if (segments.length === 0) segments.push(`${input.workspaceName}: nothing on the board yet.`);
 
   // Drop whole trailing segments until the cap holds — a sentence cut in half
   // is worse than a sentence left out. Always keep the first.
