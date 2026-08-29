@@ -10,6 +10,7 @@ import {
   type User,
   type WebhookPayload,
   agentIdCandidates,
+  agentIdForName,
   anchors,
   answerFromReply,
   checkReviewPayload,
@@ -48,6 +49,7 @@ import {
   isValidAgentId,
   isValidWatchKey,
 } from './agent-watches.ts';
+import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
 import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
@@ -1184,6 +1186,41 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // The per-agent memory of turn / denial notes (agent-notes.ts). In-process
   // only: the durable copy is the note pinned to the row it landed on.
   const agentNotes = new AgentNoteRing();
+  // The repeated-denial watcher (allow-rules.ts): a third denial of one
+  // shape in a week files a paste-ready allow rule as a review item. It
+  // reads the task notes the routes below append and writes nothing but its
+  // own sidecar — never a settings file.
+  const allowRules = new AllowRuleProposals(dataDir);
+  /** A denial's own agent, as the author of the item it triggered — so the
+   *  card says who was blocked, the way a comment-borne ask names its poster. */
+  function proposeAllowRule(
+    task: Task,
+    note: { kind: string; text: string; agent: string; at: number },
+  ): void {
+    if (note.kind !== 'denial') return;
+    let filed: ReturnType<AllowRuleProposals['onDenial']>;
+    try {
+      filed = allowRules.onDenial(
+        taskStore,
+        { agent: note.agent, text: note.text, ts: note.at },
+        task,
+      );
+    } catch {
+      // The hook's path: a note that landed must not turn into a 500 because
+      // the proposal behind it could not be written.
+      return;
+    }
+    if (!filed) return;
+    // Same two steps the review-item route takes: re-project so the board
+    // room carries the item, and announce so the queue hears about it.
+    taskProjection.ensureWorkspace(filed.task.workspaceId);
+    announceTaskReview(filed.task, filed.item, {
+      id: agentIdForName(note.agent),
+      name: note.agent,
+      kind: 'known',
+      color: ANONYMOUS_ACTOR.color,
+    });
+  }
   // Which builder worktrees are working which tasks — the witness that keeps
   // the stall loop from waking a lead over a row whose builder is busy in a
   // checkout the board cannot see. See dispatch-registry.ts.
@@ -6748,6 +6785,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(note.sessionId !== undefined ? { sessionId: note.sessionId } : {}),
           });
           if (!res.ok) return j(404, { error: res.error });
+          proposeAllowRule(res.task, note);
           agentNotes.record({ ...note, taskId: res.task.id, workspaceId: res.task.workspaceId });
           return j(202, { ok: true, taskId: res.task.id, workspaceId: res.task.workspaceId });
         }
@@ -6777,6 +6815,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ...(note.sessionId !== undefined ? { sessionId: note.sessionId } : {}),
             });
             if (!res.ok) return j(500, { error: res.error });
+            proposeAllowRule(res.task, note);
           }
           agentNotes.record({
             ...note,
