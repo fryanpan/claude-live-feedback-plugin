@@ -58,3 +58,41 @@ describe('voiceHubContext — the review item the speaker is IN', () => {
     });
   });
 });
+
+describe('voiceHubContext — a ticket-borne review item rides only with an OPEN panel', () => {
+  const items = [{ kind: 'task-review', taskId: 't-detail', reviewItemId: 'ri-1' }];
+
+  it('names the ticket’s one open review item when the panel is open on that ticket', () => {
+    expect(voiceHubContext('t-detail', null, null, items)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+      reviewItemId: 'ri-1',
+    });
+  });
+
+  it('never for a merely HIGHLIGHTED row — "answer: yes" must not land on the cursor', () => {
+    expect(voiceHubContext(null, 't-detail', null, items)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+  });
+
+  it('not when the ticket has several, or the item belongs to another ticket', () => {
+    const two = [...items, { kind: 'task-review', taskId: 't-detail', reviewItemId: 'ri-2' }];
+    expect(voiceHubContext('t-detail', null, null, two)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+    const elsewhere = [{ kind: 'task-review', taskId: 't-other', reviewItemId: 'ri-9' }];
+    expect(voiceHubContext('t-detail', null, null, elsewhere)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+    // A thread item is not a ticket-borne row, whatever task it hangs on.
+    const thread = [{ kind: 'task-thread', taskId: 't-detail', reviewItemId: 'ri-1' }];
+    expect(voiceHubContext('t-detail', null, null, thread)).toEqual({
+      surface: 'task',
+      taskId: 't-detail',
+    });
+  });
+});

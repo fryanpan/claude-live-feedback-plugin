@@ -2722,6 +2722,16 @@ export interface VoiceHubContext {
   /** The thread the detail panel is aimed at — the review item the speaker
    *  is IN. Only with the panel open: a highlighted row has no open thread. */
   threadId?: string;
+  /** The ticket-borne review item the open panel shows, when the ticket has
+   *  exactly one. Same rule: never for a highlighted row. */
+  reviewItemId?: string;
+}
+
+/** The little of a review-queue row `voiceHubContext` reads. */
+export interface VoiceHubItem {
+  kind: string;
+  taskId?: string;
+  reviewItemId?: string;
 }
 
 /**
@@ -2741,6 +2751,7 @@ export function voiceHubContext(
   detailTaskId: string | null | undefined,
   focusedRowTaskId: string | null | undefined,
   detailThreadId?: string | null,
+  items: readonly VoiceHubItem[] = [],
 ): VoiceHubContext {
   const taskId = detailTaskId || focusedRowTaskId;
   if (!taskId) return { surface: 'hub' };
@@ -2748,5 +2759,17 @@ export function voiceHubContext(
   // panel's state, and pairing it with a row cursor would pin a reply to a
   // thread on a different ticket.
   const threadId = detailTaskId && detailThreadId ? detailThreadId : undefined;
-  return { surface: 'task', taskId, ...(threadId ? { threadId } : {}) };
+  if (threadId) return { surface: 'task', taskId, threadId };
+  // A ticket-borne row, likewise only with the panel OPEN on that ticket, and
+  // only when it is the one: the server answers a pick on the task surface
+  // only against a pin, so a highlighted row — `taskId` alone — can take no
+  // answer. "answer: yes" used to land on whatever the cursor rested on.
+  if (!detailTaskId) return { surface: 'task', taskId };
+  const ticketItems = items.filter(
+    (i) => i.kind === 'task-review' && i.taskId === detailTaskId && i.reviewItemId,
+  );
+  const [only, ...rest] = ticketItems;
+  return only?.reviewItemId && rest.length === 0
+    ? { surface: 'task', taskId, reviewItemId: only.reviewItemId }
+    : { surface: 'task', taskId };
 }
