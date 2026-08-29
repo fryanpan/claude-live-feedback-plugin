@@ -1,8 +1,11 @@
 /**
  * Agent notes — the pure half of the plugin's Stop and PermissionDenied
- * hooks. Each hook posts ONE line to `POST /api/agent-notes` so the board's
- * per-agent activity pane can say what an agent did lately: the closing
- * message of every turn, and the shape of every tool call auto mode denied.
+ * hooks. Each hook posts one note to `POST /api/agent-notes` so a task's
+ * Activity tab can say what an agent did lately: the closing message of
+ * every turn — the WHOLE message, reduced, not its first line (the owner
+ * reads and replies to these on the task, so the short form was a report
+ * with its body missing) — and the shape of every tool call auto mode
+ * denied.
  *
  * Everything that decides what to post lives here as functions of their
  * inputs (payload, env, clock, fetch); `../stop-note.ts` and
@@ -15,11 +18,14 @@
  *  - Never block the turn. A hook that throws, hangs, or exits non-zero
  *    stalls the agent that fired it; every path here ends in exit 0, and the
  *    POST is capped at `POST_TIMEOUT_MS`.
- *  - Reduce, never forward. A closing message becomes one stripped line
- *    with URLs and host paths reduced; a denied command becomes its command
- *    word plus a subcommand or flag, with anything path-, URL-, assignment-
- *    or token-shaped dropped. The server stores text verbatim (its test says
- *    so), so THIS is the only place the reduction happens.
+ *  - Reduce, never forward. A closing message keeps its lines and its
+ *    markdown but every word on every line — fenced code included — goes
+ *    through the same reduction: URLs and host paths, token prefixes,
+ *    `Bearer` values and emails come out as markers or a bare file name. A
+ *    denied command becomes its command word plus a subcommand or flag,
+ *    with anything path-, URL-, assignment- or token-shaped dropped. The
+ *    server stores text verbatim (its test says so), so THIS is the only
+ *    place the reduction happens.
  */
 
 export type EnvLike = Record<string, string | undefined>;
@@ -42,8 +48,13 @@ export interface NotePayload {
 export type Decision = { post: NotePayload } | { skip: string };
 
 export const DEFAULT_BASE_URL = 'http://localhost:8787';
-/** One line of a closing message, ellipsis included. */
+/** One line of a closing message, ellipsis included — what `oneLine`
+ *  produces; the Home pane's first-line view is derived client-side. */
 export const NOTE_TEXT_CAP = 200;
+/** A whole closing message, ellipsis included. Matches the server's
+ *  `NOTE_TEXT_MAX` (agent-notes.ts), which REFUSES anything longer — so the
+ *  cut happens here, where an ellipsis can mark it, never there. */
+export const FULL_NOTE_TEXT_CAP = 4000;
 /** A denied command's shape; shapes are two tokens, so this only bites on
  *  a pathological first token. */
 const SHAPE_CAP = 80;
@@ -154,6 +165,13 @@ function isIPv4(core: string): boolean {
   return [1, 2, 3, 4].every((i) => Number(m[i]) <= 255);
 }
 
+/** `NAME=value`, `--flag=value`, `attr=value` — the value is what gets
+ *  reduced; the name stays, since it is the description. */
+const VALUE_AFTER_EQUALS_RE = /^(-{0,2}[A-Za-z_][\w-]*=)(.+)$/;
+/** A URL that starts partway through a word (`see:https://x`,
+ *  `href="https://x"`) — the anchored `URL_RE` never sees it. */
+const EMBEDDED_URL_RE = /[a-z][a-z0-9+.-]*:\/\/\S*/i;
+
 /**
  * A URL, a host path, or a credential-shaped word inside a sentence,
  * reduced: a URL (schemed or a bare tailnet/local host, `localhost`, or an
@@ -164,9 +182,16 @@ function isIPv4(core: string): boolean {
  * closing sentence routinely names any of these. Repo-relative paths
  * (`packages/x/y.ts`) and branch names (`feat/x`) are left alone — they are
  * the work, not the host.
+ *
+ * Punctuation and inline markup around the word — brackets, quotes,
+ * backticks, emphasis stars and underscores, angle brackets — are peeled
+ * off and put back, so `` `sk-…` `` comes out as `` `[token]` `` with its
+ * code span intact (`fullNote` keeps markdown; `oneLine` strips it first
+ * and sees none of this). A value after `=` is reduced on its own, so
+ * `TOKEN=ghp_…` reads `TOKEN=[token]` instead of riding through whole.
  */
 function reduceLocator(word: string): string {
-  const m = /^([("'[]*)(.*?)([)"'\].,;:!?]*)$/.exec(word);
+  const m = /^([("'[`<*_]*)(.*?)([)"'\]`>*_.,;:!?]*)$/.exec(word);
   if (!m) return word;
   const [, open, core, close] = m;
   if (URL_RE.test(core)) return `${open}[url]${close}`;
@@ -174,15 +199,22 @@ function reduceLocator(word: string): string {
   if (SCHEMELESS_HOST_RE.test(core) || isIPv4(core)) return `${open}[url]${close}`;
   if (TOKEN_PREFIX_RE.test(core)) return `${open}[token]${close}`;
   if (EMAIL_RE.test(core)) return `${open}[email]${close}`;
+  const assigned = VALUE_AFTER_EQUALS_RE.exec(core);
+  if (assigned) {
+    const value = reduceLocator(assigned[2]);
+    if (value !== assigned[2]) return `${open}${assigned[1]}${value}${close}`;
+  }
+  if (EMBEDDED_URL_RE.test(core)) return `${open}${core.replace(EMBEDDED_URL_RE, '[url]')}${close}`;
   return word;
 }
 
 /** The word-level reduction pass: `Bearer <token>` first (it spans two
- *  words), then `reduceLocator` word by word. Shared by prose
- *  (`stripInline`) and the fenced-code fallback in `oneLine`, so a closing
- *  message and its code block get the same treatment. */
+ *  words), then `reduceLocator` word by word, whitespace kept as it was.
+ *  Shared by prose (`stripInline`), every line of `fullNote`, and the
+ *  fenced-code fallback in `oneLine`, so a closing message and its code
+ *  block get the same treatment. */
 function reduceWords(s: string): string {
-  return s.replace(BEARER_RE, '[token]').split(' ').map(reduceLocator).join(' ');
+  return s.replace(BEARER_RE, '[token]').replace(/\S+/g, reduceLocator);
 }
 
 function capText(s: string, cap: number): string {
@@ -190,11 +222,80 @@ function capText(s: string, cap: number): string {
   return `${s.slice(0, cap - 1).trimEnd()}…`;
 }
 
+/** `[text](target)` and `![alt](target)` — the target is a URL or a path,
+ *  and the anchored word pass would see `[text](https://…` as one word with
+ *  its scheme in the middle. Reduced here so the text survives and the
+ *  target becomes a marker. `mailto:` is peeled so the address behind it is
+ *  seen as one. */
+const MD_LINK_RE = /(!?\[[^\]]*\])\(([^)\s]*)(\s[^)]*)?\)/g;
+/** An HTML tag — a letter or a closing slash right after `<`, so `a < b`
+ *  is prose, not a tag. Dropped whole, attributes and all: a tag is markup
+ *  `oneLine` never kept, and an `href` is a URL the word pass would only
+ *  half-see. An autolink (`<https://…>`, `<user@…>`) matches too and is
+ *  kept for the word pass to turn into a marker. */
+const HTML_TAG_RE = /<\/?[a-zA-Z][^<>]*>/g;
+const AUTOLINK_RE = /^<(?:[a-z][a-z0-9+.-]*:\/\/[^<>\s]+|[\w.+-]+@[\w-]+\.[\w.-]+)>$/i;
+
+function reduceLinkTarget(target: string): string {
+  const bare = target.replace(/^mailto:/i, '');
+  return reduceLocator(bare);
+}
+
+/** One prose line of `fullNote`: link targets, then tags, then words.
+ *  Trailing whitespace goes; indentation stays (a nested list is one). */
+function reduceProseLine(line: string): string {
+  const linked = line.replace(
+    MD_LINK_RE,
+    (_m, text: string, target: string, title: string | undefined) =>
+      `${text}(${reduceLinkTarget(target)}${title ?? ''})`,
+  );
+  const untagged = linked.replace(HTML_TAG_RE, (tag) => (AUTOLINK_RE.test(tag) ? tag : ''));
+  return reduceWords(untagged).trimEnd();
+}
+
+/**
+ * A closing message whole: every line kept, markdown and fences included,
+ * every word on every line reduced the way `oneLine` reduces its one, runs
+ * of blank lines collapsed to one, capped at `cap` with an ellipsis marking
+ * the cut. Fenced code is reduced line by line rather than dropped — the
+ * block is often the evidence (the test run, the command) and the reader
+ * asked for the full update — with the fence markers kept so it still
+ * renders as code. Empty when nothing but whitespace or bare fence markers
+ * remains, so the caller skips the post the way it always has.
+ */
+export function fullNote(text: unknown, cap = FULL_NOTE_TEXT_CAP): string {
+  if (typeof text !== 'string') return '';
+  const out: string[] = [];
+  let inFence = false;
+  let content = false;
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const t = raw.trim();
+    if (FENCE_RE.test(t)) {
+      inFence = !inFence;
+      out.push(t);
+      continue;
+    }
+    const line = inFence ? reduceWords(raw).trimEnd() : reduceProseLine(raw);
+    if (line.trim() === '') {
+      if (out.length > 0 && out[out.length - 1] !== '') out.push('');
+      continue;
+    }
+    content = true;
+    out.push(line);
+  }
+  if (!content) return '';
+  while (out.length > 0 && out[out.length - 1] === '') out.pop();
+  return capText(out.join('\n'), cap);
+}
+
 /**
  * A closing message reduced to one line: markdown stripped, the first line
  * with any prose, capped at `cap` with an ellipsis marking the cut. A
  * heading (`## Done`) and fenced code are fallbacks, not first choice — the
  * sentence under the heading says what happened; the heading names it.
+ * The hook no longer posts this — `fullNote` carries the turn — but the
+ * Home pane's first-line view is the same derivation, kept here as the
+ * reference form.
  */
 export function oneLine(text: unknown, cap = NOTE_TEXT_CAP): string {
   if (typeof text !== 'string') return '';
@@ -352,13 +453,13 @@ function note(
   };
 }
 
-/** The Stop hook: the turn's closing message as one line. */
+/** The Stop hook: the turn's closing message, whole and reduced. */
 export function decideTurnNote(payload: unknown, ctx: DecideContext): Decision {
   const p = asPayload(payload);
   if (!p) return { skip: 'malformed payload' };
   if (p.stop_hook_active === true) return { skip: 'stop hook active' };
   if (!ctx.agent) return { skip: 'no agent name' };
-  const text = oneLine(p.last_assistant_message);
+  const text = fullNote(p.last_assistant_message);
   if (text === '') return { skip: 'empty message' };
   return note(p, ctx, ctx.agent, 'turn', text);
 }
