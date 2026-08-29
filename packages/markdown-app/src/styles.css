@@ -2413,6 +2413,186 @@ body.hub-body {
   color: var(--accent);
   cursor: pointer;
 }
+/* --- Recent activity: what moved lately, grouped BY TASK ---
+   The third Home section (approved mock, 2026-08-29): the queue's panel
+   treatment and heading, one group per task, the group's header in the
+   queue's own `.hub-review-row` anatomy, its recent notes as indented muted
+   lines beneath. No counters, no buttons — the header opens the task and a
+   phrase selection is the way to comment. HEIGHT is the scarce axis on the
+   iPad, so at this tier every title and every note is ONE line (ellipsis);
+   the ≤1100px block lets them wrap where width, not height, is scarce. */
+.hub-activity-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.hub-activity-card .hub-home-review-head {
+  margin-bottom: 4px;
+}
+.acti-list {
+  display: flex;
+  flex-direction: column;
+}
+/* The header row: the queue row's hairline, floor and hover, laid out as a
+   row (mark · title · badge) rather than the queue's title-over-subline
+   column. A div acting as a button — the title must stay selectable — so it
+   takes the focus ring a real button gets for free. */
+.acti-head {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.acti-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.acti-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The status mark: the board's `.hub-status-mark` ring, scaled for a list
+   row — a dashed yellow ring for triage, a filled blue dot for in-progress,
+   solid green for done, a plain ring for todo. */
+.acti-mark {
+  flex: none;
+  position: relative;
+  box-sizing: border-box;
+  width: 11px;
+  height: 11px;
+  border: 1.3px solid var(--fg-muted);
+  border-radius: 50%;
+}
+.acti-mark-triage {
+  border-style: dashed;
+  border-color: var(--yellow);
+}
+.acti-mark-in-progress {
+  border-color: var(--accent);
+}
+.acti-mark-in-progress::after {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.acti-mark-done {
+  border-color: var(--green);
+  background: var(--green);
+}
+/* The one flag a group may wear, in the board's badge vocabulary. */
+.acti-head .hub-badge {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  padding: 0 7px;
+}
+/* Scoped to the head, not bare — the base `.hub-badge` rule sits later in
+   this sheet and would win a same-specificity tie on border and colour. */
+.acti-head .hub-badge-offband {
+  border-color: color-mix(in srgb, var(--orange) 55%, transparent);
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+}
+.acti-head .hub-badge-stale {
+  border-color: color-mix(in srgb, var(--yellow) 55%, transparent);
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+}
+.acti-head .hub-badge-dark {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+/* The notes: the queue's subline style, indented past the mark and its gap
+   (11 + 6) so they hang under the title's words, newest first. */
+.acti-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 8px 17px;
+  padding: 0 8px;
+}
+.hub-activity-note {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hub-activity-note .acti-text {
+  color: var(--fg);
+}
+/* A denial reads as the refusal it was: the refused SHAPE tinted, as the
+   approved mock draws it, with "blocked:" left as prose. A move
+   ("→ in-progress", "handed to X") stays muted — it is movement, not a
+   message. */
+.hub-activity-note-denial .acti-shape {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--danger-bg);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.hub-activity-note-move .acti-text {
+  color: var(--fg-muted);
+}
+.acti-age,
+.acti-agent {
+  color: var(--fg-muted);
+}
+.acti-more {
+  font-size: 12px;
+  color: var(--fg-muted);
+  opacity: 0.75;
+  margin-top: 1px;
+}
+/* ── Commenting on a note like a doc (2026-08-29) ──
+   Select (or tap) words of a note line or the title → the walkthrough's
+   `.comment-pill` appears beside them → the REAL thread card (threads.ts
+   `renderThread`) opens beside the group, quoting the phrase. Every group
+   sits in a wrap so opening a card never re-parents the group; the open
+   wrap is a two-column grid at the tablet tier — the card takes the 300px
+   the drawer gives a card — and the ≤1100px block stacks it under the
+   group instead. */
+.acti-group-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.acti-group-wrap-open {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+.acti-pill {
+  z-index: 800;
+}
+/* The card is the real one, whole, minus the one control this pane does not
+   offer: Resolve lives on the task's discussion, and the pane has ONE action.
+   `.thread-face` is absolutely positioned inside its slot by the drawer's
+   rules, which apply here unchanged. */
+.acti-thread .thread-foot {
+  display: none;
+}
+.acti-thread .thread {
+  margin: 0;
+}
+/* The phrase, marked the way the editor marks a thread's range — those
+   rules are scoped to `#editor > .ProseMirror`, so the pane carries the
+   active state it uses. */
+.acti-group .thread-range {
+  background: rgba(46, 125, 215, 0.22);
+  border-bottom: 2px solid rgba(46, 125, 215, 0.8);
+  border-radius: 1px;
+  color: inherit;
+}
 /* The board island owns a wrapper of its own inside `#hub-board` — Preact
    must never share a container with vanilla code. `display: contents` keeps
    that wrapper out of layout entirely, so the sections stay DIRECT children
@@ -4656,6 +4836,33 @@ a.hub-link-chip:hover {
   }
   .hub-home {
     padding-top: 4px;
+  }
+  /* --- Recent activity on a narrow viewport ---
+     Width is the scarce axis here, not height: a title and a note line may
+     wrap rather than clip, so the words the reader came for (and will
+     select to comment on) are all there. The header keeps the queue row's
+     44px floor from the base rule. */
+  .acti-title-text {
+    white-space: normal;
+    overflow: visible;
+  }
+  .hub-activity-note {
+    font-size: 13px;
+    white-space: normal;
+    overflow: visible;
+  }
+  /* Below 1100px the thread card goes UNDER the group, and the pill grows
+     to the thumb size every comment control takes on this tier. */
+  .acti-group-wrap-open {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .acti-pill {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
   }
   /* --- the goal band on mobile ---
      A goal row is a HEADER, so here it is allowed the second line a task row

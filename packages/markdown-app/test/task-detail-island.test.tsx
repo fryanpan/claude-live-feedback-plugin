@@ -88,6 +88,29 @@ afterEach(() => {
   taskDetailData.value = { task: null, handlers: handlers() };
 });
 
+describe('which tab the panel opens on', () => {
+  const selected = (host: HTMLElement, id: string) =>
+    host.querySelector(`.hub-detail-tab-${id}`)?.getAttribute('aria-selected') === 'true';
+  const shown = (host: HTMLElement, id: string) =>
+    host.querySelector(`.hub-detail-tabpanel-${id}`)?.classList.contains('hidden') === false;
+
+  it('opens on Activity when the opener asks for it — the Home activity pane’s title tap', () => {
+    const host = mount();
+    taskDetailData.value = { task: task(), tab: 'activity', handlers: handlers() };
+    expect(selected(host, 'activity')).toBe(true);
+    expect(shown(host, 'activity')).toBe(true);
+    expect(shown(host, 'comments')).toBe(false);
+  });
+
+  it('opens on Comments by default — a board row, a deep link (positive control)', () => {
+    const host = mount();
+    taskDetailData.value = { task: task(), handlers: handlers() };
+    expect(selected(host, 'comments')).toBe(true);
+    expect(shown(host, 'comments')).toBe(true);
+    expect(shown(host, 'activity')).toBe(false);
+  });
+});
+
 describe('the task detail island’s mount contract', () => {
   it('owns a dedicated wrapper and leaves the host’s vanilla children alone', () => {
     const host = document.createElement('div');
