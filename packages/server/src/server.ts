@@ -38,6 +38,7 @@ import {
   resolveIdentityId,
   setIdentityRoster,
 } from './activity.ts';
+import { AgentNoteRing, parseAgentNote, resolveCurrentTask } from './agent-notes.ts';
 import {
   AgentWatches,
   SHARED_AGENT_IDS,
@@ -136,6 +137,7 @@ import {
   READY_NUDGE_STAMP_FILENAME,
   ReadyWorkNudger,
   type ReadyWorkSnapshot,
+  isBoardActivity,
 } from './ready-nudge.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
@@ -1171,6 +1173,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     console.error(`[agent-watches] ${agentWatches.loadError}`);
   }
 
+  // The per-agent memory of turn / denial notes (agent-notes.ts). In-process
+  // only: the durable copy is the note pinned to the row it landed on.
+  const agentNotes = new AgentNoteRing();
   // Which builder worktrees are working which tasks — the witness that keeps
   // the stall loop from waking a lead over a row whose builder is busy in a
   // checkout the board cannot see. See dispatch-registry.ts.
@@ -1328,7 +1333,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // channel (`ws~<workspaceId>`, the same channel doc thread events use for
   // reviews) — no new transport (§3.6). The audit log
   // append happens inside the store's emit, not here.
+  //
+  // ONE exclusion: `task.noted` never rides the stream. An attached MCP
+  // child relays every task.* frame it has no line for as a channel message
+  // to its session, so a broadcast note would wake every other agent on the
+  // board once per turn of the agent that posted it — and two agents each
+  // holding a row would wake each other without end. Nothing on the stream
+  // needs it: the ydoc projection carries the notes and the audit log has
+  // the event. Excluded here, on the server, because a bundle-side filter
+  // only takes effect for sessions that have restarted onto it.
   taskStore.onEvent((ev) => {
+    if (ev.type === 'task.noted') return;
     const { type, ...rest } = ev;
     sse.broadcast(`ws~${ev.workspaceId}`, { event: type, ...rest });
   });
@@ -1704,14 +1719,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // "events that count as activity" — one that would silently fall behind
     // the store the first time a mutator is added.
     //
-    // ONE exclusion, stated as a PREFIX rather than as a list for the same
-    // reason: `agent.*` is liveness (attached / detached / heartbeat), and
-    // liveness is not the board moving. Counting it made the wake
-    // self-cancelling, because the only lead a nudge can be DELIVERED to is
-    // one holding a live stream — which is precisely the session attaching
-    // and heartbeating. So the pings that proved the lead was there also
-    // proved, to this clock, that the board did not need it.
-    if (!ev.type.startsWith('agent.')) readyNudger.noteActivity(ev.workspaceId, ev.ts);
+    // The exclusions live in `isBoardActivity`, for the same reason: `agent.*`
+    // is liveness (attached / detached / heartbeat), and liveness is not the
+    // board moving. Counting it made the wake self-cancelling, because the
+    // only lead a nudge can be DELIVERED to is one holding a live stream —
+    // which is precisely the session attaching and heartbeating. So the
+    // pings that proved the lead was there also proved, to this clock, that
+    // the board did not need it. `task.noted` — a turn ending — is the same
+    // class.
+    if (isBoardActivity(ev.type)) readyNudger.noteActivity(ev.workspaceId, ev.ts);
     // …and an answer is not merely activity. The lead is the party who acts
     // on answers, and making it wait out an idle window would deliver the
     // point of the feature fifteen minutes late.
@@ -6622,6 +6638,63 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(200, dispatches.close(taskId));
           }
           return j(405, { error: 'method not allowed' });
+        }
+        // --- REST: agent turn / denial notes ---
+        // The plugin's Stop and PermissionDenied hooks post one line per
+        // turn; the server pins it to the agent's current row (its latest
+        // in-progress claim) and keeps the last few per agent either way.
+        // 202 rather than 200: the hook fires with the turn already over and
+        // never reads the answer. See agent-notes.ts.
+        if (pathname === '/api/agent-notes') {
+          // Same defense-in-depth posture as the agent-watches route: no
+          // share host reaches here today, and this keeps a later
+          // allowlisting from letting an external reviewer write a session's
+          // words onto a board row.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method !== 'POST') return j(405, { error: 'method not allowed' });
+          const parsed = parseAgentNote(await safeJson(req));
+          if (!parsed.ok) return j(400, { error: parsed.error, message: parsed.message });
+          const { note } = parsed;
+          const task = resolveCurrentTask(taskStore, note.agent);
+          if (task) {
+            const res = taskStore.appendNote(task.id, {
+              kind: note.kind,
+              text: note.text,
+              agent: note.agent,
+              ts: note.at,
+              ...(note.sessionId !== undefined ? { sessionId: note.sessionId } : {}),
+            });
+            if (!res.ok) return j(500, { error: res.error });
+          }
+          agentNotes.record({
+            ...note,
+            ...(task ? { taskId: task.id, workspaceId: task.workspaceId } : {}),
+          });
+          return j(202, {
+            ok: true,
+            ...(task ? { taskId: task.id, workspaceId: task.workspaceId } : {}),
+          });
+        }
+        const agentNotesMatch = pathname.match(/^\/api\/agents\/([^/]+)\/notes$/);
+        if (agentNotesMatch) {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          if (req.method !== 'GET') return j(405, { error: 'method not allowed' });
+          const agent = decodeURIComponent(agentNotesMatch[1] ?? '').trim();
+          if (agent.length === 0 || agent.length > 200) return j(400, { error: 'bad agent' });
+          if (isSharedAgentName(agent)) {
+            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
+          }
+          // Display fields only — sessionId stays in the store, like the
+          // task-projection read (projectNotes) already keeps it out.
+          const notes = agentNotes.list(agent).map((n) => ({
+            at: n.at,
+            kind: n.kind,
+            text: n.text,
+            agent: n.agent,
+            ...(n.taskId !== undefined ? { taskId: n.taskId } : {}),
+            ...(n.workspaceId !== undefined ? { workspaceId: n.workspaceId } : {}),
+          }));
+          return j(200, { agent, notes });
         }
         // --- REST: chat-audit counters ---
         // The daily chat audit publishes per-agent unfiled-ask counts here
