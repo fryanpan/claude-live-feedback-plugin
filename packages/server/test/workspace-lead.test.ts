@@ -24,6 +24,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Identities } from '../src/identities.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import {
@@ -866,5 +867,81 @@ describe('the shared "agent" identity can neither claim nor be handed the seat',
     } finally {
       await handle.stop();
     }
+  });
+});
+
+/** Security review of PR #440: two seams a merge could abuse on the board. */
+describe('merge seats and merged-away attaches (review findings)', () => {
+  let dataDir: string;
+  let store: TaskStore;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-review-'));
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('a merge does not hand a seat to an id the board has no attachment for', () => {
+    // The seat is held by an id nothing ever attached under (a board made
+    // before the unknown-lead check, or led by the shared category).
+    const ghostLed = store.createWorkspace('ghost-hub', { leadAgentId: 'agent-ghost' });
+    const res = store.mergeAgent('agent-ghost', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    expect(res.seats).toEqual([]);
+    expect(res.seatsSkipped).toEqual([ghostLed.id]);
+    expect(store.getWorkspace(ghostLed.id)?.leadAgentId).toBe('agent-ghost');
+
+    // POSITIVE CONTROL: once the target is attached, the same merge moves it.
+    store.attachAgent(ghostLed.id, { agentId: 'agent-new', runtime: 'claude-code-local' });
+    const again = store.mergeAgent('agent-ghost', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    expect(again.seats).toEqual([ghostLed.id]);
+    expect(again.seatsSkipped).toEqual([]);
+    expect(store.getWorkspace(ghostLed.id)?.leadAgentId).toBe('agent-new');
+  });
+
+  it('a merge that carries the attachment across still moves the seat', () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    const res = store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    expect(res.seats).toEqual([led.id]);
+    expect(res.seatsSkipped).toEqual([]);
+    expect(store.getWorkspace(led.id)?.leadAgentId).toBe('agent-new');
+  });
+
+  it('a merged-away id cannot attach again; the refusal names the survivor', () => {
+    const roster = new Identities({ dataDir });
+    store.setAgentRoster(roster);
+    const ws = store.createWorkspace('hub', { leadAgentId: 'agent-lead' });
+    roster.upsertAgent('agent-new', 'New');
+    roster.upsertAgent('agent-old', 'Old');
+    // POSITIVE CONTROL: before the merge the old id attaches normally.
+    expect(
+      store.attachAgent(ws.id, { agentId: 'agent-old', runtime: 'claude-code-local' }).ok,
+    ).toBe(true);
+    // The merge, both halves — as the route runs it.
+    expect(roster.mergeAgent('agent-old', 'agent-new').ok).toBe(true);
+    store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    const res = store.attachAgent(ws.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    expect(res.ok).toBe(false);
+    if (res.ok || res.error !== 'merged-away')
+      throw new Error(`expected merged-away, got ${JSON.stringify(res)}`);
+    expect(res.into).toBe('agent-new');
+    expect(String(res.message)).toContain('agent-new');
+    // Nothing was written under the old key.
+    expect(store.listAttachments(ws.id).map((a) => a.agentId)).not.toContain('agent-old');
+    // The survivor attaches fine.
+    expect(
+      store.attachAgent(ws.id, { agentId: 'agent-new', runtime: 'claude-code-local' }).ok,
+    ).toBe(true);
   });
 });

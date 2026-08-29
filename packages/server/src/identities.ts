@@ -53,6 +53,7 @@ import {
   isEmailLike,
   normalizeEmail,
 } from '@feedback/core';
+import { ownerDisplayNames } from './activity.ts';
 import { SHARED_AGENT_IDS } from './agent-watches.ts';
 
 const FILENAME = 'identities.json';
@@ -223,9 +224,17 @@ export class Identities {
     if (!AGENT_ID_RE.test(trimmed) || SHARED_AGENT_IDS.has(trimmed)) return null;
     const now = this.now();
     const existing = this.state.identities[trimmed];
+    // A name a PERSON already answers to is not an agent's to take. The
+    // sent name wins on a rename because the launch env is where renames
+    // happen — which also made it the one line where any session could
+    // relabel itself "Bryan" fleet-wide. Refused here, not at the route, so
+    // every attach path and the merge script share the rule. The attach
+    // still lands: under the existing name, or under the id for a new row.
+    const wanted = cleanName(displayName) ?? undefined;
+    const usable = wanted !== undefined && this.isPersonName(wanted) ? undefined : wanted;
     if (existing) {
       if (existing.kind !== 'agent') return null;
-      const name = cleanName(displayName) ?? existing.displayName;
+      const name = usable ?? existing.displayName;
       if (name === existing.displayName) return existing;
       const updated: IdentityRecord = { ...existing, displayName: name, updatedAt: now };
       this.state.identities[trimmed] = updated;
@@ -235,7 +244,7 @@ export class Identities {
     const record: IdentityRecord = {
       id: trimmed,
       kind: 'agent',
-      displayName: cleanName(displayName) ?? trimmed,
+      displayName: usable ?? trimmed,
       color: hashToColor(trimmed),
       status: 'active',
       mergedFrom: [],
@@ -246,6 +255,31 @@ export class Identities {
     this.state.identities[trimmed] = record;
     this.save();
     return record;
+  }
+
+  /** Is this display name the owner's, or one an existing person row
+   *  carries? Case-insensitive on purpose: "bryan" is the same spoof. */
+  private isPersonName(name: string): boolean {
+    const lower = name.trim().toLowerCase();
+    if (lower === '') return false;
+    if (ownerDisplayNames().some((n) => n.toLowerCase() === lower)) return true;
+    return Object.values(this.state.identities).some(
+      (rec) => rec.kind !== 'agent' && rec.displayName.trim().toLowerCase() === lower,
+    );
+  }
+
+  /**
+   * The survivor an agent id was folded INTO by `mergeAgent`, or null when
+   * the id is live, a bare legacy id, or unknown. The attach path asks this
+   * so a session still launched under a merged-away id is refused with the
+   * id it should use, rather than silently re-creating the duplicate the
+   * merge just removed.
+   */
+  mergedAwayInto(id: string): string | null {
+    const rec = this.state.identities[id.trim()];
+    if (!rec || rec.kind !== 'agent' || !rec.mergedInto) return null;
+    const survivor = this.followMerges(rec);
+    return survivor.id === rec.id ? null : survivor.id;
   }
 
   /**
@@ -345,8 +379,13 @@ export class Identities {
     if (SHARED_AGENT_IDS.has(from)) return { ok: false, error: 'from-shared' };
     const target = this.state.identities[into];
     if (!target || target.kind !== 'agent') return { ok: false, error: 'into-not-agent' };
+    // Resolved, not looked up: `known-bryan` is nobody's row and yet the
+    // owner's, through `mergedFrom` — and so is every anon id the link file
+    // folded. Folding one of those into an agent would give two rows a
+    // claim on the same id, with resolution decided by insertion order.
+    const resolved = this.get(from);
+    if (resolved && resolved.kind !== 'agent') return { ok: false, error: 'from-not-agent' };
     const source = this.state.identities[from];
-    if (source && source.kind !== 'agent') return { ok: false, error: 'from-not-agent' };
     const now = this.now();
     const folded = new Set<string>([...target.mergedFrom, from, ...(source?.mergedFrom ?? [])]);
     folded.delete(into);

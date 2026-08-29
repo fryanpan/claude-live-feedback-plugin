@@ -271,3 +271,67 @@ describe('agent rows — one address book for people and helpers', () => {
     expect(store.resolveAgentId('Lighthouse')).toBe('agent-lighthouse');
   });
 });
+
+/** Security review of PR #440: the roster's merge and rename seams. */
+describe('roster merge and rename refusals (review findings)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'identities-review-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('mergeAgent refuses a `from` that resolves to a person — directly or through mergedFrom', () => {
+    const store = new Identities({ dataDir });
+    const alice = store.upsertByEmail('alice@example.com');
+    store.addMergedFrom(alice.id, 'anon-a1');
+    store.upsertAgent('agent-evil', 'Evil');
+    // POSITIVE CONTROL: both ids resolve to the person before the attempt.
+    expect(store.get('anon-a1')?.id).toBe(alice.id);
+    expect(store.mergeAgent(alice.id, 'agent-evil')).toEqual({
+      ok: false,
+      error: 'from-not-agent',
+    });
+    expect(store.mergeAgent('anon-a1', 'agent-evil')).toEqual({
+      ok: false,
+      error: 'from-not-agent',
+    });
+    // …and still do afterwards; the agent row claimed nothing.
+    expect(store.get('anon-a1')?.id).toBe(alice.id);
+    expect(store.get('agent-evil')?.mergedFrom).toEqual([]);
+    // Control: an id nobody holds still folds in as a bare legacy id.
+    expect(store.mergeAgent('anon-nobody', 'agent-evil').ok).toBe(true);
+  });
+
+  it('upsertAgent refuses a display name that is the owner’s or an existing person’s', () => {
+    const store = new Identities({ dataDir });
+    const alice = store.upsertByEmail('alice@example.com');
+    expect(alice.displayName).toBe('Alice');
+    // A new row asking for a person's name lands under its id instead.
+    expect(store.upsertAgent('agent-imp', 'Alice')?.displayName).toBe('agent-imp');
+    expect(store.upsertAgent('agent-imp2', 'Bryan')?.displayName).toBe('agent-imp2');
+    // An existing row keeps the name it had.
+    store.upsertAgent('agent-real', 'Real Name');
+    expect(store.upsertAgent('agent-real', ' alice ')?.displayName).toBe('Real Name');
+    expect(store.upsertAgent('agent-real', 'Bryan')?.displayName).toBe('Real Name');
+    // POSITIVE CONTROL: an ordinary rename still lands.
+    expect(store.upsertAgent('agent-real', 'Realer Name')?.displayName).toBe('Realer Name');
+    // Resolution is unaffected: the person's name never resolves to an agent.
+    expect(store.resolveAgentId('Alice')).toBeNull();
+  });
+
+  it('mergedAwayInto names the survivor for an id that was folded, and nothing otherwise', () => {
+    const store = new Identities({ dataDir });
+    store.upsertAgent('agent-new', 'New');
+    store.upsertAgent('agent-old', 'Old');
+    expect(store.mergedAwayInto('agent-old')).toBeNull();
+    expect(store.mergeAgent('agent-old', 'agent-new').ok).toBe(true);
+    expect(store.mergedAwayInto('agent-old')).toBe('agent-new');
+    // The survivor, a bare legacy id, and an unknown id are not merged away.
+    expect(store.mergedAwayInto('agent-new')).toBeNull();
+    store.addMergedFrom('agent-new', 'legacy-1');
+    expect(store.mergedAwayInto('legacy-1')).toBeNull();
+    expect(store.mergedAwayInto('agent-never')).toBeNull();
+  });
+});

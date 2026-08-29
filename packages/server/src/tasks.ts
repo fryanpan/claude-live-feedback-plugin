@@ -1003,6 +1003,8 @@ export interface AgentRoster {
   upsertAgent(id: string, displayName?: string): unknown;
   resolveAgentId(idOrName: string): string | null;
   displayNameFor(id: string): string | null;
+  /** The survivor an id was merged into, or null when the id is live. */
+  mergedAwayInto(id: string): string | null;
 }
 
 export interface AgentAttachment {
@@ -1229,6 +1231,10 @@ export type AttachAgentResult =
       leadNameConflicts?: LeadNameConflicts;
     }
   | { ok: false; error: 'workspace-not-found' }
+  /** The id was folded into another by a merge; `into` is the one to use.
+   *  Attaching under the old id would recreate the duplicate the merge
+   *  removed and route this session's deliveries to a key nothing reads. */
+  | { ok: false; error: 'merged-away'; into: string; message: string }
   | {
       ok: false;
       /** The shared "agent" identity tried to attach. A category cannot hold
@@ -2842,10 +2848,18 @@ export class TaskStore {
     from: string,
     into: string,
     opts: { actor: { id: string; name: string; kind?: string }; dryRun?: boolean },
-  ): { seats: string[]; attachments: string[] } {
+  ): { seats: string[]; seatsSkipped: string[]; attachments: string[]; comments: string[] } {
     const seats: string[] = [];
+    const seatsSkipped: string[] = [];
     const attachments: string[] = [];
-    if (from.trim() === '' || into.trim() === '' || from === into) return { seats, attachments };
+    const comments: string[] = [];
+    const result = () => ({
+      seats: seats.sort(),
+      seatsSkipped: seatsSkipped.sort(),
+      attachments: attachments.sort(),
+      comments: comments.sort(),
+    });
+    if (from.trim() === '' || into.trim() === '' || from === into) return result();
     const actor: TaskActor = {
       id: opts.actor.id,
       name: opts.actor.name,
@@ -2865,8 +2879,37 @@ export class TaskStore {
         }
       }
       if (state.workspace.leadAgentId === from) {
-        seats.push(workspaceId);
-        if (!opts.dryRun) this.assignLead(state, into, actor, Date.now());
+        // The same rule as a hand-over (`setLeadAgent`): the seat routes
+        // deliveries to somebody this board has a record of. After the
+        // re-key above that is the target itself whenever the old id was
+        // attached; when it was NOT — a seat held by an id nothing ever
+        // attached under, `known-agent` included — moving it would hand the
+        // seat to an id the queue cannot reach, which is exactly the state
+        // the unknown-lead check exists to refuse. Reported, not silent.
+        // On a dry run nothing was re-keyed yet, so "the old id was
+        // attached" is what "the target will be attached" looks like.
+        const targetAttached =
+          state.attachments.has(into) || (opts.dryRun === true && old !== undefined);
+        if (targetAttached) {
+          seats.push(workspaceId);
+          if (!opts.dryRun) this.assignLead(state, into, actor, Date.now());
+        } else {
+          seatsSkipped.push(workspaceId);
+        }
+      }
+      // The un-acked backlog is delivery bookkeeping keyed by addressee, and
+      // an addressee that no longer exists never acks: without this re-key
+      // every comment queued for the old id sat under it until the per-agent
+      // cap dropped it, while the new id attached to an empty list.
+      const backlog = this.listQueuedComments(workspaceId);
+      if (backlog.some((q) => q.agentId === from)) {
+        comments.push(workspaceId);
+        if (!opts.dryRun) {
+          this.writeCommentQueue(
+            workspaceId,
+            backlog.map((q) => (q.agentId === from ? { ...q, agentId: into } : q)),
+          );
+        }
       }
       // A re-key is an attachment change, and the board projects off store
       // events: without this the rows owned under the old id keep drawing
@@ -2884,7 +2927,7 @@ export class TaskStore {
         });
       }
     }
-    return { seats: seats.sort(), attachments: attachments.sort() };
+    return result();
   }
 
   /** The seat change itself, shared by `setLeadAgent` and the attach-time
@@ -5274,6 +5317,18 @@ export class TaskStore {
     // is what makes an id an addressee (and would claim an empty seat).
     if (isCategoryAuthor({ id: opts.agentId })) {
       return { ok: false, error: 'author-required', message: AUTHOR_REQUIRED_MESSAGE };
+    }
+    const survivor = this.roster?.mergedAwayInto(opts.agentId) ?? null;
+    if (survivor !== null) {
+      return {
+        ok: false,
+        error: 'merged-away',
+        into: survivor,
+        message:
+          `${opts.agentId} was merged into ${survivor}. Relaunch with CW_AGENT_NAME set to ` +
+          `that agent's name (or merge back first); attaching under the old id would ` +
+          'recreate the duplicate the merge removed.',
+      };
     }
     const now = Date.now();
     // Is this attach a NEW process, or the same live one re-attaching (a

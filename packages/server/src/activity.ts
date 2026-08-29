@@ -269,6 +269,12 @@ const OWNER_IDS = new Set<string>(['known-bryan']);
  *  as the owner on the existing corpus, which is not what this fixes. */
 const OWNER_NAMES = new Set<string>(['Bryan']);
 
+/** The owner's display names, for the roster's rename refusal: an agent
+ *  may not attach under a name that every owner check reads as the owner. */
+export function ownerDisplayNames(): string[] {
+  return [...OWNER_NAMES];
+}
+
 /**
  * Teach the owner check an identity id — the owner's email identity.
  *

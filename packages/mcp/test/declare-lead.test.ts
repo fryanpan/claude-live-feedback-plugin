@@ -369,10 +369,7 @@ describe('declareWorkspaceLead — a shared identity is refused before the seat 
   });
 });
 
-describe('the handler turns the refusal into a tool error', () => {
-  it('mcp.ts checks isError on the declare result and passes identityIsShared', async () => {
-    const src = await mcpSource();
-    expect(src).toMatch(/identityIsShared:\s*IDENTITY_IS_SHARED/);
-    expect(src).toMatch(/declared\.isError === true\s*\?\s*err\(/);
-  });
-});
+// The handler side — that a session without CW_AGENT_NAME gets a TOOL ERROR
+// from set_workspace_lead and no seat request leaves the process — is
+// asserted behaviourally over stdio in declare-lead-handler.test.ts, not by
+// grepping mcp.ts for the wiring.
