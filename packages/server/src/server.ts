@@ -1449,7 +1449,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   ): Promise<ReviewGate> {
     const judge = opts.reviewJudge;
     const criteria = taskStore.reviewItemCriteria(task.workspaceId);
-    if (!judge || !criteria) return { held: false, item };
+    if (!judge || !criteria) {
+      // Gate off. An UNHELD item is left unjudged, as before the gate
+      // existed. A held one — held by a judge that has since been turned
+      // off or lost its key — is released on this revision, or it would
+      // stay off the reader's queue with nothing left that could clear it
+      // (codex review).
+      if (!isReviewItemHeld(item)) return { held: false, item };
+      const released = taskStore.recordReviewJudgement(
+        task.id,
+        item.id,
+        { at: Date.now(), verdict: 'unavailable', reason: 'the judge is off' },
+        { actor: author },
+      );
+      if (released.ok) taskProjection.ensureWorkspace(task.workspaceId);
+      return { held: false, item: released.ok ? released.item : item };
+    }
     // The words this verdict will be about. A revision landing while the
     // judge is out gets its own call; this one's verdict must not be
     // stamped onto words it never read (codex review).
@@ -1484,12 +1499,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       forVersion,
     });
     // A row the store would not stamp (answered under us, revised under us,
-    // or the derived legacy row) is left exactly as it was — and let
-    // through. For a stale verdict the revision's own judgement is the one
-    // that stands, and the row handed back is whatever it says now.
+    // or the derived legacy row) is left exactly as it was. For a stale
+    // verdict the revision's own judgement is the one that stands — so the
+    // gate state handed back is read off the row as it is NOW, which may be
+    // a hold the newer call just placed (codex review): saying "passed"
+    // here would announce to the reader an item the queue still omits.
     if (!recorded.ok) {
       const current = taskStore.getTask(task.id)?.reviews?.find((r) => r.id === item.id);
       const read = current ? readTaskReviewItem(current) : undefined;
+      if (read && isReviewItemHeld(read) && read.judge) {
+        return {
+          held: true,
+          item: read,
+          reason: read.judge.reason,
+          message: heldMessage(task.id, item.id, read.judge.reason),
+        };
+      }
       return { held: false, item: read ?? item };
     }
     // The projection carries `judge`, so the card can say "Held: …".
