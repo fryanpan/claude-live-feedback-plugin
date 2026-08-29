@@ -20,8 +20,19 @@
  * notion of who counts as an agent is exactly the drift this codebase has
  * already been bitten by.
  */
-import type { Comment, ReviewPayload, TaskReviewItem, Thread } from '@feedback/core';
-import { decodeEntities, isReviewItemOpen, pendingDeclaration } from '@feedback/core';
+import type {
+  Comment,
+  ReviewItemState,
+  ReviewPayload,
+  TaskReviewItem,
+  Thread,
+} from '@feedback/core';
+import {
+  decodeEntities,
+  latestThreadedQuestion,
+  pendingDeclaration,
+  reviewItemState,
+} from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
 /** How much of the question rides along to the strip. Enough to recognise the
@@ -155,6 +166,19 @@ export interface ReviewTaskItem {
   since: number;
   direct: true;
   askedAt: number;
+  /**
+   * `open` or `revised` — never `waiting`, which is exactly the state this
+   * list omits: the reader asked on the item and it is the owner's turn. See
+   * `reviewItemState`.
+   */
+  state: Exclude<ReviewItemState, 'waiting' | 'answered'>;
+  /** On a revised row: when, what the reader had asked (the anchored
+   *  thread's first comment), where that thread is, and which span of the
+   *  new detail changed — everything the card needs to show "Revised". */
+  revisedAt?: number;
+  question?: string;
+  threadId?: string;
+  revisedRange?: { start: number; end: number };
 }
 
 /** A row of the queue, whatever it hangs on. */
@@ -642,13 +666,22 @@ export function taskReviewItems(tasks: ReviewTaskRef[]): ReviewTaskItem[] {
   for (const task of tasks) {
     if (task.done) continue;
     for (const item of task.reviews ?? []) {
-      if (!isReviewItemOpen(item)) continue;
+      const state = reviewItemState(item);
+      // Answered is closed; waiting is the OWNER's turn — the reader asked on
+      // it and has nothing to do until the words come back revised.
+      if (state === 'answered' || state === 'waiting') continue;
+      const revision = state === 'revised' ? item.revisions?.at(-1) : undefined;
+      const question = revision ? latestThreadedQuestion(item) : undefined;
       rows.push({
         kind: 'task-review',
         band: 'declared',
         taskId: task.id,
         reviewItemId: item.id,
         review: item.review,
+        state,
+        ...(revision ? { revisedAt: revision.at } : {}),
+        ...(question ? { question: question.text, threadId: question.threadId } : {}),
+        ...(revision?.revisedRange ? { revisedRange: revision.revisedRange } : {}),
         // Same normalization as thread rows — see `decodeEntities`.
         title: decodeEntities(task.title),
         // The headline IS the row title, exactly as on a declared thread row —

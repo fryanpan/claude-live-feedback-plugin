@@ -34,9 +34,10 @@ export function resolveElement(anchor: ElementAnchor, env: ElementResolveEnv): E
 
 /** Convenience: classify an anchor as orphan eligible. A subject anchor
  *  resolves to the document itself, so there is nothing to resolve and
- *  nothing that can break. */
+ *  nothing that can break; a review-item anchor points into a sidecar string
+ *  no Yjs position tracks, so the same holds. */
 export function isResolvable(anchor: Anchor): boolean {
-  return anchor.kind !== 'orphan' && anchor.kind !== 'subject';
+  return anchor.kind !== 'orphan' && anchor.kind !== 'subject' && anchor.kind !== 'review-item';
 }
 
 export const SCORE_THRESHOLD = 40;

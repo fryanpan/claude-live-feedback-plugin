@@ -1795,6 +1795,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'revise_review_item',
+      description:
+        "Rewrite one of your review items in place — the answer to a question somebody asked ON it (a comment anchored to a phrase of its text arrives on the task's thread with the reviewItemId). Pass only the fields that change; the previous words are kept as history and the item returns to the reader's queue marked Revised, with their question quoted and the changed span highlighted. `reply` posts on the thread that asked, in the same call.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          reviewItemId: { type: 'string', description: 'Which item on the ticket to revise.' },
+          headline: TASK_REVIEW_ITEM_SCHEMA.properties.headline,
+          detail: TASK_REVIEW_ITEM_SCHEMA.properties.detail,
+          options: TASK_REVIEW_ITEM_SCHEMA.properties.options,
+          reply: {
+            type: 'string',
+            description:
+              'A reply on the thread that asked — one or two sentences pointing at what changed. Refused when nobody has asked on this item yet.',
+          },
+          revisedRange: {
+            type: 'object',
+            description:
+              'Which span of the NEW detail changed, as character offsets, when the diff would not say it well (you moved a paragraph, say). Omitted, the changed span is derived.',
+            properties: { start: { type: 'number' }, end: { type: 'number' } },
+            required: ['start', 'end'],
+          },
+        },
+        required: ['taskId', 'reviewItemId'],
+      },
+    },
+    {
       name: 'answer_decision',
       description:
         "Record a person's verbatim answer to a decision task on their behalf, for when they told you in chat or voice — in the UI they answer directly. Pass their exact words, never a paraphrase. This answers the ticket's own decision; answer_review_item answers one of the items hanging on a ticket. Neither transitions the ticket — close it with task_transition once you have acted on the returned links.",
@@ -3467,6 +3495,37 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...(reviewItemId !== undefined ? { reviewItemId } : {}),
           recorded: true,
           links: res.task.links ?? [],
+        });
+      }
+      case 'revise_review_item': {
+        const { taskId, reviewItemId, headline, detail, options, reply, revisedRange } = a as {
+          taskId: string;
+          reviewItemId: string;
+          headline?: string;
+          detail?: string;
+          options?: unknown;
+          reply?: string;
+          revisedRange?: { start: number; end: number };
+        };
+        const res = (await http(
+          'POST',
+          `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/revise`,
+          {
+            ...(headline !== undefined ? { headline } : {}),
+            ...(detail !== undefined ? { detail } : {}),
+            ...(options !== undefined ? { options } : {}),
+            ...(reply !== undefined ? { reply } : {}),
+            ...(revisedRange !== undefined ? { revisedRange } : {}),
+            author: AUTHOR,
+          },
+        )) as { threadId?: string; reviewAdvice?: string };
+        return ok({
+          taskId,
+          reviewItemId,
+          revised: true,
+          ...(res.threadId !== undefined ? { threadId: res.threadId } : {}),
+          ...(reply !== undefined && res.threadId !== undefined ? { replied: true } : {}),
+          ...(res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {}),
         });
       }
       case 'request_more_info': {
