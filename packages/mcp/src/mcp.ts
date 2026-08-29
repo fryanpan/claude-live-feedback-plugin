@@ -99,7 +99,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.124';
+const PLUGIN_VERSION = '0.1.125';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1795,6 +1795,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'revise_review_item',
+      description:
+        "Rewrite one of your review items in place — the answer to a question somebody asked ON it (a comment anchored to a phrase of its text arrives on the task's thread with the reviewItemId). Pass only the fields that change; the previous words are kept as history and the item returns to the reader's queue marked Revised, with their question quoted and the changed span highlighted. `reply` posts on the thread that asked, in the same call.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          reviewItemId: { type: 'string', description: 'Which item on the ticket to revise.' },
+          headline: TASK_REVIEW_ITEM_SCHEMA.properties.headline,
+          detail: TASK_REVIEW_ITEM_SCHEMA.properties.detail,
+          options: TASK_REVIEW_ITEM_SCHEMA.properties.options,
+          reply: {
+            type: 'string',
+            description:
+              'A reply on the thread that asked — one or two sentences pointing at what changed. Refused when nobody has asked on this item yet.',
+          },
+          revisedRange: {
+            type: 'object',
+            description:
+              'Which span of the NEW detail changed, as character offsets, when the diff would not say it well (you moved a paragraph, say). Omitted, the changed span is derived.',
+            properties: { start: { type: 'number' }, end: { type: 'number' } },
+            required: ['start', 'end'],
+          },
+        },
+        required: ['taskId', 'reviewItemId'],
+      },
+    },
+    {
       name: 'answer_decision',
       description:
         "Record a person's verbatim answer to a decision task on their behalf, for when they told you in chat or voice — in the UI they answer directly. Pass their exact words, never a paraphrase. This answers the ticket's own decision; answer_review_item answers one of the items hanging on a ticket. Neither transitions the ticket — close it with task_transition once you have acted on the returned links.",
@@ -3469,6 +3497,37 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           links: res.task.links ?? [],
         });
       }
+      case 'revise_review_item': {
+        const { taskId, reviewItemId, headline, detail, options, reply, revisedRange } = a as {
+          taskId: string;
+          reviewItemId: string;
+          headline?: string;
+          detail?: string;
+          options?: unknown;
+          reply?: string;
+          revisedRange?: { start: number; end: number };
+        };
+        const res = (await http(
+          'POST',
+          `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/revise`,
+          {
+            ...(headline !== undefined ? { headline } : {}),
+            ...(detail !== undefined ? { detail } : {}),
+            ...(options !== undefined ? { options } : {}),
+            ...(reply !== undefined ? { reply } : {}),
+            ...(revisedRange !== undefined ? { revisedRange } : {}),
+            author: AUTHOR,
+          },
+        )) as { threadId?: string; reviewAdvice?: string };
+        return ok({
+          taskId,
+          reviewItemId,
+          revised: true,
+          ...(res.threadId !== undefined ? { threadId: res.threadId } : {}),
+          ...(reply !== undefined && res.threadId !== undefined ? { replied: true } : {}),
+          ...(res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {}),
+        });
+      }
       case 'request_more_info': {
         const { taskId, reviewItemId, question } = a as {
           taskId: string;
@@ -4391,8 +4450,16 @@ async function ackCommentRow(payload: unknown): Promise<void> {
 interface ChannelPayload {
   docId?: string;
   threadId?: string;
+  /** A comment ON a review item: the item's id, stamped by the server at the
+   *  top level (also on `thread.anchor` for a `review-item` anchor). */
+  reviewItemId?: string;
   thread?: {
-    anchor?: { snippet?: { text?: string }; original?: { snippet?: { text?: string } } };
+    anchor?: {
+      kind?: string;
+      reviewItemId?: string;
+      snippet?: { text?: string };
+      original?: { snippet?: { text?: string } };
+    };
     status?: string;
     comments?: Array<{ author?: { name?: string }; text?: string; ts?: number }>;
   };
@@ -4694,6 +4761,14 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   const threadId = p.threadId ?? '';
   const snippet =
     p.thread?.anchor?.snippet?.text ?? p.thread?.anchor?.original?.snippet?.text ?? '';
+  // A comment ON one of this agent's review items. The server stamps the id
+  // at the top level; an older server sends only the anchor. Named in the
+  // readable line, not just the meta, because the line is what the agent
+  // reads — and "which item do they mean" is the lookup revise_review_item
+  // should not need.
+  const reviewItemId =
+    p.reviewItemId ??
+    (p.thread?.anchor?.kind === 'review-item' ? p.thread.anchor.reviewItemId : undefined);
   // Resolve/reopen are STATUS changes, not speech: the person who clicked is
   // `actor` on the frame, never any comment author. The old comments[0]
   // fallback named the thread's CREATOR as the resolver, and the
@@ -4710,9 +4785,12 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
   // Human-readable body — what the agent reads in their context.
   const action = event.startsWith('thread.') ? event.slice('thread.'.length) : event;
   const header = snippet ? `on "${truncate(snippet, 60)}"` : '';
+  const onItem = reviewItemId
+    ? ` on review item ${reviewItemId}${snippet ? ` "${truncate(snippet, 60)}"` : ''} —`
+    : '';
   const body = text
-    ? `[${action}] ${author ? `${author}: ` : ''}${text}`
-    : `[${action}]${author ? ` by ${author} —` : ''} thread ${threadId} ${header}`.trim();
+    ? `[${action}]${onItem} ${author ? `${author}: ` : ''}${text}`
+    : `[${action}]${onItem}${author ? ` by ${author} —` : ''} thread ${threadId} ${header}`.trim();
 
   await server.notification({
     method: 'notifications/claude/channel',
@@ -4723,6 +4801,7 @@ async function emitChannelMessage(event: string, rawPayload: unknown): Promise<v
       meta: {
         doc_id: docId,
         thread_id: threadId,
+        ...(reviewItemId ? { review_item_id: reviewItemId } : {}),
         event,
         author,
         anchor_text: snippet,

@@ -1029,6 +1029,7 @@ describe('taskReviewItems — a ticket contributes one row per OPEN review item'
     expect(row).toEqual({
       kind: 'task-review',
       band: 'declared',
+      state: 'open',
       taskId: 'tk-1',
       reviewItemId: 'ri-4b2e',
       review: payload(),
