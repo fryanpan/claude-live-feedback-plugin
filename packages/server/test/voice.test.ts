@@ -710,7 +710,7 @@ describe('voice routing (§3.8)', () => {
 
     it('a model-named id that disagrees with the context is refused', () => {
       expect(
-        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-someone-elses"}'),
+        resolve('{"kind":"action","action":"set-status","status":"done","id":"t-not-mine"}'),
       ).toBeNull();
       // Naming the id it was TOLD to name is the compliant shape; what the
       // rule refuses is a target the speaker never had in view.
