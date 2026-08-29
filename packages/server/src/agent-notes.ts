@@ -25,6 +25,15 @@ import type { Task, TaskNote, TaskStore } from './tasks.ts';
 
 /** How many notes one agent's ring remembers. */
 export const AGENT_NOTE_RING_CAP = 20;
+/** How many agents the ring map holds before the least recently written
+ *  one is evicted. Every POST is a 202 whether or not the name is known, so
+ *  without this the map grows one ring per invented name until restart. */
+export const AGENT_NOTE_AGENTS_CAP = 200;
+/** The window a hook's own `at` is trusted inside; outside it the server
+ *  clock stands in. A pane sorts by `at`, and one bogus clock — an epoch
+ *  zero, a year ahead — would pin a note to the top or bury it forever. */
+export const AT_PAST_MS = 24 * 60 * 60_000;
+export const AT_FUTURE_MS = 5 * 60_000;
 /** How many of a row's notes the board projection carries (newest first). */
 export const TASK_NOTES_READ_CAP = 50;
 export { TASK_NOTES_STORE_CAP } from './tasks.ts';
@@ -45,7 +54,8 @@ export interface AgentNoteInput {
   agent: string;
   kind: AgentNoteKind;
   text: string;
-  /** The hook's clock; defaults to the server's when absent. */
+  /** The hook's clock when it is within `AT_PAST_MS` / `AT_FUTURE_MS` of
+   *  the server's; the server's otherwise, and when absent. */
   at: number;
   sessionId?: string;
 }
@@ -54,7 +64,7 @@ export type ParseAgentNoteResult =
   | { ok: true; note: AgentNoteInput }
   | { ok: false; error: string; message: string };
 
-export function parseAgentNote(body: unknown): ParseAgentNoteResult {
+export function parseAgentNote(body: unknown, now: number = Date.now()): ParseAgentNoteResult {
   if (body === null || typeof body !== 'object') {
     return { ok: false, error: 'bad-body', message: 'expected a JSON object' };
   }
@@ -79,12 +89,12 @@ export function parseAgentNote(body: unknown): ParseAgentNoteResult {
   if (b.text.length > NOTE_TEXT_MAX) {
     return { ok: false, error: 'bad-text', message: `\`text\` is over ${NOTE_TEXT_MAX} chars` };
   }
-  let at = Date.now();
+  let at = now;
   if (b.at !== undefined && b.at !== null) {
     if (typeof b.at !== 'number' || !Number.isFinite(b.at)) {
       return { ok: false, error: 'bad-at', message: '`at` must be a millisecond timestamp' };
     }
-    at = b.at;
+    if (b.at >= now - AT_PAST_MS && b.at <= now + AT_FUTURE_MS) at = b.at;
   }
   let sessionId: string | undefined;
   if (b.sessionId !== undefined && b.sessionId !== null) {
@@ -150,6 +160,8 @@ export interface AgentRingNote extends AgentNoteInput {
 }
 
 export class AgentNoteRing {
+  /** Insertion order is recency of the last write: a record deletes and
+   *  re-sets its key, so the first entry is always the eviction candidate. */
   private readonly rings = new Map<string, AgentRingNote[]>();
 
   record(note: AgentRingNote): void {
@@ -157,7 +169,18 @@ export class AgentNoteRing {
     const ring = this.rings.get(key) ?? [];
     ring.push(note);
     if (ring.length > AGENT_NOTE_RING_CAP) ring.splice(0, ring.length - AGENT_NOTE_RING_CAP);
+    this.rings.delete(key);
     this.rings.set(key, ring);
+    while (this.rings.size > AGENT_NOTE_AGENTS_CAP) {
+      const oldest = this.rings.keys().next().value;
+      if (oldest === undefined) break;
+      this.rings.delete(oldest);
+    }
+  }
+
+  /** How many agents currently hold a ring. */
+  get size(): number {
+    return this.rings.size;
   }
 
   /** Newest first. Unknown agent → empty, not an error. */

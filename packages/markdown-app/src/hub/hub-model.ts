@@ -1736,16 +1736,20 @@ const DECISION_EVENTS: ReadonlySet<string> = new Set([
   'workspace.goals_changed',
 ]);
 
+/**
+ * Events the trail never shows. agent.heartbeat is a liveness signal, one
+ * row per beat — pure noise in a review view whose job is to make the 80/95
+ * read effortless. server.tick is the same class (the server strips it
+ * before it ever reaches us; the guard here keeps that a server-side
+ * courtesy, not a load-bearing assumption). task.noted is one row per agent
+ * TURN — the per-agent activity pane's material, and a trail that carried
+ * it would bury the rows that move.
+ */
+const TRAIL_NOISE: ReadonlySet<string> = new Set(['agent.heartbeat', 'server.tick', 'task.noted']);
+
 export function activityRows(events: ActivityEvent[], filter: ActivityFilter): ActivityEvent[] {
   const kept = events.filter((e) =>
-    filter === 'decisions'
-      ? DECISION_EVENTS.has(e.event)
-      : // agent.heartbeat is a liveness signal, one row per beat — pure noise
-        // in a review view whose job is to make the 80/95 read effortless.
-        // server.tick is the same class (the server strips it before it ever
-        // reaches us; the guard here keeps that a server-side courtesy, not
-        // a load-bearing assumption).
-        e.event !== 'agent.heartbeat' && e.event !== 'server.tick',
+    filter === 'decisions' ? DECISION_EVENTS.has(e.event) : !TRAIL_NOISE.has(e.event),
   );
   return kept.sort((a, b) => b.ts - a.ts);
 }
@@ -1766,11 +1770,7 @@ export function activityRows(events: ActivityEvent[], filter: ActivityFilter): A
 export function taskActivity(events: ActivityEvent[] | undefined, taskId: string): ActivityEvent[] {
   return (events ?? [])
     .filter(
-      (e) =>
-        e.taskId === taskId &&
-        e.event !== 'task.transitioned' &&
-        e.event !== 'agent.heartbeat' &&
-        e.event !== 'server.tick',
+      (e) => e.taskId === taskId && e.event !== 'task.transitioned' && !TRAIL_NOISE.has(e.event),
     )
     .sort((a, b) => b.ts - a.ts);
 }

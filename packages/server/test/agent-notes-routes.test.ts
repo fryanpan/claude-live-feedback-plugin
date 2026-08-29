@@ -277,6 +277,54 @@ describe('agent notes routes', () => {
     expect((await ring('Nomad')).notes[0]?.text).toBe(leaky);
   });
 
+  it('a note never reaches another agent’s workspace stream — projection and audit still see it', async () => {
+    // Every store event rides `ws~<id>`, and an attached MCP child relays any
+    // task.* frame it has no line for as a channel message. Broadcasting
+    // task.noted would therefore wake every other agent on the board once per
+    // turn of this one — and two agents each holding a row wake each other
+    // forever. The stream must stay silent for it; the ydoc projection and
+    // the audit log are the readers.
+    const wsId = await boardWithLead();
+    const taskId = await inProgressRow(wsId, 'Wire the index');
+    const stream = await fetch(`${base}/events/workspace/${wsId}?agentId=agent-other`, {
+      headers: { host: `localhost:${handle.port}` },
+    });
+    expect(stream.status).toBe(200);
+    await settle();
+    const heard: string[] = [];
+    const reader = (stream.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    void (async () => {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return;
+          for (const line of decoder.decode(value).split('\n')) {
+            if (line.startsWith('event: ')) heard.push(line.slice(7).trim());
+          }
+        }
+      } catch {}
+    })();
+
+    expect((await note(LEAD.name, 'Quiet on the wire')).status).toBe(202);
+    // Positive control on the same stream: a row moving IS broadcast.
+    await jj(
+      await post(`/api/tasks/${taskId}/transition`, {
+        to: 'done',
+        author: LEAD,
+        workspaceId: wsId,
+      }),
+    );
+    await settle(400);
+    void reader.cancel().catch(() => {});
+
+    expect(heard).toContain('task.transitioned');
+    expect(heard).not.toContain('task.noted');
+    expect(projected(wsId, taskId).notes?.map((n) => n.text)).toEqual(['Quiet on the wire']);
+    const log = await Bun.file(join(dataDir, 'workspaces', `${wsId}.events.jsonl`)).text();
+    expect(log).toContain('"event":"task.noted"');
+  });
+
   it('task notes survive a restart; the ring does not', async () => {
     const wsId = await boardWithLead();
     const taskId = await inProgressRow(wsId, 'Wire the index');

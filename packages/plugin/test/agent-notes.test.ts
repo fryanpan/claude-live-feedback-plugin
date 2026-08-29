@@ -93,6 +93,19 @@ describe('oneLine — a closing message reduced to one safe line', () => {
   it('collapses inner whitespace and leaves snake_case alone', () => {
     expect(oneLine('kept   my_var   intact\ttoo')).toBe('kept my_var intact too');
   });
+  it('reduces absolute and home paths to their file name and URLs to a marker', () => {
+    // A closing sentence routinely names a host path or a hostname, and the
+    // board projection is read by workspace-share visitors.
+    const msg =
+      'Done. The token is in /Users/someone/.config/app/token and the URL is https://u:p@host.example/x.';
+    expect(oneLine(msg)).toBe('Done. The token is in token and the URL is [url].');
+    expect(oneLine(msg)).not.toContain('host.example');
+    expect(oneLine(msg)).not.toContain('/Users');
+    expect(oneLine('Pushed feat/turn-notes to ~/dev/repo (see packages/server/src/x.ts)')).toBe(
+      'Pushed feat/turn-notes to repo (see packages/server/src/x.ts)',
+    );
+    expect(oneLine('ran ./scripts/x.sh, then ../other/y.sh')).toBe('ran x.sh, then y.sh');
+  });
 });
 
 describe('commandShape — a Bash command reduced to its shape', () => {
@@ -115,6 +128,30 @@ describe('commandShape — a Bash command reduced to its shape', () => {
     expect(shape).toBe('install.sh');
     expect(shape).not.toMatch(/\s/);
     expect(commandShape('/usr/local/bin/tool run')).toBe('tool');
+  });
+  it('skips leading env assignments and never echoes their value', () => {
+    // `VAR=value cmd` is how a secret rides a command line; the assignment
+    // is not the shape, the command after it is.
+    expect(commandShape('AWS_SECRET_ACCESS_KEY=abcd1234 aws s3 ls')).toBe('aws s3');
+    expect(commandShape('SCRUB_SKIP=1 git push')).toBe('git push');
+    expect(commandShape('A=1 B=two ./run.sh --now')).toBe('run.sh');
+    expect(commandShape('X=1')).toBe('');
+    expect(commandShape('TOKEN=ghp_FAKEFAKEFAKEFAKEFAKEFAKE1234 gh auth login')).toBe('gh auth');
+  });
+  it('drops an opaque first token entirely rather than echoing it', () => {
+    expect(commandShape('user@host.example:cmd run')).toBe('');
+    expect(commandShape('$CMD run')).toBe('');
+  });
+  it('keeps the second token only when it is a subcommand word or a bare flag', () => {
+    expect(commandShape('mysql -phunter2 -u root')).toBe('mysql');
+    expect(commandShape('sshpass -p hunter2')).toBe('sshpass -p');
+    expect(commandShape('echo $SECRET')).toBe('echo');
+    expect(commandShape('gh pr merge 12')).toBe('gh pr');
+    expect(commandShape('bun run build:mcp')).toBe('bun run');
+    expect(commandShape('git --no-pager log')).toBe('git --no-pager');
+    expect(commandShape('curl -H "Authorization: x"')).toBe('curl -H');
+    expect(commandShape('openssl passwd Hunter2')).toBe('openssl passwd');
+    expect(commandShape(`echo ${'a'.repeat(30)}`)).toBe('echo');
   });
   it('is empty for blank or non-string input', () => {
     expect(commandShape('')).toBe('');
@@ -229,12 +266,14 @@ describe('decideDenialNote — the PermissionDenied hook', () => {
     );
     expect(JSON.stringify(d)).not.toContain('secret.env');
   });
-  it('falls back to the tool name when a Bash command is blank', () => {
-    const d = decideDenialNote(
-      { ...DENIED, tool_name: 'Bash', tool_input: { command: '  ' } },
-      ctx,
-    );
-    expect(d).toEqual(expect.objectContaining({ post: expect.objectContaining({ text: 'Bash' }) }));
+  it('falls back to the tool name when a Bash command is blank or only an assignment', () => {
+    for (const command of ['  ', 'API_KEY=sk-test-FAKE0000']) {
+      const d = decideDenialNote({ ...DENIED, tool_name: 'Bash', tool_input: { command } }, ctx);
+      expect(d).toEqual(
+        expect.objectContaining({ post: expect.objectContaining({ text: 'Bash' }) }),
+      );
+      expect(JSON.stringify(d)).not.toContain('FAKE0000');
+    }
   });
   it('never lets a token-looking string reach the payload', () => {
     const token = 'sk-test-FAKE00000000000000000000';

@@ -41,9 +41,7 @@ function shapeSeen(kind: NoteKind): boolean {
 
 export async function hookMain(kind: NoteKind): Promise<never> {
   try {
-    const chunks: Buffer[] = [];
-    for await (const chunk of Bun.stdin.stream()) chunks.push(Buffer.from(chunk));
-    await runHook(kind, Buffer.concat(chunks).toString('utf8'), {
+    await runHook(kind, await Bun.stdin.text(), {
       env: process.env,
       discoveryPort,
       shapeSeen,

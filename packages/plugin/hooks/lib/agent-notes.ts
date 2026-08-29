@@ -15,8 +15,9 @@
  *  - Never block the turn. A hook that throws, hangs, or exits non-zero
  *    stalls the agent that fired it; every path here ends in exit 0, and the
  *    POST is capped at `POST_TIMEOUT_MS`.
- *  - Reduce, never forward. A closing message becomes one stripped line; a
- *    denied command becomes its first two tokens with anything path-, URL-
+ *  - Reduce, never forward. A closing message becomes one stripped line
+ *    with URLs and host paths reduced; a denied command becomes its command
+ *    word plus a subcommand or flag, with anything path-, URL-, assignment-
  *    or token-shaped dropped. The server stores text verbatim (its test says
  *    so), so THIS is the only place the reduction happens.
  */
@@ -124,7 +125,27 @@ function stripInline(line: string): string {
     .replace(/~~([^~]+)~~/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
-  return s;
+  return s.split(' ').map(reduceLocator).join(' ');
+}
+
+const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+const HOST_PATH_RE = /^(\/|~\/|\.\.?\/)/;
+
+/**
+ * A URL or a host path inside a sentence, reduced: the URL to `[url]` (its
+ * host may be a private machine, its userinfo a credential), the path to
+ * its file name (`~/dev/repo` → `repo`). The board projection this text
+ * lands on is read by workspace-share visitors, and a closing sentence
+ * routinely names both. Repo-relative paths (`packages/x/y.ts`) and branch
+ * names (`feat/x`) are left alone — they are the work, not the host.
+ */
+function reduceLocator(word: string): string {
+  const m = /^([("'[]*)(.*?)([)"'\].,;:!?]*)$/.exec(word);
+  if (!m) return word;
+  const [, open, core, close] = m;
+  if (URL_RE.test(core)) return `${open}[url]${close}`;
+  if (HOST_PATH_RE.test(core)) return `${open}${basenameOf(core)}${close}`;
+  return word;
 }
 
 function capText(s: string, cap: number): string {
@@ -158,15 +179,25 @@ export function oneLine(text: unknown, cap = NOTE_TEXT_CAP): string {
 }
 
 /** Anything a person would not want repeated: a path or URL, an
- *  assignment, an address, or a long opaque run of the kind tokens are. */
+ *  assignment, an address, a variable reference, or a long opaque run of
+ *  the kind tokens are. */
 function looksOpaque(token: string): boolean {
   return (
-    /[/\\:=@~]/.test(token) ||
+    /[/\\:=@~$]/.test(token) ||
     token.startsWith('.') ||
     /[A-Za-z0-9_-]{20,}/.test(token) ||
     /\d{6,}/.test(token)
   );
 }
+
+/** `NAME=value` — the prefix a secret rides a command line on. */
+const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** What a second token may be to survive: a subcommand word (`rm`, `pr`,
+ *  `run`) or a bare flag (`-rf`, `--no-pager`). Positive rather than a
+ *  denylist, because a short password is indistinguishable from a word by
+ *  any negative test — `-phunter2` and `-p` are told apart only by shape. */
+const SUBCOMMAND_RE = /^[a-z][a-z0-9-]{0,23}$/;
+const FLAG_RE = /^-{1,2}[A-Za-z][A-Za-z-]*$/;
 
 /** A path token's last segment, so `./scripts/x/run.sh` reads as `run.sh`
  *  without the directory. */
@@ -176,9 +207,14 @@ function basenameOf(token: string): string {
 }
 
 /**
- * A Bash command reduced to its shape: the first two whitespace tokens
- * (`git rm`), or the first alone when either token looks like a path, URL,
- * assignment or token. A command that IS a path keeps only the file name.
+ * A Bash command reduced to its shape: the command word and its subcommand
+ * or first bare flag (`git rm`, `rm -rf`), or the command word alone when
+ * the second token is anything else — a path, URL, assignment, token, or a
+ * literal that could be a password. Leading `NAME=value` assignments are
+ * skipped, never echoed (`TOKEN=… gh auth login` → `gh auth`). A command
+ * that IS a path keeps only the file name. Empty — the caller falls back to
+ * the tool name — when nothing but assignments or an opaque word remains:
+ * the shape is a description, and a token is not one.
  */
 export function commandShape(command: unknown): string {
   if (typeof command !== 'string') return '';
@@ -186,13 +222,17 @@ export function commandShape(command: unknown): string {
     .trim()
     .split(/\s+/)
     .filter((t) => t !== '');
-  if (tokens.length === 0) return '';
-  const first = tokens[0];
+  let i = 0;
+  while (i < tokens.length && ASSIGNMENT_RE.test(tokens[i])) i++;
+  if (i >= tokens.length) return '';
+  const first = tokens[i];
+  const second = tokens[i + 1];
   if (/[/\\]/.test(first)) return capText(basenameOf(first), SHAPE_CAP);
-  if (tokens.length === 1 || looksOpaque(first) || looksOpaque(tokens[1])) {
+  if (looksOpaque(first)) return '';
+  if (second === undefined || !(SUBCOMMAND_RE.test(second) || FLAG_RE.test(second))) {
     return capText(first, SHAPE_CAP);
   }
-  return capText(`${first} ${tokens[1]}`, SHAPE_CAP);
+  return capText(`${first} ${second}`, SHAPE_CAP);
 }
 
 // ---------------------------------------------------------------------------
