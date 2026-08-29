@@ -322,3 +322,59 @@ describe('assemblyai session', () => {
     await expect(h.opening).rejects.toThrow(/connect timeout/);
   });
 });
+
+describe('assemblyai speaker labels', () => {
+  const turn = (over: Record<string, unknown>) => ({
+    type: 'Turn',
+    turn_is_formatted: true,
+    end_of_turn: true,
+    end_of_turn_confidence: 0.9,
+    words: [],
+    ...over,
+  });
+
+  it('asks for speaker labels on the connect URL', () => {
+    expect(new URL(streamingUrl(16_000)).searchParams.get('speaker_labels')).toBe('true');
+  });
+
+  it('carries the turn-level speaker label through the seam', async () => {
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    h.fake().deliver(turn({ turn_order: 0, transcript: 'Morning, Jordan.', speaker_label: 'A' }));
+    h.fake().deliver(turn({ turn_order: 1, transcript: 'Morning.', speaker_label: 'B' }));
+    expect(h.turns).toEqual([
+      { turn: 0, text: 'Morning, Jordan.', final: true, speaker: 'A' },
+      { turn: 1, text: 'Morning.', final: true, speaker: 'B' },
+    ]);
+  });
+
+  it('treats a placeholder label as no speaker, so the strip shows no tag for it', async () => {
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    h.fake().deliver(turn({ turn_order: 0, transcript: 'Yes.', speaker_label: 'PENDING' }));
+    h.fake().deliver(turn({ turn_order: 1, transcript: 'No.', speaker_label: 'UNKNOWN' }));
+    h.fake().deliver(turn({ turn_order: 2, transcript: 'Maybe.' }));
+    expect(h.turns.map((t) => t.speaker)).toEqual([undefined, undefined, undefined]);
+    expect(h.turns.map((t) => 'speaker' in t)).toEqual([false, false, false]);
+  });
+
+  it('re-emits a settled turn when the end-of-session SpeakerRevision relabels it', async () => {
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    h.fake().deliver(turn({ turn_order: 0, transcript: 'Take the migration?', speaker_label: 'A' }));
+    h.fake().deliver(turn({ turn_order: 1, transcript: 'Sure.', speaker_label: 'A' }));
+    h.turns.length = 0;
+    h.fake().deliver({
+      type: 'SpeakerRevision',
+      revisions: [
+        { turn_order: 1, speaker_label: 'B', words: [] },
+        // A turn the engine never sent cannot be revised — nothing to re-emit.
+        { turn_order: 7, speaker_label: 'B', words: [] },
+      ],
+    });
+    expect(h.turns).toEqual([{ turn: 1, text: 'Sure.', final: true, speaker: 'B' }]);
+  });
+});
