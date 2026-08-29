@@ -4942,6 +4942,21 @@ a.hub-link-chip:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   word-break: break-word;
 }
+/* The LONG form: a status brief is a paragraph, not a sentence (Bryan,
+   2026-08-29: "a brief status update … a 100 word message"). `max-content`
+   still sizes the box from the text and the width pair above still caps it —
+   ~5 lines at 840px, ~11 at a phone's 395px. What the short form never
+   needed is a ceiling on HEIGHT: the readout hangs off the nav dock and grows
+   away from it, and on the iPad the scarce axis is height (~750px usable),
+   so past the cap the box scrolls rather than climbs off the viewport. A
+   pair, like the width: the vh cap is what the phone and the iPad get, the
+   px ceiling keeps a 4K screen from a wall of text. */
+.voice-indicator--long {
+  white-space: normal;
+  max-height: min(40vh, 320px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 /* The in-flight state. The wait between releasing the key and the server's
    ack had nothing moving in it, so a slow round trip and a dead mic looked
    identical — on the one surface that promises every utterance an answer. */

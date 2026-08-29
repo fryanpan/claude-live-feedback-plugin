@@ -2719,6 +2719,9 @@ export function shouldPollHome(
 export interface VoiceHubContext {
   surface: 'hub' | 'task';
   taskId?: string;
+  /** The thread the detail panel is aimed at — the review item the speaker
+   *  is IN. Only with the panel open: a highlighted row has no open thread. */
+  threadId?: string;
 }
 
 /**
@@ -2737,7 +2740,13 @@ export interface VoiceHubContext {
 export function voiceHubContext(
   detailTaskId: string | null | undefined,
   focusedRowTaskId: string | null | undefined,
+  detailThreadId?: string | null,
 ): VoiceHubContext {
   const taskId = detailTaskId || focusedRowTaskId;
-  return taskId ? { surface: 'task', taskId } : { surface: 'hub' };
+  if (!taskId) return { surface: 'hub' };
+  // The thread rides only with the PANEL's task: `detailThreadId` is the
+  // panel's state, and pairing it with a row cursor would pin a reply to a
+  // thread on a different ticket.
+  const threadId = detailTaskId && detailThreadId ? detailThreadId : undefined;
+  return { surface: 'task', taskId, ...(threadId ? { threadId } : {}) };
 }

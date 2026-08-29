@@ -101,10 +101,14 @@ export function mountDocVoice(user: User): { destroy(): void } {
       const docId = docIdFromPath() ?? undefined;
       const editorEl = document.getElementById('editor');
       const visibleHeading = editorEl ? visibleHeadingIn(editorEl) : undefined;
+      // The thread this page was opened AT (`?thread=` — how the review
+      // queue lands a reader on an item), so a spoken answer goes to it.
+      const threadId = new URLSearchParams(location.search).get('thread') || undefined;
       return {
         surface: 'doc',
         ...(docId !== undefined ? { docId } : {}),
         ...(visibleHeading !== undefined ? { visibleHeading } : {}),
+        ...(threadId !== undefined ? { threadId } : {}),
       };
     },
     send: async (transcript, context): Promise<VoiceAck | null> => {
