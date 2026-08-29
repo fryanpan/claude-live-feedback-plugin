@@ -40,6 +40,22 @@ export interface HubTransition {
   usage?: { inputTokens: number; outputTokens: number };
 }
 
+/**
+ * One line an agent posted about a task — its Stop hook's turn summary, or
+ * a permission denial reduced to the shape that was refused. The server
+ * projects the newest `TASK_NOTES_READ_CAP` of them, NEWEST FIRST, with
+ * display fields only (the session id stays in the store, like actor ids do
+ * on transitions). Denial text is the bare shape — "blocked: " is the
+ * pane's prefix, not the store's.
+ */
+export interface HubNote {
+  at: number;
+  kind: 'turn' | 'denial';
+  text: string;
+  /** The agent's display name, as its hook environment spelled it. */
+  agent: string;
+}
+
 export interface HubDecisionOption {
   id: string;
   label: string;
@@ -92,6 +108,10 @@ export interface HubTask {
   answer?: { text: string; by: string; ts: number; optionId?: string };
   triagedAgainst?: { goalId: string; ts: number };
   transitions: HubTransition[];
+  /** The agent's own one-liners on the row, newest first (see `HubNote`).
+   *  Absent when there are none, and on a projection from a server that
+   *  predates them — both read as "nothing posted". */
+  notes?: HubNote[];
   bodyDocId: string;
   /** The description, as markdown. Capped by the server projection — see
    *  `bodyTruncated` — with the full text always in the body doc. */
