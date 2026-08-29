@@ -83,6 +83,10 @@ export interface IdentityRecord {
   status: IdentityStatus;
   /** Legacy actor ids folded into this identity. Readers resolve through it. */
   mergedFrom: string[];
+  /** Set on a row that was folded INTO another: `get` follows it, so the old
+   *  id keeps resolving while the row itself stays as the record that it
+   *  existed. Cleared if a later merge makes this row the target again. */
+  mergedInto?: string;
   createdAt: number;
   updatedAt: number;
   /** Sessions minted before this instant are refused. Bumped by `revokeSessions`. */
@@ -258,15 +262,22 @@ export class Identities {
     const raw = idOrName.trim();
     if (raw === '') return null;
     const exact = this.state.identities[raw];
-    if (exact?.kind === 'agent') return exact.id;
+    if (exact?.kind === 'agent') return this.followMerges(exact).id;
     const keys = new Set<string>([raw.toLowerCase(), ...agentIdCandidates(raw)]);
+    // Rows that were folded into another are skipped as MATCH TARGETS but
+    // their ids still match through the target's `mergedFrom`, so a display
+    // name that only the old row carried does not silently stop resolving.
     for (const rec of Object.values(this.state.identities)) {
-      if (rec.kind !== 'agent') continue;
+      if (rec.kind !== 'agent' || rec.mergedInto) continue;
       if (keys.has(rec.id.toLowerCase())) return rec.id;
       if (keys.has(rec.displayName.trim().toLowerCase())) return rec.id;
       for (const legacy of rec.mergedFrom) {
         if (keys.has(legacy.toLowerCase())) return rec.id;
       }
+    }
+    for (const rec of Object.values(this.state.identities)) {
+      if (rec.kind !== 'agent' || !rec.mergedInto) continue;
+      if (keys.has(rec.displayName.trim().toLowerCase())) return this.followMerges(rec).id;
     }
     return null;
   }
@@ -287,11 +298,65 @@ export class Identities {
    */
   get(id: string): IdentityRecord | null {
     const direct = this.state.identities[id];
-    if (direct) return direct;
+    if (direct) return this.followMerges(direct);
     for (const rec of Object.values(this.state.identities)) {
-      if (rec.mergedFrom.includes(id)) return rec;
+      if (rec.mergedFrom.includes(id)) return this.followMerges(rec);
     }
     return null;
+  }
+
+  /** The row `rec` was folded into, however many merges deep — bounded, so
+   *  a hand-edited cycle terminates rather than hanging the reader. */
+  private followMerges(rec: IdentityRecord): IdentityRecord {
+    let current = rec;
+    for (let hop = 0; hop < 8 && current.mergedInto; hop++) {
+      const next = this.state.identities[current.mergedInto];
+      if (!next || next === current) break;
+      current = next;
+    }
+    return current;
+  }
+
+  /**
+   * Fold agent id `fromId` into `intoId` — the roster half of a rename or a
+   * duplicate-id clean-up. Both rows stay (the old one as the record that it
+   * existed, marked `mergedInto`); `get(fromId)` answers the target from now
+   * on, and `intoId.mergedFrom` lists everything folded in so scanning
+   * readers find it too. Reversible by merging back: the target's own
+   * `mergedInto` is cleared whenever it becomes a target.
+   *
+   * A `fromId` the roster has never seen is folded in as a bare legacy id —
+   * the field's original purpose — so an activity row stamped with an id
+   * nothing ever attached under still resolves. The SHARED identity is never
+   * folded: 1,031 rows signed "Agent" belong to nobody in particular, and
+   * folding them into one helper would attribute every anonymous session's
+   * words to it. Callers that move a seat away from the shared id do that
+   * on the board, not here.
+   */
+  mergeAgent(
+    fromId: string,
+    intoId: string,
+  ): { ok: true; from: string; into: IdentityRecord } | { ok: false; error: string } {
+    const from = fromId.trim();
+    const into = intoId.trim();
+    if (from === '' || into === '') return { ok: false, error: 'empty-id' };
+    if (from === into) return { ok: false, error: 'self-merge' };
+    if (SHARED_AGENT_IDS.has(into)) return { ok: false, error: 'into-shared' };
+    if (SHARED_AGENT_IDS.has(from)) return { ok: false, error: 'from-shared' };
+    const target = this.state.identities[into];
+    if (!target || target.kind !== 'agent') return { ok: false, error: 'into-not-agent' };
+    const source = this.state.identities[from];
+    if (source && source.kind !== 'agent') return { ok: false, error: 'from-not-agent' };
+    const now = this.now();
+    const folded = new Set<string>([...target.mergedFrom, from, ...(source?.mergedFrom ?? [])]);
+    folded.delete(into);
+    const { mergedInto: _cleared, ...rest } = target;
+    this.state.identities[into] = { ...rest, mergedFrom: [...folded], updatedAt: now };
+    if (source) {
+      this.state.identities[from] = { ...source, mergedInto: into, updatedAt: now };
+    }
+    this.save();
+    return { ok: true, from, into: this.state.identities[into] as IdentityRecord };
   }
 
   byEmail(email: string): IdentityRecord | null {
@@ -415,6 +480,9 @@ function sanitize(key: string, rec: unknown, now: number): IdentityRecord | null
       mergedFrom: Array.isArray(r.mergedFrom)
         ? Array.from(new Set(r.mergedFrom.filter((m): m is string => typeof m === 'string')))
         : [],
+      ...(typeof r.mergedInto === 'string' && r.mergedInto.trim() && r.mergedInto !== id
+        ? { mergedInto: r.mergedInto.trim() }
+        : {}),
       createdAt: typeof r.createdAt === 'number' ? r.createdAt : now,
       updatedAt: typeof r.updatedAt === 'number' ? r.updatedAt : now,
       sessionsValidFrom: typeof r.sessionsValidFrom === 'number' ? r.sessionsValidFrom : 0,

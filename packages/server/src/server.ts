@@ -27,7 +27,7 @@ import {
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
-import { classifyActor, registerOwnerIdentity } from './activity.ts';
+import { classifyActor, registerOwnerIdentity, setIdentityRoster } from './activity.ts';
 import {
   AgentWatches,
   SHARED_AGENT_IDS,
@@ -2806,8 +2806,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     console.error(`[identities] ${identities.loadError}`);
   }
   // Agents are roster rows too: an attach writes one, and the seat claim
-  // names the lead by it. See identities.ts.
+  // names the lead by it. See identities.ts. The activity readers resolve
+  // through the same roster, so an old actor id reads as the identity it
+  // was merged into.
   taskStore.setAgentRoster(identities);
+  setIdentityRoster(identities);
   // Teach the owner check which anonymous session ids belong to a known
   // person. Logged either way: a link file that failed to parse and one that
   // was never written both leave the map empty, and the difference is
@@ -3231,7 +3234,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               shareKey: visitorShareId ?? visitor.workspaceId ?? '',
             });
           }
-          return claimed as User | undefined;
+          return stampRosterAgent(claimed as User | undefined);
+        };
+
+        /**
+         * A write signed by a roster AGENT is stamped with the roster's
+         * name and canonical id — the board's record of who holds the seat
+         * names the lead, not the launch env of whichever process happened
+         * to sign. Mirrors `userForIdentity` for people. An author the
+         * roster does not know (a person's typed name, an old bundle's id
+         * nothing attached under) passes through exactly as claimed.
+         */
+        const stampRosterAgent = (claimed: User | undefined): User | undefined => {
+          if (!claimed || typeof claimed !== 'object' || typeof claimed.id !== 'string') {
+            return claimed;
+          }
+          const rec = identities.get(claimed.id);
+          if (!rec || rec.kind !== 'agent') return claimed;
+          // A row written by an older bundle's attach carries no name — its
+          // display name is its id. The claim on THIS write is the launch
+          // env's name, which is exactly the source the roster wants, so
+          // learn it here rather than overwrite a real name with an id.
+          const claimedName = typeof claimed.name === 'string' ? claimed.name.trim() : '';
+          if (rec.displayName === rec.id && claimedName && claimedName !== rec.id) {
+            const learned = identities.upsertAgent(rec.id, claimedName);
+            return { ...claimed, id: rec.id, name: learned?.displayName ?? claimedName };
+          }
+          return { ...claimed, id: rec.id, name: rec.displayName };
         };
 
         /**
@@ -6224,6 +6253,60 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             return j(200, res);
           }
           return j(405, { error: 'method not allowed' });
+        }
+        // Fold one agent id into another — the rename verb. The roster
+        // records the merge (old ids resolve forever), every board the old
+        // id led hands its seat over, the attachment records re-key, and
+        // the durable watch set moves so deliveries follow the new id.
+        // `dryRun` answers what WOULD move and touches nothing. Never
+        // rewrites activity.jsonl or a ydoc: history resolves at read.
+        const agentMergeMatch = pathname.match(/^\/api\/agents\/([^/]+)\/merge$/);
+        if (agentMergeMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const from = decodeURIComponent(agentMergeMatch[1] ?? '');
+          const body = await safeJson(req);
+          const into = typeof body?.into === 'string' ? body.into.trim() : '';
+          if (!isValidAgentId(from) || !isValidAgentId(into)) {
+            return j(400, { error: 'bad agentId', message: 'both ids must be agent ids' });
+          }
+          if (from === into) return j(400, { error: 'self-merge' });
+          if (SHARED_AGENT_IDS.has(into)) {
+            return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
+          }
+          const dryRun = body?.dryRun === true;
+          const actor = authorFor(body?.author) ?? { id: into, name: into, kind: 'known' };
+          // The roster half is skipped for the SHARED id on purpose: the
+          // seat and attachments move (a board led by "Agent" gets a real
+          // lead), but the old comments signed by it stay unattributed —
+          // there is no proof who wrote them.
+          const fromShared = SHARED_AGENT_IDS.has(from);
+          let roster: { folded: boolean; mergedFrom: string[] } = { folded: false, mergedFrom: [] };
+          if (!fromShared) {
+            const target = identities.get(into) ?? identities.upsertAgent(into);
+            if (!target || target.kind !== 'agent') {
+              return j(400, { error: 'into-not-agent', message: `${into} is not an agent` });
+            }
+            if (!dryRun) {
+              const merged = identities.mergeAgent(from, target.id);
+              if (!merged.ok) return j(400, { error: merged.error });
+              roster = { folded: true, mergedFrom: merged.into.mergedFrom };
+            } else {
+              roster = { folded: true, mergedFrom: [...new Set([...target.mergedFrom, from])] };
+            }
+          }
+          const boards = taskStore.mergeAgent(from, into, { actor, dryRun });
+          const watches = dryRun
+            ? agentWatches.list(from, () => true).watches.map((w) => w.key)
+            : agentWatches.rekey(from, into).moved;
+          return j(200, {
+            from,
+            into,
+            dryRun,
+            roster,
+            seats: boards.seats,
+            attachments: boards.attachments,
+            watches,
+          });
         }
         // --- REST: builder dispatches ---
         // The lead's statement that a builder is working a task in a private

@@ -21,7 +21,7 @@
  * register. The repo is public.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
@@ -608,5 +608,190 @@ describe('lead agent routes + projection', () => {
     if (!emptyRoom) throw new Error('ws room missing');
     expect(emptyRoom.ydoc.getMap('workspace').get('name')).toBe('projected-empty');
     expect(emptyRoom.ydoc.getMap('workspace').has('leadAgentId')).toBe(false);
+  });
+});
+
+/**
+ * A renamed agent keeps its seat. The seat is keyed by id and the id is
+ * derived from the name, so before the roster a rename was a NEW agent that
+ * could not claim its own occupied seat. Two halves: a display-name change
+ * on the roster changes nothing about the seat, and a merge (old id → new
+ * id) moves the seat, the attachment, and every write's name with it.
+ */
+describe('the lead seat follows the identity, not the spelling', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  let events: TaskStoreEvent[];
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-merge-'));
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+    events = [];
+    store.onEvent((e) => events.push(e));
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('mergeAgent moves the seat and the attachment on every board the old id held', () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    const bystander = store.createWorkspace('other-hub', { leadAgentId: 'agent-third' });
+    store.attachAgent(bystander.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    const untouched = store.createWorkspace('untouched-hub', { leadAgentId: 'agent-third' });
+    events.length = 0;
+
+    const res = store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+    });
+    expect(res.seats.sort()).toEqual([led.id]);
+    expect(res.attachments.sort()).toEqual([bystander.id, led.id].sort());
+    expect(store.getWorkspace(led.id)?.leadAgentId).toBe('agent-new');
+    // A board the old id merely attached to keeps its own lead.
+    expect(store.getWorkspace(bystander.id)?.leadAgentId).toBe('agent-third');
+    expect(store.getWorkspace(untouched.id)?.leadAgentId).toBe('agent-third');
+    expect(store.listAttachments(led.id).map((a) => a.agentId)).toEqual(['agent-new']);
+    expect(store.listAttachments(bystander.id).map((a) => a.agentId)).toEqual(['agent-new']);
+    // The seat change is announced like any other, so the board repaints.
+    const changed = events.filter((e) => e.type === 'workspace.lead_changed');
+    expect(changed.map((e) => e.workspaceId)).toEqual([led.id]);
+    expect((changed[0] as { leadAgentId: string }).leadAgentId).toBe('agent-new');
+    expect((changed[0] as { oldLeadAgentId?: string }).oldLeadAgentId).toBe('agent-old');
+  });
+
+  it('POSITIVE CONTROL: a dry run reports the same moves and changes nothing', () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    events.length = 0;
+    const res = store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+      dryRun: true,
+    });
+    expect(res.seats).toEqual([led.id]);
+    expect(res.attachments).toEqual([led.id]);
+    expect(store.getWorkspace(led.id)?.leadAgentId).toBe('agent-old');
+    expect(store.listAttachments(led.id).map((a) => a.agentId)).toEqual(['agent-old']);
+    expect(events.filter((e) => e.type === 'workspace.lead_changed')).toHaveLength(0);
+  });
+
+  it('the merged seat survives a restart — it was persisted, not just re-pointed in memory', async () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    const reloaded = new TaskStore({ dataDir, debounceMs: 5 });
+    try {
+      expect(reloaded.getWorkspace(led.id)?.leadAgentId).toBe('agent-new');
+      expect(reloaded.listAttachments(led.id).map((a) => a.agentId)).toEqual(['agent-new']);
+    } finally {
+      reloaded.stop();
+    }
+  });
+});
+
+describe('a display-name change keeps the seat and renames every write', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+
+  const local = (path: string, init: RequestInit = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        host: `localhost:${handle.port}`,
+        'content-type': 'application/json',
+        ...((init.headers as Record<string, string>) ?? {}),
+      },
+    });
+  const post = (path: string, body: unknown) =>
+    local(path, { method: 'POST', body: JSON.stringify(body) });
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-rename-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('the roster name is what a write is signed with, and the seat does not move', async () => {
+    const created = await post('/api/workspaces', { name: 'rename-hub', goal: 'Ship it.' });
+    const { workspace } = (await created.json()) as { workspace: { id: string } };
+    const attached = await post(`/api/workspaces/${workspace.id}/attachments`, {
+      agentId: 'agent-relay',
+      agentName: 'Relay',
+      runtime: 'claude-code-local',
+    });
+    expect(attached.status).toBe(200);
+    expect(handle.tasks.getWorkspace(workspace.id)?.leadAgentId).toBe('agent-relay');
+
+    // The rename: the roster row changes, the launch env has not.
+    expect(handle.identities.setDisplayName('agent-relay', 'Relay Two')?.displayName).toBe(
+      'Relay Two',
+    );
+    expect(handle.tasks.getWorkspace(workspace.id)?.leadAgentId).toBe('agent-relay');
+
+    // A write still signed with the OLD name lands under the roster's name.
+    const task = await post(`/api/workspaces/${workspace.id}/tasks`, {
+      title: 'Signed by a stale env',
+      author: { id: 'agent-relay', name: 'Relay', kind: 'agent' },
+    });
+    expect(task.status, await task.clone().text()).toBe(200);
+    const { task: row } = (await task.json()) as { task: { id: string; assignee: string } };
+    expect(row.assignee).toBe('Relay Two');
+
+    // And a thread on a doc — the comment path, not just the task path.
+    const file = join(dataDir, 'renamed.md');
+    writeFileSync(file, '# Heading\n\nSome prose.\n');
+    const doc = await post('/api/docs', { docId: 'renamed', type: 'markdown', sourceUrl: file });
+    expect(doc.status).toBe(200);
+    const thread = await post('/api/docs/renamed/threads', {
+      author: { id: 'agent-relay', name: 'Relay', kind: 'agent' },
+      text: 'signed stale',
+      anchor: { kind: 'subject' },
+    });
+    expect(thread.status, await thread.clone().text()).toBe(200);
+    const { thread: t } = (await thread.json()) as {
+      thread: { comments: Array<{ author: { id: string; name: string } }> };
+    };
+    expect(t.comments[0]?.author).toMatchObject({ id: 'agent-relay', name: 'Relay Two' });
+
+    // POSITIVE CONTROL: a person the roster does not hold is stamped as sent.
+    const person = await post('/api/docs/renamed/threads', {
+      author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+      text: 'unchanged',
+      anchor: { kind: 'subject' },
+    });
+    expect(person.status).toBe(200);
+    const { thread: p } = (await person.json()) as {
+      thread: { comments: Array<{ author: { id: string; name: string } }> };
+    };
+    expect(p.comments[0]?.author).toMatchObject({ id: 'known-jordan', name: 'Jordan' });
+  });
+
+  it('a row an older bundle attached without a name LEARNS its name from the first signed write', async () => {
+    const created = await post('/api/workspaces', { name: 'legacy-hub', goal: 'Ship it.' });
+    const { workspace } = (await created.json()) as { workspace: { id: string } };
+    await post(`/api/workspaces/${workspace.id}/attachments`, {
+      agentId: 'agent-legacy',
+      runtime: 'claude-code-local',
+    });
+    expect(handle.identities.get('agent-legacy')?.displayName).toBe('agent-legacy');
+    const task = await post(`/api/workspaces/${workspace.id}/tasks`, {
+      title: 'Signed by a legacy bundle',
+      author: { id: 'agent-legacy', name: 'Legacy Bundle', kind: 'agent' },
+    });
+    expect(task.status).toBe(200);
+    const { task: row } = (await task.json()) as { task: { assignee: string } };
+    // The claim was NOT overwritten with the id, and the roster now knows it.
+    expect(row.assignee).toBe('Legacy Bundle');
+    expect(handle.identities.get('agent-legacy')?.displayName).toBe('Legacy Bundle');
   });
 });
