@@ -10,6 +10,7 @@ import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
+import { haikuReviewJudge, reviewGateEnabled } from './review-judge.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { TTL_FORMAT_HINT, parseTtl } from './share/ttl.ts';
@@ -97,6 +98,12 @@ const stallBuilderSilentMultiplier = positiveEnvDuration(
 // is the knob that sets the standing floor on that cost. Tunable without a
 // release for exactly that reason.
 const stallNudgeRepeatMs = positiveEnvDuration(process.env, 'CW_STALL_REPEAT_HOURS', HOUR_MS);
+
+// How long a review item the quality gate HELD may stand before the stall
+// loop complains to its filer and then to the lead (stall-gate.ts). Minutes,
+// like the stall window, and much shorter than it: a held item's filer was
+// told in the same tool result, and revising is one call.
+const heldReviewItemMs = positiveEnvDuration(process.env, 'CW_HELD_ITEM_MINUTES', MINUTE_MS);
 
 // Extra hostnames to treat as LOCAL. Loopback, the tailnet name, this
 // machine's LAN names, and private IPv4 ranges are detected automatically;
@@ -355,6 +362,20 @@ const authPeerStartsPerHour = positiveIntEnv('CW_AUTH_PEER_STARTS_PER_HOUR');
 // Absent key → null → the fast path is off and voice routes to the agent.
 const voiceComplete = haikuVoiceComplete();
 
+// The ONLY place the real review-item judge is constructed — same seam rule
+// and the SAME dedicated-key consent as the summarizer, because what leaves
+// the machine is the item's own text. Absent key or CW_REVIEW_GATE=0 → null
+// → every item passes unjudged, which is the documented "gate off" state.
+const reviewJudge = haikuReviewJudge();
+if (!reviewJudge) {
+  console.log(
+    reviewGateEnabled()
+      ? '[review-gate] no summary API key; review items pass unjudged. ' +
+          `Add one with: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`
+      : '[review-gate] off (CW_REVIEW_GATE=0); review items pass unjudged.',
+  );
+}
+
 // The ONLY place a real transcription engine is constructed — same seam rule,
 // and here it is also the difference between a test suite that is free and one
 // that opens a metered streaming session per server it spins up. No key → null
@@ -477,6 +498,8 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(stallNudgeQuietMs !== undefined ? { stallNudgeQuietMs } : {}),
       ...(stallBuilderSilentMultiplier !== undefined ? { stallBuilderSilentMultiplier } : {}),
       ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
+      ...(heldReviewItemMs !== undefined ? { heldReviewItemMs } : {}),
+      ...(reviewJudge ? { reviewJudge } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
       ...(notesComposer ? { meetingNotes: { composer: notesComposer, taskExtractor } } : {}),
