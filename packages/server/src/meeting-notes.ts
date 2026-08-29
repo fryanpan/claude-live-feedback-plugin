@@ -298,7 +298,9 @@ export function beginNotesSession(
   let chain: Promise<void> = Promise.resolve();
   const names: Record<string, string> = {};
   const withNames = (turn: NotesTurn): NotesTurn =>
-    turn.speaker === undefined ? turn : { ...turn, speaker: speakerDisplayName(turn.speaker, names) };
+    turn.speaker === undefined
+      ? turn
+      : { ...turn, speaker: speakerDisplayName(turn.speaker, names) };
 
   const composeTick = (tick: NotesTick): void => {
     lastTickNo = Math.max(lastTickNo, tick.tick);

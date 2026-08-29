@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { MEETING_AUDIO_ENCODING, parseMeetingClientMessage, speakerDisplayName } from '../src/meeting.ts';
+import {
+  MEETING_AUDIO_ENCODING,
+  parseMeetingClientMessage,
+  speakerDisplayName,
+} from '../src/meeting.ts';
 
 describe('parseMeetingClientMessage', () => {
   it('accepts start and stop', () => {

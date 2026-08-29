@@ -364,7 +364,9 @@ describe('assemblyai speaker labels', () => {
     const h = harness();
     h.fake().begin();
     await h.opening;
-    h.fake().deliver(turn({ turn_order: 0, transcript: 'Take the migration?', speaker_label: 'A' }));
+    h.fake().deliver(
+      turn({ turn_order: 0, transcript: 'Take the migration?', speaker_label: 'A' }),
+    );
     h.fake().deliver(turn({ turn_order: 1, transcript: 'Sure.', speaker_label: 'A' }));
     h.turns.length = 0;
     h.fake().deliver({

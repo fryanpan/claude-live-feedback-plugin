@@ -55,10 +55,7 @@ export const MAX_SPEAKER_NAME = 60;
  * the label itself with "Speaker" in front until they do. One function, so
  * the strip, the record and the notes never disagree about it.
  */
-export function speakerDisplayName(
-  label: string,
-  names: Readonly<Record<string, string>>,
-): string {
+export function speakerDisplayName(label: string, names: Readonly<Record<string, string>>): string {
   return names[label] ?? `Speaker ${label}`;
 }
 

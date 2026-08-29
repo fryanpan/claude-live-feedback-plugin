@@ -103,6 +103,11 @@ describe('parseMeetingServerMessage', () => {
         JSON.stringify({ type: 'transcript', turn: 2, text: 'hi', final: false }),
       ),
     ).toEqual({ type: 'transcript', turn: 2, text: 'hi', final: false });
+    expect(
+      parseMeetingServerMessage(
+        JSON.stringify({ type: 'transcript', turn: 2, text: 'hi', final: false, speaker: 'A' }),
+      ),
+    ).toEqual({ type: 'transcript', turn: 2, text: 'hi', final: false, speaker: 'A' });
   });
 
   it('returns null for anything malformed rather than throwing', () => {
@@ -143,6 +148,8 @@ interface Harness {
   elapsed(): string;
   caption(): string;
   note(): string;
+  /** The speaker tags on the caption, in turn order. */
+  tags(): string[];
 }
 
 const cleanups: Array<() => void> = [];
@@ -153,7 +160,7 @@ afterEach(() => {
 
 function mount(
   capture?: () => Promise<MeetingCaptureStart>,
-  extra: { autoStart?: boolean } = {},
+  extra: { autoStart?: boolean; promptName?: (current: string) => string | null } = {},
 ): Harness {
   const root = document.createElement('div');
   document.body.append(root);
@@ -192,6 +199,7 @@ function mount(
     elapsed: () => q('.meeting-elapsed'),
     caption: () => q('.meeting-caption-line'),
     note: () => q('.meeting-note'),
+    tags: () => [...root.querySelectorAll('.meeting-speaker')].map((el) => el.textContent ?? ''),
   };
 }
 
@@ -549,6 +557,109 @@ describe('the strip across stop and start', () => {
     // Nothing was sent on the dead socket; the new meeting announced itself
     // on its own.
     expect(JSON.parse(String(second?.sent[0]))).toMatchObject({ type: 'start' });
+  });
+});
+
+describe('who is speaking', () => {
+  const live = async (promptName?: (current: string) => string | null) => {
+    const h = mount(undefined, promptName ? { promptName } : {});
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
+    return h;
+  };
+
+  it('tags each turn with its speaker, from the first word, and follows a relabel', async () => {
+    const h = await live();
+    h.sockets[0]?.serve({
+      type: 'transcript',
+      turn: 0,
+      text: 'can you',
+      final: false,
+      speaker: 'A',
+    });
+    expect(h.tags()).toEqual(['Speaker A']);
+    // The tag sits before the words, inside the turn, so it wraps with them.
+    const turn = h.root.querySelector('.meeting-turn');
+    expect(turn?.firstElementChild?.classList.contains('meeting-speaker')).toBe(true);
+    expect(h.caption().replace(/\s+/g, ' ').trim()).toBe('Speaker A can you');
+    h.sockets[0]?.serve({ type: 'transcript', turn: 1, text: 'sure', final: false });
+    // A turn the engine has not attributed yet has no tag — not "Speaker ?".
+    expect(h.tags()).toEqual(['Speaker A']);
+    h.sockets[0]?.serve({ type: 'transcript', turn: 1, text: 'Sure.', final: true, speaker: 'B' });
+    expect(h.tags()).toEqual(['Speaker A', 'Speaker B']);
+    // The engine changed its mind about turn 1: the tag follows, in place.
+    h.sockets[0]?.serve({ type: 'transcript', turn: 1, text: 'Sure.', final: true, speaker: 'A' });
+    expect(h.tags()).toEqual(['Speaker A', 'Speaker A']);
+  });
+
+  it('a tap on a tag names that speaker everywhere, once, and tells the server', async () => {
+    const asked: string[] = [];
+    const h = await live((current) => {
+      asked.push(current);
+      return '  Jordan ';
+    });
+    h.sockets[0]?.serve({
+      type: 'transcript',
+      turn: 0,
+      text: 'Take it?',
+      final: true,
+      speaker: 'A',
+    });
+    h.sockets[0]?.serve({ type: 'transcript', turn: 1, text: 'Sure.', final: true, speaker: 'B' });
+    h.sockets[0]?.serve({
+      type: 'transcript',
+      turn: 2,
+      text: 'Thanks.',
+      final: true,
+      speaker: 'A',
+    });
+    const tag = h.root.querySelector('.meeting-speaker') as HTMLButtonElement;
+    expect(tag.getAttribute('aria-label')).toBe('Name Speaker A');
+    tag.click();
+    expect(asked).toEqual(['Speaker A']);
+    expect(h.tags()).toEqual(['Jordan', 'Speaker B', 'Jordan']);
+    // A turn that arrives later with the same label reads as Jordan too —
+    // and turn 0 has rolled off the three-turn window by then.
+    h.sockets[0]?.serve({ type: 'transcript', turn: 3, text: 'Go.', final: false, speaker: 'A' });
+    expect(h.tags()).toEqual(['Speaker B', 'Jordan', 'Jordan']);
+    expect(h.tags().length).toBe(TRANSCRIPT_KEEP);
+    const named = (h.sockets[0]?.sent ?? [])
+      .filter((d): d is string => typeof d === 'string')
+      .map((d) => JSON.parse(d) as { type: string })
+      .filter((m) => m.type === 'name_speaker');
+    expect(named).toEqual([{ type: 'name_speaker', speaker: 'A', name: 'Jordan' }]);
+    // The prompt offers the current name next time, so a rename starts from it.
+    tag.click();
+    expect(asked[1]).toBe('Jordan');
+  });
+
+  it('a cancelled or blank prompt changes nothing and sends nothing', async () => {
+    let answer: string | null = null;
+    const h = await live(() => answer);
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
+    const tag = h.root.querySelector('.meeting-speaker') as HTMLButtonElement;
+    tag.click();
+    answer = '   ';
+    tag.click();
+    expect(h.tags()).toEqual(['Speaker A']);
+    const sent = (h.sockets[0]?.sent ?? []).filter((d) => typeof d === 'string');
+    expect(sent.some((d) => String(d).includes('name_speaker'))).toBe(false);
+  });
+
+  it('names belong to one meeting: the next one starts with the labels bare', async () => {
+    const h = await live(() => 'Jordan');
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
+    (h.root.querySelector('.meeting-speaker') as HTMLButtonElement).click();
+    expect(h.tags()).toEqual(['Jordan']);
+    h.toggle().click();
+    h.toggle().click();
+    await settle();
+    h.sockets[1]?.onopen?.();
+    h.sockets[1]?.serve({ type: 'ready', meetingId: 'm2', startedAt: 1_000, engine: 'test' });
+    h.sockets[1]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
+    expect(h.tags()).toEqual(['Speaker A']);
   });
 });
 
