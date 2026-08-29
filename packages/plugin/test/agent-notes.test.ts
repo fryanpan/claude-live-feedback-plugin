@@ -106,6 +106,47 @@ describe('oneLine — a closing message reduced to one safe line', () => {
     );
     expect(oneLine('ran ./scripts/x.sh, then ../other/y.sh')).toBe('ran x.sh, then y.sh');
   });
+  it('reduces a fenced-code fallback the same way as prose, not just whitespace', () => {
+    // Security review: the in-fence branch used to skip stripInline/
+    // reduceLocator entirely and only collapse whitespace.
+    const out = oneLine('```\ncurl -u admin:hunter2 https://host.example/x\n```');
+    expect(out).not.toContain('host.example');
+    expect(out).toContain('[url]');
+  });
+  it('reduces scheme-less tailnet/local hosts, localhost, and bare IPv4 to [url]', () => {
+    const out = oneLine(
+      'Deployed to mac-mini.tailXXXXX.ts.net:8787/review/abc — see localhost:8787/w/x',
+    );
+    expect(out).not.toContain('ts.net');
+    expect(out).not.toContain('localhost:8787');
+    expect(out).toContain('[url]');
+
+    const ips = oneLine('Host 192.168.1.44:8787 and 100.101.102.103');
+    expect(ips).not.toContain('192.168.1.44');
+    expect(ips).not.toContain('100.101.102.103');
+  });
+  it('leaves a version number and a plain dotted filename alone (negative control)', () => {
+    expect(oneLine('bumped 0.1.124 and ran 3 tests')).toContain('0.1.124');
+    expect(oneLine('touched server.ts today')).toContain('server.ts');
+  });
+  it('reduces common token prefixes and Bearer tokens to [token], and an email to [email]', () => {
+    const msg = 'The key is sk-test-FAKEabc123 and Bearer eyJFAKE for user@example.com';
+    const out = oneLine(msg);
+    expect(out.match(/\[token\]/g)).toHaveLength(2);
+    expect(out).toContain('[email]');
+    expect(out).not.toContain('sk-test');
+    expect(out).not.toContain('eyJFAKE');
+    expect(out).not.toContain('example.com');
+  });
+  it('leaves an @-mention and a TLD-less address alone (negative control)', () => {
+    expect(oneLine('@bryan asked about this')).toContain('@bryan');
+    expect(oneLine('reachable at user@host on the LAN')).toContain('user@host');
+  });
+  it('reduces a token prefix inside inline code too, since the backticks are stripped', () => {
+    const out = oneLine('key is `sk-test-FAKEXYZ00000000` here');
+    expect(out).toContain('[token]');
+    expect(out).not.toContain('sk-test-FAKEXYZ');
+  });
 });
 
 describe('commandShape — a Bash command reduced to its shape', () => {
@@ -142,21 +183,48 @@ describe('commandShape — a Bash command reduced to its shape', () => {
     expect(commandShape('user@host.example:cmd run')).toBe('');
     expect(commandShape('$CMD run')).toBe('');
   });
-  it('keeps the second token only when it is a subcommand word or a bare flag', () => {
+  it('keeps the second token only when it is a bare short flag, or a subcommand word after a known subcommand-taking tool', () => {
     expect(commandShape('mysql -phunter2 -u root')).toBe('mysql');
     expect(commandShape('sshpass -p hunter2')).toBe('sshpass -p');
     expect(commandShape('echo $SECRET')).toBe('echo');
     expect(commandShape('gh pr merge 12')).toBe('gh pr');
     expect(commandShape('bun run build:mcp')).toBe('bun run');
-    expect(commandShape('git --no-pager log')).toBe('git --no-pager');
     expect(commandShape('curl -H "Authorization: x"')).toBe('curl -H');
-    expect(commandShape('openssl passwd Hunter2')).toBe('openssl passwd');
     expect(commandShape(`echo ${'a'.repeat(30)}`)).toBe('echo');
+    // A long double-dash flag is no longer kept, even after a known tool —
+    // it doesn't match the bare-short-flag shape, and it isn't a subcommand
+    // word either.
+    expect(commandShape('git --no-pager log')).toBe('git');
+    // "passwd" is subcommand-shaped, but openssl isn't a subcommand-taking
+    // tool, so the second token no longer rides along on shape alone.
+    expect(commandShape('openssl passwd Hunter2')).toBe('openssl');
   });
   it('is empty for blank or non-string input', () => {
     expect(commandShape('')).toBe('');
     expect(commandShape('   ')).toBe('');
     expect(commandShape(undefined)).toBe('');
+  });
+  it('drops a second token that is only allow-shaped by accident — the security-review cases', () => {
+    // A bare word that happens to look like a subcommand (lowercase,
+    // hyphenated) used to survive next to ANY first token; now it only
+    // survives after a tool that's known to take subcommands.
+    expect(commandShape('echo hunter2')).toBe('echo');
+    expect(commandShape('printf hunter2')).toBe('printf');
+    // A short single-dash flag glued to a value no longer passes as a bare
+    // flag — only `^-[A-Za-z]{1,3}$` does.
+    expect(commandShape('mysql -psecret db')).toBe('mysql');
+    expect(commandShape('sshpass -phunter2 ssh x')).toBe('sshpass');
+    // `-u` alone is a bare short flag regardless of the tool.
+    expect(commandShape('curl -u admin:hunter2 https://h/x')).toBe('curl -u');
+    // `aws` is a known subcommand-taking tool; `configure` is subcommand-shaped.
+    expect(commandShape('aws configure set aws_secret_access_key X')).toBe('aws configure');
+    // A heredoc marker is neither a bare flag nor a known-tool subcommand.
+    expect(commandShape("cat <<'EOF'")).toBe('cat');
+    expect(commandShape('TOKEN=abc gh auth login')).toBe('gh auth');
+  });
+  it('keeps -rf and -la (short bare flags) even for a tool outside the subcommand set', () => {
+    expect(commandShape('rm -rf foo')).toBe('rm -rf');
+    expect(commandShape('ls -la')).toBe('ls -la');
   });
 });
 

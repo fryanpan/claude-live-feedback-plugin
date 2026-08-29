@@ -125,19 +125,45 @@ function stripInline(line: string): string {
     .replace(/~~([^~]+)~~/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
-  return s.split(' ').map(reduceLocator).join(' ');
+  return reduceWords(s);
 }
 
 const URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const HOST_PATH_RE = /^(\/|~\/|\.\.?\/)/;
+/** A host with no `scheme://` to trigger `URL_RE`: a tailnet or local
+ *  machine name, or `localhost`, each with an optional port and path. */
+const SCHEMELESS_HOST_RE =
+  /^([\w-]+(\.[\w-]+)*\.(ts\.net|local|internal|lan)|localhost)(:\d+)?(\/\S*)?$/i;
+/** A bare IPv4 address, optional port and path. Anchored and requiring all
+ *  four dotted octets so a version number (`0.1.124`) never matches. */
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:\d+)?(\/\S*)?$/;
+/** Prefixes of the token formats providers hand out — a closing message
+ *  quoting one back is the leak, not a note about it. */
+const TOKEN_PREFIX_RE =
+  /^(sk-|sk_|ghp_|gho_|github_pat_|xox[abpr]-|AKIA[0-9A-Z]{12,}|glpat-|npm_|pypi-|AIza)/;
+/** `Bearer <token>` spans two words, so it's reduced on the whole line
+ *  before the per-word pass below ever sees either half. */
+const BEARER_RE = /\bBearer\s+\S+/g;
+/** An email address — TLD required, so an @-mention (`@bryan`) or a
+ *  TLD-less address (`user@host`) is left alone. */
+const EMAIL_RE = /^[\w.+-]+@[\w-]+\.[\w.-]+$/;
+
+function isIPv4(core: string): boolean {
+  const m = IPV4_RE.exec(core);
+  if (!m) return false;
+  return [1, 2, 3, 4].every((i) => Number(m[i]) <= 255);
+}
 
 /**
- * A URL or a host path inside a sentence, reduced: the URL to `[url]` (its
- * host may be a private machine, its userinfo a credential), the path to
- * its file name (`~/dev/repo` → `repo`). The board projection this text
- * lands on is read by workspace-share visitors, and a closing sentence
- * routinely names both. Repo-relative paths (`packages/x/y.ts`) and branch
- * names (`feat/x`) are left alone — they are the work, not the host.
+ * A URL, a host path, or a credential-shaped word inside a sentence,
+ * reduced: a URL (schemed or a bare tailnet/local host, `localhost`, or an
+ * IPv4 address) to `[url]` (its host may be a private machine, its userinfo
+ * a credential), a host path to its file name (`~/dev/repo` → `repo`), a
+ * known token prefix to `[token]`, an email to `[email]`. The board
+ * projection this text lands on is read by workspace-share visitors, and a
+ * closing sentence routinely names any of these. Repo-relative paths
+ * (`packages/x/y.ts`) and branch names (`feat/x`) are left alone — they are
+ * the work, not the host.
  */
 function reduceLocator(word: string): string {
   const m = /^([("'[]*)(.*?)([)"'\].,;:!?]*)$/.exec(word);
@@ -145,7 +171,18 @@ function reduceLocator(word: string): string {
   const [, open, core, close] = m;
   if (URL_RE.test(core)) return `${open}[url]${close}`;
   if (HOST_PATH_RE.test(core)) return `${open}${basenameOf(core)}${close}`;
+  if (SCHEMELESS_HOST_RE.test(core) || isIPv4(core)) return `${open}[url]${close}`;
+  if (TOKEN_PREFIX_RE.test(core)) return `${open}[token]${close}`;
+  if (EMAIL_RE.test(core)) return `${open}[email]${close}`;
   return word;
+}
+
+/** The word-level reduction pass: `Bearer <token>` first (it spans two
+ *  words), then `reduceLocator` word by word. Shared by prose
+ *  (`stripInline`) and the fenced-code fallback in `oneLine`, so a closing
+ *  message and its code block get the same treatment. */
+function reduceWords(s: string): string {
+  return s.replace(BEARER_RE, '[token]').split(' ').map(reduceLocator).join(' ');
 }
 
 function capText(s: string, cap: number): string {
@@ -170,7 +207,11 @@ export function oneLine(text: unknown, cap = NOTE_TEXT_CAP): string {
       continue;
     }
     const secondary = inFence || HEADING_RE.test(t);
-    const s = inFence ? t.replace(/\s+/g, ' ') : stripInline(t);
+    // Fenced code goes through the same reduction as prose (`stripInline`),
+    // not just a whitespace collapse — a fenced fallback is what a closing
+    // message falls back to when it's ONLY a code block, and that block
+    // routinely IS the command that was run, URLs and hosts included.
+    const s = stripInline(t);
     if (s === '') continue;
     if (!secondary) return capText(s, cap);
     if (fallback === '') fallback = s;
@@ -192,12 +233,44 @@ function looksOpaque(token: string): boolean {
 
 /** `NAME=value` — the prefix a secret rides a command line on. */
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
-/** What a second token may be to survive: a subcommand word (`rm`, `pr`,
- *  `run`) or a bare flag (`-rf`, `--no-pager`). Positive rather than a
- *  denylist, because a short password is indistinguishable from a word by
- *  any negative test — `-phunter2` and `-p` are told apart only by shape. */
+/** A bare short flag (`-rf`, `-la`, `-u`) — single dash, letters only, at
+ *  most 3 of them. Kept regardless of the command word. Deliberately NOT a
+ *  denylist and deliberately narrow: `-psecret` is a dash plus 8 characters,
+ *  so it fails this shape and the value never rides along; a long
+ *  double-dash flag (`--no-pager`) fails it too and is dropped rather than
+ *  risked. */
+const SHORT_FLAG_RE = /^-[A-Za-z]{1,3}$/;
+/** A subcommand word (`rm`, `pr`, `run`) — kept as a second token ONLY when
+ *  the first token is one of `SUBCOMMAND_TOOLS`. Any lowercase, hyphenated
+ *  word matches this shape, including a short password (`hunter2`); gating
+ *  it on a known tool is what keeps `echo hunter2` from reading as an
+ *  allowed subcommand pair. */
 const SUBCOMMAND_RE = /^[a-z][a-z0-9-]{0,23}$/;
-const FLAG_RE = /^-{1,2}[A-Za-z][A-Za-z-]*$/;
+/** Tools whose second word is conventionally a subcommand, not a value —
+ *  the allowlist `SUBCOMMAND_RE` alone used to stand in for. */
+const SUBCOMMAND_TOOLS: ReadonlySet<string> = new Set([
+  'git',
+  'gh',
+  'bun',
+  'bunx',
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'docker',
+  'kubectl',
+  'cargo',
+  'go',
+  'make',
+  'brew',
+  'launchctl',
+  'gcloud',
+  'aws',
+  'az',
+  'wrangler',
+  'codex',
+  'claude',
+]);
 
 /** A path token's last segment, so `./scripts/x/run.sh` reads as `run.sh`
  *  without the directory. */
@@ -208,13 +281,16 @@ function basenameOf(token: string): string {
 
 /**
  * A Bash command reduced to its shape: the command word and its subcommand
- * or first bare flag (`git rm`, `rm -rf`), or the command word alone when
+ * or a bare short flag (`git rm`, `rm -rf`), or the command word alone when
  * the second token is anything else — a path, URL, assignment, token, or a
- * literal that could be a password. Leading `NAME=value` assignments are
- * skipped, never echoed (`TOKEN=… gh auth login` → `gh auth`). A command
- * that IS a path keeps only the file name. Empty — the caller falls back to
- * the tool name — when nothing but assignments or an opaque word remains:
- * the shape is a description, and a token is not one.
+ * literal that could be a password. A short flag (`-rf`, `-la`, `-u`)
+ * survives regardless of the command; a subcommand word survives only after
+ * a tool from `SUBCOMMAND_TOOLS` — `echo hunter2` and `openssl passwd
+ * Hunter2` are NOT that, so the second word drops. Leading `NAME=value`
+ * assignments are skipped, never echoed (`TOKEN=… gh auth login` → `gh
+ * auth`). A command that IS a path keeps only the file name. Empty — the
+ * caller falls back to the tool name — when nothing but assignments or an
+ * opaque word remains: the shape is a description, and a token is not one.
  */
 export function commandShape(command: unknown): string {
   if (typeof command !== 'string') return '';
@@ -229,9 +305,10 @@ export function commandShape(command: unknown): string {
   const second = tokens[i + 1];
   if (/[/\\]/.test(first)) return capText(basenameOf(first), SHAPE_CAP);
   if (looksOpaque(first)) return '';
-  if (second === undefined || !(SUBCOMMAND_RE.test(second) || FLAG_RE.test(second))) {
-    return capText(first, SHAPE_CAP);
-  }
+  const keepSecond =
+    second !== undefined &&
+    (SHORT_FLAG_RE.test(second) || (SUBCOMMAND_TOOLS.has(first) && SUBCOMMAND_RE.test(second)));
+  if (!keepSecond) return capText(first, SHAPE_CAP);
   return capText(`${first} ${second}`, SHAPE_CAP);
 }
 
