@@ -588,20 +588,29 @@ function TaskDetailPanel(props: {
   // `wireInPlaceTitle` swaps its text for an `<input>` mid-rename — and an
   // element with no children is diffed against nothing, so a rename in flight
   // now simply survives a repaint instead of being snapshotted through one.
+  const beginRename = useRef<((caret?: number) => void) | null>(null);
   useLayoutEffect(() => {
     const el = titleRef.current;
     if (!el) return;
-    wireInPlaceTitle(
+    beginRename.current = wireInPlaceTitle(
       el,
-      () => latest.current.task.title,
+      // Empty for an unnamed row: the placeholder is the server's stand-in,
+      // and a rename that started on it would begin by deleting it.
+      () => (latest.current.task.untitled ? '' : latest.current.task.title),
       (v) => latest.current.handlers.onTitleCommit(latest.current.task, v),
+      undefined,
+      { placeholder: () => latest.current.task.title },
     );
   }, []);
   useLayoutEffect(() => {
     const el = titleRef.current;
+    if (!el) return;
+    // The dressing follows the projection: muted while the row has no name,
+    // plain the paint after one lands.
+    el.classList.toggle('hub-detail-title-placeholder', task.untitled === true);
     // Not while the reader is renaming: writing the stored title over the
     // input would delete what they are typing.
-    if (el && !el.querySelector('input')) el.textContent = task.title;
+    if (!el.querySelector('input')) el.textContent = task.title;
   });
 
   useFill(fieldsRef as RefObject<HTMLElement>, () => [...detailFields(task, handlers).childNodes]);
@@ -660,6 +669,15 @@ function TaskDetailPanel(props: {
   useLayoutEffect(() => {
     const panel = panelRef.current;
     if (panel && typeof panel.focus === 'function') panel.focus({ preventScroll: true });
+  }, []);
+
+  // The Board's "New task": the panel opens with the title in rename, empty
+  // and focused, so the first keystroke names the row. Declared AFTER the
+  // panel's own focus so the input, not the panel, ends up holding it. Once
+  // per mount — a mount is a new task, and a repaint must not drag the reader
+  // back into rename.
+  useLayoutEffect(() => {
+    if (latest.current.handlers.focusTitle) beginRename.current?.();
   }, []);
 
   // The slot this hands over is the one this render decided on — a rebuilt

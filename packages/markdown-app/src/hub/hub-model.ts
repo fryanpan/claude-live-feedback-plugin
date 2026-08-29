@@ -57,6 +57,11 @@ export interface HubInfoRequest {
 export interface HubTask {
   id: string;
   title: string;
+  /** Filed with no name yet (the Board's "New task"): `title` holds the
+   *  server's placeholder, and this says so — the panel shows it muted and
+   *  opens the rename on an EMPTY input. The server clears it the moment a
+   *  real title lands through any door. */
+  untitled?: boolean;
   status: TaskStatus;
   assignee: string;
   /**
