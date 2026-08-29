@@ -60,6 +60,10 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
     '- Only what was said: never invent names, numbers, or decisions the',
     '  transcript does not contain. Transcription is imperfect — where a word',
     '  is garbled, prefer the reading that fits the project context.',
+    '- Transcript lines may be prefixed with who said them. Use that to name',
+    '  the owner of an action item or the side of a disagreement; a label like',
+    '  "Speaker B" is a voice nobody has named yet — keep it as written, never',
+    '  guess who it is.',
     '- Output markdown only: no preamble, no code fences, nothing after the',
     '  notes.',
   ].join('\n');
@@ -93,7 +97,7 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
   );
   parts.push(
     `New transcript since the last update:\n${input.tick.turns
-      .map((t) => `- ${t.text}`)
+      .map((t) => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`)
       .join('\n')}`,
   );
   return { system, user: parts.join('\n\n') };
