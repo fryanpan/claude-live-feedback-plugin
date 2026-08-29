@@ -274,6 +274,15 @@ function parseStamp(stamp: string): {
   };
 }
 
+/**
+ * One HOLD, not one item: the same review item revised, passed and held
+ * again is a new hold with a new `heldAt`, and its filer is owed a fresh
+ * nudge even when no tick happened to see the item pass in between.
+ */
+function filerKey(workspaceId: string, item: HeldItemRow): string {
+  return `${workspaceId}|${item.reviewItemId}|${item.heldAt}`;
+}
+
 export class StallNudger {
   private readonly opts: StallNudgerOptions;
   private readonly now: () => number;
@@ -512,8 +521,10 @@ export class StallNudger {
     // with the stalled and unfiled rows — so the same ticket later going
     // quiet or reading as unfiled over the same held ask is not a second
     // wake; the lead was already told to get that item revised — and under
-    // its OWN id, so a second item held on a ticket the lead already heard
-    // about is news (codex review: ticket-only stamping swallowed it). It
+    // its OWN id and hold time, so a second item held on a ticket the lead
+    // already heard about is news, and so is the same item held AGAIN after
+    // a revision (codex review: ticket-only stamping swallowed the first;
+    // an id-only key needed a tick to see the gap between two holds). It
     // stays OUT of the escalation bucket below: a hold is the filer's to
     // end, and re-saying it every repeat window would bill the lead for
     // the filer's silence.
@@ -522,7 +533,7 @@ export class StallNudger {
       new Set([
         ...rows.map((row) => row.id),
         ...held.map((row) => row.id),
-        ...held.map((row) => `held:${row.reviewItemId}`),
+        ...held.map((row) => `held:${row.reviewItemId}@${row.heldAt}`),
       ]),
     ).sort();
     // The oldest row speaks for the board. `0` on a board whose only finding
@@ -593,7 +604,7 @@ export class StallNudger {
     if (!send) return;
     for (const item of held) {
       if (item.filerAgentId === undefined) continue;
-      const key = `${workspaceId}|${item.reviewItemId}`;
+      const key = filerKey(workspaceId, item);
       if (this.filersTold.has(key)) continue;
       if (!this.reachable(workspaceId, item.filerAgentId)) continue;
       let delivered = 0;
@@ -624,7 +635,7 @@ export class StallNudger {
   /** Forget filers told about items no longer held, so a fresh hold on the
    *  same item (revised, judged, held again) is nudged afresh. */
   private pruneFilersTold(workspaceId: string, held: readonly HeldItemRow[]): void {
-    const live = new Set(held.map((item) => `${workspaceId}|${item.reviewItemId}`));
+    const live = new Set(held.map((item) => filerKey(workspaceId, item)));
     const prefix = `${workspaceId}|`;
     for (const key of this.filersTold) {
       if (key.startsWith(prefix) && !live.has(key)) this.filersTold.delete(key);

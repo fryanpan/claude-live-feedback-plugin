@@ -97,6 +97,7 @@ const HELD = {
   headline: 'ok?',
   reason: 'The headline is not a question the reader can answer.',
   heldMs: 6 * MIN,
+  heldAt: 1_000_000 - 6 * MIN,
   filedBy: 'Index Keeper',
   filerAgentId: 'agent-index-keeper',
 };
@@ -695,6 +696,30 @@ describe('a held review item wakes its filer and then the lead — once each', (
     ];
     nudger.tick();
     expect(sent).toHaveLength(2);
+  });
+
+  // Found by codex review, third pass: a hold that ended and a new hold on
+  // the same item that began between two ticks looked like one hold.
+  it('the same item held AGAIN — no tick saw the gap — is a fresh nudge and a fresh wake', () => {
+    const { world, sent, toFilers, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    world.now += 10 * MIN;
+    world.boards = [
+      board({ stalled: [], held: [{ ...HELD, heldMs: 6 * MIN, heldAt: HELD.heldAt + 10 * MIN }] }),
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+    expect(toFilers).toHaveLength(2);
+    // The control: the same hold, older, is still one hold.
+    world.now += 1 * MIN;
+    world.boards = [
+      board({ stalled: [], held: [{ ...HELD, heldMs: 7 * MIN, heldAt: HELD.heldAt + 10 * MIN }] }),
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+    expect(toFilers).toHaveLength(2);
   });
 
   // Found by codex review: a filer that dropped between the reachability
