@@ -13,7 +13,7 @@ The purpose of a workspace is to provide a significantly better agent and human 
 
 1. The workspace is your plan, task list, and decision repository.
    1. If you are in a workspace, stop using harness' tools. Do not use `TaskCreate` / `TaskUpdate` / `TaskList` (formerly `TodoWrite`) and `EnterPlanMode` / `ExitPlanMode`. A task or plan in harness becomes invisible and confusing to workspace users.
-2. The workspace is where you share status and ask for human help.
+2. The workspace is where you ask for human help (status is item 3).
    1. DO NOT use regular chat messages to share progress or ask for a decision
    2. DO NOT use `AskUserQuestion`, create a review item instead
    3. Ask for human help
@@ -31,7 +31,7 @@ The purpose of a workspace is to provide a significantly better agent and human 
          1. The option label is the contract — the reviewer answers the label, not the reasoning under it. Plain words, phone-readable.
          2. The item has to be actionable on its own. The Home card renders the payload and nothing around it, so every link the reviewer needs goes in the payload's `detail` as an inline markdown link (`[the diff](/review/d-xxxx)`) — a link that lives only in the surrounding comment text never reaches the card, and the reviewer is left scrolling the comments for it.
       5. Anything the reviewer still owes an answer to is a filed review item BEFORE your turn ends — answerable where they read, with chat carrying at most a pointer to it. A "still waiting on you" list in chat is the failure mode this rule exists for: audited sessions filed 18 chat-only asks in a day, and 13 died unanswered.
-3. Share status on the task's Activity tab, never in its comments. Your end-of-turn message reaches the tab by itself — the Stop hook posts it in full — and `post_status(text, taskId?)` adds a milestone worth naming: started, blocked on what, PR open, done. Comments are for asks (review items, decisions), replies to a person, and anything a person must read and answer.
+3. The workspace is where you share status: on the task's Activity tab, never in its comments. Your end-of-turn message reaches the tab by itself — the Stop hook posts it in full — and `post_status(text, taskId?)` adds a milestone worth naming: started, blocked on what, PR open, done. Comments are for asks (review items, decisions), replies to a person, and anything a person must read and answer.
 
 ### What a chat message is
 

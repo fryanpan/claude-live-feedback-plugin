@@ -4316,11 +4316,21 @@ a.hub-link-chip:hover {
   color: var(--warn-fg);
   background: var(--warn-bg);
 }
+/* A status is a milestone the agent chose to name; a turn is every closing
+   message. Accent-tinted so the milestone stands apart while scanning. */
+.hub-hist-row-status .hub-note-kind {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+/* `overflow-wrap: anywhere`: a status is posted raw, so one unbroken hash
+   or path has to wrap in the row rather than widen the whole panel. */
 .hub-note-body {
   font-family: var(--prose);
   font-size: 13.5px;
   line-height: 1.45;
   color: var(--fg);
+  overflow-wrap: anywhere;
 }
 .hub-note-body > :first-child {
   margin-top: 0;
@@ -6906,6 +6916,28 @@ body.threads-resizing {
 }
 .cm-h:first-child {
   margin-top: 0;
+}
+/* Fenced code from renderCommentMarkdown — unscoped like `.cm-h`. Wraps
+   inside its own box (pre-wrap + anywhere) so a long line of test output
+   never widens the card or the panel it sits in; a scroll box is the
+   fallback for what still cannot break. */
+.cm-code {
+  margin: 0.3em 0 0.5em;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.cm-code code {
+  font: inherit;
+  background: none;
+  padding: 0;
 }
 /* Status chip on a workspace task/goal link (comment-markdown + link-titles).
    Unscoped for the same reason as `.cm-h`: stamped by that one renderer,

@@ -57,7 +57,7 @@ import { type ComponentChildren, Fragment, type RefObject, render } from 'preact
 import { type MutableRef, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { renderCommentMarkdown, renderCommentMarkdownInline } from '../comment-markdown.ts';
 import { SPACE_HOLD_PAGE_ATTR } from '../voice-capture.ts';
-import { DENIAL_PREFIX, ageShort } from './activity-model.ts';
+import { ageShort } from './activity-model.ts';
 import { ComposerForm, Discussion, useFill } from './detail-parts.tsx';
 import {
   type ActivityEvent,
@@ -528,7 +528,23 @@ function feedOf(task: HubTask, events: ActivityEvent[] | undefined): FeedEntry[]
       note: n,
     })),
   ];
-  return entries.sort((a, b) => b.ts - a.ts);
+  // Stable sort: at an equal timestamp a move stays above an audit row,
+  // and both above a note — the build order, pinned by test.
+  return uniqueKeys(entries.sort((a, b) => b.ts - a.ts));
+}
+
+/** Two notes in the same millisecond from one agent (a retried post, two
+ *  quick statuses) share every fact the key is built from; a repeat gets a
+ *  serial so Preact keeps both rows. Serials follow the sorted order, so
+ *  they are as stable as the facts are. */
+function uniqueKeys(entries: FeedEntry[]): FeedEntry[] {
+  const seen = new Map<string, number>();
+  for (const e of entries) {
+    const n = seen.get(e.key) ?? 0;
+    seen.set(e.key, n + 1);
+    if (n > 0) e.key = `${e.key}#${n}`;
+  }
+  return entries;
 }
 
 /** The word on a note's kind token. A denial says what it is — a refusal —
@@ -591,7 +607,7 @@ function BuiltRow(props: { entry: FeedEntry; mark?: string; children?: Component
  * A note, in FULL: the agent, its kind, the age, then the whole text as
  * comment markdown (the same renderer the discussion uses — a turn note is
  * an end-of-turn message, which is prose with lists and fences). A denial
- * keeps the pane's "blocked: <shape>" form with the shape in code.
+ * shows its shape in code under the "blocked" token.
  *
  * The body is Preact's element with no vnode children — its HTML is written
  * in a layout effect keyed on the text and the mark — so a repaint of the
@@ -616,10 +632,12 @@ function NoteRow(props: {
     const el = bodyRef.current;
     if (!el) return;
     if (kind === 'denial') {
+      // The kind token above already reads "blocked"; the body is just the
+      // shape (the Home pane, with no token, keeps DENIAL_PREFIX).
       const shape = document.createElement('code');
       shape.className = 'acti-shape';
       shape.textContent = text;
-      el.replaceChildren(document.createTextNode(DENIAL_PREFIX), shape);
+      el.replaceChildren(shape);
     } else {
       // Same escape-then-allow-known-tags path every comment takes.
       el.innerHTML = renderCommentMarkdown(text);

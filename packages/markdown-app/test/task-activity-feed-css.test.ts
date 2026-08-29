@@ -77,6 +77,23 @@ describe('the task Activity feed is height-frugal at the tablet tier', () => {
     expect(kind).toMatch(/font-size:\s*1[01](\.\d+)?px/);
   });
 
+  it('a note body wraps an unbroken token instead of widening the panel', () => {
+    // A status note is posted raw (no reduction), so one 700-char hash or
+    // path must wrap inside the row rather than scroll the whole panel.
+    expect(rule('.hub-note-body')).toMatch(/overflow-wrap:\s*anywhere/);
+    const code = rule('.cm-code');
+    expect(code, 'no .cm-code rule').not.toBe('');
+    expect(code).toMatch(/white-space:\s*pre-wrap/);
+    expect(code).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('a status token is tinted so a milestone reads apart from a routine turn', () => {
+    const status = rule('.hub-hist-row-status .hub-note-kind');
+    expect(status, 'no status kind rule').not.toBe('');
+    expect(status).toMatch(/color:/);
+    expect(status).not.toBe(rule('.hub-hist-row-denial .hub-note-kind'));
+  });
+
   it('the marked phrase in the feed wears the active thread-range treatment', () => {
     const mark = rule('.hub-detail-transitions .thread-range');
     expect(mark, 'no mark rule in the feed').not.toBe('');

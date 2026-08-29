@@ -37,11 +37,11 @@ The workspace is the **primary work surface** (Bryan, 2026-08-18: *"Chat is so w
 - Pass the `review` payload on `create_thread` / `post_reply` when you're asking Bryan to look or decide — that's what makes it a Review Item on his Home queue rather than a comment he has to notice.
 - Chat gets at most a one-line pointer. Bare URLs on their own line, never markdown-wrapped.
 
-The full rule ships fleet-wide in the `claude-workspaces:working-in-a-workspace` skill ("The workspace is where you share status and ask for human help").
+The full rule ships fleet-wide in the `claude-workspaces:working-in-a-workspace` skill ("The workspace is where you ask for human help" and "The workspace is where you share status").
 
 ## How
 
-**Markdown docs** — bind via `mcp__plugin_claude-workspaces_claude-workspaces__create_review_doc(docId, path, title?)`. Post the review URL (`http://mac-mini.tailb53801.ts.net:8787/review/<docId>`) on the task or thread the doc belongs to (see above); a chat message carries at most a pointer.
+**Markdown docs** — bind via `mcp__plugin_claude-workspaces_claude-workspaces__create_review_doc(docId, path, title?)`. Post the review URL (`http://<host>:8787/review/<docId>`) on the task or thread the doc belongs to (see above); a chat message carries at most a pointer.
 
 **Dev servers / HTML mockups** — use the `claude-workspaces:embedding-widget` skill (it covers the `<script>` tags + `setContext` calls).
 

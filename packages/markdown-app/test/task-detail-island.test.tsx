@@ -426,8 +426,58 @@ describe('the Activity tab is one feed: moves, audit rows and every note in full
     expect(status.querySelector('.hub-note-body')?.textContent).toBe('Waiting on CI');
     expect(denial.classList.contains('hub-hist-row-denial')).toBe(true);
     expect(denial.querySelector('.hub-note-kind')?.textContent).toBe('blocked');
-    expect(denial.querySelector('.hub-note-body')?.textContent).toBe('blocked: rm -rf dist');
+    // The kind token already says "blocked"; the body is just the shape.
+    expect(denial.querySelector('.hub-note-body')?.textContent).toBe('rm -rf dist');
     expect(denial.querySelector('.hub-note-body code.acti-shape')?.textContent).toBe('rm -rf dist');
+  });
+
+  it('at an equal timestamp a move sorts above an audit row, and both above a note', () => {
+    // The tie-break is the build order of the feed, pinned so a reorder of
+    // the sources cannot silently change what the reader sees first.
+    const host = mount();
+    const t = task({
+      id: 't-tie',
+      transitions: [move(5 * MIN, 'todo', 'in-progress')],
+      notes: [note(5 * MIN, 'Tied note')],
+    });
+    openActivity(t, {}, [retitled(5 * MIN, 't-tie')]);
+    const rows = rowsIn(host).map((li) => li.textContent ?? '');
+    expect(rows.length).toBe(3);
+    expect(rows[0]).toContain('todo → in-progress');
+    expect(rows[1]).toContain('renamed');
+    expect(rows[2]).toContain('Tied note');
+  });
+
+  it('two notes from the same agent in the same millisecond both render', () => {
+    // Row keys are built from a note's facts; two identical tuples used to
+    // collide and Preact folded them into one row.
+    const host = mount();
+    const t = task({
+      notes: [
+        note(MIN, 'First status', { kind: 'status' }),
+        note(MIN, 'Second status', { kind: 'status' }),
+      ],
+    });
+    openActivity(t);
+    const rows = rowsIn(host);
+    expect(rows.length).toBe(2);
+    const texts = rows.map((r) => r.querySelector('.hub-note-body')?.textContent);
+    expect(texts).toEqual(['First status', 'Second status']);
+    const keys = rows.map((r) => r.dataset.histKey);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it('a fenced block in a note renders as one code block, not as prose lines', () => {
+    const host = mount();
+    const t = task({ notes: [note(MIN, 'Ran:\n```\n# not a heading\n- not a bullet\n```')] });
+    openActivity(t);
+    const body = rowsIn(host)[0]?.querySelector('.hub-note-body') as HTMLElement;
+    expect(body.querySelector('pre.cm-code code')?.textContent).toBe(
+      '# not a heading\n- not a bullet',
+    );
+    expect(body.querySelector('.cm-h')).toBeNull();
+    expect(body.querySelector('li')).toBeNull();
+    expect(body.textContent).not.toContain('```');
   });
 
   it('a long note folds after six lines behind a "more" toggle that opens it', () => {

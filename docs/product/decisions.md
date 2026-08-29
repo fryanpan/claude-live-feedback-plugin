@@ -71,7 +71,7 @@ Big decisions that future sessions should respect or revisit deliberately.
 
 ## 2026-04-19 — Access model: Tailscale or LAN, no public tunnels
 - The feedback server binds to `localhost:<port>`. Reviewers reach it
-  via the host's Tailscale hostname (e.g. `mac-mini.tailb53801.ts.net`)
+  via the host's Tailscale hostname (e.g. `<host>.ts.net`)
   or its `.local` / LAN IP on the same wifi.
 - `bun run scripts/serve.ts` prints all three URL forms on startup.
 - Rejected: Cloudflare Tunnel (added complexity — named tunnel,
@@ -301,7 +301,7 @@ deletion. Tracked separately.
 
 ## 2026-08-21 — Serialization churn: the normal form is the contract; churn is one-time, not prevented
 
-Ask 5 of the mechanical-edits task (t-voJUJHi-BmdY): write-back reflows line
+Ask 5 of the mechanical-edits task: write-back reflows line
 wraps (a one-entry insert produced a +26/-47 diff), and a table nested under a
 bullet flattens on round-trip. The asks were stable serialization, or
 warn-or-refuse on structures the round-trip cannot preserve.
@@ -358,7 +358,7 @@ parse-side fix pays for itself.
 
 ## 2026-08-25 — Unfiled-ask counter: the audit's published number, not a live measurement
 
-Task t-8NQpdf6_KPan asked for a per-session number an agent can query about
+The per-session-usage task asked for a per-session number an agent can query about
 itself: asks that appeared in chat without a matching filed review item. Two
 open questions were left to the implementer; both calls below are reversible.
 
@@ -425,10 +425,15 @@ versions"*. Four reversible calls, shipped together on `feat/activity-feed`:
    the one-liner was (markdown kept; every line reduced: URLs → `[url]`,
    hosts/paths → basename or `[url]`, token prefixes and Bearer →
    `[token]`, emails → `[email]`; fences kept but reduced line by line);
-   `NOTE_TEXT_MAX` rises 2000 → 4000 with an ellipsis on the cut. The Home
-   activity pane shows only a note's first prose line (200 chars); the full
-   text is on the task's Activity tab, which takes phrase comments like a
-   doc.
+   `NOTE_TEXT_MAX` rises 2000 → 4000 with an ellipsis on the cut. Behind
+   the named shapes sits a catch-all (security review, 2026-08-29): a 20+
+   alphanumeric run with 3+ digits, a 32+ base64 word with `/` or `+`, and
+   the value of any secret-named key or assignment (`DB_PASSWORD=`,
+   `api_key:`, `authToken=`) come out as `[redacted]`; a token split over a
+   line break is reduced on both halves; blank lines inside a fence are
+   kept. The Home activity pane shows only a note's first prose line (200
+   chars); the full text is on the task's Activity tab, which takes phrase
+   comments like a doc.
 4. **Status replaces progress comments.** The skills, the hive-peer rule and
    the keep-moving protocol now say: status goes through `post_status` or
    arrives by itself from the hook; a comment (`post_reply`,

@@ -68,16 +68,36 @@ describe('the lead skill dispatches with the same contract', () => {
 });
 
 describe('no shipped skill still teaches progress as comments', () => {
-  const BANNED = [
-    /share progress .{0,40}using comments/,
-    /share progress on a task by writing brief comments/,
-    /post the full report as a task comment/,
-    /posts its full report as a task comment/,
-    /the board comment is the copy that survives/,
+  /** Each guard paired with the sentence it bans, so the guard is proven
+   *  against its own target below — a gap of 40 once sat between "share
+   *  progress" and "using comments" in a sentence whose middle was 53
+   *  characters, and the guard was green for a sentence it could not match. */
+  const BANNED: Array<[RegExp, string]> = [
+    [
+      /share progress .{0,80}using comments/,
+      'Share progress in the workspace on the most appropriate task or doc using comments',
+    ],
+    [
+      /share progress on a task by writing brief comments/,
+      'Share progress on a task by writing brief comments in the task at each milestone',
+    ],
+    [
+      /post the full report as a task comment/,
+      'Post the full report as a task comment FIRST, then hand over the link',
+    ],
+    [
+      /posts its full report as a task comment/,
+      'the agent posts its full report as a task comment first',
+    ],
+    [/the board comment is the copy that survives/, 'The board comment is the copy that survives.'],
   ];
   it.each(SHIPPED)('%s', (_name, raw) => {
     const flat = flatten(raw);
-    for (const re of BANNED) expect(flat).not.toMatch(re);
+    for (const [re] of BANNED) expect(flat).not.toMatch(re);
+  });
+
+  it.each(BANNED)('guard %s matches the sentence it bans', (re, sentence) => {
+    expect(flatten(sentence)).toMatch(re);
   });
 
   it('reads a non-empty set of shipped skills', () => {

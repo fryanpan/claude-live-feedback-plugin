@@ -236,6 +236,82 @@ describe('fullNote — the whole closing message, reduced line by line', () => {
       '```\nbun test packages/server\n```',
     );
   });
+  it('keeps blank lines inside a fence verbatim — code spacing is content, not a run to collapse', () => {
+    // Verify-fix: the blank-line collapse ran inside fences too, so a pasted
+    // diff or YAML block lost its double blank lines in the stored note.
+    const msg =
+      'Ran the tests:\n\n\n```\ndef a():\n    pass\n\n\ndef b():\n    pass\n```\n\n\nDone.';
+    expect(fullNote(msg)).toBe(
+      'Ran the tests:\n\n```\ndef a():\n    pass\n\n\ndef b():\n    pass\n```\n\nDone.',
+    );
+    // A fence holding only blank lines is still "nothing"
+    expect(fullNote('```\n\n\n```')).toBe('');
+  });
+  it('redacts an opaque secret with no recognised prefix — a long alphanumeric run with digits', () => {
+    // Security review: only five shapes were reduced; a bare hex key, a
+    // JWT, a Twilio-style token or a base64 blob rode through whole.
+    const hex = fullNote('Rotated key: 4f2b8c9e1a3d5f7b9c1e3a5d7f9b1c3e0a2d4f6b8c1e3a5d');
+    expect(hex).toBe('Rotated key: [redacted]');
+    const jwt = fullNote(
+      'got eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c back',
+    );
+    expect(jwt).toBe('got [token] back');
+    expect(fullNote('twilio is 0a1b2c3d4e5f60718293a4b5c6d7e8f9')).toBe('twilio is [redacted]');
+    expect(fullNote('rk_live_FAKE0 and pk_test_FAKE0')).toBe(
+      '[token] and [token]',
+    );
+    // a base64 blob with `/` or `+` in it, as an AWS secret or a PEM line is
+    // (the canonical AWS example key, with its one digit)
+    expect(fullNote('secret was wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY there')).toBe(
+      'secret was [redacted] there',
+    );
+    // punctuation and inline code around it survive
+    expect(fullNote('(`4f2b8c9e1a3d5f7b9c1e3a5d7f9b1c3e`).')).toBe('(`[redacted]`).');
+  });
+  it('leaves identifiers, short hashes, versions and long words alone (negative control)', () => {
+    const kept =
+      'renderCommentMarkdown at 910ffe6d, bumped 0.1.126, TASK_NOTES_STORE_CAP, internationalization, convertToBase64String, ran 1700000000000 ms';
+    expect(fullNote(kept)).toBe(kept);
+    expect(fullNote('see packages/markdown-app/src/hub/task-detail-island.tsx')).toBe(
+      'see packages/markdown-app/src/hub/task-detail-island.tsx',
+    );
+    expect(fullNote('on feat/activity-feed-v2-2026-08-29')).toBe(
+      'on feat/activity-feed-v2-2026-08-29',
+    );
+  });
+  it('redacts the value of a secret-named assignment or key whatever the value looks like', () => {
+    expect(
+      fullNote(
+        'DB_PASSWORD=Tr0ub4dor&3\naws_secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"api_key": "hunter2",\nauthToken=abc',
+      ),
+    ).toBe(
+      'DB_PASSWORD=[redacted]\naws_secret_access_key: [redacted]\n"api_key": "[redacted]",\nauthToken=[redacted]',
+    );
+    expect(fullNote('Authorization: Basic dXNlcjpodW50ZXIy')).toBe('Authorization: [token]');
+    // fenced code takes the same rule
+    expect(fullNote('```\nexport PASSWORD=hunter2\npassword: hunter2\n```')).toBe(
+      '```\nexport PASSWORD=[redacted]\npassword: [redacted]\n```',
+    );
+    // negative controls: a plural, an author, a plain flag, a count
+    expect(fullNote('inputTokens: 1200, tokens: 3, author: sam, --base=main, MODE=dark')).toBe(
+      'inputTokens: 1200, tokens: 3, author: sam, --base=main, MODE=dark',
+    );
+  });
+  it('redacts a token continuation on the next line when a line ends in a bare token prefix', () => {
+    // Security review: terminal-wrapped output splits a token; the prefix
+    // half became [token] and the rest rode through as prose.
+    expect(fullNote('Key is sk-\nabc12345 done')).toBe('Key is [token]\n[token] done');
+    expect(fullNote('Key is sk-\nant-api03-abcdefghijklmnopqrstuvwxyz0123456789')).toBe(
+      'Key is [token]\n[token]',
+    );
+    // negative control: an ordinary word after a whole token stays
+    expect(fullNote('Key is sk-test-FAKEabc123\nhere')).toBe('Key is [token]\nhere');
+  });
+  it('reduces a Windows or UNC path to its file name like a POSIX one', () => {
+    expect(fullNote('Key at C:\\Users\\someone\\.ssh\\id_rsa and \\\\box\\share\\x.txt')).toBe(
+      'Key at id_rsa and x.txt',
+    );
+  });
   it('caps at FULL_NOTE_TEXT_CAP with an ellipsis, and at a caller cap', () => {
     const out = fullNote('a'.repeat(5000));
     expect(out.length).toBe(FULL_NOTE_TEXT_CAP);
