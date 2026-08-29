@@ -43,12 +43,15 @@ import { resolveAssignee } from './task-owner.ts';
 import { taskBodyDocId, taskIdOfBodyDoc } from './task-projection.ts';
 import type { Ref, Task, TaskStatus, TaskStore, VoiceRoute } from './tasks.ts';
 import {
+  type HubDestination,
   type ScoredCandidate,
   type StatusQueueRow,
   type StatusTask,
   type TitleCandidate,
   answerBody,
   composeStatus,
+  goalOrdinalAsk,
+  hubDestinationAsk,
   navigationAsk,
   parseOrdinal,
   pickByLabel,
@@ -64,6 +67,8 @@ export {
   capWords,
   composeStatus,
   countWords,
+  goalOrdinalAsk,
+  hubDestinationAsk,
   navigationAsk,
   parseOrdinal,
   pickByLabel,
@@ -1539,6 +1544,25 @@ export class VoiceRouter {
       if (!direct && statusAsk(transcript)) {
         direct = this.statusResult(workspaceId, workspace.name, resource);
       }
+      // The hub's own places and a goal by its rank come BEFORE the title
+      // index: "the homepage" and "my top goal" are not titles, and both
+      // used to fall through to a model that had nothing to match them to
+      // and a lead agent that cannot drive a browser (Bryan, 2026-08-29).
+      if (!direct) {
+        const nav = hubDestinationAsk(transcript, [workspace.name]);
+        if (nav !== null) direct = this.openHubDestination(workspaceId, transcript, nav);
+      }
+      if (!direct) {
+        const at = goalOrdinalAsk(transcript, workspace.goals.length, [workspace.name]);
+        const goal = at === null ? undefined : workspace.goals[at];
+        if (goal) {
+          direct = this.openCandidate(workspaceId, transcript, {
+            id: goal.id,
+            kind: 'goal',
+            title: goal.title,
+          });
+        }
+      }
       if (!direct) {
         const name = navigationAsk(transcript, [workspace.name]);
         if (name !== null) {
@@ -1745,9 +1769,16 @@ export class VoiceRouter {
     return { ok: true, ...result };
   }
 
-  /** Every task and doc on the board with the words a person would say. */
+  /** Every task, doc and goal on the board with the words a person would
+   *  say. Top-level goals only: the goal panel opens a band, and a subgoal
+   *  has no panel of its own to land on. */
   private titleIndex(workspaceId: string): TitleCandidate[] {
     const workspace = this.tasks.getWorkspace(workspaceId);
+    const goals: TitleCandidate[] = (workspace?.goals ?? []).map((g) => ({
+      id: g.id,
+      kind: 'goal',
+      title: g.title,
+    }));
     const tasks: TitleCandidate[] = this.tasks
       .listTasks(workspaceId)
       .map((t) => ({ id: t.id, kind: 'task', title: t.title }));
@@ -1756,17 +1787,34 @@ export class VoiceRouter {
       kind: 'doc',
       title: this.docTitle?.(workspaceId, id) ?? id,
     }));
-    return [...tasks, ...docs];
+    return [...goals, ...tasks, ...docs];
   }
 
-  /** Where a resolved candidate opens — the same two paths `lookupResult`
-   *  emits, through the same same-origin assertion. */
+  /** Where a resolved candidate opens — the two paths `lookupResult` emits
+   *  plus the goal panel (`?goal=`, the shape `goalShareUrl` builds in the
+   *  client), all through the same same-origin assertion. */
   private navigationFor(workspaceId: string, c: TitleCandidate): string | undefined {
-    return c.kind === 'task'
-      ? sameOriginPath(
-          `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(c.id)}`,
-        )
-      : sameOriginPath(`/review/${encodeURIComponent(c.id)}`);
+    const board = `/workspaces/${encodeURIComponent(workspaceId)}`;
+    if (c.kind === 'task') return sameOriginPath(`${board}?task=${encodeURIComponent(c.id)}`);
+    if (c.kind === 'goal') return sameOriginPath(`${board}?goal=${encodeURIComponent(c.id)}`);
+    return sameOriginPath(`/review/${encodeURIComponent(c.id)}`);
+  }
+
+  /**
+   * One of the hub's own places. The paths are `navPath` in the client
+   * (`hub-model.ts`) spelled out: Tasks is the bare board, the other three
+   * are suffixes. The ack names the place the way the nav labels it.
+   */
+  private openHubDestination(
+    workspaceId: string,
+    transcript: string,
+    nav: HubDestination,
+  ): VoiceResult | undefined {
+    const board = `/workspaces/${encodeURIComponent(workspaceId)}`;
+    const navigate = sameOriginPath(nav === 'tasks' ? board : `${board}/${nav}`);
+    if (!navigate) return undefined;
+    const label = { home: 'Home', tasks: 'the board', mine: 'My tasks', activity: 'Activity' }[nav];
+    return { route: 'fast-path', ack: `${heard(transcript)} Opening ${label}.`, navigate };
   }
 
   private openCandidate(
@@ -1776,7 +1824,8 @@ export class VoiceRouter {
   ): VoiceResult | undefined {
     const navigate = this.navigationFor(workspaceId, c);
     if (!navigate) return undefined;
-    return { route: 'fast-path', ack: `${heard(transcript)} Opening "${c.title}".`, navigate };
+    const what = c.kind === 'goal' ? `goal "${c.title}"` : `"${c.title}"`;
+    return { route: 'fast-path', ack: `${heard(transcript)} Opening ${what}.`, navigate };
   }
 
   /**
