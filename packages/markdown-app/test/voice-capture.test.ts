@@ -60,7 +60,7 @@ function keyup(target: EventTarget, code = 'Space'): void {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 /**
- * The document-level hotkey is a HOLD, not a tap (t-Mym15-yQ3QxJ): keydown
+ * The document-level hotkey is a HOLD, not a tap (the accidental-trigger ticket): keydown
  * arms a timer and the recording only starts SPACE_HOLD_ARM_MS later, so a
  * typed space — which is a quick tap wherever it lands — never records.
  * These helpers run under fake timers.
@@ -145,7 +145,7 @@ describe('createVoiceCapture', () => {
   });
 
   it('a Space TAP records nothing, and gets the scroll it was asking for', () => {
-    // The accidental-trigger report (t-Mym15-yQ3QxJ): a typed space is a tap,
+    // The accidental-trigger report (the accidental-trigger ticket): a typed space is a tap,
     // and before this a tap RECORDED — plus a 6s "Didn't catch anything."
     // toast — whenever the guard could not see typing (focus stolen by a
     // re-render, a focused row, plain body). A tap still never reaches the
