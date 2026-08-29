@@ -119,7 +119,7 @@ describe('archived rows and the board', () => {
   });
 });
 
-describe('the board meta line', () => {
+describe('the board foot line', () => {
   const handlers = {
     onStatusSet: () => {},
     onGoalTitleCommit: () => {},
@@ -139,10 +139,36 @@ describe('the board meta line', () => {
         opened += 1;
       },
     });
-    const link = el.querySelector<HTMLButtonElement>('.hub-board-meta-archived');
+    const link = el.querySelector<HTMLButtonElement>('.hub-board-foot-archived');
     expect(link?.textContent).toBe('3 archived');
     link?.click();
     expect(opened).toBe(1);
+  });
+
+  it('sits at the BOTTOM of the board, after the last band and the goal-add row', () => {
+    // Bryan, 2026-08-29 (by voice, on the board): the archived link at the
+    // top "is taking out space" — "if you want to find archive tasks, add it
+    // somewhere at the bottom". Nothing above the first goal but the goals.
+    const el = document.createElement('div');
+    renderBoard(el, boardSections(GOALS, [task()], FILTERS), {
+      ...handlers,
+      archivedCount: 2,
+      onShowArchived: () => {},
+      onGoalAdd: () => {},
+    });
+    const foot = el.querySelector<HTMLElement>('.hub-board-foot');
+    const sections = [...el.querySelectorAll<HTMLElement>('.hub-section')];
+    const goalAdd = el.querySelector<HTMLElement>('.hub-goal-add');
+    // Positive controls: everything the foot is asserted to follow is there.
+    expect(foot).not.toBeNull();
+    expect(sections.length).toBeGreaterThan(0);
+    expect(goalAdd).not.toBeNull();
+    const follows = (a: Element, b: Element): boolean =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    for (const section of sections) expect(follows(section, foot as Element)).toBe(true);
+    expect(follows(goalAdd as Element, foot as Element)).toBe(true);
+    // And nothing at all above the first band: the old top slot is empty.
+    expect(sections[0]?.previousElementSibling).toBeNull();
   });
 
   it('draws nothing at all when the board has archived nothing', () => {
@@ -152,14 +178,14 @@ describe('the board meta line', () => {
       archivedCount: 0,
       onShowArchived: () => {},
     });
-    expect(el.querySelector('.hub-board-meta')).toBeNull();
+    expect(el.querySelector('.hub-board-foot')).toBeNull();
     // Positive control: the same call with a count DOES draw one.
     renderBoard(el, boardSections(GOALS, [task()], FILTERS), {
       ...handlers,
       archivedCount: 1,
       onShowArchived: () => {},
     });
-    expect(el.querySelector('.hub-board-meta')).not.toBeNull();
+    expect(el.querySelector('.hub-board-foot')).not.toBeNull();
   });
 });
 

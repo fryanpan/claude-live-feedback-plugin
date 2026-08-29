@@ -1195,8 +1195,8 @@ body.hub-body {
 .hub-main--home .hub-board-col {
   display: none;
 }
-/* Activity showing: quick capture, the unplaced strip and the review strip
-   step aside for the feed. A separate class from `.hidden` because those
+/* Activity showing: quick capture and the review strip step aside for the
+   feed. A separate class from `.hidden` because those
    regions each own their `.hidden` for their own reasons (empty, not loaded),
    and one flag serving two questions is how a region comes back visible on a
    view it was never meant to render in. */
@@ -1410,49 +1410,6 @@ body.hub-body {
 .hub-review-ask--direct::before {
   content: "asks ";
   color: var(--fg-muted);
-}
-
-/* --- unplaced bucket: how many, and how long the oldest has waited ---
-   Deliberately QUIETER than the decisions strip above it. That one is an
-   alarm ("things need you"); this one is a standing reading, and a reading
-   drawn like an alarm teaches everyone to skim the alarm. No yellow, no
-   fill — a muted line sitting on the board it describes. It renders at all
-   only when the bucket is non-empty, so its silence is the empty case. */
-.hub-unplaced {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
-  margin-bottom: 8px;
-  padding: 0 2px;
-  color: var(--fg-muted);
-}
-.hub-unplaced.hidden {
-  display: none;
-}
-.hub-unplaced-open {
-  /* 36px is the tap target the rest of this board uses; the text itself is
-     13px so the line stays a note rather than a heading. */
-  min-height: 36px;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
-  color: inherit;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-/* No "·" separator, on purpose: the two halves wrap onto their own lines at
-   phone widths, and a separator authored as a ::before would then lead a
-   line. Turning it off inside a media query is the trap — a media query adds
-   no specificity, so which rule wins is decided by source order rather than
-   by the condition. The gap does the same job at every width. */
-.hub-unplaced-age {
-  font-size: 13px;
 }
 
 /* --- review walkthrough: one at a time, in the derived order ---
@@ -2566,21 +2523,30 @@ body.hub-body {
 .hub-board > [data-preact-island] {
   display: contents;
 }
-/* --- the board's meta line: what is true of the LIST, above the first goal ---
+/* --- the board's foot line: what is true of the LIST, under the last band ---
    One quiet line, drawn only when it has something to say. It is where the
    archived count lives, and it is NOT a nav item: the phone rail has exactly
    four seats and "what did I put down" is a thing people check, not a place
-   they go. Right-aligned so it never competes with the first goal title for
-   the reader's first fixation. --- */
-.hub-board-meta {
+   they go. It sat above the first goal, right-aligned, until Bryan
+   (2026-08-29) said the top slot was taking space for nothing — so it is a
+   footnote now: left-aligned under the goal-add row, muted, no fill. --- */
+.hub-board-foot {
   display: flex;
-  justify-content: flex-end;
-  margin: 0 0 6px;
+  margin: 0 0 12px;
+  padding: 0 8px;
   min-height: 28px;
 }
-.hub-board-meta-archived {
+.hub-board-foot-archived {
   min-height: 28px;
   font-size: 12.5px;
+}
+@media (max-width: 1100px) {
+  /* A footnote is still a thing you tap: 44px on the phone tier, per
+     design-mobile.md. The text stays 12.5px — the target grows, not the
+     type. */
+  .hub-board-foot-archived {
+    min-height: 44px;
+  }
 }
 /* --- board sections (goals ARE the sections) --- */
 .hub-section {
