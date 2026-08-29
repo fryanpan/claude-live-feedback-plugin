@@ -75,6 +75,26 @@ export interface TrustedHostOpts {
    */
   proxiedAccessHosts?: string[];
   /**
+   * Hostnames an operator has opted in as THEIR OWN public address — the
+   * whole product, reached through the tunnel from outside the tailnet, gated
+   * by Cloudflare Access over that hostname.
+   *
+   * The third list, and the widest grant, so its separation from the other
+   * two is the security property. `extraHosts` classifies `local` with no
+   * token at all and is refused through the proxy; `proxiedAccessHosts`
+   * classifies `collab` (token, then the share surface only). An entry here
+   * classifies `proxied-local`: a token, then everything loopback gets. None
+   * of the three can leak into another — an entry on this list is still
+   * refused by `isTrustedLocalHost` through the proxy, and an `extraHosts`
+   * entry never satisfies `isProxiedTrustedHost`.
+   *
+   * Requires `accessFronted` exactly as the collaboration list does, and for
+   * a stronger reason: honoured without Access in front, this would be the
+   * full API — every doc, every workspace, share administration, the deploy
+   * verb — to anyone who can reach the tunnel and type the hostname.
+   */
+  proxiedTrustedHosts?: string[];
+  /**
    * True when a Cloudflare Access verifier really is configured for the
    * proxied hosts above — team domain AND a static audience.
    *
@@ -188,6 +208,34 @@ export function isAccessTunnelHost(
 }
 
 /**
+ * Is this Host the OPERATOR'S own public address arriving through the
+ * Cloudflare tunnel?
+ *
+ * The same three conditions as `isAccessTunnelHost` — the request really came
+ * through the edge, Access really is configured, exact membership — against
+ * the `proxiedTrustedHosts` list instead. What differs is what the caller
+ * does with a `true`: verify the Access token and then serve the product as
+ * if the request were on loopback, rather than the share surface.
+ *
+ * Deliberately NOT a widening of `isTrustedLocalHost`. That predicate's
+ * `viaProxy` veto is the fix from the 2026-08-05 review and stays absolute;
+ * this one is a separate door with a separate key.
+ */
+export function isProxiedTrustedHost(
+  host: string | null | undefined,
+  opts: TrustedHostOpts,
+): boolean {
+  if (!opts.viaProxy) return false;
+  if (!opts.accessFronted) return false;
+  const h = normalizeHost(host);
+  if (h === '') return false;
+  return (opts.proxiedTrustedHosts ?? [])
+    .map((c) => normalizeHost(c))
+    .filter((c) => c !== '')
+    .includes(h);
+}
+
+/**
  * What a share hostname grants access to.
  *
  * One field, and that is the whole point. A target used to carry a `docId`
@@ -215,6 +263,7 @@ export type HostDecision =
   | { kind: 'share'; target: ShareTarget } // per-share Access host: JWT + scope
   | { kind: 'link' } // public link host: authorize from the session cookie
   | { kind: 'collab' } // Access-fronted collaboration host: JWT + collabScope
+  | { kind: 'proxied-local' } // Access-fronted operator host: JWT, then local
   | { kind: 'deny'; reason: 'unknown_host' }; // anything else: refuse
 
 /**
@@ -222,15 +271,16 @@ export type HostDecision =
  *
  * Order matters: our own names win, then a per-share Access hostname, then
  * the single public hostname that link shares live on, then the operator's
- * opt-in collaboration hosts. Anything else is refused — the tunnel forwards
- * every hostname under its ingress here, so "unrecognised" must mean refuse,
- * never "skip the gate".
+ * opt-in collaboration hosts, then the operator's own proxied address.
+ * Anything else is refused — the tunnel forwards every hostname under its
+ * ingress here, so "unrecognised" must mean refuse, never "skip the gate".
  *
- * Collab is checked LAST on purpose. It is the newest and widest of the
- * external kinds, so putting a name in the opt-in list must never quietly
- * take a hostname AWAY from the narrower rule that already claimed it. With
- * the list empty — every deployment that has not opted in — this function
- * behaves exactly as it did before the branch existed.
+ * The external kinds are checked narrowest-first on purpose, and the widest
+ * — `proxied-local`, the whole product — LAST. Putting a name in an opt-in
+ * list must never quietly take a hostname AWAY from the narrower rule that
+ * already claimed it: a host listed as both collab and proxied-trusted stays
+ * collab. With both lists empty — every deployment that has not opted in —
+ * this function behaves exactly as it did before either branch existed.
  */
 export function classifyHost(
   host: string | null | undefined,
@@ -247,6 +297,7 @@ export function classifyHost(
   const linkHost = normalizeHost(opts.linkHost ?? '');
   if (linkHost !== '' && h === linkHost) return { kind: 'link' };
   if (isAccessTunnelHost(host, opts)) return { kind: 'collab' };
+  if (isProxiedTrustedHost(host, opts)) return { kind: 'proxied-local' };
   return { kind: 'deny', reason: 'unknown_host' };
 }
 
