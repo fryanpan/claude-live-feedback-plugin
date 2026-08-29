@@ -3536,7 +3536,10 @@ export class TaskStore {
    * Pin an agent's one-liner to a row. No status change and no gate: the
    * note records what the session said or was refused, not where the row
    * is. Bounded at `TASK_NOTES_STORE_CAP` from the old end, emitted as
-   * `task.noted` so the board re-projects and the audit log has it.
+   * `task.noted` so the board re-projects, the audit log has it, and the
+   * actor's work clock moves — but NOT broadcast on the workspace stream
+   * (server.ts keeps it off), because one frame per turn would wake every
+   * other attached agent.
    */
   appendNote(
     taskId: string,

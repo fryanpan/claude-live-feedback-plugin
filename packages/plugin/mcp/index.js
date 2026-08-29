@@ -17388,6 +17388,8 @@ async function emitHubChannelMessage(event, rawPayload) {
   const p = rawPayload ?? {};
   if (event === "agent.heartbeat")
     return;
+  if (event === "task.noted")
+    return;
   if (p.actor?.id === AUTHOR.id)
     return;
   const by = p.actor?.name ? ` by ${p.actor.name}` : "";

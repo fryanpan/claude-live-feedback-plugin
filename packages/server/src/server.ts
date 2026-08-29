@@ -135,6 +135,7 @@ import {
   READY_NUDGE_STAMP_FILENAME,
   ReadyWorkNudger,
   type ReadyWorkSnapshot,
+  isBoardActivity,
 } from './ready-nudge.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
@@ -1330,7 +1331,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // channel (`ws~<workspaceId>`, the same channel doc thread events use for
   // reviews) — no new transport (§3.6). The audit log
   // append happens inside the store's emit, not here.
+  //
+  // ONE exclusion: `task.noted` never rides the stream. An attached MCP
+  // child relays every task.* frame it has no line for as a channel message
+  // to its session, so a broadcast note would wake every other agent on the
+  // board once per turn of the agent that posted it — and two agents each
+  // holding a row would wake each other without end. Nothing on the stream
+  // needs it: the ydoc projection carries the notes and the audit log has
+  // the event. Excluded here, on the server, because a bundle-side filter
+  // only takes effect for sessions that have restarted onto it.
   taskStore.onEvent((ev) => {
+    if (ev.type === 'task.noted') return;
     const { type, ...rest } = ev;
     sse.broadcast(`ws~${ev.workspaceId}`, { event: type, ...rest });
   });
@@ -1706,14 +1717,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // "events that count as activity" — one that would silently fall behind
     // the store the first time a mutator is added.
     //
-    // ONE exclusion, stated as a PREFIX rather than as a list for the same
-    // reason: `agent.*` is liveness (attached / detached / heartbeat), and
-    // liveness is not the board moving. Counting it made the wake
-    // self-cancelling, because the only lead a nudge can be DELIVERED to is
-    // one holding a live stream — which is precisely the session attaching
-    // and heartbeating. So the pings that proved the lead was there also
-    // proved, to this clock, that the board did not need it.
-    if (!ev.type.startsWith('agent.')) readyNudger.noteActivity(ev.workspaceId, ev.ts);
+    // The exclusions live in `isBoardActivity`, for the same reason: `agent.*`
+    // is liveness (attached / detached / heartbeat), and liveness is not the
+    // board moving. Counting it made the wake self-cancelling, because the
+    // only lead a nudge can be DELIVERED to is one holding a live stream —
+    // which is precisely the session attaching and heartbeating. So the
+    // pings that proved the lead was there also proved, to this clock, that
+    // the board did not need it. `task.noted` — a turn ending — is the same
+    // class.
+    if (isBoardActivity(ev.type)) readyNudger.noteActivity(ev.workspaceId, ev.ts);
     // …and an answer is not merely activity. The lead is the party who acts
     // on answers, and making it wait out an idle window would deliver the
     // point of the feature fifteen minutes late.
