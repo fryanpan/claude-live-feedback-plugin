@@ -27,7 +27,14 @@ import {
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
 import { acquireActivityLock, releaseActivityLock } from './activity-lock.ts';
-import { classifyActor, registerOwnerIdentity, setIdentityRoster } from './activity.ts';
+import {
+  classifyActor,
+  identityLinks,
+  ownerIdentityIds,
+  registerOwnerIdentity,
+  resolveIdentityId,
+  setIdentityRoster,
+} from './activity.ts';
 import {
   AgentWatches,
   SHARED_AGENT_IDS,
@@ -2867,10 +2874,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // identity becomes `user-<hash>` the owner-activity view quietly reads
   // empty with nothing anywhere reporting it. See activity.ts.
   if (opts.ownerEmail && isEmailLike(opts.ownerEmail)) {
-    registerOwnerIdentity(emailIdentityId(opts.ownerEmail));
+    const ownerId = emailIdentityId(opts.ownerEmail);
+    registerOwnerIdentity(ownerId);
     // Named so the identity exists in the roster before its first write,
     // rather than appearing the first time the owner happens to log in.
     identities.upsertByEmail(opts.ownerEmail);
+    // The owner's legacy spellings fold into the owner's roster row: the
+    // pre-email id, and every link-file id whose target is an owner id. So
+    // every reader that resolves through the roster — activity rows, the
+    // home brief, the weekly-review projections — lands on ONE identity for
+    // the owner. Read-time only; nothing on disk is rewritten.
+    const owners = new Set(ownerIdentityIds());
+    identities.addMergedFrom(ownerId, 'known-bryan');
+    for (const [from, to] of Object.entries(identityLinks())) {
+      if (owners.has(to) || owners.has(resolveIdentityId(to))) {
+        identities.addMergedFrom(ownerId, from);
+      }
+    }
   } else if (opts.ownerEmail) {
     console.error(`[identities] CW_OWNER_EMAIL is not an address: ${opts.ownerEmail}`);
   }
@@ -3198,9 +3218,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          *
          * Order matters and each rung has a reason:
          *
-         *  1. A proven identity, when email identity is in effect. It
-         *     outranks the body precisely because the body is the thing it
-         *     exists to stop being authoritative.
+         *  1. A proven identity. It outranks the body precisely because the
+         *     body is the thing it exists to stop being authoritative — and
+         *     it does so whether or not `CW_REQUIRE_EMAIL_AUTH` is on: the
+         *     flag governs whether a session is REQUIRED, never whether a
+         *     verified one is believed (Bryan, 2026-08-29 — a verified name
+         *     is never worse than a typed one).
          *  2. A share visitor with nothing proven stays a `guest-` — that
          *     path is the template this work copies, not a thing it replaces,
          *     and link mode keeps minting guests.
@@ -3209,8 +3232,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
          *     lands on, so a request with no session behaves identically
          *     whichever way the flag is set.
          *
-         * Rung 1 is behind `CW_REQUIRE_EMAIL_AUTH` (default off), so with the
-         * flag off this function is byte-for-byte what it was.
+         * With no session presented, this function is byte-for-byte what it
+         * was whichever way the flag is set.
          */
         const authorFor = (claimed: unknown): User | undefined => {
           // Rung 0: a verified widget popup-token. NOT behind the flag,
@@ -3220,10 +3243,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // cookie can never reach. An invalid token never lands here: the
           // gate below 401s it before any route runs.
           if (widgetIdentity) return userForIdentity(widgetIdentity);
-          if (requireEmailAuth) {
-            const proven = provenIdentityFor();
-            if (proven) return userForIdentity(proven);
-          }
+          const proven = provenIdentityFor();
+          if (proven) return userForIdentity(proven);
           if (visitor) {
             return sanitizeVisitorAuthor(claimed, {
               // The SHARE, not the doc: two links to the same doc are two
