@@ -208,6 +208,16 @@ describe('an answer that was taken back is not news', () => {
     expect(deterministicBrief(input(rows))).not.toContain('**Decided:**');
   });
 
+  it('an answer the reader saw standing, overwritten and then undone while away, is a reopening', () => {
+    // Settled over the whole log, not the window: the pre-window answer is
+    // what makes the undo news. Windowing first cancelled the in-window pair
+    // to nothing and the reader was never told the ticket they last saw
+    // decided is open again.
+    const rows = briefEvents([answered(NOW - 5), answered(NOW + 1), withdrawn(NOW + 2)], NOW);
+    expect(rows.map((r) => r.event)).toEqual(['decision.answer_withdrawn']);
+    expect(deterministicBrief(input(rows))).toContain('**Reopened:**');
+  });
+
   it("pairs with the task's own answer only — an answered review item on the same ticket stands", () => {
     // Only the legacy task-level answer can be withdrawn; a real review row's
     // answer carries `reviewItemId` and has no undo. Pairing by task alone

@@ -149,16 +149,16 @@ export interface BriefEventRow {
 /** The rows a brief covers: relevant types only, strictly after `since`,
  *  oldest first — with an answer that was later taken back settled out. */
 export function briefEvents(rows: BriefEventRow[], since: number): BriefEventRow[] {
-  const inWindow = rows
+  const typed = rows
     .filter(
       (r) =>
-        typeof r.event === 'string' &&
-        BRIEF_EVENT_TYPES.has(r.event) &&
-        typeof r.ts === 'number' &&
-        r.ts > since,
+        typeof r.event === 'string' && BRIEF_EVENT_TYPES.has(r.event) && typeof r.ts === 'number',
     )
     .sort((a, b) => (a.ts as number) - (b.ts as number));
-  return settleWithdrawnAnswers(inWindow);
+  // Settled over the WHOLE log and windowed after: which answers a withdrawal
+  // took back is a fact about the log, not about the reader's marker, and an
+  // answer that stood before the marker is exactly what makes its undo news.
+  return settleWithdrawnAnswers(typed, since).filter((r) => (r.ts as number) > since);
 }
 
 /**
@@ -177,9 +177,15 @@ export function briefEvents(rows: BriefEventRow[], since: number): BriefEventRow
  * first answer into history — and `withdrawAnswer` does not bring it back,
  * so after answer, answer, undo the ticket is OPEN, and a brief that kept
  * the first answer would report it decided. An answer given after the undo
- * is untouched. A withdrawal whose answer predates the window has nothing
- * here to cancel and STAYS: the reader saw that answer stand before they
- * left, and its reopening is the news.
+ * is untouched.
+ *
+ * The withdrawal itself drops only when every answer it cleared was given
+ * after `since` — an answer and its undo the reader was away for is one
+ * non-event. When any cleared answer STOOD before the reader left (given at
+ * or before `since`, even if overwritten since), the ticket they last saw
+ * decided is open again, and the withdrawal stays as that reopening. So does
+ * a withdrawal with nothing to clear at all: the log may not reach back to
+ * the answer, and "reopened" is still the true state.
  *
  * Only the TASK-LEVEL answer can be withdrawn — `withdrawAnswer` undoes the
  * legacy `answer_decision` record and nothing else — and only that answer's
@@ -190,7 +196,10 @@ export function briefEvents(rows: BriefEventRow[], since: number): BriefEventRow
  * on the same ticket is left standing: pairing by task alone popped the
  * review item's answer instead and kept reporting the withdrawn one.
  */
-export function settleWithdrawnAnswers(rows: BriefEventRow[]): BriefEventRow[] {
+export function settleWithdrawnAnswers(
+  rows: BriefEventRow[],
+  since = Number.NEGATIVE_INFINITY,
+): BriefEventRow[] {
   const dropped = new Set<BriefEventRow>();
   const standing = new Map<string, BriefEventRow[]>();
   for (const row of rows) {
@@ -203,9 +212,10 @@ export function settleWithdrawnAnswers(rows: BriefEventRow[]): BriefEventRow[] {
     } else if (row.event === 'decision.answer_withdrawn') {
       const undone = standing.get(row.taskId);
       if (undone && undone.length > 0) {
+        const seenStanding = undone.some((r) => typeof r.ts === 'number' && r.ts <= since);
         for (const r of undone) dropped.add(r);
         undone.length = 0;
-        dropped.add(row);
+        if (!seenStanding) dropped.add(row);
       }
     }
   }
