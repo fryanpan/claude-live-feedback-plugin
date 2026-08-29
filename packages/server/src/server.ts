@@ -150,6 +150,7 @@ import {
 } from './share/redact-meta.ts';
 import { Shares } from './share/shares.ts';
 import { SharingGate } from './share/sharing-gate.ts';
+import { resolveTtl } from './share/ttl.ts';
 import type { Share, ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
@@ -304,6 +305,13 @@ const UNFILED_SHARING_REFUSED = {
   error: 'unfiled_board_not_shareable',
   hint: 'The Unfiled board collects every review bound without a board, from every agent — sharing it would share them all. So: file the review on a real board first, then share that board. Pass hubWorkspaceId when you bind (create_diff_review / bind_folder), or make a board with create_workspace and attach_doc the review to it.',
 } as const;
+
+/**
+ * Every body key `POST /api/share/link` honours. A key outside this set is
+ * refused by name (400 unsupported_argument) — `docId` and `entryDocId` are
+ * checked before this set is consulted, each with its own reply.
+ */
+const SHARE_LINK_ARGS: ReadonlySet<string> = new Set(['workspaceId', 'ttl', 'ttlSeconds', 'label']);
 
 /** The anchor's display snippet, whichever anchor kind carries it — an
  *  orphan keeps its original's snippet. */
@@ -3917,13 +3925,41 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               error: 'a board share opens the board — entryDocId is not supported',
             });
           }
+          // Everything else in the body is either honoured below or refused
+          // here BY NAME. The rule is accept-and-honour or refuse, never
+          // accept-and-widen: `share_link(docId, ttl: '15m')` once answered
+          // 200 with the whole board for two weeks because both fields fell
+          // through — the MCP handler forwards the call as sent now, so this
+          // is where a stray key is caught, and the reply says which.
+          for (const key of Object.keys(body ?? {})) {
+            if (!SHARE_LINK_ARGS.has(key)) {
+              return j(400, {
+                error: 'unsupported_argument',
+                argument: key,
+                hint: `share_link takes workspaceId, ttl (e.g. '15m'), ttlSeconds and label — ${JSON.stringify(key)} is not one of them and was not silently dropped.`,
+              });
+            }
+          }
+          if (body?.label !== undefined && typeof body.label !== 'string') {
+            return j(400, { error: 'bad_label', hint: 'label must be a string' });
+          }
+          const linkTtl = resolveTtl({
+            ttl: body?.ttl,
+            ttlSeconds: body?.ttlSeconds,
+            defaultSeconds: shares.defaultLinkTtlSeconds,
+            maxSeconds: shares.maxTtlSeconds,
+          });
+          if (!linkTtl.ok) return j(400, { error: linkTtl.error, hint: linkTtl.hint });
           try {
             const share = await shares.createShareLink({
               workspaceId,
-              ttlSeconds: typeof body?.ttlSeconds === 'number' ? body.ttlSeconds : undefined,
+              ttlSeconds: linkTtl.seconds,
               label: typeof body?.label === 'string' ? body.label : undefined,
             });
-            return j(200, { share });
+            return j(200, {
+              share,
+              ...(linkTtl.clamped ? { ttlClamped: linkTtl.clamped } : {}),
+            });
           } catch (err) {
             const error = err instanceof Error ? err.message : 'create_share_failed';
             return j(400, { error });
@@ -3936,11 +3972,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!shares) return j(404, { error: 'sharing not enabled' });
           const shareId = decodeURIComponent(ttlMatch[1] ?? '');
           const body = await safeJson(req);
-          const ttlSeconds = body?.ttlSeconds;
-          if (typeof ttlSeconds !== 'number') return j(400, { error: 'ttlSeconds required' });
+          if (body?.ttlSeconds === undefined && body?.ttl === undefined) {
+            return j(400, { error: 'ttlSeconds required' });
+          }
+          // Same resolver as the mint, so the ceiling holds on extension too.
+          const newTtl = resolveTtl({
+            ttl: body?.ttl,
+            ttlSeconds: body?.ttlSeconds,
+            defaultSeconds: shares.defaultLinkTtlSeconds,
+            maxSeconds: shares.maxTtlSeconds,
+          });
+          if (!newTtl.ok) return j(400, { error: newTtl.error, hint: newTtl.hint });
           try {
-            const share = await shares.setTtl(shareId, ttlSeconds);
-            return share ? j(200, { share }) : j(404, { error: 'share not found' });
+            const share = await shares.setTtl(shareId, newTtl.seconds);
+            return share
+              ? j(200, { share, ...(newTtl.clamped ? { ttlClamped: newTtl.clamped } : {}) })
+              : j(404, { error: 'share not found' });
           } catch (err) {
             return j(400, { error: err instanceof Error ? err.message : 'bad ttl' });
           }

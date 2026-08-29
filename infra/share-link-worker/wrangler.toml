@@ -1,0 +1,21 @@
+# Deploy config for the share-link edge Worker (see README.md).
+# `npx wrangler deploy` from this directory creates/updates the Worker AND
+# binds the routes below. The secret is set separately, never in this file:
+#   npx wrangler secret put SHARE_LINK_KEY < ../../data/share-url.key
+name = "share-link-gate"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# Only /share/* goes through the Worker; every other path reaches the tunnel
+# directly. <public-hostname> is the hostname the server's share config
+# serves today; <successor-hostname> is its planned successor — bound now
+# so the rename needs no Cloudflare change.
+routes = [
+  { pattern = "<public-hostname>/share/*", zone_name = "fryanpan.com" },
+  { pattern = "<successor-hostname>/share/*", zone_name = "fryanpan.com" },
+]
+
+# Keep observability OFF for this Worker: request logs would carry full
+# signed URLs, and the URL is the credential (README "Hygiene").
+[observability]
+enabled = false
