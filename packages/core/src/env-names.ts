@@ -40,6 +40,9 @@ export const ENV_RENAMES: ReadonlyArray<readonly [legacy: string, current: strin
   // Server-facing: read from the launchd plist / the dev shell.
   ['LF_CLIENT_ROOT', 'CW_CLIENT_ROOT'],
   ['LF_PUBLIC_BASE_URL', 'CW_PUBLIC_BASE_URL'],
+  // Named `LF_` in the domain plan and its cutover runbook before the prefix
+  // collapsed; registered so the spelling the runbook teaches keeps working.
+  ['LF_PROXIED_TRUSTED_HOSTS', 'CW_PROXIED_TRUSTED_HOSTS'],
   ['LF_WIDGET_DIST', 'CW_WIDGET_DIST'],
   ['LF_MARKDOWN_APP_DIST', 'CW_MARKDOWN_APP_DIST'],
   ['LF_SHARING_DISABLED', 'CW_SHARING_DISABLED'],

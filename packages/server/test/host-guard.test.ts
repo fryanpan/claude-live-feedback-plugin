@@ -4,13 +4,14 @@ import {
   classifyHost,
   collabScope,
   isAccessTunnelHost,
+  isProxiedTrustedHost,
   isTrustedLocalHost,
   normalizeHost,
   shareScopeAllows,
 } from '../src/middleware/host-guard.ts';
 
 const LOCAL = {
-  tailscaleHost: 'mac-mini.tailb53801.ts.net',
+  tailscaleHost: 'mac-mini.tail-example.ts.net',
   lanHosts: ['mac-mini.local', '192.168.50.227'],
 };
 
@@ -37,7 +38,7 @@ describe('isTrustedLocalHost', () => {
       'localhost:8787',
       '127.0.0.1:8787',
       '[::1]:8787',
-      'mac-mini.tailb53801.ts.net',
+      'mac-mini.tail-example.ts.net',
       'mac-mini.local:8787',
       '192.168.50.227:8787',
     ]) {
@@ -63,7 +64,7 @@ describe('isTrustedLocalHost', () => {
   it('matches exactly — a lookalike suffix/prefix must not pass', () => {
     expect(isTrustedLocalHost('evil-mac-mini.local', LOCAL)).toBe(false);
     expect(isTrustedLocalHost('mac-mini.local.attacker.com', LOCAL)).toBe(false);
-    expect(isTrustedLocalHost('mac-mini.tailb53801.ts.net.evil.com', LOCAL)).toBe(false);
+    expect(isTrustedLocalHost('mac-mini.tail-example.ts.net.evil.com', LOCAL)).toBe(false);
   });
 
   it('trusts only THIS machine’s addresses — not private ranges in general', () => {
@@ -1091,5 +1092,107 @@ describe('collabScope', () => {
     // Naming it as a WORKSPACE buys nothing either: it is exactly as reachable
     // as any other id that names no workspace, and the routes behind it 404.
     expect(allows(`/workspaces/${encodeURIComponent(sentinel)}/docs/design-doc`)).toBe(false);
+  });
+});
+
+/**
+ * The operator's own product at a public hostname: the third opt-in list.
+ * Same three conditions as the collaboration list — through the edge, Access
+ * in front, exact membership — and a different grant at the end: `local`
+ * after the token, not `collab`. What is pinned here is that neither of the
+ * other two lists leaks into it, and that it leaks into neither of them.
+ */
+describe('isProxiedTrustedHost', () => {
+  const OPT_IN = { proxiedTrustedHosts: ['operator.example.com'], accessFronted: true };
+
+  it('recognises a listed host that came through the edge with Access in front', () => {
+    expect(isProxiedTrustedHost('operator.example.com', { ...OPT_IN, viaProxy: true })).toBe(true);
+    expect(isProxiedTrustedHost('Operator.Example.com:443', { ...OPT_IN, viaProxy: true })).toBe(
+      true,
+    );
+  });
+
+  it('requires the proxy hop — a LAN client naming the host has no Access in front', () => {
+    expect(isProxiedTrustedHost('operator.example.com', { ...OPT_IN, viaProxy: false })).toBe(
+      false,
+    );
+    expect(isProxiedTrustedHost('operator.example.com', OPT_IN)).toBe(false);
+  });
+
+  it('requires Access to really be configured — the list is otherwise ignored', () => {
+    expect(
+      isProxiedTrustedHost('operator.example.com', {
+        ...OPT_IN,
+        viaProxy: true,
+        accessFronted: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('matches exactly — no lookalikes, no missing Host', () => {
+    for (const h of ['attacker.operator.example.com', 'operator.example.com.evil', null, '']) {
+      expect(isProxiedTrustedHost(h, { ...OPT_IN, viaProxy: true }), String(h)).toBe(false);
+    }
+  });
+
+  it('is NOT reached from the other two lists', () => {
+    // A TRUSTED_HOSTS entry and a collaboration entry are both refused here…
+    const others = {
+      extraHosts: ['lan-alias.example.com'],
+      proxiedAccessHosts: ['collab.example.com'],
+      accessFronted: true,
+      viaProxy: true,
+    };
+    expect(isProxiedTrustedHost('lan-alias.example.com', others)).toBe(false);
+    expect(isProxiedTrustedHost('collab.example.com', others)).toBe(false);
+    // …and an entry here is still refused by the local predicate through the
+    // proxy, so the cf-ray veto is exactly what it was.
+    expect(
+      isTrustedLocalHost('operator.example.com', { ...LOCAL, ...OPT_IN, viaProxy: true }),
+    ).toBe(false);
+  });
+});
+
+describe('classifyHost — the proxied trusted host', () => {
+  const lookupShare = () => null;
+  const OPT_IN = { ...LOCAL, lookupShare, proxiedTrustedHosts: ['operator.example.com'] };
+
+  it('classifies proxied-local: the token is still to come, then the product', () => {
+    expect(
+      classifyHost('operator.example.com', { ...OPT_IN, accessFronted: true, viaProxy: true }),
+    ).toEqual({ kind: 'proxied-local' });
+  });
+
+  it('is deny without the proxy hop, and deny without Access', () => {
+    expect(classifyHost('operator.example.com', { ...OPT_IN, accessFronted: true })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+    expect(classifyHost('operator.example.com', { ...OPT_IN, viaProxy: true })).toEqual({
+      kind: 'deny',
+      reason: 'unknown_host',
+    });
+  });
+
+  it('a host on BOTH opt-in lists is collab — the narrower grant wins', () => {
+    expect(
+      classifyHost('operator.example.com', {
+        ...OPT_IN,
+        proxiedAccessHosts: ['operator.example.com'],
+        accessFronted: true,
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'collab' });
+  });
+
+  it('never classifies a TRUSTED_HOSTS entry proxied-local', () => {
+    expect(
+      classifyHost('lan-alias.example.com', {
+        ...OPT_IN,
+        extraHosts: ['lan-alias.example.com'],
+        accessFronted: true,
+        viaProxy: true,
+      }),
+    ).toEqual({ kind: 'deny', reason: 'unknown_host' });
   });
 });
