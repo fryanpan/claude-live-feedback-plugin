@@ -2,6 +2,7 @@ import {
   SUMMARY_PENDING_WINDOW_MS,
   type Thread,
   type User,
+  authorLabel,
   formatTime,
   readDocMeta,
   readReviewPayload,
@@ -981,7 +982,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       sw.style.background = c.author.color;
       const nm = document.createElement('span');
       nm.className = 'name';
-      nm.textContent = c.author.name;
+      nm.textContent = authorLabel(c.author);
       const tm = document.createElement('span');
       tm.className = 'time';
       tm.textContent = formatTime(c.ts);

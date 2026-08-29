@@ -213,6 +213,34 @@ export class AgentWatches {
   }
 
   /**
+   * Move `from`'s whole set under `into` — the durable half of an agent
+   * rename or merge. Union, like every other write here, so a set `into`
+   * already holds is kept; `from`'s record is removed because a stale copy
+   * would keep addressing deliveries to an id nothing reads any more. The
+   * caller is expected to have refused shared ids already (the route does);
+   * this method refuses them too rather than trust that.
+   */
+  rekey(from: string, into: string): { moved: string[] } {
+    if (from === into || SHARED_AGENT_IDS.has(into) || SHARED_AGENT_IDS.has(from)) {
+      return { moved: [] };
+    }
+    const src = this.state.agents[from];
+    if (!src) return { moved: [] };
+    const dst: AgentRecord = this.state.agents[into] ?? { watches: {}, updatedAt: 0 };
+    const moved: string[] = [];
+    for (const [key, meta] of Object.entries(src.watches)) {
+      if (!dst.watches[key]) dst.watches[key] = { since: meta.since };
+      moved.push(key);
+    }
+    if (src.name && !dst.name) dst.name = src.name;
+    dst.updatedAt = this.now();
+    this.state.agents[into] = dst;
+    delete this.state.agents[from];
+    this.save();
+    return { moved: moved.sort() };
+  }
+
+  /**
    * The reverse question: which agents hold this key durably? This is what
    * ADDRESSES a queued comment — the durable watch set is the standing
    * statement "deliver this board's events to me", surviving the stream that

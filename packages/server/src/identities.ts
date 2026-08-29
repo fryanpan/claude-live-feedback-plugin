@@ -28,6 +28,13 @@
  *   itself is a later commit; the field and its resolution live here now so
  *   readers already resolve through it, and so the merge script has somewhere
  *   to write that never rewrites a stored ydoc or activity row.
+ * - **Agents are rows too (`kind: 'agent'`).** Until they were, the roster
+ *   was one address book for people and a different, per-board one
+ *   (`attachments`) for helpers — so a helper's display name was whatever
+ *   its launch env said that day, and three spellings of one agent were
+ *   three agents. An agent row has no email; its id is the one the MCP mints
+ *   (`agentIdForName`), written on attach, and `resolveAgentId` maps every
+ *   spelling a task or attachment could hold back onto it.
  * - **Sessions are revocable without touching the cookie.** `sessionsValidFrom`
  *   is a watermark: a session cookie issued before it is refused. That makes
  *   "log me out everywhere" one field write, and it costs no per-session
@@ -39,12 +46,15 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 import {
   type User,
+  agentIdCandidates,
   emailDisplayName,
   emailIdentityId,
   hashToColor,
   isEmailLike,
   normalizeEmail,
 } from '@feedback/core';
+import { ownerDisplayNames } from './activity.ts';
+import { SHARED_AGENT_IDS } from './agent-watches.ts';
 
 const FILENAME = 'identities.json';
 const FORMAT_VERSION = 1;
@@ -54,18 +64,30 @@ const FORMAT_VERSION = 1;
 const MAX_NAME = 40;
 
 export type IdentityStatus = 'active' | 'archived';
+export type IdentityKind = 'person' | 'agent';
+
+/** The shape of an agent id — the watches store's rule, for the same field. */
+const AGENT_ID_RE = /^[^\s/\\]{1,200}$/;
 
 export interface IdentityRecord {
-  /** `user-<hash>`, derived from the email — see `emailIdentityId`. */
+  /** `user-<hash>`, derived from the email — see `emailIdentityId` — or, for
+   *  an agent, the id its MCP process mints from `CW_AGENT_NAME`. */
   id: string;
-  /** Normalized address. The one field the id cannot be recovered from. */
-  email: string;
+  /** Person or agent. Rows written before the field existed were all people. */
+  kind: IdentityKind;
+  /** Normalized address. The one field a person's id cannot be recovered
+   *  from. Absent on agent rows, which have no mailbox. */
+  email?: string;
   displayName: string;
   /** `#rrggbb`. Derived from the id on creation, overridable afterwards. */
   color: string;
   status: IdentityStatus;
   /** Legacy actor ids folded into this identity. Readers resolve through it. */
   mergedFrom: string[];
+  /** Set on a row that was folded INTO another: `get` follows it, so the old
+   *  id keeps resolving while the row itself stays as the record that it
+   *  existed. Cleared if a later merge makes this row the target again. */
+  mergedInto?: string;
   createdAt: number;
   updatedAt: number;
   /** Sessions minted before this instant are refused. Bumped by `revokeSessions`. */
@@ -168,6 +190,7 @@ export class Identities {
     }
     const record: IdentityRecord = {
       id,
+      kind: 'person',
       email: normalized,
       displayName: cleanName(patch.displayName) ?? emailDisplayName(normalized),
       color: cleanColor(patch.color) ?? hashToColor(id),
@@ -183,6 +206,123 @@ export class Identities {
   }
 
   /**
+   * The roster row for an agent, creating it on first sight — called from
+   * every attach, so the roster is written where the agent first says who
+   * it is. Idempotent like `upsertByEmail`, and for the same reason a name
+   * the row already holds is never overwritten by an ABSENT one: an older
+   * bundle attaches without `agentName`, and that must not erase the name a
+   * newer session wrote. A name that IS sent wins, because the launch env is
+   * the one place a rename happens.
+   *
+   * Returns null for the shared category identity. `known-agent` is what
+   * every session with no `CW_AGENT_NAME` collapses into; a roster row for
+   * it would give a category a display name and every other surface a
+   * reason to treat it as somebody.
+   */
+  upsertAgent(id: string, displayName?: string): IdentityRecord | null {
+    const trimmed = id.trim();
+    if (!AGENT_ID_RE.test(trimmed) || SHARED_AGENT_IDS.has(trimmed)) return null;
+    const now = this.now();
+    const existing = this.state.identities[trimmed];
+    // A name a PERSON already answers to is not an agent's to take. The
+    // sent name wins on a rename because the launch env is where renames
+    // happen — which also made it the one line where any session could
+    // relabel itself "Bryan" fleet-wide. Refused here, not at the route, so
+    // every attach path and the merge script share the rule. The attach
+    // still lands: under the existing name, or under the id for a new row.
+    const wanted = cleanName(displayName) ?? undefined;
+    const usable = wanted !== undefined && this.isPersonName(wanted) ? undefined : wanted;
+    if (existing) {
+      if (existing.kind !== 'agent') return null;
+      const name = usable ?? existing.displayName;
+      if (name === existing.displayName) return existing;
+      const updated: IdentityRecord = { ...existing, displayName: name, updatedAt: now };
+      this.state.identities[trimmed] = updated;
+      this.save();
+      return updated;
+    }
+    const record: IdentityRecord = {
+      id: trimmed,
+      kind: 'agent',
+      displayName: usable ?? trimmed,
+      color: hashToColor(trimmed),
+      status: 'active',
+      mergedFrom: [],
+      createdAt: now,
+      updatedAt: now,
+      sessionsValidFrom: 0,
+    };
+    this.state.identities[trimmed] = record;
+    this.save();
+    return record;
+  }
+
+  /** Is this display name the owner's, or one an existing person row
+   *  carries? Case-insensitive on purpose: "bryan" is the same spoof. */
+  private isPersonName(name: string): boolean {
+    const lower = name.trim().toLowerCase();
+    if (lower === '') return false;
+    if (ownerDisplayNames().some((n) => n.toLowerCase() === lower)) return true;
+    return Object.values(this.state.identities).some(
+      (rec) => rec.kind !== 'agent' && rec.displayName.trim().toLowerCase() === lower,
+    );
+  }
+
+  /**
+   * The survivor an agent id was folded INTO by `mergeAgent`, or null when
+   * the id is live, a bare legacy id, or unknown. The attach path asks this
+   * so a session still launched under a merged-away id is refused with the
+   * id it should use, rather than silently re-creating the duplicate the
+   * merge just removed.
+   */
+  mergedAwayInto(id: string): string | null {
+    const rec = this.state.identities[id.trim()];
+    if (!rec || rec.kind !== 'agent' || !rec.mergedInto) return null;
+    const survivor = this.followMerges(rec);
+    return survivor.id === rec.id ? null : survivor.id;
+  }
+
+  /**
+   * The canonical agent id behind ANY spelling a board could hold — the id
+   * itself, a legacy id folded in through `mergedFrom`, the display name, or
+   * one of the `agentIdCandidates` derivations a task's `assignee` or an
+   * attachment key was written with. Null when nothing matches: an owner the
+   * roster does not know stays unknown, never a guess (see task-owner.ts on
+   * why a wrong attribution is worse than an absent one). Person rows are
+   * never returned — this answers "which agent", and a person who shares a
+   * name with one is a different question.
+   */
+  resolveAgentId(idOrName: string): string | null {
+    const raw = idOrName.trim();
+    if (raw === '') return null;
+    const exact = this.state.identities[raw];
+    if (exact?.kind === 'agent') return this.followMerges(exact).id;
+    const keys = new Set<string>([raw.toLowerCase(), ...agentIdCandidates(raw)]);
+    // Rows that were folded into another are skipped as MATCH TARGETS but
+    // their ids still match through the target's `mergedFrom`, so a display
+    // name that only the old row carried does not silently stop resolving.
+    for (const rec of Object.values(this.state.identities)) {
+      if (rec.kind !== 'agent' || rec.mergedInto) continue;
+      if (keys.has(rec.id.toLowerCase())) return rec.id;
+      if (keys.has(rec.displayName.trim().toLowerCase())) return rec.id;
+      for (const legacy of rec.mergedFrom) {
+        if (keys.has(legacy.toLowerCase())) return rec.id;
+      }
+    }
+    for (const rec of Object.values(this.state.identities)) {
+      if (rec.kind !== 'agent' || !rec.mergedInto) continue;
+      if (keys.has(rec.displayName.trim().toLowerCase())) return this.followMerges(rec).id;
+    }
+    return null;
+  }
+
+  /** The display name the roster holds for an id, resolving legacy ids the
+   *  same way `get` does; null for an id the roster does not know. */
+  displayNameFor(id: string): string | null {
+    return this.get(id)?.displayName ?? null;
+  }
+
+  /**
    * The identity behind an id, resolving a legacy id through `mergedFrom`.
    *
    * Resolution lives here rather than at the call sites so that "who is this
@@ -192,11 +332,70 @@ export class Identities {
    */
   get(id: string): IdentityRecord | null {
     const direct = this.state.identities[id];
-    if (direct) return direct;
+    if (direct) return this.followMerges(direct);
     for (const rec of Object.values(this.state.identities)) {
-      if (rec.mergedFrom.includes(id)) return rec;
+      if (rec.mergedFrom.includes(id)) return this.followMerges(rec);
     }
     return null;
+  }
+
+  /** The row `rec` was folded into, however many merges deep — bounded, so
+   *  a hand-edited cycle terminates rather than hanging the reader. */
+  private followMerges(rec: IdentityRecord): IdentityRecord {
+    let current = rec;
+    for (let hop = 0; hop < 8 && current.mergedInto; hop++) {
+      const next = this.state.identities[current.mergedInto];
+      if (!next || next === current) break;
+      current = next;
+    }
+    return current;
+  }
+
+  /**
+   * Fold agent id `fromId` into `intoId` — the roster half of a rename or a
+   * duplicate-id clean-up. Both rows stay (the old one as the record that it
+   * existed, marked `mergedInto`); `get(fromId)` answers the target from now
+   * on, and `intoId.mergedFrom` lists everything folded in so scanning
+   * readers find it too. Reversible by merging back: the target's own
+   * `mergedInto` is cleared whenever it becomes a target.
+   *
+   * A `fromId` the roster has never seen is folded in as a bare legacy id —
+   * the field's original purpose — so an activity row stamped with an id
+   * nothing ever attached under still resolves. The SHARED identity is never
+   * folded: 1,031 rows signed "Agent" belong to nobody in particular, and
+   * folding them into one helper would attribute every anonymous session's
+   * words to it. Callers that move a seat away from the shared id do that
+   * on the board, not here.
+   */
+  mergeAgent(
+    fromId: string,
+    intoId: string,
+  ): { ok: true; from: string; into: IdentityRecord } | { ok: false; error: string } {
+    const from = fromId.trim();
+    const into = intoId.trim();
+    if (from === '' || into === '') return { ok: false, error: 'empty-id' };
+    if (from === into) return { ok: false, error: 'self-merge' };
+    if (SHARED_AGENT_IDS.has(into)) return { ok: false, error: 'into-shared' };
+    if (SHARED_AGENT_IDS.has(from)) return { ok: false, error: 'from-shared' };
+    const target = this.state.identities[into];
+    if (!target || target.kind !== 'agent') return { ok: false, error: 'into-not-agent' };
+    // Resolved, not looked up: `known-bryan` is nobody's row and yet the
+    // owner's, through `mergedFrom` — and so is every anon id the link file
+    // folded. Folding one of those into an agent would give two rows a
+    // claim on the same id, with resolution decided by insertion order.
+    const resolved = this.get(from);
+    if (resolved && resolved.kind !== 'agent') return { ok: false, error: 'from-not-agent' };
+    const source = this.state.identities[from];
+    const now = this.now();
+    const folded = new Set<string>([...target.mergedFrom, from, ...(source?.mergedFrom ?? [])]);
+    folded.delete(into);
+    const { mergedInto: _cleared, ...rest } = target;
+    this.state.identities[into] = { ...rest, mergedFrom: [...folded], updatedAt: now };
+    if (source) {
+      this.state.identities[from] = { ...source, mergedInto: into, updatedAt: now };
+    }
+    this.save();
+    return { ok: true, from, into: this.state.identities[into] as IdentityRecord };
   }
 
   byEmail(email: string): IdentityRecord | null {
@@ -306,6 +505,29 @@ function cleanColor(color: string | undefined): string | null {
 function sanitize(key: string, rec: unknown, now: number): IdentityRecord | null {
   if (!rec || typeof rec !== 'object') return null;
   const r = rec as Partial<IdentityRecord>;
+  if (r.kind === 'agent') {
+    // An agent row is keyed on the id the MCP minted; there is no address to
+    // re-derive it from, so the stored key IS the id.
+    const id = typeof r.id === 'string' && r.id.trim() ? r.id.trim() : key;
+    if (!AGENT_ID_RE.test(id) || SHARED_AGENT_IDS.has(id)) return null;
+    return {
+      id,
+      kind: 'agent',
+      displayName: cleanName(r.displayName) ?? id,
+      color: cleanColor(r.color) ?? hashToColor(id),
+      status: r.status === 'archived' ? 'archived' : 'active',
+      mergedFrom: Array.isArray(r.mergedFrom)
+        ? Array.from(new Set(r.mergedFrom.filter((m): m is string => typeof m === 'string')))
+        : [],
+      ...(typeof r.mergedInto === 'string' && r.mergedInto.trim() && r.mergedInto !== id
+        ? { mergedInto: r.mergedInto.trim() }
+        : {}),
+      createdAt: typeof r.createdAt === 'number' ? r.createdAt : now,
+      updatedAt: typeof r.updatedAt === 'number' ? r.updatedAt : now,
+      sessionsValidFrom: typeof r.sessionsValidFrom === 'number' ? r.sessionsValidFrom : 0,
+      ...(typeof r.archivedReason === 'string' ? { archivedReason: r.archivedReason } : {}),
+    };
+  }
   const email = typeof r.email === 'string' ? normalizeEmail(r.email) : '';
   if (!isEmailLike(email)) return null;
   // The id is DERIVED, so a stored one that disagrees with the address is a
@@ -319,6 +541,7 @@ function sanitize(key: string, rec: unknown, now: number): IdentityRecord | null
   }
   return {
     id,
+    kind: 'person',
     email,
     displayName: cleanName(r.displayName) ?? emailDisplayName(email),
     color: cleanColor(r.color) ?? hashToColor(id),

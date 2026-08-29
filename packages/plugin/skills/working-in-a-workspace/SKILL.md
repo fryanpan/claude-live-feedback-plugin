@@ -101,9 +101,12 @@ up: that is where a park says why it was deferred and when to come back.
 File a batch of rows in ONE `create_tasks` call rather than one call per row.
 A bad row comes back in `failures` by index instead of rejecting the batch.
 
-Your session needs an agent name before it can own anything: a create whose
-owner resolves to the bare word `agent` is refused, and that refusal means the
-session was launched without `CW_AGENT_NAME`. When you hand a row to somebody
+Your session needs an agent name before it can do anything on the board: a
+create whose owner resolves to the bare word `agent`, a comment or reply
+signed by the shared "agent" identity, and a lead-seat claim from it are all
+refused with `author-required`, and that refusal means the session was
+launched without `CW_AGENT_NAME` (set it, restart the session). Old comments
+that were signed that way stay and show as "Unnamed agent". When you hand a row to somebody
 else by name, pass `assigneeKind` — nothing can tell a person from an agent of
 the same name, and an unclassified owner shows as "not recorded".
 

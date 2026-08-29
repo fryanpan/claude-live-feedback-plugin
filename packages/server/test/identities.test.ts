@@ -185,3 +185,153 @@ describe('userForIdentity', () => {
     });
   });
 });
+
+describe('agent rows — one address book for people and helpers', () => {
+  it('upsertAgent writes a row of kind agent that resolveAgentId finds by id', () => {
+    const store = new Identities({ dataDir });
+    const rec = store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    expect(rec?.kind).toBe('agent');
+    expect(rec?.displayName).toBe('Lighthouse');
+    expect(store.resolveAgentId('agent-lighthouse')).toBe('agent-lighthouse');
+  });
+
+  it('three spellings of one name resolve to the one id the MCP mints', () => {
+    // The measured field spellings for one agent: display name, bare slug,
+    // and the derived id. All three must land on one row.
+    const store = new Identities({ dataDir });
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    expect(store.resolveAgentId('Lighthouse')).toBe('agent-lighthouse');
+    expect(store.resolveAgentId('lighthouse')).toBe('agent-lighthouse');
+    expect(store.resolveAgentId('  LIGHThouse ')).toBe('agent-lighthouse');
+  });
+
+  it('a merged legacy id resolves to the identity it was folded into', () => {
+    const store = new Identities({ dataDir });
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    store.addMergedFrom('agent-lighthouse', 'qb-agent');
+    expect(store.resolveAgentId('qb-agent')).toBe('agent-lighthouse');
+    expect(store.get('qb-agent')?.id).toBe('agent-lighthouse');
+  });
+
+  it('POSITIVE CONTROL: an unknown name resolves to nothing, not to a guess', () => {
+    const store = new Identities({ dataDir });
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    expect(store.resolveAgentId('Slow Build')).toBeNull();
+    expect(store.resolveAgentId('')).toBeNull();
+  });
+
+  it('never resolves a person row as an agent', () => {
+    const store = new Identities({ dataDir });
+    store.upsertByEmail('alice@example.com');
+    expect(store.resolveAgentId('Alice')).toBeNull();
+    expect(store.resolveAgentId(emailIdentityId('alice@example.com'))).toBeNull();
+  });
+
+  it('refuses the shared category identity — a category is not somebody', () => {
+    const store = new Identities({ dataDir });
+    expect(store.upsertAgent('known-agent', 'Agent')).toBeNull();
+    expect(store.upsertAgent('agent')).toBeNull();
+    expect(store.list()).toHaveLength(0);
+  });
+
+  it('keeps a chosen display name across a re-attach that sends none', () => {
+    const store = new Identities({ dataDir });
+    store.upsertAgent('agent-lighthouse', 'Lighthouse');
+    const again = store.upsertAgent('agent-lighthouse');
+    expect(again?.displayName).toBe('Lighthouse');
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('agent rows survive a reload, and person rows written before `kind` load as people', () => {
+    writeFileSync(
+      join(dataDir, 'identities.json'),
+      JSON.stringify({
+        version: 1,
+        identities: {
+          [emailIdentityId('alice@example.com')]: {
+            id: emailIdentityId('alice@example.com'),
+            email: 'alice@example.com',
+            displayName: 'Alice',
+          },
+          'agent-lighthouse': {
+            id: 'agent-lighthouse',
+            kind: 'agent',
+            displayName: 'Lighthouse',
+          },
+          // An agent row with no email is NOT the broken-person case above.
+          'agent-no-name': { kind: 'agent' },
+        },
+      }),
+    );
+    const store = new Identities({ dataDir });
+    expect(store.loadError).toBeNull();
+    expect(store.get(emailIdentityId('alice@example.com'))?.kind).toBe('person');
+    expect(store.get('agent-lighthouse')?.kind).toBe('agent');
+    expect(store.get('agent-no-name')?.displayName).toBe('agent-no-name');
+    expect(store.resolveAgentId('Lighthouse')).toBe('agent-lighthouse');
+  });
+});
+
+/** Security review of PR #440: the roster's merge and rename seams. */
+describe('roster merge and rename refusals (review findings)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'identities-review-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('mergeAgent refuses a `from` that resolves to a person — directly or through mergedFrom', () => {
+    const store = new Identities({ dataDir });
+    const alice = store.upsertByEmail('alice@example.com');
+    store.addMergedFrom(alice.id, 'anon-a1');
+    store.upsertAgent('agent-evil', 'Evil');
+    // POSITIVE CONTROL: both ids resolve to the person before the attempt.
+    expect(store.get('anon-a1')?.id).toBe(alice.id);
+    expect(store.mergeAgent(alice.id, 'agent-evil')).toEqual({
+      ok: false,
+      error: 'from-not-agent',
+    });
+    expect(store.mergeAgent('anon-a1', 'agent-evil')).toEqual({
+      ok: false,
+      error: 'from-not-agent',
+    });
+    // …and still do afterwards; the agent row claimed nothing.
+    expect(store.get('anon-a1')?.id).toBe(alice.id);
+    expect(store.get('agent-evil')?.mergedFrom).toEqual([]);
+    // Control: an id nobody holds still folds in as a bare legacy id.
+    expect(store.mergeAgent('anon-nobody', 'agent-evil').ok).toBe(true);
+  });
+
+  it('upsertAgent refuses a display name that is the owner’s or an existing person’s', () => {
+    const store = new Identities({ dataDir });
+    const alice = store.upsertByEmail('alice@example.com');
+    expect(alice.displayName).toBe('Alice');
+    // A new row asking for a person's name lands under its id instead.
+    expect(store.upsertAgent('agent-imp', 'Alice')?.displayName).toBe('agent-imp');
+    expect(store.upsertAgent('agent-imp2', 'Bryan')?.displayName).toBe('agent-imp2');
+    // An existing row keeps the name it had.
+    store.upsertAgent('agent-real', 'Real Name');
+    expect(store.upsertAgent('agent-real', ' alice ')?.displayName).toBe('Real Name');
+    expect(store.upsertAgent('agent-real', 'Bryan')?.displayName).toBe('Real Name');
+    // POSITIVE CONTROL: an ordinary rename still lands.
+    expect(store.upsertAgent('agent-real', 'Realer Name')?.displayName).toBe('Realer Name');
+    // Resolution is unaffected: the person's name never resolves to an agent.
+    expect(store.resolveAgentId('Alice')).toBeNull();
+  });
+
+  it('mergedAwayInto names the survivor for an id that was folded, and nothing otherwise', () => {
+    const store = new Identities({ dataDir });
+    store.upsertAgent('agent-new', 'New');
+    store.upsertAgent('agent-old', 'Old');
+    expect(store.mergedAwayInto('agent-old')).toBeNull();
+    expect(store.mergeAgent('agent-old', 'agent-new').ok).toBe(true);
+    expect(store.mergedAwayInto('agent-old')).toBe('agent-new');
+    // The survivor, a bare legacy id, and an unknown id are not merged away.
+    expect(store.mergedAwayInto('agent-new')).toBeNull();
+    store.addMergedFrom('agent-new', 'legacy-1');
+    expect(store.mergedAwayInto('legacy-1')).toBeNull();
+    expect(store.mergedAwayInto('agent-never')).toBeNull();
+  });
+});

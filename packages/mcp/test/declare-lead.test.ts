@@ -249,6 +249,15 @@ describe('POSITIVE CONTROL — handing the seat to somebody else is unchanged', 
   });
 });
 
+describe('the attach carries the agent NAME, not only its id', () => {
+  it('sends agentName so the roster row is written under the display name', async () => {
+    const { calls, deps } = harness();
+    await declareWorkspaceLead({ workspaceId: WS }, deps);
+    const attach = calls.find((c) => c.path?.endsWith('/attachments'));
+    expect((attach?.body as { agentName?: string }).agentName).toBe(SELF.name);
+  });
+});
+
 describe('POSITIVE CONTROL — the legacy payload keeps its meaning', () => {
   it('an explicit self id behaves identically to the omitted form', async () => {
     const omitted = harness();
@@ -321,3 +330,46 @@ describe('the tool schema widened rather than narrowed', () => {
     expect(src).toContain('Promise<{ open: boolean; persisted: boolean }>');
   });
 });
+
+/**
+ * Declaring without a name fails LOUD and before any seat change. The old
+ * path took the seat, then reported `subscriptionPersisted: false` on a
+ * success response — which is exactly how a live board ended up led by the
+ * shared "agent" identity with its watches persisted nowhere.
+ */
+describe('declareWorkspaceLead — a shared identity is refused before the seat PUT', () => {
+  it('issues no HTTP call at all and names CW_AGENT_NAME', async () => {
+    const { calls, deps } = harness();
+    const res = await declareWorkspaceLead(
+      { workspaceId: WS },
+      {
+        ...deps,
+        self: { id: 'known-agent', name: 'Agent', kind: 'agent' },
+        identityIsShared: true,
+      },
+    );
+    expect(res.isError).toBe(true);
+    expect(String(res.message)).toContain('CW_AGENT_NAME');
+    expect(calls).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: a named identity whose persist failed still takes the seat, warning first', async () => {
+    const { calls, deps } = harness();
+    deps.watchWorkspace = async (workspaceId: string) => {
+      calls.push({ kind: 'watch', path: workspaceId });
+      return { open: true, persisted: false };
+    };
+    const res = await declareWorkspaceLead({ workspaceId: WS }, deps);
+    expect(res.isError).toBeUndefined();
+    expect(shape(calls)).toContain(`PUT /api/workspaces/${WS}/lead`);
+    // The failure is the FIRST thing in the payload, with the remedy beside it.
+    expect(Object.keys(res)[0]).toBe('subscriptionPersisted');
+    expect(res.subscriptionPersisted).toBe(false);
+    expect(String(res.subscriptionWarning)).toMatch(/CW_AGENT_NAME|server/);
+  });
+});
+
+// The handler side — that a session without CW_AGENT_NAME gets a TOOL ERROR
+// from set_workspace_lead and no seat request leaves the process — is
+// asserted behaviourally over stdio in declare-lead-handler.test.ts, not by
+// grepping mcp.ts for the wiring.

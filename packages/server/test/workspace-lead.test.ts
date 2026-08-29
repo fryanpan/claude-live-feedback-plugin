@@ -21,9 +21,10 @@
  * register. The repo is public.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Identities } from '../src/identities.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
 import {
@@ -608,5 +609,339 @@ describe('lead agent routes + projection', () => {
     if (!emptyRoom) throw new Error('ws room missing');
     expect(emptyRoom.ydoc.getMap('workspace').get('name')).toBe('projected-empty');
     expect(emptyRoom.ydoc.getMap('workspace').has('leadAgentId')).toBe(false);
+  });
+});
+
+/**
+ * A renamed agent keeps its seat. The seat is keyed by id and the id is
+ * derived from the name, so before the roster a rename was a NEW agent that
+ * could not claim its own occupied seat. Two halves: a display-name change
+ * on the roster changes nothing about the seat, and a merge (old id → new
+ * id) moves the seat, the attachment, and every write's name with it.
+ */
+describe('the lead seat follows the identity, not the spelling', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  let events: TaskStoreEvent[];
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-merge-'));
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+    events = [];
+    store.onEvent((e) => events.push(e));
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('mergeAgent moves the seat and the attachment on every board the old id held', () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    const bystander = store.createWorkspace('other-hub', { leadAgentId: 'agent-third' });
+    store.attachAgent(bystander.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    const untouched = store.createWorkspace('untouched-hub', { leadAgentId: 'agent-third' });
+    events.length = 0;
+
+    const res = store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+    });
+    expect(res.seats.sort()).toEqual([led.id]);
+    expect(res.attachments.sort()).toEqual([bystander.id, led.id].sort());
+    expect(store.getWorkspace(led.id)?.leadAgentId).toBe('agent-new');
+    // A board the old id merely attached to keeps its own lead.
+    expect(store.getWorkspace(bystander.id)?.leadAgentId).toBe('agent-third');
+    expect(store.getWorkspace(untouched.id)?.leadAgentId).toBe('agent-third');
+    expect(store.listAttachments(led.id).map((a) => a.agentId)).toEqual(['agent-new']);
+    expect(store.listAttachments(bystander.id).map((a) => a.agentId)).toEqual(['agent-new']);
+    // The seat change is announced like any other, so the board repaints.
+    const changed = events.filter((e) => e.type === 'workspace.lead_changed');
+    expect(changed.map((e) => e.workspaceId)).toEqual([led.id]);
+    expect((changed[0] as { leadAgentId: string }).leadAgentId).toBe('agent-new');
+    expect((changed[0] as { oldLeadAgentId?: string }).oldLeadAgentId).toBe('agent-old');
+  });
+
+  it('POSITIVE CONTROL: a dry run reports the same moves and changes nothing', () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    events.length = 0;
+    const res = store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+      dryRun: true,
+    });
+    expect(res.seats).toEqual([led.id]);
+    expect(res.attachments).toEqual([led.id]);
+    expect(store.getWorkspace(led.id)?.leadAgentId).toBe('agent-old');
+    expect(store.listAttachments(led.id).map((a) => a.agentId)).toEqual(['agent-old']);
+    expect(events.filter((e) => e.type === 'workspace.lead_changed')).toHaveLength(0);
+  });
+
+  it('the merged seat survives a restart — it was persisted, not just re-pointed in memory', async () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-new', name: 'New Name', kind: 'agent' },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    const reloaded = new TaskStore({ dataDir, debounceMs: 5 });
+    try {
+      expect(reloaded.getWorkspace(led.id)?.leadAgentId).toBe('agent-new');
+      expect(reloaded.listAttachments(led.id).map((a) => a.agentId)).toEqual(['agent-new']);
+    } finally {
+      reloaded.stop();
+    }
+  });
+});
+
+describe('a display-name change keeps the seat and renames every write', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+
+  const local = (path: string, init: RequestInit = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        host: `localhost:${handle.port}`,
+        'content-type': 'application/json',
+        ...((init.headers as Record<string, string>) ?? {}),
+      },
+    });
+  const post = (path: string, body: unknown) =>
+    local(path, { method: 'POST', body: JSON.stringify(body) });
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-rename-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('the roster name is what a write is signed with, and the seat does not move', async () => {
+    const created = await post('/api/workspaces', { name: 'rename-hub', goal: 'Ship it.' });
+    const { workspace } = (await created.json()) as { workspace: { id: string } };
+    const attached = await post(`/api/workspaces/${workspace.id}/attachments`, {
+      agentId: 'agent-relay',
+      agentName: 'Relay',
+      runtime: 'claude-code-local',
+    });
+    expect(attached.status).toBe(200);
+    expect(handle.tasks.getWorkspace(workspace.id)?.leadAgentId).toBe('agent-relay');
+
+    // The rename: the roster row changes, the launch env has not.
+    expect(handle.identities.setDisplayName('agent-relay', 'Relay Two')?.displayName).toBe(
+      'Relay Two',
+    );
+    expect(handle.tasks.getWorkspace(workspace.id)?.leadAgentId).toBe('agent-relay');
+
+    // A write still signed with the OLD name lands under the roster's name.
+    const task = await post(`/api/workspaces/${workspace.id}/tasks`, {
+      title: 'Signed by a stale env',
+      author: { id: 'agent-relay', name: 'Relay', kind: 'agent' },
+    });
+    expect(task.status, await task.clone().text()).toBe(200);
+    const { task: row } = (await task.json()) as { task: { id: string; assignee: string } };
+    expect(row.assignee).toBe('Relay Two');
+
+    // And a thread on a doc — the comment path, not just the task path.
+    const file = join(dataDir, 'renamed.md');
+    writeFileSync(file, '# Heading\n\nSome prose.\n');
+    const doc = await post('/api/docs', { docId: 'renamed', type: 'markdown', sourceUrl: file });
+    expect(doc.status).toBe(200);
+    const thread = await post('/api/docs/renamed/threads', {
+      author: { id: 'agent-relay', name: 'Relay', kind: 'agent' },
+      text: 'signed stale',
+      anchor: { kind: 'subject' },
+    });
+    expect(thread.status, await thread.clone().text()).toBe(200);
+    const { thread: t } = (await thread.json()) as {
+      thread: { comments: Array<{ author: { id: string; name: string } }> };
+    };
+    expect(t.comments[0]?.author).toMatchObject({ id: 'agent-relay', name: 'Relay Two' });
+
+    // POSITIVE CONTROL: a person the roster does not hold is stamped as sent.
+    const person = await post('/api/docs/renamed/threads', {
+      author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+      text: 'unchanged',
+      anchor: { kind: 'subject' },
+    });
+    expect(person.status).toBe(200);
+    const { thread: p } = (await person.json()) as {
+      thread: { comments: Array<{ author: { id: string; name: string } }> };
+    };
+    expect(p.comments[0]?.author).toMatchObject({ id: 'known-jordan', name: 'Jordan' });
+  });
+
+  it('a row an older bundle attached without a name LEARNS its name from the first signed write', async () => {
+    const created = await post('/api/workspaces', { name: 'legacy-hub', goal: 'Ship it.' });
+    const { workspace } = (await created.json()) as { workspace: { id: string } };
+    await post(`/api/workspaces/${workspace.id}/attachments`, {
+      agentId: 'agent-legacy',
+      runtime: 'claude-code-local',
+    });
+    expect(handle.identities.get('agent-legacy')?.displayName).toBe('agent-legacy');
+    const task = await post(`/api/workspaces/${workspace.id}/tasks`, {
+      title: 'Signed by a legacy bundle',
+      author: { id: 'agent-legacy', name: 'Legacy Bundle', kind: 'agent' },
+    });
+    expect(task.status).toBe(200);
+    const { task: row } = (await task.json()) as { task: { assignee: string } };
+    // The claim was NOT overwritten with the id, and the roster now knows it.
+    expect(row.assignee).toBe('Legacy Bundle');
+    expect(handle.identities.get('agent-legacy')?.displayName).toBe('Legacy Bundle');
+  });
+});
+
+describe('the shared "agent" identity can neither claim nor be handed the seat', () => {
+  let dataDir: string;
+  let store: TaskStore;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-shared-'));
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('attachAgent refuses it, so an empty seat is not claimed by a category', () => {
+    const ws = store.createWorkspace('shared-hub');
+    const res = store.attachAgent(ws.id, { agentId: 'known-agent', runtime: 'claude-code-local' });
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error).toBe('author-required');
+    expect((res as { message?: string }).message).toContain('CW_AGENT_NAME');
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBeUndefined();
+    expect(store.listAttachments(ws.id)).toEqual([]);
+    // POSITIVE CONTROL: a named agent claims the same empty seat.
+    const named = store.attachAgent(ws.id, {
+      agentId: 'agent-relay',
+      runtime: 'claude-code-local',
+    });
+    expect(named.ok).toBe(true);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe('agent-relay');
+  });
+
+  it('setLeadAgent refuses it as the seat holder and as the caller', () => {
+    const ws = store.createWorkspace('shared-hub', { leadAgentId: 'agent-relay' });
+    const handed = store.setLeadAgent(ws.id, 'known-agent', { actor: AGENT });
+    expect(handed.ok).toBe(false);
+    if (handed.ok) throw new Error('unreachable');
+    expect(handed.error).toBe('author-required');
+    const claimed = store.setLeadAgent(ws.id, 'agent-other', {
+      actor: { id: 'known-agent', name: 'Agent', kind: 'agent' },
+      takeover: true,
+    });
+    expect(claimed.ok).toBe(false);
+    expect(store.getWorkspace(ws.id)?.leadAgentId).toBe('agent-relay');
+  });
+
+  it('the attach route answers 400, not 404, so the caller can read the remedy', async () => {
+    const handle = createServer({
+      port: 0,
+      dataDir: mkdtempSync(join(tmpdir(), 'ws-lead-shared-http-')),
+    });
+    try {
+      const base = `http://localhost:${handle.port}`;
+      const post = (path: string, body: unknown) =>
+        fetch(`${base}${path}`, {
+          method: 'POST',
+          headers: { host: `localhost:${handle.port}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      const created = await post('/api/workspaces', { name: 'shared-http', goal: 'Ship it.' });
+      const { workspace } = (await created.json()) as { workspace: { id: string } };
+      const res = await post(`/api/workspaces/${workspace.id}/attachments`, {
+        agentId: 'known-agent',
+        runtime: 'claude-code-local',
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('author-required');
+    } finally {
+      await handle.stop();
+    }
+  });
+});
+
+/** Security review of PR #440: two seams a merge could abuse on the board. */
+describe('merge seats and merged-away attaches (review findings)', () => {
+  let dataDir: string;
+  let store: TaskStore;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ws-lead-review-'));
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('a merge does not hand a seat to an id the board has no attachment for', () => {
+    // The seat is held by an id nothing ever attached under (a board made
+    // before the unknown-lead check, or led by the shared category).
+    const ghostLed = store.createWorkspace('ghost-hub', { leadAgentId: 'agent-ghost' });
+    const res = store.mergeAgent('agent-ghost', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    expect(res.seats).toEqual([]);
+    expect(res.seatsSkipped).toEqual([ghostLed.id]);
+    expect(store.getWorkspace(ghostLed.id)?.leadAgentId).toBe('agent-ghost');
+
+    // POSITIVE CONTROL: once the target is attached, the same merge moves it.
+    store.attachAgent(ghostLed.id, { agentId: 'agent-new', runtime: 'claude-code-local' });
+    const again = store.mergeAgent('agent-ghost', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    expect(again.seats).toEqual([ghostLed.id]);
+    expect(again.seatsSkipped).toEqual([]);
+    expect(store.getWorkspace(ghostLed.id)?.leadAgentId).toBe('agent-new');
+  });
+
+  it('a merge that carries the attachment across still moves the seat', () => {
+    const led = store.createWorkspace('led-hub', { leadAgentId: 'agent-old' });
+    store.attachAgent(led.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    const res = store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    expect(res.seats).toEqual([led.id]);
+    expect(res.seatsSkipped).toEqual([]);
+    expect(store.getWorkspace(led.id)?.leadAgentId).toBe('agent-new');
+  });
+
+  it('a merged-away id cannot attach again; the refusal names the survivor', () => {
+    const roster = new Identities({ dataDir });
+    store.setAgentRoster(roster);
+    const ws = store.createWorkspace('hub', { leadAgentId: 'agent-lead' });
+    roster.upsertAgent('agent-new', 'New');
+    roster.upsertAgent('agent-old', 'Old');
+    // POSITIVE CONTROL: before the merge the old id attaches normally.
+    expect(
+      store.attachAgent(ws.id, { agentId: 'agent-old', runtime: 'claude-code-local' }).ok,
+    ).toBe(true);
+    // The merge, both halves — as the route runs it.
+    expect(roster.mergeAgent('agent-old', 'agent-new').ok).toBe(true);
+    store.mergeAgent('agent-old', 'agent-new', {
+      actor: { id: 'agent-operator', name: 'Operator', kind: 'agent' },
+    });
+    const res = store.attachAgent(ws.id, { agentId: 'agent-old', runtime: 'claude-code-local' });
+    expect(res.ok).toBe(false);
+    if (res.ok || res.error !== 'merged-away')
+      throw new Error(`expected merged-away, got ${JSON.stringify(res)}`);
+    expect(res.into).toBe('agent-new');
+    expect(String(res.message)).toContain('agent-new');
+    // Nothing was written under the old key.
+    expect(store.listAttachments(ws.id).map((a) => a.agentId)).not.toContain('agent-old');
+    // The survivor attaches fine.
+    expect(
+      store.attachAgent(ws.id, { agentId: 'agent-new', runtime: 'claude-code-local' }).ok,
+    ).toBe(true);
   });
 });

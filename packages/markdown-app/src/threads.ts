@@ -4,6 +4,7 @@ import {
   type ReviewPayload,
   type Thread,
   type User,
+  authorLabel,
   formatTime,
   pendingDeclaration,
   reviewAnswered,
@@ -548,7 +549,7 @@ export class ThreadPanel {
     const who = span('thread-who clip');
     const name = span('name');
     // Plain text, never HTML: author names are agent-supplied and untrusted.
-    name.textContent = author.name;
+    name.textContent = authorLabel(author);
     who.appendChild(name);
     // Status only varies where resolved/orphaned threads can appear at all —
     // the margin renders open threads exclusively, so this is empty there.
@@ -588,7 +589,7 @@ export class ThreadPanel {
     const decision = threadDecision(t);
     const decisionSuffix =
       decision === 'pending' ? ', decision needed' : decision === 'answered' ? ', decision' : '';
-    caret.setAttribute('aria-label', `Comment from ${author.name}${decisionSuffix}`);
+    caret.setAttribute('aria-label', `Comment from ${authorLabel(author)}${decisionSuffix}`);
     caret.setAttribute('aria-expanded', String(this.activeId === t.id));
     caret.textContent = '›';
     head.appendChild(caret);
@@ -760,7 +761,7 @@ export class ThreadPanel {
     // A declaration IS an ask, so this always reads "Asked" — same judgment
     // the hub's `askedMeta` records for declared items. The clock is the
     // declaring comment's, which is when the question was put.
-    meta.textContent = askedMetaLine(c.author.name, true, c.ts, Date.now());
+    meta.textContent = askedMetaLine(authorLabel(c.author), true, c.ts, Date.now());
     head.append(meta);
     card.append(head);
 
@@ -949,7 +950,7 @@ function commentRow(c: Comment, carriedByItemCard = false): HTMLElement {
   swatch.style.background = c.author.color;
   const name = span('name');
   // Plain text, never HTML: names are untrusted (agent-supplied).
-  name.textContent = c.author.name;
+  name.textContent = authorLabel(c.author);
   const time = span('time');
   time.textContent = formatTime(c.ts);
   authorRow.append(swatch, name, time);
