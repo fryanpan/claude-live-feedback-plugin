@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import {
+  type ReviewItemJudgement,
   type ReviewItemRange,
   type ReviewItemRevision,
   type ReviewPayload,
@@ -19,6 +20,7 @@ import {
   agentIdForName,
   changedRange,
   checkReviewPayload,
+  isReviewItemHeld,
   isReviewItemOpen,
   latestThreadedQuestion,
   readReviewPayload,
@@ -27,6 +29,7 @@ import {
   reviewGapAdvice,
   reviewPayloadMessage,
 } from '@feedback/core';
+import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
 import { classifyActor } from './activity.ts';
 import {
   type DecisionShapeGap,
@@ -240,6 +243,14 @@ export interface HubWorkspace {
    *  notice: an agent told only "this board is retired" has nowhere to go,
    *  and the reason is usually the name of the board that replaced it. */
   retiredReason?: string;
+  /**
+   * What this board judges a review item against before it reaches the
+   * reader's queue — a natural-language prompt the owner edits (Bryan,
+   * 2026-08-29: *"Something we can change in the settings"*). Absent means
+   * `DEFAULT_REVIEW_ITEM_CRITERIA`; `reviewItemCriteria()` is the one reader,
+   * so the default lives in exactly one place.
+   */
+  reviewItemCriteria?: string;
   createdAt: number;
 }
 
@@ -545,6 +556,20 @@ export interface InfoRequest {
   ts: number;
 }
 
+/**
+ * A review item as the SIDECAR holds it: the projected row plus what the
+ * store keeps to itself.
+ *
+ * `filedBy` is the filer as an actor — id included — because the quality
+ * gate's wake has to be ADDRESSED (`sendToAgent` keys on the agent id) and
+ * `createdBy` is a display name by the §3.3 visitor contract. It stays out
+ * of every projection the way transition actor ids do: `readTaskReviewItem`
+ * never reads it, so the board room never carries it.
+ */
+export interface StoredReviewItem extends TaskReviewItem {
+  filedBy?: TaskActor;
+}
+
 export interface Task {
   /** `t-<crypto-random>`. */
   id: string;
@@ -631,7 +656,7 @@ export interface Task {
    * Persisted with the rest of the task — the sidecar serializes the whole
    * row, so this needs no writer of its own.
    */
-  reviews?: TaskReviewItem[];
+  reviews?: StoredReviewItem[];
   /** Goal or subgoal id; `chores` is the catch-all. */
   goal: string;
   /** Fractional sort key — always room to insert between two tasks. */
@@ -2002,6 +2027,26 @@ export type WithdrawAnswerResult =
 export type RequestMoreInfoResult =
   | { ok: true; task: Task }
   | { ok: false; error: 'not-found' | 'not-a-decision' };
+
+/**
+ * One HELD review item as the stall monitor reads it off the board: enough to
+ * name the item and the ticket in a wake, and to address the filer.
+ */
+export interface HeldReviewItem {
+  taskId: string;
+  title: string;
+  reviewItemId: string;
+  headline: string;
+  /** The judge's reason — the gap the filer was asked to close. */
+  reason: string;
+  /** When the hold was placed; what the 5-minute clock runs from. */
+  heldAt: number;
+  /** Display name of the filer, for the line. */
+  filedBy: string;
+  /** The filer's agent id, for the addressed wake. Absent on an item whose
+   *  filer the store did not record (pre-gate rows cannot be held anyway). */
+  filerAgentId?: string;
+}
 
 export type AddReviewItemResult =
   | {
@@ -3969,15 +4014,140 @@ export class TaskStore {
    * "this ticket is clear" and "there is no such ticket" are the two answers
    * this method exists to keep apart, so it must not merge them itself.
    */
-  reviewState(taskId: string): { open: number; unreadable: number } | undefined {
+  reviewState(taskId: string): { open: number; unreadable: number; held: number } | undefined {
     const task = this.getTask(taskId);
     if (!task) return undefined;
-    const open = this.listReviewItems(taskId).filter(isReviewItemOpen).length;
+    // A HELD item is open — nobody has answered it — and yet it is not an
+    // ask anyone can see: the quality gate kept it off the queue. So it is
+    // counted apart, and `open` excludes it: a row whose only question is
+    // held is not legitimately waiting on a person, and reading it as such
+    // would exonerate it from the stall clock on the strength of an ask the
+    // reader was never shown.
+    const items = this.listReviewItems(taskId);
+    const held = items.filter(isReviewItemHeld).length;
+    const open = items.filter((i) => isReviewItemOpen(i) && !isReviewItemHeld(i)).length;
     let unreadable = 0;
     for (const raw of task.reviews ?? []) {
       if (!readTaskReviewItem(raw)) unreadable++;
     }
-    return { open, unreadable };
+    return { open, unreadable, held };
+  }
+
+  /**
+   * Record the quality gate's verdict on an item's CURRENT words, and who
+   * filed them.
+   *
+   * Writes only the two store-side fields — `judge` (projected, so the card
+   * can say "Held: …") and `filedBy` (store-only, so the wake can be
+   * addressed). The words themselves are untouched: a hold is a verdict ON the
+   * item, never an edit OF it, and the filer's own `revise` is what changes
+   * the text. Overwrites the previous verdict in place because a verdict is
+   * about the current words, and those have a history of their own
+   * (`revisions`) that a superseded verdict adds nothing to.
+   *
+   * Refuses the derived legacy row and an answered item for the same reasons
+   * `reviseReviewItem` does: neither has words a verdict could hold.
+   */
+  recordReviewJudgement(
+    taskId: string,
+    reviewItemId: string,
+    judgement: ReviewItemJudgement,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ):
+    | { ok: true; task: Task; item: TaskReviewItem }
+    | { ok: false; error: 'not-found' | 'unknown-review-item' | 'answered' } {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (reviewItemId === LEGACY_REVIEW_ITEM_ID) return { ok: false, error: 'unknown-review-item' };
+    const item = task.reviews?.find((r) => r.id === reviewItemId);
+    if (!item) return { ok: false, error: 'unknown-review-item' };
+    if (item.answer) return { ok: false, error: 'answered' };
+    item.judge = { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason };
+    item.filedBy = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    task.updatedAt = Math.max(task.updatedAt, judgement.at);
+    this.scheduleSave(task.workspaceId);
+    const read = readTaskReviewItem(item);
+    // Unreachable: the row was found by id and its review was readable a
+    // moment ago. Kept so a corrupt row is a refusal rather than an undefined.
+    if (!read) return { ok: false, error: 'unknown-review-item' };
+    return { ok: true, task, item: read };
+  }
+
+  /**
+   * Every HELD item on a board, with what the stall monitor needs to name
+   * it and to find its filer. Read off the raw rows because `filedBy` is
+   * store-only. Done tickets are skipped — a held question on finished work
+   * is not a finding anyone should act on.
+   */
+  heldReviewItems(workspaceId: string): HeldReviewItem[] {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return [];
+    const out: HeldReviewItem[] = [];
+    for (const task of state.tasks.values()) {
+      if (task.status === 'done' || isArchived(task)) continue;
+      for (const raw of task.reviews ?? []) {
+        const item = readTaskReviewItem(raw);
+        if (!item || !isReviewItemHeld(item) || !item.judge) continue;
+        out.push({
+          taskId: task.id,
+          title: task.title,
+          reviewItemId: item.id,
+          headline: item.review.headline,
+          reason: item.judge.reason,
+          heldAt: item.judge.at,
+          filedBy: item.createdBy,
+          ...(raw.filedBy?.id !== undefined ? { filerAgentId: raw.filedBy.id } : {}),
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The criteria this board judges review items against: the owner's own
+   * text, or the default when nobody has written any. The ONE reader of
+   * `HubWorkspace.reviewItemCriteria`, so "what does default mean" is
+   * answered in exactly one place. `undefined` for a board that does not
+   * exist — distinct from a board on the default, which is the ordinary case.
+   */
+  reviewItemCriteria(workspaceId: string): { value: string; isDefault: boolean } | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return undefined;
+    const own = state.workspace.reviewItemCriteria;
+    return own !== undefined && own.trim() !== ''
+      ? { value: own, isDefault: false }
+      : { value: DEFAULT_REVIEW_ITEM_CRITERIA, isDefault: true };
+  }
+
+  /**
+   * Set — or, with `undefined`/blank, clear back to the default — what this
+   * board judges review items against. A settings write, not a board event:
+   * nothing in §3.6's table describes it and no subscriber acts on it, the
+   * same contract as `setDependencies`. The next filing reads it.
+   */
+  setReviewItemCriteria(
+    workspaceId: string,
+    criteria: string | undefined,
+    _opts: { actor: { id: string; name: string; kind?: string } },
+  ):
+    | { ok: true; workspace: HubWorkspace; criteria: { value: string; isDefault: boolean } }
+    | { ok: false; error: 'workspace-not-found' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const next = criteria?.trim();
+    if (next === undefined || next === '') state.workspace.reviewItemCriteria = undefined;
+    else state.workspace.reviewItemCriteria = next;
+    this.scheduleSave(workspaceId);
+    const read = this.reviewItemCriteria(workspaceId);
+    return {
+      ok: true,
+      workspace: state.workspace,
+      criteria: read ?? { value: DEFAULT_REVIEW_ITEM_CRITERIA, isDefault: true },
+    };
   }
 
   /**
