@@ -170,6 +170,9 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     docLink: ctx.workspaceId
       ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
       : undefined,
+    // A huddle washes each participant's recent sections in their color;
+    // every other doc is untouched (no plugin registered at all).
+    recentEdits: ctx.huddle === true ? { whenSynced: (cb) => client.onReady(cb) } : undefined,
   });
   // Editor teardown runs before the client closes (LIFO — client.close was
   // registered first by the router), so the y-prosemirror binding detaches

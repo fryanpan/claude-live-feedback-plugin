@@ -5465,6 +5465,44 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 
+/* ========== recent-edit wash (huddle docs) ==========
+   edit-wash.ts: each participant's last three edited top-level sections,
+   tinted with THAT person's identity color (`--edit-color`, set inline by
+   the decoration — Bryan blue, agents orange, per packages/core identity).
+   A node decoration, so the class lands on the block element itself; the
+   negative margin puts the bar in the editor's gutter and the text stays
+   exactly where it was. Rank 1 = that person's most recent section. */
+#editor > .ProseMirror .edit-wash {
+  --edit-alpha: 10%;
+  border-left: 3px solid var(--edit-color, var(--accent));
+  background: color-mix(in srgb, var(--edit-color, var(--accent)) var(--edit-alpha), transparent);
+  margin-left: -14px;
+  padding-left: 11px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  border-radius: 0 4px 4px 0;
+  transition: background 240ms ease;
+}
+#editor > .ProseMirror .edit-wash-1 {
+  --edit-alpha: 12%;
+}
+#editor > .ProseMirror .edit-wash-2 {
+  --edit-alpha: 9%;
+}
+#editor > .ProseMirror .edit-wash-3 {
+  --edit-alpha: 6%;
+}
+/* The wash is the live session, not the record: a printed huddle doc is
+   plain prose. */
+@media print {
+  #editor > .ProseMirror .edit-wash {
+    background: none;
+    border-left: 0;
+    margin-left: 0;
+    padding-left: 0;
+  }
+}
+
 /* ================= MEETING TRANSCRIPT STRIP =================
    The one thing a live meeting adds to the document editor. Secondary by
    construction: panel background against the white doc, a top border, and sans
