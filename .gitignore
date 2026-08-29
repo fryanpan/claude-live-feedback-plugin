@@ -52,3 +52,6 @@ demos/*
 # CI scratch: what the other open PRs declare, written by
 # scripts/collect-open-pr-versions.ts and read by the version gate.
 open-pr-versions.json
+
+# Deployed copy of the share-link Worker config, with the real route hostnames
+infra/share-link-worker/wrangler.local.toml
