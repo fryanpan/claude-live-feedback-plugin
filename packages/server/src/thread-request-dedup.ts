@@ -38,19 +38,43 @@
  *
  * `identityKey` is caller-built (see `server.ts`'s POST /threads handler) and
  * MUST fold in every field a repeat could plausibly change on purpose: not
- * just the anchor, but the declared `review` payload too. Codex review
- * caught this once already — an earlier version keyed on anchor alone, so
- * reusing a requestId with the same text/anchor but a CORRECTED review
- * declaration (e.g. filling in a missing `detail`) silently returned the
- * stale thread instead of ever persisting the correction.
+ * just the anchor, but the declared `review` payload and the author too.
+ * Codex review caught these one at a time — an earlier version keyed on
+ * anchor alone, so reusing a requestId with the same text/anchor but a
+ * CORRECTED review declaration (e.g. filling in a missing `detail`) silently
+ * returned the stale thread instead of ever persisting the correction; a
+ * later version added `review` but not the author, so requestId — client-
+ * controlled and never asserted unique — colliding between two different
+ * people attributed the second person's comment to the first.
+ *
+ * The TTL clock runs from COMPLETION, not reservation, and an in-flight
+ * entry is never pruned regardless of age. Codex review's third pass: the
+ * clock used to start at reservation, so a `create()` slower than the TTL
+ * (unlikely, but not impossible under load) could be pruned while still
+ * running — a concurrent duplicate arriving after that would miss the
+ * reservation and create a second thread even though the first was never
+ * done. And a completed entry needs the FULL window measured from when the
+ * response could plausibly have been sent, not from when the request
+ * started — a browser/network timeout that fires the composer's retry can
+ * easily land more than a few seconds after the server began handling the
+ * original request.
  */
 
-const DEFAULT_TTL_MS = 10_000;
+/** How long a COMPLETED create is remembered, timed from completion. Wide
+ *  enough to outlast a realistic client-side timeout-then-retry — this repo
+ *  doesn't auto-retry today, but the whole point of a server-side guard is
+ *  to survive a client bug or a future one, not just today's client. */
+const DEFAULT_TTL_MS = 30_000;
 
 interface Entry<T> {
   text: string;
   identityKey: string;
-  ts: number;
+  /** Set once `create()` settles successfully; undefined while in flight (or
+   *  after a null/rejected create, which is unreserved immediately instead
+   *  of aging out). `prune` only ever looks at THIS field — never at when
+   *  the entry was reserved — so an in-flight entry is immune to the TTL no
+   *  matter how long `create()` takes. */
+  settledAt?: number;
   promise: Promise<T>;
 }
 
@@ -65,7 +89,7 @@ export class ThreadRequestDedup<T> {
 
   private prune(now: number): void {
     for (const [k, e] of this.seen) {
-      if (now - e.ts > this.ttlMs) this.seen.delete(k);
+      if (e.settledAt !== undefined && now - e.settledAt > this.ttlMs) this.seen.delete(k);
     }
   }
 
@@ -116,16 +140,28 @@ export class ThreadRequestDedup<T> {
     const existing = this.lookup(docId, requestId, text, identityKey);
     if (existing) return { value: await existing, deduped: true };
     if (!requestId) return { value: await create(), deduped: false };
-    const now = Date.now();
     // Reserved before `create` is awaited — nothing here yields to the event
     // loop between `lookup` above and this write, so a request arriving
-    // while `create` is still running always finds this entry.
+    // while `create` is still running always finds this entry. `settledAt`
+    // starts unset, which is what keeps this reservation alive for as long
+    // as `create` takes, however long that is — `prune` never touches an
+    // entry with no `settledAt`.
     const key = this.key(docId, requestId);
-    const entry: Entry<T> = { text, identityKey, ts: now, promise: create() };
+    const entry: Entry<T> = { text, identityKey, promise: create() };
     this.seen.set(key, entry);
     try {
       const value = await entry.promise;
-      if (value == null && this.seen.get(key) === entry) this.seen.delete(key);
+      if (value == null) {
+        // A failed create too — unreserve it so a retry gets a fresh attempt
+        // instead of a cached failure for the rest of the window.
+        if (this.seen.get(key) === entry) this.seen.delete(key);
+      } else if (this.seen.get(key) === entry) {
+        // The TTL clock starts NOW, at completion — not back at reservation
+        // — so a retry gets the full window measured from when a response
+        // could plausibly have reached the client, not from when the
+        // original request started.
+        entry.settledAt = Date.now();
+      }
       return { value, deduped: false };
     } catch (err) {
       // A rejection is a failed create too — unreserve it so a retry gets a
