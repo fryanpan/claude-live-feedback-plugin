@@ -115,6 +115,60 @@ describe('ThreadRequestDedup', () => {
     expect(deduped).toBe(false);
   });
 
+  it('an in-flight create outlives the TTL — the clock only starts at completion', async () => {
+    // Codex review: the TTL used to run from RESERVATION, so a create()
+    // slower than the TTL could be pruned mid-flight, and a concurrent
+    // duplicate arriving after that would miss the reservation and create a
+    // second thread even though the first was still running.
+    const d = new ThreadRequestDedup<string | null>(10);
+    let resolveFirst: ((v: string) => void) | undefined;
+    const first = d.dedupe(
+      'doc1',
+      'r1',
+      'hello',
+      'anchor-a',
+      () => new Promise<string>((resolve) => (resolveFirst = resolve)),
+    );
+    const start = Date.now();
+    while (Date.now() - start < 15) {
+      // busy-wait well past the 10ms TTL while the first create is still
+      // unresolved.
+    }
+    let secondCalls = 0;
+    const second = d.dedupe('doc1', 'r1', 'hello', 'anchor-a', async () => {
+      secondCalls++;
+      return 't2';
+    });
+    resolveFirst?.('t1');
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.value).toBe('t1');
+    expect(secondResult.value).toBe('t1');
+    expect(secondResult.deduped).toBe(true);
+    expect(secondCalls).toBe(0);
+  });
+
+  it('a completed entry is remembered for the full TTL measured from completion, not from reservation', async () => {
+    const d = new ThreadRequestDedup<string | null>(15);
+    let resolveFirst: ((v: string) => void) | undefined;
+    const first = d.dedupe(
+      'doc1',
+      'r1',
+      'hello',
+      'anchor-a',
+      () => new Promise<string>((resolve) => (resolveFirst = resolve)),
+    );
+    const start = Date.now();
+    while (Date.now() - start < 20) {
+      // The reservation is already older than the 15ms TTL — if the clock
+      // ran from reservation, the entry below would already be gone.
+    }
+    resolveFirst?.('t1');
+    await first;
+    const { value, deduped } = await d.dedupe('doc1', 'r1', 'hello', 'anchor-a', async () => 't2');
+    expect(value).toBe('t1');
+    expect(deduped).toBe(true);
+  });
+
   /**
    * The race codex flagged in review: a naive check-then-create (look up,
    * `await create()`, THEN record) lets two requests that both arrive while
