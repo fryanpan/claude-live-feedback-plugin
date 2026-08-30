@@ -338,13 +338,16 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    */
   let names: Record<string, string> = {};
 
-  /** The tag every turn with this label wears, as it should read now. */
+  /** The tag every turn with this label wears, as it should read now. The
+   *  name goes on the PILL, never on the button: the button is the tap
+   *  target and holds nothing but padding (see the stylesheet). */
   function renderTag(entry: { tag: HTMLButtonElement | null }, label: string): void {
     const tag = entry.tag;
     if (!tag) return;
     const shown = speakerDisplayName(label, names);
     tag.dataset.speaker = label;
-    tag.textContent = shown;
+    const pill = tag.querySelector('.meeting-speaker-pill');
+    if (pill) pill.textContent = shown;
     tag.setAttribute('aria-label', `Name ${shown}`);
   }
 
@@ -393,6 +396,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           tag.type = 'button';
           tag.className = 'meeting-speaker';
           tag.title = 'Tap to name this speaker';
+          // The pill is a child so the button itself can stay free of the
+          // overflow that clipping a long name needs — a clip anywhere on
+          // the button eats its own tap target.
+          const pill = document.createElement('span');
+          pill.className = 'meeting-speaker-pill';
+          tag.append(pill);
           tag.addEventListener('click', () => nameSpeaker(tag.dataset.speaker ?? ''));
           entry.span.prepend(tag);
           entry.tag = tag;

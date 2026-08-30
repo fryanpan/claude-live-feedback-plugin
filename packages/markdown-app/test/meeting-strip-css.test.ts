@@ -94,51 +94,104 @@ describe('the speaker tag', () => {
 
   it('lives in the strip section, muted and smaller than the words it labels', () => {
     expect(tag, 'no .meeting-speaker rule in the MEETING section').not.toBe('');
-    expect(tag).toMatch(/color:\s*var\(--fg-muted\)/);
-    expect(tag).toMatch(/font-size:\s*1[01](\.\d+)?px/);
-    // A button that reads as a tag: no UA chrome.
-    expect(tag).toMatch(/border-radius:\s*var\(--radius-pill\)/);
     expect(tag).toMatch(/cursor:\s*pointer/);
+    // The look lives on the pill inside it; see the split below.
+    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
+    expect(pill).toMatch(/color:\s*var\(--fg-muted\)/);
+    expect(pill).toMatch(/font-size:\s*1[01](\.\d+)?px/);
+    // A button that reads as a tag: no UA chrome.
+    expect(pill).toMatch(/border-radius:\s*var\(--radius-pill\)/);
   });
 
-  it('is tappable at the 36px floor — the pseudo AND the room to draw it', () => {
-    // This test used to assert the ::before alone and passed while the real
-    // target measured 19px: `overflow: hidden` on .meeting-caption clips to
-    // its PADDING box, and with no padding it ate the whole hit area. The
-    // pseudo-element and the caption's padding are one mechanism, so both
-    // are asserted here or the next person gets the same false green.
-    expect(tag).toMatch(/position:\s*relative/);
-    const hit = rule('.meeting-speaker::before', declarationsOnly(SECTION));
-    expect(hit).toMatch(/position:\s*absolute/);
-    const reach = /inset:\s*-(\d+)px/.exec(hit);
-    expect(reach, 'the ::before no longer reaches past the tag box').not.toBeNull();
-    const caption = rule('.meeting-caption', declarationsOnly(SECTION));
-    const pad = /padding-block:\s*(\d+)px/.exec(caption);
-    expect(pad, '.meeting-caption pads nothing, so the clip eats the target').not.toBeNull();
-    // Tag box ~18px + the pseudo's reach on each side, and the clip box must
-    // be at least as tall as the pseudo wants to be.
-    expect(Number(pad?.[1])).toBeGreaterThanOrEqual(Number(reach?.[1]) - 1);
-    expect(18 + 2 * Number(reach?.[1])).toBeGreaterThanOrEqual(36);
-    // Padding only widens the CLIP box if the height stays the text window.
-    expect(caption).toMatch(/box-sizing:\s*content-box/);
-    // And the mask has to be anchored to the window, not to a percentage of a
-    // box that just got taller — otherwise the padding reveals a rolled-off
-    // line the fade no longer covers.
-    expect(caption).toMatch(/mask-image:[^;]*transparent 9px/);
+  /**
+   * MEASURE THE OUTCOME, NOT THE INGREDIENTS. Two rounds of review were lost
+   * here while a test passed: it asserted the pseudo-element that was meant
+   * to buy the 36px, then the pseudo AND the caption's padding — and the real
+   * target measured 19px both times, because a clip one level away ate it
+   * (first .meeting-caption's, then the button's own, added for the
+   * ellipsis). Declarations that SHOULD produce 36px are not the claim. So
+   * this computes the hit box the way the browser does: the pill's height,
+   * the button's padding around it, and then every clip between the button
+   * and the strip, which is where both regressions actually happened.
+   *
+   * happy-dom resolves no layout, so the arithmetic is done here from the
+   * stylesheet. It is the model that has to be honest: it walks the ancestor
+   * chain and takes the SMALLEST clip, so any new `overflow` on any of them
+   * fails this test rather than shipping.
+   */
+  const px = (v: string | undefined, emBase: number): number => {
+    if (!v) return Number.NaN;
+    const em = /^(-?[\d.]+)em$/.exec(v.trim());
+    if (em) return Number(em[1]) * emBase;
+    const n = /^(-?[\d.]+)px$/.exec(v.trim());
+    return n ? Number(n[1]) : Number.NaN;
+  };
+  const decl = (body: string, prop: string): string | undefined =>
+    new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`).exec(body)?.[1]?.trim();
+
+  it('the tap target MEASURES at least 36px, clips included', () => {
+    const STRIP_FONT = px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'font-size'), 16);
+    expect(STRIP_FONT).toBeGreaterThan(0);
+
+    // The pill: the box the person actually sees.
+    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
+    const pillFont = px(decl(pill, 'font-size'), STRIP_FONT);
+    const pillLine = Number(decl(pill, 'line-height'));
+    const pillBorder = px(/^([\d.]+px)/.exec(decl(pill, 'border') ?? '')?.[1], STRIP_FONT);
+    const pillHeight = pillFont * pillLine + 2 * pillBorder;
+    expect(pillHeight).toBeGreaterThan(0);
+
+    // The button: its padding IS the target, so the border box is the hit box.
+    const btn = rule('.meeting-speaker', declarationsOnly(SECTION));
+    const pad = /padding:\s*([\d.]+)px/.exec(btn)?.[1];
+    const hit = pillHeight + 2 * Number(pad);
+
+    // Every clip between the target and the strip. .meeting-caption is the
+    // one that clips today; the others are asserted to clip NOTHING, because
+    // an overflow added to any of them is exactly how this broke twice.
+    const capt = rule('.meeting-caption', declarationsOnly(SECTION));
+    const captClip =
+      px(decl(capt, 'height'), STRIP_FONT) + 2 * px(decl(capt, 'padding-block'), STRIP_FONT);
+    let effective = Math.min(hit, captClip);
+    for (const sel of ['.meeting-caption-line', '.meeting-turn', '.meeting-speaker']) {
+      const body = rule(sel, declarationsOnly(SECTION));
+      const of = decl(body, 'overflow');
+      if (of && of !== 'visible') effective = Math.min(effective, pillHeight);
+    }
+    expect(effective, `hit ${hit}, caption clip ${captClip}`).toBeGreaterThanOrEqual(36);
+  });
+
+  it('keeps the target and the clip on separate elements', () => {
+    // The split IS the fix: the button holds the padding and nothing that
+    // clips; the pill holds every visual and the only overflow. Collapse them
+    // and the ellipsis clips the tap target again.
+    const btn = rule('.meeting-speaker', declarationsOnly(SECTION));
+    expect(btn).not.toMatch(/overflow:/);
+    expect(btn).not.toMatch(/text-overflow:/);
+    expect(btn).toMatch(/background:\s*none/);
+    expect(btn).toMatch(/border:\s*0/);
+    // The line box must not grow by the padding, or the caption's window
+    // stops being one line and the words move.
+    expect(btn).toMatch(/margin:\s*-\d+px/);
+    // And no pseudo-element target survives to be clipped a third time.
+    expect(rule('.meeting-speaker::before', declarationsOnly(SECTION))).toBe('');
   });
 
   it('caps the tag so naming a voice cannot push every tag out of the window', () => {
     // A 60-character name rendered a 335px pill, wrapped the caption line, and
     // hid all three tags — naming a speaker turned the labels off.
-    expect(tag).toMatch(/max-width:\s*\d+(\.\d+)?em/);
-    expect(tag).toMatch(/overflow:\s*hidden/);
-    expect(tag).toMatch(/text-overflow:\s*ellipsis/);
+    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
+    expect(pill).toMatch(/max-width:\s*\d+(\.\d+)?em/);
+    expect(pill).toMatch(/overflow:\s*hidden/);
+    expect(pill).toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it('looks like a control at rest, where there is no hover to reveal it', () => {
     // `cursor: pointer` and the title attribute are both hover-only, so on the
     // iPad nothing said the pill was tappable.
-    expect(tag).toMatch(/text-decoration:\s*underline dotted/);
+    expect(rule('.meeting-speaker-pill', declarationsOnly(SECTION))).toMatch(
+      /text-decoration:\s*underline dotted/,
+    );
   });
 
   it('gives each turn its own line, so a tag never strands above its words', () => {
