@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import { ReservedDocIdError } from '../src/doc-ids.ts';
 import {
   captureServerError,
   flushServerSentry,
@@ -6,6 +7,7 @@ import {
   isServerSentryActive,
   resetServerSentryForTest,
   routePatternForSpan,
+  sanitizeErrorForCapture,
   scrubEventForPrivacy,
   withRouteSpan,
 } from '../src/sentry.ts';
@@ -195,6 +197,25 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
 
     const scrubbed = scrubEventForPrivacy(nested);
     expect(JSON.stringify(scrubbed)).not.toContain(secretId);
+  });
+
+  it('sanitizeErrorForCapture strips a caller-chosen docId that ReservedDocIdError bakes into its own message', () => {
+    // codex review's third finding: neither scrub floor catches this,
+    // because a caller-chosen docId (a bound file's relative path, or a
+    // `task:<id>` alias) reads as ordinary text — MINTED_ID_SHAPE only
+    // matches OUR OWN minted-id shape. ReservedDocIdError is a real,
+    // currently-thrown error (rooms.ts) that puts the raw value straight
+    // into `.message`, with nothing catching it by name before it could
+    // reach captureServerError. This is the one place a structured field
+    // makes exact — not shape-guessed — redaction possible.
+    const secretDocId = 'g1:secret~internal~roadmap.md'; // a real bound-file-shaped docId
+    const err = new ReservedDocIdError(secretDocId);
+    expect(err.message).toContain(secretDocId); // the real class actually leaks first
+
+    const sanitized = sanitizeErrorForCapture(err) as Error;
+    expect(sanitized.message).not.toContain(secretDocId);
+    expect(sanitized.message).not.toContain('roadmap');
+    expect(sanitized.name).toBe('ReservedDocIdError');
   });
 });
 
@@ -414,6 +435,32 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     // A raw id in an exception MESSAGE — the plausible mistake team-lead
     // named directly.
     captureServerError(new Error(`doc ${secretDocId} not found`));
+
+    await flushServerSentry(5000);
+
+    const joined = capture
+      .hits()
+      .map((h) => h.text)
+      .join('\n');
+    expect(joined).not.toContain(secretDocId);
+  });
+
+  it('a real ReservedDocIdError caught and captured never ships its raw docId, end to end', async () => {
+    // The concrete instance codex review found: a bound-file-shaped docId
+    // that no shape-based scrub would ever catch, going through the real
+    // capture path a caller in rooms.ts actually hits. Built from
+    // crypto.randomUUID() rather than a hardcoded literal, same reasoning
+    // as elsewhere in this file: ContextLines attaches source snippets
+    // around the throw site, and a literal sitting in the SOURCE a few
+    // lines away would show up via that — this repo's own text, nothing to
+    // do with whether the runtime value actually left the process.
+    capture.hits().length = 0;
+    const secretDocId = `g1:${crypto.randomUUID()}~internal~plan.md`;
+    try {
+      throw new ReservedDocIdError(secretDocId);
+    } catch (err) {
+      captureServerError(err);
+    }
 
     await flushServerSentry(5000);
 
