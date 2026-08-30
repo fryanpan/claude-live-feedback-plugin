@@ -33,6 +33,7 @@ import {
   latestThreadedQuestion,
   pendingDeclaration,
   reviewItemState,
+  reviewPayloadRevision,
 } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
@@ -138,6 +139,24 @@ export interface ReviewThreadItem {
    * ago" about a question nobody had yet had a chance to see.
    */
   askedAt?: number;
+  /**
+   * On a DECLARED row whose words have been corrected: when, and which span
+   * of the new detail changed.
+   *
+   * Same two fields the ticket row carries, read off the payload's own
+   * `revisions` rather than a wrapper's — a doc-thread item has no wrapper.
+   * They exist so the reader can tell a CORRECTION from a fresh ask. Without
+   * them the only way to correct a doc-thread item was to raise a second one,
+   * and the queue then showed two rows about one question with no way to see
+   * which was which; showing the revision unmarked would keep that confusion
+   * while removing the duplicate, which is half a fix.
+   *
+   * No `question` twin here: a ticket item records the reader's anchored
+   * question in `infoRequests`, and a doc-thread item has no such record —
+   * the conversation IS the thread this row already points at.
+   */
+  revisedAt?: number;
+  revisedRange?: { start: number; end: number };
 }
 
 /**
@@ -575,6 +594,11 @@ export function reviewThreadItems(args: {
       if (run.length === 0 && declaring === null) continue;
 
       if (declaring?.review) {
+        // A correction to the words, if there has been one. `since` is
+        // deliberately NOT reset by it: the reader has been waiting on this
+        // question since it was asked, and a revision is the asker getting
+        // the question right rather than a new wait starting.
+        const revised = reviewPayloadRevision(declaring.review);
         items.push({
           kind,
           band: 'declared',
@@ -582,6 +606,8 @@ export function reviewThreadItems(args: {
           threadId: thread.id,
           commentId: declaring.id,
           review: declaring.review,
+          ...(revised ? { revisedAt: revised.at } : {}),
+          ...(revised?.revisedRange ? { revisedRange: revised.revisedRange } : {}),
           ...(taskId ? { taskId } : {}),
           title,
           // The headline IS the row title — an authored line rather than a

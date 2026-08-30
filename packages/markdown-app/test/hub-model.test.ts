@@ -958,6 +958,33 @@ describe('reviewQueue', () => {
     return rest;
   };
 
+  // A review item raised on a DOC THREAD became correctable in place, and a
+  // correction the reader cannot recognise is half a fix: they would still be
+  // looking at two rows unable to tell which one they had already answered.
+  // The pair, because the unmarked case is what proves the mark means
+  // something.
+  it('marks a corrected doc-thread row as revised, and leaves an uncorrected one unmarked', () => {
+    const q = reviewQueue(
+      [],
+      [
+        threadItem({
+          kind: 'doc-thread',
+          docId: 'doc-1',
+          threadId: 'th-fixed',
+          revisedAt: T0 - 1_000,
+          revisedRange: { start: 4, end: 11 },
+        }),
+        threadItem({ kind: 'doc-thread', docId: 'doc-1', threadId: 'th-asis' }),
+      ],
+      T0,
+    );
+    const fixed = q.items.find((i) => i.thread?.threadId === 'th-fixed');
+    const asis = q.items.find((i) => i.thread?.threadId === 'th-asis');
+    expect(fixed?.revision?.at).toBe(T0 - 1_000);
+    expect(fixed?.revision?.range).toEqual({ start: 4, end: 11 });
+    expect(asis?.revision).toBeUndefined();
+  });
+
   // The ordering Bryan asked for, and the reason the queue exists: the thing
   // holding work up is first, and a doc comment is not allowed to outrank a
   // decision just because it is older.

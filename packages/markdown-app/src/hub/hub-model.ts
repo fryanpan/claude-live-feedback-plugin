@@ -914,9 +914,18 @@ export interface ReviewThreadItem {
    * omits, since it is the owner's turn. Absent from an older server.
    */
   state?: 'open' | 'revised';
-  /** On a revised row: when, what the reader had asked (the anchored
-   *  thread's first comment), and which span of the NEW detail changed.
-   *  `threadId` above names the thread that asked. */
+  /**
+   * On a revised row: when, what the reader had asked (the anchored thread's
+   *  first comment), and which span of the NEW detail changed. `threadId`
+   *  above names the thread that asked.
+   *
+   * Carried by a DECLARED THREAD row as well as a `task-review` one — a
+   * review item raised on a doc thread became correctable in place, and it
+   * keeps its superseded wording on the payload rather than on a wrapper. The
+   * two fields mean the same thing on both, which is why they are one shape
+   * here. `question` stays task-only: a doc-thread item's conversation is the
+   * thread the row already points at.
+   */
   revisedAt?: number;
   question?: string;
   revisedRange?: { start: number; end: number };
@@ -1344,6 +1353,19 @@ export function reviewQueue(
           : `${t.askedBy} posted ${timeAgo(t.since, now)} · ${where}`,
         since: t.since,
         thread: t,
+        // Marked Revised, exactly as a ticket-borne item is. Without this the
+        // corrected row is indistinguishable from a fresh ask, which is the
+        // confusion the correction verb exists to remove — a reader who
+        // cannot tell which of two rows they already answered has been helped
+        // by nothing.
+        ...(t.revisedAt !== undefined
+          ? {
+              revision: {
+                at: t.revisedAt,
+                ...(t.revisedRange ? { range: t.revisedRange } : {}),
+              },
+            }
+          : {}),
       },
       rank: rankOf(
         t.kind === 'task-thread' && t.taskId ? taskById.get(t.taskId) : undefined,
