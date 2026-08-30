@@ -753,6 +753,15 @@ export interface ServerOptions {
    * Overridable so tests never wait real minutes; default 5 minutes.
    */
   uptimeTickMs?: number;
+  /**
+   * Requests whose response takes at least this many milliseconds to BUILD
+   * leave a `[timing]` line in the log (method, path, ms, status, bytes).
+   * Default 500. The body's transfer is not in the number — Bun streams it
+   * after the handler returns — which is why the byte count rides along:
+   * a 0 ms route with a megabyte body and a 3 s route with a 4 KB one are
+   * different bugs, and the line has to tell them apart. Tests set 0.
+   */
+  slowRequestMs?: number;
 }
 
 const CT: Record<string, string> = {
@@ -957,6 +966,7 @@ const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const dataDir = opts.dataDir ?? join(process.cwd(), 'data');
+  const slowRequestMs = opts.slowRequestMs ?? 500;
   const clientReleaseRootDir = opts.clientReleaseRootDir ?? null;
   const widgetDist = opts.widgetDistDir ?? null;
   const markdownAppDist = opts.markdownAppDistDir ?? null;
@@ -3258,6 +3268,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // the unfixed build, while SSE died at 9.7s.
     idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
     async fetch(req, server) {
+      const startedAt = performance.now();
       // `undefined` means the request became a websocket — nothing to decorate.
       const routed = await route(req, server);
       // Compress BEFORE the CORS merge so the encoding headers ride out on the
@@ -3268,12 +3279,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // `maybeNotModified` runs first: when the client already holds the body,
       // gzipping it is the one case where the CPU buys nothing, and a 304 has
       // no body for `maybeCompress` to act on anyway.
-      return routed === undefined
-        ? undefined
-        : applyCors(
-            req,
-            refreshSession(req, await maybeCompress(req, maybeNotModified(req, routed))),
-          );
+      if (routed === undefined) return undefined;
+      const response = applyCors(
+        req,
+        refreshSession(req, await maybeCompress(req, maybeNotModified(req, routed))),
+      );
+      const elapsedMs = performance.now() - startedAt;
+      if (elapsedMs >= slowRequestMs) {
+        // Path only — the query can carry a person's name (`?user=`), and
+        // the line is for a grep over durations, not a record of who asked.
+        console.error(
+          `[timing] ${req.method} ${new URL(req.url).pathname} ${Math.round(elapsedMs)}ms ` +
+            `status=${response.status} bytes=${response.headers.get('content-length') ?? '?'}`,
+        );
+      }
+      return response;
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
@@ -8668,6 +8688,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       }
     },
     websocket: {
+      // Yjs sync step 2 hands a fresh tab the WHOLE room state in one binary
+      // frame. Measured over the live hub board's persisted state on
+      // 2026-08-29: 1,264,566 bytes, deflating to 431,733 — 2.9×, or 813 KB
+      // this server stops sending on every board open, every tab, every
+      // reconnect. Every browser offers the extension already; the server
+      // only had to accept it and ask for compression per send.
+      //
+      // How much WALL TIME that buys is a property of the reader's link, and
+      // this repo has no trustworthy measurement of Bryan's — so the claim
+      // here is the byte count, which is measured, and not a number of
+      // seconds, which would not be. Audio frames are opaque and already
+      // codec-compressed; they do not shrink, and the cost is one deflate
+      // context per socket.
+      perMessageDeflate: true,
       open(ws) {
         if (ws.data.kind === 'audio') {
           meetingRelay.onOpen(ws);

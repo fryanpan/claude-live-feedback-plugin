@@ -50,7 +50,7 @@ function ensureBroadcaster(room: DocRoom): void {
     for (const peer of room.conns) {
       if (peer === origin) continue;
       try {
-        peer.sendBinary(payload);
+        peer.sendBinary(payload, true);
       } catch (e) {
         console.error('[ws] doc send failed', e);
       }
@@ -68,7 +68,7 @@ function ensureBroadcaster(room: DocRoom): void {
     for (const peer of room.conns) {
       if (peer === origin) continue;
       try {
-        peer.sendBinary(payload);
+        peer.sendBinary(payload, true);
       } catch (e) {
         console.error('[ws] awareness send failed', e);
       }
@@ -92,7 +92,7 @@ export function onOpen(room: DocRoom, ws: FeedbackWs): void {
     const enc = encoding.createEncoder();
     encoding.writeVarUint(enc, MSG_SYNC);
     syncProtocol.writeSyncStep1(enc, room.ydoc);
-    ws.sendBinary(encoding.toUint8Array(enc));
+    ws.sendBinary(encoding.toUint8Array(enc), true);
   }
 
   // send current awareness state
@@ -104,7 +104,7 @@ export function onOpen(room: DocRoom, ws: FeedbackWs): void {
       enc,
       awarenessProtocol.encodeAwarenessUpdate(room.awareness, Array.from(states.keys())),
     );
-    ws.sendBinary(encoding.toUint8Array(enc));
+    ws.sendBinary(encoding.toUint8Array(enc), true);
   }
 
   state(ws).cleanup = () => {
@@ -126,7 +126,7 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
         encoding.writeVarUint(enc, MSG_SYNC);
         syncProtocol.readSyncMessage(dec, enc, room.ydoc, ws);
         if (encoding.length(enc) > 1) {
-          ws.sendBinary(encoding.toUint8Array(enc));
+          ws.sendBinary(encoding.toUint8Array(enc), true);
         }
         return;
       }
