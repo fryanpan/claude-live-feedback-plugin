@@ -16,6 +16,9 @@ interface Stub {
   listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
   count: () => number;
   fire: (type: string) => void;
+  /** Raise (px > 0) or drop (0) the on-screen keyboard, as the browser would:
+   *  the visual viewport shrinks and announces it. */
+  keyboard: (px: number) => void;
 }
 
 function installViewport(height: number): Stub {
@@ -32,14 +35,28 @@ function installViewport(height: number): Stub {
     },
   };
   Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+  const fire = (type: string) => {
+    for (const h of Array.from(listeners.get(type) ?? []))
+      typeof h === 'function' ? h(new Event(type)) : h.handleEvent(new Event(type));
+  };
   return {
     listeners,
     count: () => listeners.get('resize')?.size ?? 0,
-    fire: (type) => {
-      for (const h of Array.from(listeners.get(type) ?? []))
-        typeof h === 'function' ? h(new Event(type)) : h.handleEvent(new Event(type));
+    fire,
+    keyboard: (px) => {
+      vv.height = window.innerHeight - px;
+      fire('resize');
     },
   };
+}
+
+/** Phone width, so `(max-width: 720px)` matches — the yield is gated on it and
+ *  a test at the default 1024px would exercise nothing. */
+function narrowViewport(): void {
+  const hd = (window as unknown as { happyDOM?: { setViewport(v: { width: number }): void } })
+    .happyDOM;
+  if (hd?.setViewport) hd.setViewport({ width: 430 });
+  else Object.defineProperty(window, 'innerWidth', { value: 430, configurable: true });
 }
 
 function mount() {
@@ -83,6 +100,7 @@ afterEach(() => {
 describe('wireEditViewport lifecycle', () => {
   it('arms at most one keyboard-settle listener however fast focus moves', async () => {
     vi.useFakeTimers();
+    narrowViewport();
     const vp = installViewport(window.innerHeight);
     const m = mount();
     const base = vp.count(); // the always-on resize listener
@@ -101,6 +119,7 @@ describe('wireEditViewport lifecycle', () => {
 
   it('detaches the pending settle listener when the mount goes away', async () => {
     vi.useFakeTimers();
+    narrowViewport();
     const vp = installViewport(window.innerHeight);
     const m = mount();
     m.prose.focus();
@@ -112,8 +131,48 @@ describe('wireEditViewport lifecycle', () => {
     expect(() => vp.fire('resize')).not.toThrow();
   });
 
+  it('gives the strip its row back when the keyboard goes down under kept focus', async () => {
+    // iOS "Done" on the form-accessory bar dismisses the keyboard and can
+    // LEAVE FOCUS on the field. Keying the yield on focus alone stranded the
+    // strip hidden with no keyboard on screen and the whole editor height
+    // free — and Start is the only way into a meeting, so it was unreachable
+    // until the reviewer thought to tap outside the document.
+    vi.useFakeTimers();
+    narrowViewport();
+    const vp = installViewport(window.innerHeight);
+    const m = mount();
+    m.prose.focus();
+    vp.keyboard(336);
+    await vi.advanceTimersByTimeAsync(600);
+    // The positive control: it really did yield first.
+    expect(document.body.dataset.editViewport).toBe('hidden');
+
+    vp.keyboard(0);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(document.activeElement, 'focus must be RETAINED for this case').toBe(m.prose);
+    expect(document.body.dataset.editViewport).toBeUndefined();
+    m.dispose();
+  });
+
+  it('yields again when the keyboard comes back with focus never lost', async () => {
+    vi.useFakeTimers();
+    narrowViewport();
+    const vp = installViewport(window.innerHeight);
+    const m = mount();
+    m.prose.focus();
+    vp.keyboard(336);
+    await vi.advanceTimersByTimeAsync(600);
+    vp.keyboard(0);
+    await vi.advanceTimersByTimeAsync(600);
+    vp.keyboard(336);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(document.body.dataset.editViewport).toBe('hidden');
+    m.dispose();
+  });
+
   it('publishes no mode on cleanup, so the next document keeps its strip', async () => {
     vi.useFakeTimers();
+    narrowViewport();
     installViewport(window.innerHeight);
     const m = mount();
     document.body.dataset.editViewport = 'hidden';

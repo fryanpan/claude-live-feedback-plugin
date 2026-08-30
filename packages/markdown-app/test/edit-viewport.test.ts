@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CARET_MARGIN,
   type CaretBand,
+  type StripYieldInput,
   caretScrollDelta,
   isTextEntry,
   stripYield,
@@ -14,28 +15,45 @@ import {
  * needs a real browser and is verified in a browser (see the PR body).
  */
 
+const yielding = (over: Partial<StripYieldInput> = {}): StripYieldInput => ({
+  narrow: true,
+  editing: true,
+  keyboardUp: true,
+  live: false,
+  ...over,
+});
+
 describe('stripYield — does the voice strip give its row back?', () => {
   it('keeps the strip whenever nothing is being edited', () => {
-    expect(stripYield({ narrow: true, editing: false, live: false })).toBe('full');
-    expect(stripYield({ narrow: true, editing: false, live: true })).toBe('full');
+    expect(stripYield(yielding({ editing: false }))).toBe('full');
+    expect(stripYield(yielding({ editing: false, live: true }))).toBe('full');
   });
 
   it('keeps the strip above the phone breakpoint, editing or not', () => {
     // The iPad reads a 40px bar, not the stacked panel, and its complaint has
     // never been this one. Yielding there would spend a change on a width
     // nobody reported.
-    expect(stripYield({ narrow: false, editing: true, live: false })).toBe('full');
-    expect(stripYield({ narrow: false, editing: true, live: true })).toBe('full');
+    expect(stripYield(yielding({ narrow: false }))).toBe('full');
+    expect(stripYield(yielding({ narrow: false, live: true }))).toBe('full');
   });
 
-  it('hides an idle strip while a phone-width editor has focus', () => {
-    expect(stripYield({ narrow: true, editing: true, live: false })).toBe('hidden');
+  it('keeps the strip when the keyboard is DOWN, even with the editor focused', () => {
+    // The case that matters is iOS "Done" on the form-accessory bar: it
+    // dismisses the keyboard and can leave focus on the field. Keying on focus
+    // alone left the strip hidden with the whole editor height free and Start
+    // — the only way into a meeting here — unreachable.
+    expect(stripYield(yielding({ keyboardUp: false }))).toBe('full');
+    expect(stripYield(yielding({ keyboardUp: false, live: true }))).toBe('full');
+  });
+
+  it('hides an idle strip while a phone-width editor has focus under a keyboard', () => {
+    expect(stripYield(yielding())).toBe('hidden');
   });
 
   it('collapses rather than hides a strip that is RECORDING', () => {
     // A live mic with no indicator on screen is the one thing this must not
     // do, however much room the keyboard wants.
-    expect(stripYield({ narrow: true, editing: true, live: true })).toBe('compact');
+    expect(stripYield(yielding({ live: true }))).toBe('compact');
   });
 });
 
