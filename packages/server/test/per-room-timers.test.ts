@@ -64,12 +64,40 @@ describe('per-room timers', () => {
       paths.push(path);
     }
     first.flush();
-    // A fresh Rooms over the same data dir is exactly what a restart does:
-    // hydrateFromDisk re-admits every doc and re-binds every file.
-    return { rooms: makeRooms(dataDir), docIds, paths };
+    // A fresh Rooms over the same data dir is exactly what a restart does.
+    // Since lazy hydration, a restart loads NOTHING — so open each doc, which
+    // is what these tests were really about: what a server holds once the
+    // docs are in memory. `seedBoundCold` is the same fixture unopened.
+    const rooms = makeRooms(dataDir);
+    for (const docId of docIds) rooms.get(docId);
+    // Opening put every doc in the poll's fast lane; drop the access stamps
+    // so the fixture starts where a restart used to leave it — resident and
+    // bound, with nobody looking at anything.
+    rooms.resetDerivedCaches();
+    return { rooms, docIds, paths };
   }
 
-  it('hydrates rooms without constructing an Awareness (no presence timer)', () => {
+  /** The same fixture, restarted and NOT opened. */
+  function seedBoundCold(count: number): { rooms: Rooms; docIds: string[]; paths: string[] } {
+    const { rooms, docIds, paths } = seedBound(count);
+    for (const docId of docIds) rooms.evictRoom(docId);
+    return { rooms, docIds, paths };
+  }
+
+  it('a restart holds nothing until somebody reaches for a doc', () => {
+    const { rooms, docIds } = seedBoundCold(5);
+    // The boot that used to load every doc on the server now loads none, and
+    // that is the whole memory change: no rooms, no bindings, no timers that
+    // scale with the corpus.
+    expect(rooms.stats().rooms).toBe(0);
+    expect(rooms.stats().bindings).toBe(0);
+    // ...and every one of them still resolves and still lists.
+    expect(rooms.list().length).toBeGreaterThanOrEqual(docIds.length);
+    expect(rooms.get(docIds[0] as string)).toBeDefined();
+    expect(rooms.stats().rooms).toBe(1);
+  });
+
+  it('opening rooms constructs no Awareness (no presence timer)', () => {
     const { rooms, docIds } = seedBound(5);
     expect(rooms.stats().rooms).toBeGreaterThanOrEqual(docIds.length);
     expect(rooms.stats().awareness).toBe(0);
@@ -159,17 +187,19 @@ describe('per-room timers', () => {
     const { rooms } = seedBound(10);
     const after = rooms.stats();
     expect(after.bindings).toBe(10);
-    // Hydration re-armed all ten bindings and activated none of them: they
-    // are swept on the idle budget, not stat'd on every tick.
+    // All ten bindings armed, none of them active: they are swept on the
+    // idle budget, not stat'd on every tick.
     expect(after.activeBindings).toBe(0);
     // Two timers for ten bindings: the memory line and the one shared sweep.
     expect(after.timers).toBe(2);
   });
 
-  it('still applies an external edit to a bound doc NOBODY has accessed', async () => {
+  it('still applies an external edit to a bound doc nobody is WATCHING', async () => {
     // The guarantee `git-ops-vs-bound.test.ts` depends on: a git checkout or
-    // an editor save against a bound file reaches the live doc even though
-    // no reader, socket or tool has touched it since the server started.
+    // an editor save against a bound file reaches the live doc even though no
+    // reader, socket or tool is looking at it. It holds for every doc the
+    // server is holding — which, since lazy hydration, means every doc that
+    // has been opened at least once. The cold case is the test below.
     const { rooms, docIds, paths } = seedBound(1);
     expect(rooms.stats().activeBindings).toBe(0);
     writeFileSync(paths[0], '# Doc 0\n\narrived with nobody watching\n');
@@ -180,6 +210,29 @@ describe('per-room timers', () => {
     utimesSync(paths[0], t, t);
     await sleep(1500);
     expect(markdownOf(rooms, docIds[0])).toContain('arrived with nobody watching');
+  });
+
+  it('a doc nobody has OPENED is not polled — and the edit is read on open', async () => {
+    // A behaviour change from lazy hydration, recorded here on purpose
+    // rather than left to be discovered. A doc the server has never opened
+    // has no room and no binding, so nothing stats its file: an external
+    // edit to it is NOT picked up live, and no `watch_doc` subscriber is
+    // notified. What is preserved is the thing that matters — the edit is
+    // not lost. `attachFile` arbitrates on open, the file is the source of
+    // truth at rest, and the content is there the moment somebody reaches.
+    const { rooms, docIds, paths } = seedBoundCold(1);
+    expect(rooms.stats().rooms).toBe(0);
+    expect(rooms.stats().bindings).toBe(0);
+
+    writeFileSync(paths[0], '# Doc 0\n\nedited while cold\n');
+    const t = new Date(Date.now() + 2000);
+    utimesSync(paths[0], t, t);
+    await sleep(1500);
+    // Nothing woke up: no poll ran, because there was no binding to run one.
+    expect(rooms.stats().rooms).toBe(0);
+
+    // And the edit survived — reaching for the doc reads it off disk.
+    expect(markdownOf(rooms, docIds[0])).toContain('edited while cold');
   });
 
   it('a bound doc that saw one external edit does not stay active forever', async () => {
@@ -348,6 +401,11 @@ describe('hydration cost at corpus scale', () => {
       first.flush();
 
       const rooms = makeRooms(dataDir);
+      // A restart now loads nothing — assert that before opening them, so
+      // this file records the boot cost as well as the held cost.
+      expect(rooms.stats().rooms).toBe(0);
+      for (let i = 0; i < 200; i++) rooms.get(`scale-${i}`);
+      rooms.resetDerivedCaches();
       const s = rooms.stats();
       expect(s.rooms).toBe(200);
       expect(s.bindings).toBe(200);
