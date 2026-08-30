@@ -250,6 +250,34 @@ const DEFAULT_PORT = Number(process.env.PORT ?? 8787);
  *  single digits; a hundred is a tracker, and that has its own import path. */
 const MAX_BATCH_TASKS = 100;
 
+/** How many review items one batch puts in front of the judge at a time.
+ *  The judge is a network call with an 8s timeout, so awaiting a hundred of
+ *  them one after the next is a request that can run for thirteen minutes
+ *  (codex review). Eight at a time keeps a dead judge's worst case near a
+ *  hundred seconds without opening a hundred sockets at a live one. */
+const JUDGE_BATCH_CONCURRENCY = 8;
+
+/**
+ * Run `fn` over `rows` at most `limit` at a time, answering in ROW ORDER.
+ * Order is the point: a batch reports its holds per row, and a caller
+ * matching them back to what it sent should not have to sort.
+ */
+async function mapBounded<T, R>(
+  rows: readonly T[],
+  limit: number,
+  fn: (row: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(rows.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, rows.length) }, async () => {
+    for (let i = next++; i < rows.length; i = next++) {
+      out[i] = await fn(rows[i] as T);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 /**
  * Structural validation for PUT /api/workspaces/:id/goals. Returns the
  * sanitized list, or null if any entry is malformed. Unknown keys are
@@ -5689,6 +5717,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             heldReason: string;
             message: string;
           }> = [];
+          /** The review items this batch filed, waiting on the quality gate.
+           *  They are judged together after the creation loop rather than one
+           *  per row inside it: the judge is a network call, and in series a
+           *  hundred rows against a degraded judge held the request for
+           *  thirteen minutes (codex review). Nothing is lost by waiting —
+           *  each item is stamped `pending`, and so off the reader's queue,
+           *  the moment its call goes out. */
+          const toJudge: Array<{
+            task: Task;
+            item: TaskReviewItem;
+            actor: User;
+          }> = [];
           /** Each row's actual visibility, stated plainly — a triage row is
            *  returned by no dispatch read, and a filed review item is on the
            *  addressee's Home queue regardless. See `createdVisibility`. */
@@ -5765,17 +5805,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (parsed.review !== undefined) {
               const actor = createdBy ?? ANONYMOUS_ACTOR;
               const added = taskStore.addReviewItem(res.task.id, parsed.review, { actor });
-              if (added.ok) {
-                const gate = await judgeReviewItem(added.task, added.item, actor);
-                if (gate.held) {
-                  heldReviews.push({
-                    taskId: res.task.id,
-                    reviewItemId: added.item.id,
-                    heldReason: gate.reason,
-                    message: gate.message,
-                  });
-                } else announceTaskReview(added.task, added.item, actor);
-              }
+              // Filed now, judged after the loop — see `toJudge`. The item is
+              // in the store from this line, and off the reader's queue from
+              // it too: `judgeReviewItem` stamps `pending` before it asks, so
+              // nothing here depends on the verdict landing before the next
+              // row is created.
+              if (added.ok) toJudge.push({ task: added.task, item: added.item, actor });
               attachedReview = true;
             }
             if (parsed.reviewAdvice !== undefined) {
@@ -5793,6 +5828,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             if (res.shapeGaps !== undefined) {
               shapeGaps.push({ taskId: res.task.id, gaps: res.shapeGaps });
+            }
+          }
+          // The gate, for every review this batch filed — side by side, a
+          // bounded few at a time, and answered in row order so the holds
+          // this route reports still line up with the rows that sent them.
+          if (toJudge.length > 0) {
+            const gates = await mapBounded(toJudge, JUDGE_BATCH_CONCURRENCY, (row) =>
+              judgeReviewItem(row.task, row.item, row.actor),
+            );
+            for (let i = 0; i < toJudge.length; i++) {
+              const row = toJudge[i];
+              const gate = gates[i];
+              if (!row || !gate) continue;
+              if (gate.held) {
+                heldReviews.push({
+                  taskId: row.task.id,
+                  reviewItemId: row.item.id,
+                  heldReason: gate.reason,
+                  message: gate.message,
+                });
+              } else announceTaskReview(row.task, row.item, row.actor);
             }
           }
           // Once, after the loop rather than inside it — see the single-create
