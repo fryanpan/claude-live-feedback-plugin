@@ -115,6 +115,37 @@ describe('ThreadRequestDedup', () => {
     expect(deduped).toBe(false);
   });
 
+  it('a requestId reused for a distinct payload does not evict the original — a later retry of the original still finds it', async () => {
+    // Codex review: a single-slot map meant reusing a requestId for a
+    // genuinely different comment (allowed — see "a reused requestId with
+    // different text/anchor" above) overwrote the FIRST entry outright. A
+    // later retry of the original comment then found nothing recorded and
+    // created a duplicate.
+    const d = new ThreadRequestDedup<string | null>();
+    let calls = 0;
+    const first = await d.dedupe('doc1', 'r1', 'hello', 'anchor-a', async () => {
+      calls++;
+      return 't1';
+    });
+    expect(first.value).toBe('t1');
+
+    const second = await d.dedupe('doc1', 'r1', 'goodbye', 'anchor-a', async () => {
+      calls++;
+      return 't2';
+    });
+    expect(second.value).toBe('t2');
+    expect(calls).toBe(2);
+
+    // A retry of the FIRST comment's exact payload, same requestId.
+    const retry = await d.dedupe('doc1', 'r1', 'hello', 'anchor-a', async () => {
+      calls++;
+      return 't1-duplicate';
+    });
+    expect(retry.value).toBe('t1');
+    expect(retry.deduped).toBe(true);
+    expect(calls).toBe(2);
+  });
+
   it('an in-flight create outlives the TTL — the clock only starts at completion', async () => {
     // Codex review: the TTL used to run from RESERVATION, so a create()
     // slower than the TTL could be pruned mid-flight, and a concurrent
