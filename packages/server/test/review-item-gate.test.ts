@@ -452,10 +452,21 @@ describe('the review-item quality gate', () => {
     it('a judge call the last process never got back from passes the item at boot', async () => {
       verdict = 'defer';
       const { workspaceId, taskId } = await board();
-      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      // The filing's own rejection is handled HERE, at the point the request
+      // is made, not after the restart below: shutting the server down takes
+      // this socket with it, so this promise settles as a failure the moment
+      // `handle.stop()` runs. A `.catch` attached later is attached too late
+      // — the rejection is unhandled in the meantime, which fails the test
+      // and strands whatever request is in flight when it does.
+      const filing = post(`/api/tasks/${taskId}/review-items`, {
+        review: BAD,
+        author: FILER,
+      }).catch(() => undefined);
       while (parked.length < 1) await settle(10);
       // The process dies with the call out: stop() flushes the store with
-      // `pending` on disk, and the parked judge never answers.
+      // `pending` on disk, and the parked judge never answers. A real process
+      // death takes the caller's connection with it, and so does this — the
+      // agent that filed learns nothing, which is the case being set up.
       await handle.stop();
       handle = createServer({ port: 0, dataDir, heldReviewItemMs: 0 });
       base = `http://localhost:${handle.port}`;
@@ -465,8 +476,10 @@ describe('the review-item quality gate', () => {
       const row = tasks.find((t) => t.id === taskId)?.reviews?.[0];
       expect(row?.judge?.verdict).toBe('unavailable');
       expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([row?.id]);
+      // Release the parked judge so nothing is left holding the old server's
+      // closure open; its verdict has nowhere to go.
       parked[0]?.({ ok: false, reason: 'too late' });
-      await filing.catch(() => undefined);
+      await filing;
     });
 
     // Found by codex review: two judge calls in flight for one item — the
