@@ -177,6 +177,37 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     );
     expect(second.thread.id).not.toBe(first.thread.id);
   });
+
+  it('a reused requestId with the same text/anchor but a different review declaration is a new comment, not a collision', async () => {
+    // Codex review: the dedup identity used to be anchor-only, so reusing a
+    // requestId to CORRECT a review declaration (e.g. filling in a missing
+    // detail after the thin-but-valid warning) silently returned the first,
+    // uncorrected thread instead of ever persisting the fix.
+    const payloadBase = {
+      author: REVIEWER,
+      text: 'Cache size decision.',
+      anchor: anchor('effort model'),
+      requestId: 'req-review-correction',
+    };
+    const first = await jj<{ thread: { id: string } }>(
+      await post(`/api/docs/${docId}/threads`, {
+        ...payloadBase,
+        review: { shape: 'review', headline: 'Cache size' },
+      }),
+    );
+    const second = await jj<{ thread: { id: string } }>(
+      await post(`/api/docs/${docId}/threads`, {
+        ...payloadBase,
+        review: { shape: 'review', headline: 'Cache size', detail: 'Filled in after the fact.' },
+      }),
+    );
+    expect(second.thread.id).not.toBe(first.thread.id);
+
+    const listed = await jj<{ threads: Array<{ id: string }> }>(
+      await fetch(`${base}/api/docs/${docId}/threads`),
+    );
+    expect(listed.threads).toHaveLength(2);
+  });
 });
 
 /**
