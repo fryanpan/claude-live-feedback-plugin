@@ -2999,9 +2999,22 @@ export class Rooms {
     }
     if (mtimeMs === binding.lastMtimeMs) return;
     binding.lastMtimeMs = mtimeMs;
+    // An external write IS somebody reaching for the doc — the editor or the
+    // git operation that made it is usually about to make another. Promote
+    // the binding to the fast lane so the next few writes are seen in one
+    // tick rather than one rotation, and let it decay like any other access.
+    this.lastTouchedAt.set(docId, Date.now());
     // Debounce so we don't read a half-written file mid-save.
     if (binding.readTimer) clearTimeout(binding.readTimer);
-    binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 150);
+    binding.readTimer = setTimeout(() => {
+      // Null it FIRST. `bindingIsActive` reads `readTimer` as "a reconcile is
+      // still pending"; a handle left behind after the callback fired made
+      // that permanently true, so one external edit pinned the binding in the
+      // fast lane for the life of the process. `writeTimer` has always nulled
+      // itself here for the same reason.
+      binding.readTimer = null;
+      this.reconcileFromDisk(room, binding);
+    }, 150);
   }
 
   /**
