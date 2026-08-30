@@ -1504,10 +1504,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // reader could see — and answer — an item about to be held (codex
     // review). `pending` is what the queue reads meanwhile; the ticket says
     // nothing about it.
+    const pendingAt = Date.now();
     taskStore.recordReviewJudgement(
       task.id,
       item.id,
-      { at: Date.now(), verdict: 'pending', reason: 'being judged' },
+      { at: pendingAt, verdict: 'pending', reason: 'being judged' },
       { actor: author, forVersion },
     );
     let verdict: ReviewJudgeVerdict | null = null;
@@ -1538,6 +1539,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const recorded = taskStore.recordReviewJudgement(task.id, item.id, judgement, {
       actor: author,
       forVersion,
+      // Also refused if the reader overruled the gate while we were out: a
+      // release does not change the item's words, so the version still
+      // matches and only the pending stamp tells us the row moved under us
+      // (codex review).
+      forPendingAt: pendingAt,
     });
     // A row the store would not stamp (answered under us, revised under us,
     // or the derived legacy row) is left exactly as it was. For a stale

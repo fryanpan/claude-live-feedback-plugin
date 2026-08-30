@@ -76,6 +76,13 @@ next revision goes past the judge like any other. Added after a UX review
 found the note had no interactive element at all, so a reader looking at a
 question they could answer in ten seconds could only wait for an agent.
 
+A release can be issued while the judge is still out, and it wins. The
+verdict a judge comes back with is refused unless the `pending` stamp it
+placed before asking is still on the row: a release does not change the
+item's words, so the version check alone would have let a late `held`
+overwrite it and take the item off the queue seconds after the reader was
+told it was on.
+
 ## Wake economics — the number that shaped everything
 
 **A wake is not a notification; it is a lead session's whole turn** —
