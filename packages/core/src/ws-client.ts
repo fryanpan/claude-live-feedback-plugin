@@ -30,12 +30,23 @@ const MSG_AWARENESS = 1;
  * "never" to anyone watching a 15-second load budget. Measured on real board
  * loads 2026-08-29: 4 of 120 opens never got a projection at all.
  */
-export const CONNECT_TIMEOUT_MS = 8_000;
-/** Same failure, later stage: the handshake completed but the sync-step-1/2
- *  round trip never delivered. Started fresh on every 'open' rather than
- *  continuing the connect timer, since a slow-but-genuine sync (a large
- *  board over a poor link) is not the same event as a hung handshake. */
-export const SYNC_TIMEOUT_MS = 10_000;
+export const CONNECT_TIMEOUT_MS = 10_000;
+/**
+ * Same failure, later stage: the handshake completed but the sync-step-1/2
+ * round trip never delivered. Started fresh on every 'open' rather than
+ * continuing the connect timer, since a slow-but-genuine sync (a large board
+ * over a poor link) is not the same event as a hung handshake — and it must
+ * NOT be mistaken for one: codex review on this change flagged that a
+ * WebSocket 'message' event only fires once a full frame has arrived, so
+ * there is no partial-progress signal to reset the clock on mid-transfer,
+ * and every retry re-requests the same diff from scratch. A deadline close
+ * to a genuine transfer's real duration would abort it every attempt and
+ * loop forever — worse than the bug this exists to fix. Set well above the
+ * measured tail (p95 5041ms, max 13647ms end-to-end, board loads
+ * 2026-08-29) rather than tight to it, so it only ever fires on a
+ * connection that is actually stuck, not one that is merely slow.
+ */
+export const SYNC_TIMEOUT_MS = 25_000;
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 
