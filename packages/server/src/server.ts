@@ -9846,12 +9846,13 @@ function buildProjectArtifacts(
     if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
     if ((meta.owner || 'ungrouped') !== owner) continue;
 
-    const threads = rooms.listThreads(meta.docId);
-    const openCount = threads.filter((t) => t.status === 'open').length;
+    // Both from the doc's index row rather than its thread map — same
+    // numbers, without decoding every doc this owner has on every render.
+    const openCount = rooms.threadCounts(meta.docId).open;
     // Thread activity, never `meta.lastActivityAt` — see the header note in
     // landing.ts. That field is the `.ydoc` mtime and a snapshot rewrite
     // refreshes it, so it ranks by persistence noise.
-    const lastActivity = threads.reduce((max, t) => Math.max(max, t.lastActivity), 0);
+    const lastActivity = rooms.lastThreadActivity(meta.docId);
 
     if (meta.workspaceId) {
       let art = workspaceArtifacts.get(meta.workspaceId);
@@ -9886,7 +9887,7 @@ function buildProjectArtifacts(
       // A diff member marks the whole workspace as a diff review (members can
       // also include plain 'code' context docs — any diff doc wins).
       if (meta.type === 'diff') art.kind = 'diff';
-      art.threadCount += threads.length;
+      art.threadCount += rooms.threadCounts(meta.docId).total;
       if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
       continue;
     }
@@ -9898,7 +9899,7 @@ function buildProjectArtifacts(
       id: meta.docId,
       reviewUrl: decorated.reviewUrl,
       openCount,
-      threadCount: threads.length,
+      threadCount: rooms.threadCounts(meta.docId).total,
       lastActivity,
     });
   }
