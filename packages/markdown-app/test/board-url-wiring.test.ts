@@ -92,21 +92,26 @@ describe('the card hands off to its item in one history step', () => {
   // its popstate re-applied the old ?item= entry, which closed the panel the
   // tap had just opened. The open must render first — walk → panel is one
   // push — with the card's own repaint after it.
+  // Both handlers now share `openFromWalk`, which is where the ordering lives
+  // — and where the doc jump's undo lives too (see walk-return.test.ts).
   it('renders the open before the walkthrough close', () => {
-    const handler = HUB_APP.match(/onOpenItem: \(item\) => \{[\s\S]*?\n {8}\},\n/)?.[0] ?? '';
-    expect(handler, 'onOpenItem went missing').not.toBe('');
-    const openAt = handler.indexOf('openReviewItem(item)');
-    const closeAt = handler.indexOf('renderWalkthrough()');
-    expect(openAt, 'onOpenItem no longer opens the item').toBeGreaterThan(-1);
+    const fn = HUB_APP.match(/function openFromWalk\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
+    expect(fn, 'openFromWalk went missing').not.toBe('');
+    const openAt = fn.indexOf('const stillHere = open(back)');
+    const closeAt = fn.indexOf('renderWalkthrough()');
+    expect(openAt, 'openFromWalk no longer opens the item').toBeGreaterThan(-1);
     expect(closeAt, 'the close repaint ran before the open').toBeGreaterThan(openAt);
+    // And the state close precedes the open, which is the half that keeps the
+    // pair one history step.
+    expect(fn.indexOf('state.walkIndex = CLOSED_WALK.index')).toBeLessThan(openAt);
   });
 
   it('skips the close repaint when the item navigates the page away', () => {
     // The doc jump leaves via location.assign; a close-step history.back()
-    // queued beside it races the navigation. openReviewItem reports whether
-    // it stayed in-app, and only then does the card repaint (and its URL
+    // queued beside it races the navigation. The opener reports whether it
+    // stayed in-app, and only then does the card repaint (and its URL
     // close-step) run.
-    expect(HUB_APP).toMatch(/if \(openReviewItem\(item\)\) renderWalkthrough\(\)/);
+    expect(HUB_APP).toMatch(/if \(stillHere\) renderWalkthrough\(\)/);
   });
 });
 
