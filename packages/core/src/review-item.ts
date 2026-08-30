@@ -687,14 +687,22 @@ export const REVIEW_LIMITS = {
  *
  * Three families, and keeping them distinct is what makes the advice usable:
  * a bare field name means the field is ABSENT ("write one"), a `…Length` gap
- * means the field is there and runs long ("it will wrap"), and `detail
- * Linkless` means the body is there but what it points at is not. Told the
- * same way, an author who wrote a 100-character headline would be advised to
- * write one.
+ * means the field is there and runs long ("it will wrap"), and the two
+ * `…Linkless` gaps mean the body is there but what it points at is not. Told
+ * the same way, an author who wrote a 100-character headline would be advised
+ * to write one.
+ *
+ * The two reachability gaps are the same defect caught from opposite sides.
+ * `detailLinkless` reads the COMMENT the item rode in on: links exist, they
+ * are in the wrong place. `lookAskLinkless` reads the ASK itself: it sends
+ * the reader somewhere and no link exists anywhere. Only one is ever raised —
+ * see `checkReviewPayload` — because they would otherwise say nearly the same
+ * sentence twice, and the comment-borne one is the more actionable of the two.
  */
 export type ReviewGap =
   | 'detail'
   | 'detailLinkless'
+  | 'lookAskLinkless'
   | 'headlineLength'
   | 'optionLabelLength'
   | 'optionDetailLength';
@@ -727,6 +735,66 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  */
 function hasLink(s: string): boolean {
   return /\[[^\]]*\]\([^)\s]+\)/.test(s) || /https?:\/\/\S/.test(s);
+}
+
+/**
+ * Verbs of PERCEIVING. Deliberately a small closed class — this is the set of
+ * things you can ask someone to do to an artifact without changing it — and
+ * it is extended only with another verb of the same kind, never with the
+ * nouns of whatever artifact is in fashion (`mockup`, `PR`, `staging`).
+ * Matching artifact nouns is the over-fit: the vocabulary is open-ended, it
+ * dates immediately, and it fires on asks that merely MENTION the thing.
+ */
+const PERCEIVE_VERBS =
+  'look|read|review|check|see|watch|open|try|visit|browse|inspect|compare|test';
+
+/**
+ * Is this ask telling the READER to go and perceive something?
+ *
+ * Two constraints do the work, and both are about precision rather than
+ * coverage — the cost asymmetry runs the other way from most checks. A false
+ * positive spends one sentence in a tool result. A false NEGATIVE is Bryan
+ * hunting for a link, which is the whole reason this exists. But advice that
+ * fires on asks with nothing to link is worse than either: it trains agents
+ * to skim past the channel, and then the true positives stop landing too.
+ * So this is tuned to be quiet and right, not thorough.
+ *
+ * 1. The verb is in its BASE form. "Read the draft" is a directive; "I read
+ *    the draft", "reviewed", "checking" are reports about work already done,
+ *    and a report is the commonest way one of these words appears in a
+ *    detail that needs no link at all. `\b` after the stem does this for
+ *    free: "looked", "reviews" and "checking" have no boundary there.
+ *
+ * 2. The verb sits where a request sits — opening a sentence, a line or a
+ *    bullet, or following an explicit request marker ("please", "can you",
+ *    "take a"). A verb buried mid-clause is almost always narration.
+ *
+ * 3. It TAKES AN OBJECT: the next word introduces one, being a determiner, a
+ *    pronoun, a possessive or a preposition. Position alone is not enough,
+ *    because every word in the list above is also a noun or an adjective and
+ *    card titles are written as noun phrases — "Open question: what should we
+ *    call it?", "Review complete", "Test results" all opened with a listed
+ *    word and all were advised to add a link to an artifact that does not
+ *    exist (codex review). A noun use is followed by another noun; a
+ *    directive is followed by the thing it directs you at.
+ *
+ * What it deliberately misses: an ask that implies a target without naming
+ * the act ("thoughts on the new nav?"). Catching those means guessing, and
+ * guessing fires on every open question — the "what should we call it?"
+ * family, which is complete with nothing to link. A decision whose options
+ * are described in full carries no directive either, and is silent here by
+ * construction rather than by a special case.
+ */
+function asksReaderToLook(s: string): boolean {
+  const opener = String.raw`^|[.!?;:)\]]\s+|\n\s*(?:[-*>]\s*)?`;
+  const marker = String.raw`\b(?:please|kindly)\s+|\b(?:can|could|would|will)\s+you\s+(?:please\s+)?|\byou\s+(?:can|should|could|might|may)\s+|\b(?:take|have)\s+a\s+`;
+  // What an object of the directive starts with: a determiner, a pronoun, a
+  // possessive ("Bryan's draft"), or a preposition. Anything else after the
+  // verb and the word was a noun.
+  const object = String.raw`at|the|a|an|this|that|these|those|it|them|my|our|your|its|his|her|their|through|over|into|whether|both|each|either|[\w-]+'s`;
+  return new RegExp(`(?:${opener}|${marker})(?:${PERCEIVE_VERBS})\\s+(?:${object})\\b`, 'i').test(
+    s,
+  );
 }
 
 /**
@@ -854,6 +922,25 @@ export function checkReviewPayload(input: unknown, context?: { text?: string }):
     if (context?.text !== undefined && hasLink(context.text) && !hasLink(detail)) {
       gaps.push('detailLinkless');
     }
+  }
+
+  // The same reachability question asked of the ASK rather than of the
+  // comment. `detailLinkless` needs a comment to compare against, so the
+  // ticket-borne doors — add_review_item, create_tasks — passed nothing and
+  // were judged on the payload alone, which meant they were never judged on
+  // this at all (Bryan, 2026-08-21: an item asked him to go and look and the
+  // card carried no link, so he had to hunt for it).
+  //
+  // Read across the headline AND the detail, in both directions: an ask can
+  // be a look-ask in its one line, and a link anywhere in the payload is
+  // somewhere to go. Never raised alongside `detailLinkless` — that one has
+  // already said the more actionable half, and two sentences about one
+  // missing link read as a scolding.
+  const askText = `${typeof headline === 'string' ? headline : ''}\n${
+    typeof detail === 'string' ? detail : ''
+  }`;
+  if (!gaps.includes('detailLinkless') && asksReaderToLook(askText) && !hasLink(askText)) {
+    gaps.push('lookAskLinkless');
   }
 
   const options: unknown[] | undefined = Array.isArray(p.options) ? p.options : undefined;
@@ -992,6 +1079,11 @@ export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
   if (gaps.includes('detailLinkless')) {
     unreachable.push(
       'The comment carries links and review.detail carries none. The reader acts from the Home card, which renders the detail — not the comment under it — so every link they need belongs in review.detail as an inline markdown link.',
+    );
+  }
+  if (gaps.includes('lookAskLinkless')) {
+    unreachable.push(
+      'This asks the reader to go and look at something, and nothing in the payload says where. The reader acts from the Home card, which renders the headline and review.detail and nothing else — so the thing you are asking them to look at belongs in review.detail as an inline markdown link.',
     );
   }
 
