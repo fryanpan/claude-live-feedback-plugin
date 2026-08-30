@@ -13,12 +13,11 @@ import { join } from 'node:path';
 import {
   type ReviewItemJudgement,
   type ReviewItemRange,
-  type ReviewItemRevision,
   type ReviewPayload,
   type TaskReviewItem,
   agentIdCandidates,
   agentIdForName,
-  changedRange,
+  applyReviewRevision,
   checkReviewPayload,
   isReviewItemGated,
   isReviewItemHeld,
@@ -4435,57 +4434,35 @@ export class TaskStore {
       };
     }
 
-    const touches = (['headline', 'detail', 'options'] as const).filter(
-      (k) => patch[k] !== undefined,
-    );
-    if (touches.length === 0) return { ok: false, error: 'empty-patch' };
-
-    // Merge onto the stored payload, then run the one gate. `answeredWith` /
-    // `answeredAt` are not on an open item, and a closed item is not revised
-    // here — its answer would be an answer to words nobody can see anymore.
-    const merged: Record<string, unknown> = { ...item.review };
-    for (const k of touches) merged[k] = patch[k];
-    const check = checkReviewPayload(merged);
-    if (!check.ok) {
-      return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
-    }
-    const next = readReviewPayload(merged);
-    if (!next) return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
-
     const ts = Date.now();
     const actor: TaskActor = {
       id: opts.actor.id,
       name: opts.actor.name,
       kind: classifyActor(opts.actor),
     };
-    // An explicit range is offsets into the NEW detail; one that runs past it
-    // would be served to the queue as-is and highlight to the end of whatever
-    // text is there. The derived range is bounded by construction.
-    const detailLength = (next.detail ?? '').length;
-    if (opts.revisedRange && opts.revisedRange.end > detailLength) {
-      return {
-        ok: false,
-        error: 'bad-range',
-        message: `revisedRange ${opts.revisedRange.start}–${opts.revisedRange.end} runs past the new detail (${detailLength} characters)`,
-      };
-    }
     const question = latestThreadedQuestion(item);
-    const range =
-      opts.revisedRange ??
-      (next.detail !== item.review.detail
-        ? changedRange(item.review.detail ?? '', next.detail ?? '')
-        : undefined);
-    const previous: ReviewItemRevision = {
-      at: ts,
+    // What a revision IS — which patches are legal, where the changed span
+    // fell, what the superseded reading was — is decided once, in core, and
+    // shared with the doc-thread route. Only WHERE the history is filed
+    // differs: a ticket item keeps it on the wrapper (below), a doc-thread
+    // item on the payload (`withRevision`). The `item.answer` refusal above
+    // STAYS: a ticket item records its answer on the wrapper, which the
+    // payload-level check inside cannot see.
+    const applied = applyReviewRevision(item.review, patch, {
       by: actor.name,
-      headline: item.review.headline,
-      ...(item.review.detail !== undefined ? { detail: item.review.detail } : {}),
-      ...(item.review.options !== undefined ? { options: item.review.options } : {}),
+      at: ts,
+      ...(opts.revisedRange ? { revisedRange: opts.revisedRange } : {}),
       ...(question?.threadId !== undefined ? { threadId: question.threadId } : {}),
-      ...(range !== undefined ? { revisedRange: range } : {}),
-    };
-    item.revisions = [...(item.revisions ?? []), previous];
-    item.review = next;
+    });
+    if (!applied.ok) {
+      return applied.error === 'answered'
+        ? { ok: false, error: 'answered', message: applied.message ?? '' }
+        : applied.error === 'empty-patch'
+          ? { ok: false, error: 'empty-patch' }
+          : { ok: false, error: applied.error, message: applied.message ?? '' };
+    }
+    item.revisions = [...(item.revisions ?? []), applied.previous];
+    item.review = applied.next;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
@@ -4498,7 +4475,7 @@ export class TaskStore {
       links: task.links,
       ts,
     });
-    const advice = reviewGapAdvice(check.gaps);
+    const advice = reviewGapAdvice(applied.gaps);
     return {
       ok: true,
       task,
