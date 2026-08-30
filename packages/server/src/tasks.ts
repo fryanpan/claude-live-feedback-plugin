@@ -1171,6 +1171,36 @@ export const TOOL_CALL_STALE_MS = 30 * 60_000;
 export const OBSERVED_LIVE_MS = 15 * 60_000;
 
 /**
+ * How long a seat's holder must be BOTH off the wire and unobserved before
+ * the board calls the seat stale.
+ *
+ * Deliberately three times `OBSERVED_LIVE_MS`, and the reason is the cost
+ * asymmetry rather than a second measurement. Reading stale drives two
+ * consequential acts — handing the seat to whoever attaches next, and telling
+ * a person the board's owner is gone — where reading live merely defers both
+ * to the next attach. So this window sits far enough past the delivery gate
+ * that a lead cannot lose its seat to an ordinary quiet stretch.
+ *
+ * It is NOT elapsed silence on its own, and must never be used as such: a
+ * measured 40% of provably-active minutes read as silent, and the incident
+ * this exists for (2026-08-29/30, 4.5 hours) was a session that had exited,
+ * not one that was quiet. The clock only gets a vote once the socket is
+ * already gone — see `leadSeatHealth`.
+ */
+export const LEAD_SEAT_STALE_MS = 3 * OBSERVED_LIVE_MS;
+
+/** "4h", "35m" — coarse on purpose. This lands in a sentence a person reads
+ *  while deciding whether a board has an owner, and minutes of precision
+ *  there would suggest the reading is finer than the window behind it. */
+function describeGap(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${Math.max(1, minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/**
  * How long an emitted utterance is left alone before the queue offers it again.
  *
  * The floor is "how long can a busy agent reasonably take to acknowledge a
@@ -1188,6 +1218,11 @@ export interface AttachmentThresholds {
   heartbeatFreshMs?: number;
   toolCallStaleMs?: number;
   observedWorkFreshMs?: number;
+  /** How long a seat's holder must be off the wire AND unobserved before the
+   *  seat reads stale. Its own knob rather than a multiple of the window
+   *  above, because a test that wants a takeable seat must not have to make
+   *  the delivery gate unrealistically tight to get one. */
+  leadSeatStaleMs?: number;
 }
 
 /**
@@ -1288,6 +1323,46 @@ export interface GatingSummary {
   summary: string;
 }
 
+/**
+ * The state of a board's lead seat, as something a surface can render and a
+ * session can read about itself.
+ *
+ * Exists because "who leads this board" was answerable and "is that lead
+ * still there" was not. A seat held by a session that exited renders
+ * identically to a healthy one, so a rename could take the board's only
+ * addressee offline and every surface kept reporting business as usual.
+ */
+export interface LeadSeatHealth {
+  /** Who holds the seat. Absent means the seat is empty. */
+  leadAgentId?: string;
+  /** Is the holder reachable right now? Always false for an empty seat —
+   *  there is nobody to reach. */
+  live: boolean;
+  /** The seat is HELD, and there is EVIDENCE its holder is not coming back:
+   *  it attached once, and has since been off the wire past the window. This
+   *  is the fault the board could not see — an empty seat is loud already and
+   *  a live lead is fine; this is the third state that looked like the second.
+   *
+   *  Evidence is required because this drives a seat handover. A seat whose
+   *  holder has never been observed is `unattached`, not stale — see below. */
+  stale: boolean;
+  /** The seat names an id this board has no attachment record for: a lead set
+   *  when the workspace was created and not yet arrived, or one whose record
+   *  was detached. Worth REPORTING — nothing is draining that queue — but
+   *  never a reason to take the seat, because "has not arrived yet" and "is
+   *  never coming" are the same absence, and guessing wrong hands one agent's
+   *  seat to another before it has finished starting up. */
+  unattached?: boolean;
+  /** The newest moment the server observed the holder — a heartbeat it sent
+   *  or a write it made. Absent when the seat is held by an id that never
+   *  attached at all. */
+  lastObservedAt?: number;
+  /** How long the holder has been unobserved, for saying so in words. */
+  staleForMs?: number;
+  /** The sentence a person or a session reads. Present only when stale. */
+  notice?: string;
+}
+
 export type AttachAgentResult =
   | {
       ok: true;
@@ -1316,6 +1391,15 @@ export type AttachAgentResult =
        *  lead is the addressee for anything that needs one, so a fresh
        *  context needs to know which it is without a second call. */
       lead: boolean;
+      /** The lead seat as this attach left it. `lead` says whether the seat is
+       *  MINE; this says whether it is anybody's — an occupied seat whose
+       *  holder has gone is the state that used to be indistinguishable from a
+       *  healthy one. */
+      seat: LeadSeatHealth;
+      /** This attach took the seat from a holder that was gone. Present only
+       *  then, and never silent: the handover persists and announces like any
+       *  other, so the board repaints and the audit log carries it. */
+      seatTakenFrom?: string;
       /** This board has been stood down. Present iff retired, and carried in
        *  the attach result for the same reason the queues are: it is the one
        *  payload a fresh session is guaranteed to read. `notice` is written
@@ -2493,6 +2577,7 @@ export class TaskStore {
     heartbeatFreshMs?: number;
     toolCallStaleMs?: number;
     observedWorkFreshMs?: number;
+    leadSeatStaleMs?: number;
     /** How long an emitted voice entry is left alone before it is offered
      *  again. Overridable so tests never burn real minutes. */
     voiceAckGraceMs?: number;
@@ -2511,6 +2596,7 @@ export class TaskStore {
       ...(opts.observedWorkFreshMs !== undefined
         ? { observedWorkFreshMs: opts.observedWorkFreshMs }
         : {}),
+      ...(opts.leadSeatStaleMs !== undefined ? { leadSeatStaleMs: opts.leadSeatStaleMs } : {}),
     };
     this.hydrateFromDisk();
   }
@@ -5913,11 +5999,28 @@ export class TaskStore {
     // The attach is where an agent first says who it is, so the roster row
     // is written here — one address book, not a per-board one.
     this.roster?.upsertAgent(opts.agentId, opts.agentName);
-    // Claim an EMPTY seat only. A board created before this field existed —
-    // or by a person — would otherwise stay a dead letter forever, but an
-    // occupied seat is a standing decision and a second agent attaching is
-    // not a reassignment.
-    if (state.workspace.leadAgentId === undefined) {
+    // Claim an empty seat, or one whose holder is gone.
+    //
+    // The rule used to be EMPTY ONLY, and the reason it gave is still right:
+    // an occupied seat is a standing decision, and a second agent attaching
+    // is not a reassignment. What it could not see is that "occupied" and
+    // "occupied by somebody who is coming back" are different states. A
+    // session that respawned under a new name left the seat pointing at an id
+    // that had exited, and this branch — correctly, by its own rule — refused
+    // to touch it, so the board kept every lead-addressed delivery for a
+    // holder that no longer existed.
+    //
+    // So the guard is narrowed by exactly one case, and no further: a seat is
+    // takeable when its holder is STALE, which asks the socket before it asks
+    // any clock (see `leadSeatHealth`). A lead that is merely quiet still owns
+    // its seat. This is the carry-over the rename ticket asked us to pick one
+    // of: refuse to leave the seat with a dead holder, rather than guess which
+    // dead identity a new name used to be. Guessing is the option not taken —
+    // nothing in an attach identifies a session's previous id, and a wrong
+    // guess hands one agent's seat to another.
+    const seatBefore = this.leadSeatHealth(workspaceId, now);
+    const seatTakenFrom = seatBefore.stale ? seatBefore.leadAgentId : undefined;
+    if (state.workspace.leadAgentId === undefined || seatBefore.stale) {
       // `now`, not a fresh read: the seat claim is part of THIS attach, and
       // the `workspace.lead_changed` it emits is observed as this agent's
       // work. Re-reading here would stamp the work clock a millisecond past
@@ -5965,6 +6068,12 @@ export class TaskStore {
         freshProcess,
       }),
       lead,
+      // The seat as this attach LEFT it, so a session that reads its own
+      // response can tell which of the three states it is in without a second
+      // call. `lead: false` used to be the only signal here, and it reads the
+      // same whether a working peer holds the seat or a dead id does.
+      seat: this.leadSeatHealth(workspaceId, now),
+      ...(seatTakenFrom !== undefined ? { seatTakenFrom } : {}),
       ...(isRetired(state.workspace) ? { retired: retiredNotice(state.workspace) } : {}),
       ...(leadNameConflicts ? { leadNameConflicts } : {}),
     };
@@ -6552,6 +6661,88 @@ export class TaskStore {
     // Same observed clock as `hasLiveAttachment` — fixing one and not the
     // other would leave board-wide requests queueing while ordinary ones flow.
     return this.isDeliverable(workspaceId, att);
+  }
+
+  /**
+   * Is this board's lead seat held by somebody who is still there?
+   *
+   * WHAT IT IS KEYED ON, because the choice is the whole design. The socket
+   * first: an open stream is positive evidence of a live process and it
+   * outranks every clock, so a lead that spent 19 minutes grepping is live
+   * and stays live. Only once the stream is gone does the clock get a vote,
+   * and then at `LEAD_SEAT_STALE_MS` rather than the delivery gate's window.
+   *
+   * It is deliberately NOT keyed on how long the board has been quiet.
+   * Elapsed silence was measured at 40% false positives against provably
+   * active sessions, and it cannot tell a busy lead from an exited one —
+   * which is the single distinction this whole read exists to make.
+   *
+   * A seat held by an id that never attached (`known-agent`, a hand-set
+   * lead) is stale too, and with no `lastObservedAt`: nothing was ever
+   * observed, so there is no moment to report and no reason to believe
+   * anybody is listening.
+   */
+  leadSeatHealth(workspaceId: string, now = Date.now()): LeadSeatHealth {
+    const state = this.workspaces.get(workspaceId);
+    const leadAgentId = state?.workspace.leadAgentId;
+    // An empty seat is not stale — it is empty, which every surface already
+    // says loudly. Reporting it as stale would bury the one new signal in a
+    // state people have been reading correctly all along.
+    if (!state || leadAgentId === undefined) return { live: false, stale: false };
+    const att = state.attachments.get(leadAgentId);
+    if (att && this.isDeliverable(workspaceId, att)) {
+      return { leadAgentId, live: true, stale: false, lastObservedAt: this.lastObserved(att) };
+    }
+    // The stream is what makes a quiet lead safe, so ask it on its own rather
+    // than inheriting `isDeliverable`'s answer: that predicate also returns
+    // false for a lead whose stream is open when the BOARD has no delivery
+    // channel, and a board-wide outage is not evidence about this agent.
+    if (this.agentStreamProbe?.(workspaceId, leadAgentId)) {
+      return {
+        leadAgentId,
+        live: true,
+        stale: false,
+        ...(att ? { lastObservedAt: this.lastObserved(att) } : {}),
+      };
+    }
+    // No record at all: report it, never act on it. A board created with a
+    // lead named in advance sits here for the seconds before that session
+    // attaches, and treating the gap as death let the next arrival take a seat
+    // its owner was walking towards.
+    if (!att) {
+      return {
+        leadAgentId,
+        live: false,
+        stale: false,
+        unattached: true,
+        notice:
+          `The lead seat is held by ${leadAgentId}, which this board has no attachment ` +
+          'record for — it has never been observed here, or its record was detached. ' +
+          'Nothing is draining what queues for it. If that session is not coming, hand ' +
+          'the seat to one that is.',
+      };
+    }
+    const lastObservedAt = this.lastObserved(att);
+    const staleForMs = Math.max(0, now - lastObservedAt);
+    // Off the wire, but not for long enough to conclude anything. This is the
+    // reconnect blip, and calling it stale here is how a working lead loses
+    // its seat to the next session that attaches.
+    const staleAfterMs = this.attachmentThresholds.leadSeatStaleMs ?? LEAD_SEAT_STALE_MS;
+    if (staleForMs < staleAfterMs) {
+      return { leadAgentId, live: false, stale: false, lastObservedAt };
+    }
+    return {
+      leadAgentId,
+      live: false,
+      stale: true,
+      lastObservedAt,
+      staleForMs,
+      notice:
+        `The lead seat is held by ${leadAgentId}, which is off the wire and was last ` +
+        `observed ${describeGap(staleForMs)} ago. Every lead-addressed delivery on this ` +
+        'board — comments, review answers, stall nudges — is waiting on a session that ' +
+        'is not there.',
+    };
   }
 
   /**

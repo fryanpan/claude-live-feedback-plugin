@@ -205,6 +205,17 @@ export interface StallNudgeFrame {
    * reads both frames into one payload type.
    */
   heldItems?: readonly HeldItemRow[];
+  /**
+   * The lead this wake was ADDRESSED to, when it was delivered to somebody
+   * else because the lead could not be reached. Absent on the ordinary wake,
+   * so its presence is the whole signal: the reader is a stand-in, and the
+   * board's lead seat is held by a session that is not there.
+   *
+   * Carried on the frame rather than left in the log, because the person who
+   * needs it is the one who just got woken about a board they may not own —
+   * "why am I being told this" is answerable only here.
+   */
+  escalatedFrom?: string;
   ts: number;
 }
 
@@ -213,6 +224,16 @@ export interface StallNudgerOptions {
   snapshot: () => readonly StallSnapshot[];
   /** Is this agent holding a stream we could actually wake? */
   canReach: (workspaceId: string, agentId: string) => boolean;
+  /**
+   * Everyone else holding a stream on this board — the fallback addressees
+   * when the lead cannot be woken.
+   *
+   * Same source as `canReach`, deliberately: an enumeration drawn from one
+   * place and a predicate from another will disagree eventually, and the
+   * disagreement shows up as a wake sent to a session that is not there.
+   * Omitted → no escalation, which is the behaviour this option replaced.
+   */
+  attachedAgents?: (workspaceId: string) => readonly string[];
   /** Addressed delivery. Returns how many sinks it reached. */
   send: (workspaceId: string, agentId: string, frame: StallNudgeFrame) => number;
   /**
@@ -423,9 +444,10 @@ export class StallNudger {
     // Checked LAST, and deliberately not recorded when it says no: a wake that
     // reached nobody must stay owed, or the lead returns to a board that has
     // already decided it told them.
-    if (!this.reachable(key, lead)) return;
+    const to = this.addressee(key, lead);
+    if (to === undefined) return;
     const top = board.stalled[0] ?? board.unfiled[0] ?? held[0];
-    this.emit(key, lead, {
+    this.emit(key, to.agentId, {
       event: STALL_EVENT,
       workspaceId: key,
       ...(top ? { taskId: top.id, title: top.title } : {}),
@@ -444,9 +466,46 @@ export class StallNudger {
             },
           }
         : {}),
+      ...(to.escalatedFrom !== undefined ? { escalatedFrom: to.escalatedFrom } : {}),
       ts: now,
     });
     this.armed.set(key, stamp);
+  }
+
+  /**
+   * Who actually gets this wake.
+   *
+   * The lead when the lead is there. Otherwise ANY attached session, because
+   * the alternative — the current behaviour — is a monitor whose whole output
+   * is addressed to one identity it cannot verify: a board whose lead seat is
+   * held by a session that has stopped listening goes quiet, and the silence
+   * is indistinguishable from a healthy board. That is the shape of the
+   * failure this exists to end.
+   *
+   * The lead is still tried FIRST and the ordinary frame is unchanged, so a
+   * healthy board keeps waking exactly the session it always woke.
+   *
+   * Sorted, and the lead excluded: the stand-in must be the same session on
+   * every tick, or a board with three attached agents wakes a different one
+   * each time and none of them can tell that the others were told.
+   */
+  private addressee(
+    workspaceId: string,
+    lead: string,
+  ): { agentId: string; escalatedFrom?: string } | undefined {
+    if (this.reachable(workspaceId, lead)) return { agentId: lead };
+    let attached: readonly string[] = [];
+    try {
+      attached = this.opts.attachedAgents?.(workspaceId) ?? [];
+    } catch {
+      attached = [];
+    }
+    const standIn = attached
+      .filter((id) => id !== lead && this.reachable(workspaceId, id))
+      .slice()
+      .sort()[0];
+    if (standIn === undefined) return undefined;
+    return { agentId: standIn, escalatedFrom: lead };
   }
 
   /**
@@ -734,7 +793,11 @@ export class StallNudger {
   private noteWake(workspaceId: string, agentId: string, frame: StallNudgeFrame): void {
     try {
       this.report(
-        `[stall] wake ws=${workspaceId} lead=${agentId} ` +
+        `[stall] wake ws=${workspaceId} lead=${frame.escalatedFrom ?? agentId} ` +
+          // `lead=` keeps naming the SEAT HOLDER in both cases, so a log
+          // grepped for one board reads as one story; `to=` appears only when
+          // those two are different people.
+          (frame.escalatedFrom !== undefined ? `to=${agentId} ` : '') +
           `stalled=${frame.stalledCount} unfiled=${frame.unfiled?.length ?? 0} ` +
           `undetermined=${frame.undetermined?.count ?? 0} held=${frame.heldItems?.length ?? 0}`,
       );

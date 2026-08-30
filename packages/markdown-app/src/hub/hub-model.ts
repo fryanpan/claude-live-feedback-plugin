@@ -2200,6 +2200,56 @@ export interface PresencePerson {
   self?: boolean;
 }
 
+/**
+ * Whether the lead seat has anybody in it, as the attachments read reports it.
+ *
+ * Three states, not two. The board has always drawn an EMPTY seat loudly and
+ * a HELD seat silently, and a held seat whose holder has stopped answering
+ * therefore rendered exactly like a healthy board — which is how a lead that
+ * respawned under a new name left its board apparently owned and actually
+ * unread for hours. `stale` is that third state.
+ *
+ * Absent from a server older than the field, and every reader treats absence
+ * as "no claim made" rather than as healthy.
+ */
+export interface LeadSeatView {
+  leadAgentId?: string;
+  live: boolean;
+  stale: boolean;
+  /** The seat names an id with no attachment record — set ahead of the
+   *  session arriving, or detached since. Reported, never treated as gone. */
+  unattached?: boolean;
+  staleForMs?: number;
+}
+
+/**
+ * What the strip says above the picker.
+ *
+ * The wording lives here rather than in the renderer because it is the whole
+ * signal: the strip's job is to say whether this board's asks are reaching
+ * anybody, and a label that only ever names the seat's OCCUPANT answers a
+ * question nobody was asking.
+ */
+/** A silence as a person reads one — coarse, because the reader is deciding
+ *  whether it is unusual, not measuring it. */
+function silenceWords(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+
+export function leadSeatLabel(leadAgentId: string | undefined, seat?: LeadSeatView): string {
+  if (!leadAgentId) return 'No lead agent — nobody owns this board’s asks';
+  if (!seat || seat.leadAgentId !== leadAgentId) return 'Lead agent';
+  if (seat.stale) {
+    const since = seat.staleForMs === undefined ? '' : ` for ${silenceWords(seat.staleForMs)}`;
+    return `Lead agent has not answered${since} — its asks are reaching nobody`;
+  }
+  if (seat.unattached) return 'Lead agent has not attached — its asks are reaching nobody';
+  return 'Lead agent';
+}
+
 export interface PresenceAgent {
   agentId: string;
   state: 'active' | 'unresponsive' | 'away';

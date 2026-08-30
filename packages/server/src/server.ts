@@ -56,6 +56,7 @@ import {
 } from './agent-watches.ts';
 import { AllowRuleProposals } from './allow-rules.ts';
 import { ARTIFACT_CHECK_ACTOR, ArtifactChecker } from './artifact-check.ts';
+import { attachNotes } from './attach-notes.ts';
 import { type CodeSender, createLogCodeSender } from './auth/code-sender.ts';
 import { CODE_TTL_MS, EmailCodes } from './auth/email-code.ts';
 import { SessionRevocations } from './auth/session-revocations.ts';
@@ -1284,6 +1285,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // can re-wire them instead of silently starting from `[]`. See
   // agent-watches.ts.
   const agentWatches = new AgentWatches({ dataDir });
+
+  /**
+   * A watch key is live when the thing it names still exists: a doc room, or
+   * for `ws:<id>` a hub workspace / review. Anything else is a subscription
+   * the child would open against a 404 forever.
+   *
+   * Closure-level rather than route-local because two routes need the same
+   * answer — the watches list, and the attach response that reports how many
+   * watches this session actually has. Two copies would be two definitions of
+   * "live" free to drift, on a pair of readings that only mean anything when
+   * they agree.
+   */
+  const watchKeyExists = (key: string): boolean => {
+    if (rooms.docExists(key)) return true;
+    if (!key.startsWith('ws:')) return false;
+    const wsId = key.slice('ws:'.length);
+    return (
+      taskStore.getWorkspace(wsId) !== undefined || rooms.list().some((m) => m.workspaceId === wsId)
+    );
+  };
   if (agentWatches.loadError) {
     console.error(`[agent-watches] ${agentWatches.loadError}`);
   }
@@ -2053,6 +2074,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // from an open browser tab, and a wake fanned out to every peer is the
     // cost addressed delivery exists to remove.
     canReach: (workspaceId, agentId) => sse.agentsOn(`ws~${workspaceId}`).has(agentId),
+    // The fallback addressees, read off the SAME set `canReach` answers from
+    // — so the monitor cannot enumerate a session it would then decline to
+    // send to. A board whose lead has stopped listening still reaches whoever
+    // is actually on it.
+    attachedAgents: (workspaceId) => [...sse.agentsOn(`ws~${workspaceId}`)],
     send: (workspaceId, agentId, frame) =>
       sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
     // The held item's FILER, addressed the same way. The lead learns of it in
@@ -7084,18 +7110,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (SHARED_AGENT_IDS.has(agentId)) {
             return j(400, { error: SHARED_IDENTITY_ERROR, message: SHARED_IDENTITY_MESSAGE });
           }
-          // A key is live when the thing it names still exists: a doc room, or
-          // for `ws:<id>` a hub workspace / review. Anything else
-          // is a subscription the child would open against a 404 forever.
-          const watchKeyExists = (key: string): boolean => {
-            if (rooms.docExists(key)) return true;
-            if (!key.startsWith('ws:')) return false;
-            const wsId = key.slice('ws:'.length);
-            return (
-              taskStore.getWorkspace(wsId) !== undefined ||
-              rooms.list().some((m) => m.workspaceId === wsId)
-            );
-          };
           if (req.method === 'GET') {
             const listed = agentWatches.list(agentId, watchKeyExists);
             // ADDITIVE. `coverage` is a new key on an existing 200 body, so a
@@ -7563,6 +7577,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             workspaceId,
             attachments,
+            // Who owns this board's asks, and whether they are there. It rides
+            // this read rather than the projected workspace info because seat
+            // health CHANGES WITH TIME and nothing else: a lead that stops
+            // answering writes no board event, so a value projected into the
+            // doc would still say "fine" hours later. The presence strip
+            // repaints off this list already.
+            seat: taskStore.leadSeatHealth(workspaceId),
             ...(clientRelease ? { clientRelease } : {}),
             pluginRelease: {
               version: released,
@@ -7625,7 +7646,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               res.error === 'workspace-not-found' ? 404 : res.error === 'merged-away' ? 409 : 400;
             return j(status, res);
           }
-          return j(200, res);
+          // What this session is subscribed to, counted here because watches
+          // live outside the task store. A session that respawned under a new
+          // name comes up with none, and an empty list reads exactly like a
+          // session that simply has not subscribed yet — which is why the
+          // count ships with the seat rather than on its own. Together they
+          // are the two halves of "a rename took me off this board".
+          const watching = agentWatches.list(res.attachment.agentId, watchKeyExists).watches.length;
+          return j(200, { ...res, watching, notes: attachNotes(res, watching) });
         }
         const wsAgentHeartbeatMatch = pathname.match(
           /^\/api\/workspaces\/([^/]+)\/attachments\/([^/]+)\/heartbeat$/,

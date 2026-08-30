@@ -112,12 +112,24 @@ wakes correctly:
   unchanged board is re-said at most once per window. The default repeat
   floor across a 9-board fleet prices at roughly 43M tokens/day — the knob
   exists because that floor has to be tunable faster than a release.
-- **An unreachable lead costs nothing**: the wake stays owed and fires when
-  the lead reattaches. Healthy board = silence; there is no "all clear"
-  frame.
+- **An unreachable lead escalates, and only then costs nothing**: the wake
+  goes to any other session holding a stream on that board, carrying
+  `escalatedFrom: <lead>` so the stand-in knows why it was told. The frame
+  says UNREACHABLE, never "gone": holding no stream is also what a
+  reconnecting session looks like, and deciding a session is dead takes
+  evidence over a window — that call belongs to `leadSeatHealth`, which is
+  what the board's presence strip and the attach result read. With nobody
+  at all attached the wake stays owed and fires when someone reattaches.
+  Before this, the monitor addressed one identity it could not verify: a seat
+  held by a session that had stopped listening turned every wake on that
+  board into silence, and that silence read exactly like a healthy board (a
+  lead respawned under a new name on 2026-08-29, and for four and a half
+  hours nothing reached a live session). Healthy board = silence; there is
+  no "all clear" frame.
 - Every successful wake logs
   `[stall] wake ws=<id> lead=<agent> stalled=<n> unfiled=<n> undetermined=<n>`
-  — billed turns, not decided wakes.
+  — billed turns, not decided wakes. `lead=` always names the SEAT HOLDER;
+  an escalated wake adds `to=<agent>` for who actually got it.
 
 ## Field results (first night, 2026-08-28)
 

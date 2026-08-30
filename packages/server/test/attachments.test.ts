@@ -732,6 +732,35 @@ describe('attachment routes + lead-addressed delivery', () => {
     expect(list.attachments.map((a) => a.agentId)).not.toContain('agent-away');
   });
 
+  it('the attachments read reports whether the lead seat has anybody in it', async () => {
+    // The board's own read of "is this seat manned". It rides this route
+    // rather than the projected workspace info because it changes with time
+    // alone — see leadSeatHealth. Staleness itself needs a clock the route
+    // does not expose, so the third state is asserted at the store level in
+    // lead-seat-health.test.ts; what is under test here is that the field
+    // reaches the reader at all, and that it distinguishes the two states a
+    // request can reach.
+    const wsId = await makeWorkspace('seat-read-hub', 'agent-absent');
+    const before = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+      seat: { leadAgentId?: string; live: boolean; stale: boolean; unattached?: boolean };
+    };
+    expect(before.seat.leadAgentId).toBe('agent-absent');
+    expect(before.seat.live).toBe(false);
+    // Never attached is NOT evidence of a dead session — a lead can be named
+    // before it starts up, and this must never read as a seat to take.
+    expect(before.seat.stale).toBe(false);
+    expect(before.seat.unattached).toBe(true);
+
+    await declareSelf(wsId, 'agent-present');
+    const after = (await (await local(`/api/workspaces/${wsId}/attachments`)).json()) as {
+      seat: { leadAgentId?: string; live: boolean; stale: boolean; unattached?: boolean };
+    };
+    expect(after.seat.leadAgentId).toBe('agent-present');
+    expect(after.seat.live).toBe(true);
+    expect(after.seat.stale).toBe(false);
+    expect(after.seat.unattached).toBeUndefined();
+  });
+
   it('after declaring, a voice change-request routes to the agent instead of queuing', async () => {
     const wsId = await makeWorkspace('voice-declare-hub', 'agent-away');
     await declareSelf(wsId, 'agent-self');
