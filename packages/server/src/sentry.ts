@@ -20,11 +20,9 @@
  * DSN is configured — not by reading this file.
  */
 
-// biome-ignore lint/suspicious/noExplicitAny: the whole point of the dynamic
-// import is that this module never eagerly resolves `@sentry/bun`'s types
-// at the top level either — a `import type` of a package this file might
-// never load is fine (types are erased), but naming its shape without one
-// would need a second copy of options types we don't want to maintain.
+// `typeof import(...)` of a package this file might never load at runtime is
+// fine — types are erased, so naming the shape this way costs nothing when
+// the dynamic `import()` below never fires (no DSN configured).
 type SentryBunModule = typeof import('@sentry/bun');
 
 let sentryModule: SentryBunModule | null = null;
@@ -69,8 +67,58 @@ export async function initServerSentry(opts: {
     // "redact this" knob on it, so it's disabled outright; withRouteSpan
     // already wraps every real request with a route-pattern-named span.
     integrations: (defaults) => defaults.filter((i) => i.name !== 'BunServer'),
+    // Floor, not a substitute for the above: disabling BunServer closes the
+    // one leak source this file found by reading the SDK's source. It does
+    // not prove there isn't another — a different default integration, or
+    // the SDK's own request handling, can attach a URL/header/referrer to an
+    // event without going through withRouteSpan at all. beforeSend and
+    // beforeSendTransaction run on every outbound payload regardless of
+    // which code path produced it, so the guarantee doesn't depend on having
+    // enumerated every source correctly. See scrubEventForPrivacy.
+    beforeSend(event) {
+      return scrubEventForPrivacy(event) as typeof event;
+    },
+    beforeSendTransaction(event) {
+      return scrubEventForPrivacy(event) as typeof event;
+    },
   });
   sentryModule = Sentry;
+}
+
+/**
+ * Key-targeted, not content-targeted: this walks the whole event tree and
+ * drops the VALUE of any key whose name looks like it carries a URL, query
+ * string, cookie, or referrer — `url`, `request.url`, `url.full`,
+ * `http.url`, `query_string`, `headers`, `referer`/`referrer`, `cookie(s)`.
+ * It deliberately does NOT pattern-match string CONTENT (e.g. "starts with
+ * /"), because that would also catch legitimate, harmless data this same
+ * event carries — most importantly `exception.values[].stacktrace.frames[].
+ * filename`, an absolute path into OUR OWN source tree that a debugging
+ * agent needs to find where the error happened. Naming the key is the safer
+ * floor: every URL-shaped attribute Sentry's conventions define is named
+ * with one of these substrings, and nothing else in an event is.
+ */
+const SCRUB_KEY_SUBSTRINGS = ['url', 'href', 'referer', 'referrer', 'cookie', 'query_string'];
+
+function shouldScrubKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  if (lower === 'headers') return true;
+  return SCRUB_KEY_SUBSTRINGS.some((needle) => lower.includes(needle));
+}
+
+export function scrubEventForPrivacy(value: unknown, depth = 0): unknown {
+  if (depth > 20) return value; // guard against pathological/cyclical shapes
+  if (Array.isArray(value)) {
+    return value.map((v) => scrubEventForPrivacy(v, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = shouldScrubKey(key) ? '[scrubbed]' : scrubEventForPrivacy(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
 }
 
 export async function flushServerSentry(timeoutMs = 2000): Promise<boolean> {
