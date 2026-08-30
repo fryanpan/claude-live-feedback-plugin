@@ -204,6 +204,12 @@ describe('acquirePort', () => {
   });
 });
 
+/** `Bun.serve().port` is typed optional; a `port: 0` server always has one. */
+function assignedPort(port: number | undefined): number {
+  if (port === undefined) throw new Error('Bun.serve reported no port');
+  return port;
+}
+
 describe('probeLocalPort', () => {
   /**
    * The probe this replaces bound `node:net` to `127.0.0.1` and `::1`, which
@@ -218,7 +224,7 @@ describe('probeLocalPort', () => {
   test('sees a running Bun.serve on the port', async () => {
     const holder = Bun.serve({ port: 0, fetch: () => new Response('held') });
     try {
-      expect(await probeLocalPort(holder.port)).toBe('in-use');
+      expect(await probeLocalPort(assignedPort(holder.port))).toBe('in-use');
     } finally {
       holder.stop(true);
     }
@@ -229,7 +235,7 @@ describe('probeLocalPort', () => {
     // answered "in-use" for everything would pass that test vacuously.
     // Borrow an OS-assigned port, release it, then ask about it.
     const borrowed = Bun.serve({ port: 0, fetch: () => new Response('x') });
-    const port = borrowed.port;
+    const port = assignedPort(borrowed.port);
     borrowed.stop(true);
     expect(await probeLocalPort(port)).toBeNull();
   });
