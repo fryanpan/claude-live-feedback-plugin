@@ -55,6 +55,7 @@ import {
   type HubReviewItem,
   type HubTask,
   type HubWorkspaceInfo,
+  type LeadSeatView,
   type PluginRelease,
   type PresenceAgent,
   type PresencePerson,
@@ -171,6 +172,12 @@ interface HubState {
   /** Deploy readiness (§3.12 commit 11) — null until the log has lines. */
   uptime: UptimeReport | null;
   agents: PresenceAgent[];
+  /** Whether the lead seat has anybody in it — read off the attachments poll
+   *  rather than the projected workspace info, because it changes with time
+   *  alone and a value stamped into the doc would still say "fine" hours
+   *  after the lead stopped answering. Null until the first read lands, and
+   *  null on any server older than the field: no claim, not a clear seat. */
+  seat: LeadSeatView | null;
   /** Plugin versions: what the deploy source would install, and which
    *  attached sessions are running something older. Null until the first
    *  attachments read lands. */
@@ -488,6 +495,7 @@ async function main(): Promise<void> {
   const bootLoc = parseBoardLocation(location.pathname, location.search);
   const initialNav = bootLoc.nav;
   const state: HubState = {
+    seat: null,
     info: null,
     tasks: new Map(),
     nav: initialNav,
@@ -872,6 +880,7 @@ async function main(): Promise<void> {
       state.info?.leadAgentId,
       state.agents.map((agent) => agent.agentId),
       { onLeadCommit: (leadAgentId) => void saveLead(leadAgentId) },
+      state.seat ?? undefined,
     );
   }
 
@@ -2510,6 +2519,7 @@ async function main(): Promise<void> {
         stateLabel?: string;
         lastToolCallAt: number;
       }>;
+      seat?: LeadSeatView;
       pluginRelease?: PluginRelease;
       clientRelease?: ClientRelease;
     }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/attachments`);
@@ -2526,6 +2536,10 @@ async function main(): Promise<void> {
     // only on the supervisor's stderr, so the split widened unread. Guarded
     // the same way: an unreachable server must not read as "no release".
     state.clientRelease = applyRefresh(state.clientRelease, res, (r) => r.clientRelease ?? null);
+    // Guarded like the releases above: a read that never reached the server
+    // must not read as a healthy seat. `?? null` keeps an older server's
+    // silence as "no claim", which the strip renders as it always did.
+    state.seat = applyRefresh(state.seat, res, (r) => r.seat ?? null);
     state.agents = applyRefresh(state.agents, res, (r) =>
       (r.attachments ?? []).map((a) => ({
         agentId: a.agentId,
