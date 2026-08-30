@@ -68,9 +68,14 @@ export function readingTimeTotalsFromLog(dataDir: string): ParsedTotals {
     linesScanned++;
     let ev: Event;
     try {
-      ev = JSON.parse(line);
+      const parsed: unknown = JSON.parse(line);
+      // A malformed line must never abort the whole rollup — that includes
+      // syntactically valid JSON that isn't an event object (`null`, `42`,
+      // an array), which would otherwise throw on `ev.type` below.
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+      ev = parsed as Event;
     } catch {
-      continue; // a malformed line must never abort the whole rollup
+      continue;
     }
     if (ev.type !== 'read_session') continue;
     const docId = ev.doc?.docId;

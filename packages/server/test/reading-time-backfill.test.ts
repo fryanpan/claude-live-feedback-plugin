@@ -149,6 +149,20 @@ describe('readingTimeTotalsFromLog', () => {
     expect(readSessionsFolded).toBe(1);
     expect(totals.get('t-1')?.totalSeconds).toBe(10);
   });
+
+  it('skips a syntactically valid line that is not an event object, rather than throwing', () => {
+    // `null`, a bare number, and an array all parse successfully but have no
+    // `.type` to read — this must not abort the rest of the scan.
+    writeLines(dataDir, [
+      'null',
+      '42',
+      '[1,2,3]',
+      readSessionLine({ docId: 'task:t-1', durationMs: 10_000, sessionId: 'good' }),
+    ]);
+    const { totals, readSessionsFolded } = readingTimeTotalsFromLog(dataDir);
+    expect(readSessionsFolded).toBe(1);
+    expect(totals.get('t-1')?.totalSeconds).toBe(10);
+  });
 });
 
 describe('runReadingTimeBackfill', () => {
