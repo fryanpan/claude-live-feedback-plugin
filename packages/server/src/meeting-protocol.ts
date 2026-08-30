@@ -53,6 +53,9 @@ export interface MeetingRelayDeps {
  */
 type ConnState = 'idle' | 'opening' | 'live' | 'ending';
 
+/** How long a shutdown waits for meetings to flush before going anyway. */
+const DISPOSE_DRAIN_MS = 5_000;
+
 interface Conn {
   state: ConnState;
   meeting: ActiveMeeting | null;
@@ -72,6 +75,24 @@ interface Conn {
 
 export class MeetingRelay {
   private readonly conns = new WeakMap<MeetingClient, Conn>();
+  /**
+   * Every started-and-unfinished piece of this relay's own async work.
+   *
+   * The socket callbacks cannot await — they are Bun websocket handlers —
+   * but what they start is durable: `stop()` flushes the engine's turn in
+   * progress and then the notes into the doc. On shutdown every socket closes
+   * at once and those writes have to land before the rooms are flushed, so
+   * `dispose()` waits here. A `WeakMap` of connections cannot be enumerated;
+   * this can.
+   *
+   * `start` is tracked as well as `stop`, and not for symmetry: a socket that
+   * closes mid-handshake gets a DEFERRED teardown — `stop()` only records
+   * `pendingStop` and returns, and the real flush runs inside `start`'s own
+   * continuation when the engine finally answers. Tracking only the `stop`
+   * would see that connection as already finished and flush the rooms out
+   * from under it.
+   */
+  private readonly inFlight = new Set<Promise<void>>();
 
   constructor(private readonly deps: MeetingRelayDeps) {}
 
@@ -98,7 +119,7 @@ export class MeetingRelay {
       return;
     }
     if (msg.type === 'start') {
-      void this.start(ws, conn, msg.sampleRate);
+      this.track(this.start(ws, conn, msg.sampleRate));
       return;
     }
     if (msg.type === 'name_speaker') {
@@ -108,7 +129,7 @@ export class MeetingRelay {
       conn.notes?.nameSpeaker(msg.speaker, msg.name);
       return;
     }
-    void this.stop(ws, conn, true);
+    this.track(this.stop(ws, conn, true));
   }
 
   /** A binary audio frame. */
@@ -132,11 +153,39 @@ export class MeetingRelay {
     const conn = this.conns.get(ws);
     if (!conn) return;
     this.conns.delete(ws);
-    void this.stop(ws, conn, false);
+    this.track(this.stop(ws, conn, false));
   }
 
-  /** Every live meeting ends — server shutdown. */
-  dispose(): void {
+  private track(work: Promise<void>): void {
+    this.inFlight.add(work);
+    void work.finally(() => this.inFlight.delete(work));
+  }
+
+  /**
+   * Every live meeting ends — server shutdown.
+   *
+   * Awaits the teardowns already running first: a shutdown force-closes the
+   * audio sockets, and each one's `onClose` is mid-flush when this is called.
+   * `stopAll()` after them is the belt — it ends a meeting whose connection
+   * never produced a close at all, so a restart never reads a doc as
+   * recording by a socket that is gone.
+   */
+  async dispose(): Promise<void> {
+    // Looped, not a single `allSettled`: finishing a handshake ENQUEUES the
+    // deferred teardown, so the set is refilled by the very thing being
+    // waited on.
+    //
+    // allSettled, and bounded: one meeting whose engine refuses to close must
+    // keep neither the others' notes nor the process itself out of the flush
+    // that follows. A shutdown that cannot finish is worse than a lost
+    // sentence — SIGTERM comes through here.
+    const deadline = Date.now() + DISPOSE_DRAIN_MS;
+    while (this.inFlight.size > 0 && Date.now() < deadline) {
+      await Promise.race([
+        Promise.allSettled([...this.inFlight]),
+        new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now()))),
+      ]);
+    }
     this.deps.store.stopAll();
   }
 
