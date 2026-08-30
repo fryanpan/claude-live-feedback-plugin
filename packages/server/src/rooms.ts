@@ -1231,7 +1231,10 @@ export class Rooms {
       return { ok: false, error: 'has-open-threads', openThreads };
     }
     this.teardownRoom(room, 'doc deleted');
-    this.purgePersisted(docId);
+    // `room.docId`, not `docId`: an alias resolves to the room but names no
+    // file, so purging the raw argument deleted nothing and reported success
+    // — the doc came back on the next boot.
+    this.purgePersisted(room.docId);
     return { ok: true };
   }
 
@@ -2211,7 +2214,7 @@ export class Rooms {
     // diff doc that text is the file at the target commit.)
     if (contentKind(room.meta.type) === 'flat') {
       const text = room.ydoc.getText('content').toString();
-      const syncError = this.fileBindings.get(docId)?.lastSyncError;
+      const syncError = this.fileBindings.get(room.docId)?.lastSyncError;
       return {
         plainText: text,
         blocks: [{ type: 'code', text, startOffset: 0, endOffset: text.length }],
@@ -2310,7 +2313,7 @@ export class Rooms {
   } | null {
     const room = this.resolveRoom(docId);
     if (!room) return null;
-    const binding = this.fileBindings.get(docId);
+    const binding = this.fileBindings.get(room.docId);
     const meta = this.withActivity(room.meta);
 
     let textLength: number;
@@ -3146,24 +3149,26 @@ export class Rooms {
     if (isHubOwnedRoom(docId)) return { ok: false, error: 'hub-owned' };
     const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
+    // From here on the CANONICAL id: everything below names files, writes a
+    // manifest and reports back, and an alias names none of them.
+    const id = room.docId;
     const setId = reviewIdOf(room.meta);
     if (setId !== undefined) return { ok: false, error: 'review-member', setId };
 
     const dir = ensureArchiveDir(this.cfg.dataDir);
-    if (existsSync(join(dir, `${docId}.ydoc`))) return { ok: false, error: 'archive-collision' };
+    if (existsSync(join(dir, `${id}.ydoc`))) return { ok: false, error: 'archive-collision' };
 
     // Flush BEFORE tearing down: teardown cancels the pending debounced write,
     // so without this the archived snapshot is up to 200ms stale — and for a
     // doc edited right up to the moment it was retired, that is the edit the
     // reviewer just made.
     this.persistRoomNow(room);
-    if (!this.moveDocFiles(docId, this.cfg.dataDir, dir))
-      return { ok: false, error: 'move-failed' };
+    if (!this.moveDocFiles(id, this.cfg.dataDir, dir)) return { ok: false, error: 'move-failed' };
     // Commit point passed: the files are parked. Now unbind the room.
     this.teardownRoom(room, 'doc archived');
 
     const manifest: ArchivedDoc = {
-      docId,
+      docId: id,
       archivedAt: toUtcIso(Date.now()),
       archivedBy: opts.archivedBy,
       ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
@@ -3171,8 +3176,8 @@ export class Rooms {
       linkedWorkspaces: opts.linkedWorkspaces ?? [],
     };
     writeDocArchiveManifest(this.cfg.dataDir, manifest);
-    this.recordArchiveLifecycle('archive', docId, {}, opts);
-    return { ok: true, docId, manifest };
+    this.recordArchiveLifecycle('archive', id, {}, opts);
+    return { ok: true, docId: id, manifest };
   }
 
   /**
@@ -3792,7 +3797,7 @@ export class Rooms {
   reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
     const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
-    this.touchDoc(docId);
+    this.touchDoc(room.docId);
     // PINNED diff docs have no file binding — their content is pinned to a
     // commit. Recover by re-reading the file at the target hash from the
     // repo. (Working-tree diff docs have a live binding and fall through to
@@ -4227,9 +4232,11 @@ export class Rooms {
     docId: string,
   ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'no-binding' | 'missing' {
     const room = this.resolveRoom(docId);
-    const binding = this.fileBindings.get(docId);
+    // Every keyed lookup below takes the RESOLVED id: `docId` may be an
+    // alias, which resolves to a room but keys no binding and no clock.
+    const binding = room ? this.fileBindings.get(room.docId) : undefined;
     if (!room || !binding) return 'no-binding';
-    this.touchDoc(docId);
+    this.touchDoc(room.docId);
     if (!existsSync(binding.path)) return 'missing';
     // Advance the poll baseline the same way the poll itself would, so this
     // manual reconcile doesn't get replayed on the next tick.

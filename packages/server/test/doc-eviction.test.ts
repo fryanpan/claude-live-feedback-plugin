@@ -335,6 +335,75 @@ describe('booting against docs that are not loaded', () => {
     }
   });
 
+  it('deleting or archiving BY ALIAS acts on the file the alias names', () => {
+    // The other half of making lookups alias-aware, and the dangerous half:
+    // `deleteDoc('readable-name')` now resolves the room, but every
+    // filesystem verb after it still took the raw argument — so it purged
+    // `readable-name.ydoc`, which does not exist, reported ok, and the doc
+    // came back on the next boot. Same shape in `archiveDoc`.
+    const first = make(dataDir);
+    let realId: string;
+    let archivedId: string;
+    try {
+      realId = first.getOrCreate('doomed', { type: 'markdown', alias: 'delete-me' }).docId;
+      archivedId = first.getOrCreate('parked', { type: 'markdown', alias: 'archive-me' }).docId;
+      first.flush();
+    } finally {
+      first.stop();
+    }
+    // The files must EXIST before the delete, or both the fixed and the
+    // broken purge leave the directory looking identical and the test
+    // passes on a doc that was never written. (It did, the first time.)
+    expect(existsSync(join(dataDir, `${realId}.ydoc`))).toBe(true);
+    expect(existsSync(join(dataDir, `${archivedId}.ydoc`))).toBe(true);
+
+    const remover = make(dataDir);
+    try {
+      // Control: the aliases resolve across a restart, so a failure below is
+      // about the verb and not about the alias never having been claimed.
+      expect(remover.get('delete-me')?.docId).toBe(realId);
+      expect(remover.get('archive-me')?.docId).toBe(archivedId);
+
+      expect(remover.deleteDoc('delete-me').ok).toBe(true);
+      const archived = remover.archiveDoc('archive-me', { archivedBy: 'test' });
+      expect(archived.ok).toBe(true);
+      if (archived.ok) expect(archived.docId).toBe(archivedId);
+      remover.flush();
+    } finally {
+      remover.stop();
+    }
+
+    // The real files are gone from the data dir, not a pair of files named
+    // after the aliases.
+    expect(existsSync(join(dataDir, `${realId}.ydoc`))).toBe(false);
+    expect(existsSync(join(dataDir, `${archivedId}.ydoc`))).toBe(false);
+    expect(existsSync(join(dataDir, 'delete-me.ydoc'))).toBe(false);
+
+    const second = make(dataDir);
+    try {
+      const ids = second.list().map((m) => m.docId);
+      expect(ids).not.toContain(realId);
+      expect(ids).not.toContain(archivedId);
+      // Positive control on the same listing: a doc nobody touched IS there,
+      // so "not in the list" means deleted rather than "the list is empty".
+      const keeper = make(dataDir);
+      try {
+        keeper.getOrCreate('keeper', { type: 'markdown' });
+        keeper.flush();
+      } finally {
+        keeper.stop();
+      }
+      const third = make(dataDir);
+      try {
+        expect(third.list().map((m) => m.docId)).toContain('keeper');
+      } finally {
+        third.stop();
+      }
+    } finally {
+      second.stop();
+    }
+  });
+
   it('pairs a diff member with its companion when NEITHER is loaded', () => {
     // Caught by review, not by a test: `companionOf` asked the room map, so
     // after a lazy boot a diff member and its editable companion stopped
