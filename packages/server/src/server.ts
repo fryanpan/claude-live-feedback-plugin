@@ -4611,6 +4611,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // it safe to leave un-gated for anyone already past the front door,
         // and it still refuses a share visitor: an external reviewer invited
         // to one document has no business reading how many others exist.
+        /**
+         * Run the one-shot summary backfill NOW, on request.
+         *
+         * It used to be reachable only by restarting the server with
+         * CW_SUMMARY_BACKFILL=1, which made a piece of catch-up work into a
+         * reason to bounce the process — the opposite of what a cheap boot
+         * is for. It is the same sweep with the same pacing and the same
+         * skip-if-summarized rule; what changed is that asking for it no
+         * longer costs a restart.
+         *
+         * Still deliberate rather than automatic: the backlog is hundreds of
+         * billed calls, so nothing schedules this. Somebody asks.
+         */
+        if (pathname === '/api/summaries/backfill' && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const body = await safeJson(req);
+          const minutes = Number(body?.windowMinutes ?? 15);
+          const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
+          const { queued, open, resolved } = rooms.backfillSummaries({ windowMs });
+          return j(200, { ok: true, queued, open, resolved, windowMs });
+        }
+
         if (pathname === '/api/metrics' && req.method === 'GET') {
           if (visitor) return j(403, { error: 'not available to share visitors' });
           const stats = rooms.stats();
