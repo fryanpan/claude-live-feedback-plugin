@@ -154,6 +154,51 @@ describe('per-room timers', () => {
     expect(rooms.stats().activeBindings).toBe(1);
   });
 
+  it('a live connection keeps a doc active with no access at all', () => {
+    // The websocket path: `websocket.open` resolves the room and adds the
+    // socket to `conns`, and from then on the doc is active for as long as
+    // the socket lives — it must not fall back to the idle rotation after
+    // FILE_POLL_ACTIVE_MS just because nobody made another REST call.
+    const { rooms, docIds } = seedBound(3);
+    const room = rooms.get(docIds[1]);
+    if (!room) throw new Error('room missing');
+    // Stand in for the socket; `bindingIsActive` only reads `conns.size`.
+    room.conns.add({} as never);
+    // Push every access stamp far into the past so ONLY the connection can
+    // be keeping this binding active. Without this the assertion would pass
+    // on the `rooms.get` above and prove nothing about connections.
+    rooms.resetDerivedCaches();
+    expect(rooms.stats().activeBindings).toBe(1);
+    room.conns.clear();
+    expect(rooms.stats().activeBindings).toBe(0);
+  });
+
+  it('an external edit made while idle reaches the doc after a connect', async () => {
+    const { rooms, docIds, paths } = seedBound(1);
+    const docId = docIds[0];
+    rooms.resetDerivedCaches();
+    expect(rooms.stats().activeBindings).toBe(0);
+
+    writeFileSync(paths[0], '# Doc 0\n\nedited before anyone connected\n');
+    // The seed and this write can share a millisecond, and an mtime that did
+    // not move is invisible to any mtime poll, old or new. Forcing it forward
+    // makes a failure here mean "not detected".
+    const t = new Date(Date.now() + 2000);
+    utimesSync(paths[0], t, t);
+
+    // Exactly what `websocket.open` does: resolve the room, then add the
+    // socket. Two things can carry the edit here and BOTH are the point —
+    // `get` re-stats on the idle to active edge, and the connection then
+    // holds the doc in the fast lane. The test above isolates the connection
+    // on its own; this one asserts the outcome the upgrade path must give.
+    const room = rooms.get(docId);
+    if (!room) throw new Error('room missing');
+    room.conns.add({} as never);
+    await sleep(2000);
+    expect(markdownOf(rooms, docId)).toContain('edited before anyone connected');
+    room.conns.clear();
+  });
+
   it('picks up an external edit to an IDLE bound file on the next access', async () => {
     const { rooms, docIds, paths } = seedBound(1);
     const docId = docIds[0];
@@ -192,6 +237,23 @@ describe('per-room timers', () => {
     // Same rows on a second call — the cache must not change the answer.
     const again = rooms.list().filter((m) => docIds.includes(m.docId));
     expect(again.map((m) => m.lastActivityAt)).toEqual(rows.map((m) => m.lastActivityAt));
+  });
+
+  it('list() is byte-identical cold-cache and warm-cache', () => {
+    // The cache is populated lazily by the first read, so a fresh Rooms over
+    // the same data dir serves the FIRST list from statSync and the second
+    // from the cache. Serialising both is the strongest form of "GET
+    // /api/docs returns the same rows": not the same values field by field,
+    // the same bytes.
+    const { rooms, docIds } = seedBound(4);
+    expect(docIds).toHaveLength(4);
+    const cold = JSON.stringify(rooms.list());
+    const warm = JSON.stringify(rooms.list());
+    expect(warm).toBe(cold);
+    // And a doc whose entry is dropped re-stats to the same answer rather
+    // than falling back to createdAt.
+    rooms.resetDerivedCaches();
+    expect(JSON.stringify(rooms.list())).toBe(cold);
   });
 
   it('list() picks up a doc that has just been written', async () => {

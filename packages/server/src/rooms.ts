@@ -521,6 +521,20 @@ export class Rooms {
   }
 
   /**
+   * Drop the two derived caches: access stamps and `.ydoc` mtimes.
+   *
+   * Both re-derive on the next read, so this is always safe — it is not a
+   * repair, it is a way to reach the cold path on demand. Tests use it to
+   * exercise "nobody has touched this doc" without waiting out
+   * `FILE_POLL_ACTIVE_MS`, and it is equally the thing to call if a cache
+   * ever needs clearing at runtime.
+   */
+  resetDerivedCaches(): void {
+    this.lastTouchedAt.clear();
+    this.activityMtime.clear();
+  }
+
+  /**
    * Build this room's Awareness and enrol it in the shared presence ticker.
    *
    * The library instance's own interval is stopped immediately: it is the
