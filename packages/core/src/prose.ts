@@ -1433,9 +1433,19 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   const isOrderedLine = (s: string) => /^\s*\d+\.\s+/.test(s);
   const stripMarker = (s: string) => s.replace(/^\s*(?:[-*]|\d+\.)\s+/, '');
 
-  // Append an item's child content (nested lists + continuation paragraphs,
-  // all indented deeper than `baseIndent`) to `li`. Returns the next index.
-  function consumeItemChildren(start: number, baseIndent: number, li: Y.XmlElement): number {
+  // Gather an item's child content (nested lists + continuation paragraphs,
+  // all indented deeper than `baseIndent`) into `children`. Returns the next
+  // index. An ARRAY, not the item: the item is a prelim type until the whole
+  // list lands in the doc, and appending with `li.insert(li.length, …)` read
+  // `.length` off it — Yjs logs "Invalid access: Add Yjs type to a document
+  // before reading data." for every such read. The caller inserts the array
+  // once. See `mkTable` for the measurement; lists and tables share the bug
+  // and shared the fix.
+  function consumeItemChildren(
+    start: number,
+    baseIndent: number,
+    children: Y.XmlElement[],
+  ): number {
     let k = start;
     for (;;) {
       let j = k;
@@ -1446,7 +1456,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       k = j; // consume intervening blanks now that we know content follows
       if (isListItemLine(lines[k] ?? '')) {
         const [sub, next] = parseListAt(k, ind);
-        li.insert(li.length, [sub]);
+        children.push(sub);
         k = next;
       } else if (isFence((lines[k] ?? '').trim())) {
         // A fenced code block inside the item. The serializer emits it
@@ -1469,7 +1479,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
         const t = new Y.XmlText();
         t.insert(0, code.join('\n'));
         cb.insert(0, [t]);
-        li.insert(li.length, [cb]);
+        children.push(cb);
       } else {
         const paraLines: string[] = [];
         while (
@@ -1482,7 +1492,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
           paraLines.push((lines[k] ?? '').trim());
           k++;
         }
-        li.insert(li.length, [mkParagraph(paraLines.join(' '))]);
+        children.push(mkParagraph(paraLines.join(' ')));
       }
     }
   }
@@ -1493,6 +1503,7 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
   function parseListAt(start: number, baseIndent: number): [Y.XmlElement, number] {
     const ordered = isOrderedLine(lines[start] ?? '');
     const list = new Y.XmlElement(ordered ? 'orderedList' : 'bulletList');
+    const items: Y.XmlElement[] = [];
     let k = start;
     for (;;) {
       let j = k;
@@ -1507,12 +1518,14 @@ export function parseMarkdownBlocks(markdown: string): Y.XmlElement[] {
       if (!isListItemLine(lines[j] ?? '')) break; // non-item line at this level
       if (isOrderedLine(lines[j] ?? '') !== ordered) break; // list type switches
       k = j;
-      const li = new Y.XmlElement('listItem');
-      li.insert(li.length, [mkParagraph(stripMarker(lines[k] ?? ''))]);
+      const children: Y.XmlElement[] = [mkParagraph(stripMarker(lines[k] ?? ''))];
       k++;
-      k = consumeItemChildren(k, baseIndent, li);
-      list.insert(list.length, [li]);
+      k = consumeItemChildren(k, baseIndent, children);
+      const li = new Y.XmlElement('listItem');
+      li.insert(0, children);
+      items.push(li);
     }
+    list.insert(0, items);
     return [list, k];
   }
 
@@ -1665,38 +1678,39 @@ function splitTableRow(line: string): string[] {
 }
 
 function mkTable(headerCells: string[], bodyRows: string[][]): Y.XmlElement {
-  const table = new Y.XmlElement('table');
-  // Header row
-  const headerRow = new Y.XmlElement('tableRow');
-  for (const cell of headerCells) {
-    const th = new Y.XmlElement('tableHeader');
+  // Every row and the table itself are PRELIM types here — nothing is in a
+  // doc yet — so each is filled with ONE insert of a ready-made array.
+  // Reading `.length` on a prelim type (the old `insert(row.length, …)`
+  // append) makes Yjs log "Invalid access: Add Yjs type to a document
+  // before reading data." once per cell — and hydrate parses every bound
+  // doc. Replaying that parse over the live data dir's 1,465 bound docs on
+  // 2026-08-29 measured 57,936 such warnings, 11.1 MB of stderr, in ONE
+  // pass; the fix takes it to zero, with byte-identical output for all
+  // 1,465. Parse time is unchanged — this was never a speed bug, it was an
+  // unbounded log.
+  const mkCell = (name: 'tableHeader' | 'tableCell', text: string): Y.XmlElement => {
+    const cell = new Y.XmlElement(name);
     const p = new Y.XmlElement('paragraph');
-    if (cell.length > 0) {
+    if (text.length > 0) {
       const t = new Y.XmlText();
-      insertDeltaInto(t, inlineMarksToDelta(cell));
+      insertDeltaInto(t, inlineMarksToDelta(text));
       p.insert(0, [t]);
     }
-    th.insert(0, [p]);
-    headerRow.insert(headerRow.length, [th]);
-  }
-  table.insert(0, [headerRow]);
-  // Body rows — pad with empty cells if a row is short so shape stays rectangular.
-  for (const row of bodyRows) {
+    cell.insert(0, [p]);
+    return cell;
+  };
+  const mkRow = (cells: Y.XmlElement[]): Y.XmlElement => {
     const tr = new Y.XmlElement('tableRow');
-    for (let ci = 0; ci < headerCells.length; ci++) {
-      const cellText = row[ci] ?? '';
-      const td = new Y.XmlElement('tableCell');
-      const p = new Y.XmlElement('paragraph');
-      if (cellText.length > 0) {
-        const t = new Y.XmlText();
-        insertDeltaInto(t, inlineMarksToDelta(cellText));
-        p.insert(0, [t]);
-      }
-      td.insert(0, [p]);
-      tr.insert(tr.length, [td]);
-    }
-    table.insert(table.length, [tr]);
-  }
+    tr.insert(0, cells);
+    return tr;
+  };
+  const headerRow = mkRow(headerCells.map((cell) => mkCell('tableHeader', cell)));
+  // Body rows — pad with empty cells if a row is short so shape stays rectangular.
+  const rows = bodyRows.map((row) =>
+    mkRow(headerCells.map((_, ci) => mkCell('tableCell', row[ci] ?? ''))),
+  );
+  const table = new Y.XmlElement('table');
+  table.insert(0, [headerRow, ...rows]);
   return table;
 }
 
