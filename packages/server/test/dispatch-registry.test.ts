@@ -246,16 +246,32 @@ describe('dispatch registry', () => {
       try {
         reg.register('t-alpha', worktree);
         writeFileSync(join(worktree, 'src', 'index.ts'), 'export {};\n');
-        const deadline = Date.now() + 3_000;
+        // FSEvents is a shared system service with no latency guarantee, and
+        // its delivery degrades with the number of live watchers and the
+        // amount of churn on the machine — under the full suite that is
+        // thousands of temp files across 252 files. The old 3s bound was
+        // tight enough that adding four tests to an unrelated file tipped it
+        // twice in a row, while this test passed 10/10 in isolation on the
+        // same commit. What is asserted here is that the real factory
+        // DELIVERS the event, never that it delivers inside a particular
+        // window, so the bound is generous and the failure says how long it
+        // actually waited — a factory that has stopped seeing files still
+        // fails, which is the regression this guards.
+        const startedAt = Date.now();
+        const deadline = startedAt + 20_000;
         while (reg.activityFor('t-alpha') === undefined && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 25));
         }
-        expect(reg.activityFor('t-alpha')).toBeGreaterThan(0);
+        expect(
+          reg.activityFor('t-alpha'),
+          `no watch event after ${Date.now() - startedAt}ms`,
+        ).toBeGreaterThan(0);
       } finally {
         reg.stop();
         rmSync(dataDir, { recursive: true, force: true });
         rmSync(worktree, { recursive: true, force: true });
       }
     },
+    30_000,
   );
 });

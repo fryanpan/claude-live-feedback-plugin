@@ -73,6 +73,19 @@ import {
   isReservedDocId,
   newDocId,
 } from './doc-ids.ts';
+import {
+  DOC_INDEX_VERSION,
+  type DocIndexEntry,
+  deleteDocIndex,
+  docIndexPath,
+  dropStagedDocIndex,
+  moveDocIndex,
+  readAllDocIndexes,
+  readDocIndex,
+  stageDocIndex,
+  unstageDocIndex,
+  writeDocIndex,
+} from './doc-index.ts';
 import { newEventId } from './event-id.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
@@ -494,10 +507,57 @@ export class Rooms {
   private idleCursor = 0;
   private memoryTicker: ReturnType<typeof setInterval> | null = null;
 
+  /**
+   * docId → its listing row, resident.
+   *
+   * The rows are what a board actually reads, and they are ~400 bytes each
+   * against 62-125 KB for the CRDT they were being decoded out of. Held in
+   * memory deliberately: `list()` is on the board's hot path and must not
+   * become a directory walk, and the index is small enough that keeping all
+   * of it costs less than keeping one percent of the documents.
+   *
+   * Maintained by the same write that persists the doc, and by every path
+   * that stages, restores, purges or moves one — see `doc-index.ts`.
+   */
+  private docIndex = new Map<string, DocIndexEntry>();
+
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
+    // Before hydration, so `hydrateDoc` can see which docs already have a row
+    // and the migration below knows what it still owes.
+    this.docIndex = readAllDocIndexes(cfg.dataDir);
     this.hydrateFromDisk();
+    this.writeMissingIndexes();
     this.startMemoryLog();
+  }
+
+  /**
+   * Write a listing row for every doc that does not have one yet.
+   *
+   * This is the migration, and it is deliberately not a separate script: the
+   * 5,600 docs that predate the index are already hydrated at this point, so
+   * the rows cost one JSON write each and nothing has to be scheduled,
+   * remembered or run by hand. A doc written from here on gets its row from
+   * `persistRoomNow` and never reaches this path again.
+   */
+  private writeMissingIndexes(): void {
+    let written = 0;
+    for (const [docId, room] of this.rooms) {
+      if (this.docIndex.has(docId)) continue;
+      try {
+        const entry = this.indexEntryFor(room);
+        writeDocIndex(this.cfg.dataDir, docId, entry);
+        this.docIndex.set(docId, entry);
+        written++;
+      } catch (err) {
+        // A row that cannot be written is a row that gets written next time
+        // the doc is saved. The listing falls back to the resident room, so
+        // nothing is wrong until the doc is also not resident — which is why
+        // this is loud rather than silent.
+        console.error(`[rooms] failed to write index for ${docId}:`, err);
+      }
+    }
+    if (written > 0) console.error(`[rooms] wrote ${written} missing doc index file(s)`);
   }
 
   /**
@@ -652,8 +712,92 @@ export class Rooms {
     }
   }
 
+  /**
+   * Every doc on this server, as listing rows.
+   *
+   * A resident room is authoritative — it may hold changes the last write
+   * has not carried into the index yet. A doc that is NOT resident is served
+   * from its index row, which is the whole point: answering "what docs are
+   * there" must not require decoding every CRDT that has ever been written.
+   *
+   * Today hydration still loads everything, so the second branch is only
+   * reached for a doc whose `.ydoc` went missing while its row survived. It
+   * is written now because the listing contract has to be settled BEFORE
+   * anything stops being resident, not at the same time.
+   */
   list(): DocMeta[] {
-    return Array.from(this.rooms.values()).map((r) => this.withActivity(r.meta));
+    const out: DocMeta[] = [];
+    for (const room of this.rooms.values()) out.push(this.withActivity(room.meta));
+    for (const [docId, entry] of this.docIndex) {
+      if (this.rooms.has(docId)) continue;
+      out.push(this.withActivity(entry.meta));
+    }
+    return out;
+  }
+
+  /**
+   * The same listing built ONLY from index rows, never from resident rooms.
+   *
+   * Exists so the equality that everything else rests on can be asserted
+   * directly: an index-backed listing must equal the hydrated one field for
+   * field. Without a seam that refuses to consult the rooms, a test of that
+   * property would read the rooms through `list()` and pass no matter what
+   * the index said.
+   */
+  listFromIndex(): DocMeta[] {
+    return [...this.docIndex.values()].map((e) => this.withActivity(e.meta));
+  }
+
+  /**
+   * A doc's open and total thread counts from its index row, without loading
+   * it. Null when there is no row — the caller reads the doc instead.
+   */
+  threadCountsFromIndex(docId: string): { open: number; total: number } | null {
+    const entry = this.docIndex.get(docId);
+    return entry ? { ...entry.threads } : null;
+  }
+
+  /** The most recent comment timestamp on a doc, from its index row. */
+  lastThreadActivityFromIndex(docId: string): number | undefined {
+    return this.docIndex.get(docId)?.lastThreadActivityAt;
+  }
+
+  /**
+   * A doc's open and total thread counts, for the listings that render badges.
+   *
+   * Prefers the index row, which costs a map lookup, over decoding the doc's
+   * thread map — which the diff tree and the landing page were doing once per
+   * doc per render, twice per doc in the tree's case.
+   *
+   * The row is skipped only while `saveTimers` holds a pending write for that
+   * doc, which is exactly the window in which the doc has changes the index
+   * has not been given yet. Outside that window the two cannot differ,
+   * because the same debounced write produces both. So this is not "close
+   * enough for a badge": it is the same number, found more cheaply.
+   */
+  threadCounts(docId: string): { open: number; total: number } {
+    if (!this.saveTimers.has(docId)) {
+      const entry = this.docIndex.get(docId);
+      if (entry) return { ...entry.threads };
+    }
+    const room = this.rooms.get(docId);
+    if (!room) return { open: 0, total: 0 };
+    const all = listThreads(room.ydoc);
+    return { open: all.filter((t) => t.status === 'open').length, total: all.length };
+  }
+
+  /**
+   * The newest comment timestamp on a doc — what the landing page ranks by.
+   * Same index-first rule as `threadCounts`; 0 when the doc has no comments.
+   */
+  lastThreadActivity(docId: string): number {
+    if (!this.saveTimers.has(docId)) {
+      const entry = this.docIndex.get(docId);
+      if (entry) return entry.lastThreadActivityAt ?? 0;
+    }
+    const room = this.rooms.get(docId);
+    if (!room) return 0;
+    return listThreads(room.ydoc).reduce((max, t) => Math.max(max, t.lastActivity), 0);
   }
 
   /**
@@ -786,6 +930,10 @@ export class Rooms {
    */
   stagePersisted(docId: string): boolean {
     this.activityMtime.delete(docId);
+    // The row goes with the doc, or a listing keeps describing something
+    // that is no longer there.
+    stageDocIndex(this.cfg.dataDir, docId);
+    this.docIndex.delete(docId);
     const path = this.pathFor(docId);
     if (!existsSync(path)) return true;
     try {
@@ -800,6 +948,9 @@ export class Rooms {
   /** Put a staged `.ydoc` back — the delete didn't commit. */
   unstagePersisted(docId: string): void {
     this.activityMtime.delete(docId);
+    unstageDocIndex(this.cfg.dataDir, docId);
+    const restored = readDocIndex(this.cfg.dataDir, docId);
+    if (restored) this.docIndex.set(docId, restored);
     const staged = `${this.pathFor(docId)}.deleting`;
     if (!existsSync(staged)) return;
     try {
@@ -812,6 +963,7 @@ export class Rooms {
   /** Remove a staged `.ydoc` — the delete committed. A failure here leaves
    *  a file nothing loads, so it is litter, not an orphan room. */
   dropStaged(docId: string): void {
+    dropStagedDocIndex(this.cfg.dataDir, docId);
     try {
       rmSync(`${this.pathFor(docId)}.deleting`, { force: true });
     } catch (err) {
@@ -821,10 +973,12 @@ export class Rooms {
 
   purgePersisted(docId: string): boolean {
     this.activityMtime.delete(docId);
+    this.docIndex.delete(docId);
     try {
       const p = this.pathFor(docId);
       if (existsSync(p)) rmSync(p);
       deletePrivateMeta(this.cfg.dataDir, docId);
+      deleteDocIndex(this.cfg.dataDir, docId);
       return !existsSync(p);
     } catch (err) {
       console.error(`[rooms] failed to remove persisted ${docId}:`, err);
@@ -1858,8 +2012,7 @@ export class Rooms {
     const companionThreads = new Map<string, { open: number; total: number }>();
     for (const meta of this.list()) {
       if (reviewIdOf(meta) !== setId || meta.type === 'diff' || !meta.relPath) continue;
-      const open = this.listThreads(meta.docId, { status: 'open' }).length;
-      const total = this.listThreads(meta.docId).length;
+      const { open, total } = this.threadCounts(meta.docId);
       if (open === 0 && total === 0) continue;
       const prev = companionThreads.get(meta.relPath) ?? { open: 0, total: 0 };
       companionThreads.set(meta.relPath, { open: prev.open + open, total: prev.total + total });
@@ -1869,8 +2022,9 @@ export class Rooms {
       if (reviewIdOf(meta) !== setId || meta.type !== 'diff') continue;
       const relPath = meta.relPath ?? meta.docId;
       const extra = companionThreads.get(relPath) ?? { open: 0, total: 0 };
-      const openCount = this.listThreads(meta.docId, { status: 'open' }).length + extra.open;
-      const threadCount = this.listThreads(meta.docId).length + extra.total;
+      const counts = this.threadCounts(meta.docId);
+      const openCount = counts.open + extra.open;
+      const threadCount = counts.total + extra.total;
       totalOpen += openCount;
       const decorated = decorate ? decorate(meta) : meta;
       const node: WorkspaceFileNode = {
@@ -2132,8 +2286,7 @@ export class Rooms {
       if (reviewIdOf(meta) !== setId) continue;
       if (!workspaceRoot && meta.workspaceRoot) workspaceRoot = meta.workspaceRoot;
       const key = meta.relPath ?? meta.docId;
-      const open = this.listThreads(meta.docId, { status: 'open' }).length;
-      const total = this.listThreads(meta.docId).length;
+      const { open, total } = this.threadCounts(meta.docId);
       const prev = byRel.get(key);
       if (!prev) {
         byRel.set(key, { meta, openCount: open, threadCount: total });
@@ -2358,7 +2511,7 @@ export class Rooms {
       if (!entry.root && meta.workspaceRoot) entry.root = meta.workspaceRoot;
       if (!entry.owner && meta.owner) entry.owner = meta.owner;
       entry.fileCount += 1;
-      entry.openThreads += this.listThreads(meta.docId, { status: 'open' }).length;
+      entry.openThreads += this.threadCounts(meta.docId).open;
       const last = meta.lastActivityAt ?? meta.createdAt;
       if (entry.lastActivityAt === undefined || last > entry.lastActivityAt) {
         entry.lastActivityAt = last;
@@ -2668,6 +2821,34 @@ export class Rooms {
         if (existsSync(ydocTo)) renameSync(ydocTo, ydocFrom);
       } catch {}
       return false;
+    }
+    // Membership of the resident index map follows the FILE, in the one place
+    // that knows the direction. Without this, archiving moved the .ydoc out
+    // and dropped the room while the row stayed behind — and `list()` went on
+    // reporting a doc that had just been archived, which is the whole failure
+    // an archive is supposed to produce the opposite of.
+    const carried = moveDocIndex(fromDir, toDir, docId);
+    if (toDir === this.cfg.dataDir) {
+      // Coming back. A failure here really is harmless: the doc is resident
+      // again, so `list()` sees it either way, and the next persist writes
+      // the row.
+      const restored = readDocIndex(this.cfg.dataDir, docId);
+      if (restored) this.docIndex.set(docId, restored);
+    } else {
+      this.docIndex.delete(docId);
+      // Leaving. A row left behind in the LIVE directory outlives the archive
+      // and comes back as a doc on the next restart, so it does not get to
+      // fail quietly. Deleting it destroys nothing — it is derived state, and
+      // the .ydoc it describes is safe in `toDir`.
+      if (!carried) {
+        console.error(`[rooms] could not move index for ${docId} to ${toDir}; dropping it`);
+        deleteDocIndex(fromDir, docId);
+        if (existsSync(docIndexPath(fromDir, docId))) {
+          console.error(
+            `[rooms] index for ${docId} is STILL in ${fromDir} — a restart will list it as live`,
+          );
+        }
+      }
     }
     return true;
   }
@@ -4622,9 +4803,40 @@ export class Rooms {
       // sourceUrl went missing stops writing back to disk silently —
       // the failure mode this whole change must not introduce.
       writePrivateMeta(this.cfg.dataDir, room.docId, room.meta);
+      // And the listing row, for the same reason and in the same write. A
+      // board asks "what is this called, which workspace, how many threads
+      // are open" far more often than it asks for a document, and none of
+      // those answers needs the CRDT decoded. Written here so the index
+      // cannot describe a state the `.ydoc` was never in.
+      const entry = this.indexEntryFor(room);
+      writeDocIndex(this.cfg.dataDir, room.docId, entry);
+      this.docIndex.set(room.docId, entry);
     } catch (err) {
       console.error(`[rooms] failed to persist ${room.docId}:`, err);
     }
+  }
+
+  /** The doc's listing row, built from the live room. */
+  private indexEntryFor(room: DocRoom): DocIndexEntry {
+    const threads = listThreads(room.ydoc);
+    let lastThreadActivityAt: number | undefined;
+    let open = 0;
+    for (const t of threads) {
+      if (t.status === 'open') open++;
+      for (const c of t.comments) {
+        if (lastThreadActivityAt === undefined || c.ts > lastThreadActivityAt) {
+          lastThreadActivityAt = c.ts;
+        }
+      }
+    }
+    return {
+      v: DOC_INDEX_VERSION,
+      // A copy, not the live object: `room.meta` keeps being mutated and the
+      // entry must describe this write.
+      meta: { ...room.meta },
+      threads: { open, total: threads.length },
+      ...(lastThreadActivityAt !== undefined ? { lastThreadActivityAt } : {}),
+    };
   }
 
   /**

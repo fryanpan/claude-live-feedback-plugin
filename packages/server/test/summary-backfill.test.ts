@@ -230,4 +230,39 @@ describe('rooms.backfillSummaries', () => {
     await settle(queued);
     expect((await getThread(docId, threadId)).summary).toBeDefined();
   });
+
+  /**
+   * The sweep is reachable without restarting the server.
+   *
+   * It used to be gated on CW_SUMMARY_BACKFILL=1 at startup, so asking for
+   * catch-up work meant bouncing the process — which is exactly the coupling
+   * a cheap boot is supposed to remove.
+   */
+  it('runs on request over HTTP, with no restart', async () => {
+    const docId = 'bf-route';
+    const threadId = await seed(docId, ['still unsummarized']);
+
+    // Control: the route really is off while generation is off, so a nonzero
+    // below is the sweep and not the route inventing work.
+    const off = await (
+      await fetch(`${base}/api/summaries/backfill`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ windowMinutes: 0 }),
+      })
+    ).json();
+    expect(off).toMatchObject({ ok: true, queued: 0 });
+
+    process.env.LF_SUMMARIES = '1';
+    const res = await fetch(`${base}/api/summaries/backfill`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ windowMinutes: 0 }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { queued: number; open: number; resolved: number };
+    expect(body.queued).toBeGreaterThanOrEqual(1);
+    await settle(body.queued);
+    expect((await getThread(docId, threadId)).summary).toBeDefined();
+  });
 });
