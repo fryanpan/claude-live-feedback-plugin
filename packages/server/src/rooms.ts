@@ -2657,12 +2657,16 @@ export class Rooms {
    * lookup, not a search.
    */
   companionOf(docId: string): string | undefined {
-    const meta = this.rooms.get(docId)?.meta;
+    // Metadata and existence, not residency: after a lazy boot neither doc is
+    // loaded, and equating "not in memory" with "no companion" dropped the
+    // companion's comments out of `GET /api/docs/:id/threads` and out of the
+    // member's event fan-out until somebody happened to open both.
+    const meta = this.peekMeta(docId);
     if (!meta || meta.type !== 'diff' || !meta.relPath) return undefined;
     const reviewId = reviewIdOf(meta);
     if (!reviewId) return undefined;
     const companionId = memberDocId(`${reviewId}:edit`, meta.relPath);
-    return this.rooms.has(companionId) ? companionId : undefined;
+    return this.docExists(companionId) ? companionId : undefined;
   }
 
   /**
@@ -2670,12 +2674,12 @@ export class Rooms {
    * `docId` is not a companion. Inverse of `companionOf`.
    */
   memberOfCompanion(docId: string): string | undefined {
-    const meta = this.rooms.get(docId)?.meta;
+    const meta = this.peekMeta(docId);
     if (!meta || meta.type !== 'markdown' || !meta.relPath) return undefined;
     const reviewId = reviewIdOf(meta);
     if (!reviewId || docId !== memberDocId(`${reviewId}:edit`, meta.relPath)) return undefined;
     const memberId = memberDocId(reviewId, meta.relPath);
-    return this.rooms.get(memberId)?.meta.type === 'diff' ? memberId : undefined;
+    return this.peekMeta(memberId)?.type === 'diff' ? memberId : undefined;
   }
 
   buildWorkspaceTree(setId: string): WorkspaceTree {

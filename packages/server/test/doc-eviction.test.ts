@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { memberDocId } from '../src/binds.ts';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -329,6 +330,53 @@ describe('booting against docs that are not loaded', () => {
       expect(second.list().some((m) => m.docId === 'legacy')).toBe(true);
       // Hydrated once to write the row, then let go again.
       expect(second.residentCount()).toBe(0);
+    } finally {
+      second.stop();
+    }
+  });
+
+  it('pairs a diff member with its companion when NEITHER is loaded', () => {
+    // Caught by review, not by a test: `companionOf` asked the room map, so
+    // after a lazy boot a diff member and its editable companion stopped
+    // knowing about each other. The visible cost is quiet — the companion's
+    // comments drop out of the member's `/threads` and out of its event
+    // fan-out — and it lasts until somebody happens to open both.
+    const setId = 'rev-1';
+    const relPath = 'docs/notes.md';
+    const abs = join(srcDir, 'notes.md');
+    writeFileSync(abs, '# Notes\n\nbody\n');
+    const memberId = memberDocId(setId, relPath);
+    const companionId = memberDocId(`${setId}:edit`, relPath);
+
+    const first = make(dataDir);
+    try {
+      first.getOrCreate(memberId, { type: 'diff', setId, workspaceId: setId, relPath });
+      first.getOrCreate(companionId, {
+        type: 'markdown',
+        sourceUrl: abs,
+        setId,
+        workspaceId: setId,
+        relPath,
+      });
+      // Control: the ids this test hard-codes are the ones the server mints.
+      expect(first.companionOf(memberId)).toBe(companionId);
+      expect(first.memberOfCompanion(companionId)).toBe(memberId);
+      first.flush();
+    } finally {
+      first.stop();
+    }
+
+    const second = make(dataDir);
+    try {
+      expect(second.residentCount()).toBe(0);
+      expect(second.companionOf(memberId)).toBe(companionId);
+      expect(second.memberOfCompanion(companionId)).toBe(memberId);
+      // Answered from the index, not by quietly loading both docs.
+      expect(second.residentCount()).toBe(0);
+      // Negative control: a member whose companion does not exist still
+      // answers undefined, so the assertions above are not "returns an id
+      // for anything asked".
+      expect(second.companionOf(memberDocId(setId, 'docs/absent.md'))).toBeUndefined();
     } finally {
       second.stop();
     }
