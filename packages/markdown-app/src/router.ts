@@ -1,5 +1,5 @@
 import type { FeedbackClient, User } from '@feedback/core';
-import { applyBackLink } from './back-link.ts';
+import { applyBackLink, returnItemFrom } from './back-link.ts';
 import { setActiveFile } from './diff-nav.ts';
 import { docIdFromPath, docIdFromPathOrNull } from './doc-path.ts';
 import { applyHuddleCrumb } from './huddle-entry.ts';
@@ -114,7 +114,7 @@ async function swap(docId: string): Promise<void> {
   // would inherit the previous doc's board and the arrow would be a live wrong
   // link. After the token re-check, so a superseded navigation cannot repoint
   // the arrow at the doc that lost.
-  applyBackLink(document, meta.backTo);
+  applyBackLink(document, meta.backTo, returnItemFrom(location.search));
   // Same reasoning, same moment: the word is chrome the next doc must not
   // inherit, and a superseded navigation must not write it.
   applyHuddleCrumb(document, meta.huddle === true);

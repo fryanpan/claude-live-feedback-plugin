@@ -1555,6 +1555,33 @@ export function blockedNoteLine(row: BlockerRow): string {
  */
 export const CLOSED_WALK = { index: -1, key: null } as const;
 
+/** Where the walkthrough is aimed: the three fields that survive a render. */
+export interface WalkAim {
+  index: number;
+  key: string | null;
+  hold: WalkHold | null;
+}
+
+/**
+ * Where the walkthrough should be aimed after opening one of its items.
+ *
+ * Opening closes the walk in state BEFORE the opener runs, so that the close
+ * and the open reach the URL writer as a single step — rendering the close
+ * first wrote a `close` step whose `history.back()` landed after the open's
+ * `pushState`, and the reader bounced back to Home.
+ *
+ * That is right only while the reader stays on this page. A doc item leaves
+ * via `location.assign`, so nothing renders and the close buys nothing — but
+ * the closed state is what bfcache freezes, and on the way back the restored
+ * page normalises `?item=` out of a URL the browser had restored correctly.
+ * So an open that leaves keeps the aim: the snapshot is of a reader who is
+ * mid-sitting, because they are.
+ */
+export function walkAimAfterOpen(aim: WalkAim, stillOnPage: boolean): WalkAim {
+  if (!stillOnPage) return aim;
+  return { index: CLOSED_WALK.index, key: CLOSED_WALK.key, hold: null };
+}
+
 /**
  * The position the walkthrough should render, given where it was AIMED.
  *
