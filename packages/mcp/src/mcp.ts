@@ -108,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.128';
+const PLUGIN_VERSION = '0.1.129';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -444,7 +444,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'resolve_thread',
-      description: 'Mark a thread as resolved.',
+      description:
+        'Mark a thread as resolved. THREAD-SCOPED: it retires every review item on the thread, so use withdraw_review_item to take back one of your own asks while the others stay answerable.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1886,6 +1887,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         // which of the two addresses the caller is using, and the handler
         // refuses a half-written one by name.
         required: [],
+      },
+    },
+    {
+      name: 'withdraw_review_item',
+      description:
+        'Take back a review item on a doc thread — normally one you raised, for an ask that turned out to be wrong or that a later one replaced; any agent in the workspace can retire a stale one, and the item records who did. The reader stops being asked: it leaves their queue and reads as withdrawn in the thread, with your reason beside it. Your words stay there verbatim, because they may already have read them. Prefer revise_review_item when the question still stands and only its wording is wrong; withdraw is for when there is nothing left to ask. This is how you clean up a thread carrying TWO of your items without touching the other one — resolve_thread would retire the whole thread and take the live ask with it. Refused on an item somebody has already answered: that would retract their answer. `undo: true` puts it back.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          docId: { type: 'string', description: 'The doc the thread lives on.' },
+          threadId: { type: 'string', description: 'The thread the item was raised on.' },
+          commentId: {
+            type: 'string',
+            description:
+              'The comment carrying the review payload — `thread.comments[].id` in what create_thread / post_reply returned when you raised the item.',
+          },
+          reason: {
+            type: 'string',
+            description:
+              'One line on why, shown with the retracted item. Worth writing: "superseded by the item below" is the difference between a disappearance and a correction.',
+          },
+          undo: {
+            type: 'boolean',
+            description: 'Put a withdrawn item back in front of the reader.',
+          },
+        },
+        required: ['docId', 'threadId', 'commentId'],
       },
     },
     {
@@ -3741,6 +3769,27 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Re-judged on every revision; still held means still off the queue.
           ...heldResult(res),
         });
+      }
+      case 'withdraw_review_item': {
+        const { docId, threadId, commentId, reason, undo } = a as {
+          docId: string;
+          threadId: string;
+          commentId: string;
+          reason?: string;
+          undo?: boolean;
+        };
+        // Doc threads only, because they are the surface that needed it: a
+        // ticket item has its own id and is answered one at a time, while a
+        // doc-thread item shares a thread with its siblings and resolve is
+        // thread-scoped.
+        await http(
+          'POST',
+          `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/withdraw${
+            undo ? '/undo' : ''
+          }`,
+          { commentId, author: AUTHOR, ...(reason !== undefined ? { reason } : {}) },
+        );
+        return ok({ docId, threadId, commentId, withdrawn: undo !== true });
       }
       case 'request_more_info': {
         const { taskId, reviewItemId, question } = a as {

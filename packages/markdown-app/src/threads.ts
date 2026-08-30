@@ -9,6 +9,7 @@ import {
   pendingDeclaration,
   reviewAnswered,
   reviewItemBodyMarkdown,
+  reviewWithdrawn,
   threadRenderKey,
   threadSummary,
 } from '@feedback/core';
@@ -927,12 +928,31 @@ function participantsRow(p: Participants): HTMLElement {
  */
 function reviewHeader(review: Comment['review']): HTMLElement | null {
   if (!review) return null;
-  const box = div('comment-review');
+  // WITHDRAWN — the asker took this ask back. It renders here and nowhere
+  // else: no card, no queue row, no answer box. The words stay because a
+  // reader may already have read them, and this is the row that has to say
+  // why they are no longer being asked. Marking it is the whole job — an
+  // unmarked retracted question is a question, and the reader answers it.
+  const withdrawn = reviewWithdrawn(review);
+  const box = div(withdrawn ? 'comment-review comment-review-withdrawn' : 'comment-review');
   const kind = span('comment-review-k');
-  kind.textContent = review.shape === 'decision' ? 'Decision' : 'Question';
+  kind.textContent = withdrawn
+    ? 'Withdrawn'
+    : review.shape === 'decision'
+      ? 'Decision'
+      : 'Question';
   const headline = div('comment-review-headline');
   headline.textContent = review.headline;
   box.append(kind, headline);
+  if (withdrawn) {
+    const note = div('comment-review-withdrawn-note');
+    // "Superseded by the item below" is the difference between a
+    // disappearance and a correction, so the reason gets its own line when
+    // its author wrote one.
+    const by = review.withdrawnBy ? `Withdrawn by ${review.withdrawnBy}` : 'Withdrawn';
+    note.textContent = review.withdrawnReason ? `${by} — ${review.withdrawnReason}` : by;
+    box.append(note);
+  }
   return box;
 }
 
@@ -985,7 +1005,16 @@ function btn(label: string, cls: string, on: () => void): HTMLButtonElement {
 function latestDeclaredComment(comments: ReadonlyArray<Comment>): Comment | undefined {
   const byTime = [...comments].sort((a, b) => a.ts - b.ts);
   for (let i = byTime.length - 1; i >= 0; i -= 1) {
-    if (byTime[i]?.review) return byTime[i];
+    const review = byTime[i]?.review;
+    if (!review) continue;
+    // Skipped, the same way `pendingDeclaration` steps over it: a retracted
+    // ask is not the record the reader should meet. Without this the fallback
+    // could put a withdrawn question in the card while the queue was offering
+    // a live one underneath it — the exact drift that made this rule shared
+    // in the first place. Every declaration withdrawn means no card at all,
+    // and the thread renders as the conversation it now is.
+    if (reviewWithdrawn(review)) continue;
+    return byTime[i];
   }
   return undefined;
 }

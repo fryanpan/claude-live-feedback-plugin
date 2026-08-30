@@ -8333,6 +8333,54 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               announceThreadReview(docId, threadId, res.review, user);
               return j(200, { thread: res.thread, review: res.review });
             }
+            // Taking the ASK back — the asker's exit, as opposed to /answer
+            // (the reader's) and /revise (a correction that keeps asking).
+            //
+            // Scoped to one comment on purpose. `/resolve` retires the whole
+            // thread, so an agent that had filed a correction as a second
+            // item on a shared thread could only clean up by taking its live
+            // ask down alongside the stale one. This leaves the thread open
+            // and its siblings answerable.
+            //
+            // Agents only. A withdrawal is a statement about what its author
+            // meant to ask, and a share visitor is a reader — the person a
+            // review item is FOR — so the door they get is /answer.
+            if (
+              (threadRest === '/withdraw' || threadRest === '/withdraw/undo') &&
+              req.method === 'POST'
+            ) {
+              if (visitor) return j(403, { error: 'not available to share visitors' });
+              const body = await safeJson(req);
+              const user = authorFor(body?.author);
+              const commentId = body?.commentId as string | undefined;
+              if (!user || !commentId) return j(400, { error: 'author + commentId required' });
+              if (isCategoryAuthor(user)) return refuseCategoryAuthor();
+              const reason = body?.reason;
+              if (reason !== undefined && typeof reason !== 'string') {
+                return j(400, { error: 'reason must be a string' });
+              }
+              const res = rooms.withdrawCommentReview(docId, threadId, commentId, {
+                actor: user,
+                ...(reason !== undefined ? { reason } : {}),
+                ...(threadRest === '/withdraw/undo' ? { undo: true } : {}),
+              });
+              if (!res.ok) {
+                return j(res.error === 'no-doc' || res.error === 'not-a-review-item' ? 404 : 400, {
+                  error: res.error,
+                  ...(res.message !== undefined ? { message: res.message } : {}),
+                });
+              }
+              // Announced on the way BACK only. `announceThreadReview` sends
+              // the reader a push whose title is the item's headline — "here
+              // is something to review" — so announcing a withdrawal would
+              // buzz their phone with the exact ask that was just taken off
+              // their queue. Reinstating does put an ask in front of them
+              // again, and that is worth telling them about.
+              if (threadRest === '/withdraw/undo') {
+                announceThreadReview(docId, threadId, res.review, user);
+              }
+              return j(200, { thread: res.thread, review: res.review });
+            }
             // Taking an answer back. The stamps move into the declaration's
             // `answerHistory` (soft delete — the words are user content) and
             // the reply comment stays in the thread. Un-stamping is what

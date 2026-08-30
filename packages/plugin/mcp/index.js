@@ -14440,7 +14440,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.128";
+var PLUGIN_VERSION = "0.1.129";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -14695,7 +14695,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "resolve_thread",
-      description: "Mark a thread as resolved.",
+      description: "Mark a thread as resolved. THREAD-SCOPED: it retires every review item on the thread, so use withdraw_review_item to take back one of your own asks while the others stay answerable.",
       inputSchema: {
         type: "object",
         properties: {
@@ -15987,6 +15987,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "withdraw_review_item",
+      description: "Take back a review item on a doc thread — normally one you raised, for an ask that turned out to be wrong or that a later one replaced; any agent in the workspace can retire a stale one, and the item records who did. The reader stops being asked: it leaves their queue and reads as withdrawn in the thread, with your reason beside it. Your words stay there verbatim, because they may already have read them. Prefer revise_review_item when the question still stands and only its wording is wrong; withdraw is for when there is nothing left to ask. This is how you clean up a thread carrying TWO of your items without touching the other one — resolve_thread would retire the whole thread and take the live ask with it. Refused on an item somebody has already answered: that would retract their answer. `undo: true` puts it back.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          docId: { type: "string", description: "The doc the thread lives on." },
+          threadId: { type: "string", description: "The thread the item was raised on." },
+          commentId: {
+            type: "string",
+            description: "The comment carrying the review payload — `thread.comments[].id` in what create_thread / post_reply returned when you raised the item."
+          },
+          reason: {
+            type: "string",
+            description: 'One line on why, shown with the retracted item. Worth writing: "superseded by the item below" is the difference between a disappearance and a correction.'
+          },
+          undo: {
+            type: "boolean",
+            description: "Put a withdrawn item back in front of the reader."
+          }
+        },
+        required: ["docId", "threadId", "commentId"]
+      }
+    },
+    {
       name: "answer_decision",
       description: "Record a person's verbatim answer to a decision task on their behalf, for when they told you in chat or voice — in the UI they answer directly. Pass their exact words, never a paraphrase. This answers the ticket's own decision; answer_review_item answers one of the items hanging on a ticket. Neither transitions the ticket — close it with task_transition once you have acted on the returned links.",
       inputSchema: {
@@ -17128,6 +17152,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           ...res.reviewAdvice !== undefined ? { reviewAdvice: res.reviewAdvice } : {},
           ...heldResult(res)
         });
+      }
+      case "withdraw_review_item": {
+        const { docId, threadId, commentId, reason, undo } = a;
+        await http("POST", `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/withdraw${undo ? "/undo" : ""}`, { commentId, author: AUTHOR, ...reason !== undefined ? { reason } : {} });
+        return ok({ docId, threadId, commentId, withdrawn: undo !== true });
       }
       case "request_more_info": {
         const { taskId, reviewItemId, question } = a;

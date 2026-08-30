@@ -1386,6 +1386,43 @@ describe('renderTaskDetail — discussion', () => {
     );
   });
 
+  /** A WITHDRAWN declaration stays in the stream — it is history, and the
+   *  reader may already have acted on it — but badging it 'Question' would be
+   *  the retracted ask reading as a live one, which is the whole failure the
+   *  verb exists to prevent. */
+  it('marks a withdrawn declaration instead of badging it as a question', () => {
+    renderTaskDetail(root, task({ id: 't-1' }), detailHandlers({ now: NOW }), {
+      loading: false,
+      threads: [
+        thread({
+          id: 'th-x',
+          comments: [
+            {
+              author: 'Onboarding Rework',
+              text: 'Re-measured — this one was wrong.',
+              ts: NOW - 3_600_000,
+              review: {
+                shape: 'review',
+                headline: 'Where should the trial banner live?',
+                withdrawnAt: NOW - 1_800_000,
+                withdrawnBy: 'Onboarding Rework',
+              },
+            },
+          ],
+        }),
+      ],
+    });
+    const declared = root.querySelector('.hub-comment') as HTMLElement;
+    expect(declared.querySelector('.hub-comment-review-k')?.textContent).toBe('Withdrawn');
+    expect(
+      declared.querySelector('.hub-comment-review-k')?.classList.contains('is-withdrawn'),
+    ).toBe(true);
+    // The words stay legible — struck, not removed.
+    const headline = declared.querySelector('.hub-comment-review-headline');
+    expect(headline?.textContent).toBe('Where should the trial banner live?');
+    expect(headline?.classList.contains('is-withdrawn')).toBe(true);
+  });
+
   /**
    * "Each item goes exactly to the place where I need to review" is the
    * strip's whole claim. On a task with several discussions, opening the task
