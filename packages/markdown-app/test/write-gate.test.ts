@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 /**
  * What a person sees when the server refuses their write.
  *
@@ -7,10 +9,12 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  WRITE_CONTROL_ATTR,
+  asBackgroundWrite,
   fetchWriteAccess,
   installWriteGateNotice,
   isSignInRequired,
-  markGestureForTest,
+  lockDocToReading,
   promptSignIn,
   showSignInBar,
   signInHref,
@@ -24,8 +28,34 @@ const jsonResponse = (status: number, body: unknown): Response =>
 
 beforeEach(() => {
   document.body.replaceChildren();
+  document.body.className = '';
   document.querySelector('.identity-prompt')?.remove();
 });
+
+/** The doc surface's shell: a two-row grid the bar has to become a row of. */
+function docShell(): HTMLElement {
+  const shell = document.createElement('div');
+  shell.id = 'shell';
+  const topbar = document.createElement('header');
+  topbar.id = 'topbar';
+  const main = document.createElement('main');
+  shell.append(topbar, main);
+  document.body.append(shell);
+  return shell;
+}
+
+/** The board's shell: ordinary flow, one header, no `#shell` at all. */
+function hubShell(): HTMLElement {
+  const root = document.createElement('div');
+  root.id = 'hub-root';
+  const topbar = document.createElement('header');
+  topbar.className = 'hub-topbar';
+  const main = document.createElement('div');
+  main.className = 'hub-main';
+  root.append(topbar, main);
+  document.body.append(root);
+  return root;
+}
 
 describe('recognising the refusal', () => {
   it('matches the body the server actually sends', () => {
@@ -92,6 +122,19 @@ describe('what the person is shown', () => {
     document.querySelector('.signin-required')?.remove();
   });
 
+  it('dismisses on a click on the scrim, and not on one inside the card', () => {
+    promptSignIn('Sign in to comment or edit here.');
+    const overlay = document.querySelector<HTMLElement>('.signin-required');
+    if (!overlay) throw new Error('no overlay');
+    // Inside the card first: closing on this would make the card unusable.
+    overlay
+      .querySelector('.identity-card')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(document.querySelector('.signin-required')).not.toBeNull();
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(document.querySelector('.signin-required')).toBeNull();
+  });
+
   it('renders the server message as TEXT, never as markup', () => {
     promptSignIn('<img src=x onerror=alert(1)>');
     const card = document.querySelector('.signin-required .identity-card');
@@ -101,9 +144,115 @@ describe('what the person is shown', () => {
   });
 
   it('shows the standing bar only once', () => {
+    docShell();
     showSignInBar();
     showSignInBar();
     expect(document.querySelectorAll('.signin-bar').length).toBe(1);
+  });
+});
+
+describe('where the standing bar lands', () => {
+  // It used to be one fixed overlay offset by the doc topbar's measured
+  // height. On the board there is no `#topbar` to measure, so it fell back to
+  // a constant and covered the action row — "Start a planning huddle" could
+  // not be clicked at all — and at 430px on the doc it covered the H1 and the
+  // format bar. These assert it takes SPACE on each surface instead.
+  it('becomes a declared row of the doc shell, above the topbar', () => {
+    const shell = docShell();
+    showSignInBar();
+    const bar = document.querySelector('.signin-bar');
+    expect(bar?.parentElement).toBe(shell);
+    expect(shell.firstElementChild).toBe(bar);
+    // The grid has two declared tracks; without this class the bar would be
+    // laid into the topbar's 48px and clipped.
+    expect(document.body.classList.contains('signin-gated')).toBe(true);
+    expect(bar?.classList.contains('signin-bar--floating')).toBe(false);
+  });
+
+  it('becomes a row under the board header, where the connection banner sits', () => {
+    const root = hubShell();
+    showSignInBar();
+    const bar = document.querySelector('.signin-bar');
+    expect(bar?.parentElement).toBe(root);
+    expect(bar?.previousElementSibling?.className).toBe('hub-topbar');
+    expect(bar?.classList.contains('signin-bar--floating')).toBe(false);
+    // The doc shell's row declaration must not leak onto a surface that has
+    // no `#shell` to declare rows on.
+    expect(document.body.classList.contains('signin-gated')).toBe(false);
+  });
+
+  it('falls back to a floating bar on a surface with no header to sit under', () => {
+    // Still says it. There is no layout here to be sure of, so it floats —
+    // and docks to the BOTTOM, because the top of an unknown page is the band
+    // most likely to already be spoken for.
+    showSignInBar();
+    const bar = document.querySelector('.signin-bar');
+    expect(bar?.parentElement).toBe(document.body);
+    expect(bar?.classList.contains('signin-bar--floating')).toBe(true);
+  });
+});
+
+describe('locking the doc to reading', () => {
+  // The bug this exists for: the edit toggle was disabled and Suggesting was
+  // not. One click on Suggesting set contenteditable="true", took the
+  // reader's typing, said "All changes saved", and lost every word on
+  // reload — while the socket was correctly read-only server-side the whole
+  // time. A gate that is right on the wire and wrong in the UI still loses
+  // the user's words.
+  function toggles(): HTMLElement {
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <button id="toggle-edit-mode" ${WRITE_CONTROL_ATTR}></button>
+      <button id="toggle-suggest-mode" ${WRITE_CONTROL_ATTR}></button>
+      <button id="toggle-format"></button>`;
+    document.body.append(root);
+    return root;
+  }
+
+  it('disables EVERY marked control, not just the one the gate knew about', () => {
+    const root = toggles();
+    const locked = lockDocToReading({
+      stopSuggesting: () => {},
+      toViewMode: () => {},
+      root,
+    });
+    expect(locked.map((b) => b.id).sort()).toEqual(['toggle-edit-mode', 'toggle-suggest-mode']);
+    for (const b of locked) {
+      expect(b.disabled).toBe(true);
+      // Says why, and names the fix — a disabled control with no explanation
+      // is a dead end.
+      expect(b.title).toMatch(/sign in/i);
+      expect(b.getAttribute('aria-label')).toMatch(/sign in/i);
+    }
+  });
+
+  it('leaves an unmarked control alone', () => {
+    // The control for the assertion above: if it disabled everything in
+    // reach, "both toggles are disabled" would be true of a lock that had
+    // also taken out the reader's format bar and their back button.
+    const root = toggles();
+    lockDocToReading({ stopSuggesting: () => {}, toViewMode: () => {}, root });
+    expect(root.querySelector<HTMLButtonElement>('#toggle-format')?.disabled).toBe(false);
+  });
+
+  it('turns Suggesting off and returns the surface to view mode', () => {
+    const calls: string[] = [];
+    lockDocToReading({
+      stopSuggesting: () => calls.push('suggest-off'),
+      toViewMode: () => calls.push('view'),
+      root: toggles(),
+    });
+    expect(calls).toEqual(['suggest-off', 'view']);
+  });
+
+  it('the shipped markup actually carries the marker on both toggles', () => {
+    // The lock reads the DOM, so the lock passing its own unit test proves
+    // nothing about the real page. This reads the file the server serves.
+    const html = readFileSync(join(import.meta.dirname, '..', 'index.html'), 'utf8');
+    for (const id of ['toggle-edit-mode', 'toggle-suggest-mode']) {
+      const tag = html.slice(html.indexOf(`id="${id}"`));
+      expect(tag.slice(0, tag.indexOf('>'))).toContain(WRITE_CONTROL_ATTR);
+    }
   });
 });
 
@@ -125,7 +274,6 @@ describe('the fetch wrapper', () => {
 
   it('raises the prompt on a refused write the person just made, and hands the caller an untouched response', async () => {
     next = jsonResponse(401, { error: 'sign_in_required' });
-    markGestureForTest();
     const res = await fetch('/api/docs/d1/threads', { method: 'POST' });
 
     expect(document.querySelector('.signin-required')).not.toBeNull();
@@ -136,20 +284,54 @@ describe('the fetch wrapper', () => {
   });
 
   it("does NOT interrupt a reader when the refused write was the app's own", async () => {
-    // The reading tracker, link titles and the push reconciler all POST on
-    // load. Measured on a real gated doc: one of them raised the modal over a
-    // document the reader had not touched. They get the standing bar
-    // instead — the same answer, without the interruption.
+    // The reading tracker POSTs on load and on leave. Measured on a real
+    // gated doc, it raised the modal over a document the reader had not
+    // touched. Marked writes get the standing bar instead — the same answer,
+    // without the interruption.
+    //
+    // The first version of this decided by CLOCK: a modal if any pointerdown
+    // had happened in the last five seconds. It was right about most
+    // sequences and could not be right about any particular one, because a
+    // background POST landing just after an unrelated click inherited that
+    // click. The call site says which it is now.
     next = jsonResponse(401, { error: 'sign_in_required' });
-    markGestureForTest(0);
-    await fetch('/api/docs/d1/reading-time', { method: 'POST' });
+    const res = asBackgroundWrite(() => fetch('/api/docs/d1/reading-time', { method: 'POST' }));
+    await res;
     expect(document.querySelector('.signin-required')).toBeNull();
     expect(document.querySelector('.signin-bar')).not.toBeNull();
   });
 
+  it('marks only the request inside the callback, not the ones after it', async () => {
+    // The positive control for the mechanism: the SAME url and method that
+    // just got the quiet treatment must raise the modal once the marker is
+    // gone. Without this, a marker stuck permanently on would look identical
+    // to a marker working.
+    next = jsonResponse(401, { error: 'sign_in_required' });
+    await asBackgroundWrite(() => fetch('/api/docs/d1/reading-time', { method: 'POST' }));
+    document.querySelector('.signin-bar')?.remove();
+    expect(document.querySelector('.signin-required')).toBeNull();
+
+    await fetch('/api/docs/d1/reading-time', { method: 'POST' });
+    expect(document.querySelector('.signin-required')).not.toBeNull();
+    document.querySelector('.signin-required')?.remove();
+  });
+
+  it('restores the marker when the marked call throws', async () => {
+    expect(() =>
+      asBackgroundWrite(() => {
+        throw new Error('boom');
+      }),
+    ).toThrow('boom');
+    // A leaked marker would silence every later refusal — the exact failure
+    // the modal exists to prevent, arrived at from the other side.
+    next = jsonResponse(401, { error: 'sign_in_required' });
+    await fetch('/api/docs/d1/threads', { method: 'POST' });
+    expect(document.querySelector('.signin-required')).not.toBeNull();
+    document.querySelector('.signin-required')?.remove();
+  });
+
   it('leaves a successful write completely alone', async () => {
     next = jsonResponse(200, { ok: true });
-    markGestureForTest();
     const res = await fetch('/api/docs/d1/threads', { method: 'POST' });
     expect(res.status).toBe(200);
     expect(document.querySelector('.signin-required')).toBeNull();
@@ -157,7 +339,6 @@ describe('the fetch wrapper', () => {
 
   it('leaves a 401 that is NOT the write gate alone', async () => {
     next = jsonResponse(401, { error: 'widget_token_invalid' });
-    markGestureForTest();
     await fetch('/api/anything', { method: 'POST' });
     expect(document.querySelector('.signin-required')).toBeNull();
   });

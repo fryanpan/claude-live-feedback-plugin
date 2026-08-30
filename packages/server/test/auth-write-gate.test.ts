@@ -326,6 +326,31 @@ describe('with the gate ON', () => {
     }
   });
 
+  it('leaves a POST that only reads open to an unsigned browser', async () => {
+    // `/api/links/titles` is a POST for its request shape — a batch of URLs
+    // does not fit in a query string — and a read in its effect. Gated, an
+    // unsigned reader's link chips silently never resolved while the refusal
+    // told them "Reading needs no account".
+    const b = boot(true);
+    const res = await fetch(`${b.base}/api/links/titles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
+      body: JSON.stringify({ urls: [`${b.base}/review/nothing-here`] }),
+    });
+    expect(res.status).toBe(200);
+
+    // The control, in the same test: an ordinary POST from the SAME unsigned
+    // browser on the SAME server is still refused. Without this the 200 above
+    // would be equally consistent with a gate that had stopped working.
+    const gated = await fetch(`${b.base}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
+      body: JSON.stringify({ name: 'A board' }),
+    });
+    expect(gated.status).toBe(401);
+    expect(((await gated.json()) as { error?: string }).error).toBe(SIGN_IN_REQUIRED_ERROR);
+  });
+
   it('leaves the sign-in flow reachable — otherwise the gate is a deadlock', async () => {
     // `signIn` is itself the assertion: it POSTs /api/auth/start and
     // /api/auth/verify as a browser with no session, and expects 200 from

@@ -505,6 +505,9 @@ export interface QuickActionHandlers {
   /** Resolves when the huddle doc exists and the page is leaving, or when the
    *  start was refused — which gives the button back as the retry. */
   onStartHuddle: () => Promise<boolean>;
+  /** Whether the server will accept writes from this browser. Absent means
+   *  yes, so every caller that predates the sign-in gate is unchanged. */
+  canWrite?: boolean;
 }
 
 export function renderQuickActions(container: HTMLElement, handlers: QuickActionHandlers): void {
@@ -534,6 +537,17 @@ export function renderQuickActions(container: HTMLElement, handlers: QuickAction
   huddle.innerHTML = `${MIC_ICON}<span>Start a planning huddle</span>`;
   hold(huddle, handlers.onStartHuddle);
   row.append(newTask, huddle);
+  // Error prevention rather than error recovery, matching the doc surface's
+  // edit toggle: a signed-out reader is told these are unavailable instead of
+  // pressing one and receiving a refusal. Disabled, not hidden — a control
+  // that vanishes teaches nothing about why.
+  if (handlers.canWrite === false) {
+    for (const button of [newTask, huddle]) {
+      button.disabled = true;
+      button.title = 'Sign in to add to this board';
+      button.setAttribute('aria-label', 'Sign in to add to this board');
+    }
+  }
   container.append(row);
 }
 

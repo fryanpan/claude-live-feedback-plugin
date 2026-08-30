@@ -21,7 +21,12 @@ import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { pageSentry } from '../sentry-page.ts';
-import { fetchWriteAccess, installWriteGateNotice, showSignInBar } from '../signin/write-gate.ts';
+import {
+  asBackgroundWrite,
+  fetchWriteAccess,
+  installWriteGateNotice,
+  showSignInBar,
+} from '../signin/write-gate.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { activityCommentRequest, asksOf } from './activity-model.ts';
@@ -490,7 +495,10 @@ async function main(): Promise<void> {
   // Same order as the doc surface: the write answer decides whether the name
   // prompt is worth showing. See signin/write-gate.ts.
   const writeAccess = await fetchWriteAccess();
-  if (!writeAccess.canWrite) showSignInBar();
+  // The bar is raised after `buildShell` below, not here: it mounts as a row
+  // under `.hub-topbar`, and at this point `#hub-root` is still the empty div
+  // the server sent. Raised here it would be wiped by the very next
+  // `root.innerHTML`.
   const user: User = await ensureUserIdentity(
     new URLSearchParams(location.search).get('as'),
     {
@@ -567,6 +575,8 @@ async function main(): Promise<void> {
   );
   if (initial) state.info = initial.workspace;
   buildShell(root, state.info?.name ?? workspaceId);
+  // Now that there is a header to sit under. See signin/write-gate.ts.
+  if (!writeAccess.canWrite) showSignInBar();
   // The Preact proving island (hidden; owns its own wrapper under root).
   // buildShell wrote root.innerHTML just above, so this mounts AFTER the last
   // vanilla wipe of root — the contract is that no vanilla code wipes a
@@ -1953,6 +1963,11 @@ async function main(): Promise<void> {
     renderQuickActions(el('hub-quick'), {
       onNewTask: () => newTask(),
       onStartHuddle: () => startHuddle(),
+      // The board's two create buttons are the doc surface's edit toggle: a
+      // control that cannot work should say so before it is pressed, not
+      // after. The rest of the board's writes still fail loudly through
+      // `send()`'s toast and the sign-in prompt — see the PR note.
+      canWrite: writeAccess.canWrite,
     });
     renderLead();
     renderMe();
@@ -2641,17 +2656,24 @@ async function main(): Promise<void> {
     // What the network actually moved: "slow because big" and "slow because
     // far" need different fixes, and the report should tell them apart.
     const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
-    void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        msToBoot,
-        ...(msToFirstProjection !== null ? { msToFirstProjection } : {}),
-        resourceCount: resources.length,
-        transferBytes: resources.reduce((sum, r) => sum + (r.transferSize || 0), 0),
-        decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
-      }),
-    }).catch(() => {});
+    // Nobody asked for this POST — it is telemetry about the load that just
+    // happened. Marked, so that a signed-out reader gets the standing bar
+    // rather than a modal demanding they sign in to do something they never
+    // did. Measured: unmarked, it raised the modal over the board within
+    // four seconds of opening it.
+    asBackgroundWrite(() => {
+      void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          msToBoot,
+          ...(msToFirstProjection !== null ? { msToFirstProjection } : {}),
+          resourceCount: resources.length,
+          transferBytes: resources.reduce((sum, r) => sum + (r.transferSize || 0), 0),
+          decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
+        }),
+      }).catch(() => {});
+    });
     // Same numbers onto the pageload trace, best-effort: if the SDK loaded
     // and the transaction is still open they land as measurements; if not,
     // the posted report above is still the durable record.
