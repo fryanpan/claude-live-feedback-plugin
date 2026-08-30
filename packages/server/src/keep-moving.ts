@@ -123,7 +123,10 @@ export function classifyOpenTasks(
    *    whole decision conversation is live on its thread is not quiet.
    *  - a registered builder's worktree churn (`dispatches.activityFor`).
    *  - the last content change to a doc the row LINKS (server.ts): an agent
-   *    rewriting the doc a row is about is the row moving.
+   *    rewriting the doc a row is about is the row moving. Only a LINKED doc
+   *    — an unlinked one is invisible here, so such a row still reads as
+   *    quiet while its doc is being written; server.ts states why at the
+   *    merge site.
    *
    * The CLI fetches these only for rows a first pass reported stalled, which
    * caps the per-row calls at the handful being reported. (The `/api/docs`
