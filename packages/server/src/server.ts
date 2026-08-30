@@ -239,6 +239,7 @@ import {
   reviewItemVersion,
   taskChip,
 } from './tasks.ts';
+import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
 import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
@@ -1270,6 +1271,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     type: 'mockup',
     title: 'Hub feedback (all workspaces)',
   });
+  // Server-side half of the double-submit fix: the doc composer's in-flight
+  // guard stops ONE call site from ever sending the repeat, this catches
+  // whatever gets through anyway (a request that landed but read as a
+  // client-side failure, a future caller that reintroduces the race).
+  const threadRequestDedup = new ThreadRequestDedup();
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
   const taskStore = new TaskStore({
@@ -8523,6 +8529,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller that wrote it has to be the one that hears about it.
             const anchorCheck = anchors.validateAnchor(anchor);
             if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
+            // A repeat of a create this server already made — same doc, same
+            // client-generated requestId, same text and anchor — short-
+            // circuits here, before the review-item side effects below run a
+            // second time (requestMoreInfoOnReview is not idempotent). Keyed
+            // on the RAW anchor: a duplicate call carries byte-identical
+            // JSON, the located/rewritten anchor below does not need to.
+            const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
+            const anchorKey = JSON.stringify(anchor);
+            const dupThreadId = threadRequestDedup.matchExisting(docId, requestId, text, anchorKey);
+            if (dupThreadId) {
+              const existing = rooms.getThread(docId, dupThreadId);
+              if (existing) {
+                const handoff = threadUrl(docId, Boolean(visitor));
+                return j(200, {
+                  thread: withTaskChips(docId, existing),
+                  ...(handoff ? { threadUrl: handoff } : {}),
+                });
+              }
+            }
             // A thread on a PHRASE of a review item — the doc-style question
             // asked back at an ask. The anchor names an item this task must
             // carry, and its offsets must spell its snippet in the item's
@@ -8599,6 +8624,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               generate: !visitor,
               ...(declared.review ? { review: declared.review } : {}),
             });
+            if (t) threadRequestDedup.record(docId, requestId, text, anchorKey, t.id);
             if (t && itemAsk?.range) {
               const asked = taskStore.requestMoreInfoOnReview(
                 itemAsk.taskId,
