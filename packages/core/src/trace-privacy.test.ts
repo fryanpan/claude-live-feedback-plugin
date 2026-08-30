@@ -20,9 +20,26 @@ import {
  */
 const NEEDLE = 'quarterly-comp-review.md';
 
+/**
+ * A short synthetic workspace id, the same spelling sentry-server.test.ts
+ * uses: route templates match on POSITION, not on how long a segment is, so
+ * nothing here needs a realistic-length id.
+ */
+const WS_ID = 'w-abc123';
+
+/**
+ * The minted-id SHAPE, on the other hand, is the thing under test — it needs
+ * a prefix plus 10+ base64url characters. Generated at runtime rather than
+ * written as a literal, the same way sentry-server.test.ts builds its
+ * secrets: a fixture that IS the shape is also the shape the pre-push leak
+ * gate exists to stop, and a hardcoded one would be indistinguishable from a
+ * real board id to any scanner.
+ */
+const TASK_ID = `t-${crypto.randomUUID().replaceAll('-', '')}`;
+
 describe('span names reduce to route patterns', () => {
   it('drops a doc id that is a file path, method and all', () => {
-    expect(scrubSpanName(`GET /workspaces/w-AbCdEfGhIj/docs/${NEEDLE}`)).toBe(
+    expect(scrubSpanName(`GET /workspaces/${WS_ID}/docs/${NEEDLE}`)).toBe(
       'GET /workspaces/:id/docs/:id',
     );
   });
@@ -59,9 +76,9 @@ describe('a browser transaction event, scrubbed', () => {
   function pageloadEvent(): Record<string, unknown> {
     return {
       type: 'transaction',
-      transaction: `/workspaces/w-AbCdEfGhIj/docs/${NEEDLE}`,
+      transaction: `/workspaces/${WS_ID}/docs/${NEEDLE}`,
       tags: { page_type: 'doc' },
-      request: { url: `https://example.test/workspaces/w-AbCdEfGhIj/docs/${NEEDLE}?walk=1` },
+      request: { url: `https://example.test/workspaces/${WS_ID}/docs/${NEEDLE}?walk=1` },
       spans: [
         {
           op: 'http.client',
@@ -73,8 +90,8 @@ describe('a browser transaction event, scrubbed', () => {
         {
           category: 'navigation',
           data: {
-            from: `/workspaces/w-AbCdEfGhIj/docs/${NEEDLE}`,
-            to: '/workspaces/w-AbCdEfGhIj/home',
+            from: `/workspaces/${WS_ID}/docs/${NEEDLE}`,
+            to: `/workspaces/${WS_ID}/home`,
           },
         },
       ],
@@ -117,8 +134,10 @@ describe('a browser transaction event, scrubbed', () => {
 
   it('still redacts a minted id in an ordinary message, as the server floor did', () => {
     const out = scrubBrowserEvent({
-      message: 'could not load task t-AbCdEfGhIjKl',
+      message: `could not load task ${TASK_ID}`,
     }) as Record<string, unknown>;
+    // Positive control first: the needle really is in the input.
+    expect(TASK_ID.length).toBeGreaterThan(12);
     expect(out.message).toBe('could not load task [id]');
   });
 
