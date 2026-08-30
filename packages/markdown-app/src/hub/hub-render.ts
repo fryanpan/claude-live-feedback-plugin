@@ -8,6 +8,7 @@ import { type ReviewPayload, reviewAnswered, reviewWithdrawn } from '@feedback/c
 import type { ReviewShape, Thread, User } from '@feedback/core';
 import {
   type EffortCalibration,
+  type EffortRatio,
   applyEffortRatio,
   effortActualHandsOnSeconds,
   effortActualWallClockSeconds,
@@ -1409,6 +1410,8 @@ export function detailFields(
    *  without a board behind it, and the effort cell then shows the raw
    *  numbers alone rather than inventing a factor of 1. */
   calibration?: EffortCalibration,
+  /** The band the ticket renders under — see `effortCellText`. */
+  calibrationGoal?: string,
 ): HTMLElement {
   const dl = document.createElement('dl');
   dl.className = 'hub-detail-fields';
@@ -1537,7 +1540,7 @@ export function detailFields(
   // Three states, three sentences, and an unscored ticket gets NO cell at
   // all rather than a zero — the same line `Task.effortEstimate` draws in
   // its own type doc.
-  const effortText = effortCellText(task, calibration);
+  const effortText = effortCellText(task, calibration, calibrationGoal);
   if (effortText !== '') cell('Effort', effortText);
   return dl;
 }
@@ -1549,7 +1552,15 @@ export function detailFields(
  * the thing worth testing here is which of the three states produces which
  * sentence, not that a `<dd>` got appended.
  */
-export function effortCellText(task: HubTask, calibration?: EffortCalibration): string {
+export function effortCellText(
+  task: HubTask,
+  calibration?: EffortCalibration,
+  /** The BAND this ticket renders under, which is its own goal id unless
+   *  that id matches no band and the board files it under Backlog. The
+   *  calibration is keyed by band for exactly that reason, so a lookup by
+   *  the raw `task.goal` would read a bucket the board never built. */
+  calibrationGoal?: string,
+): string {
   const state = effortEstimateState(task);
   if (state === 'none') return '';
   if (state === 'failed') {
@@ -1561,20 +1572,38 @@ export function effortCellText(task: HubTask, calibration?: EffortCalibration): 
   }
   const est = estimateNumbers(task);
   if (!est) return '';
-  const ratio = calibration ? ratioForGoal(calibration.wallClock, task.goal) : undefined;
-  const handsRatio = calibration ? ratioForGoal(calibration.handsOn, task.goal) : undefined;
+  const band = calibrationGoal ?? task.goal;
+  const wallRatio = calibration ? ratioForGoal(calibration.wallClock, band) : undefined;
+  const handsRatio = calibration ? ratioForGoal(calibration.handsOn, band) : undefined;
   const hands = handsRatio
     ? applyEffortRatio(est.handsOnSeconds, handsRatio.ratio)
     : est.handsOnSeconds;
-  const wall = ratio ? applyEffortRatio(est.wallClockSeconds, ratio.ratio) : est.wallClockSeconds;
+  const wall = wallRatio
+    ? applyEffortRatio(est.wallClockSeconds, wallRatio.ratio)
+    : est.wallClockSeconds;
   const parts = [`${formatEffortSeconds(hands)} of yours over ${formatEffortSeconds(wall)}`];
   // The factor, and what it was learned from — never a bare multiplier. A
   // correction with no sample count behind it is a number nobody can argue
   // with.
-  if (ratio && ratio.samples > 0) {
-    parts.push(
-      `scaled \u00d7${ratio.ratio.toFixed(2)} from ${ratio.samples} closed ticket${ratio.samples === 1 ? '' : 's'}`,
-    );
+  //
+  // The two axes are calibrated from SEPARATE sample sets on purpose (a
+  // ticket with a transition trail but no reading time teaches the calendar
+  // and not your attention), so they can disagree — in both the factor and
+  // the count behind it. One "×N" printed over two different corrections
+  // would be a claim about numbers that were never scaled that way, so they
+  // are only spoken as one when they are in fact one.
+  const said = (r: EffortRatio): string =>
+    `\u00d7${r.ratio.toFixed(2)} from ${r.samples} closed ticket${r.samples === 1 ? '' : 's'}`;
+  const same =
+    handsRatio !== undefined &&
+    wallRatio !== undefined &&
+    handsRatio.ratio.toFixed(2) === wallRatio.ratio.toFixed(2) &&
+    handsRatio.samples === wallRatio.samples;
+  if (same && wallRatio !== undefined && wallRatio.samples > 0) {
+    parts.push(`scaled ${said(wallRatio)}`);
+  } else {
+    if (handsRatio && handsRatio.samples > 0) parts.push(`your time ${said(handsRatio)}`);
+    if (wallRatio && wallRatio.samples > 0) parts.push(`the calendar ${said(wallRatio)}`);
   }
   // What it actually took, once it is closed. Measured numbers are never
   // multiplied — these are reported exactly as they happened, beside the

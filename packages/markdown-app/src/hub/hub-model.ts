@@ -589,17 +589,52 @@ export interface BoardEffort {
  * most of the way back to the board's own experience instead of claiming a
  * factor of its own.
  */
-export function boardEffort(goals: HubGoal[], tasks: HubTask[], now: number): BoardEffort {
+/** Every id a band can have on this board — goals and their subgoals. */
+export function goalBandIds(goals: HubGoal[]): Set<string> {
   const known = new Set<string>();
   for (const g of goals) {
     known.add(g.id);
     for (const sg of g.subgoals ?? []) known.add(sg.id);
   }
+  return known;
+}
+
+/**
+ * The band a goal id lands in — itself, or Backlog when no band answers to
+ * it.
+ *
+ * Exported because the calibration is keyed by BAND and two callers need the
+ * same key: the board, which groups rows into bands, and the ticket panel,
+ * which looks one row's correction up. A panel that keyed on a stale goal id
+ * would quote a factor the board never computed.
+ */
+export function bandOfGoal(known: Set<string>, goal: string): string {
+  return known.has(goal) ? goal : CHORES_ID;
+}
+
+/**
+ * The board-wide correction alone, without rolling every band up.
+ *
+ * The ticket panel needs the factor and not the summaries, and it recomputes
+ * on every repaint of the panel — so it gets the cheap half. Built through
+ * the SAME band mapping `boardEffort` uses, which is the whole point of it
+ * living here rather than being a bare `computeEffortCalibration` call at the
+ * call site.
+ */
+export function boardCalibration(goals: HubGoal[], tasks: HubTask[]): EffortCalibration {
+  const known = goalBandIds(goals);
+  return computeEffortCalibration(
+    tasks.map((task) => ({ ...task, goal: bandOfGoal(known, task.goal) })),
+  );
+}
+
+export function boardEffort(goals: HubGoal[], tasks: HubTask[], now: number): BoardEffort {
+  const known = goalBandIds(goals);
   // A task whose goal id matches no band renders under Backlog, so it must
   // count there too — the same fallback `boardSections` applies, spelled the
   // same way, so a row cannot be in one band on screen and another in the
   // arithmetic.
-  const bandOf = (task: HubTask): string => (known.has(task.goal) ? task.goal : CHORES_ID);
+  const bandOf = (task: HubTask): string => bandOfGoal(known, task.goal);
   const grouped = new Map<string, HubTask[]>();
   for (const id of known) grouped.set(id, []);
   grouped.set(CHORES_ID, grouped.get(CHORES_ID) ?? []);

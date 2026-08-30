@@ -28,8 +28,11 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  bandOfGoal,
+  boardCalibration,
   boardEffort,
   boardSectionsWithEffort,
+  goalBandIds,
   goalEffortLabel,
 } from '../src/hub/hub-model.ts';
 import { effortCellText } from '../src/hub/hub-render.ts';
@@ -404,6 +407,48 @@ describe('the ticket panel states the numbers the board no longer shows', () => 
     expect(text).toContain('×2.00');
     expect(text).toContain('6 closed tickets');
     expect(text).toContain('2h');
+  });
+
+  it('never prints one factor over two different corrections', () => {
+    // The two axes learn from different samples: a close with a transition
+    // trail and no reading time teaches the calendar and nothing about your
+    // attention. Here the calendar ran 2x long over 4 closes while only one
+    // of them recorded reading time, so the counts differ and one "×N" would
+    // be a claim about a number that was never scaled that way.
+    const rows = closedSet().map((t, i) =>
+      i === 0 ? t : { ...t, readingTime: undefined },
+    ) as HubTask[];
+    const text = effortCellText(task(), computeEffortCalibration(rows));
+    expect(text).toContain('your time');
+    expect(text).toContain('the calendar');
+    expect(text).toContain('from 1 closed ticket');
+    expect(text).toContain('from 6 closed tickets');
+    // Positive control: when the two agree, they are still said once.
+    const agreed = effortCellText(task(), computeEffortCalibration(closedSet()));
+    expect(agreed).toContain('scaled ×2.00 from 6 closed tickets');
+    expect(agreed).not.toContain('the calendar');
+  });
+
+  it('looks the correction up by BAND, the way the board filed it', () => {
+    // Two populations: six closes under a real band that all ran 2x long,
+    // and four under a goal id no band answers to, which all landed on their
+    // estimate. A ticket in the second group renders under Backlog, so its
+    // correction is Backlog's — four samples, not the board's ten.
+    const onTime = closed(2 * DAY, HOUR, {
+      goal: 'g-vanished',
+      effortEstimate: { status: 'ok', handsOnSeconds: 1200, wallClockSeconds: 3600 },
+      readingTime: { totalSeconds: 1200, sessionCount: 1, lastSessionAt: NOW },
+    });
+    const rows = [...closedSet(), onTime, { ...onTime }, { ...onTime }, { ...onTime }];
+    const calibration = boardCalibration(GOALS, rows);
+    const orphan = task({ goal: 'g-vanished' });
+    const band = bandOfGoal(goalBandIds(GOALS), orphan.goal);
+    expect(band).toBe(CHORES_ID);
+    expect(effortCellText(orphan, calibration, band)).toContain('from 4 closed tickets');
+    // Keyed on the stale id the lookup misses the bucket entirely and falls
+    // back to the board's ten — a different number, quoted about the same
+    // ticket. That is the bug this parameter exists to close.
+    expect(effortCellText(orphan, calibration, 'g-vanished')).toContain('from 10 closed tickets');
   });
 
   it('reports what a closed ticket actually took, unmultiplied', () => {

@@ -112,6 +112,9 @@ export interface TaskDetailView {
    *  the task; absent means "no board behind this panel", and the field then
    *  shows the raw numbers rather than inventing a factor of 1. */
   calibration?: EffortCalibration;
+  /** The band the open ticket renders under — the key its correction was
+   *  filed under. See `effortCellText`. */
+  calibrationGoal?: string;
 }
 
 /** A closed panel answers nothing, which is what the signal holds until the
@@ -952,8 +955,9 @@ function TaskDetailPanel(props: {
   handlers: DetailHandlers;
   initialTab?: DetailTab;
   calibration?: EffortCalibration;
+  calibrationGoal?: string;
 }) {
-  const { host, task, discussion, handlers, calibration } = props;
+  const { host, task, discussion, handlers, calibration, calibrationGoal } = props;
   const now = handlers.now ?? Date.now();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const headRef = useRef<HTMLDivElement | null>(null);
@@ -1001,7 +1005,7 @@ function TaskDetailPanel(props: {
   });
 
   useFill(fieldsRef as RefObject<HTMLElement>, () => [
-    ...detailFields(task, handlers, calibration).childNodes,
+    ...detailFields(task, handlers, calibration, calibrationGoal).childNodes,
   ]);
 
   // The description slot is the one node a repaint must never rebuild: the
@@ -1305,7 +1309,7 @@ function TaskDetailPanel(props: {
  * panel are siblings under different subtrees.
  */
 function TaskDetail(props: { host: HTMLElement }) {
-  const { task, discussion, handlers, tab, calibration } = taskDetailData.value;
+  const { task, discussion, handlers, tab, calibration, calibrationGoal } = taskDetailData.value;
   const { host } = props;
   useLayoutEffect(() => {
     host.classList.toggle('hidden', task === null);
@@ -1339,6 +1343,7 @@ function TaskDetail(props: { host: HTMLElement }) {
       handlers={handlers}
       initialTab={tab}
       calibration={calibration}
+      calibrationGoal={calibrationGoal}
     />
   );
 }

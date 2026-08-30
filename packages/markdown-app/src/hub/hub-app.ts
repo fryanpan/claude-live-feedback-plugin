@@ -9,7 +9,6 @@
  * which the server would revert.
  */
 import { type ReviewPayload, type Thread, type User, connect, escapeHtml } from '@feedback/core';
-import { computeEffortCalibration } from '@feedback/core/goal-effort';
 import {
   renderConnectionBanner,
   renderLiveStaleNotice,
@@ -71,9 +70,12 @@ import {
   advanceWalk,
   applyRefresh,
   archivedTasks,
+  bandOfGoal,
+  boardCalibration,
   boardSections,
   boardSectionsWithEffort,
   clientDriftNotice,
+  goalBandIds,
   goalLabel,
   holdWaitingItem,
   hubTabTitle,
@@ -1460,7 +1462,13 @@ async function main(): Promise<void> {
       // of everything that has closed. Unfiltered for the same reason the goal
       // rollup is — a correction that moved when the reader changed tabs would
       // be a correction about the reader.
-      calibration: task ? computeEffortCalibration(taskList()) : undefined,
+      calibration: task ? boardCalibration(state.info?.goals ?? [], taskList()) : undefined,
+      // The band the row renders under, which is the key its correction was
+      // filed under. A ticket whose goal id matches no band shows Backlog's
+      // arithmetic, exactly as it shows under Backlog on the board.
+      calibrationGoal: task
+        ? bandOfGoal(goalBandIds(state.info?.goals ?? []), task.goal)
+        : undefined,
       handlers: {
         onClose: () => {
           state.detailTaskId = null;
