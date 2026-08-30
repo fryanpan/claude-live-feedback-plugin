@@ -61,6 +61,31 @@ export class ThreadRequestDedup<T> {
   }
 
   /**
+   * A matching in-flight or completed create's promise, if there is one —
+   * a pure read, reserves nothing. This is the escape hatch for a route
+   * whose validation reads MUTABLE state a successful create itself
+   * changes: `POST /threads`'s review-item branch refuses a second ask
+   * while the item is already `waiting`, a state the first request's own
+   * side effect sets — so a retry with the same requestId must be caught
+   * HERE, before that validation runs, or it never reaches `dedupe` at all
+   * and the retry this class exists to support gets a stale-state error
+   * instead of the thread it already made.
+   */
+  lookup(
+    docId: string,
+    requestId: string | undefined,
+    text: string,
+    anchorKey: string,
+  ): Promise<T> | undefined {
+    if (!requestId) return undefined;
+    this.prune(Date.now());
+    const existing = this.seen.get(this.key(docId, requestId));
+    return existing && existing.text === text && existing.anchorKey === anchorKey
+      ? existing.promise
+      : undefined;
+  }
+
+  /**
    * Run `create` for this comment, or — if a request with the same
    * (docId, requestId, text, anchorKey) is already in flight or completed
    * within the window — await ITS result instead of running `create` again.
@@ -79,17 +104,14 @@ export class ThreadRequestDedup<T> {
     anchorKey: string,
     create: () => Promise<T>,
   ): Promise<{ value: T; deduped: boolean }> {
+    const existing = this.lookup(docId, requestId, text, anchorKey);
+    if (existing) return { value: await existing, deduped: true };
     if (!requestId) return { value: await create(), deduped: false };
     const now = Date.now();
-    this.prune(now);
-    const key = this.key(docId, requestId);
-    const existing = this.seen.get(key);
-    if (existing && existing.text === text && existing.anchorKey === anchorKey) {
-      return { value: await existing.promise, deduped: true };
-    }
     // Reserved before `create` is awaited — nothing here yields to the event
-    // loop between the lookup above and this write, so a request arriving
+    // loop between `lookup` above and this write, so a request arriving
     // while `create` is still running always finds this entry.
+    const key = this.key(docId, requestId);
     const entry: Entry<T> = { text, anchorKey, ts: now, promise: create() };
     this.seen.set(key, entry);
     const value = await entry.promise;

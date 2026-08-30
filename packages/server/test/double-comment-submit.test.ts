@@ -154,3 +154,83 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     expect(second.thread.id).not.toBe(first.thread.id);
   });
 });
+
+/**
+ * A `review-item` anchor's own validation refuses a SECOND ask while the
+ * item is already `waiting` — a state the first successful create's own
+ * side effect (`requestMoreInfoOnReview`) sets. Codex review flagged that a
+ * requestId retry would hit that check before ever reaching the dedup
+ * logic, turning the retry this feature exists to support into a 409
+ * instead of the thread the first request already made.
+ */
+describe('a requestId retry on a review-item anchor is deduped before the waiting-state check', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+
+  const post = (path: string, body: unknown): Promise<Response> =>
+    fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const jj = async <T>(res: Response): Promise<T> => {
+    expect(res.ok, `${res.status} ${await res.clone().text()}`).toBe(true);
+    return res.json() as Promise<T>;
+  };
+
+  const DETAIL = 'A full pass reads the index once. A smaller cache makes it read twice.';
+  const PHRASE = 'read twice';
+
+  beforeEach(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'double-comment-review-item-'));
+    handle = createServer({ port: 0, dataDir });
+    base = `http://localhost:${handle.port}`;
+  });
+
+  afterEach(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('the retry gets the already-created thread back, not a 409', async () => {
+    const { workspace } = await jj<{ workspace: { id: string } }>(
+      await post('/api/workspaces', { name: 'index-rebuild', goal: 'Rebuild the index nightly.' }),
+    );
+    const { task } = await jj<{ task: { id: string } }>(
+      await post(`/api/workspaces/${workspace.id}/tasks`, {
+        title: 'Rebuild the index nightly',
+        assignee: 'Index Keeper',
+        author: REVIEWER,
+      }),
+    );
+    const { item } = await jj<{ item: { id: string } }>(
+      await post(`/api/tasks/${task.id}/review-items`, {
+        review: { shape: 'review', headline: 'Cache size', detail: DETAIL },
+        author: REVIEWER,
+      }),
+    );
+
+    const body = {
+      author: REVIEWER,
+      text: 'Twice per what — per night?',
+      anchor: { kind: 'review-item', reviewItemId: item.id, snippet: { text: PHRASE } },
+      requestId: 'req-retry-1',
+    };
+    const first = await jj<{ thread: { id: string } }>(
+      await post(`/api/docs/task:${task.id}/threads`, body),
+    );
+    // Without the fix this second call hits the review-item branch's
+    // waiting-state check (the item is now `waiting`, set by the first
+    // call) and 409s before dedup ever runs.
+    const second = await post(`/api/docs/task:${task.id}/threads`, body);
+    expect(second.status, `${second.status} ${await second.clone().text()}`).toBe(200);
+    const secondBody = (await second.json()) as { thread: { id: string } };
+    expect(secondBody.thread.id).toBe(first.thread.id);
+
+    const { threads } = await jj<{ threads: Array<{ id: string }> }>(
+      await fetch(`${base}/api/docs/task:${task.id}/threads`),
+    );
+    expect(threads).toHaveLength(1);
+  });
+});
