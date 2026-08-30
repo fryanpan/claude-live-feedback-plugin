@@ -163,6 +163,34 @@ describe('connect() stall recovery', () => {
     client.close();
   });
 
+  it('retries a RECONNECT that opens but never re-syncs, after an earlier successful sync', () => {
+    // Regression for a codex review catch: `gotInitialSync` is a one-shot
+    // lifetime flag for onReady and stays true forever after the first sync,
+    // so a watchdog keyed on it would never fire again on any later
+    // reconnect — a server-restart reconnect that opens but never re-syncs
+    // would look identical to a healthy connection.
+    const client = connect('ws://localhost:0/y/test');
+    const first = StubWebSocket.instances[0]!;
+    first.triggerOpen();
+    first.triggerSyncStep2();
+    expect(client.status).toBe('open');
+
+    // The network drops (server restart, tab sleep/wake, etc.) — a real
+    // close, not the watchdog's forced one.
+    first.close();
+    vi.advanceTimersByTime(600); // backoff before the reconnect attempt
+    expect(StubWebSocket.instances).toHaveLength(2);
+
+    const second = StubWebSocket.instances[1]!;
+    second.triggerOpen();
+    // ...but this attempt never delivers sync step 2.
+    vi.advanceTimersByTime(SYNC_TIMEOUT_MS + 1);
+    vi.advanceTimersByTime(600);
+
+    expect(StubWebSocket.instances).toHaveLength(3);
+    client.close();
+  });
+
   it('leaves no forced-close timer running after close()', () => {
     const client = connect('ws://localhost:0/y/test');
     client.close();
