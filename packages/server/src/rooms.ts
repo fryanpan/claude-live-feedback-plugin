@@ -129,7 +129,24 @@ export type FeedbackWs = ServerWebSocket<WsCtx>;
 export interface DocRoom {
   docId: string;
   ydoc: Y.Doc;
+  /**
+   * Presence state for this room, CREATED ON FIRST READ.
+   *
+   * y-protocols' `Awareness` starts a 3s `setInterval` in its constructor and
+   * never unrefs it, so one instance per hydrated room meant thousands of
+   * timers firing forever on a server whose rooms are, almost all of them,
+   * nobody's open tab. Every reader of this field is on a websocket path
+   * (`yjs-protocol.ts`), so deferring construction to the first read is
+   * exactly "created on first connection" without any caller having to know.
+   * Use `peekAwareness()` when you must NOT bring one into being.
+   */
   awareness: awarenessProtocol.Awareness;
+  /**
+   * The Awareness instance if this room has one, else null — the read that
+   * does not construct. Teardown uses it so closing an untouched room does
+   * not create the very object it is about to destroy.
+   */
+  peekAwareness(): awarenessProtocol.Awareness | null;
   conns: Set<FeedbackWs>;
   meta: DocMeta;
   webhookUrl?: string;
@@ -224,8 +241,13 @@ interface FileBinding {
   path: string;
   writeTimer?: ReturnType<typeof setTimeout> | null;
   readTimer?: ReturnType<typeof setTimeout> | null;
-  /** Interval handle for the stat-mtime poll (see armFileWatcher). */
-  pollTimer?: ReturnType<typeof setInterval> | null;
+  /**
+   * Whether this binding takes part in the shared mtime sweep (see
+   * `armFileWatcher`). There is no per-binding interval any more: 4,228 of
+   * them were the 2026-08-29 timer storm. The sweep stats every ARMED
+   * binding whose doc is active, plus a rotating slice of the idle ones.
+   */
+  pollArmed?: boolean;
   /** Last file mtime (ms) we observed, so the poll reacts only to changes. */
   lastMtimeMs?: number;
   /** The serialized markdown we last wrote or last read from disk.
@@ -310,6 +332,71 @@ export function isHubOwnedRoom(docId: string): boolean {
   return HUB_ROOM_PREFIXES.some((p) => docId.startsWith(p));
 }
 
+/** How often the shared mtime sweep runs — the cadence the old per-binding
+ *  interval ran at, kept so external-edit latency is unchanged for a doc
+ *  anyone is actually looking at. */
+const FILE_POLL_MS = 500;
+
+/** How long after an access a bound doc counts as ACTIVE — stat'd on every
+ *  tick. Long enough that a person reading, thinking and typing never falls
+ *  out of it; short enough that a doc touched once by a bulk operation goes
+ *  quiet again. */
+const FILE_POLL_ACTIVE_MS = 60_000;
+
+/**
+ * How many IDLE bindings the sweep may stat per tick.
+ *
+ * This is the cap that turns an unbounded per-doc cost into a constant one.
+ * Idle bindings are visited round-robin, so the syscall rate is
+ * `IDLE_SWEEP_BUDGET / FILE_POLL_MS` (256/s) no matter how many bound docs
+ * exist — what grows with the corpus is how long an UNWATCHED external edit
+ * waits to be noticed, not how hard the server works. Below the budget
+ * (every dev machine, every test) each idle binding is still visited on every
+ * tick, so the old 500ms guarantee is unchanged there.
+ */
+const IDLE_SWEEP_BUDGET = 128;
+
+/** y-protocols' own presence constants, restated because its per-instance
+ *  interval is replaced by one shared ticker (see `maintainAwareness`).
+ *  `outdatedTimeout` is not exported from the package's typings. */
+const AWARENESS_OUTDATED_MS = 30_000;
+const AWARENESS_TICK_MS = AWARENESS_OUTDATED_MS / 10;
+
+/** How often the always-on memory line is written. */
+const MEMORY_LOG_MS = 5 * 60_000;
+
+/**
+ * The maintenance y-protocols' `Awareness` constructor would run on its own
+ * 3s interval: renew the local clock before it goes outdated, and evict
+ * remote clients that have stopped reporting.
+ *
+ * Reimplemented over the public surface (`getLocalState` / `setLocalState` /
+ * `meta` / `states` / `removeAwarenessStates`) so ONE ticker can drive every
+ * room. The library's version is per instance and never unref'd; on a server
+ * that hydrates every persisted doc that was thousands of timers firing
+ * forever for rooms with no sockets on them.
+ *
+ * Exported so the equivalence is testable rather than asserted.
+ */
+export function maintainAwareness(aw: awarenessProtocol.Awareness, now = Date.now()): void {
+  const local = aw.getLocalState();
+  const localMeta = aw.meta.get(aw.clientID);
+  if (local !== null && localMeta && AWARENESS_OUTDATED_MS / 2 <= now - localMeta.lastUpdated) {
+    aw.setLocalState(local);
+  }
+  const remove: number[] = [];
+  aw.meta.forEach((meta, clientId) => {
+    if (
+      clientId !== aw.clientID &&
+      AWARENESS_OUTDATED_MS <= now - meta.lastUpdated &&
+      aw.states.has(clientId)
+    ) {
+      remove.push(clientId);
+    }
+  });
+  if (remove.length > 0) awarenessProtocol.removeAwarenessStates(aw, remove, 'timeout');
+}
+
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
   private fileBindings = new Map<string, FileBinding>();
@@ -337,9 +424,147 @@ export class Rooms {
    */
   private aliases = new Map<string, string>();
 
+  /**
+   * docId → `.ydoc` mtime (ms), the value `withActivity` reports.
+   *
+   * This file is written by exactly one process — us — so the cache is
+   * authoritative between writes, and `persistRoomNow` refreshes it. Before
+   * this, every `list()` stat'd every doc: `GET /api/docs` alone was ~11k
+   * syscalls per request against the measured corpus, and `list()` is called
+   * two or three times over by the workspace-thread and grouped-diff views.
+   * Deleting an entry is always safe — the next read re-stats.
+   */
+  private activityMtime = new Map<string, number>();
+
+  /** docId → last time anything reached for this doc (see `touchDoc`). */
+  private lastTouchedAt = new Map<string, number>();
+
+  /** Rooms that have a live Awareness instance, i.e. the ones the shared
+   *  presence ticker has to visit. */
+  private awarenessRooms = new Set<DocRoom>();
+
+  private awarenessTicker: ReturnType<typeof setInterval> | null = null;
+  private filePollTicker: ReturnType<typeof setInterval> | null = null;
+  /** Round-robin position in the idle half of the file sweep. */
+  private idleCursor = 0;
+  private memoryTicker: ReturnType<typeof setInterval> | null = null;
+
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
     this.hydrateFromDisk();
+    this.startMemoryLog();
+  }
+
+  /**
+   * One line every few minutes: resident memory, how many rooms are in it,
+   * and how many timers this process is actually holding.
+   *
+   * It exists because the 2026-08-29 jetsam kill left nothing to read — the
+   * server was at 2.6 GB and the only evidence of how it got there was the
+   * absence of the process. Cheap enough to leave on forever: `memoryUsage()`
+   * once per five minutes plus a few map sizes.
+   */
+  private startMemoryLog(): void {
+    if (this.memoryTicker) return;
+    const timer = setInterval(() => {
+      const s = this.stats();
+      console.error(
+        `[rooms] mem rss=${s.rssMb}MB rooms=${s.rooms} bindings=${s.bindings} ` +
+          `activeBindings=${s.activeBindings} awareness=${s.awareness} timers=${s.timers}`,
+      );
+    }, MEMORY_LOG_MS);
+    timer.unref?.();
+    this.memoryTicker = timer;
+  }
+
+  /**
+   * What this Rooms currently costs: resident memory, how many rooms are in
+   * it, and how many timers it actually holds.
+   *
+   * Public because the memory line and the tests that pin these numbers must
+   * read the SAME counters — an assertion against a privately-computed number
+   * proves nothing about the line an incident is read from. Cheap: map sizes
+   * plus one `memoryUsage()`, no syscalls per doc.
+   */
+  stats(): {
+    rssMb: number;
+    rooms: number;
+    bindings: number;
+    /** Bindings the sweep would stat on this tick (see `bindingIsActive`). */
+    activeBindings: number;
+    /** Rooms holding a live Awareness instance. */
+    awareness: number;
+    /** Timers owned by this Rooms: pending saves + file debounces + tickers. */
+    timers: number;
+  } {
+    const now = Date.now();
+    let activeBindings = 0;
+    let bindingTimers = 0;
+    for (const [docId, binding] of this.fileBindings) {
+      if (this.bindingIsActive(docId, binding, now)) activeBindings++;
+      if (binding.writeTimer) bindingTimers++;
+      if (binding.readTimer) bindingTimers++;
+    }
+    return {
+      rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      rooms: this.rooms.size,
+      bindings: this.fileBindings.size,
+      activeBindings,
+      awareness: this.awarenessRooms.size,
+      timers:
+        this.saveTimers.size +
+        bindingTimers +
+        (this.awarenessTicker ? 1 : 0) +
+        (this.filePollTicker ? 1 : 0) +
+        (this.memoryTicker ? 1 : 0),
+    };
+  }
+
+  /**
+   * Build this room's Awareness and enrol it in the shared presence ticker.
+   *
+   * The library instance's own interval is stopped immediately: it is the
+   * per-room timer this whole change exists to remove, and `maintainAwareness`
+   * does its work from one place instead.
+   */
+  private createAwareness(room: DocRoom): awarenessProtocol.Awareness {
+    const aw = new awarenessProtocol.Awareness(room.ydoc);
+    clearInterval(
+      (aw as unknown as { _checkInterval: ReturnType<typeof setInterval> })._checkInterval,
+    );
+    this.awarenessRooms.add(room);
+    if (!this.awarenessTicker) {
+      const timer = setInterval(() => this.sweepAwareness(), AWARENESS_TICK_MS);
+      timer.unref?.();
+      this.awarenessTicker = timer;
+    }
+    return aw;
+  }
+
+  /**
+   * Presence maintenance for every room that has a live connection. A room
+   * whose last socket has gone keeps its Awareness (the websocket layer
+   * registers its broadcast handler against that instance once per room) but
+   * costs nothing per tick: with no peers there is no clock to renew and
+   * nobody to evict.
+   */
+  private sweepAwareness(): void {
+    const now = Date.now();
+    let live = 0;
+    for (const room of this.awarenessRooms) {
+      const aw = room.peekAwareness();
+      if (!aw) {
+        this.awarenessRooms.delete(room);
+        continue;
+      }
+      live++;
+      if (room.conns.size === 0) continue;
+      maintainAwareness(aw, now);
+    }
+    if (live === 0 && this.awarenessTicker) {
+      clearInterval(this.awarenessTicker);
+      this.awarenessTicker = null;
+    }
   }
 
   list(): DocMeta[] {
@@ -354,12 +579,27 @@ export class Rooms {
    * back to `createdAt` when the file isn't on disk yet.
    */
   private withActivity(meta: DocMeta): DocMeta {
-    let lastActivityAt = meta.createdAt;
+    return { ...meta, lastActivityAt: this.lastActivityFor(meta.docId, meta.createdAt) };
+  }
+
+  /**
+   * The `.ydoc` mtime for a doc, stat'd at most once per write.
+   *
+   * Same number `withActivity` always reported — this only stops asking the
+   * filesystem for it on every row of every list. `persistRoomNow` refreshes
+   * the entry (it is the only writer of that file), and every path that moves
+   * or removes the file drops the entry so the next read re-stats.
+   */
+  private lastActivityFor(docId: string, createdAt: number): number {
+    const cached = this.activityMtime.get(docId);
+    if (cached !== undefined) return cached;
+    let lastActivityAt = createdAt;
     try {
-      const p = this.pathFor(meta.docId);
+      const p = this.pathFor(docId);
       if (existsSync(p)) lastActivityAt = Math.round(statSync(p).mtimeMs);
     } catch {}
-    return { ...meta, lastActivityAt };
+    this.activityMtime.set(docId, lastActivityAt);
+    return lastActivityAt;
   }
 
   /**
@@ -415,7 +655,7 @@ export class Rooms {
     if (binding) {
       if (binding.writeTimer) clearTimeout(binding.writeTimer);
       if (binding.readTimer) clearTimeout(binding.readTimer);
-      if (binding.pollTimer) clearInterval(binding.pollTimer);
+      binding.pollArmed = false;
       this.fileBindings.delete(docId);
     }
     for (const ws of room.conns) {
@@ -424,8 +664,13 @@ export class Rooms {
       } catch {}
     }
     this.rooms.delete(docId);
+    this.activityMtime.delete(docId);
+    this.lastTouchedAt.delete(docId);
+    this.awarenessRooms.delete(room);
     try {
-      room.awareness.destroy();
+      // peek, not `room.awareness`: the getter would construct an Awareness
+      // (and register a fresh sweep entry) purely to destroy it.
+      room.peekAwareness()?.destroy();
       room.ydoc.destroy();
     } catch {}
   }
@@ -455,6 +700,7 @@ export class Rooms {
    * Returns false only if the file is there and could not be moved.
    */
   stagePersisted(docId: string): boolean {
+    this.activityMtime.delete(docId);
     const path = this.pathFor(docId);
     if (!existsSync(path)) return true;
     try {
@@ -468,6 +714,7 @@ export class Rooms {
 
   /** Put a staged `.ydoc` back — the delete didn't commit. */
   unstagePersisted(docId: string): void {
+    this.activityMtime.delete(docId);
     const staged = `${this.pathFor(docId)}.deleting`;
     if (!existsSync(staged)) return;
     try {
@@ -488,6 +735,7 @@ export class Rooms {
   }
 
   purgePersisted(docId: string): boolean {
+    this.activityMtime.delete(docId);
     try {
       const p = this.pathFor(docId);
       if (existsSync(p)) rmSync(p);
@@ -624,6 +872,7 @@ export class Rooms {
     }
     const existing = this.rooms.get(docId);
     if (existing) {
+      this.touchDoc(docId);
       if (init?.webhookUrl !== undefined) existing.webhookUrl = init.webhookUrl;
       // Allow re-tagging an existing doc into a different set without a
       // server restart — agents may rebatch their review queue.
@@ -699,10 +948,18 @@ export class Rooms {
     // back off disk at boot. Same call either way, so the alias table cannot
     // be complete at creation and empty after a restart.
     if (meta.alias) this.claimAlias(meta.alias, docId);
+    // Captured so the `awareness` getter below can reach the Rooms instance:
+    // inside a getter, `this` is the room, not the map that owns it.
+    const owner = this;
+    let awareness: awarenessProtocol.Awareness | null = null;
     const room: DocRoom = {
       docId,
       ydoc,
-      awareness: new awarenessProtocol.Awareness(ydoc),
+      get awareness(): awarenessProtocol.Awareness {
+        if (!awareness) awareness = owner.createAwareness(this as DocRoom);
+        return awareness;
+      },
+      peekAwareness: () => awareness,
       conns: new Set(),
       meta,
       webhookUrl: init?.webhookUrl,
@@ -738,9 +995,15 @@ export class Rooms {
    */
   get(docId: string): DocRoom | undefined {
     const direct = this.rooms.get(docId);
-    if (direct) return direct;
+    if (direct) {
+      this.touchDoc(direct.docId);
+      return direct;
+    }
     const aliased = this.aliases.get(docId);
-    return aliased ? this.rooms.get(aliased) : undefined;
+    if (!aliased) return undefined;
+    const room = this.rooms.get(aliased);
+    if (room) this.touchDoc(room.docId);
+    return room;
   }
 
   /**
@@ -2264,6 +2527,7 @@ export class Rooms {
    * fine, and is what a doc that has never been persisted looks like.
    */
   private moveDocFiles(docId: string, fromDir: string, toDir: string): boolean {
+    this.activityMtime.delete(docId);
     const ydocFrom = join(fromDir, `${docId}.ydoc`);
     const ydocTo = join(toDir, `${docId}.ydoc`);
     try {
@@ -2396,7 +2660,7 @@ export class Rooms {
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
-    if (existing?.pollTimer) clearInterval(existing.pollTimer);
+    if (existing) existing.pollArmed = false;
     // A re-attach must replace the write-back observer, not stack another —
     // each leaked observer is a duplicate scheduler holding a stale binding.
     if (existing?.observer) fragment.unobserveDeep(existing.observer);
@@ -2573,7 +2837,7 @@ export class Rooms {
     const existing = this.fileBindings.get(docId);
     if (existing?.writeTimer) clearTimeout(existing.writeTimer);
     if (existing?.readTimer) clearTimeout(existing.readTimer);
-    if (existing?.pollTimer) clearInterval(existing.pollTimer);
+    if (existing) existing.pollArmed = false;
     if (existing?.contentObserver) content.unobserve(existing.contentObserver);
     // lastWritten is "what the FILE holds" — when the doc won the arbitration
     // the file still holds the stale disk text, and recording the doc text
@@ -2620,32 +2884,156 @@ export class Rooms {
    * Bun-on-Linux. A stat-mtime poll is immune to all of it — inode
    * replacement, platform, and runtime — and ~1s latency matches the doc's
    * existing sync contract.
+   *
+   * What changed on 2026-08-29: the poll is no longer an interval PER
+   * binding. Arming enrols the binding in one shared sweep (`sweepFilePolls`)
+   * which visits active docs every tick and idle docs on a budget. Same
+   * mechanism, same immunity, a constant number of timers.
    */
-  private armFileWatcher(room: DocRoom, binding: FileBinding): void {
-    if (binding.pollTimer) clearInterval(binding.pollTimer);
-    binding.pollTimer = null;
+  private armFileWatcher(_room: DocRoom, binding: FileBinding): void {
+    binding.pollArmed = false;
     if (!existsSync(binding.path)) return;
     try {
       binding.lastMtimeMs = statSync(binding.path).mtimeMs;
     } catch {}
-    const timer = setInterval(() => {
-      let mtimeMs: number;
-      try {
-        if (!existsSync(binding.path)) return;
-        mtimeMs = statSync(binding.path).mtimeMs;
-      } catch (err) {
+    binding.pollArmed = true;
+    // Armed, but deliberately not marked as ACCESSED. Hydration re-binds
+    // every bound doc at boot; if arming warmed them, the first minute of
+    // every restart would put the whole corpus in the fast lane — the storm
+    // this change exists to remove. It joins the idle rotation instead, and
+    // the first real `get` / `getOrCreate` promotes it.
+    this.ensureFilePollTicker();
+  }
+
+  /**
+   * Is somebody looking at this doc — i.e. does it belong in the fast lane,
+   * stat'd on every 500ms tick rather than on the idle rotation?
+   *
+   * "Looking at" is one of three things, all of them pushed to us rather
+   * than polled for:
+   *   - a live websocket on the room (someone has the editor open),
+   *   - a write-back or reconcile still inside its debounce window, or
+   *   - an access within the last `FILE_POLL_ACTIVE_MS` — any `get` /
+   *     `getOrCreate`, which is every REST read, every MCP edit tool, and the
+   *     websocket upgrade itself.
+   *
+   * An IDLE binding is not unwatched — it is watched more slowly, on the
+   * round-robin budget (see `IDLE_SWEEP_BUDGET`), and re-stat'd immediately
+   * by `touchDoc` the moment anyone reaches for the doc. That matters
+   * because a git checkout / stash / pull against a bound file nobody has
+   * open must still reach the live doc: it is the documented behaviour and
+   * `git-ops-vs-bound.test.ts` pins it. `reparseFromDisk` remains the
+   * explicit force-pull.
+   */
+  private bindingIsActive(docId: string, binding: FileBinding, now: number): boolean {
+    if (!binding.pollArmed) return false;
+    if (binding.writeTimer || binding.readTimer) return true;
+    const room = this.rooms.get(docId);
+    if (room && room.conns.size > 0) return true;
+    const touched = this.lastTouchedAt.get(docId);
+    return touched !== undefined && now - touched < FILE_POLL_ACTIVE_MS;
+  }
+
+  /**
+   * One stat of one bound file, and the reconcile it may schedule. Extracted
+   * from the old per-binding interval body so the shared sweep and the
+   * on-access edge check run byte-identical logic.
+   */
+  private pollBinding(docId: string, binding: FileBinding): void {
+    const room = this.rooms.get(docId);
+    if (!room) return;
+    let mtimeMs: number;
+    try {
+      // One syscall, not `existsSync` + `statSync`: the sweep runs this for
+      // every bound file, so the second stat was half the cost of the poll.
+      // A file that has gone is the ordinary case (a deleted worktree), and
+      // it is silent — only a real error is worth a line.
+      mtimeMs = statSync(binding.path).mtimeMs;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
         console.error(`[rooms] stat failed for ${binding.path}:`, err);
-        return;
       }
-      if (mtimeMs === binding.lastMtimeMs) return;
-      binding.lastMtimeMs = mtimeMs;
-      // Debounce so we don't read a half-written file mid-save.
-      if (binding.readTimer) clearTimeout(binding.readTimer);
-      binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 150);
-    }, 500);
+      return;
+    }
+    if (mtimeMs === binding.lastMtimeMs) return;
+    binding.lastMtimeMs = mtimeMs;
+    // Debounce so we don't read a half-written file mid-save.
+    if (binding.readTimer) clearTimeout(binding.readTimer);
+    binding.readTimer = setTimeout(() => this.reconcileFromDisk(room, binding), 150);
+  }
+
+  /**
+   * ONE interval for every bound file on the server, instead of one per
+   * binding. The measured corpus had 4,228 bound docs; at 500ms each that was
+   * thousands of stat syscalls a second, almost all of them for docs nobody
+   * had open, plus 4,228 entries on the timer heap that never came off.
+   */
+  private ensureFilePollTicker(): void {
+    if (this.filePollTicker) return;
+    const timer = setInterval(() => this.sweepFilePolls(), FILE_POLL_MS);
     // Don't let the poll keep the process (or a test runner) alive.
     timer.unref?.();
-    binding.pollTimer = timer;
+    this.filePollTicker = timer;
+  }
+
+  /**
+   * One pass over the bound files: every ACTIVE binding, plus a slice of the
+   * idle ones.
+   *
+   * The two halves answer different questions. An active binding belongs to a
+   * doc somebody is in, so it keeps the original 500ms latency. An idle one
+   * belongs to a doc that is nonetheless allowed to change under us — a git
+   * checkout, a branch switch, an editor save — so it must still be visited,
+   * just not all of them every half-second. `idleCursor` walks the binding
+   * map so each idle doc comes round in turn.
+   */
+  private sweepFilePolls(): void {
+    const now = Date.now();
+    const idle: string[] = [];
+    let armed = 0;
+    for (const [docId, binding] of this.fileBindings) {
+      if (!binding.pollArmed) continue;
+      armed++;
+      if (this.bindingIsActive(docId, binding, now)) this.pollBinding(docId, binding);
+      else idle.push(docId);
+    }
+    if (armed === 0) {
+      if (this.filePollTicker) clearInterval(this.filePollTicker);
+      this.filePollTicker = null;
+      this.idleCursor = 0;
+      return;
+    }
+    const take = Math.min(IDLE_SWEEP_BUDGET, idle.length);
+    for (let i = 0; i < take; i++) {
+      const docId = idle[(this.idleCursor + i) % idle.length];
+      const binding = this.fileBindings.get(docId);
+      if (binding) this.pollBinding(docId, binding);
+    }
+    this.idleCursor = idle.length === 0 ? 0 : (this.idleCursor + take) % idle.length;
+  }
+
+  /**
+   * Record that somebody just reached for this doc, and — on the idle→active
+   * edge — pull any external edit in before they read it.
+   *
+   * Called from `get` / `getOrCreate`, which every route, MCP tool and
+   * websocket upgrade funnels through. The edge check is rate-limited to one
+   * stat per `FILE_POLL_MS` per doc, so a burst of requests against one doc
+   * costs no more syscalls than the old always-on poll did.
+   */
+  private touchDoc(docId: string): void {
+    const binding = this.fileBindings.get(docId);
+    if (!binding?.pollArmed) {
+      // Nothing to poll — but still remember the access, so a doc that is
+      // bound later starts out warm rather than cold.
+      this.lastTouchedAt.set(docId, Date.now());
+      return;
+    }
+    const now = Date.now();
+    const prev = this.lastTouchedAt.get(docId);
+    this.lastTouchedAt.set(docId, now);
+    this.ensureFilePollTicker();
+    if (prev === undefined || now - prev >= FILE_POLL_MS) this.pollBinding(docId, binding);
   }
 
   /**
@@ -2658,6 +3046,7 @@ export class Rooms {
   reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
     const room = this.rooms.get(docId);
     if (!room) return { ok: false, error: 'not-found' };
+    this.touchDoc(docId);
     // PINNED diff docs have no file binding — their content is pinned to a
     // commit. Recover by re-reading the file at the target hash from the
     // repo. (Working-tree diff docs have a live binding and fall through to
@@ -2892,6 +3281,10 @@ export class Rooms {
   }
 
   private scheduleFileWrite(room: DocRoom, binding: FileBinding): void {
+    // A pending flush makes the binding active (see `bindingIsActive`), so the
+    // sweep must be running to see it — it may have stopped itself while the
+    // doc was idle.
+    if (binding.pollArmed) this.ensureFilePollTicker();
     if (binding.writeTimer) clearTimeout(binding.writeTimer);
     binding.writeTimer = setTimeout(() => {
       binding.writeTimer = null;
@@ -3066,6 +3459,7 @@ export class Rooms {
     const room = this.rooms.get(docId);
     const binding = this.fileBindings.get(docId);
     if (!room || !binding) return 'no-binding';
+    this.touchDoc(docId);
     if (!existsSync(binding.path)) return 'missing';
     // Advance the poll baseline the same way the poll itself would, so this
     // manual reconcile doesn't get replayed on the next tick.
@@ -4063,7 +4457,15 @@ export class Rooms {
   private persistRoomNow(room: DocRoom): void {
     try {
       const update = Y.encodeStateAsUpdate(room.ydoc);
-      writeFileSync(this.pathFor(room.docId), update);
+      const path = this.pathFor(room.docId);
+      writeFileSync(path, update);
+      // We are the only writer of this file, so recording the mtime here is
+      // what lets `withActivity` stop stat-ing every doc on every list.
+      try {
+        this.activityMtime.set(room.docId, Math.round(statSync(path).mtimeMs));
+      } catch {
+        this.activityMtime.delete(room.docId);
+      }
       // The sidecar rides the SAME debounced write as the `.ydoc`. Two
       // persistence paths would eventually disagree, and a doc whose
       // sourceUrl went missing stops writing back to disk silently —
