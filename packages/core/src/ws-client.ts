@@ -101,6 +101,12 @@ export function connect(url: string): FeedbackClient {
     // Stuck-handshake watchdog: force a close if 'open' never comes. See
     // CONNECT_TIMEOUT_MS above for why this can't rely on a browser default.
     let syncTimer: ReturnType<typeof setTimeout> | null = null;
+    // Per-ATTEMPT, unlike `gotInitialSync` below: a reconnect after a server
+    // restart re-opens with `gotInitialSync` already true forever (it only
+    // ever gates the one-shot onReady callbacks), so the watchdog needs its
+    // own flag or a reconnect that opens but never re-syncs would sail past
+    // it silently — open() looks healthy, the board just stops updating.
+    let syncedThisAttempt = false;
     const connectTimer: ReturnType<typeof setTimeout> = setTimeout(() => {
       if (thisWs.readyState === thisWs.CONNECTING) {
         try {
@@ -115,9 +121,9 @@ export function connect(url: string): FeedbackClient {
       reconnectDelay = 500;
       setStatus('open');
       // Stuck-sync watchdog: the handshake completed but sync step 1/2 never
-      // round-tripped. Cleared the moment this attempt's initial sync lands.
+      // round-tripped. Cleared the moment THIS attempt's sync lands.
       syncTimer = setTimeout(() => {
-        if (!gotInitialSync) {
+        if (!syncedThisAttempt) {
           try {
             thisWs.close();
           } catch {}
@@ -152,14 +158,17 @@ export function connect(url: string): FeedbackClient {
         encoding.writeVarUint(enc, MSG_SYNC);
         const type = syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
         if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
-        if (
-          !gotInitialSync &&
-          (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)
-        ) {
-          gotInitialSync = true;
+        if (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate) {
+          // Disarms the watchdog on EVERY attempt, including a reconnect
+          // long after the first sync — `gotInitialSync` below stays
+          // one-shot for onReady, which is a different contract.
+          syncedThisAttempt = true;
           if (syncTimer !== null) clearTimeout(syncTimer);
-          for (const cb of readyCbs) cb();
-          readyCbs = [];
+          if (!gotInitialSync) {
+            gotInitialSync = true;
+            for (const cb of readyCbs) cb();
+            readyCbs = [];
+          }
         }
       } else if (kind === MSG_AWARENESS) {
         awarenessProtocol.applyAwarenessUpdate(awareness, decoding.readVarUint8Array(dec), ws);
