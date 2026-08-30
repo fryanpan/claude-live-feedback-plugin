@@ -74,6 +74,10 @@ function harness(
     now: () => world.now,
     snapshot: () => world.boards,
     canReach: (_workspaceId, agentId) => world.reachable.has(agentId),
+    // Enumerated from the same set the predicate answers from, exactly as
+    // `server.ts` wires it — so a test cannot accidentally prove an
+    // escalation to a session the sender would have refused.
+    attachedAgents: () => [...world.reachable],
     send: (workspaceId, agentId, frame) => {
       sent.push({ workspaceId, agentId, frame });
       return 1;
@@ -756,5 +760,131 @@ describe('a held review item wakes its filer and then the lead — once each', (
     nudger.tick();
     expect(sent).toHaveLength(0);
     expect(toFilers).toHaveLength(0);
+  });
+});
+
+// ── The monitor does not depend on one identity it cannot verify ─────────────
+
+describe('a lead that cannot be woken escalates to whoever is attached', () => {
+  it('sends the frame to another attached session, marked as an escalation', () => {
+    const { world, sent, nudger } = harness();
+    // The seat holder is gone — a session that respawned under a new name is
+    // the case this exists for. Somebody else is on the board.
+    world.reachable.clear();
+    world.reachable.add('agent-surveyor');
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.agentId).toBe('agent-surveyor');
+    // The stand-in is told WHY it was woken about a board it does not own.
+    expect(sent[0]?.frame.escalatedFrom).toBe('agent-cartographer');
+    // …and the wake is otherwise the wake, not a lesser summary of it.
+    expect(sent[0]?.frame.taskId).toBe('t-1');
+    expect(sent[0]?.frame.stalledCount).toBe(1);
+    expect(sent[0]?.frame.consideredCount).toBe(4);
+  });
+
+  it('POSITIVE CONTROL: a healthy lead still gets its own wake, unchanged', () => {
+    const { world, sent, nudger } = harness();
+    // Another session is attached and would be a valid stand-in. It must not
+    // be used, and the lead's frame must not gain the escalation marker —
+    // this is the case that must look exactly as it did before the feature.
+    world.reachable.add('agent-surveyor');
+
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.agentId).toBe('agent-cartographer');
+    expect(sent[0]?.frame.escalatedFrom).toBeUndefined();
+    expect('escalatedFrom' in sent[0]!.frame).toBe(false);
+  });
+
+  it('invents nobody: with the whole board dark the wake stays owed', () => {
+    const { world, sent, nudger } = harness();
+    world.reachable.clear();
+
+    nudger.tick();
+    expect(sent).toHaveLength(0);
+
+    // Anyone attaching — here not the lead — collects the wake that was owed.
+    world.reachable.add('agent-surveyor');
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.agentId).toBe('agent-surveyor');
+  });
+
+  it('picks the same stand-in every tick, and never the seat holder', () => {
+    const { world, sent, nudger } = harness();
+    world.reachable.clear();
+    world.reachable.add('agent-surveyor');
+    world.reachable.add('agent-draughtsman');
+    // The dead lead is listed as attached by a stale enumeration. It is the
+    // one session the escalation must never pick — it is why we are here.
+    world.reachable.delete('agent-cartographer');
+
+    nudger.tick();
+    // Growth, so the next tick is allowed to fire at all.
+    world.boards = [
+      board({
+        stalled: [
+          { id: 't-1', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 45 * MIN },
+          { id: 't-2', title: 'Retry the importer', bucket: 'in-progress', quietMs: 30 * MIN },
+        ],
+      }),
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent.map((s) => s.agentId)).toEqual(['agent-draughtsman', 'agent-draughtsman']);
+  });
+
+  it('an escalated wake arms the board, so it does not repeat every tick', () => {
+    const { world, sent, nudger } = harness();
+    world.reachable.clear();
+    world.reachable.add('agent-surveyor');
+
+    nudger.tick();
+    world.now += 5 * MIN;
+    nudger.tick();
+
+    expect(sent).toHaveLength(1);
+  });
+
+  it('records that it had to: the wake line names the seat holder AND the reader', () => {
+    const { world, reported, nudger } = harness();
+    world.reachable.clear();
+    world.reachable.add('agent-surveyor');
+
+    nudger.tick();
+
+    const line = reported.find((l) => l.includes('[stall] wake'));
+    // `lead=` keeps naming the seat holder, so a log grepped for one board
+    // reads as one story; `to=` says who actually spent the turn.
+    expect(line).toContain('lead=agent-cartographer');
+    expect(line).toContain('to=agent-surveyor');
+  });
+
+  it('goes back to the lead, unmarked, once the lead is reachable again', () => {
+    const { world, sent, nudger } = harness();
+    world.reachable.clear();
+    world.reachable.add('agent-surveyor');
+    nudger.tick();
+    expect(sent[0]?.agentId).toBe('agent-surveyor');
+
+    world.reachable.add('agent-cartographer');
+    world.boards = [
+      board({
+        stalled: [
+          { id: 't-1', title: 'Rank results by recency', bucket: 'in-progress', quietMs: 45 * MIN },
+          { id: 't-2', title: 'Retry the importer', bucket: 'in-progress', quietMs: 30 * MIN },
+        ],
+      }),
+    ];
+    nudger.tick();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.agentId).toBe('agent-cartographer');
+    expect(sent[1]?.frame.escalatedFrom).toBeUndefined();
   });
 });

@@ -92,6 +92,11 @@ export interface StallPayload {
   undetermined?: { count?: number; reasons?: string[] };
   /** `heldItems`, not `held` — ready_idle spends that name on its counts. */
   heldItems?: HeldRowPayload[];
+  /** The lead this wake was addressed to, when it could not be reached and
+   *  came here instead. Absent on the ordinary wake — its presence is the
+   *  whole signal, and without it the reader has no way to tell why it was
+   *  woken about a board it does not lead. */
+  escalatedFrom?: string;
 }
 
 /** What `workspace.review_item_held` carries — the filer's own wake. */
@@ -325,7 +330,28 @@ export function stalledLine(p: StallPayload): string {
   // Never empty: the server does not send this frame with all four lists
   // empty, and a line that could render to a bare slug would be the
   // no-subject wake the whole file exists to prevent.
-  return `[workspace.stalled] ${parts.join(' ') || 'the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.'}`;
+  const body =
+    parts.join(' ') ||
+    'the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.';
+  // FIRST, when it is there. The reader of an escalated wake is not the lead:
+  // before it can weigh the rows it has to know that it is standing in, and
+  // that the board's own addressee is unreachable — which is a finding of its
+  // own, and the one nobody could see before.
+  //
+  // It says UNREACHABLE, never "gone" or "has not answered for N": the sender
+  // knows only that the seat holder holds no stream right now, which a
+  // reconnecting session also looks like. Deciding a session is dead takes
+  // evidence over a window (`leadSeatHealth`), and this line is not where
+  // that call is made.
+  if (p.escalatedFrom !== undefined && p.escalatedFrom !== '') {
+    return (
+      `[workspace.stalled] You are not this board's lead — ${p.escalatedFrom} holds the seat and ` +
+      'is not reachable, so this came to you instead. Nothing addressed to that seat is arriving: ' +
+      'take it (attach_agent) or hand it to a session that is here. Then, on the board itself: ' +
+      body
+    );
+  }
+  return `[workspace.stalled] ${body}`;
 }
 
 /**

@@ -1113,7 +1113,11 @@ body.hub-body {
 }
 /* The vacancy is a state to fix, not a blank — a goal change with nobody
    responsible is a dead letter, so it reads as a warning. */
-.hub-lead-empty .hub-lead-label {
+.hub-lead-empty .hub-lead-label,
+/* A seat held by a session that stopped answering costs the board exactly
+   what an empty one costs, so it is drawn exactly like one. */
+  .hub-lead-stale
+  .hub-lead-label {
   color: var(--yellow);
 }
 .hub-lead-select {
