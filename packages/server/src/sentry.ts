@@ -66,7 +66,25 @@ export async function initServerSentry(opts: {
     // `Bun.serve()` in the process, including test fixtures. There's no
     // "redact this" knob on it, so it's disabled outright; withRouteSpan
     // already wraps every real request with a route-pattern-named span.
-    integrations: (defaults) => defaults.filter((i) => i.name !== 'BunServer'),
+    //
+    // Also drops `OnUncaughtException` and `OnUnhandledRejection`: the SDK
+    // registers its own `process.on('uncaughtException' | 'unhandledRejection',
+    // ...)` listeners for those, which is bin.ts's job too (see the handlers
+    // installed right after this call). Leaving both pairs active means Bun
+    // fires every listener on a fatal error, so the SDK's own listener
+    // calls `captureException` a second time — a duplicate event for a
+    // process that just crashed once. `OnUnhandledRejection` does this
+    // unconditionally; `OnUncaughtException` only skips its own exit call
+    // once it notices bin.ts's listener is registered too, so the capture
+    // still doubles even though the two don't race on `process.exit`
+    // itself. bin.ts's handlers already do capture + flush + exit with
+    // explicit control, so they're the single source of truth here — same
+    // reasoning as disabling `BunServer` below and leaving withRouteSpan as
+    // the one thing that names a span.
+    integrations: (defaults) =>
+      defaults.filter(
+        (i) => !['BunServer', 'OnUncaughtException', 'OnUnhandledRejection'].includes(i.name),
+      ),
     // Floor, not a substitute for the above: disabling BunServer closes the
     // one leak source this file found by reading the SDK's source. It does
     // not prove there isn't another — a different default integration, or

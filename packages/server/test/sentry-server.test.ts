@@ -84,6 +84,21 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // segments rather than ever emitting free text.
     expect(routePatternForSpan('/some/future/route')).toBe('/:id/:id/:id');
   });
+
+  it('redacts a caller-chosen id even when its VALUE collides with a literal keyword at a DIFFERENT position', () => {
+    // codex review: the old check classified each segment independently of
+    // where it sat, so a docId whose value happened to equal an allowlisted
+    // word (any of ~130 of them — "content", "home", "settings", "notes"...)
+    // was wrongly preserved. `content` is both a real docId here (position
+    // 2, the id slot of /api/docs/:id/...) and a real subroute keyword
+    // (position 3) — this is exactly the shape codex's example described.
+    expect(routePatternForSpan('/api/docs/content/content')).toBe('/api/docs/:id/content');
+    // Same collision against other real keywords, elsewhere in the route
+    // table — a docId literally named "home", or a taskId literally named
+    // "archive", must redact just as any other id would.
+    expect(routePatternForSpan('/api/docs/home/status')).toBe('/api/docs/:id/status');
+    expect(routePatternForSpan('/api/tasks/archive/transition')).toBe('/api/tasks/:id/transition');
+  });
 });
 
 describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a negative that can fail', () => {
