@@ -8539,11 +8539,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // Identity for the dedup below — computed from the RAW anchor
             // (so a duplicate call matches regardless of how the
             // review-item branch below rewrites `anchor` for the eventual
-            // write) PLUS the declared review. Codex review caught that
-            // anchor alone let a requestId reuse with a CORRECTED review
-            // payload (e.g. filling in a missing detail) silently return
-            // the stale thread instead of ever persisting the correction.
-            const identityKey = JSON.stringify({ anchor, review: declared.review ?? null });
+            // write), the declared review, AND the author. Codex review
+            // caught both gaps in turn: anchor alone let a requestId reuse
+            // with a CORRECTED review payload silently return the stale
+            // thread, and anchor+review alone let two DIFFERENT people who
+            // (client-controlled, not globally unique) happened to mint the
+            // same requestId collide — the second author's comment would
+            // come back attributed to the first.
+            const identityKey = JSON.stringify({
+              anchor,
+              review: declared.review ?? null,
+              authorId: user.id,
+            });
             // A retry of an already-handled request has to be caught HERE,
             // before the review-item validation below: that block refuses a
             // second ask while the item is `waiting`, a state the FIRST
