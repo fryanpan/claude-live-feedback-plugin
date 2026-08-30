@@ -80,9 +80,30 @@ export function spanDuration(s: ActiveSpanState): number {
 export interface ReadingTrackerOptions {
   docId: string;
   user: User;
-  /** Element whose scrollTop/scrollHeight define scroll depth. Falls back to
-   *  the document scrolling element. */
-  scrollEl?: HTMLElement | null;
+  /**
+   * Element whose scrollTop/scrollHeight define scroll depth. Falls back to
+   * the document scrolling element.
+   *
+   * May be a getter, for a surface whose scroll container does not exist yet
+   * when the tracker starts: the hub opens a ticket by writing a signal, and
+   * the panel is painted a microtask later, so an element resolved at start
+   * would be the previous ticket's or nothing at all.
+   */
+  scrollEl?: HTMLElement | null | (() => HTMLElement | null);
+  /**
+   * Where an interaction has to happen to count as reading THIS doc.
+   *
+   * Defaults to `window`, which is right on the doc surfaces: the page IS the
+   * document, so anything the reader does is done to it. The hub is the case
+   * that needs narrowing — a ticket opens as a PANEL over a board that is
+   * still there, and on `window` every scroll of the rows behind it would
+   * accrue as time spent reading the ticket. Passing the panel scopes the
+   * signal to the thing actually being read.
+   *
+   * Capture-phase listeners, so this works for `scroll` too: scroll events do
+   * not bubble, but they do capture, so an ancestor still sees a descendant's.
+   */
+  root?: HTMLElement | null;
   /** Override the POST target base (defaults to same-origin). Used in tests. */
   apiBase?: string;
 }
@@ -138,7 +159,8 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const scrollDepthPct = (): number => {
-    const el = opts.scrollEl ?? (document.scrollingElement as HTMLElement | null);
+    const given = typeof opts.scrollEl === 'function' ? opts.scrollEl() : opts.scrollEl;
+    const el = given ?? (document.scrollingElement as HTMLElement | null);
     if (!el) return 0;
     const max = el.scrollHeight - el.clientHeight;
     if (max <= 0) return 100; // nothing to scroll = fully "seen"
@@ -210,10 +232,13 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
   const onOpener = (): void => onSignal(true);
   const onMove = (): void => onSignal(false);
   const openerEvents = ['scroll', 'pointerdown', 'keydown'] as const;
+  // The doc surfaces read the whole page; the hub scopes this to the open
+  // ticket panel (see `root`).
+  const interactionRoot: EventTarget = opts.root ?? window;
   for (const ev of openerEvents) {
-    window.addEventListener(ev, onOpener, { passive: true, capture: true });
+    interactionRoot.addEventListener(ev, onOpener, { passive: true, capture: true });
   }
-  window.addEventListener('pointermove', onMove, { passive: true, capture: true });
+  interactionRoot.addEventListener('pointermove', onMove, { passive: true, capture: true });
 
   const onHide = (): void => {
     if (session) flush(Date.now());
@@ -226,9 +251,11 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
 
   return () => {
     for (const ev of openerEvents) {
-      window.removeEventListener(ev, onOpener, { capture: true } as EventListenerOptions);
+      interactionRoot.removeEventListener(ev, onOpener, { capture: true } as EventListenerOptions);
     }
-    window.removeEventListener('pointermove', onMove, { capture: true } as EventListenerOptions);
+    interactionRoot.removeEventListener('pointermove', onMove, {
+      capture: true,
+    } as EventListenerOptions);
     window.removeEventListener('pagehide', onHide);
     document.removeEventListener('visibilitychange', onVisibility);
     if (idleTimer) clearTimeout(idleTimer);
