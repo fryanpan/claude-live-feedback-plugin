@@ -315,7 +315,7 @@ export interface HubWorkspace {
   /**
    * What this board's ticket-effort scorer weighs — a natural-language
    * prompt the owner edits, the same shape and the same reasoning as
-   * `reviewItemCriteria` (BRY t-go5Wj0kOcz_7). Absent means
+   * `reviewItemCriteria` (chunk 2 of the effort model). Absent means
    * `DEFAULT_EFFORT_ESTIMATE_PROMPT`; `effortEstimatePrompt()` is the one
    * reader, so the default lives in exactly one place.
    */
@@ -792,8 +792,8 @@ export interface Task {
   readingTime?: TaskReadingTime;
   /**
    * The scoring model's last read on this ticket's effort — hands-on and
-   * wall-clock, in seconds — or a recorded failure to produce one (BRY
-   * t-go5Wj0kOcz_7, chunk 2 of the effort model). Absent means "never
+   * wall-clock, in seconds — or a recorded failure to produce one (chunk 2
+   * of the effort model). Absent means "never
    * scored": no estimator wired, scoring switched off, or a row that
    * predates this field. DISTINCT from a `failed` run, which means an
    * attempt ran and came back with nothing usable. No reader may treat
