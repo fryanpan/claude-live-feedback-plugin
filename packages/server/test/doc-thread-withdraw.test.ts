@@ -222,6 +222,30 @@ describe('withdrawing a review item raised on a doc thread', () => {
     expect((await again.json()).error).toBe('already-withdrawn');
   });
 
+  // The race: the reader taps Answer on a stale client at the moment the ask
+  // is withdrawn. Their words are real and must not be thrown away — the
+  // answer lands as a comment — but the retracted item must NOT come back onto
+  // the queue behind it. `pendingDeclaration` reads withdrawn BEFORE answered,
+  // which is what makes that ordering safe rather than lucky.
+  it('an answer arriving after a withdrawal does not put the item back', async () => {
+    const { threadId, staleId, liveId } = await twoAsksOnOneThread();
+    await jj(await withdraw(threadId, { commentId: liveId }));
+    await jj(await withdraw(threadId, { commentId: staleId }));
+    expect(await queueAsks()).toEqual([]);
+    const late = await post(`/api/docs/${docId}/threads/${threadId}/answer`, {
+      commentId: liveId,
+      author: PERSON,
+      text: 'Inside its own box.',
+    });
+    expect([200, 400]).toContain(late.status);
+    expect(await queueAsks()).toEqual([]);
+    // Whatever the route decided, the person's words are not lost.
+    if (late.status === 200) {
+      const t = await threadNow(threadId);
+      expect(JSON.stringify(t.comments)).toContain('Inside its own box.');
+    }
+  });
+
   it('refuses a comment that carries no review item, and an unknown doc', async () => {
     const { threadId } = await twoAsksOnOneThread();
     const plain = await jj<{ thread: ThreadPayload }>(
