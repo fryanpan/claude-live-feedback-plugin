@@ -20,7 +20,8 @@ import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
-import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
+import { pageSentry } from '../sentry-page.ts';
+import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { activityCommentRequest, asksOf } from './activity-model.ts';
 import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.tsx';
@@ -2603,31 +2604,12 @@ async function main(): Promise<void> {
   };
 
   // ── Sentry ──────────────────────────────────────────────────────────────
-  // Errors + tracing, but only when the served shell carries the DSN meta —
-  // box config, never the repo. Dynamic import: the hub entry builds with
-  // splitting on, so an unconfigured page fetches zero Sentry bytes and
-  // makes zero external requests. The build id doubles as the release, so
-  // Sentry can say which deploy a regression arrived with.
-  let sentry: typeof import('@sentry/browser') | null = null;
-  const sentryDsn = document
-    .querySelector('meta[name="sentry-dsn"]')
-    ?.getAttribute('content')
-    ?.trim();
-  if (sentryDsn) {
-    void import('@sentry/browser')
-      .then((S) => {
-        S.init({
-          dsn: sentryDsn,
-          release: BUILD_ID || undefined,
-          integrations: [S.browserTracingIntegration()],
-          // Low-traffic internal tool: sample everything rather than guess
-          // at a rate that would drop the one slow iPad load that matters.
-          tracesSampleRate: 1.0,
-        });
-        sentry = S;
-      })
-      .catch(() => {});
-  }
+  // The board no longer inits its own client. `/app/sentry.js` does it for
+  // every page type — board, doc, mockup, landing — so all four are
+  // comparable and there is one place the release, the tags and the privacy
+  // scrub are decided (see packages/server/src/browser-sentry.ts). This is
+  // the read side: whatever that entry parked on `window`, or null.
+  const sentry = pageSentry();
 
   // ── Load report ─────────────────────────────────────────────────────────
   // One line per page load, POSTed to /load-reports so "the board was slow"
