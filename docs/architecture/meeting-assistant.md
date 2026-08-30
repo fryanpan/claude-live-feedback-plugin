@@ -110,6 +110,39 @@ follows the same no-default seam as the engine: nothing that merely spins a
 server up can reach an LLM. Partials count as speech in progress and defer
 the pause tick.
 
+**The write is a MERGE, and a person can type in the section while it runs**
+(owner, 2026-08-30: *"destroyed my notes"*). The old write deleted the whole
+section and re-inserted the composed string, so every tick ate what he had
+typed since the last one. Now (`meeting-notes-merge.ts`):
+
+- The unit is an **item** — a top-level block, or one item of a list, because
+  a bullet list is a single block and block granularity would hand the
+  agent's whole list to the person who fixed one bullet.
+- Ownership is a **ledger** of the markdown the agent last wrote, held per
+  doc in memory. An item that still reads exactly as the agent left it is the
+  agent's to revise; anything else is a person's, and stays a person's. Only
+  agent items are ever deleted, and a person's item is never re-created —
+  the same Yjs element stays in place, so its marks and anchors survive.
+- **`previous` is the live section**, not the composer's own last reply, so
+  the composer sees what the person wrote. The first tick of a session still
+  composes from scratch — otherwise every meeting would continue the last
+  one's notes. Human items are listed in the prompt as theirs to reproduce
+  verbatim.
+- **A changed version of a person's line becomes a suggestion**, not a
+  rewrite: the redline marks in `suggest-ops.ts`, authored as "Meeting
+  Assistant". The accepted state — what serializes to disk — stays his words
+  until he accepts. One pending proposal per item; the marks are the
+  registry, so the doc is where the duplicate check asks.
+- **The stale-compose race** is caught with `basedOn`, the item list the
+  compose read. An item missing from it arrived DURING the compose, so a
+  collision with it is dropped rather than proposed; an item in it that has
+  since left the doc is one he edited mid-compose, so anything the compose
+  says that reads like it is dropped rather than inserted. Nothing is lost —
+  the composer returns the whole notes every tick.
+- **An empty ledger means "everything here is somebody else's"**, so a
+  restarted server adds and stops replacing rather than claiming prose it
+  has never seen.
+
 ## Task capture ("file a ticket for that")
 
 Each pause tick ALSO runs a task-capture pass (`meeting-task-capture.ts`)
@@ -141,6 +174,13 @@ stored content.
   reads as settled — a silent failure.
 - **AssemblyAI auth is the bare key as the whole `Authorization` header** —
   no `Bearer` prefix.
+- **A detached Yjs type reads as empty, and its children cannot be
+  re-parented.** `parseMarkdownBlocks` hands back elements that belong to no
+  document: serializing one returns nothing ("Invalid access: Add Yjs type to
+  a document before reading data"), and moving a parsed `listItem` into a
+  live list silently inserts nothing while every call reports success. Parse
+  into a scratch `Y.Doc` to READ markdown, and build a `listItem` by hand
+  (`listItem > paragraph > XmlText` + `insertTextWithMarks`) to WRITE one.
 - **A speaker name is applied when a tick COMPOSES, not when it arrives** —
   the compose runs on the session's promise chain, so a name given right
   after the quiet timer fires still reaches that tick. Carried (failed)
@@ -193,4 +233,6 @@ stored content.
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
-doc sink) · `packages/markdown-app/src/meeting-strip.ts` (UI).
+doc sink) · `packages/server/src/meeting-notes-merge.ts` (the merge that
+keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
+(UI).
