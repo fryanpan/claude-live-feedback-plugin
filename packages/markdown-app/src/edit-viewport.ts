@@ -261,21 +261,33 @@ export function wireEditViewport(opts: EditViewportOpts): EditViewport {
 
   /** Focus has moved: republish the strip mode, then follow the caret once
    *  the keyboard has finished arriving. The `visualViewport` resize is the
-   *  real signal; the timer is the fallback for a keyboard already up. */
+   *  real signal; the timer is the fallback for a keyboard already up.
+   *
+   *  There is at most ONE of these pending at a time, and cancelling it
+   *  detaches its listener. A version that only detached from inside the
+   *  callback leaked one closure per focus change that was superseded before
+   *  its 500ms was up — tap through three paragraphs quickly and three stale
+   *  closures wait for the next resize, holding a torn-down editor if the
+   *  mount went away in between. */
   let settle: ReturnType<typeof setTimeout> | null = null;
+  let pending: (() => void) | null = null;
+  function cancelSettle(): void {
+    if (settle) clearTimeout(settle);
+    settle = null;
+    if (pending) window.visualViewport?.removeEventListener('resize', pending);
+    pending = null;
+  }
   function onFocusChange(): void {
     sync();
+    cancelSettle();
     if (!editing()) return;
     const vv = window.visualViewport;
-    let done = false;
     const run = () => {
-      if (done) return;
-      done = true;
-      vv?.removeEventListener('resize', run);
+      cancelSettle();
       follow();
     };
+    pending = run;
     vv?.addEventListener('resize', run);
-    if (settle) clearTimeout(settle);
     settle = setTimeout(run, KEYBOARD_SETTLE_MS);
   }
 
@@ -315,7 +327,7 @@ export function wireEditViewport(opts: EditViewportOpts): EditViewport {
   if (obs && stripEl) obs.observe(stripEl, { attributes: true, attributeFilter: ['class'] });
 
   opts.onCleanup(() => {
-    if (settle) clearTimeout(settle);
+    cancelSettle();
     if (frame) clearTimeout(frame);
     if (media) media.removeEventListener('change', syncAndFollow);
     obs?.disconnect();
