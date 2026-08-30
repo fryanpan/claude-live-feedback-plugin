@@ -129,36 +129,61 @@ describe('the speaker tag', () => {
   const decl = (body: string, prop: string): string | undefined =>
     new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`).exec(body)?.[1]?.trim();
 
-  it('the tap target MEASURES at least 36px, clips included', () => {
+  /**
+   * The hit box is the INTERSECTION of the button with the clip, at both
+   * widths. Three rounds, three variants of one lesson: round one asserted
+   * the ingredients, round two the box but not its clip, round three the box
+   * and the clip but not the OFFSET between them — the button was the 37.75px
+   * designed and still measured 34, because it sat 4.3px above the clip with
+   * 5.6px of clip unused below it. So this places the box before measuring
+   * it.
+   *
+   * The placement it models is `vertical-align: middle`, asserted below: the
+   * pill's margin box is centred on the text, so the room above and below it
+   * inside the clip is symmetric and computable. Baseline alignment is what
+   * put it off-centre, so the model would be a lie under it.
+   */
+  const hitBox = (captionBody: string): { hit: number; clip: number; room: number } => {
     const STRIP_FONT = px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'font-size'), 16);
-    expect(STRIP_FONT).toBeGreaterThan(0);
-
-    // The pill: the box the person actually sees.
     const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
-    const pillFont = px(decl(pill, 'font-size'), STRIP_FONT);
-    const pillLine = Number(decl(pill, 'line-height'));
-    const pillBorder = px(/^([\d.]+px)/.exec(decl(pill, 'border') ?? '')?.[1], STRIP_FONT);
-    const pillHeight = pillFont * pillLine + 2 * pillBorder;
-    expect(pillHeight).toBeGreaterThan(0);
+    const pillH =
+      px(decl(pill, 'font-size'), STRIP_FONT) * Number(decl(pill, 'line-height')) +
+      2 * px(/^([\d.]+px)/.exec(decl(pill, 'border') ?? '')?.[1], STRIP_FONT);
+    const btnPad = Number(
+      /padding:\s*([\d.]+)px/.exec(rule('.meeting-speaker', declarationsOnly(SECTION)))?.[1],
+    );
+    const content = px(decl(captionBody, 'height'), STRIP_FONT);
+    const capPad = px(decl(captionBody, 'padding-block'), STRIP_FONT);
+    // Centred pill: half the slack in the window, plus the caption's padding.
+    const room = (content - pillH) / 2 + capPad;
+    return { hit: pillH + 2 * Math.min(btnPad, room), clip: content + 2 * capPad, room };
+  };
 
-    // The button: its padding IS the target, so the border box is the hit box.
-    const btn = rule('.meeting-speaker', declarationsOnly(SECTION));
-    const pad = /padding:\s*([\d.]+)px/.exec(btn)?.[1];
-    const hit = pillHeight + 2 * Number(pad);
-
-    // Every clip between the target and the strip. .meeting-caption is the
-    // one that clips today; the others are asserted to clip NOTHING, because
-    // an overflow added to any of them is exactly how this broke twice.
+  it('the tap target MEASURES at least 36px at 1180x820, clip and offset included', () => {
     const capt = rule('.meeting-caption', declarationsOnly(SECTION));
-    const captClip =
-      px(decl(capt, 'height'), STRIP_FONT) + 2 * px(decl(capt, 'padding-block'), STRIP_FONT);
-    let effective = Math.min(hit, captClip);
-    for (const sel of ['.meeting-caption-line', '.meeting-turn', '.meeting-speaker']) {
-      const body = rule(sel, declarationsOnly(SECTION));
-      const of = decl(body, 'overflow');
-      if (of && of !== 'visible') effective = Math.min(effective, pillHeight);
-    }
-    expect(effective, `hit ${hit}, caption clip ${captClip}`).toBeGreaterThanOrEqual(36);
+    const { hit, clip } = hitBox(capt);
+    expect(Number.isFinite(hit) && hit > 0, 'the model read nothing').toBe(true);
+    // The 40px bar is the ceiling on the clip, which is the ceiling on the
+    // target — there is no room here to buy slack with more padding.
+    expect(clip).toBeLessThanOrEqual(
+      px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'height'), 16),
+    );
+    expect(hit, `hit ${hit} in a ${clip} clip`).toBeGreaterThanOrEqual(36);
+  });
+
+  it('the tap target MEASURES at least 36px at 430px too', () => {
+    const narrow = block('@media (max-width: 720px)', SECTION);
+    const capt = `${rule('.meeting-caption', declarationsOnly(SECTION))};${rule('.meeting-caption', declarationsOnly(narrow))}`;
+    // The mobile block overrides only the window; the padding carries over.
+    const { hit } = hitBox(capt);
+    expect(hit).toBeGreaterThanOrEqual(36);
+  });
+
+  it('the model it measures against is the one the stylesheet uses', () => {
+    // `middle` is a precondition of the arithmetic above, not a preference:
+    // under `baseline` a clipping inline-block hangs off its bottom edge and
+    // the "room each side" the model assumes is not symmetric.
+    expect(rule('.meeting-speaker', declarationsOnly(SECTION))).toMatch(/vertical-align:\s*middle/);
   });
 
   it('keeps the target and the clip on separate elements', () => {
