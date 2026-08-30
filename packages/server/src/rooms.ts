@@ -1276,6 +1276,7 @@ export class Rooms {
     this.rooms.delete(docId);
     this.activityMtime.delete(docId);
     this.lastTouchedAt.delete(docId);
+    this.hydratedAt.delete(docId);
     this.awarenessRooms.delete(room);
     try {
       // peek, not `room.awareness`: the getter would construct an Awareness
@@ -3053,7 +3054,16 @@ export class Rooms {
     // Commit point passed: every file is parked. Now unbind the rooms.
     for (const m of members) {
       const room = this.rooms.get(m.docId);
-      if (room) this.teardownRoom(room, 'review archived');
+      if (room) {
+        this.teardownRoom(room, 'review archived');
+        continue;
+      }
+      // A member nobody had opened has no room to tear down, but its alias
+      // was claimed from the index at boot and would outlive its file:
+      // `claimAlias` then refuses to give that name to a NEW doc, so a reused
+      // review name resolves for ever to something archived. `teardownRoom`
+      // released these back when every doc was resident.
+      this.releaseAliases(m.docId);
     }
 
     const entry = members.find((m) => reviewIdOf(m) === setId);

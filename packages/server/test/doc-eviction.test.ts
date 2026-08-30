@@ -404,6 +404,48 @@ describe('booting against docs that are not loaded', () => {
     }
   });
 
+  it('frees a cold review member NAME when the review is archived', () => {
+    // `teardownRoom` is what released a doc's aliases, and archiving a review
+    // only tore down members that happened to be resident. After a lazy boot
+    // that is none of them — so the name stayed pointed at an archived file
+    // for the life of the process, and `claimAlias` refuses to move a name
+    // that is already taken. The next review to reuse it silently resolved
+    // to the archived one.
+    const setId = 'rev-cold';
+    const first = make(dataDir);
+    try {
+      first.getOrCreate('member-a', { type: 'markdown', setId, alias: 'the-name' });
+      first.flush();
+    } finally {
+      first.stop();
+    }
+
+    const second = make(dataDir);
+    try {
+      // Control: cold, and the name resolves — so the archive below is what
+      // has to release it.
+      expect(second.residentCount()).toBe(0);
+      expect(second.peek('the-name')?.docId ?? second.get('the-name')?.docId).toBe('member-a');
+      // ...and cold again before archiving, so the member really is not
+      // resident when `archiveReview` walks it.
+      second.evictRoom('member-a');
+      expect(second.residentCount()).toBe(0);
+
+      const archived = second.archiveReview(setId, { archivedBy: 'test' });
+      expect(archived.ok).toBe(true);
+
+      // The name is free: a NEW doc may take it, and it resolves there.
+      const replacement = second.getOrCreate('member-b', {
+        type: 'markdown',
+        alias: 'the-name',
+      });
+      expect(replacement.docId).toBe('member-b');
+      expect(second.get('the-name')?.docId).toBe('member-b');
+    } finally {
+      second.stop();
+    }
+  });
+
   it('pairs a diff member with its companion when NEITHER is loaded', () => {
     // Caught by review, not by a test: `companionOf` asked the room map, so
     // after a lazy boot a diff member and its editable companion stopped
