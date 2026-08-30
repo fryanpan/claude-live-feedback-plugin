@@ -4,6 +4,7 @@ import { saveStateView, settlePending, watchConnection } from './connection-stat
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { fetchDocMeta } from './doc-meta.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
+import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
 import { wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
@@ -158,6 +159,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   // callbacks can fire during initial Yjs application — guard until set.
   // biome-ignore lint/style/useConst: assigned after createEditor so its callbacks can close over it
   let chrome: ReviewChrome | undefined;
+  // Same forward-ref shape as `chrome`: the editor's selection callback fires
+  // during the first Yjs application, before this is wired.
+  // biome-ignore lint/style/useConst: assigned after the meeting strip mounts
+  let editViewport: ReturnType<typeof wireEditViewport> | undefined;
   const editor: EditorHandle = createEditor({
     parent: editorMount,
     ydoc,
@@ -285,6 +290,31 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     scope.onCleanup(() => strip.destroy());
   }
 
+  // Editing under an on-screen keyboard: the meeting strip gives its grid row
+  // back while a phone-width editor has focus, and the caret is kept above
+  // whatever the keyboard is covering. See edit-viewport.ts for both rules.
+  editViewport = wireEditViewport({
+    roots: () => [editorMount, composer],
+    scroller: () => editorMount,
+    strip: () => meetingStripEl,
+    caretRect: () => {
+      const view = editor.editor.view;
+      // View mode never focuses the editor; there is no caret to follow and
+      // no keyboard that could be covering one.
+      if (!view.dom.contains(document.activeElement)) return null;
+      try {
+        const c = view.coordsAtPos(view.state.selection.head);
+        return { top: c.top, bottom: c.bottom };
+      } catch {
+        // A head position that has not been rendered yet (a fresh mount, a
+        // remote edit mid-frame) throws rather than returning coordinates.
+        return null;
+      }
+    },
+    listen: (t, type, h, o) => scope.listen(t, type, h, o),
+    onCleanup: (fn) => scope.onCleanup(fn),
+  });
+
   // =========================================================================
   // COMMENT PILL — small inline affordance
   //   • Range selection → pill appears just past the end of the selection
@@ -342,6 +372,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   function refreshSelectionState(): void {
     const sel = editor.getSelectionRel();
     if (sel) selection = sel;
+    // Typing or arrowing towards the bottom of the window walks the caret
+    // under the on-screen keyboard; `follow` scrolls it back into the band
+    // the visual viewport says is visible. No-op with no keyboard up, and a
+    // no-op again once the caret is already clear.
+    editViewport?.follow();
   }
 
   /** Is there a non-collapsed native selection sitting inside the editor?
