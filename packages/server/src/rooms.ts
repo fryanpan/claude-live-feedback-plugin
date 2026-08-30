@@ -521,6 +521,20 @@ export class Rooms {
   }
 
   /**
+   * Drop the two derived caches: access stamps and `.ydoc` mtimes.
+   *
+   * Both re-derive on the next read, so this is always safe — it is not a
+   * repair, it is a way to reach the cold path on demand. Tests use it to
+   * exercise "nobody has touched this doc" without waiting out
+   * `FILE_POLL_ACTIVE_MS`, and it is equally the thing to call if a cache
+   * ever needs clearing at runtime.
+   */
+  resetDerivedCaches(): void {
+    this.lastTouchedAt.clear();
+    this.activityMtime.clear();
+  }
+
+  /**
    * Build this room's Awareness and enrol it in the shared presence ticker.
    *
    * The library instance's own interval is stopped immediately: it is the
@@ -542,11 +556,22 @@ export class Rooms {
   }
 
   /**
-   * Presence maintenance for every room that has a live connection. A room
-   * whose last socket has gone keeps its Awareness (the websocket layer
-   * registers its broadcast handler against that instance once per room) but
-   * costs nothing per tick: with no peers there is no clock to renew and
-   * nobody to evict.
+   * Presence maintenance for every room that HAS an Awareness — including the
+   * ones with no sockets left on them.
+   *
+   * Skipping socketless rooms looked free and was not (codex, P2): a peer
+   * whose socket went away without its cleanup running leaves its state
+   * behind, and `onOpen` hands `getStates()` to the next joiner before any
+   * sweep can fire. That joiner would see a ghost. The library's timer
+   * expired those states whether or not anyone was connected, and this must
+   * too — the count of rooms holding an Awareness is the count that have ever
+   * been opened, tens rather than thousands, so there was nothing to save.
+   *
+   * A room whose last socket has gone keeps its Awareness rather than
+   * destroying it: `yjs-protocol.ts` registers the room's broadcast handler
+   * against that instance once, in a WeakMap keyed by room, so a replacement
+   * instance would never get an `update` listener and presence would stop
+   * working silently on the next connection.
    */
   private sweepAwareness(): void {
     const now = Date.now();
@@ -558,7 +583,6 @@ export class Rooms {
         continue;
       }
       live++;
-      if (room.conns.size === 0) continue;
       maintainAwareness(aw, now);
     }
     if (live === 0 && this.awarenessTicker) {
