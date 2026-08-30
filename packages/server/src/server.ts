@@ -160,6 +160,7 @@ import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
 import { type ReviewItemRow, type ReviewThreadItem, reviewItemRows } from './review-queue.ts';
 import { type FeedbackWs, Rooms, type WorkspaceDirNode, type WorkspaceFileNode } from './rooms.ts';
 import { isWithinRoot } from './safe-path.ts';
+import { captureServerError, routePatternForSpan, withRouteSpan } from './sentry.ts';
 import { CfApi } from './share/cf-api.ts';
 import {
   SHARE_COOKIE,
@@ -3565,8 +3566,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
     async fetch(req, server) {
       const startedAt = performance.now();
-      // `undefined` means the request became a websocket — nothing to decorate.
-      const routed = await route(req, server);
+      const pathname = new URL(req.url).pathname;
+      // Server-side Sentry (a no-op passthrough when unconfigured — see
+      // sentry.ts): one span per request, named by route PATTERN never raw
+      // path, continuing the browser's trace when it sent one so a page load
+      // reads end to end. A throw inside `route()` is reported with the same
+      // route-pattern context, then rethrown unchanged — this wrapper only
+      // observes, it does not change what a request returns.
+      let routed: Response | undefined;
+      try {
+        routed = await withRouteSpan(req, pathname, () => route(req, server));
+      } catch (err) {
+        captureServerError(err, { route: routePatternForSpan(pathname), method: req.method });
+        throw err;
+      }
       // Compress BEFORE the CORS merge so the encoding headers ride out on the
       // same response the wrapper copies; `maybeCompress` skips anything whose
       // content-type isn't on its allowlist (see compress.ts for why that gate
@@ -3575,6 +3588,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // `maybeNotModified` runs first: when the client already holds the body,
       // gzipping it is the one case where the CPU buys nothing, and a 304 has
       // no body for `maybeCompress` to act on anyway.
+      // `undefined` means the request became a websocket — nothing to decorate.
       if (routed === undefined) return undefined;
       const response = applyCors(
         req,
@@ -3585,7 +3599,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // Path only — the query can carry a person's name (`?user=`), and
         // the line is for a grep over durations, not a record of who asked.
         console.error(
-          `[timing] ${req.method} ${new URL(req.url).pathname} ${Math.round(elapsedMs)}ms ` +
+          `[timing] ${req.method} ${pathname} ${Math.round(elapsedMs)}ms ` +
             `status=${response.status} bytes=${response.headers.get('content-length') ?? '?'}`,
         );
       }
