@@ -52,17 +52,27 @@ const BAD = {
 
 type Frame = { event: string; data?: Record<string, unknown> };
 
-function listenFrames(res: Response): { frames: Frame[]; stop: () => Promise<void> } {
+function listenFrames(res: Response): {
+  frames: Frame[];
+  /** Resolves on the stream's first bytes — see `agentStream`. */
+  open: Promise<void>;
+  stop: () => Promise<void>;
+} {
   const frames: Frame[] = [];
   const reader = (res.body as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
   let stopped = false;
   let buf = '';
+  let opened!: () => void;
+  const open = new Promise<void>((resolve) => {
+    opened = resolve;
+  });
   const pump = (async () => {
     try {
       while (!stopped) {
         const { done, value } = await reader.read();
         if (done) return;
+        opened();
         buf += decoder.decode(value, { stream: true });
         let sep = buf.indexOf('\n\n');
         while (sep >= 0) {
@@ -86,8 +96,10 @@ function listenFrames(res: Response): { frames: Frame[]; stop: () => Promise<voi
   })();
   return {
     frames,
+    open,
     stop: async () => {
       stopped = true;
+      opened();
       await reader.cancel().catch(() => {});
       await pump;
     },
@@ -95,6 +107,13 @@ function listenFrames(res: Response): { frames: Frame[]; stop: () => Promise<voi
 }
 
 const settle = (ms = 60) => new Promise((r) => setTimeout(r, ms));
+
+/** SSE frames are pushed, not polled for, so this returns the moment the
+ *  nth arrives. The deadline matters only when one never does — and it must
+ *  stay well under the timeout of the test that calls it, or a missing frame
+ *  is reported as "this test took too long" instead of as the miss it is.
+ *  Tests that wait on frames pass `SSE_TEST_TIMEOUT_MS` for that reason. */
+const SSE_TEST_TIMEOUT_MS = 30_000;
 
 async function waitForFrames(frames: Frame[], event: string, n: number, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
@@ -210,7 +229,15 @@ describe('the review-item quality gate', () => {
       `${base}/events/workspace/${workspaceId}?agentId=${encodeURIComponent(agent.id)}`,
       { headers: { accept: 'text/event-stream' } },
     );
-    return listenFrames(res);
+    const stream = listenFrames(res);
+    // `fetch` resolves on the response HEADERS, and the hub registers this
+    // stream's sink inside the body's `start()` — which enqueues its `:ok`
+    // preamble in the same synchronous block. So the first BYTES are proof
+    // the sink is registered, and headers alone are not: without this await,
+    // a wake aimed at an agent whose stream had not landed yet was dropped,
+    // and the loop that owes it does not tick again for a minute.
+    await stream.open;
+    return stream;
   }
 
   describe('settings — the criteria are a workspace prompt', () => {
@@ -578,88 +605,166 @@ describe('the review-item quality gate', () => {
     });
   });
 
-  describe('agent wake', () => {
-    it('the filer is told which item was held, why, and to revise it', async () => {
-      verdict = { ok: false, reason: 'The headline is a ticket id.' };
-      const { workspaceId, taskId } = await board();
-      const filer = await agentStream(workspaceId, FILER);
-      const lead = await agentStream(workspaceId, LEAD);
-      try {
-        const res = await jj<{ item: { id: string } }>(
-          await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
-        );
-        const [frame] = await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
-        expect(frame?.data).toMatchObject({
-          workspaceId,
-          taskId,
-          reviewItemId: res.item.id,
-          reason: 'The headline is a ticket id.',
-          title: 'Rebuild the index nightly',
-        });
-        // Addressed to the filer alone: the lead is not woken over an item
-        // that is not theirs to fix.
-        await settle(150);
-        expect(lead.frames.filter((f) => f.event === REVIEW_ITEM_HELD_EVENT)).toEqual([]);
-      } finally {
-        await filer.stop();
-        await lead.stop();
-      }
+  describe('a batch that files reviews with its rows', () => {
+    /** A batch row carrying a review, with a distinct headline per index so
+     *  the holds can be matched back to the rows that sent them. */
+    const row = (n: number) => ({
+      title: `Rebuild shard ${n}`,
+      body: 'Agent can rebuild a shard so that search stays fresh.',
+      assignee: FILER.name,
+      assigneeKind: 'agent',
+      review: { ...BAD, headline: `shard ${n} cfg?` },
+    });
+
+    async function batchBoard(): Promise<string> {
+      const { workspace } = await jj<{ workspace: { id: string } }>(
+        await post('/api/workspaces', { name: 'index-rebuild', leadAgentId: LEAD.id }),
+      );
+      return workspace.id;
+    }
+
+    // Found by codex review, fifth pass: the batch used to await the judge
+    // inside the row loop, so a hundred rows against a judge timing out at
+    // eight seconds held the request for thirteen minutes. Parking every
+    // call proves they are in flight together — in series, `parked` could
+    // never reach two.
+    it('puts its rows in front of the judge together, not one after the next', async () => {
+      verdict = 'defer';
+      const workspaceId = await batchBoard();
+      const sent = post(`/api/workspaces/${workspaceId}/tasks/batch`, {
+        tasks: [row(1), row(2), row(3)],
+        author: FILER,
+      });
+      const deadline = Date.now() + 5_000;
+      while (parked.length < 3 && Date.now() < deadline) await settle(10);
+      expect(parked).toHaveLength(3);
+
+      // Answered out of order, on purpose: the reply still reports the hold
+      // against the row that filed it.
+      parked[1]?.({ ok: false, reason: 'No stakes.' });
+      parked[2]?.({ ok: true, reason: 'Fine.' });
+      parked[0]?.({ ok: false, reason: 'No stakes.' });
+      const res = await jj<{
+        tasks: Array<{ id: string; title: string }>;
+        held?: Array<{ taskId: string; heldReason: string; message: string }>;
+      }>(await sent);
+      const titleOf = (taskId: string) => res.tasks.find((t) => t.id === taskId)?.title;
+      expect((res.held ?? []).map((h) => titleOf(h.taskId))).toEqual([
+        'Rebuild shard 1',
+        'Rebuild shard 2',
+      ]);
+      expect(res.held?.[0]?.heldReason).toBe('No stakes.');
+
+      // The control: the row the judge passed is on the queue, and the two
+      // it held are not.
+      expect((await queue(workspaceId)).length).toBe(1);
+    });
+
+    it('reports no holds when the judge passes every row (control)', async () => {
+      verdict = { ok: true, reason: 'Fine.' };
+      const workspaceId = await batchBoard();
+      const res = await jj<{ tasks: Array<{ id: string }>; held?: unknown[] }>(
+        await post(`/api/workspaces/${workspaceId}/tasks/batch`, {
+          tasks: [row(1), row(2)],
+          author: FILER,
+        }),
+      );
+      expect(res.tasks).toHaveLength(2);
+      expect(res.held).toBeUndefined();
+      expect((await queue(workspaceId)).length).toBe(2);
     });
   });
 
+  describe('agent wake', () => {
+    it(
+      'the filer is told which item was held, why, and to revise it',
+      async () => {
+        verdict = { ok: false, reason: 'The headline is a ticket id.' };
+        const { workspaceId, taskId } = await board();
+        const filer = await agentStream(workspaceId, FILER);
+        const lead = await agentStream(workspaceId, LEAD);
+        try {
+          const res = await jj<{ item: { id: string } }>(
+            await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+          );
+          const [frame] = await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
+          expect(frame?.data).toMatchObject({
+            workspaceId,
+            taskId,
+            reviewItemId: res.item.id,
+            reason: 'The headline is a ticket id.',
+            title: 'Rebuild the index nightly',
+          });
+          // Addressed to the filer alone: the lead is not woken over an item
+          // that is not theirs to fix.
+          await settle(150);
+          expect(lead.frames.filter((f) => f.event === REVIEW_ITEM_HELD_EVENT)).toEqual([]);
+        } finally {
+          await filer.stop();
+          await lead.stop();
+        }
+      },
+      SSE_TEST_TIMEOUT_MS,
+    );
+  });
+
   describe('stall monitor', () => {
-    it('an overdue held item is a finding: the filer is nudged, then the lead — once per item', async () => {
-      verdict = { ok: false, reason: 'No stakes.' };
-      const { workspaceId, taskId } = await board();
-      const filer = await agentStream(workspaceId, FILER);
-      const lead = await agentStream(workspaceId, LEAD);
-      try {
-        const res = await jj<{ item: { id: string } }>(
-          await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
-        );
-        // The create-time wake, so the counts below start from a known place.
-        await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
+    it(
+      'an overdue held item is a finding: the filer is nudged, then the lead — once per item',
+      async () => {
+        verdict = { ok: false, reason: 'No stakes.' };
+        const { workspaceId, taskId } = await board();
+        const filer = await agentStream(workspaceId, FILER);
+        const lead = await agentStream(workspaceId, LEAD);
+        try {
+          const res = await jj<{ item: { id: string } }>(
+            await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+          );
+          // The create-time wake, so the counts below start from a known place.
+          await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
 
-        handle.nudgeStalls();
-        const [stall] = await waitForFrames(lead.frames, STALL_EVENT, 1);
-        expect(stall?.data).toMatchObject({
-          workspaceId,
-          stalledCount: 0,
-          taskId,
-        });
-        const held = stall?.data?.heldItems as Array<Record<string, unknown>>;
-        expect(held).toHaveLength(1);
-        expect(held[0]).toMatchObject({
-          id: taskId,
-          reviewItemId: res.item.id,
-          reason: 'No stakes.',
-          filedBy: FILER.name,
-        });
-        const nudges = await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 2);
-        expect(nudges).toHaveLength(2);
-        expect(nudges[1]?.data).toMatchObject({ reviewItemId: res.item.id, overdue: true });
+          handle.nudgeStalls();
+          const [stall] = await waitForFrames(lead.frames, STALL_EVENT, 1);
+          expect(stall?.data).toMatchObject({
+            workspaceId,
+            stalledCount: 0,
+            taskId,
+          });
+          const held = stall?.data?.heldItems as Array<Record<string, unknown>>;
+          expect(held).toHaveLength(1);
+          expect(held[0]).toMatchObject({
+            id: taskId,
+            reviewItemId: res.item.id,
+            reason: 'No stakes.',
+            filedBy: FILER.name,
+          });
+          const nudges = await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 2);
+          expect(nudges).toHaveLength(2);
+          expect(nudges[1]?.data).toMatchObject({ reviewItemId: res.item.id, overdue: true });
 
-        // A second pass says nothing new to anybody.
-        handle.nudgeStalls();
-        await settle(200);
-        expect(lead.frames.filter((f) => f.event === STALL_EVENT)).toHaveLength(1);
-        expect(filer.frames.filter((f) => f.event === REVIEW_ITEM_HELD_EVENT)).toHaveLength(2);
+          // A second pass says nothing new to anybody.
+          handle.nudgeStalls();
+          await settle(200);
+          expect(lead.frames.filter((f) => f.event === STALL_EVENT)).toHaveLength(1);
+          expect(filer.frames.filter((f) => f.event === REVIEW_ITEM_HELD_EVENT)).toHaveLength(2);
 
-        // Revising it away clears the finding; the board falls silent.
-        verdict = { ok: true, reason: 'Clear.' };
-        await jj(
-          await post(`/api/tasks/${taskId}/review-items/${res.item.id}/revise`, {
-            detail: 'Stakes: the nightly window.',
-            author: FILER,
-          }),
-        );
-        handle.nudgeStalls();
-        await settle(200);
-        expect(lead.frames.filter((f) => f.event === STALL_EVENT)).toHaveLength(1);
-      } finally {
-        await filer.stop();
-        await lead.stop();
-      }
-    });
+          // Revising it away clears the finding; the board falls silent.
+          verdict = { ok: true, reason: 'Clear.' };
+          await jj(
+            await post(`/api/tasks/${taskId}/review-items/${res.item.id}/revise`, {
+              detail: 'Stakes: the nightly window.',
+              author: FILER,
+            }),
+          );
+          handle.nudgeStalls();
+          await settle(200);
+          expect(lead.frames.filter((f) => f.event === STALL_EVENT)).toHaveLength(1);
+        } finally {
+          await filer.stop();
+          await lead.stop();
+        }
+      },
+      SSE_TEST_TIMEOUT_MS,
+    );
   });
 });
