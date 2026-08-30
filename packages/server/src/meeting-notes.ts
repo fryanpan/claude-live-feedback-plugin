@@ -383,6 +383,13 @@ export function beginNotesSession(
   let lastTickNo = 0;
   let chain: Promise<void> = Promise.resolve();
   const names: Record<string, string> = {};
+  /**
+   * Every engine label this meeting has carried. Kept so a rename can ask
+   * whether the name it is replacing belongs to more than one voice — the
+   * `names` map alone would miss a voice that is still unnamed and whose
+   * "Speaker B" someone has just typed as another voice's name.
+   */
+  const seen = new Set<string>();
   const withNames = (turn: NotesTurn): NotesTurn =>
     turn.speaker === undefined
       ? turn
@@ -436,7 +443,10 @@ export function beginNotesSession(
   });
 
   return {
-    onTurn: (turn) => ticker.onTurn(turn),
+    onTurn: (turn) => {
+      if (turn.speaker !== undefined) seen.add(turn.speaker);
+      ticker.onTurn(turn);
+    },
     nameSpeaker(speaker, name) {
       // Read the OLD display name before the map moves — that is the string
       // the composer actually wrote, whether it was "Speaker B" or an
@@ -445,6 +455,21 @@ export function beginNotesSession(
       names[speaker] = name;
       const to = speakerDisplayName(speaker, names);
       if (from === to) return;
+      // Two voices can be called the same thing — two people named Alex, or
+      // a slip. Then "Alex" in the notes does not say WHICH of them, and
+      // renaming one would silently reattribute the other's words. The
+      // forward mapping still holds (this voice's later turns compose under
+      // the new name); only the retroactive rewrite is refused, because the
+      // text it would have to match is not evidence of who said it.
+      const ambiguous = [...seen, ...Object.keys(names)].some(
+        (label) => label !== speaker && speakerDisplayName(label, names) === from,
+      );
+      if (ambiguous) {
+        deps.onError?.(
+          `notes: "${from}" is more than one voice, so notes already written were left as they are`,
+        );
+        return;
+      }
       // On the chain, behind any compose in flight: that compose is still
       // going to return notes written with the old name (it read `previous`
       // before the rename), and the rewrite has to land after it, not under

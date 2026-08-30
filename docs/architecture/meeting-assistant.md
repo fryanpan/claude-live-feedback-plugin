@@ -172,6 +172,16 @@ Renaming an already-given name works the same way, because the rewrite reads
 the OLD DISPLAY NAME (what the composer actually wrote), not the raw label —
 "Devi" → "Devi Raman" replaces "Devi".
 
+**Two voices with the same name refuse the rewrite.** Display text is the
+only handle the notes give — composed prose carries no per-mention
+attribution — so if both A and B are called "Alex", "Alex" in the notes does
+not say which, and correcting A to "Sam" would silently reattribute B's
+words. The session detects that (across every label SEEN, not just the named
+ones — an unnamed B still reads as "Speaker B") and skips the retroactive
+part, reporting it through `onError`. The forward mapping still holds: that
+voice's later turns compose under the new name. Raised by review before
+merge, not in the field.
+
 ## Task capture ("file a ticket for that")
 
 Each pause tick ALSO runs a task-capture pass (`meeting-task-capture.ts`)
