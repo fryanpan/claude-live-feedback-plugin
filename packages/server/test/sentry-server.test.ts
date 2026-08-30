@@ -153,6 +153,34 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
     );
     expect(scrubbed.tags.phase).toBe('ws.message');
   });
+
+  it('redacts a minted id inside an exception message — an ordinary VALUE under an ordinary key', () => {
+    // The key-targeted pass alone does nothing here: `message` isn't
+    // url/cookie/referrer-shaped, so a docId or taskId interpolated into a
+    // thrown Error's text (a real, plausible mistake — "doc t-... not
+    // found") sailed straight through it. This is exactly the gap
+    // MINTED_ID_SHAPE exists to close.
+    const secretId = `t-${crypto.randomUUID()}`;
+    const raw = { exception: { values: [{ type: 'Error', value: `doc ${secretId} not found` }] } };
+    expect(JSON.stringify(raw)).toContain(secretId); // fixture actually leaks first
+
+    const scrubbed = scrubEventForPrivacy(raw) as typeof raw;
+    expect(JSON.stringify(scrubbed)).not.toContain(secretId);
+    expect(scrubbed.exception.values[0].value).toBe('doc [id] not found');
+  });
+
+  it('redacts a minted id inside a span/transaction name — in case anything ever names one by raw path', () => {
+    const secretId = `w-${crypto.randomUUID()}`;
+    const raw = {
+      transaction: `GET /api/workspaces/${secretId}/home`,
+      spans: [{ description: secretId }],
+    };
+    expect(JSON.stringify(raw)).toContain(secretId); // fixture actually leaks first
+
+    const scrubbed = scrubEventForPrivacy(raw) as typeof raw;
+    expect(JSON.stringify(scrubbed)).not.toContain(secretId);
+    expect(scrubbed.transaction).toBe('GET /api/workspaces/[id]/home');
+  });
 });
 
 describe('server Sentry: silent with no DSN', () => {
@@ -195,7 +223,12 @@ describe('server Sentry: silent with no DSN', () => {
 
 describe('server Sentry: configured — reaches Sentry end to end', () => {
   let capture: ReturnType<typeof startCaptureServer>;
-  const release = 'rel-observability-test-0829';
+  // Shaped like a real sourceRef (deploy-source.ts: a short git-describe
+  // output, optionally `-dirty`) rather than a minted id — a real release
+  // tag is a hex SHA and never matches MINTED_ID_SHAPE's all-lowercase-
+  // letters-before-the-dash prefix, so this fixture stays realistic instead
+  // of accidentally exercising a collision that production doesn't have.
+  const release = 'a822618-dirty';
 
   beforeAll(async () => {
     capture = startCaptureServer();
@@ -342,5 +375,37 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
       .map((h) => h.text)
       .join('\n');
     expect(joined).not.toContain(secret);
+  });
+
+  it('the value-shaped scrub catches a minted id inside an exception message and a span name — not just a url-shaped key', async () => {
+    // Team-lead's follow-up: the key-targeted pass finds fields NAMED like a
+    // url; it does nothing for an id sitting in an ordinary string value —
+    // an exception message ("doc t-... not found"), or a span/transaction
+    // name if anything ever names one by raw path instead of
+    // routePatternForSpan. This is the end-to-end version of the pure-
+    // function tests above, through the real init/beforeSend pipeline.
+    capture.hits().length = 0;
+    const secretDocId = `t-${crypto.randomUUID()}`;
+    const Sentry = await import('@sentry/bun');
+
+    // A raw id in a span NAME — bypassing routePatternForSpan entirely, the
+    // way a future direct `Sentry.startSpan({ name: rawPath })` call
+    // elsewhere in the codebase could.
+    await Sentry.startSpan(
+      { name: `GET /api/docs/${secretDocId}/content`, op: 'http.server' },
+      async () => {},
+    );
+
+    // A raw id in an exception MESSAGE — the plausible mistake team-lead
+    // named directly.
+    captureServerError(new Error(`doc ${secretDocId} not found`));
+
+    await flushServerSentry(5000);
+
+    const joined = capture
+      .hits()
+      .map((h) => h.text)
+      .join('\n');
+    expect(joined).not.toContain(secretDocId);
   });
 });
