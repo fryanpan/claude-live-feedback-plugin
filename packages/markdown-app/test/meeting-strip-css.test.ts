@@ -101,13 +101,50 @@ describe('the speaker tag', () => {
     expect(tag).toMatch(/cursor:\s*pointer/);
   });
 
-  it('is tappable at the 36px floor without being 36px tall', () => {
-    // The tag sits inside a 1.45em line, so its box cannot meet the floor;
-    // the hit area comes from a pseudo-element that reaches past the box.
+  it('is tappable at the 36px floor — the pseudo AND the room to draw it', () => {
+    // This test used to assert the ::before alone and passed while the real
+    // target measured 19px: `overflow: hidden` on .meeting-caption clips to
+    // its PADDING box, and with no padding it ate the whole hit area. The
+    // pseudo-element and the caption's padding are one mechanism, so both
+    // are asserted here or the next person gets the same false green.
     expect(tag).toMatch(/position:\s*relative/);
     const hit = rule('.meeting-speaker::before', declarationsOnly(SECTION));
     expect(hit).toMatch(/position:\s*absolute/);
-    expect(hit).toMatch(/inset:\s*-1[0-9]px/);
+    const reach = /inset:\s*-(\d+)px/.exec(hit);
+    expect(reach, 'the ::before no longer reaches past the tag box').not.toBeNull();
+    const caption = rule('.meeting-caption', declarationsOnly(SECTION));
+    const pad = /padding-block:\s*(\d+)px/.exec(caption);
+    expect(pad, '.meeting-caption pads nothing, so the clip eats the target').not.toBeNull();
+    // Tag box ~18px + the pseudo's reach on each side, and the clip box must
+    // be at least as tall as the pseudo wants to be.
+    expect(Number(pad?.[1])).toBeGreaterThanOrEqual(Number(reach?.[1]) - 1);
+    expect(18 + 2 * Number(reach?.[1])).toBeGreaterThanOrEqual(36);
+    // Padding only widens the CLIP box if the height stays the text window.
+    expect(caption).toMatch(/box-sizing:\s*content-box/);
+    // And the mask has to be anchored to the window, not to a percentage of a
+    // box that just got taller — otherwise the padding reveals a rolled-off
+    // line the fade no longer covers.
+    expect(caption).toMatch(/mask-image:[^;]*transparent 9px/);
+  });
+
+  it('caps the tag so naming a voice cannot push every tag out of the window', () => {
+    // A 60-character name rendered a 335px pill, wrapped the caption line, and
+    // hid all three tags — naming a speaker turned the labels off.
+    expect(tag).toMatch(/max-width:\s*\d+(\.\d+)?em/);
+    expect(tag).toMatch(/overflow:\s*hidden/);
+    expect(tag).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it('looks like a control at rest, where there is no hover to reveal it', () => {
+    // `cursor: pointer` and the title attribute are both hover-only, so on the
+    // iPad nothing said the pill was tappable.
+    expect(tag).toMatch(/text-decoration:\s*underline dotted/);
+  });
+
+  it('gives each turn its own line, so a tag never strands above its words', () => {
+    // Inline, a turn started where the previous one ended and its tag landed
+    // at the END of that line — on a phone, the faded one being clipped away.
+    expect(rule('.meeting-turn', declarationsOnly(SECTION))).toMatch(/display:\s*block/);
   });
 });
 
@@ -161,7 +198,8 @@ describe('at 430px the strip is its own stacked panel', () => {
     expect(strip).toMatch(/height:\s*auto/);
     expect(strip).toMatch(/flex-direction:\s*column/);
     expect(strip).toMatch(/align-items:\s*stretch/);
-    // Two lines at the caption's 1.45 line-height.
+    // Two lines at the caption's 1.45 line-height — the WINDOW, not the box;
+    // the caption's own padding sits outside it.
     expect(rule('.meeting-caption', declarationsOnly(narrow))).toMatch(/height:\s*2\.9em/);
     // The REC/Paused word only exists here; the bar has the room for a clock
     // and nothing else.
@@ -173,6 +211,16 @@ describe('at 430px the strip is its own stacked panel', () => {
     const strip = rule('.meeting-strip', declarationsOnly(narrow));
     expect(strip).toMatch(/padding-bottom:\s*calc\([^)]*var\(--safe-bottom\)/);
     expect(strip).toMatch(/var\(--kb-bottom, 0px\)/);
+  });
+
+  it('does not pay for the tap target twice on the screen with the least room', () => {
+    // The caption carries 9px of its own on each side now (that padding IS
+    // the tag's hit area). The panel's own gap and bottom padding stand down
+    // rather than stacking on top of it — otherwise the phone's strip grows a
+    // full 18px to buy a target the iPad needed too.
+    const strip = rule('.meeting-strip', declarationsOnly(narrow));
+    expect(strip).toMatch(/gap:\s*0/);
+    expect(strip).not.toMatch(/padding-bottom:\s*calc\(\s*\d/);
   });
 
   it('does not reserve room for a bottom navbar the doc surface does not have', () => {

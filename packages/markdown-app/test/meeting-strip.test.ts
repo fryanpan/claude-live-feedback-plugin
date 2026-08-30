@@ -11,6 +11,7 @@ import {
   type MeetingSocket,
   type MeetingStripHandle,
   TRANSCRIPT_KEEP,
+  clipSpeakerName,
   diffTurnWords,
   formatElapsed,
   mountMeetingStrip,
@@ -646,7 +647,7 @@ describe('who is speaking', () => {
     const h = await live(() => long);
     h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
     (h.root.querySelector('.meeting-speaker') as HTMLButtonElement).click();
-    const clipped = long.slice(0, MAX_SPEAKER_NAME);
+    const clipped = clipSpeakerName(long);
     // Past the limit the server drops the frame without answering, so an
     // unclipped name would sit on screen while the record and the notes
     // never heard it.
@@ -656,7 +657,26 @@ describe('who is speaking', () => {
       .map((d) => JSON.parse(d) as { type: string; name?: string })
       .filter((m) => m.type === 'name_speaker');
     expect(named).toEqual([{ type: 'name_speaker', speaker: 'A', name: clipped }]);
+    // The positive control on the clip: what it produces is what the server
+    // accepts. A clip that still overshot would be no clip at all.
     expect(parseMeetingClientMessage(JSON.stringify(named[0]))).not.toBeNull();
+  });
+
+  it('a clipped name SAYS it was clipped, and breaks at a word', () => {
+    const title = 'Jordan Ashworth, VP of Platform Engineering, EMEA and APAC regions';
+    const clipped = clipSpeakerName(title);
+    expect(clipped.length).toBeLessThanOrEqual(MAX_SPEAKER_NAME);
+    // Cut mid-word and silent, this read as a typo rather than a truncation.
+    expect(clipped.endsWith('\u2026')).toBe(true);
+    expect(clipped).not.toMatch(/Engi\u2026$/);
+    expect(title.startsWith(clipped.slice(0, -1))).toBe(true);
+    // A name that fits is returned untouched — no stray ellipsis on "Jordan".
+    expect(clipSpeakerName('Jordan')).toBe('Jordan');
+    expect(clipSpeakerName('x'.repeat(MAX_SPEAKER_NAME))).toBe('x'.repeat(MAX_SPEAKER_NAME));
+    // One long word cannot break at a boundary, and must not clip to nothing.
+    const oneWord = clipSpeakerName('x'.repeat(MAX_SPEAKER_NAME + 20));
+    expect(oneWord.length).toBe(MAX_SPEAKER_NAME);
+    expect(oneWord.endsWith('\u2026')).toBe(true);
   });
 
   it('a cancelled or blank prompt changes nothing and sends nothing', async () => {

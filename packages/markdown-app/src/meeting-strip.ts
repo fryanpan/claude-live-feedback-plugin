@@ -219,6 +219,25 @@ export interface MeetingStripOpts {
   promptName?: (current: string) => string | null;
 }
 
+/**
+ * A typed name the server will actually accept. Past MAX_SPEAKER_NAME its
+ * parser drops the frame without answering, so an unclipped name would sit on
+ * the tag while the record and the notes never heard it. The clip falls back
+ * to a word boundary and SAYS it happened: cut mid-word and silent, "VP of
+ * Platform Engineering, EMEA" came back as "…VP of Platform Engi", which
+ * reads as a typo rather than as a name that was too long.
+ */
+export function clipSpeakerName(name: string): string {
+  if (name.length <= MAX_SPEAKER_NAME) return name;
+  const room = MAX_SPEAKER_NAME - 1;
+  const cut = name.slice(0, room);
+  const lastSpace = cut.lastIndexOf(' ');
+  // Only honour a word boundary that leaves a name behind, never one that
+  // clips back to a single word.
+  const kept = lastSpace > room / 2 ? cut.slice(0, lastSpace) : cut;
+  return `${kept.trimEnd()}\u2026`;
+}
+
 export interface MeetingStripHandle {
   destroy(): void;
   state(): StripState;
@@ -331,11 +350,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   function nameSpeaker(label: string): void {
     const current = speakerDisplayName(label, names);
-    // Clipped to the same limit the server's parser enforces. Past it the
-    // frame is dropped without an answer, so an unclipped name would show
-    // here and reach neither the record nor the notes for the rest of the
-    // meeting — the strip disagreeing with the doc, silently.
-    const answer = promptName(current)?.trim().slice(0, MAX_SPEAKER_NAME) ?? '';
+    const answer = clipSpeakerName(promptName(current)?.trim() ?? '');
     if (!answer || answer === current) return;
     names[label] = answer;
     for (const entry of rendered.values()) {
