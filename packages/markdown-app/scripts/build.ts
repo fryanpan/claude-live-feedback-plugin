@@ -18,7 +18,16 @@ const isWatch = process.argv.includes('--watch');
  * invisible: the id would not move, and "a new version is available" would
  * stay silent for the one file the browser re-fetches on its own schedule.
  */
-const HASHED = ['app.js', 'hub.js', 'signin.js', 'sw.js', 'styles.css', 'tokens.css', 'index.html'];
+const HASHED = [
+  'app.js',
+  'hub.js',
+  'signin.js',
+  'sentry.js',
+  'sw.js',
+  'styles.css',
+  'tokens.css',
+  'index.html',
+];
 
 /**
  * Builds both entries plus the copied assets. Runs TWICE per build: once with
@@ -114,6 +123,29 @@ async function emit(buildId: string): Promise<boolean> {
   if (!signinResult.success) {
     console.error('signin build failed:');
     for (const m of signinResult.logs) console.error(m);
+    if (!isWatch) process.exit(1);
+    return false;
+  }
+
+  // Sentry: its own entry, loaded by a <script type="module"> that a shell
+  // emits only when the box has a DSN configured — see
+  // packages/server/src/browser-sentry.ts for why it is not an import inside
+  // the page bundles. Splitting off: it is one module and the SDK, and a
+  // chunk that 404s would take the whole init with it.
+  const sentryResult = await Bun.build({
+    entrypoints: [join(pkgRoot, 'src', 'sentry-boot.ts')],
+    outdir: dist,
+    target: 'browser',
+    format: 'esm',
+    splitting: false,
+    sourcemap: 'external',
+    define,
+    naming: { entry: 'sentry.js', chunk: '[name]-[hash].js', asset: '[name].[ext]' },
+    minify: process.env.NODE_ENV !== 'dev' && !isWatch,
+  });
+  if (!sentryResult.success) {
+    console.error('sentry build failed:');
+    for (const m of sentryResult.logs) console.error(m);
     if (!isWatch) process.exit(1);
     return false;
   }
