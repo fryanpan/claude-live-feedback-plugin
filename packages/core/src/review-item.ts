@@ -769,6 +769,15 @@ const PERCEIVE_VERBS =
  *    bullet, or following an explicit request marker ("please", "can you",
  *    "take a"). A verb buried mid-clause is almost always narration.
  *
+ * 3. It TAKES AN OBJECT: the next word introduces one, being a determiner, a
+ *    pronoun, a possessive or a preposition. Position alone is not enough,
+ *    because every word in the list above is also a noun or an adjective and
+ *    card titles are written as noun phrases — "Open question: what should we
+ *    call it?", "Review complete", "Test results" all opened with a listed
+ *    word and all were advised to add a link to an artifact that does not
+ *    exist (codex review). A noun use is followed by another noun; a
+ *    directive is followed by the thing it directs you at.
+ *
  * What it deliberately misses: an ask that implies a target without naming
  * the act ("thoughts on the new nav?"). Catching those means guessing, and
  * guessing fires on every open question — the "what should we call it?"
@@ -779,7 +788,13 @@ const PERCEIVE_VERBS =
 function asksReaderToLook(s: string): boolean {
   const opener = String.raw`^|[.!?;:)\]]\s+|\n\s*(?:[-*>]\s*)?`;
   const marker = String.raw`\b(?:please|kindly)\s+|\b(?:can|could|would|will)\s+you\s+(?:please\s+)?|\byou\s+(?:can|should|could|might|may)\s+|\b(?:take|have)\s+a\s+`;
-  return new RegExp(`(?:${opener}|${marker})(?:${PERCEIVE_VERBS})\\b`, 'i').test(s);
+  // What an object of the directive starts with: a determiner, a pronoun, a
+  // possessive ("Bryan's draft"), or a preposition. Anything else after the
+  // verb and the word was a noun.
+  const object = String.raw`at|the|a|an|this|that|these|those|it|them|my|our|your|its|his|her|their|through|over|into|whether|both|each|either|[\w-]+'s`;
+  return new RegExp(`(?:${opener}|${marker})(?:${PERCEIVE_VERBS})\\s+(?:${object})\\b`, 'i').test(
+    s,
+  );
 }
 
 /**

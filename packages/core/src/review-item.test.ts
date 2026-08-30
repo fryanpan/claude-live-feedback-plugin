@@ -462,6 +462,42 @@ describe('an ask that sends the reader somewhere has to say where', () => {
     ).toEqual([]);
   });
 
+  // Found by codex review: every verb in the list is also a noun or an
+  // adjective, and card titles are written as noun phrases. Position alone
+  // read all of these as imperatives and advised each one to link an artifact
+  // that does not exist — including the open-question family the rule above
+  // claims in writing to leave alone.
+  it('reads a noun phrase as a noun phrase, not as an order', () => {
+    for (const headline of [
+      'Open question: what should we call it?',
+      'Review complete',
+      'Test results',
+      'See you Tuesday',
+      'Check-in notes',
+      'Watch list for the release',
+    ]) {
+      expect(look({ headline }).gaps, headline).toEqual([]);
+    }
+  });
+
+  it('still fires on the directive spellings, including a possessive object', () => {
+    // The control for the case above: the narrowing that silenced those six
+    // has to leave these eight alone, or it bought its precision by turning
+    // the advisory off.
+    for (const headline of [
+      'Review the nav mockup',
+      'Read this before Thursday',
+      'Please look at the header spacing',
+      'Check the new empty state',
+      "Read Bryan's draft",
+      'Compare both mockups',
+      'Open the staging build',
+      'Try it on a phone',
+    ]) {
+      expect(look({ headline }).gaps, headline).toContain('lookAskLinkless');
+    }
+  });
+
   it('does not say the same thing twice when the comment already explains it', () => {
     // `detailLinkless` is the more actionable half — the links exist and are
     // in the wrong place — so it is raised alone.
