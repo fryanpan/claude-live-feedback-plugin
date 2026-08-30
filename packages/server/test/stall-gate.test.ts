@@ -15,8 +15,10 @@ import type { EventRow, ReviewItemRow, TaskRow } from '../src/keep-moving.ts';
 import {
   BUILDER_SILENT_BUCKET,
   BUILDER_SILENT_MULTIPLIER_DEFAULT,
+  HELD_ITEM_DEFAULT_MS,
   STALL_QUIET_DEFAULT_MS,
   evaluateStalls,
+  overdueHeldItems,
 } from '../src/stall-gate.ts';
 
 const MIN = 60_000;
@@ -338,5 +340,54 @@ describe('a row whose questions cannot be read is named as unread, never as heal
 
   it('leaves a healthy board with nothing undetermined', () => {
     expect(evaluate().undetermined).toHaveLength(0);
+  });
+});
+
+// ── Review items the quality gate is holding ─────────────────────────────────
+
+describe('a held review item is a finding once it has stood past the window', () => {
+  const held = (over: { heldAt?: number; reviewItemId?: string } = {}) => ({
+    taskId: 't-9',
+    title: 'Rebuild the index nightly',
+    reviewItemId: over.reviewItemId ?? 'ri-1',
+    headline: 'ok?',
+    reason: 'The headline is not a question the reader can answer.',
+    heldAt: over.heldAt ?? now - 5 * MIN - 1,
+    filedBy: 'Index Keeper',
+    filerAgentId: 'agent-index-keeper',
+  });
+
+  it('the default window is five minutes — the number Bryan named', () => {
+    expect(HELD_ITEM_DEFAULT_MS).toBe(5 * MIN);
+  });
+
+  it('names an item held for longer than five minutes', () => {
+    const rows = overdueHeldItems([held({ heldAt: now - 5 * MIN - 1 })], now);
+    expect(rows.map((r) => r.reviewItemId)).toEqual(['ri-1']);
+    expect(rows[0]).toMatchObject({
+      id: 't-9',
+      title: 'Rebuild the index nightly',
+      reason: 'The headline is not a question the reader can answer.',
+      filedBy: 'Index Keeper',
+      filerAgentId: 'agent-index-keeper',
+      heldMs: 5 * MIN + 1,
+    });
+  });
+
+  it('leaves an item held for four minutes alone — and exactly five is not "more than"', () => {
+    expect(overdueHeldItems([held({ heldAt: now - 4 * MIN })], now)).toEqual([]);
+    expect(overdueHeldItems([held({ heldAt: now - 5 * MIN })], now)).toEqual([]);
+  });
+
+  it('sorts the longest-held first and honours a window override', () => {
+    const rows = overdueHeldItems(
+      [
+        held({ reviewItemId: 'ri-young', heldAt: now - 2 * MIN }),
+        held({ reviewItemId: 'ri-old', heldAt: now - 9 * MIN }),
+      ],
+      now,
+      MIN,
+    );
+    expect(rows.map((r) => r.reviewItemId)).toEqual(['ri-old', 'ri-young']);
   });
 });

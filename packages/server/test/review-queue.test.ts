@@ -1065,6 +1065,28 @@ describe('taskReviewItems — a ticket contributes one row per OPEN review item'
     expect(rows.map((r) => r.reviewItemId)).toEqual(['ri-1', 'ri-3']);
   });
 
+  // The quality gate's hold: on the ticket, NOT on the queue. The reader is
+  // not waited on until the filer has revised it into something answerable.
+  it('drops an item the quality gate is holding, and keeps one it passed', () => {
+    const rows = taskReviewItems([
+      {
+        id: 'tk-1',
+        title: 'Storage cleanup',
+        bodyDocId: 'task:tk-1',
+        reviews: [
+          item({
+            id: 'ri-held',
+            judge: { at: T0 + 5, verdict: 'held', reason: 'The headline is a ticket id.' },
+          }),
+          item({ id: 'ri-ok', judge: { at: T0 + 5, verdict: 'ok', reason: 'fine' } }),
+          item({ id: 'ri-unjudged' }),
+          item({ id: 'ri-pending', judge: { at: T0 + 5, verdict: 'pending', reason: '' } }),
+        ],
+      },
+    ]);
+    expect(rows.map((r) => r.reviewItemId)).toEqual(['ri-ok', 'ri-unjudged']);
+  });
+
   // An info request is a question asked BACK, not an answer — the item is still
   // waiting on a person, so it must still be in the queue.
   it('keeps an item that only has info requests', () => {

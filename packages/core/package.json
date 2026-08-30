@@ -13,6 +13,7 @@
     "./machine-paths": "./src/machine-paths.ts",
     "./types": "./src/types.ts",
     "./summary-prompt": "./src/summary-prompt.ts",
+    "./review-judge-prompt": "./src/review-judge-prompt.ts",
     "./goal-summary": "./src/goal-summary.ts"
   },
   "dependencies": {
