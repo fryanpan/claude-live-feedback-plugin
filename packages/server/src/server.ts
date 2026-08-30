@@ -753,6 +753,15 @@ export interface ServerOptions {
    * Overridable so tests never wait real minutes; default 5 minutes.
    */
   uptimeTickMs?: number;
+  /**
+   * Requests whose response takes at least this many milliseconds to BUILD
+   * leave a `[timing]` line in the log (method, path, ms, status, bytes).
+   * Default 500. The body's transfer is not in the number — Bun streams it
+   * after the handler returns — which is why the byte count rides along:
+   * a 0 ms route with a megabyte body and a 3 s route with a 4 KB one are
+   * different bugs, and the line has to tell them apart. Tests set 0.
+   */
+  slowRequestMs?: number;
 }
 
 const CT: Record<string, string> = {
@@ -957,6 +966,7 @@ const REVIEW_DELETE = /^\/api\/reviews\/([^/]+)$/;
 export function createServer(opts: ServerOptions = {}): ServerHandle {
   const port = opts.port ?? DEFAULT_PORT;
   const dataDir = opts.dataDir ?? join(process.cwd(), 'data');
+  const slowRequestMs = opts.slowRequestMs ?? 500;
   const clientReleaseRootDir = opts.clientReleaseRootDir ?? null;
   const widgetDist = opts.widgetDistDir ?? null;
   const markdownAppDist = opts.markdownAppDistDir ?? null;
@@ -1343,7 +1353,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const task = taskStore.getTask(docId.slice('task:'.length));
       if (task) return task.title;
     }
-    return rooms.get(docId)?.meta.title ?? 'A document';
+    return rooms.peek(docId)?.meta.title ?? 'A document';
   }
 
   /** One spelling of "a declaration just landed on a comment", for the three
@@ -1924,7 +1934,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Exactly one hop from review to board — the same non-transitive rule
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
-    const reviewId = reviewIdOf(rooms.get(docId)?.meta ?? {});
+    const reviewId = reviewIdOf(rooms.peek(docId)?.meta ?? {});
     for (const board of hubBoardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
       // rooms.ts already broadcast on the review's own channel; a second
@@ -1980,7 +1990,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         done: g.status === 'done',
       })),
       docs: workspace.docIds.map((docId) => {
-        const meta = rooms.get(docId)?.meta;
+        const meta = rooms.peek(docId)?.meta;
         // Title, else the file's BASENAME — never `relPath` whole and
         // never `sourceUrl`. Those describe the host machine, and a
         // share visitor reads this route (§3.3): a label is workspace
@@ -2213,7 +2223,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     docResource: (workspaceId, docId) => {
       const workspace = taskStore.getWorkspace(workspaceId);
       if (!workspace) return undefined;
-      const meta = rooms.get(docId)?.meta;
+      const meta = rooms.peek(docId)?.meta;
       // Title, else the file's BASENAME — never the path. Same rule, and the
       // same reason, as the review-items route: a label is workspace content,
       // a host path is not, and this text leaves the machine.
@@ -2256,7 +2266,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // board calls it. Title, else the file's basename — never the path, for
     // the reason given twice above.
     docTitle: (_workspaceId, docId) => {
-      const meta = rooms.get(docId)?.meta;
+      const meta = rooms.peek(docId)?.meta;
       // Title, else the file's NAME. The review-items route stops at
       // `relPath`'s basename because a share visitor reads it; this label
       // reaches only the local speaker's ack and the classification prompt,
@@ -2323,9 +2333,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // readable URL handed to an outside reviewer would simply not open. This
     // is the one resolver every share-scope predicate reads, which is why the
     // fix belongs here and not in each of them.
-    const id = rooms.get(rawId)?.docId ?? rawId;
+    const id = rooms.peek(rawId)?.docId ?? rawId;
     const out = new Set<string>();
-    const reviewId = reviewIdOf(rooms.get(id)?.meta ?? {});
+    const reviewId = reviewIdOf(rooms.peek(id)?.meta ?? {});
     if (reviewId) out.add(reviewId);
     for (const board of hubWorkspacesHolding(id)) out.add(board);
     if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) out.add(board);
@@ -2374,7 +2384,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   function hubBoardsForDoc(docId: string): Set<string> {
     const boards = new Set(hubWorkspacesHolding(docId));
-    const reviewId = reviewIdOf(rooms.get(docId)?.meta ?? {});
+    const reviewId = reviewIdOf(rooms.peek(docId)?.meta ?? {});
     if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) boards.add(board);
     return boards;
   }
@@ -2778,7 +2788,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * that is a security decision rather than an addressing one.
    */
   const resolveWorkspaceForDoc = (docId: string): string | null =>
-    backTargetFor(docId, reviewIdOf(rooms.get(docId)?.meta ?? {}))?.id ?? null;
+    backTargetFor(docId, reviewIdOf(rooms.peek(docId)?.meta ?? {}))?.id ?? null;
 
   /**
    * The workspace to send THIS caller to for a doc.
@@ -2850,7 +2860,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * `workspace` room also holds no content surface, but its route is the
    * board, not a mockup.
    */
-  const isMockupDoc = (docId: string): boolean => rooms.get(docId)?.meta.type === 'mockup';
+  const isMockupDoc = (docId: string): boolean => rooms.peek(docId)?.meta.type === 'mockup';
 
   /**
    * A mockup's own HTML, streamed from the file the room is bound to — with
@@ -3258,6 +3268,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // the unfixed build, while SSE died at 9.7s.
     idleTimeout: HTTP_IDLE_TIMEOUT_SEC,
     async fetch(req, server) {
+      const startedAt = performance.now();
       // `undefined` means the request became a websocket — nothing to decorate.
       const routed = await route(req, server);
       // Compress BEFORE the CORS merge so the encoding headers ride out on the
@@ -3268,12 +3279,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // `maybeNotModified` runs first: when the client already holds the body,
       // gzipping it is the one case where the CPU buys nothing, and a 304 has
       // no body for `maybeCompress` to act on anyway.
-      return routed === undefined
-        ? undefined
-        : applyCors(
-            req,
-            refreshSession(req, await maybeCompress(req, maybeNotModified(req, routed))),
-          );
+      if (routed === undefined) return undefined;
+      const response = applyCors(
+        req,
+        refreshSession(req, await maybeCompress(req, maybeNotModified(req, routed))),
+      );
+      const elapsedMs = performance.now() - startedAt;
+      if (elapsedMs >= slowRequestMs) {
+        // Path only — the query can carry a person's name (`?user=`), and
+        // the line is for a grep over durations, not a record of who asked.
+        console.error(
+          `[timing] ${req.method} ${new URL(req.url).pathname} ${Math.round(elapsedMs)}ms ` +
+            `status=${response.status} bytes=${response.headers.get('content-length') ?? '?'}`,
+        );
+      }
+      return response;
 
       // Hoisted, so the wrapper above can call it first. The whole route
       // table lives in here unchanged.
@@ -4345,6 +4365,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             undefined,
             sseLastEventId(req, url),
           );
+        }
+
+        // --- REST: what this process currently costs ---
+        //
+        // The 2026-08-29 jetsam kill left nothing to read: the server was at
+        // 2.6 GB and the only evidence of how it got there was the absence of
+        // the process. `Rooms.stats()` is also written to the log every five
+        // minutes; this route is the same numbers on demand, so the NEXT
+        // incident can be sampled over time instead of reconstructed.
+        //
+        // Counts only — no doc ids, no paths, no titles. That is what makes
+        // it safe to leave un-gated for anyone already past the front door,
+        // and it still refuses a share visitor: an external reviewer invited
+        // to one document has no business reading how many others exist.
+        if (pathname === '/api/metrics' && req.method === 'GET') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const stats = rooms.stats();
+          return j(200, { ...stats, uptimeSec: Math.round(process.uptime()) });
         }
 
         // --- REST: docs ---
@@ -5679,9 +5717,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             linkTitlesFor(
               urls.filter((u): u is string => typeof u === 'string'),
               {
-                docMeta: (docId) => rooms.get(docId)?.meta,
+                docMeta: (docId) => rooms.peek(docId)?.meta,
                 docInWorkspace: (docId, workspaceId) => {
-                  const meta = rooms.get(docId)?.meta;
+                  const meta = rooms.peek(docId)?.meta;
                   if (!meta) return false;
                   if (meta.workspaceId === workspaceId) return true;
                   boardIndex ??= boardIndexForListing();
@@ -6596,7 +6634,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // for `ws:<id>` a hub workspace / review. Anything else
           // is a subscription the child would open against a 404 forever.
           const watchKeyExists = (key: string): boolean => {
-            if (rooms.get(key)) return true;
+            if (rooms.peek(key)) return true;
             if (!key.startsWith('ws:')) return false;
             const wsId = key.slice('ws:'.length);
             return (
@@ -8668,6 +8706,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       }
     },
     websocket: {
+      // Yjs sync step 2 hands a fresh tab the WHOLE room state in one binary
+      // frame. Measured over the live hub board's persisted state on
+      // 2026-08-29: 1,264,566 bytes, deflating to 431,733 — 2.9×, or 813 KB
+      // this server stops sending on every board open, every tab, every
+      // reconnect. Every browser offers the extension already; the server
+      // only had to accept it and ask for compression per send.
+      //
+      // How much WALL TIME that buys is a property of the reader's link, and
+      // this repo has no trustworthy measurement of Bryan's — so the claim
+      // here is the byte count, which is measured, and not a number of
+      // seconds, which would not be. Audio frames are opaque and already
+      // codec-compressed; they do not shrink, and the cost is one deflate
+      // context per socket.
+      perMessageDeflate: true,
       open(ws) {
         if (ws.data.kind === 'audio') {
           meetingRelay.onOpen(ws);
@@ -8785,7 +8837,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Reuse `withReviewUrl` rather than rebuild the /review/ path here: it
     // already branches on doc type (a mockup is not served from /review/),
     // and one builder is the same reason `externalBaseUrl` is one function.
-    const meta = rooms.get(docId)?.meta;
+    const meta = rooms.peek(docId)?.meta;
     return meta ? withReviewUrl(meta).reviewUrl : undefined;
   }
 

@@ -6,9 +6,11 @@ import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
+import { installLogSquelch } from './log-squelch.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
+import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
@@ -440,12 +442,58 @@ const deployer = args.includes('--deploy')
     })
   : null;
 
-// Try the requested port first; if it's taken (e.g. another agent owns it),
-// walk up to the next 20 ports. This keeps `bun run dev` working without
-// conflicts when multiple agents are on the same machine.
+// A ceiling on what a hot error loop can cost this process's log.
+//
+// launchd owns ~/Library/Logs/…err.log and /etc/newsyslog.d is not ours to
+// edit, so the bound has to be in-process. Installed HERE rather than in
+// createServer: patching a global console is the prerogative of the program
+// that owns the log, and every test that imports the server would otherwise
+// inherit it. Installed BEFORE createServer because hydrate — the loop that
+// put 357 MB in the file on 2026-08-29 — runs inside it.
+//
+// It also goes before the bind wait below, so that a server waiting hours for
+// an occupied port cannot spend the log on its own backoff lines either.
+const logSquelch = installLogSquelch();
+
+// DEV: try the requested port, and if it's taken (another agent owns it),
+// walk up to the next 20. That convenience is what keeps `bun run dev`
+// working with several agents on one machine.
+//
+// PROD (`--no-port-walk`, passed by scripts/serve.ts under launchd): the port
+// is the contract. Peers' CW_BASE_URL, the discovery file, the Cloudflare
+// tunnel and the supervisor's bind-health watchdog all name it, and a server
+// that silently moved to 8788 is invisible to every one of them — the
+// watchdog then reads "8787 not listening", kills a healthy server and
+// relaunches, forever. So prod waits for its port in place, with backoff,
+// rather than moving or throwing.
+//
+// Either way, only EADDRINUSE is a statement about the PORT. A host that has
+// run out of network buffers (ENOBUFS) or lost its interface (EADDRNOTAVAIL)
+// answers the same for every port, so walking cannot help and must not run —
+// see packages/server/src/port-bind.ts for the whole story.
+const walkPorts = shouldWalkPorts(args);
+const sleep = (ms: number): Promise<void> =>
+  new Promise((r) => {
+    setTimeout(r, ms);
+  });
+
+// PROD: wait for the port with a CHEAP socket probe, before `createServer` is
+// ever called. This ordering is the requirement, not an optimisation:
+// `createServer` hydrates every persisted document and re-arms every markdown
+// file watcher before it attempts its bind, so retrying `createServer`
+// against a busy port costs a full 5,622-document hydration (and leaks the
+// activity-writer lock) per attempt. Retrying the probe costs two syscalls.
+if (!walkPorts) {
+  await acquirePort({
+    port: requestedPort,
+    probe: probeLocalPort,
+    sleep,
+    log: (m) => console.warn(m.replace('[supervisor]', '[feedback]')),
+  });
+}
+
 let port = requestedPort;
-let lastErr: unknown = null;
-for (let i = 0; i < 20 && !handle; i++) {
+while (!handle) {
   try {
     handle = createServer({
       port,
@@ -484,14 +532,32 @@ for (let i = 0; i < 20 && !handle; i++) {
       ...(deployer ? { deployer } : {}),
     });
   } catch (err) {
-    lastErr = err;
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== 'EADDRINUSE') throw err;
-    console.warn(`[feedback] port ${port} busy, trying ${port + 1}`);
-    port++;
+    const kind = classifyBindError(err);
+    if (kind === 'fatal') throw err;
+    if (walkPorts) {
+      // Dev only, and only for a genuinely occupied port.
+      if (kind !== 'in-use' || port >= requestedPort + 20) throw err;
+      console.warn(`[feedback] port ${port} busy, trying ${port + 1}`);
+      port++;
+      continue;
+    }
+    // We probed and the port was free, so reaching here means we lost a race
+    // for it in the moments since. Rare, and the answer is the same: wait for
+    // the port, never move off it. Going back through the probe keeps the
+    // waiting cheap even though this retry does re-run the hydration.
+    console.warn(
+      kind === 'in-use'
+        ? `[feedback] lost the race for :${port} — waiting for it, not walking`
+        : `[feedback] cannot open a socket on :${port} (host resources, not the port) — waiting`,
+    );
+    await acquirePort({
+      port,
+      probe: probeLocalPort,
+      sleep,
+      log: (m) => console.warn(m.replace('[supervisor]', '[feedback]')),
+    });
   }
 }
-if (!handle) throw lastErr ?? new Error('could not start server');
 port = handle.port;
 
 const ts = tailscaleHost();
@@ -624,6 +690,9 @@ if (pluginRefresher) {
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
     console.log(`[feedback] shutting down (${sig})`);
+    // Report whatever the current squelch window was still counting; nothing
+    // else will ask for it once the process is gone.
+    logSquelch.flush();
     // Cancels an in-flight backfill; without it a paced drain keeps spending
     // on a process that is on its way out.
     summarizer.dispose();
