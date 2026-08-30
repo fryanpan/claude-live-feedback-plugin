@@ -11,13 +11,20 @@
  *
  * Two halves, and both are needed.
  *
- * **Before** — `applyWriteAccess` asks the server whether this browser may
- * write, and if not says so up front and keeps the doc in view mode. This is
- * the half that matters for prose: doc text goes over the yjs socket, which
- * the server holds open in read-only mode so reading is unaffected, and a
- * person allowed to type into a socket that drops every keystroke has been
+ * **Before** — `fetchWriteAccess` asks the server whether this browser may
+ * write, ONCE, before the router starts, and the answer travels to every
+ * surface on `MountContext.canWrite` so each one mounts already knowing. This
+ * is the half that matters for prose: doc text goes over the yjs socket,
+ * which the server holds open in read-only mode so reading is unaffected, and
+ * a person allowed to type into a socket that drops every keystroke has been
  * told nothing at all — the text appears, syncs to nobody, and is gone on
  * reload.
+ *
+ * It is a value passed down rather than a call each surface makes, and that
+ * is the whole lesson of the second review pass: a surface that asks for
+ * itself is EDITABLE WHILE IT ASKS. There used to be an `applyWriteAccess()`
+ * here that did exactly that, and the doc mount awaited it after it had
+ * already gone live.
  *
  * **After** — `installWriteGateNotice` wraps `fetch` once and turns any
  * `sign_in_required` refusal into a prompt. One wrapper rather than an edit
@@ -291,21 +298,6 @@ export function lockDocToReading(opts: {
     btn.setAttribute('aria-label', 'Sign in to edit this doc');
   }
   return locked;
-}
-
-/**
- * Ask the server whether this browser may write, and if not, say so and hand
- * the caller the answer so it can lock its own surface (the editor's edit
- * toggle, a composer, a button).
- *
- * Returns `canWrite`, so a caller that does nothing else still reads
- * correctly as a boolean.
- */
-export async function applyWriteAccess(): Promise<boolean> {
-  const access = await fetchWriteAccess();
-  if (access.canWrite) return true;
-  showSignInBar();
-  return false;
 }
 
 let installed = false;
