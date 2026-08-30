@@ -9851,9 +9851,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // persisted dispatch set survives for the next process to re-arm.
       dispatches.stop();
       uptimeMonitor.stop();
+      // The sockets come down HERE, not at the end. `stop(true)` force-closes
+      // every open connection instead of leaving keep-alive HTTP and
+      // websockets to drain — without it each server this process ever
+      // started keeps its sockets to the grave (measured 2026-08-30: +733
+      // kernel PCBs per server-suite run, and a machine-wide ENOBUFS at the
+      // end of a night of them).
+      //
+      // Force-closing fires every `close(ws)` handler SYNCHRONOUSLY inside
+      // this call, and those handlers write: a meeting's flushes its last
+      // sentence into the doc. So they have to run while the subsystems
+      // below are still live — after `rooms.flush()` that write would have
+      // nowhere left to land.
+      server.stop(true);
       // Close the books on any live meeting, so a restart never finds a doc
-      // marked as recording by a socket that died with the process.
-      meetingRelay.dispose();
+      // marked as recording by a socket that died with the process. Awaited
+      // because the close handlers above start their teardowns async, and
+      // their notes belong in the rooms this flushes next.
+      await meetingRelay.dispose();
       // Flush pending body snapshots into the store BEFORE the store's own
       // flush, so the last keystrokes in a task body reach the sidecar.
       taskProjection.stop();
@@ -9873,7 +9888,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // subscriber's cursor is unrecognisable after the restart and every
       // stream opens with a `replay.gap` that has nothing behind it.
       saveReplayMarks(dataDir, sse.marks());
-      server.stop();
     },
   };
 }
