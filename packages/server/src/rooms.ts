@@ -614,6 +614,16 @@ export class Rooms {
    */
   private hydratedAt = new Map<string, number>();
 
+  /**
+   * Docs whose last bound-file write-back THREW. Sticky, and read by
+   * `indexEntryFor`, so the doc's row keeps `pendingFileWrite` and the next
+   * boot reasserts it — `writeBoundFileNow` swallows its own errors, so
+   * without this a failed write looked exactly like a completed one to
+   * everything downstream and the `.md` stayed stale until somebody opened
+   * the doc, which for a cold doc is never.
+   */
+  private failedFileWrites = new Set<string>();
+
   /** The eviction policy's clock. See `RoomsConfig.now`. */
   private now(): number {
     return this.cfg.now?.() ?? Date.now();
@@ -678,6 +688,11 @@ export class Rooms {
       clearTimeout(pendingSave);
       this.saveTimers.delete(docId);
       this.persistRoomNow(room);
+    } else if (this.failedFileWrites.has(docId)) {
+      // The flush above threw. Nothing else will write this doc's row, and
+      // the row is the only thing that tells the next boot to come back for
+      // it — so pay the mtime refresh here rather than lose the repair.
+      this.persistRoomNow(room);
     }
     // No pending save means the `.ydoc` and its index row already match this
     // doc — every mutation schedules one. Rewriting anyway would refresh the
@@ -698,6 +713,9 @@ export class Rooms {
     this.rooms.delete(docId);
     this.lastTouchedAt.delete(docId);
     this.hydratedAt.delete(docId);
+    // The row written above carries the marker now, so the in-memory copy has
+    // done its job; a doc that comes back re-derives it from its own binding.
+    this.failedFileWrites.delete(docId);
     this.awarenessRooms.delete(room);
     try {
       // peek, not `room.awareness`: the getter would construct an Awareness
@@ -4077,6 +4095,7 @@ export class Rooms {
           : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
       if (md === binding.lastWritten) {
         // Nothing to write means nothing to reassert after a restart either.
+        this.failedFileWrites.delete(room.docId);
         this.clearPendingFileWrite(room.docId);
         return;
       }
@@ -4101,8 +4120,13 @@ export class Rooms {
       // The edit is on disk now, so a restart has nothing to repair. Note
       // this is NOT in a `finally`: a write that THREW must keep the flag,
       // because that is exactly the doc a restart still has to reassert.
+      this.failedFileWrites.delete(room.docId);
       this.clearPendingFileWrite(room.docId);
     } catch (err) {
+      // Sticky, because the caller cannot see this: the throw is swallowed
+      // here and the write timer is already cleared, so nothing downstream
+      // can tell a failed write from a finished one.
+      this.failedFileWrites.add(room.docId);
       console.error(`[rooms] file write failed for ${binding.path}:`, err);
     }
   }
@@ -5332,7 +5356,9 @@ export class Rooms {
     }
     // The ydoc save runs at 200ms and the file write-back at 800ms, so a
     // pending write-back is always visible from here. See `DocIndexEntry`.
-    const pendingFileWrite = this.fileBindings.get(room.docId)?.writeTimer != null;
+    const pendingFileWrite =
+      this.fileBindings.get(room.docId)?.writeTimer != null ||
+      this.failedFileWrites.has(room.docId);
     return {
       v: DOC_INDEX_VERSION,
       // A copy, not the live object: `room.meta` keeps being mutated and the
