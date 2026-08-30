@@ -13,7 +13,7 @@
  * Where the two conflict, prefer leaving a STALE entry (which a reader can
  * see, and which the next honest start reclaims) over leaving none.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import {
   type DiscoveryEntry,
   shouldClaimDiscovery,

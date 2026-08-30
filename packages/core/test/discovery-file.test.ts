@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 /**
  * The discovery slot, exercised against a real filesystem under a throwaway
  * HOME — the sequence that actually bit prod on 2026-08-30, in order:
@@ -9,11 +13,7 @@
  * A test that only covers clean shutdown misses the crash path, which is the
  * one that leaves no cleanup running at all.
  */
-import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { describe, expect, test } from 'vitest';
 import { publishDiscovery, readDiscovery, releaseDiscovery } from '../src/discovery-file.ts';
 import { resolveDiscoveryFile } from '../src/machine-paths.ts';
 
