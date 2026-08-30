@@ -6895,6 +6895,29 @@ body.threads-resizing {
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
+/* A declaration its ASKER took back. It appears only in the thread history —
+   never as the item card, never as a queue row — so this is the one place the
+   reader can meet it, and it has to read as retracted at a glance rather than
+   as one more question. Muted accent and a struck headline; the words stay
+   legible because a reader may already have acted on them. */
+.comment-review-withdrawn {
+  border-left-color: var(--muted, #8a8f98);
+  opacity: 0.75;
+}
+.comment-review-withdrawn .comment-review-k {
+  color: var(--muted, #8a8f98);
+}
+.comment-review-withdrawn .comment-review-headline {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.comment-review-withdrawn-note {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted, #8a8f98);
+  overflow-wrap: anywhere;
+}
 /* The FULL review-item interface, rendered first in the expanded thread that
    carries the item (approved design, review-flow-mock-v1). Same anatomy as
    the hub's card — head row (kind badge · headline · asked-by meta), one
