@@ -65,6 +65,16 @@ describe('routePatternForSpan: default-deny redaction', () => {
     expect(routePatternForSpan('/')).toBe('/');
   });
 
+  it('keeps the route family for static-asset prefix routes at any depth', () => {
+    // server.ts serves these four with `pathname.startsWith('/<root>/')`,
+    // not a fixed segment count — codex review caught the whole-template
+    // rewrite silently collapsing them to the generic `/:id/:id` fallback.
+    expect(routePatternForSpan('/app/hub.js')).toBe('/app/:id');
+    expect(routePatternForSpan('/widget/assets/chunk-abc123.js')).toBe('/widget/:id');
+    expect(routePatternForSpan('/demos/some-demo/index.html')).toBe('/demos/:id');
+    expect(routePatternForSpan('/projects/octocat/hello-world')).toBe('/projects/:id');
+  });
+
   it('redacts a docId shaped like a bound file path or a task alias — never leaks it', () => {
     // docIds are caller-chosen and can embed a bound file's relative path
     // (binds.ts: `${groupId}:${relPath.replaceAll('/', '~')}`) or a

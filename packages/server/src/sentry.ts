@@ -397,6 +397,24 @@ function matchesRouteTemplate(segments: readonly string[], template: readonly st
 }
 
 /**
+ * Static-asset roots server.ts serves with a `pathname.startsWith('/<root>/')`
+ * prefix match (widgetDist, markdown-app's dist, the demos dir, the
+ * project-card assets) — arbitrary depth beneath the root (an asset can sit
+ * in a subdirectory), so no fixed-length ROUTE_TEMPLATES entry can name it:
+ * a template matches on exact segment COUNT, and these routes have none.
+ * codex review (this branch): the whole-template rewrite above silently
+ * dropped these from `/app/:id` etc. to the generic `/:id/:id` fallback,
+ * an observability regression with no privacy fix behind it — the OLD flat
+ * per-segment allowlist happened to keep segment 0 static for exactly these
+ * four words. Collapsing everything past the root to one `:id` restores
+ * that, and stays position-keyed rather than value-keyed for the same
+ * reason ROUTE_TEMPLATES is: nothing in ROUTE_TEMPLATES ever puts a
+ * caller-chosen id at segment 0 under these literal strings, so a request
+ * only lands here by actually hitting one of these four static routes.
+ */
+const STATIC_ASSET_ROUTE_ROOTS = new Set(['widget', 'app', 'demos', 'projects']);
+
+/**
  * Route pattern for a span/transaction name — NEVER `url.pathname` directly.
  * A raw path can carry a doc id that's a bound file's relative path, a task
  * title alias (`task:<taskId>`), or a share token; this collapses every
@@ -410,6 +428,9 @@ export function routePatternForSpan(pathname: string): string {
   if (segments.length === 0) return '/';
   const template = ROUTE_TEMPLATES.find((t) => matchesRouteTemplate(segments, t));
   if (template) return `/${template.join('/')}`;
+  if (segments.length >= 2 && STATIC_ASSET_ROUTE_ROOTS.has(segments[0]!)) {
+    return `/${segments[0]}/:id`;
+  }
   return `/${segments.map(() => ':id').join('/')}`;
 }
 
