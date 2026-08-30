@@ -11,8 +11,8 @@ import {
 } from '../src/sentry.ts';
 
 /**
- * Server-side Sentry (t-aM-A7XV0izgH): today's ask is "observe it, don't
- * trust the `if` statement" — so this points a real DSN at a local capture
+ * Server-side Sentry: today's ask is "observe it, don't trust the `if`
+ * statement" — so this points a real DSN at a local capture
  * server we control and asserts on what actually crossed the wire, both
  * when Sentry is unconfigured (must be nothing at all) and when it is
  * (must be a slow-request transaction, a captured error, both stamped with
@@ -72,9 +72,9 @@ describe('routePatternForSpan: default-deny redaction', () => {
     expect(withFilePath).not.toContain('secret');
     expect(withFilePath).not.toContain('roadmap');
 
-    const withTaskAlias = routePatternForSpan('/api/docs/task:t-confidential-title/threads');
+    const withTaskAlias = routePatternForSpan('/api/docs/task:t-hidden1/threads');
     expect(withTaskAlias).toBe('/api/docs/:id/threads');
-    expect(withTaskAlias).not.toContain('confidential');
+    expect(withTaskAlias).not.toContain('hidden1');
   });
 
   it('redacts an unknown segment anywhere, not just where an id is expected', () => {
