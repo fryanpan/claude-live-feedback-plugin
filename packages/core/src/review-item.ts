@@ -149,6 +149,35 @@ export interface ReviewPayload {
    * caller holds.
    */
   revisions?: ReviewItemRevision[];
+  /**
+   * When the ASKER took this item back, and who. A withdrawn item is retired
+   * without anybody having answered it.
+   *
+   * This is the one move an agent had no way to make. An ask that turns out
+   * to be wrong can be revised (`applyReviewRevision`), and an ask a person
+   * settles is answered — but an ask that should never have been asked, or
+   * that a later ask replaced, had only two exits: fabricate an answer the
+   * reader never gave, or resolve the whole thread and take every other ask
+   * on it down with it. Measured on a real doc thread 2026-08-29: two asks on
+   * one thread, the stale one unreachable, and the correct numbers left in a
+   * plain comment underneath because neither exit was honest.
+   *
+   * Soft, like everything else here: the words stay, verbatim and readable,
+   * because a reader may already have read them. Only the item's standing
+   * changes — `pendingDeclaration` steps over it, the queue stops carrying
+   * it, and the doc renders it as retracted rather than as a live question.
+   * `reinstateReview` puts it back.
+   */
+  withdrawnAt?: number;
+  /** Display name of who withdrew it. No actor ids in projected state. */
+  withdrawnBy?: string;
+  /**
+   * One line on WHY, shown with the retracted item. Optional, and worth
+   * writing: the reader is looking at an ask they may have been about to
+   * answer, and "superseded by the item below" is the difference between a
+   * disappearance and a correction.
+   */
+  withdrawnReason?: string;
 }
 
 /** One undone answer: the stamps as they stood, plus who took them back and
@@ -172,6 +201,20 @@ export interface ReviewAnswerUndone {
  */
 export function reviewAnswered(review: ReviewPayload): boolean {
   return review.answeredAt !== undefined || review.answeredWith !== undefined;
+}
+
+/**
+ * Has the ASKER taken this item back?
+ *
+ * The counterpart to `reviewAnswered`, and separate from it on purpose: both
+ * retire an item, and which one happened is exactly what the reader needs to
+ * see. An answered item records a decision; a withdrawn one records that no
+ * decision was ever needed. Collapsing them into one "closed" flag would make
+ * the queue's history unable to tell "you settled this" from "we retracted
+ * this", which is the difference between work done and work undone.
+ */
+export function reviewWithdrawn(review: ReviewPayload): boolean {
+  return review.withdrawnAt !== undefined;
 }
 
 /**
@@ -230,9 +273,13 @@ export function reviewItemBodyMarkdown(review: Pick<ReviewPayload, 'detail'>): s
  * - By time, not by array position. Comment order in a Yjs array is a CRDT's
  *   merge order, not a clock — "the last element" answers a question about
  *   array layout, not about who spoke last.
+ * - A withdrawn declaration is stepped over, not stopped at. The newest ask
+ *   decides only while it stands; one the asker took back has no claim on the
+ *   thread, so the search continues underneath it.
  * - A non-open thread has nothing pending: an authored ask is retired by an
- *   ANSWER (`reviewAnswered`) or by its thread being resolved, and by
- *   nothing else.
+ *   ANSWER (`reviewAnswered`), by its ASKER withdrawing it
+ *   (`reviewWithdrawn`), or by its thread being resolved, and by nothing
+ *   else.
  *
  * `null` means "nothing here to answer" — an ordinary thread, a retired one,
  * or one whose newest ask is settled — and the caller posts a plain comment.
@@ -252,6 +299,13 @@ export function pendingDeclaration<C extends { ts: number; review?: ReviewPayloa
   for (let i = byTime.length - 1; i >= 0; i -= 1) {
     const c = byTime[i];
     if (c?.review === undefined) continue;
+    // A withdrawn ask supersedes nothing — it was taken back, so the thread
+    // falls through to whatever it was asking before. This is the only way an
+    // older ask can come back into view, and it is deliberate: it is what
+    // lets an agent that filed a correction as a SECOND item on the thread
+    // clean up after itself, withdrawing the stale one and leaving the live
+    // one answerable, without resolving the thread they share.
+    if (reviewWithdrawn(c.review)) continue;
     return reviewAnswered(c.review) ? null : c;
   }
   return null;
@@ -395,7 +449,11 @@ export type ReviseReviewResult =
        *  the words that were judged are the words that were stored. */
       gaps: ReviewCheck['gaps'];
     }
-  | { ok: false; error: 'answered' | 'empty-patch' | 'bad-review' | 'bad-range'; message?: string };
+  | {
+      ok: false;
+      error: 'answered' | 'withdrawn' | 'empty-patch' | 'bad-review' | 'bad-range';
+      message?: string;
+    };
 
 export function applyReviewRevision(
   current: ReviewPayload,
@@ -420,6 +478,17 @@ export function applyReviewRevision(
       error: 'answered',
       message:
         'this review item is already answered — the answer is to the words it has; raise a new item instead of rewriting these',
+    };
+  }
+  // A withdrawn item is not revised either, for the mirror-image reason: its
+  // words were retracted, and rewriting retracted words leaves the reader a
+  // correction to something nobody is being asked about. Reinstate it first
+  // (`reinstateReview`) if the ask is live again, or file a new one.
+  if (reviewWithdrawn(current)) {
+    return {
+      ok: false,
+      error: 'withdrawn',
+      message: 'this review item was withdrawn — reinstate it before revising, or raise a new item',
     };
   }
   const touches = (['headline', 'detail', 'options'] as const).filter(
@@ -466,6 +535,85 @@ export function applyReviewRevision(
  *  the doc-thread half of `applyReviewRevision`. Appends, never replaces. */
 export function withRevision(next: ReviewPayload, previous: ReviewItemRevision): ReviewPayload {
   return { ...next, revisions: [...(next.revisions ?? []), previous] };
+}
+
+/**
+ * Take an item back, or put it back — the asker's own exit from its own ask.
+ *
+ * PURE and shared, for the same reason `applyReviewRevision` is: what
+ * "withdrawn" means must not be decided twice. The doc route holds the only
+ * write door today (a doc-thread item is a bare payload on a comment, which
+ * is where the gap was measured), but every surface READS the stamp through
+ * `reviewWithdrawn`, so the rule cannot be surface-local.
+ *
+ * The authored words are never touched by either direction. A withdrawal is a
+ * change of standing, not a deletion: `headline`, `detail` and `options` read
+ * afterwards exactly as they read before, which is what makes this a soft
+ * retirement rather than an erasure of text a person may already have read.
+ *
+ * Refusals, both of them about not lying to the reader:
+ *
+ * - **answered** — a settled item is the record of a decision somebody made.
+ *   Retracting it would take their answer off the board along with the
+ *   question, and the asker does not get to un-ask something already
+ *   answered. Undo the answer first if it was a mistake.
+ * - **already-withdrawn / not-withdrawn** — a no-op, refused rather than
+ *   silently accepted so a caller cannot overwrite the original `withdrawnAt`
+ *   (and with it the record of when the reader stopped being asked) by
+ *   repeating itself.
+ */
+export type WithdrawReviewResult =
+  | { ok: true; next: ReviewPayload }
+  | { ok: false; error: 'answered' | 'already-withdrawn' | 'not-withdrawn'; message: string };
+
+export function withdrawReview(
+  current: ReviewPayload,
+  opts: { by: string; at: number; reason?: string },
+): WithdrawReviewResult {
+  if (reviewAnswered(current)) {
+    return {
+      ok: false,
+      error: 'answered',
+      message:
+        'this review item is already answered — withdrawing it would retract an answer somebody gave; undo the answer first if it was a mistake',
+    };
+  }
+  if (reviewWithdrawn(current)) {
+    return {
+      ok: false,
+      error: 'already-withdrawn',
+      message: 'this review item is already withdrawn',
+    };
+  }
+  const reason = opts.reason?.trim();
+  return {
+    ok: true,
+    next: {
+      ...current,
+      withdrawnAt: opts.at,
+      withdrawnBy: opts.by,
+      ...(reason !== undefined && reason !== '' ? { withdrawnReason: reason } : {}),
+    },
+  };
+}
+
+/**
+ * Put a withdrawn item back in front of the reader.
+ *
+ * Clears the three stamps and nothing else. They are state rather than
+ * content — the item's words never went anywhere — so dropping them loses no
+ * authored text; the `withdrawnReason` goes with them because a reason for a
+ * withdrawal that has been undone describes nothing that is still true.
+ */
+export function reinstateReview(
+  current: ReviewPayload,
+  _opts?: { by: string; at: number },
+): WithdrawReviewResult {
+  if (!reviewWithdrawn(current)) {
+    return { ok: false, error: 'not-withdrawn', message: 'this review item is not withdrawn' };
+  }
+  const { withdrawnAt: _a, withdrawnBy: _b, withdrawnReason: _c, ...rest } = current;
+  return { ok: true, next: rest };
 }
 
 /**
@@ -1304,6 +1452,16 @@ export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   // not) from the stamps above — these two only decorate the record.
   if (typeof value.answeredBy === 'string') out.answeredBy = value.answeredBy;
   if (typeof value.answerText === 'string') out.answerText = value.answerText;
+
+  // Defensively, like the answer stamps above: `withdrawnAt` is what makes an
+  // item read as retracted, so a junk-typed value must not retire a live ask —
+  // nor revive a retracted one, which would put words the asker took back
+  // back in front of the reader.
+  if (typeof value.withdrawnAt === 'number' && Number.isFinite(value.withdrawnAt)) {
+    out.withdrawnAt = value.withdrawnAt;
+  }
+  if (typeof value.withdrawnBy === 'string') out.withdrawnBy = value.withdrawnBy;
+  if (typeof value.withdrawnReason === 'string') out.withdrawnReason = value.withdrawnReason;
 
   const payloadRevisions = readRevisions(value.revisions);
   if (payloadRevisions) out.revisions = payloadRevisions;
