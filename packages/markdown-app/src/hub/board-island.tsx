@@ -40,6 +40,7 @@ import {
   assigneeLabel,
   dropIndexFor,
   dropTarget,
+  goalEffortLabel,
   ownerInitials,
   ownerKindSuffix,
   ownerMarkKind,
@@ -672,6 +673,75 @@ function TaskRow(props: {
   );
 }
 
+/**
+ * The goal header's effort readout: a bar, what is left, and roughly when.
+ *
+ * TWO variants of the same summary, and only one of them is ever visible —
+ * CSS picks by available width and `display: none` keeps the other out of
+ * the accessibility tree, so nothing is announced twice.
+ *
+ * Which one, and why it is not a single element: both were drawn against the
+ * real board markup and measured. The bar cannot "sit in the due-date slot"
+ * — `.hub-goal-meta` shrink-wraps its date at 65px with no slack, so a
+ * pill in that row takes ~166px from the goal title. Above 1100px the title
+ * has room to spare and the pill costs no HEIGHT, which is the scarce axis
+ * on the iPad this board is read from. At 430px the same readout leaves the
+ * title 78px and clips a 61-character goal story to about 17 characters —
+ * it eats the subject of every sentence. So the phone gets the strip, which
+ * leaves the title alone and spends a row instead; on a surface that already
+ * scrolls, a row is the cheap axis.
+ *
+ * The A/B was drawn for Bryan and never answered. It is resolved this way
+ * rather than left open because the acceptance criteria settle it: a
+ * projected finish date has to be on the board, and there is no width in the
+ * meta row for one at 430px.
+ */
+function GoalEffort(props: {
+  section: BoardSection;
+  variant: 'inline' | 'strip';
+}): ComponentChildren {
+  const { section, variant } = props;
+  // Backlog is a bucket, not a goal — no bar, no date (plan §4). A band the
+  // caller built without a rollup says nothing rather than guessing.
+  if (section.isChores || !section.effort) return null;
+  const label = goalEffortLabel(section.effort, Date.now());
+  if (!label.show) return null;
+  // No bar on an unscored goal, deliberately. An empty grey track is exactly
+  // how this component draws "0% done", and a goal nobody has scored is not
+  // a goal at zero — it gets the sentence instead.
+  const bar = label.showBar ? (
+    <span class="hub-goal-bar" aria-hidden="true">
+      <i style={`width:${label.percentFill}%`} />
+    </span>
+  ) : null;
+  if (variant === 'inline') {
+    return (
+      <span
+        class={`hub-goal-effort hub-goal-effort-inline${label.showBar ? '' : ' hub-goal-effort-bare'}`}
+        title={label.title}
+      >
+        {bar}
+        <span class="hub-goal-effort-left">
+          {[label.leftText, label.finishText].filter(Boolean).join(' \u00b7 ')}
+        </span>
+      </span>
+    );
+  }
+  return (
+    <div
+      class={`hub-goal-effort hub-goal-effort-strip${label.showBar ? '' : ' hub-goal-effort-bare'}`}
+      title={label.title}
+    >
+      {bar}
+      <span class="hub-goal-effort-left">
+        {[label.percentText, label.leftText].filter(Boolean).join(' \u00b7 ')}
+      </span>
+      {label.coverageText ? <span class="hub-goal-effort-note">{label.coverageText}</span> : null}
+      {label.finishText ? <span class="hub-goal-effort-fin">{label.finishText}</span> : null}
+    </div>
+  );
+}
+
 // ── The goal band ──────────────────────────────────────────────────────────
 
 /**
@@ -834,6 +904,7 @@ function GoalBand(props: {
             band takes the due date's SLOT rather than sitting beside it,
             because a date a finished goal ran past is noise. */}
         <span class="hub-goal-meta">
+          <GoalEffort section={section} variant="inline" />
           {!section.isChores && section.status === 'done' ? (
             <span class="hub-done-note">done</span>
           ) : !section.isChores && section.dueAt !== undefined ? (
@@ -881,6 +952,7 @@ function GoalBand(props: {
             ))}
         </span>
       </div>
+      <GoalEffort section={section} variant="strip" />
       {/* The band's tasks, on the rail that says "these belong to the row
           above". A folded band hides this container in CSS and renders NOTHING
           in its place — a collapsed band shows nothing extra, by decision. */}

@@ -2769,6 +2769,60 @@ body.hub-body {
   color: var(--red);
   font-weight: 600;
 }
+/* The effort readout: how far along this goal is, what is left of your own
+   attention, and roughly when it lands.
+
+   PLAIN TEXT AND A BAR — deliberately not a chip, inheriting the decision
+   immediately above that struck chips from this row and said none may grow
+   back. The mock drew it as a tinted pill; that tint existed to mark the
+   new pieces AS new against real markup, and it does not survive into the
+   board.
+
+   Two variants of one summary, and exactly one is ever displayed. Above the
+   mobile tier the readout rides the meta row: the goal title has room to
+   spare at 1180 and this way the readout costs no HEIGHT, which is the
+   scarce axis on the iPad the board is mostly read from. At 430px that same
+   placement clips the goal story to about a quarter of itself, so the phone
+   gets the strip below (see the ≤1100 block). `display: none` rather than
+   visibility, so the hidden variant is out of the accessibility tree and
+   nothing is announced twice. */
+.hub-goal-effort {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.hub-goal-effort-left {
+  font-variant-numeric: tabular-nums;
+}
+/* How many of the band's tickets the bar does NOT cover. Muted below the
+   figure it qualifies, because it is a caveat and not a second number. */
+.hub-goal-effort-note {
+  font-size: 11.5px;
+  opacity: 0.85;
+}
+.hub-goal-bar {
+  display: inline-block;
+  position: relative;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 99px;
+}
+.hub-goal-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+/* The strip is the phone's variant; above the mobile tier it is not drawn. */
+.hub-goal-effort-strip {
+  display: none;
+}
 /* The goal's open caret: the task row's hover affordance, same size, same
    opacity reveal. Hidden on mobile (the whole row opens there) — see the
    ≤1100 block. */
@@ -5150,6 +5204,34 @@ a.hub-link-chip:hover {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+  /* The effort readout swaps places here. In the meta row at this width it
+     leaves the goal title ~78px, which clamps a 61-character goal story to
+     about 17 characters — it eats the subject of every sentence. As its own
+     strip it leaves the title untouched and spends a row instead, and on a
+     surface that already scrolls a row is the cheap axis. Measured both
+     ways before choosing.
+
+     It stays visible on a COLLAPSED band, unlike `.hub-band-tasks`. The
+     "a folded band shows nothing extra" decision is about what replaces the
+     task list; a one-line summary of a goal you have folded away is the
+     moment the summary is worth most. */
+  .hub-goal-effort-inline {
+    display: none;
+  }
+  .hub-goal-effort-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    align-items: center;
+    padding: 4px 12px 6px 30px;
+    white-space: normal;
+    border-bottom: 1px solid var(--border);
+  }
+  /* The date goes to the far end of the strip, so the eye finds "when" in
+     the same place on every band regardless of how long the figures are. */
+  .hub-goal-effort-fin {
+    margin-left: auto;
   }
   .hub-band-tasks {
     padding-left: 24px;

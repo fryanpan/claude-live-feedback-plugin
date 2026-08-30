@@ -5,6 +5,16 @@
  * without a browser.
  */
 import type { ReviewPayload } from '@feedback/core';
+import {
+  EFFORT_MIN_CLOSES_FOR_PROJECTION,
+  EFFORT_PACE_WINDOW_DAYS,
+  type EffortCalibration,
+  type GoalEffortSummary,
+  computeEffortCalibration,
+  formatEffortDate,
+  formatGoalEffortSeconds,
+  summarizeGoalEffort,
+} from '@feedback/core/goal-effort';
 import { tabTitle } from '../tab-title.ts';
 
 /** `triage` is what a row is before `todo`: an agent filed it and nobody has
@@ -157,6 +167,26 @@ export interface HubTask {
    * and on a projection from a server older than the field.
    */
   reviews?: HubReviewItem[];
+  /**
+   * The scoring model's last read on this ticket (`projectTask`). Three
+   * states, and the board draws all three: `{ status: 'ok', … }` carries
+   * numbers, `{ status: 'failed', reason }` means an attempt ran and came
+   * back with nothing usable, and ABSENT means never scored. Absence is not
+   * a zero and a failure is not a number — see `@feedback/core/goal-effort`,
+   * which is the only reader that turns these into arithmetic.
+   */
+  effortEstimate?: {
+    status: 'ok' | 'failed';
+    handsOnSeconds?: number;
+    wallClockSeconds?: number;
+    reason?: string;
+    model?: string;
+    promptVersion?: number;
+    estimatedAt?: number;
+  };
+  /** Folded-up human attention on this ticket's body room. Absent means not
+   *  measured — never measured at zero. */
+  readingTime?: { totalSeconds: number; sessionCount: number; lastSessionAt: number };
 }
 
 /** A projected review item, as far as the hub reads it. */
@@ -426,6 +456,15 @@ export interface BoardSection {
   commentCount?: number;
   isChores: boolean;
   tasks: HubTask[];
+  /**
+   * The band's effort rollup — the header bar, what is left, the finish date.
+   *
+   * Filled by `boardSectionsWithEffort`, and absent when the caller built its
+   * sections without one (the goal detail panel, which wants the grouping and
+   * not the bar). Computed from the UNFILTERED task list even though `tasks`
+   * above is filtered: see `boardEffort`.
+   */
+  effort?: GoalEffortSummary;
 }
 
 function byBoardOrder(a: HubTask, b: HubTask): number {
@@ -492,6 +531,202 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
   }
   for (const s of sections) s.tasks.sort(byBoardOrder);
   return sections;
+}
+
+/**
+ * `boardSections`, with each band's effort rollup attached.
+ *
+ * One function rather than two calls at the call site, because the two have
+ * to be given the SAME unfiltered `tasks` array and it would be quietly
+ * wrong to hand the rollup the filtered one. Callers that only want the
+ * grouping — the goal detail panel — keep calling `boardSections`.
+ */
+export function boardSectionsWithEffort(
+  goals: HubGoal[],
+  tasks: HubTask[],
+  f: BoardFilters,
+  now: number,
+): BoardSection[] {
+  const sections = boardSections(goals, tasks, f);
+  const effort = boardEffort(goals, tasks, now);
+  for (const section of sections) {
+    const summary = effort.byGoal.get(section.id);
+    if (summary) section.effort = summary;
+  }
+  return sections;
+}
+
+// ── Per-goal effort: the header bar, what is left, and when it lands ───────
+
+/**
+ * Every goal's effort rollup for one render, plus the calibration behind it.
+ *
+ * **Computed from the UNFILTERED task list, deliberately, and this is the
+ * whole reason the function exists instead of a loop over `section.tasks`.**
+ * `taskVisible` hides done rows older than the reader's done-window and, on
+ * the "Mine" tab, every row that is not theirs. A percentage computed off
+ * what survives that would be a percentage of the reader's current filter:
+ * switching to "Mine" would swing a goal from 80% to 0% without a ticket
+ * moving, and narrowing the done-window would march every goal backwards.
+ * How far along a goal is does not depend on who is looking at it.
+ *
+ * Archived rows are the one exclusion, and it is applied inside the rollup
+ * (`countsTowardEffort`) rather than here, because it is a fact about the
+ * ticket rather than about the viewer.
+ */
+export interface BoardEffort {
+  calibration: EffortCalibration;
+  /** Keyed by goal id, including `chores` — the caller decides whether to
+   *  draw it, and the Backlog bucket deliberately gets no bar. */
+  byGoal: Map<string, GoalEffortSummary>;
+}
+
+/**
+ * Roll every goal's tickets up, once per render.
+ *
+ * Calibration is learned board-wide first and then per goal, so the two
+ * passes share one sample set: a goal with two closed tickets is pulled
+ * most of the way back to the board's own experience instead of claiming a
+ * factor of its own.
+ */
+export function boardEffort(goals: HubGoal[], tasks: HubTask[], now: number): BoardEffort {
+  const known = new Set<string>();
+  for (const g of goals) {
+    known.add(g.id);
+    for (const sg of g.subgoals ?? []) known.add(sg.id);
+  }
+  // A task whose goal id matches no band renders under Backlog, so it must
+  // count there too — the same fallback `boardSections` applies, spelled the
+  // same way, so a row cannot be in one band on screen and another in the
+  // arithmetic.
+  const bandOf = (task: HubTask): string => (known.has(task.goal) ? task.goal : CHORES_ID);
+  const grouped = new Map<string, HubTask[]>();
+  for (const id of known) grouped.set(id, []);
+  grouped.set(CHORES_ID, grouped.get(CHORES_ID) ?? []);
+  for (const task of tasks) {
+    const band = bandOf(task);
+    const list = grouped.get(band);
+    if (list) list.push(task);
+    else grouped.set(band, [task]);
+  }
+  const calibration = computeEffortCalibration(
+    tasks.map((task) => ({ ...task, goal: bandOf(task) })),
+  );
+  const byGoal = new Map<string, GoalEffortSummary>();
+  for (const [id, list] of grouped) {
+    byGoal.set(id, summarizeGoalEffort(list, id, calibration, now));
+  }
+  return { calibration, byGoal };
+}
+
+/** What a goal header actually prints. Empty strings mean "say nothing
+ *  here", never "say zero". */
+export interface GoalEffortLabel {
+  /** `62%`, or `''` when there is no percentage to claim. */
+  percentText: string;
+  /** Bar fill, 0–100. */
+  percentFill: number;
+  /** `2h 40m left`, or the not-scored sentence. */
+  leftText: string;
+  /** `~Sep 12`, or `''` below the projection floor. */
+  finishText: string;
+  /** `4 not scored` / `4 not scored, 1 failed`, or `''` at full coverage. */
+  coverageText: string;
+  /** The long version, for the element's `title`. */
+  title: string;
+  /** Whether there is anything at all to draw. */
+  show: boolean;
+  /** Whether to draw the bar itself. An unscored goal gets the sentence and
+   *  no bar: a grey empty track is how this board draws 0% done, and a goal
+   *  nobody has scored is not a goal at zero. */
+  showBar: boolean;
+}
+
+/**
+ * Turn one goal's rollup into the words the header prints.
+ *
+ * The board never says "hands on" or "wall clock" — Bryan struck both from
+ * every board surface, the goal header included ("No need to show hands on
+ * or wall clock hours in the board", 2026-08-30). What is left is a bar, a
+ * figure with the word "left" after it, and a date. The full sentence,
+ * including which quantity is which, lives in the `title` and on the ticket.
+ */
+export function goalEffortLabel(
+  summary: GoalEffortSummary,
+  now: number,
+  locale?: string,
+): GoalEffortLabel {
+  const none = (leftText: string, title: string, show: boolean): GoalEffortLabel => ({
+    percentText: '',
+    percentFill: 0,
+    leftText,
+    finishText: '',
+    coverageText: '',
+    title,
+    show,
+    showBar: false,
+  });
+  if (summary.kind === 'unestimated') {
+    // An empty band has nothing to report and says nothing. A band with
+    // tickets that carry no estimate says so out loud — that is the visible
+    // half of the positive control: a scorer that produces nothing must be
+    // legible as producing nothing, not as a goal that has not started.
+    if (summary.reason === 'no-tasks') return none('', '', false);
+    const failed = summary.failedCount;
+    return none(
+      failed > 0 ? 'no estimate yet' : 'not estimated',
+      failed > 0
+        ? `Scoring ran on ${failed} of these tickets and produced nothing usable; the rest were never scored.`
+        : 'None of these tickets has been scored yet.',
+      true,
+    );
+  }
+  const left = formatGoalEffortSeconds(summary.handsOnRemainingSeconds);
+  const coverageText =
+    summary.unestimatedCount === 0
+      ? ''
+      : summary.failedCount > 0
+        ? `${summary.unestimatedCount} not scored, ${summary.failedCount} failed`
+        : `${summary.unestimatedCount} not scored`;
+  const finishText =
+    summary.projectedFinishAt !== undefined
+      ? `~${formatEffortDate(summary.projectedFinishAt, locale)}`
+      : '';
+  const titleParts = [
+    `${summary.percentComplete}% of this goal's estimated calendar time is done.`,
+    `About ${left} of your own attention left across ${summary.estimatedCount} scored ticket${
+      summary.estimatedCount === 1 ? '' : 's'
+    }.`,
+  ];
+  if (coverageText) titleParts.push(`${coverageText} — the bar covers only the scored ones.`);
+  if (summary.projectedFinishAt !== undefined) {
+    const latest = summary.projectedLatestAt;
+    titleParts.push(
+      latest !== undefined
+        ? `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${formatEffortDate(summary.projectedFinishAt, locale)}, likely by ${formatEffortDate(latest, locale)}.`
+        : `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${formatEffortDate(summary.projectedFinishAt, locale)}.`,
+    );
+  } else {
+    titleParts.push(
+      `No finish date yet — that needs ${EFFORT_MIN_CLOSES_FOR_PROJECTION} tickets closed in the last ${EFFORT_PACE_WINDOW_DAYS} days, and ${summary.closesInWindow} ${summary.closesInWindow === 1 ? 'has' : 'have'} closed.`,
+    );
+  }
+  if (summary.wallClockRatio.samples > 0) {
+    titleParts.push(
+      `Estimates on this goal are scaled ×${summary.wallClockRatio.ratio.toFixed(2)} from ${summary.wallClockRatio.samples} closed ticket${summary.wallClockRatio.samples === 1 ? '' : 's'}.`,
+    );
+  }
+  void now;
+  return {
+    percentText: `${summary.percentComplete}%`,
+    percentFill: Math.min(100, Math.max(0, summary.percentComplete)),
+    leftText: `${left} left`,
+    finishText,
+    coverageText,
+    title: titleParts.join(' '),
+    show: true,
+    showBar: true,
+  };
 }
 
 /**

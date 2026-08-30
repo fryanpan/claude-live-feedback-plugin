@@ -71,6 +71,7 @@ import {
   applyRefresh,
   archivedTasks,
   boardSections,
+  boardSectionsWithEffort,
   clientDriftNotice,
   goalLabel,
   holdWaitingItem,
@@ -1021,7 +1022,7 @@ async function main(): Promise<void> {
     // the board is open, and a picker built from a stale list offers agents
     // who have left.
     boardData.value = {
-      sections: boardSections(state.info?.goals ?? [], taskList(), filters),
+      sections: boardSectionsWithEffort(state.info?.goals ?? [], taskList(), filters, filters.now),
       pane: state.pane,
       showArchived,
       knownAgentIds: knownAgentIds(),
