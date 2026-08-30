@@ -2641,10 +2641,16 @@ export function homeSinceLabel(payload: Pick<HomePayload, 'since' | 'brief'>, no
 
 /** "2 days" — how long something has waited, bare. The walkthrough card's
  *  wait chip (mockup: `2 days` beside the project chip). Same unit boundaries
- *  as timeAgo; under a minute says "moments" rather than a zero. */
+ *  as timeAgo; under a minute says "under a minute" rather than a zero.
+ *
+ *  It returns a DURATION, never an adverbial: every caller composes it into
+ *  its own sentence — "waiting …", "… ago", "held …" — and a helper that
+ *  returned "moments" read correctly only in the one that appends "ago".
+ *  The held note said "held moments" (UX review round two, 2026-08-29). One
+ *  contract, so a new caller cannot pick the broken half. */
 export function waitShort(since: number, now: number): string {
   const m = Math.round(Math.max(0, now - since) / 60_000);
-  if (m < 1) return 'moments';
+  if (m < 1) return 'under a minute';
   const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   if (m < 60) return unit(m, 'minute');
   const h = Math.round(m / 60);
