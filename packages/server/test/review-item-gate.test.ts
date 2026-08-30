@@ -790,11 +790,23 @@ describe('the review-item quality gate', () => {
         const filer = await agentStream(workspaceId, FILER);
         const lead = await agentStream(workspaceId, LEAD);
         try {
-          const res = await jj<{ item: { id: string } }>(
+          const res = await jj<{ item: { id: string; judge?: { at: number } } }>(
             await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
           );
           // The create-time wake, so the counts below start from a known place.
           await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
+
+          // The window here is zero, and `overdueHeldItems` wants age > window
+          // — so the hold is a finding only once the clock has actually moved
+          // past the millisecond the judge stamped it in. Ticking inside that
+          // same millisecond finds nothing, and the single tick below would
+          // then wait out its whole deadline for a frame nobody was ever going
+          // to send. One millisecond of real time makes the precondition true
+          // and keeps it true; this is not a tuned timeout.
+          const stampedAt = res.item.judge?.at;
+          expect(stampedAt).toBeGreaterThan(0); // never vacuous: an absent stamp fails here
+          await settle(5);
+          expect(Date.now()).toBeGreaterThan(stampedAt as number);
 
           handle.nudgeStalls();
           const [stall] = await waitForFrames(lead.frames, STALL_EVENT, 1);
