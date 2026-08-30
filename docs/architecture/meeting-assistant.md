@@ -146,6 +146,18 @@ stored content.
   after the quiet timer fires still reaches that tick. Carried (failed)
   turns keep the raw label and are re-mapped on retry; mapping a display
   name twice would wrap it ("Speaker Jordan").
+- **The caption's `overflow: hidden` clips the speaker tag's TAP TARGET.**
+  A pseudo-element reaching past a small pill is the usual way to buy a 36px
+  target, and it silently does nothing inside a clipping ancestor — the clip
+  is to the PADDING box, so the caption's padding is what gives the pseudo
+  room to exist. Measured 19px while a unit test asserted the pseudo and
+  passed. Whenever the caption's window height changes, the padding and the
+  px-anchored mask move with it.
+- **A turn must be a block, or its tag strands.** Inline, a turn began where
+  the last one ended and its tag landed at the end of the PREVIOUS visual
+  line — above its own words, and on a phone that is the faded line being
+  clipped away. A long turn still scrolls its own tag off the top, the same
+  way its words scroll; that is the window being smaller than the turn.
 - **Bun has ONE websocket handler per server.** Audio sockets are
   distinguished by `ws.data.kind`; the upgrade for `/audio/` sets it.
 - **Audio frames must be COPIED, not viewed** — Bun reuses the receive

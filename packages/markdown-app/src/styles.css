@@ -6121,22 +6121,47 @@ body.is-reading-width #editor > .ProseMirror {
 }
 /* One line of transcript, bottom-aligned, with the line above it fading out as
    it rolls off — the mask is what keeps a half-visible line from reading as
-   clipped text. */
+   clipped text.
+
+   THE PADDING IS THE TAP TARGET. `overflow: hidden` clips to the PADDING box,
+   so with no padding it also ate the speaker tag's hit area, which measured
+   19px against this project's 36px floor. The height below is the text
+   WINDOW (content-box); the 9px above and below widen the clip box to ~36px
+   so the tag's ::before survives, and the mask is anchored in px to the
+   window's own top edge so the taller box reveals nothing that was hidden
+   before. Grow one and the other has to move with it. */
 .meeting-caption {
   flex: 1 1 auto;
   min-width: 0;
+  box-sizing: content-box;
   height: 1.45em;
+  padding-block: 9px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 55%);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 55%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 9px,
+    #000 calc(9px + 0.8em)
+  );
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 9px, #000 calc(9px + 0.8em));
 }
 .meeting-caption-line {
   margin: 0;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+/* A turn owns its lines. Inline, a turn began wherever the one before it
+   ended, which put its speaker tag at the END of the previous visual line —
+   above the words it labels, and on a phone that line is the faded one being
+   clipped away. As a block the tag always starts its turn's first line, so
+   the newest turn's tag sits at the head of the newest turn. It also puts the
+   full stop of one turn and the pill of the next on separate lines, which is
+   the space that was missing between them. */
+.meeting-turn {
+  display: block;
 }
 /* One span per word, so a word the engine revises is rewritten where it
    already is rather than the line being redrawn under the reader. */
@@ -6156,12 +6181,18 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 /* Who said the turn: a muted tag at the head of each turn's words, and the one
-   tap that names a voice for the meeting. It sits inside the 1.45em caption
-   line, so its own box cannot reach the 36px tap floor — the ::before reaches
-   past the box to make the target, without moving anything on the line. */
+   tap that names a voice for the meeting. Its own box is ~18px inside the
+   caption's line, so the 36px tap floor comes from the ::before below — which
+   only reaches its full size because .meeting-caption pads its clip box out
+   of the way. The two are one mechanism; neither works alone.
+
+   The max-width is load-bearing, not tidiness: a 60-character name rendered a
+   335px pill that wrapped the line and pushed every tag out of the window,
+   so naming a voice was what turned the labels off. */
 .meeting-speaker {
   position: relative;
   display: inline-block;
+  max-width: 11em;
   margin-right: 2px;
   padding: 0 6px;
   font: inherit;
@@ -6176,6 +6207,12 @@ body.is-reading-width #editor > .ProseMirror {
   cursor: pointer;
   vertical-align: baseline;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* At rest it has to LOOK like a control. Hover is not an answer on the
+     iPad, and `cursor: pointer` and a `title` are both hover-only. */
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
 }
 .meeting-speaker::before {
   content: "";
@@ -6233,12 +6270,16 @@ body.is-reading-width #editor > .ProseMirror {
     height: auto;
     flex-direction: column;
     align-items: stretch;
-    gap: 3px;
+    /* No gap and no bottom padding of its own: the caption is the last child
+       and now carries 9px of its own on each side (the tag's hit area lives
+       in it). Doubling up would grow the panel by a whole 18px on the screen
+       with the least room for it. */
+    gap: 0;
     padding: 7px 14px;
     /* The last row of the window: clear of the home indicator, and lifted by
        whatever an open keyboard is covering (--kb-bottom, published by
        keyboard-inset.ts) so the words are not behind it. */
-    padding-bottom: calc(9px + var(--safe-bottom) + var(--kb-bottom, 0px));
+    padding-bottom: calc(var(--safe-bottom) + var(--kb-bottom, 0px));
   }
   .meeting-status {
     display: inline;
