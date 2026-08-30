@@ -28,6 +28,8 @@ interface Metrics {
   awareness: number;
   timers: number;
   uptimeSec: number;
+  activations: { tag: string; count: number }[];
+  activationsTotal: number;
 }
 
 describe('GET /api/metrics', () => {
@@ -127,8 +129,46 @@ describe('GET /api/metrics', () => {
     expect(body).not.toContain('metrics-leak-probe');
     expect(body).not.toContain('secret-name');
     expect(body).not.toContain(srcDir);
-    for (const value of Object.values(JSON.parse(body) as Record<string, unknown>)) {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key === 'activations') continue;
       expect(typeof value).toBe('number');
     }
+    // `activations` is the one non-scalar field: source locations and counts.
+    // A tag is a repo-relative path into `packages/` and nothing else — never
+    // an absolute host path, and never anything derived from a doc.
+    const activations = parsed.activations as { tag: string; count: number }[];
+    expect(Array.isArray(activations)).toBe(true);
+    for (const row of activations) {
+      expect(typeof row.count).toBe('number');
+      expect(row.tag).toMatch(/^(packages\/[\w./-]+:\d+|external|unknown|other)$/);
+      expect(row.tag.startsWith('/')).toBe(false);
+    }
+  });
+
+  it('names the caller that put a binding in the fast lane', async () => {
+    const path = join(srcDir, 'attributed.md');
+    writeFileSync(path, '# Doc\n\nbody\n');
+    await local('/api/docs', {
+      method: 'POST',
+      body: JSON.stringify({ docId: 'metrics-attributed', type: 'markdown', sourceUrl: path }),
+    });
+    handle.rooms.resetDerivedCaches();
+
+    const before = await metrics();
+    // Reading a doc over HTTP is a genuine access, and the route that serves
+    // it lives in server.ts — so that is the file the tag must name.
+    expect((await local('/api/docs/metrics-attributed')).status).toBe(200);
+    const after = await metrics();
+
+    // Positive control: the read really did activate something. Without it,
+    // an attribution map that never records anything would pass every shape
+    // assertion below.
+    expect(after.activeBindings).toBeGreaterThan(before.activeBindings);
+    expect(after.activationsTotal).toBeGreaterThan(before.activationsTotal);
+    const top = after.activations[0];
+    expect(top).toBeDefined();
+    expect(top?.tag).toContain('packages/server/src/server.ts:');
+    expect(top?.count).toBeGreaterThan(0);
   });
 });
