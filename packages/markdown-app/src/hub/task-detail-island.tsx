@@ -435,7 +435,7 @@ function HeldReviewNote(props: { task: HubTask; handlers: DetailHandlers; now: n
             {handlers.onReleaseHeld && (
               <button
                 type="button"
-                class="hub-btn hub-btn-ghost hub-decide-held-release"
+                class="hub-btn hub-decide-held-release"
                 disabled={releasing === item.id}
                 onClick={() => {
                   setReleasing(item.id);

@@ -1012,14 +1012,24 @@ body.hub-body {
   align-items: stretch;
   gap: 6px;
 }
-/* Tall enough for the default's six lines at 430px, and capped so the panel's
-   own max-height (70vh) is never spent on this one field — on the iPad in
-   landscape, height is the scarce axis. Vertical resize stays available for a
-   reader who wants more. */
+/* The old comment here claimed 96px was "tall enough for the default's six
+   lines at 430px". It was not: at 430px the default wraps to ~280px of text
+   in a 110px box, showing four lines and a sliced fifth (UX review round two,
+   2026-08-29). Criteria are prose a reader edits, and prose that is cut
+   mid-sentence reads as broken rather than as scrolled.
+
+   160px is ~8 lines — enough that the shipped default reads as a paragraph
+   rather than a fragment — and the rest scrolls, which is stated rather than
+   left to the UA default. Still capped at 34vh so the panel's own 70vh is
+   never spent on this one field: on the iPad in landscape height is the
+   scarce axis. Vertical resize stays available for a reader who wants more.
+   `min-height` beats `max-height` in the cascade, so on a very short window
+   the floor holds and the box scrolls — which is the honest failure. */
 .hub-criteria {
   width: 100%;
-  min-height: 96px;
+  min-height: 160px;
   max-height: 34vh;
+  overflow: auto;
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -3950,12 +3960,36 @@ a.hub-link-chip:hover {
   color: var(--fg-subtle, var(--fg-muted));
   font-size: 12px;
 }
-/* Never smaller than a finger, and quiet: overruling the gate is a real act,
-   but it is not the thing the eye should land on in a note about waiting. */
+/* Never smaller than a finger, and it has to READ as a control with no
+   pointer on the page at all. It shipped `.hub-btn-ghost` — transparent on
+   transparent, muted grey at 13px, the same colour and nearly the same size
+   as the meta beside it — and `.hub-btn:hover` paints `--bg-hover`, which is
+   exactly the background `.hub-decide-held` already sits on, so the hover was
+   invisible and the only feedback left was the cursor. On the iPad there is
+   no cursor (UX review round two, 2026-08-29).
+
+   So: its own surface against the note's, an accent border and underline that
+   say "tappable" while at rest, and a hover/active/focus that INVERTS rather
+   than tinting — the one state change that cannot collide with the surface
+   behind it, whatever the theme does to the tokens. */
 .hub-decide-held-release {
   flex: none;
   min-height: 44px;
   padding-inline: 12px;
+  border-color: var(--accent);
+  background: var(--bg-panel);
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+}
+.hub-decide-held-release:hover,
+.hub-decide-held-release:focus-visible,
+.hub-decide-held-release:active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  text-decoration-line: none;
 }
 /* A refusal said next to the control that refused. `role="alert"`, so it is
    announced rather than only drawn. */
