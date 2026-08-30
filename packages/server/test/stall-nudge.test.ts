@@ -21,6 +21,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  REVIEW_ITEM_HELD_EVENT,
+  type ReviewItemHeldFrame,
   STALL_EVENT,
   STALL_REPEAT_DEFAULT_MS,
   type StallNudgeFrame,
@@ -57,13 +59,16 @@ function board(over: Partial<StallSnapshot> = {}): StallSnapshot {
   };
 }
 
-function harness(opts: { repeatMs?: number; stampFile?: string; world?: World } = {}) {
+function harness(
+  opts: { repeatMs?: number; stampFile?: string; world?: World; filerDelivers?: () => number } = {},
+) {
   const world: World = opts.world ?? {
     now: 1_000_000,
     boards: [board()],
     reachable: new Set(['agent-cartographer']),
   };
   const sent: Sent[] = [];
+  const toFilers: Array<{ workspaceId: string; agentId: string; frame: ReviewItemHeldFrame }> = [];
   const reported: string[] = [];
   const nudger = new StallNudger({
     now: () => world.now,
@@ -73,12 +78,29 @@ function harness(opts: { repeatMs?: number; stampFile?: string; world?: World } 
       sent.push({ workspaceId, agentId, frame });
       return 1;
     },
+    sendToFiler: (workspaceId, agentId, frame) => {
+      toFilers.push({ workspaceId, agentId, frame });
+      return opts.filerDelivers ? opts.filerDelivers() : 1;
+    },
     report: (line) => reported.push(line),
     ...(opts.repeatMs !== undefined ? { repeatMs: opts.repeatMs } : {}),
     ...(opts.stampFile !== undefined ? { stampFile: opts.stampFile } : {}),
   });
-  return { world, sent, reported, nudger };
+  return { world, sent, toFilers, reported, nudger };
 }
+
+/** One review item the quality gate has held past the window. */
+const HELD = {
+  id: 't-7',
+  title: 'Rebuild the index nightly',
+  reviewItemId: 'ri-1',
+  headline: 'ok?',
+  reason: 'The headline is not a question the reader can answer.',
+  heldMs: 6 * MIN,
+  heldAt: 1_000_000 - 6 * MIN,
+  filedBy: 'Index Keeper',
+  filerAgentId: 'agent-index-keeper',
+};
 
 describe('a stalled row wakes the lead — once', () => {
   it('sends one addressed frame naming the quietest row', () => {
@@ -591,5 +613,148 @@ describe('the timer', () => {
     nudger.stop();
     nudger.stop();
     expect(nudger.running()).toBe(false);
+  });
+});
+
+// ── A held review item is its own finding ────────────────────────────────────
+
+describe('a held review item wakes its filer and then the lead — once each', () => {
+  it('a quiet board with one overdue hold sends the lead a frame naming it', () => {
+    const { world, sent, toFilers, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.agentId).toBe('agent-cartographer');
+    expect(sent[0]?.frame.event).toBe(STALL_EVENT);
+    expect(sent[0]?.frame.heldItems).toEqual([HELD]);
+    // The lead's next act is on the ticket, so the frame's subject is the ticket.
+    expect(sent[0]?.frame.taskId).toBe('t-7');
+    expect(toFilers).toHaveLength(1);
+    expect(toFilers[0]?.agentId).toBe('agent-index-keeper');
+    expect(toFilers[0]?.frame).toMatchObject({
+      event: REVIEW_ITEM_HELD_EVENT,
+      taskId: 't-7',
+      reviewItemId: 'ri-1',
+      reason: HELD.reason,
+      overdue: true,
+    });
+  });
+
+  it('does NOT complain again on the next pass while the same item stays held', () => {
+    const { world, sent, toFilers, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    world.now += 3 * MIN;
+    world.boards = [board({ stalled: [], held: [{ ...HELD, heldMs: 9 * MIN }] })];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+    expect(toFilers).toHaveLength(1);
+  });
+
+  it('fires again for a second held item, and again for the same item held afresh', () => {
+    const { world, sent, toFilers, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    // A second item on another ticket joins the held set: news.
+    world.boards = [
+      board({ stalled: [], held: [HELD, { ...HELD, id: 't-8', reviewItemId: 'ri-2' }] }),
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+    expect(toFilers.map((f) => f.frame.reviewItemId)).toEqual(['ri-1', 'ri-2']);
+    // The first item is revised, judged ok, then held again on a later
+    // revision: the filer hears about the new hold, because the old one
+    // left the set in between.
+    world.boards = [board({ stalled: [], held: [{ ...HELD, id: 't-8', reviewItemId: 'ri-2' }] })];
+    nudger.tick();
+    world.boards = [
+      board({ stalled: [], held: [{ ...HELD, id: 't-8', reviewItemId: 'ri-2' }, HELD] }),
+    ];
+    nudger.tick();
+    expect(toFilers.map((f) => f.frame.reviewItemId)).toEqual(['ri-1', 'ri-2', 'ri-1']);
+  });
+
+  // Found by codex review: stamping held rows by ticket alone meant a second
+  // item held on a ticket the lead had already heard about was not news.
+  it('a second item held on the SAME ticket is news to the lead', () => {
+    const { world, sent, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    nudger.tick();
+    world.boards = [board({ stalled: [], held: [HELD, { ...HELD, reviewItemId: 'ri-2' }] })];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.frame.heldItems?.map((r) => r.reviewItemId)).toEqual(['ri-1', 'ri-2']);
+    // And the same ticket going quiet over the same held ask is NOT.
+    world.boards = [
+      board({
+        stalled: [{ id: 't-7', title: HELD.title, bucket: 'in-progress', quietMs: 45 * MIN }],
+        held: [HELD, { ...HELD, reviewItemId: 'ri-2' }],
+      }),
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+  });
+
+  // Found by codex review, third pass: a hold that ended and a new hold on
+  // the same item that began between two ticks looked like one hold.
+  it('the same item held AGAIN — no tick saw the gap — is a fresh nudge and a fresh wake', () => {
+    const { world, sent, toFilers, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    world.now += 10 * MIN;
+    world.boards = [
+      board({ stalled: [], held: [{ ...HELD, heldMs: 6 * MIN, heldAt: HELD.heldAt + 10 * MIN }] }),
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+    expect(toFilers).toHaveLength(2);
+    // The control: the same hold, older, is still one hold.
+    world.now += 1 * MIN;
+    world.boards = [
+      board({ stalled: [], held: [{ ...HELD, heldMs: 7 * MIN, heldAt: HELD.heldAt + 10 * MIN }] }),
+    ];
+    nudger.tick();
+    expect(sent).toHaveLength(2);
+    expect(toFilers).toHaveLength(2);
+  });
+
+  // Found by codex review: a filer that dropped between the reachability
+  // check and the send got nothing, and was marked told forever.
+  it('a filer nudge that reached nobody is not "told" — the next pass tries again', () => {
+    let delivers = 0;
+    const { world, toFilers, nudger } = harness({ filerDelivers: () => delivers });
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    expect(toFilers).toHaveLength(1);
+    delivers = 1;
+    nudger.tick();
+    expect(toFilers).toHaveLength(2);
+    nudger.tick();
+    expect(toFilers).toHaveLength(2);
+  });
+
+  it('an unreachable filer is skipped, not marked told — the next pass tries again', () => {
+    const { world, sent, toFilers, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD] })];
+    nudger.tick();
+    expect(sent).toHaveLength(1);
+    expect(toFilers).toHaveLength(0);
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    expect(toFilers).toHaveLength(1);
+  });
+
+  it('a retired board holds nothing', () => {
+    const { world, sent, toFilers, nudger } = harness();
+    world.boards = [board({ stalled: [], held: [HELD], retired: true })];
+    world.reachable.add('agent-index-keeper');
+    nudger.tick();
+    expect(sent).toHaveLength(0);
+    expect(toFilers).toHaveLength(0);
   });
 });

@@ -263,3 +263,79 @@ export function evaluateStalls(input: EvaluateStallsInput): StallVerdict {
   // lists inherit that order — the row at the top is the one to start with.
   return { stalled, unfiled, considered: rows.length, undetermined };
 }
+
+/**
+ * Five minutes (Bryan, 2026-08-29: *"If a review item's been unacceptable for
+ * more than 5 minutes. Complain."*).
+ *
+ * Much shorter than the stall window, and the difference is what it
+ * measures. A stalled row's silence is ambiguous — reading code looks like
+ * absence — so twenty minutes buys confidence. A held item is not ambiguous:
+ * its filer was told, in the same tool result, that the item is off the
+ * queue until they revise it, and a revision is a one-call edit. Five minutes
+ * of not doing it is the filer having moved on, and the reader's question is
+ * sitting on nobody's list. A decision rather than a measurement, so it is
+ * exported and `CW_HELD_ITEM_MINUTES` overrides it.
+ */
+export const HELD_ITEM_DEFAULT_MS = 5 * 60_000;
+
+/** One held review item as the wake names it. `id` is the TICKET's id — the
+ *  row the lead drives — and `reviewItemId` the item on it. */
+export interface HeldItemRow {
+  id: string;
+  title: string;
+  reviewItemId: string;
+  headline: string;
+  /** The judge's reason: the gap the filer was asked to close. */
+  reason: string;
+  /** How long the item has been held. */
+  heldMs: number;
+  /** When THIS hold was placed (the judge's stamp). A revision that is held
+   *  again gets a new one, which is what tells one hold from the next. */
+  heldAt: number;
+  /** The filer's display name — who the lead nudges. */
+  filedBy: string;
+  /** The filer's agent id, for the addressed nudge. Absent when unknown. */
+  filerAgentId?: string;
+}
+
+export interface HeldItemInput {
+  taskId: string;
+  title: string;
+  reviewItemId: string;
+  headline: string;
+  reason: string;
+  heldAt: number;
+  filedBy: string;
+  filerAgentId?: string;
+}
+
+/**
+ * Which held items have been held long enough to complain about. Strictly
+ * longer than the window, oldest first: a four-minute hold is the filer
+ * still on it, and a wake over it would train the lead to skim the one that
+ * is not.
+ */
+export function overdueHeldItems(
+  items: readonly HeldItemInput[],
+  now: number,
+  heldMs: number = HELD_ITEM_DEFAULT_MS,
+): HeldItemRow[] {
+  const out: HeldItemRow[] = [];
+  for (const item of items) {
+    const age = now - item.heldAt;
+    if (age <= heldMs) continue;
+    out.push({
+      id: item.taskId,
+      title: item.title,
+      reviewItemId: item.reviewItemId,
+      headline: item.headline,
+      reason: item.reason,
+      heldMs: age,
+      heldAt: item.heldAt,
+      filedBy: item.filedBy,
+      ...(item.filerAgentId !== undefined ? { filerAgentId: item.filerAgentId } : {}),
+    });
+  }
+  return out.sort((a, b) => b.heldMs - a.heldMs);
+}
