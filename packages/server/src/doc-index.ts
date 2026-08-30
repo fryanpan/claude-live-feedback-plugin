@@ -44,6 +44,15 @@ export interface DocIndexEntry {
   meta: DocMeta;
   /** Open and total thread counts, for the board's per-row badges. */
   threads: { open: number; total: number };
+  /**
+   * The doc had an un-flushed write to its bound `.md` when this row was
+   * written — set on the ydoc save (200ms), cleared when the file write-back
+   * (800ms) lands. A row that still carries it at boot is a doc the server
+   * went down on mid-write, and the ONLY doc a lazy boot has to hydrate: the
+   * edit is safe in the `.ydoc`, but nothing else would ever put it on disk
+   * for a doc nobody opens again.
+   */
+  pendingFileWrite?: boolean;
   /** Most recent comment timestamp across the doc's threads, when it has any. */
   lastThreadActivityAt?: number;
 }

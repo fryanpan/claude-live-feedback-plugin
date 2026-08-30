@@ -265,6 +265,19 @@ export interface RoomsConfig {
    * ignorant of what a `task:` docId means.
    */
   onRoomEvent?: (docId: string, payload: WebhookPayload) => void;
+  /**
+   * The clock the RESIDENCY policy reads — the idle/eviction window and the
+   * file poll's fast lane, both of which are keyed on `lastTouchedAt`.
+   *
+   * Injectable so a test can prove a two-day window in a millisecond, and so
+   * the property under test is the real `touchDoc` path rather than a value
+   * written into the map behind it. One clock for the whole policy: two would
+   * make "recently touched" mean different things a few lines apart.
+   *
+   * Deliberately NOT the clock for content — comment timestamps, thread
+   * activity and mtimes stay on the real one, because they are data.
+   */
+  now?: () => number;
 }
 
 /**
@@ -390,6 +403,29 @@ function isAuthoringOrigin(room: DocRoom, origin: unknown): boolean {
  *  rewrite is refused (callers with a tracked read are judged by order,
  *  not the clock). See `Rooms.staleWriteCheck`. */
 const STALE_WRITE_WINDOW_MS = 10 * 60_000;
+
+/**
+ * How long a doc may sit untouched in memory before it is dropped.
+ *
+ * Two days, and it is Bryan's number, not a tuning parameter: *"drop idle
+ * docs after two days, but if the user opens the doc again or interacts with
+ * it that resets the clock"*. The reason it is long is that he is unwilling
+ * to have a doc he touched recently disappear from memory, so err towards
+ * keeping rather than towards a smaller process.
+ *
+ * THE WINDOW IS THE AUTHORITATIVE RULE. An earlier design carried a resident
+ * cap of ~500 docs alongside it; roughly 600 docs are touched in a single
+ * day, so a two-day window legitimately holds more than that cap allows. If
+ * a count-based cap is ever added here, it must yield: a doc somebody touched
+ * yesterday is never evicted to satisfy a number. There is deliberately no
+ * such cap in this file today, and adding one is a decision, not a tweak.
+ */
+const IDLE_EVICT_MS = 2 * 24 * 60 * 60 * 1000;
+
+/** How often the idle sweep runs. A two-day window does not need a fast
+ *  clock; this only bounds how late an eviction is, never whether it
+ *  happens. */
+const EVICT_SWEEP_MS = 10 * 60_000;
 
 /** Backups kept per doc by `backupReplacedContent` before rotation. */
 const REPLACE_BACKUP_CAP = 20;
@@ -571,6 +607,215 @@ export class Rooms {
   /** Round-robin position in the idle half of the file sweep. */
   private idleCursor = 0;
   private memoryTicker: ReturnType<typeof setInterval> | null = null;
+  private evictTicker: ReturnType<typeof setInterval> | null = null;
+  /**
+   * When each resident room entered memory. The eviction clock reads
+   * `lastTouchedAt` first — a real reach — and falls back to this, so a doc
+   * that was just created or just hydrated is never evicted before anyone
+   * has had a chance to touch it.
+   */
+  private hydratedAt = new Map<string, number>();
+
+  /**
+   * Docs whose last bound-file write-back THREW. Sticky, and read by
+   * `indexEntryFor`, so the doc's row keeps `pendingFileWrite` and the next
+   * boot reasserts it — `writeBoundFileNow` swallows its own errors, so
+   * without this a failed write looked exactly like a completed one to
+   * everything downstream and the `.md` stayed stale until somebody opened
+   * the doc, which for a cold doc is never.
+   */
+  private failedFileWrites = new Set<string>();
+
+  /** The eviction policy's clock. See `RoomsConfig.now`. */
+  private now(): number {
+    return this.cfg.now?.() ?? Date.now();
+  }
+
+  /** How many docs are actually in memory. The number lazy hydration exists
+   *  to keep small, and the one a test has to be able to read. */
+  residentCount(): number {
+    return this.rooms.size;
+  }
+
+  /**
+   * Drop ONE doc from memory without losing anything it was holding.
+   *
+   * This is not `teardownRoom` and must never become it. `teardownRoom` is
+   * for a doc that is going away — it CANCELS the pending save and write-back
+   * timers, closes the sockets, and releases the aliases. Every one of those
+   * is wrong here, because the doc is coming back:
+   *
+   *  - Pending writes are FLUSHED, not cancelled. A cancelled write-back is
+   *    the keystrokes between the last flush and now, silently gone.
+   *  - Aliases stay. `teardownRoom` releases them; a captured review URL
+   *    would then 404 on a doc that is merely not loaded.
+   *  - The index row stays, so the doc is still listed, still resolvable,
+   *    still countable — it is out of memory, not out of existence.
+   *  - The file binding is dropped WHOLE, so a re-attach runs `attachFile`'s
+   *    non-empty-fragment arbitration from a clean slate — the same path a
+   *    restart takes, where the file is the source of truth at rest. That is
+   *    what merges an edit somebody made while the doc was out of memory.
+   *
+   *    Honest note on this one: the ticket asked for `lastMtimeMs` to be
+   *    cleared here, and it is (with the binding). But once the flush above
+   *    exists, doc and file are EQUAL at eviction, and the merge test passes
+   *    whether the binding is dropped or left behind — measured both ways.
+   *    So the flush is the guard doing the work, and this is hygiene: it
+   *    stops a stale `lastWritten`/`lastMtimeMs` from being reachable at all,
+   *    rather than fixing a failure that is currently reachable.
+   *
+   * Returns false if the doc was not in memory to begin with.
+   */
+  evictRoom(docId: string): boolean {
+    const room = this.rooms.get(docId);
+    if (!room) return false;
+    const binding = this.fileBindings.get(docId);
+
+    // 1. FLUSH. Same order and same calls as `flush()`, so a doc leaving
+    //    memory is saved exactly the way a shutdown saves it.
+    if (binding?.writeTimer) {
+      clearTimeout(binding.writeTimer);
+      binding.writeTimer = null;
+      try {
+        this.writeBoundFileNow(room, binding);
+      } catch (err) {
+        // Loud, and the eviction still proceeds: the `.ydoc` write below is
+        // the durable record, and refusing to evict here would pin a wedged
+        // doc in memory forever.
+        console.error(`[rooms] evict ${docId}: write-back failed:`, err);
+      }
+    }
+    const pendingSave = this.saveTimers.get(docId);
+    if (pendingSave) {
+      clearTimeout(pendingSave);
+      this.saveTimers.delete(docId);
+      this.persistRoomNow(room);
+    } else if (this.failedFileWrites.has(docId)) {
+      // The flush above threw. Nothing else will write this doc's row, and
+      // the row is the only thing that tells the next boot to come back for
+      // it — so pay the mtime refresh here rather than lose the repair.
+      this.persistRoomNow(room);
+    }
+    // No pending save means the `.ydoc` and its index row already match this
+    // doc — every mutation schedules one. Rewriting anyway would refresh the
+    // file's mtime, and `lastActivityAt` is that mtime: 600 evictions a day
+    // would each look like activity on a doc nobody touched.
+
+    // 2. Let go of the file. `pollArmed: false` takes it out of the shared
+    //    sweep; clearing lastMtimeMs is the write-loss guard described above.
+    if (binding) {
+      if (binding.readTimer) clearTimeout(binding.readTimer);
+      binding.readTimer = null;
+      binding.pollArmed = false;
+      this.fileBindings.delete(docId);
+    }
+
+    // 3. Out of memory. Aliases and the index row are deliberately untouched;
+    //    `activityMtime` stays too, so a listing still answers without a stat.
+    this.rooms.delete(docId);
+    this.lastTouchedAt.delete(docId);
+    this.hydratedAt.delete(docId);
+    // The row written above carries the marker now, so the in-memory copy has
+    // done its job; a doc that comes back re-derives it from its own binding.
+    this.failedFileWrites.delete(docId);
+    this.awarenessRooms.delete(room);
+    try {
+      // peek, not `room.awareness`: the getter would construct an Awareness
+      // purely to destroy it.
+      room.peekAwareness()?.destroy();
+      room.ydoc.destroy();
+    } catch {}
+    return true;
+  }
+
+  /**
+   * Why this doc cannot be dropped right now, or null if it can.
+   *
+   * These are the ways eviction loses work, so each one is a named string
+   * rather than a boolean — when a doc will not leave memory, the reason is
+   * the first thing anyone asks.
+   *
+   * NOT a hold, and worth knowing: an agent's `watch_doc` subscription. A
+   * watched doc that nobody opens for two days is evicted, and while its
+   * COMMENT events still arrive — a comment goes through `get`, which
+   * hydrates — an external edit to its bound `.md` no longer does, because
+   * an evicted doc has no file binding to poll. The doc is not resident, so
+   * nothing is watching the file for it. There is no per-doc subscriber
+   * count to hold on today; when there is, it belongs in this list.
+   */
+  private evictionHold(docId: string, room: DocRoom, now: number): string | null {
+    // Somebody is in it. Their next keystroke belongs to this Y.Doc.
+    if (room.conns.size > 0) return 'connected';
+    const binding = this.fileBindings.get(docId);
+    // The last write-back failed or collided. A wedged doc has a backup and
+    // an unresolved disagreement with its file; dropping it now would leave
+    // that to be rediscovered by whoever opens it next.
+    if (binding?.lastSyncError) return 'sync-error';
+    // A write is in flight. `evictRoom` would flush it correctly, but a doc
+    // mid-write is by definition a doc something is doing work on.
+    if (this.saveTimers.has(docId) || binding?.writeTimer) return 'pending-write';
+    // A person edited it inside the stale-write window — the same window
+    // `staleWriteCheck` uses to refuse an agent's overwrite. If an agent's
+    // write is not safe yet, neither is dropping the doc it would land on.
+    if (room.lastHumanEditAt !== undefined && now - room.lastHumanEditAt < STALE_WRITE_WINDOW_MS) {
+      return 'human-edit';
+    }
+    return null;
+  }
+
+  /**
+   * Drop every doc nobody has touched for two days. Returns what went.
+   *
+   * Public because the sweep timer and the tests must exercise the same
+   * pass — a test that reimplemented the policy would prove only that the
+   * test agrees with itself.
+   */
+  evictIdleRooms(): string[] {
+    const now = this.now();
+    const evicted: string[] = [];
+    // Snapshot: `evictRoom` mutates the map being walked.
+    for (const [docId, room] of [...this.rooms]) {
+      const last = this.lastTouchedAt.get(docId) ?? this.hydratedAt.get(docId) ?? now;
+      if (now - last < IDLE_EVICT_MS) continue;
+      if (this.evictionHold(docId, room, now) !== null) continue;
+      if (this.evictRoom(docId)) evicted.push(docId);
+    }
+    return evicted;
+  }
+
+  private startEvictionSweep(): void {
+    if (this.evictTicker) return;
+    const timer = setInterval(() => {
+      try {
+        const gone = this.evictIdleRooms();
+        if (gone.length > 0) console.error(`[rooms] evicted ${gone.length} idle doc(s)`);
+      } catch (err) {
+        console.error('[rooms] eviction sweep failed:', err);
+      }
+    }, EVICT_SWEEP_MS);
+    timer.unref?.();
+    this.evictTicker = timer;
+  }
+
+  /**
+   * Stop this Rooms' background timers. Every one of them is `unref`'d, so
+   * this is not needed to let a process exit — it is here so a test can build
+   * several Rooms over one data dir without their sweeps overlapping, and so
+   * a shutdown stops sweeping before `flush` runs.
+   */
+  stop(): void {
+    if (this.memoryTicker) clearInterval(this.memoryTicker);
+    this.memoryTicker = null;
+    if (this.evictTicker) clearInterval(this.evictTicker);
+    this.evictTicker = null;
+    if (this.filePollTicker) clearInterval(this.filePollTicker);
+    this.filePollTicker = null;
+    // The presence ticker stops itself when the last Awareness goes, but a
+    // shutdown does not wait for that: leaving it running holds callbacks
+    // into a Rooms nobody is using any more.
+    if (this.awarenessTicker) clearInterval(this.awarenessTicker);
+    this.awarenessTicker = null;
+  }
 
   /**
    * docId → its listing row, resident.
@@ -588,41 +833,128 @@ export class Rooms {
 
   constructor(private cfg: RoomsConfig) {
     if (!existsSync(cfg.dataDir)) mkdirSync(cfg.dataDir, { recursive: true });
-    // Before hydration, so `hydrateDoc` can see which docs already have a row
-    // and the migration below knows what it still owes.
+    // The index IS the boot. Nothing is hydrated here: a start now costs one
+    // read per doc of a small JSON row instead of decoding every CRDT ever
+    // written, and a doc enters memory when somebody reaches for it.
     this.docIndex = readAllDocIndexes(cfg.dataDir);
-    this.hydrateFromDisk();
-    this.writeMissingIndexes();
+    // Names first. A doc that is not resident still has to answer to the
+    // readable alias in a link somebody saved, and `claimAlias` normally runs
+    // inside `getOrCreate` — which no longer runs at boot.
+    this.seedAliasesFromIndex();
+    this.indexUnindexedDocs();
+    this.reassertPendingWrites();
     this.startMemoryLog();
+    this.startEvictionSweep();
   }
 
   /**
-   * Write a listing row for every doc that does not have one yet.
+   * Put every alias in the index into the resolver table.
    *
-   * This is the migration, and it is deliberately not a separate script: the
-   * 5,600 docs that predate the index are already hydrated at this point, so
-   * the rows cost one JSON write each and nothing has to be scheduled,
-   * remembered or run by hand. A doc written from here on gets its row from
-   * `persistRoomNow` and never reaches this path again.
+   * Aliases used to be a side effect of hydration, so the table was complete
+   * because everything was loaded. With lazy hydration nothing is loaded, and
+   * a table built on demand would 404 the first request for a name — the one
+   * failure a captured URL cannot survive.
    */
-  private writeMissingIndexes(): void {
-    let written = 0;
-    for (const [docId, room] of this.rooms) {
-      if (this.docIndex.has(docId)) continue;
+  private seedAliasesFromIndex(): void {
+    for (const [docId, entry] of this.docIndex) {
+      const alias = entry.meta.alias;
+      if (!alias) continue;
+      // A doc whose PRIMARY id is this string beats an alias that spells it:
+      // the primary is the older address and the one saved links use. Boot
+      // used to settle this by loading every `.ydoc` first, so the primary
+      // was already resident when the alias was claimed. Nothing is resident
+      // now, so the file on disk is what has to be consulted — including the
+      // pre-index `.ydoc`s this pass runs before.
+      if (docId !== alias && existsSync(this.pathFor(alias))) {
+        console.warn(
+          `[rooms] alias "${alias}" is also a doc id on disk; leaving it to that doc (${docId} keeps its own id)`,
+        );
+        continue;
+      }
+      this.claimAlias(alias, docId);
+    }
+  }
+
+  /**
+   * Hydrate the docs the server went down on mid-write, so their edit still
+   * reaches disk.
+   *
+   * The one case a lazy boot cannot leave to the next open. Everything else
+   * a doc is holding survives in its `.ydoc` and is arbitrated back into
+   * agreement the moment somebody reaches for it — but a doc nobody opens
+   * again is never reached, and its last edit would sit in the `.ydoc` while
+   * the `.md` on disk stayed stale indefinitely. The old boot covered this
+   * by loading every doc; this covers it by loading the handful that were
+   * actually mid-write, which after a clean shutdown is none.
+   *
+   * Hydration re-attaches the file, and `attachFile`'s arbitration does the
+   * reassert — this method only decides WHO to open.
+   */
+  private reassertPendingWrites(): void {
+    const pending = [...this.docIndex]
+      .filter(([, entry]) => entry.pendingFileWrite)
+      .map(([docId]) => docId);
+    if (pending.length === 0) return;
+    console.warn(
+      `[rooms] ${pending.length} doc(s) had an un-flushed file write at shutdown; reasserting`,
+    );
+    for (const docId of pending) {
       try {
+        this.hydrateDoc(docId);
+      } catch (err) {
+        console.error(`[rooms] could not reassert ${docId}:`, err);
+      }
+    }
+  }
+
+  /**
+   * Give a row to every `.ydoc` that has none, then let it go again.
+   *
+   * This is the whole migration for the docs written before the index
+   * existed: hydrate once, write the row, evict. There is no separate
+   * backfill script to remember to run, and no second code path that could
+   * produce a different row than `persistRoomNow` does — the row comes from
+   * the same `indexEntryFor`.
+   *
+   * A doc that already has a row is never opened, which is the point: the
+   * cost of this pass falls to zero the first time it runs.
+   */
+  private indexUnindexedDocs(): void {
+    let written = 0;
+    let files: string[];
+    try {
+      files = readdirSync(this.cfg.dataDir);
+    } catch (err) {
+      console.error('[rooms] could not read the data dir:', err);
+      return;
+    }
+    for (const file of files) {
+      if (!file.endsWith('.ydoc')) continue;
+      const docId = file.slice(0, -'.ydoc'.length);
+      if (!docId || this.docIndex.has(docId)) continue;
+      try {
+        this.hydrateDoc(docId);
+        const room = this.rooms.get(docId);
+        if (!room) continue;
         const entry = this.indexEntryFor(room);
         writeDocIndex(this.cfg.dataDir, docId, entry);
         this.docIndex.set(docId, entry);
         written++;
       } catch (err) {
-        // A row that cannot be written is a row that gets written next time
-        // the doc is saved. The listing falls back to the resident room, so
-        // nothing is wrong until the doc is also not resident — which is why
-        // this is loud rather than silent.
-        console.error(`[rooms] failed to write index for ${docId}:`, err);
+        // Loud: a doc with no row is invisible to every listing, so this is
+        // not a cosmetic failure. It is also self-healing — the next write to
+        // that doc writes its row — which is why it does not abort the boot.
+        console.error(`[rooms] failed to index ${docId}:`, err);
+      } finally {
+        // Straight back out. Writing a row is not somebody opening the doc,
+        // and a migration that left 5,000 docs resident would be the very
+        // boot this change exists to stop.
+        this.evictRoom(docId);
       }
     }
-    if (written > 0) console.error(`[rooms] wrote ${written} missing doc index file(s)`);
+    if (written > 0) {
+      console.error(`[rooms] wrote ${written} missing doc index row(s) at startup`);
+    }
   }
 
   /**
@@ -697,7 +1029,8 @@ export class Rooms {
         bindingTimers +
         (this.awarenessTicker ? 1 : 0) +
         (this.filePollTicker ? 1 : 0) +
-        (this.memoryTicker ? 1 : 0),
+        (this.memoryTicker ? 1 : 0) +
+        (this.evictTicker ? 1 : 0),
       activations: [...this.activations.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, ACTIVATION_TAGS_REPORTED)
@@ -911,14 +1244,17 @@ export class Rooms {
     docId: string,
     opts?: { force?: boolean },
   ): { ok: boolean; error?: 'not-found' | 'has-open-threads'; openThreads?: number } {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const openThreads = listThreads(room.ydoc).filter((t) => t.status === 'open').length;
     if (openThreads > 0 && !opts?.force) {
       return { ok: false, error: 'has-open-threads', openThreads };
     }
     this.teardownRoom(room, 'doc deleted');
-    this.purgePersisted(docId);
+    // `room.docId`, not `docId`: an alias resolves to the room but names no
+    // file, so purging the raw argument deleted nothing and reported success
+    // — the doc came back on the next boot.
+    this.purgePersisted(room.docId);
     return { ok: true };
   }
 
@@ -960,6 +1296,7 @@ export class Rooms {
     this.rooms.delete(docId);
     this.activityMtime.delete(docId);
     this.lastTouchedAt.delete(docId);
+    this.hydratedAt.delete(docId);
     this.awarenessRooms.delete(room);
     try {
       // peek, not `room.awareness`: the getter would construct an Awareness
@@ -1048,42 +1385,6 @@ export class Rooms {
     } catch (err) {
       console.error(`[rooms] failed to remove persisted ${docId}:`, err);
       return false;
-    }
-  }
-
-  // The persisted Yjs files are the source of truth for doc existence —
-  // the in-memory `rooms` map is just a hot cache. Without this hydration
-  // step, `list()` only returns rooms that have been touched since the
-  // last supervisor restart, which is misleading (every `bun --watch`
-  // reload silently shrinks the result). Load every persisted doc into
-  // memory at startup so discovery via list_docs is always accurate.
-  // File-bound markdown rooms re-attach automatically when their sourceUrl
-  // points at an existing file. Without this, every supervisor restart
-  // silently leaves bound docs with their Yjs state intact in memory but
-  // no observeDeep listener wired to write-back — reads work, writes never
-  // fire, disk drifts behind the live editor. Bug surfaced 2026-05-09:
-  // ~16 hours of edits sat unflushed before disk was inspected.
-  // Files that have moved (sourceUrl present, file missing) are left
-  // unbound; callers can rebind via create_review_doc with the new path.
-  private hydrateFromDisk(): void {
-    let count = 0;
-    let rebound = 0;
-    try {
-      for (const file of readdirSync(this.cfg.dataDir)) {
-        if (!file.endsWith('.ydoc')) continue;
-        const docId = file.slice(0, -'.ydoc'.length);
-        if (!docId) continue;
-        count++;
-        if (this.hydrateDoc(docId)) rebound++;
-      }
-    } catch (err) {
-      console.error('[rooms] hydrateFromDisk failed:', err);
-    }
-    if (count > 0) {
-      console.error(
-        `[rooms] hydrated ${count} doc(s) from ${this.cfg.dataDir}` +
-          (rebound > 0 ? ` (${rebound} markdown docs auto-rebound)` : ''),
-      );
     }
   }
 
@@ -1270,6 +1571,7 @@ export class Rooms {
       seq: 0,
     };
     this.rooms.set(docId, room);
+    this.hydratedAt.set(docId, this.now());
     this.wireEvents(room);
     // For freshly-created rooms (no on-disk state), the initDocMeta call
     // above fired its update event before wireEvents listened, so nothing
@@ -1298,9 +1600,36 @@ export class Rooms {
    * space, so the two branches can never both match.
    */
   get(docId: string): DocRoom | undefined {
-    const room = this.peek(docId);
+    const room = this.resolveRoom(docId);
     if (room) this.touchDoc(room.docId);
     return room;
+  }
+
+  /**
+   * The room for a docId, LOADING IT FROM DISK if it is not in memory.
+   *
+   * This is the seam lazy hydration hangs on. Every method that is about to
+   * read or write a document's CONTENT goes through here, so "not in memory"
+   * and "does not exist" stop being the same answer — which they were when
+   * every doc was loaded at boot, and which is why so much code could get
+   * away with reaching straight into the room map.
+   *
+   * Deliberately does NOT touch: hydrating is not the same as somebody
+   * reaching for a doc, and a sweep that pulled docs in would otherwise hold
+   * every one of them for two days. `get` touches; this does not, so a doc
+   * pulled in by machinery goes back out on the next sweep.
+   *
+   * The `.ydoc` must exist. Hydration LOADS what is on disk — it must never
+   * mint an empty doc for an id nobody wrote, which is exactly what
+   * `getOrCreate` would do for a stray index row with no file behind it.
+   */
+  private resolveRoom(docId: string): DocRoom | undefined {
+    const resident = this.peek(docId);
+    if (resident) return resident;
+    const target = this.aliases.get(docId) ?? docId;
+    if (!existsSync(this.pathFor(target))) return undefined;
+    this.hydrateDoc(target);
+    return this.rooms.get(target);
   }
 
   /**
@@ -1326,6 +1655,44 @@ export class Rooms {
     const aliased = this.aliases.get(docId);
     if (!aliased) return undefined;
     return this.rooms.get(aliased);
+  }
+
+  /**
+   * A doc's metadata without needing the doc in memory.
+   *
+   * Almost every `peek` in the server wanted `?.meta` — a title for a link, a
+   * `type` for a route, the review id a share scope is computed from. Under
+   * lazy hydration `peek` answers undefined for anything not resident, and
+   * those callers silently degraded: a share scope came out empty and refused
+   * a document it covers, which is a 403 on your own link rather than an
+   * error anybody would see in a log.
+   *
+   * The index row carries the whole `DocMeta`, so this answers for every doc
+   * on disk at the cost of a map lookup. Resident first — a live room's meta
+   * is newer than the last row written for it.
+   */
+  peekMeta(docId: string): DocMeta | undefined {
+    const resident = this.peek(docId);
+    if (resident) return resident.meta;
+    const target = this.aliases.get(docId) ?? docId;
+    return this.docIndex.get(target)?.meta;
+  }
+
+  /**
+   * The id a name resolves to: an alias's target, or the name itself.
+   *
+   * The canonicalization half of `peek(x)?.docId ?? x`, which stopped working
+   * for docs that are not in memory.
+   */
+  resolveDocId(docId: string): string {
+    if (this.rooms.has(docId)) return docId;
+    return this.aliases.get(docId) ?? docId;
+  }
+
+  /** Whether a doc exists at all — resident, indexed, or a file on disk. */
+  docExists(docId: string): boolean {
+    const target = this.resolveDocId(docId);
+    return this.rooms.has(target) || this.docIndex.has(target) || existsSync(this.pathFor(target));
   }
 
   /**
@@ -1405,7 +1772,7 @@ export class Rooms {
   /** Schedule a persistence pass for a doc whose in-memory meta changed with
    *  no accompanying CRDT update (the private sidecar keys). */
   persistMeta(docId: string): void {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (room) this.saveToDisk(room);
   }
 
@@ -1439,7 +1806,7 @@ export class Rooms {
       review?: ReviewPayload;
     },
   ): Promise<Thread | null> {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     if (threadId == null) {
       if (!anchor) return null;
@@ -1544,7 +1911,7 @@ export class Rooms {
     optionId?: string,
     opts?: { generate?: boolean; onlyIfUnanswered?: boolean },
   ): Promise<{ ok: true; thread: Thread } | { ok: false; error: string }> {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
@@ -1689,7 +2056,7 @@ export class Rooms {
     author: User,
     opts?: { generate?: boolean },
   ): { ok: true; thread: Thread } | { ok: false; error: string } {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     const thread = this.getThread(docId, threadId);
     const target = thread?.comments.find((c) => c.id === commentId);
@@ -1761,7 +2128,7 @@ export class Rooms {
         candidates?: Array<{ docOffset: number; preview: string }>;
       }
   > {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     // Code/diff docs are flat text in the `content` Y.Text — the prose
     // resolver below would walk an empty fragment and always miss. Find the
@@ -1862,7 +2229,7 @@ export class Rooms {
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'resolved');
     if (t) {
@@ -1884,7 +2251,7 @@ export class Rooms {
     author?: User,
     opts?: { generate?: boolean },
   ): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     const t = schemaSetStatus(room.ydoc, threadId, 'open');
     if (t) {
@@ -1898,7 +2265,7 @@ export class Rooms {
   }
 
   reanchor(docId: string, threadId: string, anchor: Anchor): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     return schemaReplaceAnchor(room.ydoc, threadId, anchor);
   }
@@ -1922,14 +2289,14 @@ export class Rooms {
     threads: Thread[];
     syncError?: { message: string; at: number };
   } | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     // Code and diff docs are flat read-only text in the `content` Y.Text,
     // not a prose fragment — surface the whole source as one block. (For a
     // diff doc that text is the file at the target commit.)
     if (contentKind(room.meta.type) === 'flat') {
       const text = room.ydoc.getText('content').toString();
-      const syncError = this.fileBindings.get(docId)?.lastSyncError;
+      const syncError = this.fileBindings.get(room.docId)?.lastSyncError;
       return {
         plainText: text,
         blocks: [{ type: 'code', text, startOffset: 0, endOffset: text.length }],
@@ -2026,9 +2393,9 @@ export class Rooms {
     threads: { open: number; resolved: number };
     pendingSuggestions: number;
   } | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
-    const binding = this.fileBindings.get(docId);
+    const binding = this.fileBindings.get(room.docId);
     const meta = this.withActivity(room.meta);
 
     let textLength: number;
@@ -2375,12 +2742,16 @@ export class Rooms {
    * lookup, not a search.
    */
   companionOf(docId: string): string | undefined {
-    const meta = this.rooms.get(docId)?.meta;
+    // Metadata and existence, not residency: after a lazy boot neither doc is
+    // loaded, and equating "not in memory" with "no companion" dropped the
+    // companion's comments out of `GET /api/docs/:id/threads` and out of the
+    // member's event fan-out until somebody happened to open both.
+    const meta = this.peekMeta(docId);
     if (!meta || meta.type !== 'diff' || !meta.relPath) return undefined;
     const reviewId = reviewIdOf(meta);
     if (!reviewId) return undefined;
     const companionId = memberDocId(`${reviewId}:edit`, meta.relPath);
-    return this.rooms.has(companionId) ? companionId : undefined;
+    return this.docExists(companionId) ? companionId : undefined;
   }
 
   /**
@@ -2388,12 +2759,12 @@ export class Rooms {
    * `docId` is not a companion. Inverse of `companionOf`.
    */
   memberOfCompanion(docId: string): string | undefined {
-    const meta = this.rooms.get(docId)?.meta;
+    const meta = this.peekMeta(docId);
     if (!meta || meta.type !== 'markdown' || !meta.relPath) return undefined;
     const reviewId = reviewIdOf(meta);
     if (!reviewId || docId !== memberDocId(`${reviewId}:edit`, meta.relPath)) return undefined;
     const memberId = memberDocId(reviewId, meta.relPath);
-    return this.rooms.get(memberId)?.meta.type === 'diff' ? memberId : undefined;
+    return this.peekMeta(memberId)?.type === 'diff' ? memberId : undefined;
   }
 
   buildWorkspaceTree(setId: string): WorkspaceTree {
@@ -2764,7 +3135,16 @@ export class Rooms {
     // Commit point passed: every file is parked. Now unbind the rooms.
     for (const m of members) {
       const room = this.rooms.get(m.docId);
-      if (room) this.teardownRoom(room, 'review archived');
+      if (room) {
+        this.teardownRoom(room, 'review archived');
+        continue;
+      }
+      // A member nobody had opened has no room to tear down, but its alias
+      // was claimed from the index at boot and would outlive its file:
+      // `claimAlias` then refuses to give that name to a NEW doc, so a reused
+      // review name resolves for ever to something archived. `teardownRoom`
+      // released these back when every doc was resident.
+      this.releaseAliases(m.docId);
     }
 
     const entry = members.find((m) => reviewIdOf(m) === setId);
@@ -2858,26 +3238,28 @@ export class Rooms {
     | { ok: false; error: 'not-found' | 'hub-owned' | 'archive-collision' | 'move-failed' }
     | { ok: false; error: 'review-member'; setId: string } {
     if (isHubOwnedRoom(docId)) return { ok: false, error: 'hub-owned' };
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
+    // From here on the CANONICAL id: everything below names files, writes a
+    // manifest and reports back, and an alias names none of them.
+    const id = room.docId;
     const setId = reviewIdOf(room.meta);
     if (setId !== undefined) return { ok: false, error: 'review-member', setId };
 
     const dir = ensureArchiveDir(this.cfg.dataDir);
-    if (existsSync(join(dir, `${docId}.ydoc`))) return { ok: false, error: 'archive-collision' };
+    if (existsSync(join(dir, `${id}.ydoc`))) return { ok: false, error: 'archive-collision' };
 
     // Flush BEFORE tearing down: teardown cancels the pending debounced write,
     // so without this the archived snapshot is up to 200ms stale — and for a
     // doc edited right up to the moment it was retired, that is the edit the
     // reviewer just made.
     this.persistRoomNow(room);
-    if (!this.moveDocFiles(docId, this.cfg.dataDir, dir))
-      return { ok: false, error: 'move-failed' };
+    if (!this.moveDocFiles(id, this.cfg.dataDir, dir)) return { ok: false, error: 'move-failed' };
     // Commit point passed: the files are parked. Now unbind the room.
     this.teardownRoom(room, 'doc archived');
 
     const manifest: ArchivedDoc = {
-      docId,
+      docId: id,
       archivedAt: toUtcIso(Date.now()),
       archivedBy: opts.archivedBy,
       ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
@@ -2885,8 +3267,8 @@ export class Rooms {
       linkedWorkspaces: opts.linkedWorkspaces ?? [],
     };
     writeDocArchiveManifest(this.cfg.dataDir, manifest);
-    this.recordArchiveLifecycle('archive', docId, {}, opts);
-    return { ok: true, docId, manifest };
+    this.recordArchiveLifecycle('archive', id, {}, opts);
+    return { ok: true, docId: id, manifest };
   }
 
   /**
@@ -3066,7 +3448,7 @@ export class Rooms {
     resolvedPath?: string;
   } {
     if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
     const fragment = prose.getProseFragment(room.ydoc);
@@ -3224,7 +3606,7 @@ export class Rooms {
     opts: { writeBack?: boolean } = {},
   ): { ok: boolean; error?: 'not-found' | 'path-empty' | 'read-failed'; resolvedPath?: string } {
     if (!filePath || filePath.trim() === '') return { ok: false, error: 'path-empty' };
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const abs = filePath.startsWith('/') ? filePath : join(process.cwd(), filePath);
     const content = room.ydoc.getText('content');
@@ -3388,7 +3770,9 @@ export class Rooms {
     // git operation that made it is usually about to make another. Promote
     // the binding to the fast lane so the next few writes are seen in one
     // tick rather than one rotation, and let it decay like any other access.
-    this.lastTouchedAt.set(docId, Date.now());
+    // `this.now()`, not `Date.now()`: residency runs on ONE clock, or an
+    // externally edited doc ages against an epoch the policy never sees.
+    this.lastTouchedAt.set(docId, this.now());
     // Debounce so we don't read a half-written file mid-save.
     if (binding.readTimer) clearTimeout(binding.readTimer);
     binding.readTimer = setTimeout(() => {
@@ -3428,7 +3812,7 @@ export class Rooms {
    * map so each idle doc comes round in turn.
    */
   private sweepFilePolls(): void {
-    const now = Date.now();
+    const now = this.now();
     const idle: string[] = [];
     let armed = 0;
     for (const [docId, binding] of this.fileBindings) {
@@ -3466,10 +3850,10 @@ export class Rooms {
     if (!binding?.pollArmed) {
       // Nothing to poll — but still remember the access, so a doc that is
       // bound later starts out warm rather than cold.
-      this.lastTouchedAt.set(docId, Date.now());
+      this.lastTouchedAt.set(docId, this.now());
       return;
     }
-    const now = Date.now();
+    const now = this.now();
     // Asked BEFORE the stamp moves: afterwards every touch looks active.
     const wasActive = this.bindingIsActive(docId, binding, now);
     const prev = this.lastTouchedAt.get(docId);
@@ -3502,9 +3886,9 @@ export class Rooms {
    * unchanged.
    */
   reparseFromDisk(docId: string): { ok: boolean; error?: 'not-found' | 'no-binding' | 'missing' } {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
-    this.touchDoc(docId);
+    this.touchDoc(room.docId);
     // PINNED diff docs have no file binding — their content is pinned to a
     // commit. Recover by re-reading the file at the target hash from the
     // repo. (Working-tree diff docs have a live binding and fall through to
@@ -3772,7 +4156,12 @@ export class Rooms {
         contentKind(room.meta.type) === 'flat'
           ? room.ydoc.getText('content').toString()
           : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
-      if (md === binding.lastWritten) return;
+      if (md === binding.lastWritten) {
+        // Nothing to write means nothing to reassert after a restart either.
+        this.failedFileWrites.delete(room.docId);
+        this.clearPendingFileWrite(room.docId);
+        return;
+      }
       // Atomic: write-temp-then-rename, so a crash mid-write can't leave
       // the user's file truncated and a concurrent reader never sees half
       // a document. (Same save pattern editors use.) Rename onto the
@@ -3791,9 +4180,34 @@ export class Rooms {
       try {
         binding.lastMtimeMs = statSync(binding.path).mtimeMs;
       } catch {}
+      // The edit is on disk now, so a restart has nothing to repair. Note
+      // this is NOT in a `finally`: a write that THREW must keep the flag,
+      // because that is exactly the doc a restart still has to reassert.
+      this.failedFileWrites.delete(room.docId);
+      this.clearPendingFileWrite(room.docId);
     } catch (err) {
+      // Sticky, because the caller cannot see this: the throw is swallowed
+      // here and the write timer is already cleared, so nothing downstream
+      // can tell a failed write from a finished one.
+      this.failedFileWrites.add(room.docId);
       console.error(`[rooms] file write failed for ${binding.path}:`, err);
     }
+  }
+
+  /**
+   * Drop `pendingFileWrite` from a doc's index row, if it is set.
+   *
+   * Writes the row rather than waiting for the next `persistRoomNow`: the
+   * whole value of the flag is that it is accurate at the moment the process
+   * dies, and a flag left set only costs one doc's hydration at the next
+   * boot, while a flag cleared too eagerly loses the edit it was guarding.
+   */
+  private clearPendingFileWrite(docId: string): void {
+    const entry = this.docIndex.get(docId);
+    if (!entry?.pendingFileWrite) return;
+    const { pendingFileWrite: _drop, ...rest } = entry;
+    this.docIndex.set(docId, rest);
+    writeDocIndex(this.cfg.dataDir, docId, rest);
   }
 
   /**
@@ -3914,10 +4328,12 @@ export class Rooms {
   reconcileNow(
     docId: string,
   ): 'in-sync' | 'catch-up' | 'apply' | 'conflict' | 'no-binding' | 'missing' {
-    const room = this.rooms.get(docId);
-    const binding = this.fileBindings.get(docId);
+    const room = this.resolveRoom(docId);
+    // Every keyed lookup below takes the RESOLVED id: `docId` may be an
+    // alias, which resolves to a room but keys no binding and no clock.
+    const binding = room ? this.fileBindings.get(room.docId) : undefined;
     if (!room || !binding) return 'no-binding';
-    this.touchDoc(docId);
+    this.touchDoc(room.docId);
     if (!existsSync(binding.path)) return 'missing';
     // Advance the poll baseline the same way the poll itself would, so this
     // manual reconcile doesn't get replayed on the next tick.
@@ -4079,7 +4495,7 @@ export class Rooms {
     docId: string,
     markdown: string,
   ): { ok: true } | { ok: false; error: 'not-found' | 'unsupported' | 'empty' | 'parse-failed' } {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     // Flat docs (code / diff) are read-only review surfaces; their content
     // comes from disk or a pinned commit, never from an agent payload.
@@ -4123,7 +4539,7 @@ export class Rooms {
       parseInlineMarks?: boolean;
     },
   ): prose.ReplaceResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.findAndReplace(room.ydoc, opts);
   }
@@ -4141,7 +4557,7 @@ export class Rooms {
     replacement: string,
     opts?: { parseInlineMarks?: boolean },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -4168,7 +4584,7 @@ export class Rooms {
       label?: string;
     },
   ): prose.CreateAnchorResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.createAgentAnchor(room.ydoc, opts);
   }
@@ -4178,7 +4594,7 @@ export class Rooms {
     anchorId: string,
     op: { kind: 'replace'; text: string } | { kind: 'insert_after'; text: string },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-not-found' };
@@ -4193,7 +4609,7 @@ export class Rooms {
   }
 
   deleteAgentAnchor(docId: string, anchorId: string): boolean {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return false;
     return prose.deleteAgentAnchor(room.ydoc, anchorId);
   }
@@ -4211,7 +4627,7 @@ export class Rooms {
   /** All pending proposals on the doc, in doc order. Empty for unknown docs
    *  and for flat (code/diff) docs, whose prose fragment has no content. */
   listSuggestions(docId: string): suggestOps.SuggestionSummary[] {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return [];
     return suggestOps.listSuggestions(room.ydoc);
   }
@@ -4244,7 +4660,7 @@ export class Rooms {
         error: 'not-found' | 'no-match' | 'ambiguous' | 'match-in-pending-suggestion';
         candidates?: Array<{ docOffset: number; preview: string }>;
       } {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const res = suggestOps.suggestReplace(room.ydoc, opts);
     if (!res.ok) return res;
@@ -4277,7 +4693,7 @@ export class Rooms {
   ):
     | { ok: true; suggestionId: string }
     | { ok: false; error: 'anchor-not-found' | 'anchor-orphaned' | 'cross-block' } {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -4304,7 +4720,7 @@ export class Rooms {
    *  normal debounced write-back. Missing sid (or doc) → not-found — also
    *  the correct answer to the double-accept race. */
   acceptSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
     const res = suggestOps.acceptSuggestion(room.ydoc, sid);
@@ -4314,7 +4730,7 @@ export class Rooms {
 
   /** Reject a proposal: restores exactly the pre-suggestion text. */
   rejectSuggestion(docId: string, sid: string): suggestOps.SuggestionOpResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const before = suggestOps.listSuggestions(room.ydoc).find((s) => s.sid === sid);
     const res = suggestOps.rejectSuggestion(room.ydoc, sid);
@@ -4327,7 +4743,7 @@ export class Rooms {
     docId: string,
     opts: { action: 'accept' | 'reject'; authorId?: string },
   ): { ok: true; resolved: number; sids: string[] } | { ok: false; error: 'not-found' } {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'not-found' };
     const before = new Map(suggestOps.listSuggestions(room.ydoc).map((s) => [s.sid, s]));
     const res = suggestOps.resolveAllSuggestions(room.ydoc, opts);
@@ -4352,7 +4768,7 @@ export class Rooms {
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-not-found' };
@@ -4365,7 +4781,7 @@ export class Rooms {
 
   /** Append text at the END position of a thread's anchored range. */
   insertAfterThread(docId: string, threadId: string, text: string): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -4385,7 +4801,7 @@ export class Rooms {
     markdown: string,
     opts?: { placement?: prose.BlockPlacement },
   ): prose.AnchoredEditResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-not-found' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-not-found' };
@@ -4404,7 +4820,7 @@ export class Rooms {
    * empty block element behind.
    */
   deleteBlockAtThread(docId: string, threadId: string): prose.DeleteBlockResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-orphaned' };
     const thread = this.getThread(docId, threadId);
     if (!thread) return { ok: false, error: 'anchor-orphaned' };
@@ -4414,7 +4830,7 @@ export class Rooms {
 
   /** Same, keyed on an agent anchor. */
   deleteBlockAtAgentAnchor(docId: string, anchorId: string): prose.DeleteBlockResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'anchor-orphaned' };
     const anchor = prose.readAgentAnchor(room.ydoc, anchorId);
     if (!anchor) return { ok: false, error: 'anchor-orphaned' };
@@ -4434,7 +4850,7 @@ export class Rooms {
       endOccurrence?: number;
     },
   ): prose.DeleteBlocksInRangeResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.deleteBlocksInRange(room.ydoc, opts);
   }
@@ -4444,7 +4860,7 @@ export class Rooms {
     docId: string,
     opts: { heading: string; level?: number; occurrence?: number },
   ): prose.DeleteSectionResult {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-match' };
     return prose.deleteSection(room.ydoc, opts);
   }
@@ -4455,20 +4871,20 @@ export class Rooms {
    * safe to call on every significant doc change.
    */
   autoReanchor(docId: string): { checked: number; reanchored: number; stillOrphan: number } | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     return prose.autoReanchorDoc(room.ydoc);
   }
 
   listThreads(docId: string, filter?: { status?: 'open' | 'resolved' }): Thread[] {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return [];
     const all = listThreads(room.ydoc);
     return filter?.status ? all.filter((t) => t.status === filter.status) : all;
   }
 
   getThread(docId: string, threadId: string): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     return listThreads(room.ydoc).find((t) => t.id === threadId) ?? null;
   }
@@ -4533,7 +4949,7 @@ export class Rooms {
     if (type !== 'read_session' && type !== 'doc_open') {
       return { ok: false, error: 'bad-type' };
     }
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return { ok: false, error: 'no-doc' };
     try {
       // Re-clamp the browser-supplied duration/scroll fields server-side so a
@@ -4659,23 +5075,47 @@ export class Rooms {
     const tasks: ScheduleArgs[] = [];
     let open = 0;
     let resolved = 0;
-    for (const [docId, room] of this.rooms) {
+    // Every doc on the server, not just the ones that happen to be in memory.
+    // Under lazy hydration those are two very different sets, and the whole
+    // point of this sweep is the OLD threads — which are exactly the ones in
+    // docs nobody has opened.
+    for (const docId of new Set([...this.docIndex.keys(), ...this.rooms.keys()])) {
+      // The index says how many threads a doc has, so a doc with none is
+      // skipped without loading it. On the measured corpus that is most of
+      // them, and it is the difference between a sweep that reads a few
+      // hundred docs and one that reads five thousand.
+      if (this.threadCounts(docId).total === 0) continue;
+      const wasResident = this.rooms.has(docId);
+      const room = this.resolveRoom(docId);
+      if (!room) continue;
+      let queuedHere = 0;
       for (const t of listThreads(room.ydoc)) {
         // Ask the same question the live path asks, so a thread summarized a
         // second ago is not paid for twice.
         if (!needsCall(t, t.summary)) continue;
         if (t.status === 'open') open++;
         else resolved++;
+        queuedHere++;
         tasks.push({
           docId,
           threadId: t.id,
           getThread: () => this.getThread(docId, t.id),
           apply: (summary) => {
-            setThreadSummary(room.ydoc, t.id, summary);
-            this.saveToDisk(room);
+            // Resolved again HERE, not captured above: this runs minutes
+            // later, spread over the pacing window, and the room it was
+            // collected from may have been evicted since — writing into a
+            // destroyed Y.Doc would drop the summary silently.
+            const live = this.resolveRoom(docId);
+            if (!live) return;
+            setThreadSummary(live.ydoc, t.id, summary);
+            this.saveToDisk(live);
           },
         });
       }
+      // Put back what this sweep pulled in and did not need. A doc that had
+      // work queued stays for now — `apply` is about to write to it — and the
+      // idle sweep takes it later on the ordinary clock.
+      if (!wasResident && queuedHere === 0) this.evictRoom(docId);
     }
     if (tasks.length > 0) {
       void summarizer
@@ -4701,7 +5141,7 @@ export class Rooms {
    * an on-demand summary cannot end up in the doc but not on disk.
    */
   applyThreadSummary(docId: string, threadId: string, summary: StoredSummary): Thread | null {
-    const room = this.rooms.get(docId);
+    const room = this.resolveRoom(docId);
     if (!room) return null;
     const t = setThreadSummary(room.ydoc, threadId, summary);
     if (t) this.saveToDisk(room);
@@ -4977,6 +5417,11 @@ export class Rooms {
         }
       }
     }
+    // The ydoc save runs at 200ms and the file write-back at 800ms, so a
+    // pending write-back is always visible from here. See `DocIndexEntry`.
+    const pendingFileWrite =
+      this.fileBindings.get(room.docId)?.writeTimer != null ||
+      this.failedFileWrites.has(room.docId);
     return {
       v: DOC_INDEX_VERSION,
       // A copy, not the live object: `room.meta` keeps being mutated and the
@@ -4984,6 +5429,7 @@ export class Rooms {
       meta: { ...room.meta },
       threads: { open, total: threads.length },
       ...(lastThreadActivityAt !== undefined ? { lastThreadActivityAt } : {}),
+      ...(pendingFileWrite ? { pendingFileWrite: true } : {}),
     };
   }
 
