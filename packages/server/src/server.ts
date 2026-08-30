@@ -1949,6 +1949,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // one for a dispatch still watching, the ordinary one otherwise.
       const dispatchTs = dispatches.activityFor(row.id);
       if (dispatchTs !== undefined && dispatchTs > newest) newest = dispatchTs;
+      // Somebody rewriting the doc the row is ABOUT is the row moving, for
+      // the same reason a comment and a builder's worktree churn are: the
+      // work is happening somewhere the board's own timestamps cannot see.
+      // Measured on the live board — a row whose agent edited its linked doc
+      // continuously woke the lead three times in one hour.
+      //
+      // Merged into `threadActivity` rather than passed as a fifth argument,
+      // because that map is already this loop's ONE exoneration seam:
+      // stall-gate.ts says so where it defines `watchingDispatchTaskIds`
+      // ("worktree activity itself arrives merged into `threadActivity` by
+      // the caller; this set only says whose silence is a builder's"). A
+      // third parallel notion of activity would have to be taught to
+      // `evaluateStalls`, the CLI report, and every future caller.
+      //
+      // Scope is the row's OWN links — a doc it cites and any doc it holds a
+      // thread ref into. Deliberately not the row's `task:<id>` body room:
+      // that room is written by the projection on any row change, so
+      // counting it would exonerate a row for changing its own status.
+      for (const ref of taskStore.getTask(row.id)?.links ?? []) {
+        if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
+        const editedAt = rooms.lastContentChangeFor(ref.docId);
+        if (editedAt !== undefined && editedAt > newest) newest = editedAt;
+      }
       if (newest > 0) threadActivity.set(row.id, newest);
     }
     if (threadActivity.size === 0 && commentAsks.length === 0) return first;

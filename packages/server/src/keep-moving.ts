@@ -113,13 +113,25 @@ export function classifyOpenTasks(
   stallMs: number,
   bands: { dispatchable: Set<string>; ownerBand: Set<string> },
   /**
-   * Latest `thread.lastActivity` per taskId, from the row's discussion doc
-   * (`GET /api/docs/task:<id>/threads`). A comment IS activity: a row whose
-   * whole decision conversation is live on its thread is not quiet. The CLI
-   * fetches these only for rows a first pass reported stalled, which caps the
-   * per-row calls at the handful being reported. (The `/api/docs` listing's
-   * `lastActivityAt` is NOT usable here — it is a `.ydoc` mtime, refreshed by
-   * server-side snapshot rewrites; see packages/server/src/landing.ts rule 1.)
+   * The row's newest movement that the board's own timestamps cannot see, per
+   * taskId — this classifier's ONE seam for such evidence, kept single on
+   * purpose so callers merge into it rather than growing parallel notions of
+   * activity. Callers take the max of everything they can see:
+   *
+   *  - `thread.lastActivity` from the row's discussion doc
+   *    (`GET /api/docs/task:<id>/threads`). A comment IS activity: a row whose
+   *    whole decision conversation is live on its thread is not quiet.
+   *  - a registered builder's worktree churn (`dispatches.activityFor`).
+   *  - the last content change to a doc the row LINKS (server.ts): an agent
+   *    rewriting the doc a row is about is the row moving.
+   *
+   * The CLI fetches these only for rows a first pass reported stalled, which
+   * caps the per-row calls at the handful being reported. (The `/api/docs`
+   * listing's `lastActivityAt` is NOT usable here — it is a `.ydoc` mtime,
+   * refreshed by server-side snapshot rewrites; see
+   * packages/server/src/landing.ts rule 1. Nor is a doc's `lastTouchedAt`,
+   * which mere reads set. `DocRoom.lastContentChangeAt` is the signal that
+   * means somebody actually changed the content.)
    */
   threadActivity?: Map<string, number>,
 ): Classified[] {

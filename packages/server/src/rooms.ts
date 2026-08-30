@@ -100,6 +100,7 @@ import {
 import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
+import { PROJECTION_ORIGIN } from './task-projection.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
 export type WsCtx = {
@@ -161,6 +162,27 @@ export interface DocRoom {
    * In-memory only: after a restart there are no live edits to protect yet.
    */
   lastHumanEditAt?: number;
+  /**
+   * Wall-clock time of the last change to this doc's CONTENT made by a
+   * person or an agent — the signal the stall loop reads so that a row whose
+   * whole current work is somebody rewriting its doc does not read as
+   * silent (see `DOC_ACTIVITY_DENIED_ORIGINS`).
+   *
+   * Stamped from the room's single `ydoc.on('update')` hook, so it covers
+   * every writer — browser websocket, MCP edit tool, HTTP route — without a
+   * per-path call anyone can forget to add. Deliberately NOT any of the
+   * three timestamps that already existed and each lie in a different
+   * direction: `meta.lastActivityAt` is a `.ydoc` mtime that server-side
+   * snapshot rewrites refresh (landing.ts rule 1), `lastTouchedAt` is set by
+   * `touchDoc` on mere READS, and `lastHumanEditAt` above is browser-typing
+   * only, which excludes exactly the agent MCP edits this is for.
+   *
+   * In-memory only, like `lastHumanEditAt`: after a restart no edit has been
+   * seen yet, so a doc under active editing goes unexonerated for at most one
+   * stall interval. That is the safe direction to be wrong in — it can only
+   * cause the wake this removes, never suppress a real one.
+   */
+  lastContentChangeAt?: number;
 }
 
 /** A file leaf in the workspace tree (a single bound review doc). */
@@ -307,6 +329,35 @@ export function decideReconcile(args: {
 /** Yjs origin for the private-meta guard's own deletes, so it never
  *  re-enters on its own transaction. */
 const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
+
+/**
+ * Transaction origins that are the SERVER writing to itself, and so are not
+ * evidence that anybody is working on the doc. Everything else counts: a live
+ * websocket (a person typing, whose origin is the connection OBJECT) and every
+ * string-origin server-side writer that acts for an agent (`agent`,
+ * `agent-set-content`, `agent-queued`, …).
+ *
+ * Each entry is here because counting it would manufacture activity out of
+ * nothing:
+ *  - `file-seed` / `file-watch` — the disk, not an author. A `git pull` or a
+ *    hydrate would otherwise exonerate every bound row on the board at once.
+ *  - `agent-reanchor` — the thread re-anchor sweep, which the server runs in
+ *    reaction to other edits; counting it would let one real edit keep
+ *    re-arming itself.
+ *  - `task-projection` — the board ydoc re-render on any row change.
+ *  - the private-meta guard and migration — server hygiene.
+ *
+ * Hydration is excluded a second way as well: `wireEvents` is wired AFTER
+ * `loadFromDisk`, so a room's load never reaches this hook at all.
+ */
+const DOC_ACTIVITY_DENIED_ORIGINS: ReadonlySet<unknown> = new Set([
+  'file-seed',
+  'file-watch',
+  'agent-reanchor',
+  PROJECTION_ORIGIN,
+  PRIVATE_META_GUARD_ORIGIN,
+  'private-meta-migration',
+]);
 
 /** How long after a human's live edit an UNTRACKED caller's whole-doc
  *  rewrite is refused (callers with a tracked read are judged by order,
@@ -3672,6 +3723,24 @@ export class Rooms {
    */
   /** Record a human (browser-websocket) prose edit. Called by the wireEvents
    *  observer; public so tests can pin the window policy without a socket. */
+  /**
+   * When this doc's content was last changed by a person or an agent, or
+   * undefined if no change has been seen since the room was loaded (a room
+   * that was never opened answers undefined, which is the right answer — it
+   * has no activity to report).
+   *
+   * `peek`, not `get`: `get` calls `touchDoc`, and a stall-loop poll must not
+   * register as somebody reaching for the doc, or the instrument would move
+   * what it measures (and would drag the whole corpus into the file poll's
+   * fast lane — see `peek`'s own note). Going through `peek` rather than the
+   * raw map is also what makes ALIASES resolve: a task's saved `doc` ref
+   * usually holds the caller-chosen name, not the minted id, so a raw
+   * `this.rooms.get` answered undefined for exactly the docs this is for.
+   */
+  lastContentChangeFor(docId: string): number | undefined {
+    return this.peek(docId)?.lastContentChangeAt;
+  }
+
   noteHumanEdit(docId: string, at: number = Date.now()): void {
     const room = this.get(docId);
     if (room) room.lastHumanEditAt = at;
@@ -4494,7 +4563,11 @@ export class Rooms {
   }
 
   private wireEvents(room: DocRoom): void {
-    room.ydoc.on('update', () => {
+    room.ydoc.on('update', (_update: Uint8Array, origin: unknown) => {
+      // One hook, every writer. See `DocRoom.lastContentChangeAt` for why the
+      // three pre-existing timestamps could not be used, and
+      // `DOC_ACTIVITY_DENIED_ORIGINS` for what is filtered out and why.
+      if (!DOC_ACTIVITY_DENIED_ORIGINS.has(origin)) room.lastContentChangeAt = Date.now();
       this.saveToDisk(room);
     });
     this.guardPrivateMeta(room);
