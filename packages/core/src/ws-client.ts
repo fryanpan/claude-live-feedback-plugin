@@ -15,6 +15,39 @@ import * as Y from 'yjs';
 const MSG_SYNC = 0;
 const MSG_AWARENESS = 1;
 
+/**
+ * How long a single connection attempt gets before it is declared stuck and
+ * force-retried. Two phases, two timers, because a hung handshake and a
+ * socket that opened but never got synced are different failures with the
+ * same symptom: a board that paints and never gets a projection.
+ *
+ * Neither the WebSocket spec nor any browser guarantees a timeout on a
+ * pending connection — a dead proxy, a backgrounded tab, or a Cloudflare
+ * Tunnel edge that swallows the upgrade can leave `readyState === CONNECTING`
+ * with no 'open', 'error', or 'close' ever firing. The exponential backoff
+ * below only re-triggers from 'close', so without a forced timeout that
+ * socket sits there until the OS's own TCP timeout (minutes), which reads as
+ * "never" to anyone watching a 15-second load budget. Measured on real board
+ * loads 2026-08-29: 4 of 120 opens never got a projection at all.
+ */
+export const CONNECT_TIMEOUT_MS = 10_000;
+/**
+ * Same failure, later stage: the handshake completed but the sync-step-1/2
+ * round trip never delivered. Started fresh on every 'open' rather than
+ * continuing the connect timer, since a slow-but-genuine sync (a large board
+ * over a poor link) is not the same event as a hung handshake — and it must
+ * NOT be mistaken for one: codex review on this change flagged that a
+ * WebSocket 'message' event only fires once a full frame has arrived, so
+ * there is no partial-progress signal to reset the clock on mid-transfer,
+ * and every retry re-requests the same diff from scratch. A deadline close
+ * to a genuine transfer's real duration would abort it every attempt and
+ * loop forever — worse than the bug this exists to fix. Set well above the
+ * measured tail (p95 5041ms, max 13647ms end-to-end, board loads
+ * 2026-08-29) rather than tight to it, so it only ever fires on a
+ * connection that is actually stuck, not one that is merely slow.
+ */
+export const SYNC_TIMEOUT_MS = 25_000;
+
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 
 export interface FeedbackClient {
@@ -74,10 +107,40 @@ export function connect(url: string): FeedbackClient {
     setStatus('connecting');
     ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
+    const thisWs = ws;
+
+    // Stuck-handshake watchdog: force a close if 'open' never comes. See
+    // CONNECT_TIMEOUT_MS above for why this can't rely on a browser default.
+    let syncTimer: ReturnType<typeof setTimeout> | null = null;
+    // Per-ATTEMPT, unlike `gotInitialSync` below: a reconnect after a server
+    // restart re-opens with `gotInitialSync` already true forever (it only
+    // ever gates the one-shot onReady callbacks), so the watchdog needs its
+    // own flag or a reconnect that opens but never re-syncs would sail past
+    // it silently — open() looks healthy, the board just stops updating.
+    let syncedThisAttempt = false;
+    const connectTimer: ReturnType<typeof setTimeout> = setTimeout(() => {
+      if (thisWs.readyState === thisWs.CONNECTING) {
+        try {
+          thisWs.close();
+        } catch {}
+      }
+    }, CONNECT_TIMEOUT_MS);
+    connectTimer.unref?.();
 
     ws.addEventListener('open', () => {
+      clearTimeout(connectTimer);
       reconnectDelay = 500;
       setStatus('open');
+      // Stuck-sync watchdog: the handshake completed but sync step 1/2 never
+      // round-tripped. Cleared the moment THIS attempt's sync lands.
+      syncTimer = setTimeout(() => {
+        if (!syncedThisAttempt) {
+          try {
+            thisWs.close();
+          } catch {}
+        }
+      }, SYNC_TIMEOUT_MS);
+      syncTimer.unref?.();
       // sync step 1
       const enc = encoding.createEncoder();
       encoding.writeVarUint(enc, MSG_SYNC);
@@ -106,6 +169,21 @@ export function connect(url: string): FeedbackClient {
         encoding.writeVarUint(enc, MSG_SYNC);
         const type = syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
         if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
+        if (type === syncProtocol.messageYjsSyncStep2) {
+          // Disarms the watchdog on EVERY attempt, including a reconnect
+          // long after the first sync — `gotInitialSync` below stays
+          // one-shot for onReady, which is a different contract. ONLY
+          // step2, never a plain update: codex review caught that a
+          // concurrent peer's edit broadcasts as messageYjsUpdate and can
+          // reach this socket before ITS OWN step-1 request gets answered
+          // (readSyncStep1 on the server always replies with step2, so that
+          // reply is guaranteed — but ordering isn't). Disarming on the
+          // incidental update would silence the watchdog before the actual
+          // full-state answer ever arrives, defeating the retry this exists
+          // for.
+          syncedThisAttempt = true;
+          if (syncTimer !== null) clearTimeout(syncTimer);
+        }
         if (
           !gotInitialSync &&
           (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)
@@ -120,6 +198,8 @@ export function connect(url: string): FeedbackClient {
     });
 
     ws.addEventListener('close', () => {
+      clearTimeout(connectTimer);
+      if (syncTimer !== null) clearTimeout(syncTimer);
       setStatus('closed');
       if (closed) return;
       setTimeout(open, Math.min(reconnectDelay, 10000));
