@@ -1731,6 +1731,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     if (!prompt) return; // workspace gone
     const forTitleWrittenAt = task.titleWrittenAt ?? task.createdAt;
     const forBodyWrittenAt = task.bodyWrittenAt;
+    const forGoal = task.goal;
     void (async () => {
       let verdict: EffortEstimateVerdict | null = null;
       try {
@@ -1758,6 +1759,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         estimatedAt: Date.now(),
         forTitleWrittenAt,
         ...(forBodyWrittenAt !== undefined ? { forBodyWrittenAt } : {}),
+        forGoal,
       };
       const record: TaskEffortEstimate =
         verdict === null
@@ -1776,17 +1778,27 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
 
   // Effort-estimate scoring: re-score a ticket in the background whenever
-  // its words change. `task.created`, `task.retitled` and `task.body_edited`
-  // are the three doors a title or a body move through — `applyTitle`'s own
-  // doc names the seven routes that converge on them — so subscribing here
-  // rather than at each route is what makes every one of those routes get
-  // scoring for free, batch creation included.
+  // its words — or its goal — change. `task.created`, `task.retitled` and
+  // `task.body_edited` are the three doors a title or a body move through —
+  // `applyTitle`'s own doc names the seven routes that converge on them —
+  // so subscribing here rather than at each route is what makes every one
+  // of those routes get scoring for free, batch creation included.
+  // `task.regrouped` is the fourth: the goal's own title is part of what the
+  // scorer weighs (see `scoreEffortEstimate` above), so moving a ticket to a
+  // DIFFERENT goal is a change to the scorer's input even when the title and
+  // body never moved. `task.regrouped` also fires on a pure reorder within
+  // the same goal (order changed, goal did not) — `fromGoal !== toGoal` is
+  // what tells the two apart, so a reorder alone triggers no extra call.
   taskStore.onEvent((ev) => {
     if (ev.type === 'task.created') {
       scoreEffortEstimate(ev.task);
       return;
     }
-    if (ev.type === 'task.retitled' || ev.type === 'task.body_edited') {
+    if (
+      ev.type === 'task.retitled' ||
+      ev.type === 'task.body_edited' ||
+      (ev.type === 'task.regrouped' && ev.fromGoal !== ev.toGoal)
+    ) {
       const task = taskStore.getTask(ev.taskId);
       if (task) scoreEffortEstimate(task);
     }
@@ -5568,6 +5580,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const body = await safeJson(req);
             const author = authorFor(body?.author);
             if (!author) return j(400, { error: 'author required' });
+            // Validate EVERY supplied field before applying ANY of them. A
+            // caller sending both fields where only the second is malformed
+            // must get back a 400 that changed nothing — not a 400 that
+            // already wrote the first field to disk.
+            let hasReviewCriteria = false;
+            let reviewCriteriaValue: string | undefined;
             if (body && Object.hasOwn(body, 'reviewItemCriteria')) {
               const raw = body.reviewItemCriteria;
               if (raw !== null && typeof raw !== 'string') {
@@ -5580,13 +5598,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   error: `reviewItemCriteria is over ${REVIEW_ITEM_CRITERIA_MAX_CHARS} characters`,
                 });
               }
-              const res = taskStore.setReviewItemCriteria(
-                workspaceId,
-                typeof raw === 'string' ? raw : undefined,
-                { actor: author },
-              );
-              if (!res.ok) return j(404, res);
+              hasReviewCriteria = true;
+              reviewCriteriaValue = typeof raw === 'string' ? raw : undefined;
             }
+            let hasEffortPrompt = false;
+            let effortPromptValue: string | undefined;
             if (body && Object.hasOwn(body, 'effortEstimatePrompt')) {
               const raw = body.effortEstimatePrompt;
               if (raw !== null && typeof raw !== 'string') {
@@ -5599,11 +5615,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   error: `effortEstimatePrompt is over ${EFFORT_ESTIMATE_PROMPT_MAX_CHARS} characters`,
                 });
               }
-              const res = taskStore.setEffortEstimatePrompt(
-                workspaceId,
-                typeof raw === 'string' ? raw : undefined,
-                { actor: author },
-              );
+              hasEffortPrompt = true;
+              effortPromptValue = typeof raw === 'string' ? raw : undefined;
+            }
+            if (hasReviewCriteria) {
+              const res = taskStore.setReviewItemCriteria(workspaceId, reviewCriteriaValue, {
+                actor: author,
+              });
+              if (!res.ok) return j(404, res);
+            }
+            if (hasEffortPrompt) {
+              const res = taskStore.setEffortEstimatePrompt(workspaceId, effortPromptValue, {
+                actor: author,
+              });
               if (!res.ok) return j(404, res);
             }
           }

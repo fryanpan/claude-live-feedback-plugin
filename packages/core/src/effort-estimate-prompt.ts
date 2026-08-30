@@ -81,6 +81,9 @@ export function buildEffortEstimatePrompt(
  *  for: no estimate stored, not a number nobody would stand behind. */
 export const EFFORT_ESTIMATE_MAX_SECONDS = 90 * 24 * 60 * 60;
 
+/** Checked AFTER rounding, deliberately — a raw reply like `0.4` passes a
+ *  pre-round positivity check yet rounds to zero, which would then violate
+ *  the very invariant the check exists to enforce. */
 function isUsableSeconds(value: unknown): value is number {
   return (
     typeof value === 'number' &&
@@ -90,11 +93,18 @@ function isUsableSeconds(value: unknown): value is number {
   );
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 /**
  * Read the model's reply. `null` when it is not a usable estimate — no
- * JSON, a missing or non-numeric field, a non-positive or absurd number —
- * which the caller treats as a FAILED run: the row says so, rather than
- * storing a guess nobody could stand behind.
+ * JSON, a missing or non-numeric field, a non-positive or absurd number, or
+ * hands-on time reported as MORE than wall-clock time (the one relationship
+ * the system prompt tells the model to hold: hands-on is a slice of the
+ * calendar time, never more of it) — which the caller treats as a FAILED
+ * run: the row says so, rather than storing a guess nobody could stand
+ * behind.
  */
 export function parseEffortEstimateResponse(text: string): EffortEstimateVerdict | null {
   const start = text.indexOf('{');
@@ -107,8 +117,12 @@ export function parseEffortEstimateResponse(text: string): EffortEstimateVerdict
     return null;
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
-  const handsOn = (parsed as { handsOnSeconds?: unknown }).handsOnSeconds;
-  const wallClock = (parsed as { wallClockSeconds?: unknown }).wallClockSeconds;
-  if (!isUsableSeconds(handsOn) || !isUsableSeconds(wallClock)) return null;
-  return { handsOnSeconds: Math.round(handsOn), wallClockSeconds: Math.round(wallClock) };
+  const handsOnRaw = (parsed as { handsOnSeconds?: unknown }).handsOnSeconds;
+  const wallClockRaw = (parsed as { wallClockSeconds?: unknown }).wallClockSeconds;
+  if (!isFiniteNumber(handsOnRaw) || !isFiniteNumber(wallClockRaw)) return null;
+  const handsOnSeconds = Math.round(handsOnRaw);
+  const wallClockSeconds = Math.round(wallClockRaw);
+  if (!isUsableSeconds(handsOnSeconds) || !isUsableSeconds(wallClockSeconds)) return null;
+  if (handsOnSeconds > wallClockSeconds) return null;
+  return { handsOnSeconds, wallClockSeconds };
 }

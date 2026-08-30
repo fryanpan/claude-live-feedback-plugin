@@ -115,13 +115,14 @@ export interface ArtifactCheck {
  * One scoring run's fields common to both outcomes — what generation of
  * scoring made this, and against which words. `model` and `promptVersion`
  * are what lets a stored run be told from one made under an older scorer or
- * an older prompt frame; `forTitleWrittenAt`/`forBodyWrittenAt` are the
- * `task.titleWrittenAt`/`task.bodyWrittenAt` this run read at the moment it
- * asked — the provenance a reader compares against the task's CURRENT
- * values to tell a fresh estimate from a stale one, and the guard
+ * an older prompt frame; `forTitleWrittenAt`/`forBodyWrittenAt`/`forGoal` are
+ * the `task.titleWrittenAt`/`task.bodyWrittenAt`/`task.goal` this run read at
+ * the moment it asked — the provenance a reader compares against the task's
+ * CURRENT values to tell a fresh estimate from a stale one, and the guard
  * `TaskStore.recordEffortEstimate` uses so a slow call that lands after a
- * newer edit already re-scored the ticket cannot overwrite the newer
- * answer with a stale one.
+ * newer edit (or a re-triage to a different goal, which changes the goal
+ * title the scorer weighed) already re-scored the ticket cannot overwrite
+ * the newer answer with a stale one.
  */
 interface TaskEffortEstimateProvenance {
   model: string;
@@ -129,6 +130,7 @@ interface TaskEffortEstimateProvenance {
   estimatedAt: number;
   forTitleWrittenAt: number;
   forBodyWrittenAt?: number;
+  forGoal: string;
 }
 
 /** A produced guess at how long a ticket will take, in seconds — never a
@@ -4422,12 +4424,14 @@ export class TaskStore {
    * `task.retitled` / `task.body_edited` (server.ts), so a write here that
    * emitted one of those would re-trigger its own scorer forever.
    *
-   * Refused as `stale` when the words this run read are no longer the
-   * ticket's current words — `estimate.forTitleWrittenAt` /
-   * `forBodyWrittenAt` must still match `task.titleWrittenAt` /
-   * `task.bodyWrittenAt`. Guards against a slow call landing after a NEWER
-   * edit already started (or finished) its own re-score: that newer run's
-   * answer must stand, not be overwritten by a late answer to older words.
+   * Refused as `stale` when the words (or the goal) this run read are no
+   * longer the ticket's current words — `estimate.forTitleWrittenAt` /
+   * `forBodyWrittenAt` / `forGoal` must still match `task.titleWrittenAt` /
+   * `task.bodyWrittenAt` / `task.goal`. Guards against a slow call landing
+   * after a NEWER edit — or a re-triage to a different goal, which changes
+   * the goal title the scorer weighed — already started (or finished) its
+   * own re-score: that newer run's answer must stand, not be overwritten by
+   * a late answer to older words or an old goal.
    */
   recordEffortEstimate(
     taskId: string,
@@ -4437,7 +4441,8 @@ export class TaskStore {
     if (!task) return { ok: false, error: 'not-found' };
     if (
       estimate.forTitleWrittenAt !== (task.titleWrittenAt ?? task.createdAt) ||
-      estimate.forBodyWrittenAt !== task.bodyWrittenAt
+      estimate.forBodyWrittenAt !== task.bodyWrittenAt ||
+      estimate.forGoal !== task.goal
     ) {
       return { ok: false, error: 'stale' };
     }

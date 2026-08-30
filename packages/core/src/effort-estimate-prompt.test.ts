@@ -82,6 +82,16 @@ describe('parseEffortEstimateResponse', () => {
     expect(
       parseEffortEstimateResponse('{"handsOnSeconds": NaN, "wallClockSeconds": 3600}'),
     ).toBeNull();
+    // A fractional value that rounds down to zero must be rejected AFTER
+    // rounding, not accepted on its still-positive raw value.
+    expect(
+      parseEffortEstimateResponse('{"handsOnSeconds": 0.4, "wallClockSeconds": 3600}'),
+    ).toBeNull();
+    // Hands-on is documented as a slice of wall-clock time — never more of
+    // it — so a reply that inverts the two is not a usable estimate.
+    expect(
+      parseEffortEstimateResponse('{"handsOnSeconds": 7200, "wallClockSeconds": 3600}'),
+    ).toBeNull();
   });
 
   it('accepts a number right at the ceiling', () => {
