@@ -182,6 +182,33 @@ describe('per-room timers', () => {
     expect(markdownOf(rooms, docIds[0])).toContain('arrived with nobody watching');
   });
 
+  it('a bound doc that saw one external edit does not stay active forever', async () => {
+    // The reconcile debounce is a `setTimeout` on the binding, and
+    // `bindingIsActive` reads it as "a reconcile is still pending". The
+    // callback used to leave the fired handle behind, so the FIRST external
+    // edit pinned that binding in the fast lane for the life of the process
+    // — a 500ms stat per changed doc, forever, with nobody watching. On
+    // production this read as every bound doc active five minutes after boot.
+    const { rooms, docIds, paths } = seedBound(2);
+    expect(rooms.stats().activeBindings).toBe(0);
+
+    writeFileSync(paths[0], '# Doc 0\n\nedited once\n');
+    const t = new Date(Date.now() + 2000);
+    utimesSync(paths[0], t, t);
+    // Long enough for the sweep to see it, the 150ms read debounce to fire,
+    // and the 800ms write-back debounce behind it to drain.
+    await sleep(2500);
+
+    // Control: the edit really landed. Without it, "nothing is active" could
+    // just mean the poll never noticed anything at all.
+    expect(markdownOf(rooms, docIds[0])).toContain('edited once');
+
+    // `markdownOf` calls `rooms.get`, which is a genuine access — clear the
+    // access stamps so only a leftover timer could still hold the binding.
+    rooms.resetDerivedCaches();
+    expect(rooms.stats().activeBindings).toBe(0);
+  });
+
   it('an access activates exactly the doc that was accessed', () => {
     const { rooms, docIds } = seedBound(10);
     rooms.get(docIds[3]);
