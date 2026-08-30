@@ -103,6 +103,14 @@ if (sentryDsn) {
       phase: 'unhandledRejection',
     });
     console.error('[feedback] unhandled rejection', reason);
+    // Registering ANY listener here overrides Bun's own default handling
+    // (log + crash) — without this exit, an unhandled rejection would go
+    // from fatal to merely logged the moment Sentry is configured, leaving
+    // the process alive in whatever state produced the rejection. Match the
+    // uncaughtException handler above so enabling Sentry never changes
+    // whether the process survives an otherwise-fatal error, only whether
+    // it gets seen before exiting.
+    void flushServerSentry().finally(() => process.exit(1));
   });
 }
 
