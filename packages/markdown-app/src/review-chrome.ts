@@ -63,6 +63,14 @@ export function anchorBody(sel: ChromeSelection) {
   };
 }
 
+/** An idempotency key for one comment-composer submit attempt — unique
+ *  enough to dedupe against, not a security token, so `Math.random` is
+ *  plenty. Not `crypto.randomUUID`: iOS Safari under 15.4 (still in the
+ *  field on shared review links) doesn't have it. */
+function makeRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export interface ChromeOpts {
   docId: string;
   user: User;
@@ -863,6 +871,12 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   /** Selection captured when the composer opened — survives the editor
    *  losing its DOM selection while the user types the comment. */
   let composerSelection: ChromeSelection | null = null;
+  /** One id per comment attempt, minted when the composer opens and reused
+   *  across retries of THAT attempt — never per submit call. The server
+   *  dedupes a repeat of (docId, requestId) within a short window, so a
+   *  request that actually landed but looked like a client-side failure
+   *  (timeout, dropped response) doesn't get posted twice on retry either. */
+  let composerRequestId: string | null = null;
 
   function openComposer(): void {
     const use = opts.getSelection();
@@ -871,6 +885,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       return;
     }
     composerSelection = use;
+    composerRequestId = null;
     // Muted quote of the anchored text so the user doesn't lose sight of
     // what they're commenting on once iOS lifts the keyboard.
     el<HTMLElement>('composer-quote').textContent = use.snippet;
@@ -906,6 +921,14 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
   on(el<HTMLButtonElement>('composer-submit'), 'click', () => void submitComposer());
 
   async function submitComposer(): Promise<void> {
+    const submitBtn = el<HTMLButtonElement>('composer-submit');
+    // The button's `disabled` is the send-in-progress flag, but Enter never
+    // routes through the button — it calls this function directly — so a
+    // second Enter (key repeat, or one more tap before the first request
+    // lands) has to be turned away HERE, before anything else runs. Checked
+    // and set synchronously, with no `await` between them, so two calls
+    // arriving back to back can't both pass.
+    if (submitBtn.disabled) return;
     const text = composerText.value.trim();
     if (!text) return;
     if (!composerSelection) {
@@ -913,13 +936,16 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       return;
     }
     const anchor = anchorBody(composerSelection);
-    const submitBtn = el<HTMLButtonElement>('composer-submit');
+    const requestId = composerRequestId ?? (composerRequestId = makeRequestId());
     submitBtn.disabled = true;
+    // Mirrors the button: no further keystrokes (or Enters) reach the editor
+    // while the request is in flight, on top of the disabled-button guard.
+    composerText.disabled = true;
     try {
       const res = await fetch(`/api/docs/${encodeURIComponent(docId)}/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ author: user, text, anchor }),
+        body: JSON.stringify({ author: user, text, anchor, requestId }),
       });
       if (!res.ok) throw new Error('post failed');
       const body = (await res.json()) as { thread: { id: string } };
@@ -939,6 +965,7 @@ export function mountReviewChrome(opts: ChromeOpts): ReviewChrome {
       showToast('Failed to post comment');
     } finally {
       submitBtn.disabled = false;
+      composerText.disabled = false;
     }
   }
 

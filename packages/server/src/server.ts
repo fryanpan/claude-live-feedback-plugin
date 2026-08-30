@@ -241,6 +241,7 @@ import {
   reviewItemVersion,
   taskChip,
 } from './tasks.ts';
+import { ThreadRequestDedup } from './thread-request-dedup.ts';
 import type { TranscriptionEngine } from './transcribe.ts';
 import { SERVER_TICK_EVENT, UptimeMonitor, analyzeUptime } from './uptime.ts';
 import { type VoiceComplete, VoiceRouter, parseVoiceContext } from './voice.ts';
@@ -1272,6 +1273,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     type: 'mockup',
     title: 'Hub feedback (all workspaces)',
   });
+  // Server-side half of the double-submit fix: the doc composer's in-flight
+  // guard stops ONE call site from ever sending the repeat, this catches
+  // whatever gets through anyway (a request that landed but read as a
+  // client-side failure, a future caller that reintroduces the race).
+  const threadRequestDedup = new ThreadRequestDedup<Thread | null>();
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
   const taskStore = new TaskStore({
@@ -8565,6 +8571,51 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller that wrote it has to be the one that hears about it.
             const anchorCheck = anchors.validateAnchor(anchor);
             if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
+            // Computed early (not just before the write, where it used to
+            // live) so both the dedup escape hatch below and the normal
+            // return can build the SAME response shape — a retry must get
+            // its reviewAdvice back too, not just its thread.
+            const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
+            const declared = reviewFromBody(body?.review, text);
+            if (!declared.ok) return j(400, { error: declared.error });
+            // Identity for the dedup below — computed from the RAW anchor
+            // (so a duplicate call matches regardless of how the
+            // review-item branch below rewrites `anchor` for the eventual
+            // write), the declared review, AND the author. Codex review
+            // caught both gaps in turn: anchor alone let a requestId reuse
+            // with a CORRECTED review payload silently return the stale
+            // thread, and anchor+review alone let two DIFFERENT people who
+            // (client-controlled, not globally unique) happened to mint the
+            // same requestId collide — the second author's comment would
+            // come back attributed to the first.
+            const identityKey = JSON.stringify({
+              anchor,
+              review: declared.review ?? null,
+              authorId: user.id,
+            });
+            // A retry of an already-handled request has to be caught HERE,
+            // before the review-item validation below: that block refuses a
+            // second ask while the item is `waiting`, a state the FIRST
+            // request's own side effect sets — so a retry would otherwise
+            // never reach the dedupe() call at the bottom and would get a
+            // stale-state 409 instead of the thread it already made.
+            const priorThreadCreate = threadRequestDedup.lookup(
+              docId,
+              requestId,
+              text,
+              identityKey,
+            );
+            if (priorThreadCreate) {
+              const t = await priorThreadCreate;
+              const handoff = threadUrl(docId, Boolean(visitor));
+              return t
+                ? j(200, {
+                    thread: t,
+                    ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                    ...(handoff ? { threadUrl: handoff } : {}),
+                  })
+                : j(500, { error: 'could not create thread' });
+            }
             // A thread on a PHRASE of a review item — the doc-style question
             // asked back at an ask. The anchor names an item this task must
             // carry, and its offsets must spell its snippet in the item's
@@ -8635,22 +8686,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               };
               itemAsk = { taskId, reviewItemId: item.id, range };
             }
-            const declared = reviewFromBody(body?.review, text);
-            if (!declared.ok) return j(400, { error: declared.error });
-            const t = await rooms.postComment(docId, null, user, text, anchor, {
-              generate: !visitor,
-              ...(declared.review ? { review: declared.review } : {}),
-            });
-            if (t && itemAsk?.range) {
-              const asked = taskStore.requestMoreInfoOnReview(
-                itemAsk.taskId,
-                itemAsk.reviewItemId,
-                text,
-                { actor: user, threadId: t.id, range: itemAsk.range },
-              );
-              if (asked.ok) taskProjection.ensureWorkspace(asked.task.workspaceId);
-            }
-            if (t && declared.review) announceThreadReview(docId, t.id, declared.review, user);
+            // `dedupe` reserves (docId, requestId) synchronously and runs
+            // this closure at most once for however many duplicate requests
+            // arrive while it is in flight — the write AND the review-item
+            // side effects it triggers, so a concurrent repeat never fires
+            // `requestMoreInfoOnReview` a second time either.
+            const { value: t } = await threadRequestDedup.dedupe(
+              docId,
+              requestId,
+              text,
+              identityKey,
+              async () => {
+                const created = await rooms.postComment(docId, null, user, text, anchor, {
+                  generate: !visitor,
+                  ...(declared.review ? { review: declared.review } : {}),
+                });
+                if (created && itemAsk?.range) {
+                  const asked = taskStore.requestMoreInfoOnReview(
+                    itemAsk.taskId,
+                    itemAsk.reviewItemId,
+                    text,
+                    { actor: user, threadId: created.id, range: itemAsk.range },
+                  );
+                  if (asked.ok) taskProjection.ensureWorkspace(asked.task.workspaceId);
+                }
+                if (created && declared.review) {
+                  announceThreadReview(docId, created.id, declared.review, user);
+                }
+                return created;
+              },
+            );
             const handoff = threadUrl(docId, Boolean(visitor));
             return t
               ? j(200, {
