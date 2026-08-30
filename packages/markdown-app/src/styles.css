@@ -6266,7 +6266,7 @@ body.is-reading-width #editor > .ProseMirror {
   min-width: 0;
   box-sizing: content-box;
   height: 1.45em;
-  padding-block: 9px;
+  padding-block: 10px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -6274,10 +6274,10 @@ body.is-reading-width #editor > .ProseMirror {
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0,
-    transparent 9px,
-    #000 calc(9px + 0.8em)
+    transparent 10px,
+    #000 calc(10px + 0.8em)
   );
-  mask-image: linear-gradient(to bottom, transparent 0, transparent 9px, #000 calc(9px + 0.8em));
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 calc(10px + 0.8em));
 }
 .meeting-caption-line {
   margin: 0;
@@ -6312,21 +6312,42 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 /* Who said the turn: a muted tag at the head of each turn's words, and the one
-   tap that names a voice for the meeting. Its own box is ~18px inside the
-   caption's line, so the 36px tap floor comes from the ::before below — which
-   only reaches its full size because .meeting-caption pads its clip box out
-   of the way. The two are one mechanism; neither works alone.
+   tap that names a voice for the meeting.
 
-   The max-width is load-bearing, not tidiness: a 60-character name rendered a
-   335px pill that wrapped the line and pushed every tag out of the window,
-   so naming a voice was what turned the labels off. */
+   THE TARGET IS THE BUTTON'S OWN PADDING, and the button clips NOTHING. Two
+   rounds of review were lost to a pseudo-element hit area: first the caption's
+   `overflow: hidden` ate it, then — added for the ellipsis below — the
+   button's own did. A pseudo target is defeated by a clip on ANY ancestor,
+   its own element included, and it fails silently and measures 19px. Real
+   padding cannot be clipped away by a property somebody adds one level up.
+
+   So the two jobs are split across two elements, and must stay split: the
+   BUTTON is a transparent box whose padding is the target, and the PILL
+   inside it carries every visual and the only overflow. Give the button a
+   background, a border or an `overflow` and you have rebuilt the bug. */
 .meeting-speaker {
-  position: relative;
+  display: inline-block;
+  /* 10px each side of the ~17.75px pill = 37.75px: the border box IS the
+     target, and 9px would have missed the 36px floor by a quarter pixel. The
+     negative vertical margin gives that height back to the line box, so the
+     caption's window stays one line and the words do not move. */
+  padding: 10px 4px;
+  margin: -10px 0 -10px -4px;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: 0;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+/* The pill: the whole look, and the clip that keeps a long name from wrapping
+   the caption line. The max-width is load-bearing, not tidiness — a
+   60-character name rendered a 335px pill that pushed every tag out of the
+   window, so naming a voice was what turned the labels off. */
+.meeting-speaker-pill {
   display: inline-block;
   max-width: 11em;
-  margin-right: 2px;
   padding: 0 6px;
-  font: inherit;
   font-size: 10.5px;
   font-weight: 600;
   line-height: 1.5;
@@ -6335,8 +6356,6 @@ body.is-reading-width #editor > .ProseMirror {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  cursor: pointer;
-  vertical-align: baseline;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6345,12 +6364,7 @@ body.is-reading-width #editor > .ProseMirror {
   text-decoration: underline dotted;
   text-underline-offset: 2px;
 }
-.meeting-speaker::before {
-  content: "";
-  position: absolute;
-  inset: -10px -4px;
-}
-.meeting-speaker:hover {
+.meeting-speaker:hover .meeting-speaker-pill {
   color: var(--fg);
   border-color: var(--border-strong);
 }
@@ -6402,8 +6416,8 @@ body.is-reading-width #editor > .ProseMirror {
     flex-direction: column;
     align-items: stretch;
     /* No gap and no bottom padding of its own: the caption is the last child
-       and now carries 9px of its own on each side (the tag's hit area lives
-       in it). Doubling up would grow the panel by a whole 18px on the screen
+       and now carries 10px of its own on each side (the tag's hit area lives
+       in it). Doubling up would grow the panel by a whole 20px on the screen
        with the least room for it. */
     gap: 0;
     padding: 7px 14px;

@@ -146,13 +146,22 @@ stored content.
   after the quiet timer fires still reaches that tick. Carried (failed)
   turns keep the raw label and are re-mapped on retry; mapping a display
   name twice would wrap it ("Speaker Jordan").
-- **The caption's `overflow: hidden` clips the speaker tag's TAP TARGET.**
-  A pseudo-element reaching past a small pill is the usual way to buy a 36px
-  target, and it silently does nothing inside a clipping ancestor — the clip
-  is to the PADDING box, so the caption's padding is what gives the pseudo
-  room to exist. Measured 19px while a unit test asserted the pseudo and
-  passed. Whenever the caption's window height changes, the padding and the
-  px-anchored mask move with it.
+- **A pseudo-element tap target is eaten by a clip on ANY ancestor —
+  including its own element.** Two review rounds were lost to this: the
+  caption's `overflow: hidden` ate it, then the button's own `overflow`,
+  added to give a long name an ellipsis, ate it again. It fails silently and
+  measures 19px against the 36px floor. The target is now the button's own
+  PADDING, which no ancestor property can clip away, and the button holds
+  nothing that clips: the pill inside it carries every visual and the only
+  overflow. Keep those two jobs on two elements. The caption still pads its
+  clip box (and the mask is px-anchored to the window's top edge, so the two
+  move together) because the clip box must still be at least as tall as the
+  target.
+- **Assert the measured box, never the declarations.** The test for that
+  floor passed through both regressions while the real target was 19px,
+  because it asserted the properties that should have produced 36px. It now
+  computes the hit box from the pill, the button's padding and every clip in
+  between.
 - **A turn must be a block, or its tag strands.** Inline, a turn began where
   the last one ended and its tag landed at the end of the PREVIOUS visual
   line — above its own words, and on a phone that is the faded line being
