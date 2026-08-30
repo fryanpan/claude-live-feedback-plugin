@@ -6,6 +6,16 @@
  */
 import { type ReviewPayload, reviewAnswered, reviewWithdrawn } from '@feedback/core';
 import type { ReviewShape, Thread, User } from '@feedback/core';
+import {
+  type EffortCalibration,
+  applyEffortRatio,
+  effortActualHandsOnSeconds,
+  effortActualWallClockSeconds,
+  effortEstimateState,
+  estimateNumbers,
+  formatEffortSeconds,
+  ratioForGoal,
+} from '@feedback/core/goal-effort';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
 import { MIC_ICON, PLUS_ICON } from '../icons.ts';
@@ -1391,7 +1401,15 @@ export const BODY_LIVE_CLASS = 'hub-detail-body-live';
  * were pills, so the state you were IN read as a stray label rather than as
  * the selected one.
  */
-export function detailFields(task: HubTask, handlers: DetailHandlers): HTMLElement {
+export function detailFields(
+  task: HubTask,
+  handlers: DetailHandlers,
+  /** The board's learned correction, so the panel can show what the raw
+   *  estimate becomes and what it was scaled by. Absent on a panel opened
+   *  without a board behind it, and the effort cell then shows the raw
+   *  numbers alone rather than inventing a factor of 1. */
+  calibration?: EffortCalibration,
+): HTMLElement {
   const dl = document.createElement('dl');
   dl.className = 'hub-detail-fields';
   // Each field is a `<div>` WRAPPING its `dt` + `dd`, which HTML has allowed
@@ -1506,7 +1524,66 @@ export function detailFields(task: HubTask, handlers: DetailHandlers): HTMLEleme
     if (goal.value && goal.value !== task.goal) handlers.onGoalSet?.(task, goal.value);
   });
   cell('Goal', goal);
+
+  // Effort, last, and only when there is something to say.
+  //
+  // This is where the numbers live. Bryan struck them from the board rows —
+  // "No need to show hands on or wall clock hours in the board" — on the
+  // understanding that the ticket still carries them, so this cell is the
+  // other half of that trade. It is also the one non-hover surface that
+  // states the calibration factor, which matters because the goal header
+  // says it in a `title` and an iPad has no hover.
+  //
+  // Three states, three sentences, and an unscored ticket gets NO cell at
+  // all rather than a zero — the same line `Task.effortEstimate` draws in
+  // its own type doc.
+  const effortText = effortCellText(task, calibration);
+  if (effortText !== '') cell('Effort', effortText);
   return dl;
+}
+
+/**
+ * The Effort cell's words, or `''` for "draw no cell".
+ *
+ * Written as a pure function of the row so it can be asserted without a DOM:
+ * the thing worth testing here is which of the three states produces which
+ * sentence, not that a `<dd>` got appended.
+ */
+export function effortCellText(task: HubTask, calibration?: EffortCalibration): string {
+  const state = effortEstimateState(task);
+  if (state === 'none') return '';
+  if (state === 'failed') {
+    // Said out loud, because the alternative is a ticket that reads exactly
+    // like one nobody has scored. This is the visible half of the positive
+    // control: a scorer that produces nothing must be legible as producing
+    // nothing.
+    return 'no estimate — the scorer could not produce one';
+  }
+  const est = estimateNumbers(task);
+  if (!est) return '';
+  const ratio = calibration ? ratioForGoal(calibration.wallClock, task.goal) : undefined;
+  const handsRatio = calibration ? ratioForGoal(calibration.handsOn, task.goal) : undefined;
+  const hands = handsRatio
+    ? applyEffortRatio(est.handsOnSeconds, handsRatio.ratio)
+    : est.handsOnSeconds;
+  const wall = ratio ? applyEffortRatio(est.wallClockSeconds, ratio.ratio) : est.wallClockSeconds;
+  const parts = [`${formatEffortSeconds(hands)} of yours over ${formatEffortSeconds(wall)}`];
+  // The factor, and what it was learned from — never a bare multiplier. A
+  // correction with no sample count behind it is a number nobody can argue
+  // with.
+  if (ratio && ratio.samples > 0) {
+    parts.push(
+      `scaled \u00d7${ratio.ratio.toFixed(2)} from ${ratio.samples} closed ticket${ratio.samples === 1 ? '' : 's'}`,
+    );
+  }
+  // What it actually took, once it is closed. Measured numbers are never
+  // multiplied — these are reported exactly as they happened, beside the
+  // corrected guess rather than folded into it.
+  const actualWall = effortActualWallClockSeconds(task);
+  const actualHands = effortActualHandsOnSeconds(task);
+  if (actualWall !== null) parts.push(`actually took ${formatEffortSeconds(actualWall)}`);
+  if (actualHands !== null) parts.push(`${formatEffortSeconds(actualHands)} of it read`);
+  return parts.join(' \u00b7 ');
 }
 
 /** An epoch-ms instant as the `YYYY-MM-DD` a `<input type="date">` wants, in

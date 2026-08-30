@@ -53,6 +53,7 @@
  */
 import { reviewItemBodyMarkdown } from '@feedback/core';
 import { judgeReasonClause } from '@feedback/core';
+import type { EffortCalibration } from '@feedback/core/goal-effort';
 import { signal } from '@preact/signals';
 import { type ComponentChildren, Fragment, type RefObject, render } from 'preact';
 import { type MutableRef, useLayoutEffect, useRef, useState } from 'preact/hooks';
@@ -105,6 +106,12 @@ export interface TaskDetailView {
   /** Aimed at the task this paint draws — see the head of the file for why
    *  these travel with the data rather than being bound at mount. */
   handlers: DetailHandlers;
+  /** The board's learned correction, so the Effort field can state what the
+   *  raw estimate was scaled by. It is a fact about the whole board rather
+   *  than about this ticket, which is why it rides on the view rather than on
+   *  the task; absent means "no board behind this panel", and the field then
+   *  shows the raw numbers rather than inventing a factor of 1. */
+  calibration?: EffortCalibration;
 }
 
 /** A closed panel answers nothing, which is what the signal holds until the
@@ -944,8 +951,9 @@ function TaskDetailPanel(props: {
   discussion?: TaskDiscussion;
   handlers: DetailHandlers;
   initialTab?: DetailTab;
+  calibration?: EffortCalibration;
 }) {
-  const { host, task, discussion, handlers } = props;
+  const { host, task, discussion, handlers, calibration } = props;
   const now = handlers.now ?? Date.now();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const headRef = useRef<HTMLDivElement | null>(null);
@@ -992,7 +1000,9 @@ function TaskDetailPanel(props: {
     if (!el.querySelector('input')) el.textContent = task.title;
   });
 
-  useFill(fieldsRef as RefObject<HTMLElement>, () => [...detailFields(task, handlers).childNodes]);
+  useFill(fieldsRef as RefObject<HTMLElement>, () => [
+    ...detailFields(task, handlers, calibration).childNodes,
+  ]);
 
   // The description slot is the one node a repaint must never rebuild: the
   // live editor is a ProseMirror view bound to a Yjs room, and even MOVING the
@@ -1295,7 +1305,7 @@ function TaskDetailPanel(props: {
  * panel are siblings under different subtrees.
  */
 function TaskDetail(props: { host: HTMLElement }) {
-  const { task, discussion, handlers, tab } = taskDetailData.value;
+  const { task, discussion, handlers, tab, calibration } = taskDetailData.value;
   const { host } = props;
   useLayoutEffect(() => {
     host.classList.toggle('hidden', task === null);
@@ -1328,6 +1338,7 @@ function TaskDetail(props: { host: HTMLElement }) {
       discussion={discussion}
       handlers={handlers}
       initialTab={tab}
+      calibration={calibration}
     />
   );
 }

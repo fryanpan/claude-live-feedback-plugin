@@ -9,6 +9,7 @@
  * which the server would revert.
  */
 import { type ReviewPayload, type Thread, type User, connect, escapeHtml } from '@feedback/core';
+import { computeEffortCalibration } from '@feedback/core/goal-effort';
 import {
   renderConnectionBanner,
   renderLiveStaleNotice,
@@ -1454,6 +1455,12 @@ async function main(): Promise<void> {
       task,
       discussion: task ? discussion : undefined,
       tab: state.detailTab,
+      // Learned from the WHOLE board, not from this ticket's band: the panel
+      // reports what the estimate was scaled by, and the scaling is a property
+      // of everything that has closed. Unfiltered for the same reason the goal
+      // rollup is — a correction that moved when the reader changed tabs would
+      // be a correction about the reader.
+      calibration: task ? computeEffortCalibration(taskList()) : undefined,
       handlers: {
         onClose: () => {
           state.detailTaskId = null;

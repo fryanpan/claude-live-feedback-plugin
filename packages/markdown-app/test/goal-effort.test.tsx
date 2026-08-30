@@ -20,6 +20,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { computeEffortCalibration } from '@feedback/core/goal-effort';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type BoardFilters,
@@ -31,6 +32,7 @@ import {
   boardSectionsWithEffort,
   goalEffortLabel,
 } from '../src/hub/hub-model.ts';
+import { effortCellText } from '../src/hub/hub-render.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);
@@ -313,5 +315,71 @@ describe('the stylesheet picks exactly one variant per tier', () => {
     // sixth child of the row, which is what keeps the avatar column aligned
     // with the task rows'. A sixth track here would break both.
     expect(body(CSS, '.hub-goal-row')).toContain('auto minmax(0, 1fr) auto auto auto');
+  });
+});
+
+/**
+ * The ticket's Effort field — the other half of the trade Bryan made when he
+ * struck the numbers from the board rows. If this cell does not carry them,
+ * they are nowhere a person can read: the goal header states the calibration
+ * factor in a `title`, and the primary device has no hover.
+ */
+describe('the ticket panel states the numbers the board no longer shows', () => {
+  const closedSet = (): HubTask[] => {
+    // Six closes, each of which took twice its estimate — 2h of wall clock
+    // against an hour estimated, 20m read against 10m — so the learned factor
+    // is a round 2.00 and the assertions below are arithmetic rather than a
+    // snapshot.
+    const rows: HubTask[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      rows.push(
+        closed(2 * DAY, 2 * HOUR, {
+          effortEstimate: { status: 'ok', handsOnSeconds: 600, wallClockSeconds: 3600 },
+          readingTime: { totalSeconds: 1200, sessionCount: 2, lastReadAt: NOW },
+        }),
+      );
+    }
+    return rows;
+  };
+
+  it('says nothing at all about a ticket nobody scored', () => {
+    // Absent is not zero, and an unscored ticket gets no field rather than a
+    // field reading "0m". Positive control below: the same call on a SCORED
+    // row is non-empty, so an always-empty implementation cannot pass.
+    expect(effortCellText(task({ effortEstimate: undefined }))).toBe('');
+    expect(effortCellText(task())).not.toBe('');
+  });
+
+  it('says the scorer failed, rather than looking unscored', () => {
+    const text = effortCellText(
+      task({ effortEstimate: { status: 'failed', reason: 'the body was empty' } }),
+    );
+    expect(text).toContain('could not produce');
+    // The distinction the acceptance criterion turns on.
+    expect(text).not.toBe(effortCellText(task({ effortEstimate: undefined })));
+  });
+
+  it('shows the raw numbers when no board is behind the panel', () => {
+    const text = effortCellText(task());
+    expect(text).toContain('10m');
+    expect(text).toContain('1h');
+    // No factor is invented out of nothing.
+    expect(text).not.toContain('scaled');
+  });
+
+  it('states the calibration factor and what it was learned from', () => {
+    const calibration = computeEffortCalibration(closedSet());
+    const text = effortCellText(task(), calibration);
+    // 3600s estimated x 2.00 learned = 7200s = 2h, said out loud with its
+    // sample count so the reader can weigh it.
+    expect(text).toContain('×2.00');
+    expect(text).toContain('6 closed tickets');
+    expect(text).toContain('2h');
+  });
+
+  it('reports what a closed ticket actually took, unmultiplied', () => {
+    const text = effortCellText(closedSet()[0], computeEffortCalibration(closedSet()));
+    expect(text).toContain('actually took 2h');
+    expect(text).toContain('20m of it read');
   });
 });
