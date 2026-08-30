@@ -467,6 +467,21 @@ describe('what the tool schemas tell an agent', () => {
     expect(byName('create_tasks').description).toContain('takes a list');
   });
 
+  // The trap this verb exists for is a discoverability one as much as an API
+  // one: an agent holding two items on a thread reaches for resolve_thread,
+  // which is the tool that reads like cleanup. So the two descriptions have to
+  // point at each other, and a rewrite that drops either pointer puts the next
+  // agent back where the last one got stuck.
+  it('withdraw_review_item says it spares the siblings, and resolve_thread says it does not', () => {
+    const withdraw = byName('withdraw_review_item');
+    expect(withdraw.description).toContain('resolve_thread');
+    expect(withdraw.description).toMatch(/answered/i);
+    expect(Object.keys(withdraw.inputSchema.properties ?? {})).toEqual(
+      expect.arrayContaining(['docId', 'threadId', 'commentId', 'reason', 'undo']),
+    );
+    expect(byName('resolve_thread').description).toContain('withdraw_review_item');
+  });
+
   it("the create_tasks row's `review` field says the blurb is not the ticket title", () => {
     const rows = byName('create_tasks').inputSchema.properties?.tasks as {
       items?: { properties?: Record<string, { description?: string }> };
