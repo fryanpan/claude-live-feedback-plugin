@@ -788,3 +788,39 @@ describe('the activity pane at 430px is thumb-sized and lets the words wrap', ()
     expect(rule('.acti-nonesuch', media('(max-width: 1100px)'))).toBe('');
   });
 });
+
+/**
+ * Home is three stacked sections — the queue, this pane, the brief — and for
+ * a while they butted against each other with 16px/650 headings, the same
+ * weight as every row title beneath, so the page read as one grey run
+ * (Bryan, 2026-08-29: "too much bold … not enough separation"). The sheet is
+ * the invariant: headings are small uppercase labels, titles are medium at
+ * most, and each section after the first sits below a hairline with air.
+ */
+describe('Home’s sections are separated and its headings are labels, not a second bold', () => {
+  it('each section after the first sits below a hairline with air above and below it', () => {
+    const stack = rule('#hub-home-page');
+    expect(stack, '#hub-home-page has no rule').not.toBe('');
+    expect(stack).toMatch(/gap:\s*\d+px/);
+    const next = rule('#hub-home-page > * + *');
+    expect(next, '#hub-home-page > * + * has no rule').not.toBe('');
+    expect(next).toMatch(/border-top:\s*1px solid var\(--border\)/);
+    expect(next).toMatch(/padding-top:\s*\d+px/);
+  });
+
+  it('the section heading is a small uppercase muted kicker, never a heavier bold', () => {
+    const heading = rule('.hub-home-heading');
+    expect(heading, '.hub-home-heading has no rule').not.toBe('');
+    expect(heading).toMatch(/text-transform:\s*uppercase/);
+    expect(heading).toMatch(/letter-spacing:/);
+    expect(heading).toMatch(/color:\s*var\(--fg-muted\)/);
+    expect(heading).toMatch(/font-weight:\s*(4|5|6)00\b/);
+  });
+
+  it('a row title is medium at most; the one emphasis cue stays on the row’s marker', () => {
+    expect(rule('.hub-review-row-title')).toMatch(/font-weight:\s*(400|500)\b/);
+    // Positive control: the weight regex can see a bold when one is there —
+    // the flag badge keeps its 600, because it IS the row's one cue.
+    expect(rule('.acti-head .hub-badge')).toMatch(/font-weight:\s*600\b/);
+  });
+});
