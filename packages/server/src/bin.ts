@@ -646,34 +646,12 @@ if (!widgetDist)
 if (!markdownAppDist)
   console.log('[feedback] (markdown app not built yet — run: bun run build:markdown-app)');
 
-// One-shot backfill of every thread that has no current summary, open or
-// resolved, spread over a window.
+// The summary backfill is NOT here any more.
 //
-// Deliberately OPT-IN per start. Threads written before generation shipped
-// have no summary, and nothing in the live path ever revisits them — but the
-// backlog is hundreds of billed calls, so a restart (a crash loop, a launchd
-// respawn, a `bun run dev` while iterating) must never spend it by accident.
-// Run it once, on purpose:
-//
-//   CW_SUMMARY_BACKFILL=1 bun run dev
-//
-// Set the window in minutes with CW_SUMMARY_BACKFILL_MINUTES (default 15).
-// It is paced, skips anything already summarized, and stops on shutdown.
-if (
-  ['1', 'true', 'yes'].includes(
-    (readRenamedEnv(process.env, 'CW_SUMMARY_BACKFILL') ?? '').trim().toLowerCase(),
-  )
-) {
-  const minutes = Number(readRenamedEnv(process.env, 'CW_SUMMARY_BACKFILL_MINUTES') ?? '15');
-  const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
-  const { queued, open, resolved } = handle.rooms.backfillSummaries({ windowMs });
-  console.log(
-    queued > 0
-      ? `[feedback]   backfill:   ${queued} threads (${open} open, ${resolved} resolved) ` +
-          `over ~${Math.round(windowMs / 60_000)} min`
-      : '[feedback]   backfill:   nothing to do (no unsummarized threads, or summaries are off)',
-  );
-}
+// It was gated on CW_SUMMARY_BACKFILL=1 at startup, which meant the only way
+// to ask for a piece of catch-up work was to bounce the process. It is now
+// POST /api/summaries/backfill — same sweep, same pacing, no restart. Still
+// deliberate: nothing schedules it, because the backlog is billed calls.
 
 // The update runs off the merge, not off somebody remembering.
 //
