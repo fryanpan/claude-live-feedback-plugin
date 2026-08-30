@@ -257,6 +257,69 @@ describe('renderLeadStrip', () => {
     expect(root.textContent).toContain('No lead agent');
     expect(root.querySelector('select')).toBeNull();
   });
+
+  it('a seat whose holder stopped answering is drawn as loudly as an empty one', () => {
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      ['agent-helper'],
+      { onLeadCommit: vi.fn() },
+      { leadAgentId: 'agent-relay', live: false, stale: true, staleForMs: 4 * 60 * 60_000 },
+    );
+    expect(root.classList.contains('hub-lead-stale')).toBe(true);
+    // The reader has to be able to tell WHAT is wrong and FOR HOW LONG
+    // without opening anything.
+    expect(root.textContent).toContain('has not answered for 4h');
+    expect(root.textContent).toContain('reaching nobody');
+    // Still reassignable — this is the state the picker exists for.
+    expect(root.querySelector('select')).not.toBeNull();
+  });
+
+  it('POSITIVE CONTROL: a live lead is drawn exactly as it was before the seat existed', () => {
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      ['agent-helper'],
+      { onLeadCommit: vi.fn() },
+      { leadAgentId: 'agent-relay', live: true, stale: false },
+    );
+    expect(root.classList.contains('hub-lead-stale')).toBe(false);
+    expect(root.textContent).toContain('Lead agent');
+    expect(root.textContent).not.toContain('reaching nobody');
+  });
+
+  it('a seat held by an id that never attached says so, without claiming it is gone', () => {
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      [],
+      { onLeadCommit: vi.fn() },
+      { leadAgentId: 'agent-relay', live: false, stale: false, unattached: true },
+    );
+    expect(root.textContent).toContain('has not attached');
+    expect(root.textContent).not.toContain('has not answered');
+    expect(root.classList.contains('hub-lead-stale')).toBe(true);
+  });
+
+  it('a server that reports no seat renders the strip it always did', () => {
+    renderLeadStrip(root, 'agent-relay', ['agent-helper'], { onLeadCommit: vi.fn() });
+    expect(root.textContent).toContain('Lead agent');
+    expect(root.classList.contains('hub-lead-stale')).toBe(false);
+  });
+
+  it('a seat reading about a DIFFERENT lead is ignored rather than pinned on this one', () => {
+    // The picker can change the lead between the attachments read and this
+    // paint. A stale reading must not paint the new lead as dead.
+    renderLeadStrip(
+      root,
+      'agent-relay',
+      ['agent-helper'],
+      { onLeadCommit: vi.fn() },
+      { leadAgentId: 'agent-helper', live: false, stale: true, staleForMs: 60_000 },
+    );
+    expect(root.textContent).toContain('Lead agent');
+    expect(root.classList.contains('hub-lead-stale')).toBe(false);
+  });
 });
 
 describe('renderActivity', () => {

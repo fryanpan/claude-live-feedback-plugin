@@ -7577,6 +7577,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, {
             workspaceId,
             attachments,
+            // Who owns this board's asks, and whether they are there. It rides
+            // this read rather than the projected workspace info because seat
+            // health CHANGES WITH TIME and nothing else: a lead that stops
+            // answering writes no board event, so a value projected into the
+            // doc would still say "fine" hours later. The presence strip
+            // repaints off this list already.
+            seat: taskStore.leadSeatHealth(workspaceId),
             ...(clientRelease ? { clientRelease } : {}),
             pluginRelease: {
               version: released,

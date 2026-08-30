@@ -29,6 +29,7 @@ import {
   type HubReviewItem,
   type HubTask,
   type HubTransition,
+  type LeadSeatView,
   type ReviewQueue,
   type ReviewThreadItem,
   TASK_STATUS_ORDER,
@@ -39,6 +40,7 @@ import {
   decisionAskedBy,
   describeEvent,
   homeSinceLabel,
+  leadSeatLabel,
   ownerKindSuffix,
   ownerMarkKind,
   reviewBannerText,
@@ -203,12 +205,18 @@ export function renderLeadStrip(
   leadAgentId: string | undefined,
   knownAgentIds: string[],
   handlers: LeadStripHandlers,
+  seat?: LeadSeatView,
 ): void {
   container.replaceChildren();
   container.classList.toggle('hub-lead-empty', !leadAgentId);
+  // A held seat whose holder has stopped answering is drawn as loudly as an
+  // empty one, because it costs the board the same thing: nothing is reading
+  // its asks. Before this it was drawn as a healthy board.
+  const unmanned = Boolean(leadAgentId && seat?.leadAgentId === leadAgentId && !seat.live);
+  container.classList.toggle('hub-lead-stale', unmanned);
   const label = document.createElement('span');
   label.className = 'hub-lead-label';
-  label.textContent = leadAgentId ? 'Lead agent' : 'No lead agent — nobody owns this board’s asks';
+  label.textContent = leadSeatLabel(leadAgentId, seat);
   container.append(label);
 
   const options = [...new Set([...(leadAgentId ? [leadAgentId] : []), ...knownAgentIds])].sort(
