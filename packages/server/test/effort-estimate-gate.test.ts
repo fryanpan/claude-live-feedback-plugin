@@ -175,6 +175,74 @@ describe('effort-estimate scoring', () => {
     expect(calls.at(-1)?.ticket.body).toContain('bigger rewrite');
   });
 
+  it('re-scores when a ticket moves to a DIFFERENT goal, but not on a plain reorder', async () => {
+    const { workspaceId } = await board();
+    const { created } = await jj<{ created: Array<{ id: string; title: string }> }>(
+      await put(`/api/workspaces/${workspaceId}/goals`, {
+        goals: [{ title: 'Launch week' }],
+        author: PERSON,
+      }),
+    );
+    const goalId = created[0]?.id ?? '';
+    const taskId = await newTask(workspaceId);
+    await until(() => handle.tasks.getTask(taskId)?.effortEstimate);
+
+    // A pure reorder within the SAME goal (chores) must not re-score — the
+    // goal title the scorer weighs did not change.
+    const callsBeforeReorder = calls.length;
+    await jj(
+      await post(`/api/tasks/${taskId}/goal`, { goal: 'chores', author: PERSON, after: null }),
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    expect(calls.length).toBe(callsBeforeReorder);
+
+    // Moving to a DIFFERENT goal changes the goal title in the scorer's
+    // input, so it must re-score.
+    verdict = { handsOnSeconds: 42, wallClockSeconds: 4_200 };
+    await jj(await post(`/api/tasks/${taskId}/goal`, { goal: goalId, author: PERSON }));
+    const est = await until(() => {
+      const e = handle.tasks.getTask(taskId)?.effortEstimate;
+      return e && e.status === 'ok' && e.handsOnSeconds === 42 ? e : undefined;
+    });
+    expect(est.wallClockSeconds).toBe(4_200);
+    expect(calls.at(-1)?.ticket.goal).toBe('Launch week');
+  });
+
+  it("a slow answer scored under the OLD goal never overwrites a re-triaged ticket's newer answer", async () => {
+    const { workspaceId } = await board();
+    const { created } = await jj<{ created: Array<{ id: string; title: string }> }>(
+      await put(`/api/workspaces/${workspaceId}/goals`, {
+        goals: [{ title: 'Launch week' }],
+        author: PERSON,
+      }),
+    );
+    const goalId = created[0]?.id ?? '';
+    verdict = 'defer';
+    const taskId = await newTask(workspaceId);
+    const createCall = await until(() => (parked.length >= 1 ? parked[0] : undefined));
+
+    // Re-triage to a different goal before the create's scoring run answers.
+    verdict = 'defer';
+    await jj(await post(`/api/tasks/${taskId}/goal`, { goal: goalId, author: PERSON }));
+    const regroupCall = await until(() => (parked.length >= 2 ? parked[1] : undefined));
+
+    regroupCall?.({ handsOnSeconds: 111, wallClockSeconds: 222 });
+    const est = await until(() => {
+      const e = handle.tasks.getTask(taskId)?.effortEstimate;
+      return e && e.status === 'ok' ? e : undefined;
+    });
+    expect(est).toMatchObject({ handsOnSeconds: 111, wallClockSeconds: 222 });
+
+    // The stale, old-goal run answers late — refused, even though title and
+    // body never changed, because the goal it scored no longer matches.
+    createCall?.({ handsOnSeconds: 999, wallClockSeconds: 999 });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(handle.tasks.getTask(taskId)?.effortEstimate).toMatchObject({
+      handsOnSeconds: 111,
+      wallClockSeconds: 222,
+    });
+  });
+
   // The positive control this feature was built under: a reply the scorer
   // cannot turn into a usable estimate must read as "no estimate, here's
   // why" on the row — never a silent absence and never a guessed number.
@@ -352,6 +420,26 @@ describe('effort-estimate scoring', () => {
         author: PERSON,
       });
       expect(bad.status).toBe(400);
+    });
+
+    // A 400 must mean nothing changed — including the OTHER field in the
+    // same body. Without validating both fields before applying either, a
+    // valid reviewItemCriteria alongside a malformed effortEstimatePrompt
+    // would persist the first while still answering 400 for the second.
+    it('a 400 on either field leaves BOTH fields untouched, even when the other is valid', async () => {
+      const { workspaceId } = await board();
+      const bad = await put(`/api/workspaces/${workspaceId}/settings`, {
+        reviewItemCriteria: 'Every headline is a question.',
+        effortEstimatePrompt: 42,
+        author: PERSON,
+      });
+      expect(bad.status).toBe(400);
+      const after = await jj<{
+        reviewItemCriteria: { isDefault: boolean };
+        effortEstimatePrompt: { isDefault: boolean };
+      }>(await get(`/api/workspaces/${workspaceId}/settings`));
+      expect(after.reviewItemCriteria.isDefault).toBe(true);
+      expect(after.effortEstimatePrompt.isDefault).toBe(true);
     });
 
     it('the changed prompt is what the scorer is asked with', async () => {
