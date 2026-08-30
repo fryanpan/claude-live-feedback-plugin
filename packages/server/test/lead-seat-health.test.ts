@@ -128,29 +128,46 @@ describe('leadSeatHealth', () => {
     expect(health.notice ?? '').toContain('agent-live-feedback');
   });
 
-  it('a seat whose holder detached is stale with nothing observed', () => {
-    // Reachable, and it is the incident's own shape: the attachment record
-    // goes and the seat pointer stays. There is no moment to report, and no
-    // reason to believe anybody is listening.
+  it('a seat whose holder never attached is reported, but NOT stale', () => {
+    // The distinction that keeps a handover honest. A board can be created
+    // with its lead named in advance, and for the seconds before that session
+    // attaches the seat looks exactly like one whose holder detached and went
+    // away. "Has not arrived yet" and "is never coming" are the same absence,
+    // so this state is reported and never acted on — treating it as death let
+    // the next arrival take a seat its owner was walking towards, which broke
+    // three existing suites before this branch existed.
     //
     // Note what is NOT tested here, because the server already refuses it:
     // `setLeadAgent` will not hand the seat to an id nothing attached under,
-    // so a hand-set phantom lead cannot be created that way. The assertion
-    // below pins that refusal, so this case stays honest about which door the
-    // state actually comes through.
+    // so this state arrives by workspace creation or by a detach, not by a
+    // hand-set phantom lead. The assertion below pins that refusal.
     const store = tightStore();
-    const ws = store.createWorkspace('detached');
-    store.attachAgent(ws.id, { agentId: 'agent-live-feedback', runtime: 'claude-code-local' });
+    const ws = store.createWorkspace('awaited', { leadAgentId: 'not-here-yet' });
+    store.attachAgent(ws.id, { agentId: 'somebody', runtime: 'claude-code-local' });
     const refused = store.setLeadAgent(ws.id, 'never-here', {
-      actor: { id: 'agent-live-feedback', name: 'Worker', kind: 'agent' },
+      actor: { id: 'somebody', name: 'Somebody', kind: 'agent' },
     });
     expect(refused.ok).toBe(false);
 
+    const health = store.leadSeatHealth(ws.id, wellPast());
+    expect(health.leadAgentId).toBe('not-here-yet');
+    expect(health.stale).toBe(false);
+    expect(health.unattached).toBe(true);
+    expect(health.lastObservedAt).toBeUndefined();
+    expect(health.notice ?? '').toContain('no attachment record');
+  });
+
+  it('a holder that detached is likewise reported rather than seized', () => {
+    // Same absence, reached the other way: the record goes and the pointer
+    // stays. Indistinguishable in the data from the case above, so it gets
+    // the same conservative answer.
+    const store = tightStore();
+    const ws = store.createWorkspace('detached');
+    store.attachAgent(ws.id, { agentId: 'agent-live-feedback', runtime: 'claude-code-local' });
     expect(store.detachAgent(ws.id, 'agent-live-feedback')).toBe(true);
     const health = store.leadSeatHealth(ws.id, wellPast());
     expect(health.leadAgentId).toBe('agent-live-feedback');
-    expect(health.stale).toBe(true);
-    expect(health.lastObservedAt).toBeUndefined();
-    expect(health.notice ?? '').toContain('never been observed');
+    expect(health.stale).toBe(false);
+    expect(health.unattached).toBe(true);
   });
 });
