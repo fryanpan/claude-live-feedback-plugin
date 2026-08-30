@@ -4,7 +4,7 @@
  * so the interaction contracts (the status dropdown, in-place title edits,
  * the two-filter activity view) are testable under happy-dom.
  */
-import { type ReviewPayload, reviewAnswered } from '@feedback/core';
+import { type ReviewPayload, reviewAnswered, reviewWithdrawn } from '@feedback/core';
 import type { ReviewShape, Thread, User } from '@feedback/core';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
@@ -1209,9 +1209,18 @@ export function commentRow(
   when.title = new Date(c.ts).toLocaleString();
   head.append(who, when);
   if (c.review) {
+    // A WITHDRAWN item still belongs in the stream — it is history, and the
+    // reader may already have acted on it — but badging it 'Question' is the
+    // whole bug the verb exists to prevent, one surface over. The doc pane's
+    // `reviewHeader` marks it the same way; both read the one predicate.
+    const retracted = reviewWithdrawn(c.review);
     const badge = document.createElement('span');
-    badge.className = 'hub-comment-review-k';
-    badge.textContent = c.review.shape === 'decision' ? 'Decision' : 'Question';
+    badge.className = retracted ? 'hub-comment-review-k is-withdrawn' : 'hub-comment-review-k';
+    badge.textContent = retracted
+      ? 'Withdrawn'
+      : c.review.shape === 'decision'
+        ? 'Decision'
+        : 'Question';
     head.append(badge);
   }
   // "Needs your reply" was a THREAD badge — it named a thread, because the
@@ -1230,7 +1239,9 @@ export function commentRow(
     // item card's markdown body at the top of the panel, and a second copy
     // in the stream was the duplication the one-card anatomy removes.
     const headline = document.createElement('p');
-    headline.className = 'hub-comment-review-headline';
+    headline.className = reviewWithdrawn(c.review)
+      ? 'hub-comment-review-headline is-withdrawn'
+      : 'hub-comment-review-headline';
     headline.textContent = c.review.headline;
     li.append(headline);
   }

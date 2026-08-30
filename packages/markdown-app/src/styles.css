@@ -4695,6 +4695,19 @@ a.hub-link-chip:hover {
   letter-spacing: 0.06em;
   color: var(--accent, #2e7dd7);
 }
+
+/* A retracted ask in the hub's comment stream. It stays in the history, and
+   the marking is what keeps it from reading as one more question — same
+   vocabulary as the threads pane's `.comment-review-withdrawn`, because the
+   two surfaces show the same item. */
+.hub-comment-review-k.is-withdrawn {
+  color: var(--muted, #8a8f98);
+}
+.hub-comment-review-headline.is-withdrawn {
+  color: var(--muted, #8a8f98);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
 .hub-comment-review-headline {
   margin: 2px 0 0;
   font-size: 14px;
@@ -7000,6 +7013,29 @@ body.threads-resizing {
   font-size: 13.5px;
   font-weight: 650;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+/* A declaration its ASKER took back. It appears only in the thread history —
+   never as the item card, never as a queue row — so this is the one place the
+   reader can meet it, and it has to read as retracted at a glance rather than
+   as one more question. Muted accent and a struck headline; the words stay
+   legible because a reader may already have acted on them. */
+.comment-review-withdrawn {
+  border-left-color: var(--muted, #8a8f98);
+  opacity: 0.75;
+}
+.comment-review-withdrawn .comment-review-k {
+  color: var(--muted, #8a8f98);
+}
+.comment-review-withdrawn .comment-review-headline {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.comment-review-withdrawn-note {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted, #8a8f98);
   overflow-wrap: anywhere;
 }
 /* The FULL review-item interface, rendered first in the expanded thread that

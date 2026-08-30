@@ -27,6 +27,7 @@ import {
   listThreads,
   prose,
   readDocMeta,
+  reinstateReview,
   reviewAnswered,
   reviewIdOf,
   postReply as schemaPostReply,
@@ -36,6 +37,7 @@ import {
   setThreadSummary,
   suggestOps,
   withRevision,
+  withdrawReview,
 } from '@feedback/core';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -2028,6 +2030,65 @@ export class Rooms {
     }
     const after = this.getThread(docId, threadId);
     return after ? { ok: true, review, thread: after } : { ok: false, error: 'not-a-review-item' };
+  }
+
+  /**
+   * Take back a review item raised on a doc thread — the asker's own exit.
+   *
+   * Thin for the reason `reviseCommentReview` is thin: what a withdrawal IS,
+   * and which ones are refused, is core's (`withdrawReview`). This layer only
+   * knows where the payload lives and how to write it back inside one
+   * synchronous stretch.
+   *
+   * It deliberately does NOT touch the thread. That is the whole point of the
+   * verb: `resolve_thread` is thread-scoped, so retiring one ask by resolving
+   * its thread takes every sibling ask down with it. Here the thread stays
+   * open and its other declarations stay answerable — `pendingDeclaration`
+   * steps over the withdrawn one and falls through to whichever ask is still
+   * standing.
+   *
+   * ANY agent in the workspace may withdraw an item, not only the one whose
+   * name is on it, and `withdrawnBy` records who did. Two reasons, and the
+   * first is the stronger: a workspace is a shared view, so its resources are
+   * everyone's, and the sibling verb one step from here (`reviseCommentReview`)
+   * already lets an agent REWRITE another's ask — a narrower rule on the
+   * gentler of the two operations would be a fence with no field behind it.
+   * The second is the case that produced this verb: the agent left holding a
+   * stale ask is often not the one that filed it (a peer that has since
+   * exited, or a lead cleaning up by hand), and an ownership check would lock
+   * exactly that agent out of the cleanup.
+   */
+  withdrawCommentReview(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    opts: { actor: User; reason?: string; undo?: boolean },
+  ):
+    | { ok: true; review: ReviewPayload; thread: Thread }
+    | { ok: false; error: string; message?: string } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    const thread = this.getThread(docId, threadId);
+    const target = thread?.comments.find((c) => c.id === commentId);
+    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
+    const at = Date.now();
+    const applied = opts.undo
+      ? reinstateReview(target.review, { by: opts.actor.name, at })
+      : withdrawReview(target.review, {
+          by: opts.actor.name,
+          at,
+          ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+        });
+    if (!applied.ok) return { ok: false, error: applied.error, message: applied.message };
+    if (!setCommentReview(room.ydoc, threadId, commentId, applied.next)) {
+      // The comment went between the read and the write — a race, not an
+      // error the caller did anything to cause.
+      return { ok: false, error: 'not-a-review-item' };
+    }
+    const after = this.getThread(docId, threadId);
+    return after
+      ? { ok: true, review: applied.next, thread: after }
+      : { ok: false, error: 'not-a-review-item' };
   }
 
   /**
