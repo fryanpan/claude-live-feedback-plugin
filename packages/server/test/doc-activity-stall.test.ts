@@ -12,7 +12,8 @@
  *
  * The origin filter gets its own pair too, driven through `handle.rooms`
  * rather than a route, because the thing being pinned is which TRANSACTION
- * ORIGINS count — a `file-watch` reparse must not read as somebody working.
+ * ORIGINS count — a `file-watch` reparse, and above all an unnamed
+ * (`undefined`) server write, must not read as somebody working.
  *
  * All fixtures are synthetic — invented names in the jordan@partner.example
  * register. The repo is public.
@@ -242,10 +243,10 @@ describe("a task's linked doc counts as the task moving", () => {
       return (room as { ydoc: Y.Doc }).ydoc;
     }
 
-    it('an agent write stamps the doc, a file reparse does not', async () => {
+    it('an agent write stamps the doc, server bookkeeping does not', async () => {
       const ydoc = await freshRoom('origins-doc');
       // Positive control first: a plain agent-origin write must move the
-      // stamp, or the negative below would pass for the wrong reason.
+      // stamp, or the negatives below would pass for the wrong reason.
       ydoc.transact(() => {
         ydoc.getMap('probe').set('k', 1);
       }, 'agent');
@@ -253,13 +254,28 @@ describe("a task's linked doc counts as the task moving", () => {
       expect(afterAgent).toBeGreaterThan(0);
 
       await settle(5);
-      for (const origin of ['file-seed', 'file-watch', 'agent-reanchor', 'task-projection']) {
+      // `undefined` is the one that matters most and is easiest to miss: Yjs
+      // stamps it on any transaction that names no origin, which is what
+      // binds.ts meta writes and every schema.ts thread write do. A
+      // deny-list of the named synthetic origins let all of those through.
+      const synthetic: unknown[] = [
+        undefined,
+        'file-seed',
+        'file-watch',
+        'agent-reanchor',
+        'task-projection',
+        'private-meta-guard',
+        // An object that is not one of this room's live connections — a
+        // websocket from some other room must not author this one.
+        { notAConnection: true },
+      ];
+      for (const origin of synthetic) {
         ydoc.transact(() => {
           ydoc.getMap('probe').set('k', Math.random());
         }, origin);
         expect(
           handle.rooms.lastContentChangeFor('origins-doc'),
-          `origin ${origin} must not read as somebody working`,
+          `origin ${String(origin)} must not read as somebody working`,
         ).toBe(afterAgent);
       }
     });

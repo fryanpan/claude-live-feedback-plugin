@@ -100,7 +100,6 @@ import {
 import { isWithinRoot } from './safe-path.ts';
 import type { SseHub } from './sse.ts';
 import type { ScheduleArgs, ThreadSummarizer } from './summarize.ts';
-import { PROJECTION_ORIGIN } from './task-projection.ts';
 import type { WebhookDispatcher } from './webhooks.ts';
 
 export type WsCtx = {
@@ -166,7 +165,7 @@ export interface DocRoom {
    * Wall-clock time of the last change to this doc's CONTENT made by a
    * person or an agent — the signal the stall loop reads so that a row whose
    * whole current work is somebody rewriting its doc does not read as
-   * silent (see `DOC_ACTIVITY_DENIED_ORIGINS`).
+   * silent (see `isAuthoringOrigin`).
    *
    * Stamped from the room's single `ydoc.on('update')` hook, so it covers
    * every writer — browser websocket, MCP edit tool, HTTP route — without a
@@ -331,33 +330,46 @@ export function decideReconcile(args: {
 const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
 
 /**
- * Transaction origins that are the SERVER writing to itself, and so are not
- * evidence that anybody is working on the doc. Everything else counts: a live
- * websocket (a person typing, whose origin is the connection OBJECT) and every
- * string-origin server-side writer that acts for an agent (`agent`,
- * `agent-set-content`, `agent-queued`, …).
+ * Does this transaction origin mean a PERSON or an AGENT changed the doc, as
+ * opposed to the server writing to itself? Feeds `DocRoom.lastContentChangeAt`.
  *
- * Each entry is here because counting it would manufacture activity out of
- * nothing:
- *  - `file-seed` / `file-watch` — the disk, not an author. A `git pull` or a
- *    hydrate would otherwise exonerate every bound row on the board at once.
- *  - `agent-reanchor` — the thread re-anchor sweep, which the server runs in
- *    reaction to other edits; counting it would let one real edit keep
- *    re-arming itself.
- *  - `task-projection` — the board ydoc re-render on any row change.
- *  - the private-meta guard and migration — server hygiene.
+ * An ALLOW-list, and the difference is the whole correctness argument. Yjs
+ * stamps a bare `undefined` origin on any transaction that does not name one,
+ * and a great deal of server bookkeeping does exactly that: the meta and
+ * diff-meta writes in `binds.ts`, every thread create / resolve / re-anchor
+ * write in `packages/core/src/schema.ts`, the `summaryPendingTs` marker in
+ * this file, the `setId` backfill above. A deny-list of known-synthetic
+ * origins counted all of them as somebody working — which is the same failure
+ * as the `.ydoc` mtime the stall loop already had to learn not to trust
+ * (landing.ts rule 1), reached by a different road. Caught in review; the
+ * first version of this hook had that bug.
  *
- * Hydration is excluded a second way as well: `wireEvents` is wired AFTER
- * `loadFromDisk`, so a room's load never reaches this hook at all.
+ * Two shapes count:
+ *  - the CONNECTION OBJECT of one of this room's live websockets — a person
+ *    typing in the browser editor. `lastHumanEditAt` identifies them the
+ *    same way, a few hundred lines below.
+ *  - an `agent…` string. Every server-side writer acting FOR an agent stamps
+ *    one: plain `agent` from `packages/core/src/prose.ts`, which is every
+ *    prose edit tool (`find_and_replace`, `rewrite_thread_region`,
+ *    `edit_at_anchor`, …), plus `agent-set-content`, `agent-queued`,
+ *    `agent-meeting-assistant`.
+ *
+ * `agent-reanchor` is the one agent-shaped exception: it is the server's own
+ * thread re-anchor sweep, which runs in REACTION to an edit, so counting it
+ * would let a single real edit keep re-arming the clock by itself.
+ *
+ * Excluding the undefined-origin THREAD writes costs the stall loop nothing —
+ * a comment already reaches the same clock as `thread.lastActivity`; see the
+ * caller in server.ts. And hydration is excluded twice over: `wireEvents` is
+ * wired after `loadFromDisk`, so a room's load never reaches the hook at all.
  */
-const DOC_ACTIVITY_DENIED_ORIGINS: ReadonlySet<unknown> = new Set([
-  'file-seed',
-  'file-watch',
-  'agent-reanchor',
-  PROJECTION_ORIGIN,
-  PRIVATE_META_GUARD_ORIGIN,
-  'private-meta-migration',
-]);
+const REANCHOR_ORIGIN = 'agent-reanchor';
+
+function isAuthoringOrigin(room: DocRoom, origin: unknown): boolean {
+  if (typeof origin === 'string') return origin.startsWith('agent') && origin !== REANCHOR_ORIGIN;
+  if (typeof origin !== 'object' || origin === null) return false;
+  return room.conns.has(origin as FeedbackWs);
+}
 
 /** How long after a human's live edit an UNTRACKED caller's whole-doc
  *  rewrite is refused (callers with a tracked read are judged by order,
@@ -4566,8 +4578,8 @@ export class Rooms {
     room.ydoc.on('update', (_update: Uint8Array, origin: unknown) => {
       // One hook, every writer. See `DocRoom.lastContentChangeAt` for why the
       // three pre-existing timestamps could not be used, and
-      // `DOC_ACTIVITY_DENIED_ORIGINS` for what is filtered out and why.
-      if (!DOC_ACTIVITY_DENIED_ORIGINS.has(origin)) room.lastContentChangeAt = Date.now();
+      // `isAuthoringOrigin` for what counts as somebody working and why.
+      if (isAuthoringOrigin(room, origin)) room.lastContentChangeAt = Date.now();
       this.saveToDisk(room);
     });
     this.guardPrivateMeta(room);
