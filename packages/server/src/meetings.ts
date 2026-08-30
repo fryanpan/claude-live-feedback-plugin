@@ -158,9 +158,21 @@ export function readTranscript(
       continue;
     }
     // A line with a turn and a label but no words is a relabel of a turn
-    // already written — the append-only form of "we now think it was B".
+    // already written — the append-only form of "we now think it was B",
+    // or of "we no longer think it was anyone" when the label is null.
+    // Anything else in the field is malformed and changes nothing.
     const known = byTurn.get(row.turn);
-    if (known && speaker !== undefined) known.speaker = speaker;
+    if (!known) continue;
+    if (speaker !== undefined) {
+      known.speaker = speaker;
+    } else if (row.speaker === null) {
+      // Replaced, not patched: an absent `speaker` is what "nobody" reads as
+      // for a turn that never had one, and the two must not differ.
+      const cleared: TranscriptTurn = { turn: known.turn, text: known.text, ts: known.ts };
+      const at = turns.indexOf(known);
+      if (at >= 0) turns[at] = cleared;
+      byTurn.set(row.turn, cleared);
+    }
   }
   return turns;
 }
@@ -253,9 +265,13 @@ export class MeetingStore {
         // An engine that settles the same turn twice would otherwise double
         // it in the record, and appending is not something we can take back.
         if (written.has(turn)) {
-          if (speaker === undefined || written.get(turn) === speaker) return;
+          if (written.get(turn) === speaker) return;
           written.set(turn, speaker);
-          appendLine(transcriptPath, { turn, speaker, ts: Date.now() });
+          // Explicit `null`, never an absent field: a relabel line says what
+          // the label IS now, and the revision pass can take one away as
+          // well as change it. Absent would read as "this line says nothing
+          // about the speaker" and leave a label the strip already dropped.
+          appendLine(transcriptPath, { turn, speaker: speaker ?? null, ts: Date.now() });
           return;
         }
         written.set(turn, speaker);

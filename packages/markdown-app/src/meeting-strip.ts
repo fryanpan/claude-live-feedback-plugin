@@ -24,6 +24,7 @@
  */
 
 import {
+  MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   type MeetingServerMessage,
@@ -330,7 +331,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   function nameSpeaker(label: string): void {
     const current = speakerDisplayName(label, names);
-    const answer = promptName(current)?.trim() ?? '';
+    // Clipped to the same limit the server's parser enforces. Past it the
+    // frame is dropped without an answer, so an unclipped name would show
+    // here and reach neither the record nor the notes for the rest of the
+    // meeting — the strip disagreeing with the doc, silently.
+    const answer = promptName(current)?.trim().slice(0, MAX_SPEAKER_NAME) ?? '';
     if (!answer || answer === current) return;
     names[label] = answer;
     for (const entry of rendered.values()) {

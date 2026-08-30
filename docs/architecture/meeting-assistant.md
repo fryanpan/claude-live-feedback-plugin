@@ -75,9 +75,13 @@ the $0.15 base (docs: streaming/label-speakers-and-separate-channels). Each
 (`PENDING`/`UNKNOWN`) the engine adapter maps to "no speaker". A
 `SpeakerRevision` arrives before `Termination` naming turns the whole-session
 pass relabelled; the adapter re-emits those through `onTurn` as settled turns
-with retained text, so the relay needs no second channel. Notes already
-composed keep the label they were composed with — the revision reaches the
-record and the strip, not the composer.
+with retained text, so the relay needs no second channel. A turn still
+waiting on the pause tick takes the new label; notes ALREADY composed keep
+the label they were composed with — those words are in the doc and the
+revision has nowhere to land. The revision can also take a label away (a
+placeholder is "no speaker"), which the record writes as an explicit
+`speaker: null` relabel line — an absent field would read as "says nothing
+about the speaker" and leave an attribution the strip had already dropped.
 
 **Key wiring:** `ASSEMBLYAI_API_KEY` env, then Keychain
 (`transcribe-assemblyai.ts` names the service). No key → the socket answers
@@ -89,7 +93,8 @@ constructs a real one, so no test run ever opens a metered session.
 
 Append-only under `<dataDir>/meetings/<safeDocId>/`: one
 `<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
-`{turn, speaker, ts}` line with no text relabels a turn already written),
+`{turn, speaker, ts}` line with no text relabels a turn already written, and
+`speaker: null` there un-labels it),
 plus a `meetings.jsonl` index whose start/stop lines fold into one record
 per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized

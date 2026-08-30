@@ -1,4 +1,10 @@
-import { MEETING_AUDIO_ENCODING, MEETING_SAMPLE_RATE, meetingSocketPath } from '@feedback/core';
+import {
+  MAX_SPEAKER_NAME,
+  MEETING_AUDIO_ENCODING,
+  MEETING_SAMPLE_RATE,
+  meetingSocketPath,
+  parseMeetingClientMessage,
+} from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MeetingCaptureStart } from '../src/meeting-audio.ts';
 import {
@@ -633,6 +639,24 @@ describe('who is speaking', () => {
     // The prompt offers the current name next time, so a rename starts from it.
     tag.click();
     expect(asked[1]).toBe('Jordan');
+  });
+
+  it('clips a name to the limit the server enforces, so the two never diverge', async () => {
+    const long = 'Jordan'.repeat(30);
+    const h = await live(() => long);
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
+    (h.root.querySelector('.meeting-speaker') as HTMLButtonElement).click();
+    const clipped = long.slice(0, MAX_SPEAKER_NAME);
+    // Past the limit the server drops the frame without answering, so an
+    // unclipped name would sit on screen while the record and the notes
+    // never heard it.
+    expect(h.tags()).toEqual([clipped]);
+    const named = (h.sockets[0]?.sent ?? [])
+      .filter((d): d is string => typeof d === 'string')
+      .map((d) => JSON.parse(d) as { type: string; name?: string })
+      .filter((m) => m.type === 'name_speaker');
+    expect(named).toEqual([{ type: 'name_speaker', speaker: 'A', name: clipped }]);
+    expect(parseMeetingClientMessage(JSON.stringify(named[0]))).not.toBeNull();
   });
 
   it('a cancelled or blank prompt changes nothing and sends nothing', async () => {
