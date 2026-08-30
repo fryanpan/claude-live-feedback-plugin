@@ -99,6 +99,31 @@ describe('routePatternForSpan: default-deny redaction', () => {
     expect(routePatternForSpan('/api/docs/home/status')).toBe('/api/docs/:id/status');
     expect(routePatternForSpan('/api/tasks/archive/transition')).toBe('/api/tasks/:id/transition');
   });
+
+  it('names the reviewApi subroutes under both of their live aliases', () => {
+    // codex review: server.ts's `reviewApi(sub)` builds ONE regex per
+    // subroute that matches `/api/(?:reviews|workspaces)/:id/<sub>` — a
+    // review or a hub workspace addressed under either prefix (compat for
+    // long-running sessions and open tabs). Missing either alias here isn't
+    // a privacy bug (an unmatched path still redacts to all-:id), but it
+    // does lose the route name for every request to that alias — this
+    // exercises all 8 subroutes under both prefixes.
+    for (const sub of [
+      'refresh',
+      'groups',
+      'grouped',
+      'threads',
+      'files',
+      'tree',
+      'context-file',
+      'editable-file',
+    ]) {
+      expect(routePatternForSpan(`/api/reviews/r-abc123/${sub}`)).toBe(`/api/reviews/:id/${sub}`);
+      expect(routePatternForSpan(`/api/workspaces/w-abc123/${sub}`)).toBe(
+        `/api/workspaces/:id/${sub}`,
+      );
+    }
+  });
 });
 
 describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a negative that can fail', () => {

@@ -250,6 +250,26 @@ const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
   ['api', 'reviews', ':id'],
   ['api', 'reviews', ':id', 'archive'],
   ['api', 'reviews', ':id', 'unarchive'],
+  // reviewApi(sub): `/api/(?:reviews|workspaces)/:id/<sub>` — a review or a
+  // hub workspace can be addressed under either prefix (compat for
+  // long-running sessions and open tabs; see the reviewApi comment in
+  // server.ts), so every one of these 8 subroutes needs BOTH prefixes.
+  ['api', 'reviews', ':id', 'refresh'],
+  ['api', 'workspaces', ':id', 'refresh'],
+  ['api', 'reviews', ':id', 'groups'],
+  ['api', 'workspaces', ':id', 'groups'],
+  ['api', 'reviews', ':id', 'grouped'],
+  ['api', 'workspaces', ':id', 'grouped'],
+  ['api', 'reviews', ':id', 'threads'],
+  ['api', 'workspaces', ':id', 'threads'],
+  ['api', 'reviews', ':id', 'files'],
+  ['api', 'workspaces', ':id', 'files'],
+  ['api', 'reviews', ':id', 'tree'],
+  ['api', 'workspaces', ':id', 'tree'],
+  ['api', 'reviews', ':id', 'context-file'],
+  ['api', 'workspaces', ':id', 'context-file'],
+  ['api', 'reviews', ':id', 'editable-file'],
+  ['api', 'workspaces', ':id', 'editable-file'],
   ['share', ':id'],
   ['s', ':id'],
   ['api', 'share', ':id'],
