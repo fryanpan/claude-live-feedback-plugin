@@ -58,6 +58,18 @@
  * started — a browser/network timeout that fires the composer's retry can
  * easily land more than a few seconds after the server began handling the
  * original request.
+ *
+ * A `requestId` can hold MORE THAN ONE entry at once. Codex review's fourth
+ * pass: a single-slot map meant a requestId reused for a genuinely
+ * different comment (different text or identity — which every test above
+ * this line proves must NOT be treated as a collision) overwrote the
+ * original entry outright. A later, legitimate retry of the ORIGINAL
+ * comment then found nothing recorded and created a duplicate — the two-
+ * requests-share-an-id case fixed the attribution but not the bookkeeping.
+ * Each `requestId` key now holds a small array, one entry per distinct
+ * (text, identityKey) seen under it; in the app's actual usage this array
+ * never grows past one, since the composer mints a fresh requestId per
+ * comment and only ever repeats it for its OWN retries.
  */
 
 /** How long a COMPLETED create is remembered, timed from completion. Wide
@@ -79,7 +91,7 @@ interface Entry<T> {
 }
 
 export class ThreadRequestDedup<T> {
-  private readonly seen = new Map<string, Entry<T>>();
+  private readonly seen = new Map<string, Entry<T>[]>();
 
   constructor(private readonly ttlMs = DEFAULT_TTL_MS) {}
 
@@ -88,9 +100,24 @@ export class ThreadRequestDedup<T> {
   }
 
   private prune(now: number): void {
-    for (const [k, e] of this.seen) {
-      if (e.settledAt !== undefined && now - e.settledAt > this.ttlMs) this.seen.delete(k);
+    for (const [k, entries] of this.seen) {
+      const kept = entries.filter(
+        (e) => e.settledAt === undefined || now - e.settledAt <= this.ttlMs,
+      );
+      if (kept.length === 0) this.seen.delete(k);
+      else if (kept.length !== entries.length) this.seen.set(k, kept);
     }
+  }
+
+  /** Remove one exact entry (by reference) from its requestId's array,
+   *  dropping the array entirely once it's empty. Used to unreserve a
+   *  failed or rejected create immediately rather than let it age out. */
+  private forget(key: string, entry: Entry<T>): void {
+    const entries = this.seen.get(key);
+    if (!entries) return;
+    const kept = entries.filter((e) => e !== entry);
+    if (kept.length === 0) this.seen.delete(key);
+    else this.seen.set(key, kept);
   }
 
   /**
@@ -112,10 +139,8 @@ export class ThreadRequestDedup<T> {
   ): Promise<T> | undefined {
     if (!requestId) return undefined;
     this.prune(Date.now());
-    const existing = this.seen.get(this.key(docId, requestId));
-    return existing && existing.text === text && existing.identityKey === identityKey
-      ? existing.promise
-      : undefined;
+    const entries = this.seen.get(this.key(docId, requestId));
+    return entries?.find((e) => e.text === text && e.identityKey === identityKey)?.promise;
   }
 
   /**
@@ -145,17 +170,18 @@ export class ThreadRequestDedup<T> {
     // while `create` is still running always finds this entry. `settledAt`
     // starts unset, which is what keeps this reservation alive for as long
     // as `create` takes, however long that is — `prune` never touches an
-    // entry with no `settledAt`.
+    // entry with no `settledAt`. Appended, never overwriting a DIFFERENT
+    // (text, identityKey) entry already recorded under the same requestId.
     const key = this.key(docId, requestId);
     const entry: Entry<T> = { text, identityKey, promise: create() };
-    this.seen.set(key, entry);
+    this.seen.set(key, [...(this.seen.get(key) ?? []), entry]);
     try {
       const value = await entry.promise;
       if (value == null) {
         // A failed create too — unreserve it so a retry gets a fresh attempt
         // instead of a cached failure for the rest of the window.
-        if (this.seen.get(key) === entry) this.seen.delete(key);
-      } else if (this.seen.get(key) === entry) {
+        this.forget(key, entry);
+      } else {
         // The TTL clock starts NOW, at completion — not back at reservation
         // — so a retry gets the full window measured from when a response
         // could plausibly have reached the client, not from when the
@@ -168,8 +194,8 @@ export class ThreadRequestDedup<T> {
       // fresh attempt instead of the same rejected promise for the rest of
       // the TTL. A caller that was already awaiting THIS promise (a genuine
       // concurrent duplicate) still sees the same rejection; only a later
-      // lookup is affected by the delete.
-      if (this.seen.get(key) === entry) this.seen.delete(key);
+      // lookup is affected by the removal.
+      this.forget(key, entry);
       throw err;
     }
   }
