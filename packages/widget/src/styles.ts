@@ -123,6 +123,11 @@ export const widgetStyles = `
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
 }
 .auth-signout {
   background: none;
