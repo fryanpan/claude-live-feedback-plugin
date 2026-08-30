@@ -1967,6 +1967,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // thread ref into. Deliberately not the row's `task:<id>` body room:
       // that room is written by the projection on any row change, so
       // counting it would exonerate a row for changing its own status.
+      //
+      // KNOWN LIMIT, and the reason a row can still wake falsely while
+      // somebody edits its doc: linking the doc is the OPT-IN GESTURE. A row
+      // with empty `links` gets nothing from this — the row that filed this
+      // very fix had none, so its own false wake was the worktree shape
+      // (`watchingDispatchTaskIds` above), not this one. There is no
+      // automatic association to fall back on: the only candidate is matching
+      // the editing agent against the row's assignee, and that over-exonerates
+      // the moment one agent holds two rows, which is the direction that
+      // turns the watchdog off rather than merely making it noisy. Removing
+      // the link requirement is a ranked decision, not a cleanup.
       for (const ref of taskStore.getTask(row.id)?.links ?? []) {
         if (ref.kind !== 'doc' && ref.kind !== 'thread') continue;
         const editedAt = rooms.lastContentChangeFor(ref.docId);
