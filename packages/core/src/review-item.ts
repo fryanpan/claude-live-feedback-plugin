@@ -509,6 +509,100 @@ export interface TaskReviewItem {
   /** What the item said BEFORE each revision, oldest first. Absent while
    *  the words have never changed. See `ReviewItemRevision`. */
   revisions?: ReviewItemRevision[];
+  /**
+   * The quality gate's verdict on the CURRENT words — see
+   * `ReviewItemJudgement`. Absent on an item filed before the gate existed,
+   * or on a board with no judge configured; both read as "not held".
+   */
+  judge?: ReviewItemJudgement;
+}
+
+/**
+ * What the quality gate said about the item's current words, and when.
+ *
+ * `held` is the one verdict that changes anything: the item stays on the
+ * ticket and off the reader's queue until a revision is judged again. `ok`
+ * is the ordinary case. `unavailable` records that the judge was asked and
+ * could not answer — no key, a timeout, an unparseable reply — and the item
+ * went through; it is kept so a later reader can tell "passed" from "never
+ * judged" (Bryan's rule, 2026-08-29: don't refuse, and never block on the
+ * judge being down).
+ *
+ * Recorded ON the item rather than derived, unlike `isReviewItemOpen`'s
+ * facts, because it is the output of a call that cannot be re-run for free —
+ * a second spelling would be a second call.
+ */
+export interface ReviewItemJudgement {
+  /** When the verdict was made. The hold's clock: the stall monitor ages a
+   *  held item from here. */
+  at: number;
+  verdict: ReviewJudgeVerdictKind;
+  /** The judge's one sentence — on a hold, the gap to fix. May be empty. */
+  reason: string;
+}
+
+/**
+ * `pending` is the judge's call still out: stamped before the item is
+ * exposed, so an item the judge is about to hold never flashes onto the
+ * queue for the seconds the call takes. The server replaces it with the
+ * verdict, and turns a `pending` it finds on disk at boot into
+ * `unavailable` — a call that never came back is a pass, like any other
+ * judge failure.
+ */
+export type ReviewJudgeVerdictKind = 'ok' | 'held' | 'unavailable' | 'pending';
+
+const JUDGE_VERDICTS: ReadonlySet<string> = new Set(['ok', 'held', 'unavailable', 'pending']);
+
+/**
+ * Is this item HELD by the quality gate — filed, on the ticket, but kept off
+ * the reader's queue until its filer revises it?
+ *
+ * An answered item is never held, whatever the verdict says: the answer is
+ * the fact that closes an item (`isReviewItemOpen`), and a hold on a closed
+ * item would be a second opinion about words somebody has already acted on.
+ */
+export function isReviewItemHeld(item: TaskReviewItem): boolean {
+  return item.answer === undefined && item.judge?.verdict === 'held';
+}
+
+/**
+ * The judge's reason as a CLAUSE — no trailing full stops — for the surfaces
+ * that carry on the sentence after it ("… — the agent has been asked to
+ * revise it").
+ *
+ * The judge writes a sentence, and every caller that appended to one produced
+ * doubled punctuation: the ticket note read "…rather than 'see below'. — the
+ * agent has been asked…" and the filer's channel line read "…'see below'..
+ * It has been held for 4m" (UX review, 2026-08-29). Only full stops are
+ * stripped: a reason that ends in a question mark or an ellipsis is quoted as
+ * it was written.
+ */
+export function judgeReasonClause(reason: string): string {
+  return reason.trim().replace(/\.+$/, '').trimEnd();
+}
+
+/**
+ * The judge's reason as its own SENTENCE — exactly one terminal mark — for
+ * the surfaces that stop after it. `?`, `!` and `…` are left alone; anything
+ * else gains a full stop, so a reason and the sentence after it never run
+ * together either.
+ */
+export function judgeReasonSentence(reason: string): string {
+  const clause = judgeReasonClause(reason);
+  if (clause === '') return '';
+  return /[?!…]$/.test(clause) ? clause : `${clause}.`;
+}
+
+/**
+ * Is this item OFF the reader's queue because of the quality gate — held,
+ * or still being judged? The queue asks this one; the ticket's "Held: …"
+ * note asks `isReviewItemHeld`, because there is nothing to say about an
+ * item whose verdict is seconds away.
+ */
+export function isReviewItemGated(item: TaskReviewItem): boolean {
+  if (item.answer !== undefined) return false;
+  const verdict = item.judge?.verdict;
+  return verdict === 'held' || verdict === 'pending';
 }
 
 /**
@@ -1088,7 +1182,24 @@ export function readTaskReviewItem(value: unknown): TaskReviewItem | undefined {
     }
     if (revs.length > 0) out.revisions = revs;
   }
+
+  // A verdict that cannot be read is dropped, and the row kept: the safe
+  // direction is the pass-through, since a hold nobody can explain is an item
+  // that vanished from the queue with no reason on the card.
+  const judge = readJudgement(value.judge);
+  if (judge) out.judge = judge;
   return out;
+}
+
+function readJudgement(value: unknown): ReviewItemJudgement | undefined {
+  if (!isPlainObject(value)) return undefined;
+  if (typeof value.verdict !== 'string' || !JUDGE_VERDICTS.has(value.verdict)) return undefined;
+  if (typeof value.at !== 'number' || !Number.isFinite(value.at)) return undefined;
+  return {
+    at: value.at,
+    verdict: value.verdict as ReviewJudgeVerdictKind,
+    reason: str(value.reason, ''),
+  };
 }
 
 function readSpan(value: unknown): { start: number; end: number } | undefined {

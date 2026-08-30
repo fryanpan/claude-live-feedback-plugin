@@ -31,6 +31,8 @@ import {
   dropTarget,
   goalLabel,
   goalRank,
+  heldMetaLine,
+  heldReviewItems,
   humanBlockerRows,
   initialsOf,
   panelAsks,
@@ -48,6 +50,7 @@ import {
   timeAgo,
   unplacedNotice,
   uptimeSummary,
+  waitShort,
 } from '../src/hub/hub-model.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
@@ -2218,5 +2221,86 @@ describe('answeredByLine — the one you/name voice every answered record speaks
   it('claims nobody when the record carries no name', () => {
     expect(answeredByLine(undefined, 'Jordan')).toBe('Answered: “');
     expect(answeredByLine('', 'Jordan')).toBe('Answered: “');
+  });
+});
+
+describe('heldReviewItems', () => {
+  const base = {
+    id: 't-1',
+    title: 'Rebuild the index nightly',
+    status: 'todo' as const,
+    assignee: 'agent',
+    goal: CHORES_ID,
+    order: 1,
+    after: [],
+    links: [],
+    transitions: [],
+    bodyDocId: 'task:t-1',
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const item = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    review: { headline: 'ok?' },
+    ...over,
+  });
+
+  it('is the open items the quality gate holds — not the passed, unjudged or answered ones', () => {
+    const held = heldReviewItems({
+      ...base,
+      reviews: [
+        item('ri-held', { judge: { at: 2, verdict: 'held', reason: 'No stakes.' } }),
+        item('ri-ok', { judge: { at: 2, verdict: 'ok', reason: 'fine' } }),
+        item('ri-unjudged'),
+        item('ri-answered', {
+          judge: { at: 2, verdict: 'held', reason: 'No stakes.' },
+          answer: { text: 'fine' },
+        }),
+      ],
+    });
+    expect(held.map((r) => r.id)).toEqual(['ri-held']);
+  });
+
+  it('is empty on a task with no reviews field — an older projection', () => {
+    expect(heldReviewItems(base)).toEqual([]);
+  });
+});
+
+describe('heldMetaLine — who filed a held item and how long it has stood', () => {
+  const NOW_MS = 1_700_000_000_000;
+
+  it('names the filer and the wait, off the same clock as the card beside it', () => {
+    const line = heldMetaLine('Index Keeper', NOW_MS - 4 * 60_000, NOW_MS);
+    expect(line).toContain('Filed by Index Keeper');
+    expect(line).toContain(waitShort(NOW_MS - 4 * 60_000, NOW_MS));
+  });
+
+  it('states only what it holds: no filer, or no hold time', () => {
+    expect(heldMetaLine(undefined, NOW_MS - 60_000, NOW_MS)).toMatch(/^Held /);
+    expect(heldMetaLine('  ', NOW_MS - 60_000, NOW_MS)).toMatch(/^Held /);
+    expect(heldMetaLine('Index Keeper', undefined, NOW_MS)).toBe('Filed by Index Keeper');
+    expect(heldMetaLine(undefined, undefined, NOW_MS)).toBe('');
+  });
+
+  // The line does not append "ago", so the clock has to hand it a DURATION.
+  // It shipped reading "held moments" on an item under a minute old, because
+  // `waitShort` returned an adverbial that only composed in the one caller
+  // that appends "ago" (UX review round two, 2026-08-29).
+  it('reads as a duration under a minute, not as "held moments"', () => {
+    const line = heldMetaLine('Index Keeper', NOW_MS - 20_000, NOW_MS);
+    expect(line).toBe('Filed by Index Keeper · held under a minute');
+    expect(line).not.toContain('moments');
+    // The two callers now agree on the contract, so the same clock reads
+    // correctly on the card above it and in the queue subline beside it.
+    expect(askedMetaLine('Index Keeper', true, NOW_MS - 20_000, NOW_MS)).toBe(
+      'Asked by Index Keeper under a minute ago',
+    );
+  });
+
+  // It is NOT askedMetaLine with the hold time in the ask slot: `judge.at` is
+  // when the hold was placed, which on a re-hold is long after the question
+  // was asked (UX review, 2026-08-29).
+  it('never claims the hold time is when the question was asked', () => {
+    expect(heldMetaLine('Index Keeper', NOW_MS - 4 * 60_000, NOW_MS)).not.toContain('Asked');
   });
 });

@@ -1002,6 +1002,60 @@ body.hub-body {
   font-size: 12px;
   color: var(--fg-subtle, var(--fg-muted));
 }
+/* The criteria row stacks — label, then the words, then the buttons — because
+   the words are the content here and a side-by-side label would leave the
+   textarea a column too narrow to read a sentence in. `column` on the ROW
+   rather than a new element: every other row in this panel is a flex row, and
+   a wrapper would have to re-state the padding and the type colour. */
+.hub-settings-row--criteria {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+/* The old comment here claimed 96px was "tall enough for the default's six
+   lines at 430px". It was not: at 430px the default wraps to ~280px of text
+   in a 110px box, showing four lines and a sliced fifth (UX review round two,
+   2026-08-29). Criteria are prose a reader edits, and prose that is cut
+   mid-sentence reads as broken rather than as scrolled.
+
+   160px is ~8 lines — enough that the shipped default reads as a paragraph
+   rather than a fragment — and the rest scrolls, which is stated rather than
+   left to the UA default. Still capped at 34vh so the panel's own 70vh is
+   never spent on this one field: on the iPad in landscape height is the
+   scarce axis. Vertical resize stays available for a reader who wants more.
+   `min-height` beats `max-height` in the cascade, so on a very short window
+   the floor holds and the box scrolls — which is the honest failure. */
+.hub-criteria {
+  width: 100%;
+  min-height: 160px;
+  max-height: 34vh;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.hub-criteria:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.hub-criteria-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* `.hub-btn`'s own floor is 36px, which is a mouse target. These two are read
+   and pressed on a phone at 430px, so they take the 44px touch floor the rest
+   of the touch chrome uses. */
+.hub-criteria-actions .hub-btn {
+  min-height: 44px;
+}
 /* 24px keeps the hit area honest on a phone without making the panel taller
    on the iPad, where vertical room is the scarce axis. */
 .hub-check {
@@ -3859,6 +3913,83 @@ a.hub-link-chip:hover {
    16px gap under the answer would be trailing space. */
 .hub-decide--answered .hub-detail-answered {
   margin-bottom: 0;
+}
+/* A review item the quality gate is HOLDING: on the ticket, off the reader's
+   queue, waiting on its filer to revise. A note, not a card — nothing here
+   is answerable — so it reads as a status line with the judge's reason. */
+.hub-decide--held {
+  padding: 0;
+}
+.hub-decide-held {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-hover);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.hub-decide-held-kicker {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  margin-right: 8px;
+}
+.hub-decide-held-ask {
+  font-weight: 600;
+}
+.hub-decide-held-why {
+  display: block;
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
+/* Who filed it and how long it has stood, with the override on the same line.
+   `space-between` puts the button at the edge the way the panel's other
+   secondary actions sit, and wrapping keeps the two off each other at 430px
+   where the meta alone can fill the width. */
+.hub-decide-held-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.hub-decide-held-meta {
+  color: var(--fg-subtle, var(--fg-muted));
+  font-size: 12px;
+}
+/* Never smaller than a finger, and it has to READ as a control with no
+   pointer on the page at all. It shipped `.hub-btn-ghost` — transparent on
+   transparent, muted grey at 13px, the same colour and nearly the same size
+   as the meta beside it — and `.hub-btn:hover` paints `--bg-hover`, which is
+   exactly the background `.hub-decide-held` already sits on, so the hover was
+   invisible and the only feedback left was the cursor. On the iPad there is
+   no cursor (UX review round two, 2026-08-29).
+
+   So: its own surface against the note's, an accent border and underline that
+   say "tappable" while at rest, and a hover/active/focus that INVERTS rather
+   than tinting — the one state change that cannot collide with the surface
+   behind it, whatever the theme does to the tokens. */
+.hub-decide-held-release {
+  flex: none;
+  min-height: 44px;
+  padding-inline: 12px;
+  border-color: var(--accent);
+  background: var(--bg-panel);
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+}
+.hub-decide-held-release:hover,
+.hub-decide-held-release:focus-visible,
+.hub-decide-held-release:active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  text-decoration-line: none;
 }
 /* A refusal said next to the control that refused. `role="alert"`, so it is
    announced rather than only drawn. */

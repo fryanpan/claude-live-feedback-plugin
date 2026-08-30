@@ -58,14 +58,39 @@ function replyFor(path: string): unknown {
       ],
       failures: [],
       reviewAdvice: [{ taskId: 't-9001', advice: 'add a lookFor' }],
+      // The gate held the review filed with the row.
+      held: [
+        {
+          taskId: 't-9001',
+          reviewItemId: 'r-held',
+          heldReason: 'No option names its cost.',
+          message: 'Held off the reader’s queue — revise it with revise_review_item.',
+        },
+      ],
     };
   }
   if (/\/review-items$/.test(path)) {
+    // The quality gate held it — only on the one ticket the held case uses,
+    // so every other case is the positive control for "not held".
+    const held = path.includes('/tasks/t-held/');
     return {
       task: { id: 't-1', links: [] },
       item: { id: 'r-4b2e', createdAt: 1, createdBy: 'Index Keeper' },
       reviewAdvice: 'add a lookFor',
+      ...(held
+        ? {
+            held: true,
+            heldReason: 'The headline is a ticket id.',
+            message: 'Held off the reader’s queue — revise it with revise_review_item.',
+          }
+        : {}),
     };
+  }
+  if (/\/revise$/.test(path) && path.includes('/tasks/t-held/')) {
+    return { ok: true, held: true, heldReason: 'Still no cost on the options.' };
+  }
+  if (path.endsWith('/settings')) {
+    return { reviewItemCriteria: { value: 'Every option names a cost.', isDefault: false } };
   }
   return { ok: true, task: { id: 't-1', links: [{ kind: 'task', taskId: 't-2' }] } };
 }
@@ -331,6 +356,55 @@ describe('a ticket carries review items, and the tools reach them', () => {
     expect(payload(reply).revised).toBe(true);
   });
 
+  it('add_review_item reports a HOLD with the reason and the fix', async () => {
+    const reply = await call('add_review_item', { taskId: 't-held', review });
+    okReply(reply);
+    expect(payload(reply).held).toBe(true);
+    expect(payload(reply).heldReason).toBe('The headline is a ticket id.');
+    expect(String(payload(reply).message)).toContain('revise_review_item');
+    // The row still exists — held is not refused.
+    expect(payload(reply).reviewItemId).toBe('r-4b2e');
+  });
+
+  it('add_review_item on a passed item says nothing about holding (control)', async () => {
+    const reply = await call('add_review_item', { taskId: 't-1', review });
+    expect('held' in payload(reply)).toBe(false);
+    expect('heldReason' in payload(reply)).toBe(false);
+  });
+
+  it('revise_review_item reports a hold that survived the revision', async () => {
+    const reply = await call('revise_review_item', {
+      taskId: 't-held',
+      reviewItemId: 'r-4b2e',
+      detail: 'Reads twice per nightly run.',
+    });
+    okReply(reply);
+    expect(payload(reply).revised).toBe(true);
+    expect(payload(reply).held).toBe(true);
+    expect(payload(reply).heldReason).toBe('Still no cost on the options.');
+  });
+
+  it('set_review_item_criteria PUTs the prompt to the board’s settings', async () => {
+    const reply = await call('set_review_item_criteria', {
+      workspaceId: 'w-1',
+      criteria: 'Every option names a cost.',
+    });
+    okReply(reply);
+    expect(last().method).toBe('PUT');
+    expect(last().path).toBe('/api/workspaces/w-1/settings');
+    expect(last().body.reviewItemCriteria).toBe('Every option names a cost.');
+    expect(last().body.author).toBeTruthy();
+    expect(payload(reply).criteria).toBe('Every option names a cost.');
+    expect(payload(reply).isDefault).toBe(false);
+  });
+
+  it('set_review_item_criteria with no prompt sends null — back to the default', async () => {
+    await call('set_review_item_criteria', { workspaceId: 'w-1' });
+    expect(last().body.reviewItemCriteria).toBeNull();
+    await call('set_review_item_criteria', { workspaceId: 'w-1', criteria: '   ' });
+    expect(last().body.reviewItemCriteria).toBeNull();
+  });
+
   it('create_tasks carries a `review` row through and reports its advice', async () => {
     const reply = await call('create_tasks', {
       workspaceId: 'w-1',
@@ -341,6 +415,22 @@ describe('a ticket carries review items, and the tools reach them', () => {
     expect(sent?.review).toEqual(review);
     const created = payload(reply).created as Array<Record<string, unknown>>;
     expect(created[0]?.reviewAdvice).toBe('add a lookFor');
+  });
+
+  // Found by codex review: the batch door held the review and said so only in
+  // a top-level array the handler never read, so the filer got a success-
+  // shaped row for an ask nobody could see.
+  it('create_tasks reports a HOLD on the review filed with the row, with the id to revise', async () => {
+    const reply = await call('create_tasks', {
+      workspaceId: 'w-1',
+      tasks: [{ title: 'Bryan can pick the eviction policy', assignee: 'human', review }],
+    });
+    okReply(reply);
+    const created = payload(reply).created as Array<Record<string, unknown>>;
+    expect(created[0]?.held).toBe(true);
+    expect(created[0]?.heldReason).toBe('No option names its cost.');
+    expect(created[0]?.reviewItemId).toBe('r-held');
+    expect(String(created[0]?.message)).toContain('revise_review_item');
   });
 });
 
