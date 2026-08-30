@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
-import { resolveClientDists } from './client-release.ts';
+import { clientReleaseStatus, resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
 import { installLogSquelch } from './log-squelch.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
@@ -13,6 +13,7 @@ import { createPluginRefresher } from './plugin-refresh.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
 import { haikuReviewJudge, reviewGateEnabled } from './review-judge.ts';
+import { captureServerError, flushServerSentry, initServerSentry } from './sentry.ts';
 import { createServer } from './server.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { TTL_FORMAT_HINT, parseTtl } from './share/ttl.ts';
@@ -72,6 +73,46 @@ const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 
 const sentryDsn = readRenamedEnv(process.env, 'CW_SENTRY_DSN')?.trim();
+
+// Server-side Sentry: traces + error capture for THIS process, independent
+// of the `sentryDsn` handed to `createServer` below (that one only ever
+// reaches the browser as a meta tag — see sentry.ts for why the two are
+// deliberately not the same init path). Same env var, same "no DSN, no SDK,
+// no outbound request" contract. The release is the deploy this process is
+// running, read the same way the board reads a peer's own version: from the
+// published release's provenance file, when this start is one (prod). Dev
+// and staging run straight from a checkout with no release directory, so
+// `sourceRef` is absent there — Sentry just omits the release tag rather
+// than guessing at one.
+if (sentryDsn) {
+  const releaseSourceRef = clientReleaseRootDir
+    ? clientReleaseStatus(clientReleaseRootDir).sourceRef
+    : null;
+  await initServerSentry({ dsn: sentryDsn, release: releaseSourceRef });
+  // A crash Sentry never gets to see is the exact failure mode this exists
+  // to fix — so these two catch what a request-scoped span cannot: an error
+  // that isn't inside any one request. Capture, THEN preserve Bun's default
+  // behavior (log + exit non-zero) rather than silently swallowing it.
+  process.on('uncaughtException', (err) => {
+    captureServerError(err, { phase: 'uncaughtException' });
+    console.error('[feedback] uncaught exception', err);
+    void flushServerSentry().finally(() => process.exit(1));
+  });
+  process.on('unhandledRejection', (reason) => {
+    captureServerError(reason instanceof Error ? reason : new Error(String(reason)), {
+      phase: 'unhandledRejection',
+    });
+    console.error('[feedback] unhandled rejection', reason);
+    // Registering ANY listener here overrides Bun's own default handling
+    // (log + crash) — without this exit, an unhandled rejection would go
+    // from fatal to merely logged the moment Sentry is configured, leaving
+    // the process alive in whatever state produced the rejection. Match the
+    // uncaughtException handler above so enabling Sentry never changes
+    // whether the process survives an otherwise-fatal error, only whether
+    // it gets seen before exiting.
+    void flushServerSentry().finally(() => process.exit(1));
+  });
+}
 
 // How long ready, agent-owned work may sit untouched before the board wakes
 // its lead (ready-nudge.ts). Minutes rather than ms because it is a number an
@@ -699,6 +740,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     summarizer.dispose();
     if (pluginRefreshTimer) clearInterval(pluginRefreshTimer);
     await handle.stop();
+    await flushServerSentry();
     process.exit(0);
   });
 }

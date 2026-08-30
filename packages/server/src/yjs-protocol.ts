@@ -3,6 +3,7 @@ import * as encoding from 'lib0/encoding';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import type { DocRoom, FeedbackWs } from './rooms.ts';
+import { captureServerError } from './sentry.ts';
 
 /**
  * Minimal y-websocket protocol implementation for Bun's native WebSocket.
@@ -148,6 +149,12 @@ export function onMessage(room: DocRoom, ws: FeedbackWs, data: Uint8Array): void
     }
   } catch (err) {
     console.error('[ws] message handler error:', err);
+    // The sync flow's error path — a genuine desync/protocol bug, not the
+    // expected-on-disconnect send failures above (those stay off Sentry on
+    // purpose; a peer closing mid-broadcast would otherwise spam it). No
+    // docId, no content — a sync protocol error doesn't need either to be
+    // actionable.
+    captureServerError(err, { phase: 'ws.message' });
   }
 }
 
