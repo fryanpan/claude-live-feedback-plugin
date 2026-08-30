@@ -113,7 +113,12 @@ switch `CW_MEETING_TASKS=0` — extracts explicit task requests and references
 to tracked work from the new speech. Find-or-create is guarded
 deterministically (a model-claimed reference must share words with the tick's
 own transcript; a request that duplicates open work links the row instead of
-twinning it), because a wrong link is worse than no link. New rows are
+twinning it), because a wrong link is worse than no link. The pass reads the
+same speaker-prefixed transcript the composer does and may return a
+`requester` for a request — guarded on the same law, so it must be a voice
+that tick actually carried; the created row's body then says who asked,
+which is the half of "who said what" a task can still answer a week later,
+once the strip is gone. New rows are
 attributed to the `Meeting Assistant` agent actor and enter triage; a request
 judged clear-and-doable goes to the chores band at `todo` and wakes the
 board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
