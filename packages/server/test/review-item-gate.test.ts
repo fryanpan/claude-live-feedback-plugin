@@ -697,6 +697,46 @@ describe('the review-item quality gate', () => {
       expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([item.id]);
     });
 
+    // Found by codex review, third pass: a release does not change the
+    // item's WORDS, so the version check alone still matched when the judge
+    // came back — and its `held` overwrote the release, taking the item off
+    // the queue seconds after the reader had been told it was on.
+    it('a release issued while the judge is out survives its late verdict', async () => {
+      verdict = 'defer';
+      const { workspaceId, taskId } = await board();
+      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      while (parked.length < 1) await settle(10);
+      const { tasks } = await jj<{ tasks: Array<{ id: string; reviews?: Array<{ id: string }> }> }>(
+        await get(`/api/workspaces/${workspaceId}/tasks`),
+      );
+      const itemId = tasks.find((t) => t.id === taskId)?.reviews?.[0]?.id as string;
+      // The control: while the judge is out the item is off the queue, so the
+      // release below is what puts it there and not the filing.
+      expect(await queue(workspaceId)).toEqual([]);
+
+      const released = await jj<{ released: boolean }>(
+        await post(`/api/tasks/${taskId}/review-items/${itemId}/release`, { author: PERSON }),
+      );
+      expect(released.released).toBe(true);
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([itemId]);
+
+      // Now the judge answers, and it wants the item held.
+      parked[0]?.({ ok: false, reason: 'No stakes.' });
+      const filed = await jj<{ held?: boolean }>(await filing);
+      // Nobody is told to go and revise something the reader already asked for.
+      expect(filed.held ?? false).toBe(false);
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([itemId]);
+      const seen = await jj<{
+        tasks: Array<{
+          id: string;
+          reviews?: Array<{ judge?: { verdict: string; reason: string } }>;
+        }>;
+      }>(await get(`/api/workspaces/${workspaceId}/tasks`));
+      const judge = seen.tasks.find((t) => t.id === taskId)?.reviews?.[0]?.judge;
+      expect(judge?.verdict).toBe('ok');
+      expect(judge?.reason).toContain(PERSON.name);
+    });
+
     it('is a no-op success on an item nothing is holding — two taps is not an error', async () => {
       verdict = { ok: true, reason: 'Fine.' };
       const { workspaceId, taskId } = await board();

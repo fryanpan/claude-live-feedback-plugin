@@ -4073,6 +4073,18 @@ export class TaskStore {
        * whatever words are there now.
        */
       forVersion?: number;
+      /**
+       * The `at` of the `pending` stamp this caller placed before it asked
+       * the judge. The verdict is refused unless that exact stamp is still
+       * on the row — somebody else has written a verdict since, and theirs
+       * is the newer fact.
+       *
+       * `forVersion` alone does not cover this: a reader overruling the gate
+       * releases the item WITHOUT changing its words, so a judge that came
+       * back afterwards still matched the version and could re-hold an item
+       * the reader had just been told was released (codex review).
+       */
+      forPendingAt?: number;
     },
   ):
     | { ok: true; task: Task; item: TaskReviewItem }
@@ -4084,6 +4096,12 @@ export class TaskStore {
     if (!item) return { ok: false, error: 'unknown-review-item' };
     if (item.answer) return { ok: false, error: 'answered' };
     if (opts.forVersion !== undefined && reviewItemVersion(item) !== opts.forVersion) {
+      return { ok: false, error: 'stale' };
+    }
+    if (
+      opts.forPendingAt !== undefined &&
+      (item.judge?.verdict !== 'pending' || item.judge.at !== opts.forPendingAt)
+    ) {
       return { ok: false, error: 'stale' };
     }
     item.judge = { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason };
