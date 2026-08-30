@@ -92,6 +92,21 @@ export interface WidgetOpts {
 const AUTH_TOKEN_KEY = 'cfw:authToken';
 const AUTH_USER_KEY = 'cfw:authUser';
 
+/**
+ * `true` when a 401 is the workspace saying "sign in first" rather than
+ * "your token is dead". Read off a CLONE so the caller still gets an
+ * unconsumed response, and false for anything unparseable — an unreadable
+ * body must not turn a dead token into a sign-in prompt.
+ */
+async function isSignInRequired(res: Response): Promise<boolean> {
+  try {
+    const body = (await res.clone().json()) as { error?: unknown };
+    return body?.error === 'sign_in_required';
+  } catch {
+    return false;
+  }
+}
+
 const TAG = 'claude-feedback-widget';
 const IGNORE_ATTR = 'data-feedback-widget';
 
@@ -548,16 +563,62 @@ class FeedbackWidgetEl extends HTMLElement {
    * identity the widget now actually holds.
    */
   private async authedPost(url: string, build: () => RequestInit): Promise<Response> {
-    if (!this.authToken) return fetch(url, build());
-    const init = build();
-    const headers = {
-      ...(init.headers as Record<string, string>),
-      authorization: `Bearer ${this.authToken}`,
+    const send = (): Promise<Response> => {
+      const init = build();
+      if (!this.authToken) return fetch(url, init);
+      return fetch(url, {
+        ...init,
+        headers: {
+          ...(init.headers as Record<string, string>),
+          authorization: `Bearer ${this.authToken}`,
+        },
+      });
     };
-    const res = await fetch(url, { ...init, headers });
+    const res = await send();
     if (res.status !== 401) return res;
+    // TWO different 401s, and the old code could only see one of them.
+    //
+    // `sign_in_required` is the workspace refusing an UNSIGNED write
+    // (server/src/middleware/write-gate.ts). Clearing a token we do not hold
+    // and retrying anonymously produces the identical refusal, forever, and
+    // every caller here ignores the response — so the comment simply
+    // vanished, which is the exact failure the gate exists to replace.
+    if (await isSignInRequired(res)) {
+      this.showSignInRequired();
+      return res;
+    }
+    // Anything else with a token is the token being refused (revoked,
+    // expired): sign out locally and retry once so the comment lands as
+    // anonymous rather than vanishing. Rebuilt after `clearAuth`, so the
+    // retry carries the identity the widget now actually holds.
+    if (!this.authToken) return res;
     this.clearAuth();
-    return fetch(url, build());
+    return send();
+  }
+
+  /**
+   * Say that this comment needs a signed-in person, and put the way to
+   * become one within reach.
+   *
+   * On an embed that offers the popup handshake, opening it IS the fix, so
+   * open it. Otherwise the widget is on a page the workspace serves itself,
+   * where the session cookie is what counts — so point at the sign-in page
+   * on the workspace origin and let the person come back.
+   */
+  private showSignInRequired(): void {
+    if (this.opts.authOffer) {
+      this.startSignIn();
+      return;
+    }
+    const actions = this.shadow.querySelector('.panel-actions') as HTMLElement | null;
+    if (!actions || actions.querySelector('.auth-required')) return;
+    const note = document.createElement('a');
+    note.className = 'auth-required';
+    note.textContent = 'Sign in to comment';
+    note.href = `${this.serverOrigin()}/signin`;
+    note.target = '_blank';
+    note.rel = 'noopener';
+    actions.appendChild(note);
   }
 
   // --- Element picker ---
