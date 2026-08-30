@@ -1275,7 +1275,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // guard stops ONE call site from ever sending the repeat, this catches
   // whatever gets through anyway (a request that landed but read as a
   // client-side failure, a future caller that reintroduces the race).
-  const threadRequestDedup = new ThreadRequestDedup();
+  const threadRequestDedup = new ThreadRequestDedup<Thread | null>();
   // The hub task store (plan §3.2/§3.3): server-owned workspaces + tasks,
   // persisted as per-workspace sidecars under <dataDir>/workspaces/.
   const taskStore = new TaskStore({
@@ -8529,25 +8529,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller that wrote it has to be the one that hears about it.
             const anchorCheck = anchors.validateAnchor(anchor);
             if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
-            // A repeat of a create this server already made — same doc, same
-            // client-generated requestId, same text and anchor — short-
-            // circuits here, before the review-item side effects below run a
-            // second time (requestMoreInfoOnReview is not idempotent). Keyed
-            // on the RAW anchor: a duplicate call carries byte-identical
-            // JSON, the located/rewritten anchor below does not need to.
+            // Identity for the dedup below — computed from the RAW anchor, so
+            // a duplicate call (byte-identical JSON) matches regardless of
+            // how the review-item branch below rewrites `anchor` for the
+            // eventual write.
             const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
             const anchorKey = JSON.stringify(anchor);
-            const dupThreadId = threadRequestDedup.matchExisting(docId, requestId, text, anchorKey);
-            if (dupThreadId) {
-              const existing = rooms.getThread(docId, dupThreadId);
-              if (existing) {
-                const handoff = threadUrl(docId, Boolean(visitor));
-                return j(200, {
-                  thread: withTaskChips(docId, existing),
-                  ...(handoff ? { threadUrl: handoff } : {}),
-                });
-              }
-            }
             // A thread on a PHRASE of a review item — the doc-style question
             // asked back at an ask. The anchor names an item this task must
             // carry, and its offsets must spell its snippet in the item's
@@ -8620,21 +8607,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             }
             const declared = reviewFromBody(body?.review, text);
             if (!declared.ok) return j(400, { error: declared.error });
-            const t = await rooms.postComment(docId, null, user, text, anchor, {
-              generate: !visitor,
-              ...(declared.review ? { review: declared.review } : {}),
-            });
-            if (t) threadRequestDedup.record(docId, requestId, text, anchorKey, t.id);
-            if (t && itemAsk?.range) {
-              const asked = taskStore.requestMoreInfoOnReview(
-                itemAsk.taskId,
-                itemAsk.reviewItemId,
-                text,
-                { actor: user, threadId: t.id, range: itemAsk.range },
-              );
-              if (asked.ok) taskProjection.ensureWorkspace(asked.task.workspaceId);
-            }
-            if (t && declared.review) announceThreadReview(docId, t.id, declared.review, user);
+            // `dedupe` reserves (docId, requestId) synchronously and runs
+            // this closure at most once for however many duplicate requests
+            // arrive while it is in flight — the write AND the review-item
+            // side effects it triggers, so a concurrent repeat never fires
+            // `requestMoreInfoOnReview` a second time either.
+            const { value: t } = await threadRequestDedup.dedupe(
+              docId,
+              requestId,
+              text,
+              anchorKey,
+              async () => {
+                const created = await rooms.postComment(docId, null, user, text, anchor, {
+                  generate: !visitor,
+                  ...(declared.review ? { review: declared.review } : {}),
+                });
+                if (created && itemAsk?.range) {
+                  const asked = taskStore.requestMoreInfoOnReview(
+                    itemAsk.taskId,
+                    itemAsk.reviewItemId,
+                    text,
+                    { actor: user, threadId: created.id, range: itemAsk.range },
+                  );
+                  if (asked.ok) taskProjection.ensureWorkspace(asked.task.workspaceId);
+                }
+                if (created && declared.review) {
+                  announceThreadReview(docId, created.id, declared.review, user);
+                }
+                return created;
+              },
+            );
             const handoff = threadUrl(docId, Boolean(visitor));
             return t
               ? j(200, {
