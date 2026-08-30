@@ -190,8 +190,10 @@ describe('per-room timers', () => {
     // All ten bindings armed, none of them active: they are swept on the
     // idle budget, not stat'd on every tick.
     expect(after.activeBindings).toBe(0);
-    // Two timers for ten bindings: the memory line and the one shared sweep.
-    expect(after.timers).toBe(2);
+    // Three timers for ten bindings, and the same three for ten thousand:
+    // the memory line, the one shared file sweep, and the idle-eviction
+    // sweep. The count is the point, not the number.
+    expect(after.timers).toBe(3);
   });
 
   it('still applies an external edit to a bound doc nobody is WATCHING', async () => {
@@ -410,13 +412,14 @@ describe('hydration cost at corpus scale', () => {
       expect(s.rooms).toBe(200);
       expect(s.bindings).toBe(200);
       // The whole point: the timer count does not scale with the corpus.
-      // 200 rooms, 200 bindings, no presence instances, two timers — the
-      // memory line and the one shared file sweep. Before this change the
-      // same fixture held 400 (one Awareness interval and one stat poll per
-      // doc), which is what took the server to 2.6 GB at 5,600 docs.
+      // 200 rooms, 200 bindings, no presence instances, three timers — the
+      // memory line, the shared file sweep and the idle-eviction sweep.
+      // Before this change the same fixture held 400 (one Awareness interval
+      // and one stat poll per doc), which is what took the server to 2.6 GB
+      // at 5,600 docs.
       expect(s.awareness).toBe(0);
       expect(s.activeBindings).toBe(0);
-      expect(s.timers).toBe(2);
+      expect(s.timers).toBe(3);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
       rmSync(srcDir, { recursive: true, force: true });
