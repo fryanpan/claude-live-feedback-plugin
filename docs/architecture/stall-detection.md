@@ -55,7 +55,9 @@ A judge that has no key, times out, errors, or answers unparseably PASSES
 the item — the gate is a nudge toward better asks, never a door that
 closes when the API does (`decisions.md`, 2026-08-29). Held state is
 stored on the item (`judge: {at, verdict, reason}`) and the filer's agent id
-beside it, store-only. `stallSnapshot` lists the holds older than
+beside it, store-only; the item is `pending` — off the queue, nothing on
+the ticket — from the moment it is filed until the verdict lands, and a
+`pending` still on disk at boot becomes `unavailable`. `stallSnapshot` lists the holds older than
 `CW_HELD_ITEM_MINUTES` (default 5) as `held`; the nudger wakes the FILER
 once per item per process (`filersTold`), and the frame to the lead carries
 them as `heldItems` — a board with nothing else wrong still wakes on one.

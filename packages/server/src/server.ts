@@ -1469,6 +1469,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // judge is out gets its own call; this one's verdict must not be
     // stamped onto words it never read (codex review).
     const forVersion = reviewItemVersion(item);
+    // Off the queue from THIS moment, not from the verdict: the item is
+    // already in the store, and the seconds the judge takes were seconds the
+    // reader could see — and answer — an item about to be held (codex
+    // review). `pending` is what the queue reads meanwhile; the ticket says
+    // nothing about it.
+    taskStore.recordReviewJudgement(
+      task.id,
+      item.id,
+      { at: Date.now(), verdict: 'pending', reason: 'being judged' },
+      { actor: author, forVersion },
+    );
     let verdict: ReviewJudgeVerdict | null = null;
     try {
       verdict = await judge({

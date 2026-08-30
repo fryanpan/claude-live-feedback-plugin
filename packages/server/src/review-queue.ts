@@ -29,7 +29,7 @@ import type {
 } from '@feedback/core';
 import {
   decodeEntities,
-  isReviewItemHeld,
+  isReviewItemGated,
   latestThreadedQuestion,
   pendingDeclaration,
   reviewItemState,
@@ -667,12 +667,13 @@ export function taskReviewItems(tasks: ReviewTaskRef[]): ReviewTaskItem[] {
   for (const task of tasks) {
     if (task.done) continue;
     for (const item of task.reviews ?? []) {
-      // HELD by the quality gate: filed, on the ticket, and not yet fit to
-      // put in front of the reader. Its filer was told to revise; until the
-      // revision is judged again the row does not exist here — which is
-      // exactly what "not on the queue" has to mean for the brief's count,
-      // the strip and the walkthrough, all of which read this one list.
-      if (isReviewItemHeld(item)) continue;
+      // HELD by the quality gate — filed, on the ticket, and not yet fit to
+      // put in front of the reader — or still being judged. Its filer was
+      // (or is about to be) told; until a verdict passes it the row does not
+      // exist here — which is exactly what "not on the queue" has to mean
+      // for the brief's count, the strip and the walkthrough, all of which
+      // read this one list.
+      if (isReviewItemGated(item)) continue;
       const state = reviewItemState(item);
       // Answered is closed; waiting is the OWNER's turn — the reader asked on
       // it and has nothing to do until the words come back revised.
