@@ -29,7 +29,7 @@
  */
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
-import { connect as netConnect, createServer as netServer } from 'node:net';
+import { connect as netConnect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,12 @@ import {
   prepareClientRelease,
 } from '../packages/server/src/client-release.ts';
 import { readDeploySource } from '../packages/server/src/deploy-source.ts';
+import {
+  type BindErrorKind,
+  acquirePort,
+  probeLocalPort,
+  shouldWalkPorts,
+} from '../packages/server/src/port-bind.ts';
 
 const args = process.argv.slice(2);
 function arg(name: string): string | undefined {
@@ -54,18 +60,25 @@ const requestedPort = Number(arg('port') ?? process.env.PORT ?? '8787');
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
 
+/**
+ * DEV only. Walk to the next port when this one is occupied, so two agents on
+ * one machine do not fight over 8787. Only `in-use` justifies a step: a host
+ * that cannot open a socket at all will answer identically for all 50 ports,
+ * and walking converts one host-level failure into a bogus "no free port".
+ */
 async function pickFreePort(start: number): Promise<number> {
-  async function canBind(p: number, host: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      const s = netServer();
-      s.once('error', () => resolve(false));
-      s.listen(p, host, () => s.close(() => resolve(true)));
-    });
-  }
+  let last: BindErrorKind | null = null;
   for (let p = start; p < start + 50; p++) {
-    if ((await canBind(p, '127.0.0.1')) && (await canBind(p, '::1'))) return p;
+    const kind = await probeLocalPort(p);
+    if (kind === null) return p;
+    last = kind;
+    if (kind !== 'in-use') break;
   }
-  throw new Error(`no free port near ${start}`);
+  throw new Error(
+    last === 'in-use'
+      ? `no free port near ${start}`
+      : `cannot open a socket on :${start} — this host is out of network resources, not out of ports`,
+  );
 }
 
 /** Can we open a TCP connection to the port? This answers "is the server
@@ -101,7 +114,31 @@ function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
 // with a timestamp alone rather than failing a deploy over a label.
 const deploySource = noWatch ? readDeploySource(repoRoot) : null;
 
-const port = await pickFreePort(requestedPort);
+// DEV negotiates a port; PROD is GIVEN one. Under launchd the port is part
+// of the contract — the discovery file, peers' CW_BASE_URL, the Cloudflare
+// tunnel and this supervisor's own bind-health watchdog all name it — so a
+// prod server that quietly moved to 8788 is invisible to every one of them.
+// On 2026-08-29 that invisibility is precisely what let the watchdog kill and
+// relaunch nine healthy servers in a row while their predecessors stayed up.
+//
+// So prod WAITS for its port, in this process, with backoff. The wait happens
+// here, BEFORE the client builds and before the child hydrates 5,622
+// documents, so a busy port costs a log line rather than a full relaunch.
+const walkPorts = shouldWalkPorts(args);
+async function resolvePort(): Promise<number> {
+  if (walkPorts) return pickFreePort(requestedPort);
+  await acquirePort({
+    port: requestedPort,
+    probe: probeLocalPort,
+    sleep: (ms) =>
+      new Promise((r) => {
+        setTimeout(r, ms);
+      }),
+    log: (m) => console.error(m),
+  });
+  return requestedPort;
+}
+const port = await resolvePort();
 
 // PROD deploy step. Two problems, one sequence:
 //
@@ -204,6 +241,12 @@ const serverArgs = [
   join(repoRoot, 'packages', 'server', 'src', 'bin.ts'),
   '--port',
   String(port),
+  // PROD only: the port is the contract, so the child may not walk off it
+  // either. Without this the supervisor waits politely for 8787, hands the
+  // child 8787, and the child binds 8788 the moment anything else is holding
+  // it — which is invisible to the bind-health watchdog below (it polls the
+  // port it ASKED for) and was the engine of the 2026-08-29 restart storm.
+  ...(noWatch ? ['--no-port-walk'] : []),
   // PROD only: the published release to serve. Empty in dev, where the
   // bundler watches this checkout's dist and the server should follow it.
   ...clientArgs,
@@ -266,6 +309,54 @@ if (noWatch) console.log('[supervisor] mode: prod (no hot-reload; bind-health wa
 console.log('');
 
 let cleaningUp = false;
+
+/** How long a child gets to honour SIGTERM before we stop being polite. */
+const SHUTDOWN_GRACE_MS = 5_000;
+const SIGKILL_GRACE_MS = 2_000;
+
+const stillRunning = (): ChildProcess[] =>
+  children().filter((p) => p.exitCode === null && p.signalCode === null);
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * SIGTERM every child, then WAIT for them to actually die, then SIGKILL
+ * whatever is left.
+ *
+ * The predecessor of this function fired SIGTERM and called `process.exit`
+ * 300ms later without ever looking at whether anything died. A server child
+ * midway through hydrating 5,622 documents does not exit in 300ms, so it was
+ * reparented to launchd and kept running — holding its port, its 2,553 file
+ * watchers and its memory — while launchd started a replacement. On
+ * 2026-08-29 that leak ran nine times; the last survivor reached 2.77 GB and
+ * was the process jetsam killed when the machine ran out of memory and, with
+ * it, network buffers. `activity-writer.lock is held by pid 88883` appears in
+ * the log across seven consecutive restarts: one orphan, outliving them all.
+ */
+async function reapChildren(): Promise<void> {
+  for (const p of stillRunning()) {
+    try {
+      p.kill('SIGTERM');
+    } catch {}
+  }
+  const softDeadline = Date.now() + SHUTDOWN_GRACE_MS;
+  while (Date.now() < softDeadline && stillRunning().length > 0) await wait(100);
+
+  const stubborn = stillRunning();
+  if (stubborn.length === 0) return;
+  console.error(
+    `[supervisor] ${stubborn.length} child(ren) ignored SIGTERM after ` +
+      `${SHUTDOWN_GRACE_MS / 1000}s — SIGKILL (pids ${stubborn.map((p) => p.pid).join(', ')})`,
+  );
+  for (const p of stubborn) {
+    try {
+      p.kill('SIGKILL');
+    } catch {}
+  }
+  const hardDeadline = Date.now() + SIGKILL_GRACE_MS;
+  while (Date.now() < hardDeadline && stillRunning().length > 0) await wait(50);
+}
+
 /** Tear down children + discovery file and exit. `code` decides whether
  *  launchd (KeepAlive: SuccessfulExit=false) respawns us: exit 0 on an
  *  intentional stop (SIGINT/SIGTERM) so we stay down, exit 1 when a child
@@ -273,23 +364,54 @@ let cleaningUp = false;
 function cleanup(code: number): void {
   if (cleaningUp) return;
   cleaningUp = true;
-  for (const p of children()) {
-    try {
-      p.kill('SIGTERM');
-    } catch {}
-  }
   try {
     unlinkSync(discoveryFile);
   } catch {}
-  setTimeout(() => process.exit(code), 300);
+  void reapChildren().then(() => process.exit(code));
 }
+
+// Last-resort orphan guard. `cleanup` covers the paths we know about; this
+// covers the ones we do not — an uncaught throw, an explicit process.exit
+// elsewhere, a code path added later. It must be synchronous, so SIGKILL is
+// the only option available here.
+process.on('exit', () => {
+  for (const p of stillRunning()) {
+    try {
+      p.kill('SIGKILL');
+    } catch {}
+  }
+});
 // A child exiting unexpectedly is a failure — exit non-zero so launchd
 // respawns a healthy supervisor (the old code exited 0 here, which meant a
 // crashed server was NOT respawned).
-server.on('exit', () => cleanup(1));
+//
+// But a child that dies IMMEDIATELY, every time, is the outage's cost
+// structure with a different trigger: launchd's ThrottleInterval is 10s, and
+// each relaunch re-runs two client builds and re-hydrates every persisted
+// document before it can fail again. So when the server dies young, hold
+// before exiting. This is a damper, not exponential backoff — the supervisor
+// keeps no state across launchd relaunches, so it cannot know it is the
+// fourth attempt — but it turns a 10s hot loop into a ~30s one and costs
+// nothing when the server was healthy and something else killed it.
+const FAST_CRASH_MS = 30_000;
+const FAST_CRASH_HOLD_MS = 20_000;
+const spawnedAt = Date.now();
+server.on('exit', () => {
+  const uptimeMs = Date.now() - spawnedAt;
+  if (cleaningUp || uptimeMs >= FAST_CRASH_MS) {
+    cleanup(1);
+    return;
+  }
+  console.error(
+    `[supervisor] server died ${Math.round(uptimeMs / 1000)}s after starting — ` +
+      `holding ${FAST_CRASH_HOLD_MS / 1000}s before exiting, so relaunching does not ` +
+      'become a hot loop of client builds and document hydration',
+  );
+  setTimeout(() => cleanup(1), FAST_CRASH_HOLD_MS);
+});
 mdApp?.on('exit', () => cleanup(1));
 // Intentional stop → exit 0, no respawn.
-for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => cleanup(0));
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () => cleanup(0));
 
 // Bind-health watchdog (prod only). The failure that took prod down was the
 // server process staying ALIVE but no longer LISTENING (a --watch reload
@@ -297,6 +419,14 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => cleanup(
 // port; if it's unreachable across MAX_FAILS consecutive checks while we
 // haven't been asked to stop, exit non-zero so launchd respawns a bound
 // server. Dropping --watch removes the known trigger; this catches the class.
+//
+// This polls the port we ASKED for, which is only the same as the port the
+// child BOUND because prod forbids walking on both sides (`shouldWalkPorts`
+// above, `--no-port-walk` in serverArgs). When that invariant did not hold,
+// this watchdog was the outage: the child bound 8788, the watchdog polled
+// 8787, declared a healthy server unbound, and restarted it — nine times,
+// leaking a fully-hydrated server on each pass. Do not re-enable walking in
+// prod without giving the child a way to report the port it actually got.
 if (noWatch) {
   const GRACE_MS = 15_000; // let the server bind before the first check
   const CHECK_MS = 30_000;
