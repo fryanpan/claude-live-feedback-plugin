@@ -1679,6 +1679,17 @@ export class Rooms {
    * open and its other declarations stay answerable — `pendingDeclaration`
    * steps over the withdrawn one and falls through to whichever ask is still
    * standing.
+   *
+   * ANY agent in the workspace may withdraw an item, not only the one whose
+   * name is on it, and `withdrawnBy` records who did. Two reasons, and the
+   * first is the stronger: a workspace is a shared view, so its resources are
+   * everyone's, and the sibling verb one step from here (`reviseCommentReview`)
+   * already lets an agent REWRITE another's ask — a narrower rule on the
+   * gentler of the two operations would be a fence with no field behind it.
+   * The second is the case that produced this verb: the agent left holding a
+   * stale ask is often not the one that filed it (a peer that has since
+   * exited, or a lead cleaning up by hand), and an ownership check would lock
+   * exactly that agent out of the cleanup.
    */
   withdrawCommentReview(
     docId: string,
