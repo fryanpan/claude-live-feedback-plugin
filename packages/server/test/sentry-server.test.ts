@@ -181,6 +181,21 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
     expect(JSON.stringify(scrubbed)).not.toContain(secretId);
     expect(scrubbed.transaction).toBe('GET /api/workspaces/[id]/home');
   });
+
+  it('fails closed past the recursion guard — a subtree too deep to walk is redacted, not passed through raw', () => {
+    // codex review caught this: the original guard returned the RAW subtree
+    // once depth exceeded the cycle-protection limit, which would ship
+    // whatever sat below that depth unscrubbed. No real Sentry event nests
+    // this deep, so there is no legitimate data to protect by passing it
+    // through — only a wrong assumption to remove.
+    const secretId = `d-${crypto.randomUUID()}`;
+    let nested: unknown = { leaf: secretId };
+    for (let i = 0; i < 25; i++) nested = { child: nested };
+    expect(JSON.stringify(nested)).toContain(secretId); // fixture actually leaks first
+
+    const scrubbed = scrubEventForPrivacy(nested);
+    expect(JSON.stringify(scrubbed)).not.toContain(secretId);
+  });
 });
 
 describe('server Sentry: silent with no DSN', () => {

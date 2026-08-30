@@ -140,7 +140,14 @@ function redactMintedIdShapes(text: string): string {
 }
 
 export function scrubEventForPrivacy(value: unknown, depth = 0): unknown {
-  if (depth > 20) return value; // guard against pathological/cyclical shapes
+  // Fail closed, not open: a subtree this deep is never a real Sentry event
+  // shape (envelope objects run a handful of levels deep at most), so
+  // returning it unscrubbed on the assumption that "it's probably fine"
+  // would be exactly the kind of unproven assumption this whole file exists
+  // to replace with a check. Redact instead — the guard is still what stops
+  // a pathological/cyclical shape from recursing forever, it just no longer
+  // buys an attacker's data a pass on the way out.
+  if (depth > 20) return '[scrubbed: too deep]';
   if (typeof value === 'string') {
     return redactMintedIdShapes(value);
   }
