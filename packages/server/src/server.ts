@@ -8370,10 +8370,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   ...(res.message !== undefined ? { message: res.message } : {}),
                 });
               }
-              // Same announcement as a revision, for the same reason: anyone
-              // holding the old item is holding an ask the reader is no
-              // longer being asked.
-              announceThreadReview(docId, threadId, res.review, user);
+              // Announced on the way BACK only. `announceThreadReview` sends
+              // the reader a push whose title is the item's headline — "here
+              // is something to review" — so announcing a withdrawal would
+              // buzz their phone with the exact ask that was just taken off
+              // their queue. Reinstating does put an ask in front of them
+              // again, and that is worth telling them about.
+              if (threadRest === '/withdraw/undo') {
+                announceThreadReview(docId, threadId, res.review, user);
+              }
               return j(200, { thread: res.thread, review: res.review });
             }
             // Taking an answer back. The stamps move into the declaration's
