@@ -6,10 +6,10 @@ import type { ReviewSurface } from '../src/review-surface.ts';
 
 /**
  * A double submit on the doc's new-comment composer must yield ONE thread,
- * not two. Measured 2026-08-29 on the effort-model plan doc: two thread ids
- * created 343ms apart, identical text, identical anchor — a tap plus a
- * keyboard Enter (or two Enters before the first request lands) both firing
- * `submitComposer`, which had no in-flight guard.
+ * not two. Measured: a double submit created two thread ids ~340ms apart,
+ * identical text, identical anchor — a tap plus a keyboard Enter (or two
+ * Enters before the first request lands) both firing `submitComposer`,
+ * which had no in-flight guard.
  */
 
 function mountChromeDom(): void {

@@ -1,10 +1,10 @@
 /**
  * A double submit on `POST /api/docs/:id/threads` must yield ONE thread.
  *
- * Measured 2026-08-29 on the effort-model plan doc: two thread ids created
- * 343ms apart, identical text, identical anchor — a tap plus a keyboard
- * Enter both reaching the composer's submit handler before the first
- * request had a response back (fixed client-side in `review-chrome.ts`).
+ * Measured: a double submit created two thread ids ~340ms apart, identical
+ * text, identical anchor — a tap plus a keyboard Enter both reaching the
+ * composer's submit handler before the first request had a response back
+ * (fixed client-side in `review-chrome.ts`).
  *
  * This is the server half: a request carrying the same client-generated
  * `requestId` as one already turned into a thread, within a short window,
@@ -65,7 +65,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     handle = createServer({ port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     const file = join(dataDir, 'plan.md');
-    writeFileSync(file, '# Plan\n\nThe effort model needs a review.\n');
+    writeFileSync(file, '# Plan\n\nThe sample paragraph needs a review.\n');
     const created = await jj<{ docId: string }>(
       await post('/api/docs', { docId: 'plan', type: 'markdown', sourceUrl: file }),
     );
@@ -81,7 +81,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     const body = {
       author: REVIEWER,
       text: 'Tighten the second paragraph.',
-      anchor: anchor('effort model'),
+      anchor: anchor('sample paragraph'),
       requestId: 'req-1',
     };
     const first = await jj<{ thread: { id: string } }>(
@@ -105,7 +105,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       await post(`/api/docs/${docId}/threads`, {
         author: REVIEWER,
         text: 'First comment.',
-        anchor: anchor('effort model'),
+        anchor: anchor('sample paragraph'),
         requestId: 'req-a',
       }),
     );
@@ -129,7 +129,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     const body = {
       author: REVIEWER,
       text: 'No idempotency key on this one.',
-      anchor: anchor('effort model'),
+      anchor: anchor('sample paragraph'),
     };
     await jj(await post(`/api/docs/${docId}/threads`, body));
     await jj(await post(`/api/docs/${docId}/threads`, body));
@@ -148,7 +148,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     const body = {
       author: REVIEWER,
       text: 'Worth a second look.',
-      anchor: anchor('effort model'),
+      anchor: anchor('sample paragraph'),
       requestId: 'req-advice',
       review: { shape: 'review', headline: 'Cache size' },
     };
@@ -169,7 +169,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       await post(`/api/docs/${docId}/threads`, {
         author: REVIEWER,
         text: 'First comment.',
-        anchor: anchor('effort model'),
+        anchor: anchor('sample paragraph'),
         requestId: 'req-reused',
       }),
     );
@@ -177,7 +177,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       await post(`/api/docs/${docId}/threads`, {
         author: REVIEWER,
         text: 'A completely different comment.',
-        anchor: anchor('effort model'),
+        anchor: anchor('sample paragraph'),
         requestId: 'req-reused',
       }),
     );
@@ -192,7 +192,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     const payloadBase = {
       author: REVIEWER,
       text: 'Cache size decision.',
-      anchor: anchor('effort model'),
+      anchor: anchor('sample paragraph'),
       requestId: 'req-review-correction',
     };
     const first = await jj<{ thread: { id: string } }>(
@@ -222,7 +222,7 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     // attributed to that first author.
     const body = {
       text: 'Same wording, different person.',
-      anchor: anchor('effort model'),
+      anchor: anchor('sample paragraph'),
       requestId: 'req-shared-by-coincidence',
     };
     const first = await jj<{ thread: { id: string } }>(
