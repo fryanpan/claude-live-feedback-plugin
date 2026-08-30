@@ -3379,3 +3379,47 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   watching it fail the same day. Anything that must be true per-device
   belongs in a stored preference, not a media query; width picks defaults and
   nothing more. Layout rules per tier: `docs/product/design-mobile.md`.
+
+## bfcache restores the JS heap too, so state a page discarded on its way out is what comes back
+
+- Reported from a phone (2026-08-30): open a doc from the review queue on
+  Home, press back, land on a rebuilt Home with the queue closed. Three
+  candidates were named up front — a history entry replaced where it should
+  have been pushed, a back target computed from the doc, or a Home that
+  remounts fresh — and **all three were wrong**. The browser was blameless:
+  bfcache restored the page with `?item=` intact and the walkthrough open,
+  and it stayed correct for ~15ms before the app replaced the URL with a bare
+  Home. Sampling at 200ms saw only the aftermath and would have sent the
+  investigation to any of the three wrong places; the timeline only appears if
+  you sample from inside the `pageshow` handler at 0/1/3/6/12/25ms.
+- **`pageshow` with `persisted: true` means no `documentstart` fires and the
+  heap comes back as it was.** So any state the page cleared on its way out —
+  even state it cleared for a good reason and never rendered — is what the
+  reader returns to. Here the walkthrough was closed in state before a
+  `location.assign`, deliberately, to keep the close and the open one history
+  step. Nothing rendered, so the clear bought nothing; all it did was poison
+  the snapshot. Treat "we are leaving the page" as a distinct case from "we
+  opened something on this page", and leave the state describing what the
+  reader will come back to.
+- **A back arrow that is an `<a href>` is a forward navigation, and bfcache
+  cannot help it at all.** The same symptom had a second, unrelated cause
+  underneath: the doc shell's arrow pointed at the bare board, so it never
+  carried a position to begin with. Two causes, one report — fixing the one
+  you found first would have left the other in place and looked like a
+  regression later.
+- **The `history.back()` unwind only happens when THIS document pushed the
+  entry**, and that makes the race untestable from a pasted link.
+  `syncBoardUrl` calls `history.back()` for a close step only when
+  `history.state.res` marks the entry as its own; an entry that arrived from
+  the address bar has null state and takes the `replaceState` branch instead.
+  So a control that opens the walkthrough by pasting `?item=<key>` comes back
+  clean and proves nothing. Reproduce it in-page — plain Home, then "Review
+  All", then tap into the item.
+- **The guard on the in-page ordering is a source-shape pin, not a
+  behavioural test** (`board-url-wiring.test.ts`). The walkthrough suites mock
+  `onOpenItem` as `vi.fn()` and assert the island calls it, so nothing
+  exercises the handler body or history; this repo has no browser driver in
+  its suites. Verified by hand instead, with the pre-fix ordering rebuilt as a
+  control to prove the check could fail — worth doing every time a fix
+  narrows a guard somebody put in deliberately, because a green run against a
+  fix you just wrote says nothing on its own.
