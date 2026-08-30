@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyBackLink, backLinkFor } from '../src/back-link.ts';
+import { applyBackLink, backLinkFor, returnItemFrom } from '../src/back-link.ts';
 
 /**
  * The topbar `←` used to be a static `href="/"` — the machine-wide landing
@@ -74,5 +74,86 @@ describe('applyBackLink', () => {
   it('does nothing when the shell has no back link', () => {
     document.body.innerHTML = '<div class="doc-crumb"></div>';
     expect(() => applyBackLink(document, { workspaceId: 'w-abc', name: 'n' })).not.toThrow();
+  });
+});
+
+/**
+ * Returning to the QUEUE, not just the board.
+ *
+ * A doc opened from the review walkthrough is a detour inside a sitting: the
+ * reader has five items to get through and the doc is item three. An arrow
+ * that lands on the bare board makes them re-open the walkthrough and find
+ * their place again, five times over.
+ *
+ * The doc page cannot infer this — it has no referrer (see the module note).
+ * So the walkthrough stamps its position on the link it mints (`?item=`), and
+ * the arrow honours it. A doc reached any other way — pasted link, sidebar,
+ * a board row — carries no stamp and keeps the plain board target, so a
+ * visitor is never dropped into a queue they were never in.
+ */
+describe('backLinkFor with a return position', () => {
+  it('returns to the queue the link was minted from', () => {
+    expect(
+      backLinkFor({ workspaceId: 'w-abc', name: 'search-revamp' }, 'doc-thread:d-1:th-1'),
+    ).toEqual({
+      href: '/workspaces/w-abc/home?item=doc-thread%3Ad-1%3Ath-1',
+      label: 'Back to search-revamp',
+    });
+  });
+
+  it('an unstamped link keeps the plain board target', () => {
+    const plain = { href: '/workspaces/w-abc', label: 'Back to search-revamp' };
+    expect(backLinkFor({ workspaceId: 'w-abc', name: 'search-revamp' }, null)).toEqual(plain);
+    expect(backLinkFor({ workspaceId: 'w-abc', name: 'search-revamp' }, '')).toEqual(plain);
+  });
+
+  it('a stamp without a board is still the index — a queue needs a board to live on', () => {
+    expect(backLinkFor(null, 'doc-thread:d-1:th-1').href).toBe('/');
+  });
+
+  it('encodes a stamp that would otherwise escape the URL it is written into', () => {
+    // The stamp arrives from the address bar, so it is reader-supplied. An
+    // un-encoded `/` would turn a same-origin path into `//host` — a link off
+    // this site wearing the back arrow's clothes.
+    expect(backLinkFor({ workspaceId: 'w-a', name: 'n' }, '/evil.example/x').href).toBe(
+      '/workspaces/w-a/home?item=%2Fevil.example%2Fx',
+    );
+    expect(backLinkFor({ workspaceId: 'w-a', name: 'n' }, 'a&b=c#d').href).toBe(
+      '/workspaces/w-a/home?item=a%26b%3Dc%23d',
+    );
+  });
+});
+
+describe('returnItemFrom', () => {
+  it('reads the stamp the walkthrough wrote', () => {
+    expect(returnItemFrom('?thread=th-1&item=doc-thread%3Ad-1%3Ath-1')).toBe('doc-thread:d-1:th-1');
+  });
+
+  it('is null on a plain doc URL', () => {
+    expect(returnItemFrom('?thread=th-1')).toBe(null);
+    expect(returnItemFrom('')).toBe(null);
+  });
+
+  it('an empty stamp is no stamp', () => {
+    expect(returnItemFrom('?item=')).toBe(null);
+  });
+});
+
+describe('applyBackLink carries the return position', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div class="doc-crumb"><a href="/" class="back-link">←</a></div>';
+  });
+  const link = () => document.querySelector('.doc-crumb .back-link') as HTMLAnchorElement;
+
+  it('stamps the queue position onto the arrow', () => {
+    applyBackLink(document, { workspaceId: 'w-abc', name: 'n' }, 'doc-thread:d-1:th-1');
+    expect(link().getAttribute('href')).toBe('/workspaces/w-abc/home?item=doc-thread%3Ad-1%3Ath-1');
+  });
+
+  it('clears a previous doc’s position — the shell outlives the mount', () => {
+    applyBackLink(document, { workspaceId: 'w-abc', name: 'n' }, 'doc-thread:d-1:th-1');
+    expect(link().getAttribute('href')).toContain('item='); // presence first
+    applyBackLink(document, { workspaceId: 'w-abc', name: 'n' });
+    expect(link().getAttribute('href')).toBe('/workspaces/w-abc');
   });
 });

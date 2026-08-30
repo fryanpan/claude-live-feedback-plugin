@@ -62,6 +62,7 @@ import {
   type ReviewItem,
   type ReviewThreadItem,
   type UptimeReport,
+  type WalkAim,
   type WalkHold,
   type WalkSources,
   advanceWalk,
@@ -88,6 +89,7 @@ import {
   shouldPollHome,
   tabForNav,
   voiceHubContext,
+  walkAimAfterOpen,
   walkHandoff,
   walkHandoffReady,
   walkNextUrl,
@@ -769,8 +771,15 @@ async function main(): Promise<void> {
    * Returns whether the reader is still on THIS page afterwards — false only
    * for the doc jump, which leaves via location.assign. The walkthrough's
    * hand-off keys its card repaint on it (see onOpenItem).
+   *
+   * `returnItem` is the reader's place in the review queue, and only the
+   * walkthrough passes one. It rides the doc's URL so the doc's back arrow
+   * can bring them back to the sitting rather than to the bare board — the
+   * doc page has no referrer and cannot work this out for itself. Every other
+   * caller omits it, which is what keeps a doc opened from a board row (or a
+   * pasted link) from returning a visitor into a queue they were never in.
    */
-  function openReviewItem(item: ReviewItem): boolean {
+  function openReviewItem(item: ReviewItem, returnItem?: string | null): boolean {
     // `reviewRow` is the one reader for "which task is this row about", so a
     // future band that carries a task row cannot land in the strip with a
     // chip that taps into nothing.
@@ -814,8 +823,9 @@ async function main(): Promise<void> {
     // The doc's canonical workspace address rather than the legacy `/review/`
     // one, so what lands in the reader's address bar is the shape every other
     // surface emits and the link-chip renderer titles.
+    const back = returnItem ? `&item=${encodeURIComponent(returnItem)}` : '';
     location.assign(
-      `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}`,
+      `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(t.docId)}?thread=${encodeURIComponent(t.threadId)}${back}`,
     );
     return false;
   }
@@ -828,10 +838,11 @@ async function main(): Promise<void> {
    * aim at falls back to opening the item itself. Same return contract as
    * `openReviewItem`: whether the reader is still on this page.
    */
-  function openReviewThread(item: ReviewItem): boolean {
+  function openReviewThread(item: ReviewItem, returnItem?: string | null): boolean {
     const t = item.thread;
     const threadId = item.revision?.threadId ?? t?.threadId;
-    if (!t || t.kind !== 'task-review' || !t.taskId || !threadId) return openReviewItem(item);
+    if (!t || t.kind !== 'task-review' || !t.taskId || !threadId)
+      return openReviewItem(item, returnItem);
     return openTaskThread(t.taskId, threadId);
   }
 
@@ -1652,6 +1663,40 @@ async function main(): Promise<void> {
   }
 
   /**
+   * Open one of the walkthrough's own items, and leave the walk aimed for
+   * whichever way the reader then goes.
+   *
+   * Close-in-state first, but render the OPEN first: the close and the open
+   * are one user action, and they must reach `syncBoardUrl` as one step
+   * (walk → panel, a push). Rendering the close ahead of the open wrote a
+   * `close` step whose `history.back()` — an async traversal — landed after
+   * the open's `pushState`, and its popstate re-applied the old `?item=`
+   * entry: the tapped task closed itself and the reader bounced back to Home.
+   *
+   * When the item is a DOC the opener leaves the page instead, and the card
+   * repaint is skipped outright — a close-step `back()` queued beside
+   * `location.assign` races it. That is why the close is undone on that path
+   * (`walkAimAfterOpen`): nothing rendered, so it bought nothing, and the
+   * closed state is exactly what bfcache freezes for the trip back.
+   *
+   * The aim doubles as the return address handed to the opener, so the doc
+   * can point its back arrow at the queue. Only an OPEN walk has one to give.
+   */
+  function openFromWalk(open: (returnItem: string | null) => boolean): void {
+    const aim: WalkAim = { index: state.walkIndex, key: state.walkKey, hold: state.walkHold };
+    const back = aim.index >= 0 ? aim.key : null;
+    state.walkIndex = CLOSED_WALK.index;
+    state.walkKey = CLOSED_WALK.key;
+    state.walkHold = null;
+    const stillHere = open(back);
+    const next = walkAimAfterOpen(aim, stillHere);
+    state.walkIndex = next.index;
+    state.walkKey = next.key;
+    state.walkHold = next.hold;
+    if (stillHere) renderWalkthrough();
+  }
+
+  /**
    * The walkthrough re-derives its queue from the live projection on every
    * render, and the position is an INDEX into that queue rather than a task
    * id. So answering the card you're on drops it out of the queue and the
@@ -1702,28 +1747,11 @@ async function main(): Promise<void> {
         onAskOnItem: (item, phrase, question) => askOnReviewItem(item, phrase, question),
         onReply: (item, text, optionId) =>
           finishWalkItem(item, next, () => replyToReviewItem(item, text, optionId)),
-        onOpenItem: (item) => {
-          // Close-in-state first, but render the OPEN first: the close and
-          // the open are one user action, and they must reach syncBoardUrl as
-          // one step (walk → panel, a push). Rendering the close ahead of the
-          // open wrote a 'close' step whose history.back() — an async
-          // traversal — landed after the open's pushState, and its popstate
-          // re-applied the old ?item= entry: the tapped task closed itself
-          // and the reader bounced back to Home. When the item leaves the
-          // page instead (a doc jump), the card repaint is skipped outright —
-          // a close-step back() queued beside location.assign races it.
-          state.walkIndex = -1;
-          state.walkKey = null;
-          state.walkHold = null;
-          if (openReviewItem(item)) renderWalkthrough();
-        },
-        onOpenThread: (item) => {
-          // Same one-step close-then-open as `onOpenItem`, aimed at the thread.
-          state.walkIndex = -1;
-          state.walkKey = null;
-          state.walkHold = null;
-          if (openReviewThread(item)) renderWalkthrough();
-        },
+        onOpenItem: (item) => openFromWalk((back) => openReviewItem(item, back)),
+        // Same one-step close-then-open as `onOpenItem`, aimed at the thread —
+        // and the same doc jump underneath when the item has no thread on a
+        // task to aim at, so it needs the same care on the way out.
+        onOpenThread: (item) => openFromWalk((back) => openReviewThread(item, back)),
         onStep: (i) => {
           // Skip and back are positional by nature — the reader is pointing at
           // a place in the list they can see. Re-aim from that position so the
