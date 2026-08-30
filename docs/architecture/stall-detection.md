@@ -67,6 +67,15 @@ one complaint per item, not per pass. Revising re-judges; a pass clears
 the hold, keeps the original filing time, and forgets the filer stamp, so
 a fresh hold on the same item is nudged afresh.
 
+**The reader can overrule the judge.** The held note on the ticket names
+who filed the item and how long the hold has stood, and carries "Ask me
+anyway" — `POST /api/tasks/:taskId/review-items/:itemId/release`, which
+records an `ok` verdict naming the person and puts the item on the queue
+the way any passed item reaches it. The gate is not disarmed by it: the
+next revision goes past the judge like any other. Added after a UX review
+found the note had no interactive element at all, so a reader looking at a
+question they could answer in ten seconds could only wait for an agent.
+
 ## Wake economics — the number that shaped everything
 
 **A wake is not a notification; it is a lead session's whole turn** —

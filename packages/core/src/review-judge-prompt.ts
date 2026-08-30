@@ -17,7 +17,7 @@ import type { ReviewOption } from './review-item.ts';
 
 /** Bumped when the frame around the criteria changes, so a stored verdict
  *  can be told from one made under an older ask. */
-export const REVIEW_JUDGE_PROMPT_VERSION = 1;
+export const REVIEW_JUDGE_PROMPT_VERSION = 2;
 
 /**
  * What a workspace judges its review items against until somebody edits it.
@@ -68,6 +68,12 @@ export function buildReviewJudgePrompt(
     'Judge substance against the criteria below, not length or tone. When unsure, pass it: a held item costs the reader an answer they could have given.',
     'Reply with JSON only, on one line: {"ok": true|false, "reason": "<one sentence>"}.',
     'When ok is false, the reason names the single biggest gap so the agent can fix it in one edit.',
+    // A judge that mis-states the item loses the agent a whole revision: it
+    // fixes the fault it was told about and is held again for the real one.
+    // Measured on the live board — an item whose detail read “see below” was
+    // held for “The detail section is empty”, which is a different fault with
+    // a different fix (UX review, 2026-08-29).
+    'The reason must describe what the item ACTUALLY says. Never call a field empty or missing when it has content: name the words that are there and why they are not enough — a detail reading “see below” is present and says nothing, which is not the same fault as no detail at all.',
     '',
     'Criteria:',
     criteria.trim(),

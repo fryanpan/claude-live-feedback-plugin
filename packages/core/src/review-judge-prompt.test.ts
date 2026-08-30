@@ -68,3 +68,31 @@ describe('parseReviewJudgeResponse', () => {
     expect(out?.reason).not.toContain('  ');
   });
 });
+
+describe('the judge is told to describe what it actually saw', () => {
+  // Measured on the live board: an item whose detail read "see below" was
+  // held for "The detail section is empty" — a different fault with a
+  // different fix, so the agent spends a revision on the wrong thing (UX
+  // review, 2026-08-29).
+  it('forbids calling a field empty when it has content', () => {
+    const { system } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, {
+      headline: 'Which index?',
+      detail: 'see below',
+    });
+    expect(system).toContain('ACTUALLY says');
+    expect(system).toContain('Never call a field empty or missing when it has content');
+  });
+
+  it('still lays a present-but-useless detail in front of the judge as words, not as (none)', () => {
+    const { user } = buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, {
+      headline: 'Which index?',
+      detail: 'see below',
+    });
+    expect(user).toContain('Detail: see below');
+    expect(user).not.toContain('(none)');
+    // The control: a genuinely absent detail is still marked absent.
+    expect(
+      buildReviewJudgePrompt(DEFAULT_REVIEW_ITEM_CRITERIA, { headline: 'Which index?' }).user,
+    ).toContain('Detail: (none)');
+  });
+});

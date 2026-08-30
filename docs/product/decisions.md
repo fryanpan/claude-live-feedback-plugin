@@ -523,6 +523,19 @@ and a textarea pattern is its own piece of work. Reversible calls:
    `unavailable` (a call nobody will answer is a judge failure, rule 1). The item stays on
    the ticket with the judge's reason ("Held: … — the agent has been asked
    to revise"), because the reader should see that a question is coming.
+2b. **The criteria live in the settings panel, and the reader can overrule
+   the judge.** Both were missing when the gate first shipped, and a UX
+   review on staging caught them: the prompt every agent was measured
+   against was reachable only from an MCP tool and a raw PUT, and the held
+   note had zero interactive elements against the answerable card's two.
+   The panel now carries the prompt as an editable multi-line field showing
+   the default when unset (`review-criteria.ts`), and the note carries
+   "Ask me anyway" (`…/release`), which records an `ok` verdict naming the
+   person rather than inventing a fourth verdict — a release IS a pass, on
+   the reader's authority instead of the judge's, and everything downstream
+   already knows what a pass means. A failed READ of the criteria disables
+   the field rather than emptying it: an empty box a reader then saves
+   would write empty criteria over the board's real ones.
 3. **Five minutes, then one complaint per item.** `CW_HELD_ITEM_MINUTES`
    (default 5, Bryan's number). Past it, the filer is nudged once per item
    per server process and the lead's `workspace.stalled` frame carries the

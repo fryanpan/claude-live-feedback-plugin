@@ -14191,13 +14191,16 @@ function stalledLine(p) {
   }
   return `[workspace.stalled] ${parts.join(" ") || "the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board."}`;
 }
+function judgeReasonClauseLocal(reason) {
+  return reason.trim().replace(/\.+$/, "").trimEnd();
+}
 function heldRowClause(row) {
   const ask = row.headline ? `"${truncate3(row.headline, 50)}"` : row.reviewItemId ?? "an item";
   const on = row.title ? ` on "${truncate3(row.title, 40)}"` : "";
   const id = row.id ? ` (${row.id})` : "";
   const by = row.filedBy ? ` filed by ${row.filedBy}` : "";
   const age = row.heldMs === undefined ? "" : ` held ${humanDuration2(row.heldMs)}`;
-  const why = row.reason ? ` — ${truncate3(row.reason, 120)}` : "";
+  const why = row.reason ? ` — ${truncate3(judgeReasonClauseLocal(row.reason), 120)}` : "";
   return `${ask}${on}${id}${by}${age}${why}`;
 }
 function heldRowsClause(rows) {
@@ -14209,7 +14212,7 @@ function reviewItemHeldLine(p) {
   const ask = p.headline ? `"${truncate3(p.headline, 60)}"` : "a review item you filed";
   const on = p.title ? ` on "${truncate3(p.title, 40)}"` : "";
   const ids = p.taskId && p.reviewItemId ? ` (taskId ${p.taskId}, reviewItemId ${p.reviewItemId})` : "";
-  const why = p.reason ? ` — ${p.reason}` : "";
+  const why = p.reason ? ` — ${judgeReasonClauseLocal(p.reason)}` : "";
   const stood = p.overdue === true ? ` It has been held${p.heldMs === undefined ? "" : ` for ${humanDuration2(p.heldMs)}`} and the reader still cannot see it.` : "";
   return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} Fix the gap named and call revise_review_item now; it is judged again on every revision.`;
 }
