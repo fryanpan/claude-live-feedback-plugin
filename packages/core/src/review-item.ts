@@ -132,6 +132,23 @@ export interface ReviewPayload {
    * the record cheap to keep.
    */
   answerHistory?: ReviewAnswerUndone[];
+  /**
+   * What this item said BEFORE each revision, oldest first — the same record
+   * `TaskReviewItem.revisions` keeps, in the same type, for the same reason.
+   *
+   * It lives on the PAYLOAD as well as on the task-side wrapper because a
+   * review item raised on a DOC THREAD is a bare payload on a comment: it has
+   * no wrapper to hang history on, so before this field the only way to
+   * correct a doc-thread ask was to file a second one, leaving the reader's
+   * queue carrying two items about one question with the older, wronger one
+   * still reading as live. The superseded words are user content the reader
+   * may already have read, so they are kept, never overwritten.
+   *
+   * A task-side item stores its history on the wrapper, not here — one
+   * spelling per surface, and `reviewPayloadRevision` reads whichever the
+   * caller holds.
+   */
+  revisions?: ReviewItemRevision[];
 }
 
 /** One undone answer: the stamps as they stood, plus who took them back and
@@ -348,6 +365,121 @@ export interface ReviewItemRevision {
   options?: ReviewOption[];
   threadId?: string;
   revisedRange?: { start: number; end: number };
+}
+
+/**
+ * Compute one revision of a review item: what the new words are, and what the
+ * old ones were.
+ *
+ * PURE, and shared by both surfaces on purpose. A ticket-borne item revises
+ * through `TaskStore.reviseReviewItem`; a doc-thread item revises through the
+ * doc route, and it arrived second. Writing "what a revision is" twice is how
+ * the two would come to disagree about which patches are legal, where the
+ * changed span is, or whether an answered item may be rewritten — so the
+ * decision lives here once and each caller only decides WHERE to store the
+ * result.
+ *
+ * Returns the new payload and the superseded reading. It deliberately does
+ * NOT file `previous` anywhere: a task item keeps its history on the wrapper
+ * (`TaskReviewItem.revisions`), a doc-thread item on the payload itself
+ * (`ReviewPayload.revisions`, via `withRevision`), and only the caller knows
+ * which it holds.
+ */
+export type ReviseReviewResult =
+  | {
+      ok: true;
+      next: ReviewPayload;
+      previous: ReviewItemRevision;
+      /** The quality gate's gaps in the NEW words — the caller turns these
+       *  into advice (`reviewGapAdvice`). Returned rather than re-derived, so
+       *  the words that were judged are the words that were stored. */
+      gaps: ReviewCheck['gaps'];
+    }
+  | { ok: false; error: 'answered' | 'empty-patch' | 'bad-review' | 'bad-range'; message?: string };
+
+export function applyReviewRevision(
+  current: ReviewPayload,
+  patch: { headline?: unknown; detail?: unknown; options?: unknown },
+  opts: {
+    by: string;
+    at: number;
+    revisedRange?: { start: number; end: number };
+    threadId?: string;
+  },
+): ReviseReviewResult {
+  // An answered item is not revised: the answer is an answer to the words it
+  // had, and rewriting them under it leaves a reply to text nobody can see.
+  //
+  // This reads the PAYLOAD's own answer stamps, which is the whole story for
+  // a doc-thread item. A ticket-borne one records its answer on the wrapper
+  // instead (`TaskReviewItem.answer`), so that caller checks there as well —
+  // this is not the only gate, and it is not meant to be.
+  if (reviewAnswered(current)) {
+    return {
+      ok: false,
+      error: 'answered',
+      message:
+        'this review item is already answered — the answer is to the words it has; raise a new item instead of rewriting these',
+    };
+  }
+  const touches = (['headline', 'detail', 'options'] as const).filter(
+    (k) => patch[k] !== undefined,
+  );
+  if (touches.length === 0) return { ok: false, error: 'empty-patch' };
+
+  const merged: Record<string, unknown> = { ...current };
+  for (const k of touches) merged[k] = patch[k];
+  const check = checkReviewPayload(merged);
+  if (!check.ok) return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+  const next = readReviewPayload(merged);
+  if (!next) return { ok: false, error: 'bad-review', message: reviewPayloadMessage(check) };
+
+  // An explicit range is offsets into the NEW detail; one that runs past it
+  // would be served to the queue as-is and highlight to the end of whatever
+  // text is there. The derived range is bounded by construction.
+  const detailLength = (next.detail ?? '').length;
+  if (opts.revisedRange && opts.revisedRange.end > detailLength) {
+    return {
+      ok: false,
+      error: 'bad-range',
+      message: `revisedRange ${opts.revisedRange.start}\u2013${opts.revisedRange.end} runs past the new detail (${detailLength} characters)`,
+    };
+  }
+  const range =
+    opts.revisedRange ??
+    (next.detail !== current.detail
+      ? changedRange(current.detail ?? '', next.detail ?? '')
+      : undefined);
+  const previous: ReviewItemRevision = {
+    at: opts.at,
+    by: opts.by,
+    headline: current.headline,
+    ...(current.detail !== undefined ? { detail: current.detail } : {}),
+    ...(current.options !== undefined ? { options: current.options } : {}),
+    ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
+    ...(range !== undefined ? { revisedRange: range } : {}),
+  };
+  return { ok: true, next, previous, gaps: check.gaps };
+}
+
+/** File a superseded reading onto the payload that carries its own history —
+ *  the doc-thread half of `applyReviewRevision`. Appends, never replaces. */
+export function withRevision(next: ReviewPayload, previous: ReviewItemRevision): ReviewPayload {
+  return { ...next, revisions: [...(next.revisions ?? []), previous] };
+}
+
+/**
+ * The reading this payload superseded most recently, or undefined if its
+ * words have never changed (or it is closed, where "revised" is not the thing
+ * the reader needs to see — the answer is).
+ *
+ * The payload-level twin of the `revisions?.at(-1)` the task queue reads. It
+ * is what lets a doc-thread row say Revised and highlight the changed span
+ * instead of arriving as an indistinguishable second ask.
+ */
+export function reviewPayloadRevision(review: ReviewPayload): ReviewItemRevision | undefined {
+  if (reviewAnswered(review)) return undefined;
+  return review.revisions?.at(-1);
 }
 
 /**
@@ -1117,6 +1249,39 @@ export function reviewGapAdvice(gaps: ReviewGap[]): string | undefined {
  * without anything rewriting stored docs. A reader cannot tell which field a
  * paragraph came from, which is the point — they are one body now.
  */
+/**
+ * The superseded-wording list, read back defensively.
+ *
+ * Shared by `readReviewPayload` and `readTaskReviewItem` because the two
+ * surfaces keep the SAME record in the same type — a doc-thread item on its
+ * payload, a ticket-borne one on its wrapper — and two parsers for one shape
+ * is how they would drift. Absent rather than empty when nothing parses, like
+ * every other optional list here.
+ */
+function readRevisions(value: unknown): ReviewItemRevision[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const revs: ReviewItemRevision[] = [];
+  for (const raw of value) {
+    if (!isPlainObject(raw)) continue;
+    // The previous headline IS the record — a row without one preserves
+    // nothing, so it is the only field that can drop a row.
+    if (typeof raw.headline !== 'string') continue;
+    const rev: ReviewItemRevision = {
+      at: num(raw.at, 0),
+      by: str(raw.by, ''),
+      headline: raw.headline,
+    };
+    if (typeof raw.detail === 'string') rev.detail = raw.detail;
+    const options = readReviewPayload({ headline: raw.headline, options: raw.options })?.options;
+    if (options) rev.options = options;
+    if (typeof raw.threadId === 'string' && raw.threadId !== '') rev.threadId = raw.threadId;
+    const span = readSpan(raw.revisedRange);
+    if (span) rev.revisedRange = span;
+    revs.push(rev);
+  }
+  return revs.length > 0 ? revs : undefined;
+}
+
 export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   if (!isPlainObject(value)) return undefined;
   const shape = normalizeReviewType(value.review_type ?? value.shape);
@@ -1139,6 +1304,9 @@ export function readReviewPayload(value: unknown): ReviewPayload | undefined {
   // not) from the stamps above — these two only decorate the record.
   if (typeof value.answeredBy === 'string') out.answeredBy = value.answeredBy;
   if (typeof value.answerText === 'string') out.answerText = value.answerText;
+
+  const payloadRevisions = readRevisions(value.revisions);
+  if (payloadRevisions) out.revisions = payloadRevisions;
 
   if (Array.isArray(value.answerHistory)) {
     const history: ReviewAnswerUndone[] = [];
@@ -1254,26 +1422,8 @@ export function readTaskReviewItem(value: unknown): TaskReviewItem | undefined {
     if (reqs.length > 0) out.infoRequests = reqs;
   }
 
-  if (Array.isArray(value.revisions)) {
-    const revs: ReviewItemRevision[] = [];
-    for (const raw of value.revisions) {
-      if (!isPlainObject(raw)) continue;
-      if (typeof raw.headline !== 'string') continue;
-      const rev: ReviewItemRevision = {
-        at: num(raw.at, 0),
-        by: str(raw.by, ''),
-        headline: raw.headline,
-      };
-      if (typeof raw.detail === 'string') rev.detail = raw.detail;
-      const options = readReviewPayload({ headline: raw.headline, options: raw.options })?.options;
-      if (options) rev.options = options;
-      if (typeof raw.threadId === 'string' && raw.threadId !== '') rev.threadId = raw.threadId;
-      const span = readSpan(raw.revisedRange);
-      if (span) rev.revisedRange = span;
-      revs.push(rev);
-    }
-    if (revs.length > 0) out.revisions = revs;
-  }
+  const revisions = readRevisions(value.revisions);
+  if (revisions) out.revisions = revisions;
 
   // A verdict that cannot be read is dropped, and the row kept: the safe
   // direction is the pass-through, since a hold nobody can explain is an item

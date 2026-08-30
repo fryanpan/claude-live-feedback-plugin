@@ -19,6 +19,7 @@ import {
   type Thread,
   type User,
   type WebhookPayload,
+  applyReviewRevision,
   contentKind,
   createThread,
   initDocMeta,
@@ -34,6 +35,7 @@ import {
   setCommentReview,
   setThreadSummary,
   suggestOps,
+  withRevision,
 } from '@feedback/core';
 import type { ServerWebSocket } from 'bun';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -1598,6 +1600,67 @@ export class Rooms {
     });
     const replied = await this.postComment(docId, threadId, author, text, undefined, opts);
     return replied ? { ok: true, thread: replied } : { ok: false, error: 'reply-failed' };
+  }
+
+  /**
+   * Rewrite a review item raised on a DOC THREAD, keeping what it said before.
+   *
+   * The doc-side twin of `TaskStore.reviseReviewItem`, and deliberately thin:
+   * `applyReviewRevision` in core decides what a revision is, so the two
+   * surfaces cannot come to disagree about which patches are legal or where
+   * the changed span fell. What differs is only where the history is filed —
+   * a ticket item keeps it on its wrapper, and a doc-thread item has no
+   * wrapper, so `withRevision` puts it on the payload.
+   *
+   * Before this existed the only way to correct a doc-thread ask was to raise
+   * a second one, which left the reader's queue carrying two items about one
+   * question with the older, wronger one still reading as live. That is the
+   * failure this method removes.
+   *
+   * Addressed by `(docId, threadId, commentId)` — the identity the queue
+   * already uses for a doc-thread row, and the one `setCommentReview` already
+   * mutates by. Nothing new had to be minted.
+   */
+  reviseCommentReview(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    patch: { headline?: unknown; detail?: unknown; options?: unknown },
+    opts: { actor: User; revisedRange?: { start: number; end: number } },
+  ):
+    | { ok: true; review: ReviewPayload; thread: Thread }
+    | { ok: false; error: string; message?: string } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    const thread = this.getThread(docId, threadId);
+    const target = thread?.comments.find((c) => c.id === commentId);
+    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
+    // Read and write in one synchronous stretch, the reason `answerReview`
+    // gives: the caller's read is an await away from being stale, and this is
+    // the layer that knows what is stored.
+    const applied = applyReviewRevision(target.review, patch, {
+      by: opts.actor.name,
+      at: Date.now(),
+      ...(opts.revisedRange ? { revisedRange: opts.revisedRange } : {}),
+      // No `threadId` stamp: on a task the field names the thread that ASKED,
+      // somewhere other than the item. Here the item IS on the thread, so
+      // recording it would say nothing and read as a cross-reference.
+    });
+    if (!applied.ok) {
+      return {
+        ok: false,
+        error: applied.error,
+        ...(applied.message !== undefined ? { message: applied.message } : {}),
+      };
+    }
+    const review = withRevision(applied.next, applied.previous);
+    if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
+      // The comment went between the read and the write — a race, not an
+      // error the caller did anything to cause.
+      return { ok: false, error: 'not-a-review-item' };
+    }
+    const after = this.getThread(docId, threadId);
+    return after ? { ok: true, review, thread: after } : { ok: false, error: 'not-a-review-item' };
   }
 
   /**
