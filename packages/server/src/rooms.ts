@@ -2169,9 +2169,11 @@ export class Rooms {
    */
   closeSocketsForShare(shareId: string): number {
     let closed = 0;
-    for (const meta of this.list()) {
-      const room = this.get(meta.docId);
-      if (!room) continue;
+    // Straight over the room map. `list()` + `get()` walked the same rooms
+    // but built a fresh DocMeta for every one of them and then looked each
+    // back up by id — and `get` marks a doc ACCESSED, which is what put the
+    // whole corpus in the file poll's fast lane. See `closeSocketsForDeadShares`.
+    for (const room of this.rooms.values()) {
       for (const ws of room.conns) {
         if (ws.data?.shareId !== shareId) continue;
         try {
@@ -2189,9 +2191,24 @@ export class Rooms {
    *  expired). Returns the shareIds that were swept. */
   closeSocketsForDeadShares(isLive: (shareId: string) => boolean): string[] {
     const dead = new Set<string>();
-    for (const meta of this.list()) {
-      const room = this.get(meta.docId);
-      if (!room) continue;
+    // This runs every 60s for the life of the server, over every room, and it
+    // only ever reads `conns`. Two things were wrong with reaching them via
+    // `list()` + `get()`:
+    //
+    //  - `get` counts as an ACCESS. On a 5,624-room server the sweep marked
+    //    every bound doc accessed once a minute, and the file poll's active
+    //    window is also 60s — so from the first sweep onward the fast lane
+    //    never emptied and every bound file was stat'd every 500ms. Measured
+    //    on a copy of the production data directory: one sweep took
+    //    activeBindings from 0 to 4,196, and production sat pinned at 2,549
+    //    from ~90s of uptime onward.
+    //  - `list()` allocates a spread DocMeta per room, so the sweep also
+    //    produced several MB of garbage a minute for a pass that reads one
+    //    field of one Set.
+    //
+    // The room map is the same set `list()` maps over, so coverage is
+    // unchanged.
+    for (const room of this.rooms.values()) {
       for (const ws of room.conns) {
         const id = ws.data?.shareId;
         if (!id || isLive(id)) continue;
