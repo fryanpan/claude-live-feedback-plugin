@@ -941,6 +941,36 @@ export interface WatchCoverage {
   unattachedBoards: CoverageUnattachedBoard[];
 }
 
+/**
+ * `revisedRange` off a request body: the offsets into the NEW detail that a
+ * caller says changed.
+ *
+ * One parser for both revise routes — the ticket one and the doc-thread one.
+ * It was inline in the ticket route when it was the only one; copying it
+ * would have been two places free to disagree about what a legal span is,
+ * which is the drift this file has been bitten by before. An absent range is
+ * legal and means "derive it".
+ */
+function parseRevisedRange(
+  raw: unknown,
+): { ok: true; range?: { start: number; end: number } } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true };
+  const r = raw as { start?: unknown; end?: unknown } | null;
+  const start = r?.start;
+  const end = r?.end;
+  if (
+    typeof start !== 'number' ||
+    typeof end !== 'number' ||
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start
+  ) {
+    return { ok: false, error: 'revisedRange must be {start, end} offsets with start <= end' };
+  }
+  return { ok: true, range: { start, end } };
+}
+
 export interface ServerHandle {
   port: number;
   rooms: Rooms;
@@ -6397,25 +6427,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (reply !== undefined && (typeof reply !== 'string' || reply.trim() === '')) {
             return j(400, { error: 'reply must be a non-empty string' });
           }
-          const rawRange = body?.revisedRange as { start?: unknown; end?: unknown } | undefined;
-          let revisedRange: { start: number; end: number } | undefined;
-          if (rawRange !== undefined) {
-            const start = rawRange?.start;
-            const end = rawRange?.end;
-            if (
-              typeof start !== 'number' ||
-              typeof end !== 'number' ||
-              !Number.isInteger(start) ||
-              !Number.isInteger(end) ||
-              start < 0 ||
-              end < start
-            ) {
-              return j(400, {
-                error: 'revisedRange must be {start, end} offsets with start <= end',
-              });
-            }
-            revisedRange = { start, end };
-          }
+          const parsedRange = parseRevisedRange(body?.revisedRange);
+          if (!parsedRange.ok) return j(400, { error: parsedRange.error });
+          const revisedRange = parsedRange.range;
           if (reply !== undefined) {
             const item = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
             if (item && !latestThreadedQuestion(item)?.threadId) {
@@ -8274,6 +8288,50 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 readyNudger.reviewAnswered({ workspaceId: answerHome, actorId: user.id });
               }
               return j(200, { thread: res.thread });
+            }
+            // Correcting a review item raised on a doc thread — the verb
+            // that did not exist, and whose absence forced an agent that
+            // found its own advice wrong to file a SECOND item, leaving the
+            // reader two rows about one question with the older, wronger one
+            // still reading as live.
+            //
+            // Addressed by commentId, like /answer directly above: that is
+            // the identity `review-queue.ts` already keys a doc-thread row on
+            // and the one `setCommentReview` already mutates by. Nothing was
+            // minted for this route.
+            if (threadRest === '/revise' && req.method === 'POST') {
+              const body = await safeJson(req);
+              const user = authorFor(body?.author);
+              const commentId = body?.commentId as string | undefined;
+              if (!user || !commentId) return j(400, { error: 'author + commentId required' });
+              if (isCategoryAuthor(user)) return refuseCategoryAuthor();
+              const parsed = parseRevisedRange(body?.revisedRange);
+              if (!parsed.ok) return j(400, { error: parsed.error });
+              const res = rooms.reviseCommentReview(
+                docId,
+                threadId,
+                commentId,
+                {
+                  ...(body?.headline !== undefined ? { headline: body.headline } : {}),
+                  ...(body?.detail !== undefined ? { detail: body.detail } : {}),
+                  ...(body?.options !== undefined ? { options: body.options } : {}),
+                },
+                {
+                  actor: user,
+                  ...(parsed.range ? { revisedRange: parsed.range } : {}),
+                },
+              );
+              if (!res.ok) {
+                return j(res.error === 'no-doc' || res.error === 'not-a-review-item' ? 404 : 400, {
+                  error: res.error,
+                  ...(res.message !== undefined ? { message: res.message } : {}),
+                });
+              }
+              // Watchers hear a revision the same way they hear the original
+              // ask: the item changed, and anyone holding the old words is
+              // holding words the reader can no longer see.
+              announceThreadReview(docId, threadId, res.review, user);
+              return j(200, { thread: res.thread, review: res.review });
             }
             // Taking an answer back. The stamps move into the declaration's
             // `answerHistory` (soft delete — the words are user content) and
