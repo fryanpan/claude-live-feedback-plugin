@@ -2282,6 +2282,21 @@ describe('heldMetaLine — who filed a held item and how long it has stood', () 
     expect(heldMetaLine(undefined, undefined, NOW_MS)).toBe('');
   });
 
+  // The line does not append "ago", so the clock has to hand it a DURATION.
+  // It shipped reading "held moments" on an item under a minute old, because
+  // `waitShort` returned an adverbial that only composed in the one caller
+  // that appends "ago" (UX review round two, 2026-08-29).
+  it('reads as a duration under a minute, not as "held moments"', () => {
+    const line = heldMetaLine('Index Keeper', NOW_MS - 20_000, NOW_MS);
+    expect(line).toBe('Filed by Index Keeper · held under a minute');
+    expect(line).not.toContain('moments');
+    // The two callers now agree on the contract, so the same clock reads
+    // correctly on the card above it and in the queue subline beside it.
+    expect(askedMetaLine('Index Keeper', true, NOW_MS - 20_000, NOW_MS)).toBe(
+      'Asked by Index Keeper under a minute ago',
+    );
+  });
+
   // It is NOT askedMetaLine with the hold time in the ask slot: `judge.at` is
   // when the hold was placed, which on a re-hold is long after the question
   // was asked (UX review, 2026-08-29).
