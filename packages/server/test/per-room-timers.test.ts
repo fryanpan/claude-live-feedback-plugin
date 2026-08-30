@@ -121,6 +121,40 @@ describe('per-room timers', () => {
     remote.destroy();
   });
 
+  it('expires stale presence on a room with NO sockets left', async () => {
+    // codex P2: skipping maintenance for socketless rooms let a state left
+    // behind by a socket whose cleanup never ran survive indefinitely, and
+    // `onOpen` hands `getStates()` to the next joiner before any sweep — so
+    // the joiner would see a ghost peer. The library's own timer expired
+    // those whether or not anyone was connected.
+    const { rooms, docIds } = seedBound(1);
+    const room = rooms.get(docIds[0]);
+    if (!room) throw new Error('room missing');
+    const aw = room.awareness;
+
+    // A peer's state arrives, then its socket vanishes without cleanup.
+    const ghostDoc = new Y.Doc();
+    const ghost = new awarenessProtocol.Awareness(ghostDoc);
+    ghost.setLocalState({ name: 'ghost' });
+    awarenessProtocol.applyAwarenessUpdate(
+      aw,
+      awarenessProtocol.encodeAwarenessUpdate(ghost, [ghost.clientID]),
+      'test',
+    );
+    expect(room.conns.size).toBe(0);
+    // Control: the ghost really is present, so the assertion below has
+    // something to fail on.
+    expect(aw.getStates().has(ghost.clientID)).toBe(true);
+
+    // The sweep is what must clear it. Drive the same function the ticker
+    // does, at a time past the outdated window.
+    maintainAwareness(aw, Date.now() + 31_000);
+    expect(aw.getStates().has(ghost.clientID)).toBe(false);
+
+    ghost.destroy();
+    ghostDoc.destroy();
+  });
+
   it('a bound doc nobody is looking at is not in the fast lane', () => {
     const { rooms } = seedBound(10);
     const after = rooms.stats();
