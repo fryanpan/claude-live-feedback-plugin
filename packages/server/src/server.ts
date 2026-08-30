@@ -2074,6 +2074,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // from an open browser tab, and a wake fanned out to every peer is the
     // cost addressed delivery exists to remove.
     canReach: (workspaceId, agentId) => sse.agentsOn(`ws~${workspaceId}`).has(agentId),
+    // The fallback addressees, read off the SAME set `canReach` answers from
+    // — so the monitor cannot enumerate a session it would then decline to
+    // send to. A board whose lead has stopped listening still reaches whoever
+    // is actually on it.
+    attachedAgents: (workspaceId) => [...sse.agentsOn(`ws~${workspaceId}`)],
     send: (workspaceId, agentId, frame) =>
       sse.sendToAgent(`ws~${workspaceId}`, agentId, { ...frame }),
     // The held item's FILER, addressed the same way. The lead learns of it in
