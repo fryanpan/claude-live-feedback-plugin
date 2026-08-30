@@ -26,6 +26,7 @@
     "staging": "bun run scripts/staging.ts",
     "share": "bun run scripts/share.ts",
     "activity:backfill": "bun run packages/server/src/activity-backfill.ts",
+    "reading-time:backfill": "bun run packages/server/src/reading-time-backfill.ts",
     "activity:repair-owner": "bun run packages/server/src/activity-repair-owner.ts",
     "agents:merge": "bun run scripts/merge-agent.ts",
     "identity:link": "bun run scripts/link-identity.ts",
