@@ -566,6 +566,34 @@ export function isReviewItemHeld(item: TaskReviewItem): boolean {
 }
 
 /**
+ * The judge's reason as a CLAUSE — no trailing full stops — for the surfaces
+ * that carry on the sentence after it ("… — the agent has been asked to
+ * revise it").
+ *
+ * The judge writes a sentence, and every caller that appended to one produced
+ * doubled punctuation: the ticket note read "…rather than 'see below'. — the
+ * agent has been asked…" and the filer's channel line read "…'see below'..
+ * It has been held for 4m" (UX review, 2026-08-29). Only full stops are
+ * stripped: a reason that ends in a question mark or an ellipsis is quoted as
+ * it was written.
+ */
+export function judgeReasonClause(reason: string): string {
+  return reason.trim().replace(/\.+$/, '').trimEnd();
+}
+
+/**
+ * The judge's reason as its own SENTENCE — exactly one terminal mark — for
+ * the surfaces that stop after it. `?`, `!` and `…` are left alone; anything
+ * else gains a full stop, so a reason and the sentence after it never run
+ * together either.
+ */
+export function judgeReasonSentence(reason: string): string {
+  const clause = judgeReasonClause(reason);
+  if (clause === '') return '';
+  return /[?!…]$/.test(clause) ? clause : `${clause}.`;
+}
+
+/**
  * Is this item OFF the reader's queue because of the quality gate — held,
  * or still being judged? The queue asks this one; the ticket's "Held: …"
  * note asks `isReviewItemHeld`, because there is nothing to say about an
