@@ -114,7 +114,11 @@ wakes correctly:
   exists because that floor has to be tunable faster than a release.
 - **An unreachable lead escalates, and only then costs nothing**: the wake
   goes to any other session holding a stream on that board, carrying
-  `escalatedFrom: <lead>` so the stand-in knows why it was told. With nobody
+  `escalatedFrom: <lead>` so the stand-in knows why it was told. The frame
+  says UNREACHABLE, never "gone": holding no stream is also what a
+  reconnecting session looks like, and deciding a session is dead takes
+  evidence over a window — that call belongs to `leadSeatHealth`, which is
+  what the board's presence strip and the attach result read. With nobody
   at all attached the wake stays owed and fires when someone reattaches.
   Before this, the monitor addressed one identity it could not verify: a seat
   held by a session that had stopped listening turned every wake on that

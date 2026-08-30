@@ -14189,7 +14189,11 @@ function stalledLine(p) {
     const noun = held.length === 1 ? "review item is" : "review items are";
     parts.push(`${held.length} ${noun} HELD by the quality gate and off the reader's queue — ` + `${heldRowsClause(held)}. Get each filer to revise_review_item; nobody can answer a held ask.`);
   }
-  return `[workspace.stalled] ${parts.join(" ") || "the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board."}`;
+  const body = parts.join(" ") || "the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.";
+  if (p.escalatedFrom !== undefined && p.escalatedFrom !== "") {
+    return `[workspace.stalled] You are not this board's lead — ${p.escalatedFrom} holds the seat and ` + "is not reachable, so this came to you instead. Nothing addressed to that seat is arriving: " + "take it (attach_agent) or hand it to a session that is here. Then, on the board itself: " + body;
+  }
+  return `[workspace.stalled] ${body}`;
 }
 function judgeReasonClauseLocal(reason) {
   return reason.trim().replace(/\.+$/, "").trimEnd();
@@ -14440,7 +14444,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.129";
+var PLUGIN_VERSION = "0.1.130";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -17254,7 +17258,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             ...q.author !== undefined ? { author: q.author } : {},
             text: q.text,
             ts: q.ts
-          }))
+          })),
+          ...res.notes !== undefined && res.notes.length > 0 ? { notes: res.notes } : {},
+          ...res.watching !== undefined ? { watching: res.watching } : {},
+          ...res.seat !== undefined ? { seat: res.seat } : {},
+          ...res.seatTakenFrom !== undefined ? { seatTakenFrom: res.seatTakenFrom } : {}
         });
       }
       case "heartbeat": {
