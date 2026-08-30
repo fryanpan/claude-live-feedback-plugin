@@ -8535,6 +8535,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // eventual write.
             const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
             const anchorKey = JSON.stringify(anchor);
+            // A retry of an already-handled request has to be caught HERE,
+            // before the review-item validation below: that block refuses a
+            // second ask while the item is `waiting`, a state the FIRST
+            // request's own side effect sets — so a retry would otherwise
+            // never reach the dedupe() call at the bottom and would get a
+            // stale-state 409 instead of the thread it already made.
+            const priorThreadCreate = threadRequestDedup.lookup(docId, requestId, text, anchorKey);
+            if (priorThreadCreate) {
+              const t = await priorThreadCreate;
+              const handoff = threadUrl(docId, Boolean(visitor));
+              return t
+                ? j(200, { thread: t, ...(handoff ? { threadUrl: handoff } : {}) })
+                : j(500, { error: 'could not create thread' });
+            }
             // A thread on a PHRASE of a review item — the doc-style question
             // asked back at an ask. The anchor names an item this task must
             // carry, and its offsets must spell its snippet in the item's
