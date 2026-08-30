@@ -1,0 +1,241 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import {
+  captureServerError,
+  flushServerSentry,
+  initServerSentry,
+  isServerSentryActive,
+  resetServerSentryForTest,
+  routePatternForSpan,
+  withRouteSpan,
+} from '../src/sentry.ts';
+
+/**
+ * Server-side Sentry (t-aM-A7XV0izgH): today's ask is "observe it, don't
+ * trust the `if` statement" — so this points a real DSN at a local capture
+ * server we control and asserts on what actually crossed the wire, both
+ * when Sentry is unconfigured (must be nothing at all) and when it is
+ * (must be a slow-request transaction, a captured error, both stamped with
+ * the release, both naming the route pattern — never the raw path).
+ */
+
+type CapturedRequest = { path: string; headers: Record<string, string>; text: string };
+
+function startCaptureServer(): {
+  dsn: string;
+  hits: () => CapturedRequest[];
+  stop: () => void;
+} {
+  const hits: CapturedRequest[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const buf = await req.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      // Sentry's transport may or may not gzip the envelope body depending
+      // on payload size; detect the gzip magic bytes rather than trusting
+      // content-encoding, so this test doesn't quietly stop reading bodies
+      // if that changes.
+      const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+      const text = new TextDecoder().decode(isGzip ? Bun.gunzipSync(bytes) : bytes);
+      hits.push({
+        path: new URL(req.url).pathname,
+        headers: Object.fromEntries(req.headers.entries()),
+        text,
+      });
+      return new Response('{}', { status: 200 });
+    },
+  });
+  return {
+    dsn: `http://examplekey@127.0.0.1:${server.port}/1`,
+    hits: () => hits,
+    stop: () => server.stop(true),
+  };
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+describe('routePatternForSpan: default-deny redaction', () => {
+  it('keeps known literal route keywords', () => {
+    expect(routePatternForSpan('/api/workspaces/w-abc123/tasks')).toBe(
+      '/api/workspaces/:id/tasks',
+    );
+    expect(routePatternForSpan('/api/tasks/t-xyz/transition')).toBe('/api/tasks/:id/transition');
+    expect(routePatternForSpan('/y/w-abc123')).toBe('/y/:id');
+    expect(routePatternForSpan('/')).toBe('/');
+  });
+
+  it('redacts a docId shaped like a bound file path or a task alias — never leaks it', () => {
+    // docIds are caller-chosen and can embed a bound file's relative path
+    // (binds.ts: `${groupId}:${relPath.replaceAll('/', '~')}`) or a
+    // `task:<taskId>` alias (see workspace-board.md). Both must vanish.
+    const withFilePath = routePatternForSpan(
+      '/api/docs/g1:secret~internal~roadmap.md/content',
+    );
+    expect(withFilePath).toBe('/api/docs/:id/content');
+    expect(withFilePath).not.toContain('secret');
+    expect(withFilePath).not.toContain('roadmap');
+
+    const withTaskAlias = routePatternForSpan('/api/docs/task:t-confidential-title/threads');
+    expect(withTaskAlias).toBe('/api/docs/:id/threads');
+    expect(withTaskAlias).not.toContain('confidential');
+  });
+
+  it('redacts an unknown segment anywhere, not just where an id is expected', () => {
+    // Default-deny: a route this file doesn't know about degrades to `:id`
+    // segments rather than ever emitting free text.
+    expect(routePatternForSpan('/some/future/route')).toBe('/:id/:id/:id');
+  });
+});
+
+describe('server Sentry: silent with no DSN', () => {
+  let capture: ReturnType<typeof startCaptureServer>;
+
+  beforeAll(() => {
+    capture = startCaptureServer();
+  });
+
+  afterAll(() => {
+    capture.stop();
+  });
+
+  afterEach(() => {
+    resetServerSentryForTest();
+  });
+
+  it('never initialized: isServerSentryActive is false', () => {
+    expect(isServerSentryActive()).toBe(false);
+  });
+
+  it('withRouteSpan and captureServerError run as plain passthroughs and open no socket', async () => {
+    const req = new Request('http://localhost/api/workspaces/w-quiet/home');
+    const result = await withRouteSpan(req, '/api/workspaces/w-quiet/home', async () => {
+      await sleep(10);
+      return 'handled';
+    });
+    expect(result).toBe('handled');
+
+    captureServerError(new Error('should go nowhere — sentry never initialized'));
+
+    // flush is a documented no-op when unconfigured; awaiting it also gives
+    // any errant async send a moment to arrive before we check.
+    expect(await flushServerSentry(200)).toBe(true);
+    await sleep(300);
+
+    expect(capture.hits()).toEqual([]);
+  });
+});
+
+describe('server Sentry: configured — reaches Sentry end to end', () => {
+  let capture: ReturnType<typeof startCaptureServer>;
+  const release = 'rel-observability-test-0829';
+
+  beforeAll(async () => {
+    capture = startCaptureServer();
+    await initServerSentry({ dsn: capture.dsn, release });
+  });
+
+  afterAll(async () => {
+    await flushServerSentry(2000);
+    resetServerSentryForTest();
+    capture.stop();
+  });
+
+  it('is active once initialized with a DSN', () => {
+    expect(isServerSentryActive()).toBe(true);
+  });
+
+  it('a deliberately slow request produces a transaction naming the route pattern, stamped with the release', async () => {
+    // Generated at runtime, never written anywhere as a literal — Sentry's
+    // ContextLines integration attaches source snippets around a stack
+    // frame, and a hardcoded "secret" sitting a few lines from a throw would
+    // show up via THAT (our own source text), giving a false leak positive
+    // that has nothing to do with request data actually escaping. A random
+    // id can only appear in the payload if it genuinely flowed through.
+    const docId = `w-${crypto.randomUUID()}`;
+    const pathname = `/api/docs/${docId}/content`;
+    const req = new Request(`http://localhost${pathname}`, { method: 'GET' });
+    const response = await withRouteSpan(req, pathname, async () => {
+      await sleep(60); // the "deliberately slow" request
+      return new Response('ok');
+    });
+    expect(response.status).toBe(200);
+
+    await flushServerSentry(5000);
+
+    const bodies = capture.hits().map((h) => h.text);
+    const joined = bodies.join('\n');
+    expect(joined).toContain('GET /api/docs/:id/content');
+    expect(joined).toContain(release);
+    // The whole point: the raw docId never left the process.
+    expect(joined).not.toContain(docId);
+  });
+
+  it('a deliberately thrown error is captured with the release stamp and the route pattern', async () => {
+    capture.hits().length = 0; // isolate this assertion from the transaction above
+    const taskId = `t-${crypto.randomUUID()}`; // see note above: random, not a literal
+    const pathname = `/api/tasks/${taskId}/transition`;
+    const req = new Request(`http://localhost${pathname}`, { method: 'POST' });
+    const thrown = new Error('deliberate test failure — sentry-server.test.ts');
+    try {
+      await withRouteSpan(req, pathname, async () => {
+        throw thrown;
+      });
+      throw new Error('expected withRouteSpan to rethrow');
+    } catch (err) {
+      if (err !== thrown) throw err;
+      captureServerError(err, { route: routePatternForSpan(pathname), method: req.method });
+    }
+
+    await flushServerSentry(5000);
+
+    const bodies = capture.hits().map((h) => h.text);
+    const joined = bodies.join('\n');
+    expect(joined).toContain('deliberate test failure');
+    expect(joined).toContain(release);
+    expect(joined).toContain('/api/tasks/:id/transition');
+    expect(joined).not.toContain(taskId);
+  });
+
+  it("the SDK's own BunServer auto-instrumentation is disabled — a real Bun.serve request produces no second, unredacted transaction", async () => {
+    // @sentry/bun's default `BunServer` integration monkey-patches
+    // `Bun.serve` itself and names ITS OWN transaction `${method}
+    // ${url.pathname}` — the raw path — plus a `url.full` attribute with
+    // the full URL. withRouteSpan alone can't prevent that; it has to be
+    // disabled in Sentry.init (see sentry.ts). This is the one test in the
+    // file that goes through a real `Bun.serve`, so it's the one that would
+    // catch a regression here — everything above calls withRouteSpan
+    // directly and would stay green even if BunServer leaked a duplicate.
+    capture.hits().length = 0;
+    const docId = `w-${crypto.randomUUID()}`;
+    const testServer = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const pathname = new URL(req.url).pathname;
+        return withRouteSpan(req, pathname, async () => new Response('ok'));
+      },
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${testServer.port}/api/docs/${docId}/content`);
+      expect(res.status).toBe(200);
+    } finally {
+      testServer.stop(true);
+    }
+
+    await flushServerSentry(5000);
+
+    const bodies = capture.hits().map((h) => h.text);
+    const joined = bodies.join('\n');
+    // The transaction PAYLOAD itself has its own `"type":"transaction"`
+    // field, so counting that substring double-counts every real
+    // transaction by one. The envelope ITEM HEADER — a standalone `{"type":
+    // "transaction"}` object with no other keys — appears exactly once per
+    // transaction sent, so that's what distinguishes "one" from "a
+    // duplicate from BunServer".
+    const transactionCount = (joined.match(/\{"type":"transaction"\}/g) ?? []).length;
+    expect(transactionCount).toBe(1); // not 2 — no duplicate from BunServer
+    expect(joined).toContain('GET /api/docs/:id/content');
+    expect(joined).not.toContain(docId);
+    expect(joined).not.toContain('url.full');
+    expect(joined).not.toContain('"url.path"');
+  });
+});
