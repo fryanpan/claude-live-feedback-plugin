@@ -231,6 +231,14 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
     expect(sanitized.message).not.toContain(secretDocId);
     expect(sanitized.message).not.toContain('roadmap');
     expect(sanitized.name).toBe('ReservedDocIdError');
+    // codex review, second pass: the first fix redacted `.message` but
+    // copied `.stack` across unchanged — and a stack's own first line is
+    // `${name}: ${message}` (V8's format), so the raw id came right back
+    // through that copy. Sentry parses the stack during captureException,
+    // so this is a real leak path, not a cosmetic one.
+    expect(err.stack).toContain(secretDocId); // the real class leaks here too
+    expect(sanitized.stack).not.toContain(secretDocId);
+    expect(sanitized.stack).not.toContain('roadmap');
   });
 });
 

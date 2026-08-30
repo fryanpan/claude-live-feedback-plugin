@@ -421,22 +421,32 @@ export function withRouteSpan<T>(req: Request, pathname: string, fn: () => Promi
  * fields, the exact value is known, so every occurrence of it in the
  * message can be replaced outright before Sentry ever sees the object.
  * Extend this list if a future error class follows the same pattern.
+ *
+ * codex review: the first version of this fix redacted `.message` but
+ * copied `.stack` across unchanged — and a stack's own first line is
+ * `${name}: ${message}` (V8's own format), so the raw id came right back
+ * through that copy, proven by a probe that built a real ReservedDocIdError
+ * and found the id still in `sanitized.stack`. The stack gets the exact
+ * same value-for-value replacement as the message, for the same reason: the
+ * value is known exactly, so there is nothing to guess at.
  */
 const KNOWN_ID_FIELDS = ['docId', 'taskId', 'workspaceId'] as const;
 
 export function sanitizeErrorForCapture(err: unknown): unknown {
   if (!(err instanceof Error)) return err;
   let message = err.message;
+  let stack = err.stack;
   for (const field of KNOWN_ID_FIELDS) {
     const value = (err as unknown as Record<string, unknown>)[field];
     if (typeof value === 'string' && value.length > 0 && message.includes(value)) {
       message = message.split(value).join('[id]');
+      if (stack) stack = stack.split(value).join('[id]');
     }
   }
   if (message === err.message) return err; // nothing to change — don't rebuild the object
   const sanitized = new Error(message);
   sanitized.name = err.name;
-  sanitized.stack = err.stack;
+  sanitized.stack = stack;
   return sanitized;
 }
 
