@@ -28,13 +28,12 @@
  * Stops cleanly on Ctrl+C.
  */
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect as netConnect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { publishDiscovery, releaseDiscovery } from '../packages/core/src/discovery-file.ts';
 import { readRenamedEnv } from '../packages/core/src/env-names.ts';
-import { DISCOVERY_FILE, discoveryDir } from '../packages/core/src/machine-paths.ts';
 import {
   type PreparedClient,
   clientReleaseRoot,
@@ -292,12 +291,21 @@ const children = (): ChildProcess[] => (mdApp ? [server, mdApp] : [server]);
 // (see `resolveDiscoveryFile`) because the flag day does not order the server
 // restart against each session's respawn — but writing both would leave a
 // stale port behind for whichever reader checked the old one first.
-const discoveryFile = join(discoveryDir(homedir()), DISCOVERY_FILE);
-mkdirSync(discoveryDir(homedir()), { recursive: true });
-writeFileSync(
-  discoveryFile,
-  `${JSON.stringify({ port, pid: server.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,
-);
+//
+// The slot is machine-wide — the path is built from $HOME alone, because a
+// READER has no port to key on — so publishing is a claim, not a write. A
+// second server on another port declines it while the first is alive, and
+// `publishedPid` stays null so its cleanup knows the entry is not its to
+// remove. On 2026-08-30 that unconditional write, and the unconditional
+// unlink below, cost prod its entry to a throwaway supervisor.
+const publishedPid =
+  publishDiscovery({ home: homedir(), port, pid: server.pid as number }) === 'claimed'
+    ? (server.pid as number)
+    : null;
+if (publishedPid === null)
+  console.log(
+    `[supervisor] another server owns the discovery entry; :${port} is not publishing it`,
+  );
 
 // bin.ts prints its own URL banner (tailscale + lan + localhost), so we
 // stay quiet here — just leave a hint after about the review URL shape.
@@ -364,9 +372,7 @@ async function reapChildren(): Promise<void> {
 function cleanup(code: number): void {
   if (cleaningUp) return;
   cleaningUp = true;
-  try {
-    unlinkSync(discoveryFile);
-  } catch {}
+  releaseDiscovery({ home: homedir(), ourPublishedPid: publishedPid });
   void reapChildren().then(() => process.exit(code));
 }
 
