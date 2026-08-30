@@ -152,17 +152,24 @@ export interface LogSquelchHandle {
  *
  * The FIRST occurrence goes through with the caller's original arguments, so
  * an Error still prints with its stack; only the summary is a plain string.
+ *
+ * Each level gets its OWN state. Sharing one would let a `console.warn('x')`
+ * swallow the `console.error('x')` that followed it — a lower severity
+ * hiding a higher one, and the count then surfacing on whichever level
+ * happened to roll the window. Separate states also mean each level's
+ * summaries go out on that level's own writer.
  */
 export function installLogSquelch(
   opts: SquelchOptions & { now?: () => number } = {},
 ): LogSquelchHandle {
   const now = opts.now ?? Date.now;
-  const state = newSquelchState(now());
   const original = { warn: console.warn, error: console.error };
+  const states = { warn: newSquelchState(now()), error: newSquelchState(now()) };
 
-  const wrap = (write: (...args: unknown[]) => void) => {
+  const wrap = (level: 'warn' | 'error') => {
+    const write = (...args: unknown[]) => original[level](...args);
     return (...args: unknown[]) => {
-      const { flushed, emit } = squelchLine(state, formatArgs(args), now(), opts);
+      const { flushed, emit } = squelchLine(states[level], formatArgs(args), now(), opts);
       for (const line of flushed) write(line);
       // The line we were handed prints as it was handed to us — an Error
       // argument keeps its stack; only the summaries are plain strings.
@@ -170,12 +177,13 @@ export function installLogSquelch(
     };
   };
 
-  console.warn = wrap((...a: unknown[]) => original.warn(...a));
-  console.error = wrap((...a: unknown[]) => original.error(...a));
+  console.warn = wrap('warn');
+  console.error = wrap('error');
 
   return {
     flush() {
-      for (const line of flushSquelch(state, now(), opts)) original.error(line);
+      for (const line of flushSquelch(states.warn, now(), opts)) original.warn(line);
+      for (const line of flushSquelch(states.error, now(), opts)) original.error(line);
     },
     restore() {
       console.warn = original.warn;

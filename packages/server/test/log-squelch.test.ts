@@ -145,6 +145,54 @@ describe('installLogSquelch', () => {
     expect(calls[0]?.[1]).toBe(err);
   });
 
+  it('does not let a warning swallow an identical error', () => {
+    // codex review, 2026-08-29: one shared state keyed only on the formatted
+    // text meant `console.warn('x')` suppressed the `console.error('x')` that
+    // followed — a lower severity hiding a higher one, with the count then
+    // surfacing on whichever level happened to roll the window first.
+    const warned: string[] = [];
+    const errored: string[] = [];
+    const realWarn = console.warn;
+    const realError = console.error;
+    console.warn = (...a: unknown[]) => warned.push(a.map(String).join(' '));
+    console.error = (...a: unknown[]) => errored.push(a.map(String).join(' '));
+    const handle = installLogSquelch({ ...OPTS, now: () => 0 });
+    try {
+      console.warn('disk is filling');
+      console.error('disk is filling');
+      console.error('disk is filling');
+    } finally {
+      handle.restore();
+      console.warn = realWarn;
+      console.error = realError;
+    }
+    expect(warned).toEqual(['disk is filling']);
+    expect(errored).toEqual(['disk is filling']);
+  });
+
+  it('flushes each level to its own writer', () => {
+    const warned: string[] = [];
+    const errored: string[] = [];
+    const realWarn = console.warn;
+    const realError = console.error;
+    console.warn = (...a: unknown[]) => warned.push(a.map(String).join(' '));
+    console.error = (...a: unknown[]) => errored.push(a.map(String).join(' '));
+    const handle = installLogSquelch({ ...OPTS, now: () => 0 });
+    try {
+      console.warn('w');
+      console.warn('w');
+      console.error('e');
+      console.error('e');
+      handle.flush();
+    } finally {
+      handle.restore();
+      console.warn = realWarn;
+      console.error = realError;
+    }
+    expect(warned).toEqual(['w', '[log-squelch] …repeated 1 more time in 1s: w']);
+    expect(errored).toEqual(['e', '[log-squelch] …repeated 1 more time in 1s: e']);
+  });
+
   it('squelches console.warn too, and restore puts both back', () => {
     const written: string[] = [];
     const realWarn = console.warn;
