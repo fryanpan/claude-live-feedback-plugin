@@ -131,6 +131,25 @@ interface TaskEffortEstimateProvenance {
   forTitleWrittenAt: number;
   forBodyWrittenAt?: number;
   forGoal: string;
+  /**
+   * `Task.wordsRevision` as this run read it — THE token
+   * `TaskStore.recordEffortEstimate` compares, and the only one it compares.
+   *
+   * The three fields above are wall-clock milliseconds, and a millisecond is
+   * coarser than the events they were being asked to separate. A create and
+   * a rename that land inside the same tick stamp the SAME `titleWrittenAt`,
+   * so the create run's captured token still matched the renamed row, the
+   * guard read "not stale", and the create's late answer overwrote the
+   * rename's own. Not a test artifact — two quick edits on the board do it —
+   * but that is where it was caught: CI, 2026-08-30, a 999/999 create answer
+   * landing on a row that had already accepted the rename's 111/222.
+   *
+   * A counter that only ever goes up cannot tie, however fast two edits are.
+   * The timestamps stay because they answer a different question — "which
+   * words was this scored against", asked by a reader in human time, where a
+   * clock is the readable answer and a counter is not.
+   */
+  forWordsRevision: number;
 }
 
 /** A produced guess at how long a ticket will take, in seconds — never a
@@ -943,6 +962,35 @@ export interface Task {
    * head-change trigger for that row and nothing else.
    */
   titleHead?: string;
+  /**
+   * How many times the words a scoring run reads — title, body, goal — have
+   * changed on this row. The create names the row, so a fresh task lands
+   * here at 1; every later change to any of the three adds one.
+   *
+   * A COUNTER, not a clock, and that is the entire point of it: this is the
+   * ordering token `recordEffortEstimate` compares, and two edits inside one
+   * millisecond have to come out different. `titleWrittenAt` /
+   * `bodyWrittenAt` cannot do that — see `forWordsRevision`, which carries
+   * the incident.
+   *
+   * Absent on every row written before this field existed. `wordsRevisionOf`
+   * reads that absence as 0, which is right in BOTH directions: a run
+   * started after the load captures 0 and its answer lands, so a legacy row
+   * is not "always stale"; and the first edit after the load moves the row
+   * to 1, so a run that edit overtook is refused, and a legacy row is not
+   * "never stale" either. Nothing ever compares it across a restart — an
+   * in-flight scoring call does not survive one.
+   */
+  wordsRevision?: number;
+}
+
+/**
+ * This row's words-and-goal revision, with the pre-field absence resolved.
+ * One reader so the `?? 0` cannot disagree with itself across call sites —
+ * the same shape `bodyWrittenAtOf` uses for `bodyWrittenAt`.
+ */
+export function wordsRevisionOf(task: { wordsRevision?: number }): number {
+  return task.wordsRevision ?? 0;
 }
 
 /**
@@ -4425,13 +4473,28 @@ export class TaskStore {
    * emitted one of those would re-trigger its own scorer forever.
    *
    * Refused as `stale` when the words (or the goal) this run read are no
-   * longer the ticket's current words — `estimate.forTitleWrittenAt` /
-   * `forBodyWrittenAt` / `forGoal` must still match `task.titleWrittenAt` /
-   * `task.bodyWrittenAt` / `task.goal`. Guards against a slow call landing
-   * after a NEWER edit — or a re-triage to a different goal, which changes
-   * the goal title the scorer weighed — already started (or finished) its
-   * own re-score: that newer run's answer must stand, not be overwritten by
-   * a late answer to older words or an old goal.
+   * longer the ticket's current words: `estimate.forWordsRevision` must
+   * still equal the row's `wordsRevision`. Guards against a slow call
+   * landing after a NEWER edit — or a re-triage to a different goal, which
+   * changes the goal title the scorer weighed — already started (or
+   * finished) its own re-score: that newer run's answer must stand, not be
+   * overwritten by a late answer to older words or an old goal.
+   *
+   * ONE token, and a monotonic one. This used to compare the three
+   * timestamps the estimate still carries — `forTitleWrittenAt` /
+   * `forBodyWrittenAt` / `forGoal` against `titleWrittenAt` /
+   * `bodyWrittenAt` / `goal` — and a millisecond is not fine enough to
+   * separate a create from the rename that follows it: land both in one
+   * tick and the older run's captured token still equals the row's current
+   * one, the guard reads "not stale", and the stale answer wins. See
+   * `forWordsRevision`. The timestamps are kept on the record as
+   * provenance a person reads; they are no longer asked a question they
+   * cannot answer.
+   *
+   * A record that somehow carries no revision at all compares `undefined`
+   * against a number and is REFUSED, which is the safe direction: an
+   * estimate whose provenance cannot be established must not overwrite one
+   * whose provenance can.
    */
   recordEffortEstimate(
     taskId: string,
@@ -4439,11 +4502,7 @@ export class TaskStore {
   ): { ok: true; task: Task } | { ok: false; error: 'not-found' | 'stale' } {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
-    if (
-      estimate.forTitleWrittenAt !== (task.titleWrittenAt ?? task.createdAt) ||
-      estimate.forBodyWrittenAt !== task.bodyWrittenAt ||
-      estimate.forGoal !== task.goal
-    ) {
+    if (estimate.forWordsRevision !== wordsRevisionOf(task)) {
       return { ok: false, error: 'stale' };
     }
     task.effortEstimate = estimate;
@@ -4838,6 +4897,22 @@ export class TaskStore {
     task.title = title;
     task.titleWrittenAt = Date.now();
     task.titleHead = bodyHead(task.body);
+    this.bumpWordsRevision(task);
+  }
+
+  /**
+   * Advance the row's words-and-goal revision. Called from the four places a
+   * scoring run's inputs actually move — `applyTitle` (the one title
+   * writer), the two `bodyWrittenAt` stamps, and the two goal assignments —
+   * so the counter has exactly the reach the timestamps it replaces had, and
+   * no more.
+   *
+   * Every caller bumps BEFORE emitting the event that re-triggers scoring,
+   * which is what makes the fresh run capture the post-edit value and the
+   * overtaken run capture something strictly smaller.
+   */
+  private bumpWordsRevision(task: Task): void {
+    task.wordsRevision = wordsRevisionOf(task) + 1;
   }
 
   /**
@@ -4938,6 +5013,7 @@ export class TaskStore {
     if (nextTitle && (nextTitle !== titleFrom || task.untitled)) this.applyTitle(task, nextTitle);
     task.updatedAt = ts;
     task.bodyWrittenAt = ts;
+    this.bumpWordsRevision(task);
     this.scheduleSave(task.workspaceId);
     this.emit({
       type: 'task.body_edited',
@@ -5252,6 +5328,10 @@ export class TaskStore {
     const changed = goal !== fromGoal || order !== task.order;
 
     task.goal = goal;
+    // Only a MOVE, never a reorder: the goal's title is part of what the
+    // scorer weighs, the order is not — the same `fromGoal !== toGoal` line
+    // the re-score trigger in server.ts draws.
+    if (goal !== fromGoal) this.bumpWordsRevision(task);
     task.order = order;
     if (renumbered) for (const [i, t] of renumbered.entries()) t.order = i + 1;
     task.triagedAgainst = { goalId: goal, ts };
@@ -5463,6 +5543,7 @@ export class TaskStore {
       moved.push({ task, fromGoal: task.goal });
       choresMax += 1;
       task.goal = CHORES_GOAL_ID;
+      this.bumpWordsRevision(task);
       task.order = choresMax;
       // The band this was placed under is gone, so its placement is no longer
       // named — the bucket's other entrance. `triagedAgainst` deliberately
@@ -5880,6 +5961,7 @@ export class TaskStore {
     // so a no-op flush cannot make a stale body look freshly written — which
     // would silently clear the drift notice on exactly the rows that need it.
     task.bodyWrittenAt = Date.now();
+    this.bumpWordsRevision(task);
     this.scheduleSave(task.workspaceId);
     return true;
   }
