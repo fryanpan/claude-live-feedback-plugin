@@ -19,6 +19,7 @@ import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
+import { startReadingTracker } from '../reading-tracker.ts';
 import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { activityCommentRequest, asksOf } from './activity-model.ts';
@@ -1262,6 +1263,44 @@ async function main(): Promise<void> {
     taskDetailData.value = { task: null, handlers };
   }
 
+  /**
+   * Reading-time capture for the open ticket — the same tracker the markdown,
+   * redline and code surfaces mount, pointed at the task's body room.
+   *
+   * A ticket is a PANEL rather than a page, so there is no load to hang a
+   * tracker off and no unload to flush it: this is the lifecycle. It is keyed
+   * on the task id and called from every path that changes what the panel
+   * shows, so a repaint — and `renderDetail` runs on every board event and
+   * clock tick — is a no-op, while an open, a close, and a tap straight from
+   * one row to another each do the right thing. The disposer flushes any
+   * in-flight session, so closing a ticket banks its read rather than losing
+   * it.
+   */
+  let readTracker: { taskId: string; stop: () => void } | null = null;
+  function syncReadTracker(taskId: string | null, bodyDocId?: string): void {
+    if (readTracker?.taskId === taskId) return;
+    readTracker?.stop();
+    readTracker = null;
+    if (!taskId || !bodyDocId) return;
+    const host = document.getElementById('hub-detail');
+    if (!host) return;
+    readTracker = {
+      taskId,
+      stop: startReadingTracker({
+        docId: bodyDocId,
+        user,
+        // `.hub-detail-panel` is the element with `overflow: auto`, so it is
+        // what scroll depth means here. A getter, not the element: this runs
+        // during the signal write that opens the panel, and the panel is not
+        // painted until a microtask later.
+        scrollEl: () => host.querySelector<HTMLElement>('.hub-detail-panel'),
+        // Scoped to the panel: the board is still behind it, and scrolling
+        // the rows is not reading the ticket.
+        root: host,
+      }),
+    };
+  }
+
   function renderDetail(): void {
     // Task wins when both ids are somehow set: the deep-link and voice paths
     // set a task id without knowing a goal panel was open, and what they mean
@@ -1295,6 +1334,9 @@ async function main(): Promise<void> {
         // The task panel closes first: the two share the screen, never the
         // container, so nothing else empties the island's host any more.
         closeTaskPanel(true);
+        // A goal opening over a ticket ends the read of that ticket — this is
+        // the one close that does not run through the task path below.
+        syncReadTracker(null);
         goalDetailData.value = {
           section,
           discussion: goalDiscussion,
@@ -1452,6 +1494,9 @@ async function main(): Promise<void> {
       detailOpener = null;
     }
     syncBoardUrl();
+    // Open, close, and row-to-row all land here; keyed on the id, so the
+    // repaints in between cost nothing.
+    syncReadTracker(task?.id ?? null, task?.bodyDocId);
     renderedDetailId = task?.id ?? null;
     renderedGoalId = null;
   }
