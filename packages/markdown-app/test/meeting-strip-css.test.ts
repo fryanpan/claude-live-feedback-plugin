@@ -89,6 +89,171 @@ describe('the editor pane reserves a row for the strip', () => {
   });
 });
 
+describe('the speaker tag', () => {
+  const tag = rule('.meeting-speaker', declarationsOnly(SECTION));
+
+  it('lives in the strip section, muted and smaller than the words it labels', () => {
+    expect(tag, 'no .meeting-speaker rule in the MEETING section').not.toBe('');
+    expect(tag).toMatch(/cursor:\s*pointer/);
+    // The look lives on the pill inside it; see the split below.
+    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
+    expect(pill).toMatch(/color:\s*var\(--fg-muted\)/);
+    expect(pill).toMatch(/font-size:\s*1[01](\.\d+)?px/);
+    // A button that reads as a tag: no UA chrome.
+    expect(pill).toMatch(/border-radius:\s*var\(--radius-pill\)/);
+  });
+
+  /**
+   * MEASURE THE OUTCOME, NOT THE INGREDIENTS. Two rounds of review were lost
+   * here while a test passed: it asserted the pseudo-element that was meant
+   * to buy the 36px, then the pseudo AND the caption's padding — and the real
+   * target measured 19px both times, because a clip one level away ate it
+   * (first .meeting-caption's, then the button's own, added for the
+   * ellipsis). Declarations that SHOULD produce 36px are not the claim. So
+   * this computes the hit box the way the browser does: the pill's height,
+   * the button's padding around it, and then every clip between the button
+   * and the strip, which is where both regressions actually happened.
+   *
+   * happy-dom resolves no layout, so the arithmetic is done here from the
+   * stylesheet. It is the model that has to be honest: it walks the ancestor
+   * chain and takes the SMALLEST clip, so any new `overflow` on any of them
+   * fails this test rather than shipping.
+   */
+  const px = (v: string | undefined, emBase: number): number => {
+    if (!v) return Number.NaN;
+    const em = /^(-?[\d.]+)em$/.exec(v.trim());
+    if (em) return Number(em[1]) * emBase;
+    const n = /^(-?[\d.]+)px$/.exec(v.trim());
+    return n ? Number(n[1]) : Number.NaN;
+  };
+  const decl = (body: string, prop: string): string | undefined =>
+    new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`).exec(body)?.[1]?.trim();
+
+  /**
+   * The hit box is the INTERSECTION of the button with the clip, at both
+   * widths. Three rounds, three variants of one lesson: round one asserted
+   * the ingredients, round two the box but not its clip, round three the box
+   * and the clip but not the OFFSET between them — the button was the 37.75px
+   * designed and still measured 34, because it sat 4.3px above the clip with
+   * 5.6px of clip unused below it. So this places the box before measuring
+   * it.
+   *
+   * The placement it models is `vertical-align: middle`, asserted below: the
+   * pill's margin box is centred on the text, so the room above and below it
+   * inside the clip is symmetric and computable. Baseline alignment is what
+   * put it off-centre, so the model would be a lie under it.
+   */
+  const hitBox = (captionBody: string): { hit: number; clip: number; room: number } => {
+    const STRIP_FONT = px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'font-size'), 16);
+    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
+    const pillH =
+      px(decl(pill, 'font-size'), STRIP_FONT) * Number(decl(pill, 'line-height')) +
+      2 * px(/^([\d.]+px)/.exec(decl(pill, 'border') ?? '')?.[1], STRIP_FONT);
+    const btnPad = Number(
+      /padding:\s*([\d.]+)px/.exec(rule('.meeting-speaker', declarationsOnly(SECTION)))?.[1],
+    );
+    const content = px(decl(captionBody, 'height'), STRIP_FONT);
+    const capPad = px(decl(captionBody, 'padding-block'), STRIP_FONT);
+    // Centred pill: half the slack in the window, plus the caption's padding.
+    const room = (content - pillH) / 2 + capPad;
+    return { hit: pillH + 2 * Math.min(btnPad, room), clip: content + 2 * capPad, room };
+  };
+
+  it('the tap target MEASURES at least 36px at 1180x820, clip and offset included', () => {
+    const capt = rule('.meeting-caption', declarationsOnly(SECTION));
+    const { hit, clip } = hitBox(capt);
+    expect(Number.isFinite(hit) && hit > 0, 'the model read nothing').toBe(true);
+    // The 40px bar is the ceiling on the clip, which is the ceiling on the
+    // target — there is no room here to buy slack with more padding.
+    expect(clip).toBeLessThanOrEqual(
+      px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'height'), 16),
+    );
+    expect(hit, `hit ${hit} in a ${clip} clip`).toBeGreaterThanOrEqual(36);
+  });
+
+  it('the tap target MEASURES at least 36px at 430px too', () => {
+    const narrow = block('@media (max-width: 720px)', SECTION);
+    const capt = `${rule('.meeting-caption', declarationsOnly(SECTION))};${rule('.meeting-caption', declarationsOnly(narrow))}`;
+    // The mobile block overrides only the window; the padding carries over.
+    const { hit } = hitBox(capt);
+    expect(hit).toBeGreaterThanOrEqual(36);
+  });
+
+  it('the model it measures against is the one the stylesheet uses', () => {
+    // `middle` is a precondition of the arithmetic above, not a preference:
+    // under `baseline` a clipping inline-block hangs off its bottom edge and
+    // the "room each side" the model assumes is not symmetric.
+    expect(rule('.meeting-speaker', declarationsOnly(SECTION))).toMatch(/vertical-align:\s*middle/);
+  });
+
+  it('is fully opaque everywhere the current line can paint', () => {
+    // The caption's mask hides the line that has rolled off, which really does
+    // paint: overflow: hidden clips to the PADDING box, not the content box.
+    // So the transparent zone must be exactly the top padding and no more --
+    // measured at 1180x820 the pill's top edge lands 0.38px inside the content
+    // box, so a ramp of ANY length reaches into it. That is what rendered the
+    // pill pale with no top border next to crisp words.
+    const capt = rule('.meeting-caption', declarationsOnly(SECTION));
+    const STRIP_FONT = px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'font-size'), 16);
+    const capPad = px(decl(capt, 'padding-block'), STRIP_FONT);
+    const mask = decl(capt, 'mask-image') ?? '';
+    expect(mask, 'no mask-image on the caption').toMatch(/linear-gradient/);
+    const stops = [...mask.matchAll(/(transparent|#000)\s+([\d.]+)px/g)].map((m) => ({
+      opaque: m[1] === '#000',
+      at: Number(m[2]),
+    }));
+    const firstOpaque = stops.find((s) => s.opaque);
+    expect(firstOpaque, 'the gradient never reaches opaque').toBeTruthy();
+    expect(
+      firstOpaque!.at,
+      `opaque only at ${firstOpaque!.at}px, ${capPad}px of padding — the ramp is inside the pill`,
+    ).toBeLessThanOrEqual(capPad);
+    // And it must still be transparent right up to there, or the rolled-off
+    // line stops being hidden and reappears above the current one.
+    const lastClear = stops.filter((s) => !s.opaque).at(-1);
+    expect(lastClear?.at).toBe(capPad);
+  });
+
+  it('keeps the target and the clip on separate elements', () => {
+    // The split IS the fix: the button holds the padding and nothing that
+    // clips; the pill holds every visual and the only overflow. Collapse them
+    // and the ellipsis clips the tap target again.
+    const btn = rule('.meeting-speaker', declarationsOnly(SECTION));
+    expect(btn).not.toMatch(/overflow:/);
+    expect(btn).not.toMatch(/text-overflow:/);
+    expect(btn).toMatch(/background:\s*none/);
+    expect(btn).toMatch(/border:\s*0/);
+    // The line box must not grow by the padding, or the caption's window
+    // stops being one line and the words move.
+    expect(btn).toMatch(/margin:\s*-\d+px/);
+    // And no pseudo-element target survives to be clipped a third time.
+    expect(rule('.meeting-speaker::before', declarationsOnly(SECTION))).toBe('');
+  });
+
+  it('caps the tag so naming a voice cannot push every tag out of the window', () => {
+    // A 60-character name rendered a 335px pill, wrapped the caption line, and
+    // hid all three tags — naming a speaker turned the labels off.
+    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
+    expect(pill).toMatch(/max-width:\s*\d+(\.\d+)?em/);
+    expect(pill).toMatch(/overflow:\s*hidden/);
+    expect(pill).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it('looks like a control at rest, where there is no hover to reveal it', () => {
+    // `cursor: pointer` and the title attribute are both hover-only, so on the
+    // iPad nothing said the pill was tappable.
+    expect(rule('.meeting-speaker-pill', declarationsOnly(SECTION))).toMatch(
+      /text-decoration:\s*underline dotted/,
+    );
+  });
+
+  it('gives each turn its own line, so a tag never strands above its words', () => {
+    // Inline, a turn started where the previous one ended and its tag landed
+    // at the END of that line — on a phone, the faded one being clipped away.
+    expect(rule('.meeting-turn', declarationsOnly(SECTION))).toMatch(/display:\s*block/);
+  });
+});
+
 describe('at 1180x820 the strip is one 40px bar', () => {
   const strip = rule('.meeting-strip', declarationsOnly(SECTION));
 
@@ -139,7 +304,8 @@ describe('at 430px the strip is its own stacked panel', () => {
     expect(strip).toMatch(/height:\s*auto/);
     expect(strip).toMatch(/flex-direction:\s*column/);
     expect(strip).toMatch(/align-items:\s*stretch/);
-    // Two lines at the caption's 1.45 line-height.
+    // Two lines at the caption's 1.45 line-height — the WINDOW, not the box;
+    // the caption's own padding sits outside it.
     expect(rule('.meeting-caption', declarationsOnly(narrow))).toMatch(/height:\s*2\.9em/);
     // The REC/Paused word only exists here; the bar has the room for a clock
     // and nothing else.
@@ -151,6 +317,16 @@ describe('at 430px the strip is its own stacked panel', () => {
     const strip = rule('.meeting-strip', declarationsOnly(narrow));
     expect(strip).toMatch(/padding-bottom:\s*calc\([^)]*var\(--safe-bottom\)/);
     expect(strip).toMatch(/var\(--kb-bottom, 0px\)/);
+  });
+
+  it('does not pay for the tap target twice on the screen with the least room', () => {
+    // The caption carries 9px of its own on each side now (that padding IS
+    // the tag's hit area). The panel's own gap and bottom padding stand down
+    // rather than stacking on top of it — otherwise the phone's strip grows a
+    // full 18px to buy a target the iPad needed too.
+    const strip = rule('.meeting-strip', declarationsOnly(narrow));
+    expect(strip).toMatch(/gap:\s*0/);
+    expect(strip).not.toMatch(/padding-bottom:\s*calc\(\s*\d/);
   });
 
   it('does not reserve room for a bottom navbar the doc surface does not have', () => {

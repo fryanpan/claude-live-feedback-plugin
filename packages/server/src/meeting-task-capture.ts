@@ -46,6 +46,13 @@ export interface CapturedRequest {
   title: string;
   /** Clear and doable as spoken — the store may set it moving. */
   actionable: boolean;
+  /**
+   * The voice that asked, as the transcript spells it — a name the person
+   * gave that label, or the bare "Speaker B" of one nobody has named. Absent
+   * when the speech carried no labels, or when the model named a voice this
+   * tick never heard (see {@link speakerOnTick}).
+   */
+  requester?: string;
 }
 
 /** Speech that referred to work the board already tracks. */
@@ -201,6 +208,22 @@ export function requestMatchesCandidate(title: string, candidateTitle: string): 
   return sharedWordCount(significantWords(title), significantWords(candidateTitle)) >= 2;
 }
 
+/**
+ * The transcript must vouch for a requester the same way it vouches for a
+ * reference: the model may only name a voice this tick actually carried.
+ * Compared case-insensitively and answered with the transcript's own
+ * spelling, so a model that lowercases a name still attributes it, and one
+ * that invents a person attributes nobody.
+ */
+export function speakerOnTick(turns: readonly NotesTurn[], claimed: string): string | undefined {
+  const want = claimed.trim().toLowerCase();
+  if (!want) return undefined;
+  for (const turn of turns) {
+    if (turn.speaker && turn.speaker.toLowerCase() === want) return turn.speaker;
+  }
+  return undefined;
+}
+
 /** The board deep link `parseWorkspaceLink` reads back as `kind: 'task'` —
  *  root-relative, so it survives being read under any host the server has. */
 export function taskCaptureUrl(workspaceId: string, taskId: string): string {
@@ -216,7 +239,8 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
   const system = [
     'You listen to a live working meeting and extract exactly two things:',
     'task REQUESTS and task REFERENCES. Answer with JSON only, this shape:',
-    '{"items":[{"kind":"request","title":"...","actionable":true|false}',
+    '{"items":[{"kind":"request","title":"...","actionable":true|false,',
+    '           "requester":"who asked, omitted if unclear"}',
     '         |{"kind":"reference","match":<candidate number>}]}',
     '',
     'A REQUEST only when a speaker explicitly asks for work to be tracked or',
@@ -227,6 +251,12 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     'Mark a request "actionable": true only when it is clear enough to start',
     'without asking anything back — what to do and where — and nobody said',
     'to wait. When in doubt, false.',
+    '',
+    'Transcript lines may be prefixed with who said them. Set "requester" to',
+    'that speaker, copied exactly as the line spells it — including a label',
+    'like "Speaker B", which is a voice nobody has named yet. Omit',
+    '"requester" when the lines carry no speaker or you are unsure who asked;',
+    'never guess, and never name anyone the lines do not.',
     '',
     'A REFERENCE only when the speech clearly refers to work in the numbered',
     'candidate list; "match" is that number. Never guess: no confident match',
@@ -244,7 +274,11 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
         .join('\n')}`,
     );
   }
-  parts.push(`Speech since the last update:\n${input.turns.map((t) => `- ${t.text}`).join('\n')}`);
+  parts.push(
+    `Speech since the last update:\n${input.turns
+      .map((t) => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`)
+      .join('\n')}`,
+  );
   return { system, user: parts.join('\n\n') };
 }
 
@@ -291,7 +325,14 @@ export function parseTaskCaptureReply(
       const key = title.toLowerCase();
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
-      out.push({ kind: 'request', title, actionable: row.actionable === true });
+      const requester =
+        typeof row.requester === 'string' ? speakerOnTick(turns, row.requester) : undefined;
+      out.push({
+        kind: 'request',
+        title,
+        actionable: row.actionable === true,
+        ...(requester !== undefined ? { requester } : {}),
+      });
     }
   }
   return out;
@@ -399,6 +440,10 @@ export async function runTaskCapture(
       body: [
         `Filed live from the meeting${input.docTitle ? ` "${input.docTitle}"` : ''} by the`,
         "meeting assistant — the doc's transcript is the source record.",
+        // Who asked is the half of "who said what" a task can still answer a
+        // week later, once the strip is gone. Only ever a voice the tick
+        // carried, so this line names a real speaker or nothing at all.
+        ...(item.requester ? [`Asked for by ${item.requester}.`] : []),
       ].join(' '),
       assignee: MEETING_CAPTURE_ACTOR.name,
       assigneeKind: 'agent',

@@ -24,11 +24,13 @@
  */
 
 import {
+  MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   type MeetingServerMessage,
   type MeetingUnavailableReason,
   meetingSocketPath,
+  speakerDisplayName,
 } from '@feedback/core';
 import {
   type MeetingCapture,
@@ -51,6 +53,8 @@ export interface TranscriptTurn {
   turn: number;
   text: string;
   final: boolean;
+  /** The engine's label for the voice; the tag shows the name given to it. */
+  speaker?: string;
 }
 
 /**
@@ -139,7 +143,13 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
     }
     case 'transcript':
       if (typeof m.turn !== 'number' || typeof m.text !== 'string') return null;
-      return { type: 'transcript', turn: m.turn, text: m.text, final: m.final === true };
+      return {
+        type: 'transcript',
+        turn: m.turn,
+        text: m.text,
+        final: m.final === true,
+        ...(typeof m.speaker === 'string' && m.speaker ? { speaker: m.speaker } : {}),
+      };
     case 'stopped':
       return {
         type: 'stopped',
@@ -200,6 +210,32 @@ export interface MeetingStripOpts {
    * that is reported as what it is.
    */
   autoStart?: boolean;
+  /**
+   * Ask the person what to call a speaker; `current` is what the tag says
+   * now. Null or blank means leave it. Defaults to `window.prompt` — the
+   * strip is a 40px bar with no room for an inline field, and a name is
+   * typed once per voice per meeting.
+   */
+  promptName?: (current: string) => string | null;
+}
+
+/**
+ * A typed name the server will actually accept. Past MAX_SPEAKER_NAME its
+ * parser drops the frame without answering, so an unclipped name would sit on
+ * the tag while the record and the notes never heard it. The clip falls back
+ * to a word boundary and SAYS it happened: cut mid-word and silent, "VP of
+ * Platform Engineering, EMEA" came back as "…VP of Platform Engi", which
+ * reads as a typo rather than as a name that was too long.
+ */
+export function clipSpeakerName(name: string): string {
+  if (name.length <= MAX_SPEAKER_NAME) return name;
+  const room = MAX_SPEAKER_NAME - 1;
+  const cut = name.slice(0, room);
+  const lastSpace = cut.lastIndexOf(' ');
+  // Only honour a word boundary that leaves a name behind, never one that
+  // clips back to a single word.
+  const kept = lastSpace > room / 2 ? cut.slice(0, lastSpace) : cut;
+  return `${kept.trimEnd()}\u2026`;
 }
 
 export interface MeetingStripHandle {
@@ -230,12 +266,17 @@ function defaultInterval(fn: () => void, ms: number): () => void {
   return () => clearInterval(id);
 }
 
+function defaultPromptName(current: string): string | null {
+  return window.prompt('Who is this?', current);
+}
+
 export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const { docId, root } = opts;
   const now = opts.now ?? Date.now;
   const interval = opts.interval ?? defaultInterval;
   const openSocket = opts.openSocket ?? defaultOpenSocket;
   const startCapture = opts.startCapture ?? startMeetingCapture;
+  const promptName = opts.promptName ?? defaultPromptName;
 
   const strip = document.createElement('div');
   strip.className = 'meeting-strip-row';
@@ -286,7 +327,42 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   /** Live word spans per turn, so a correction rewrites the span that is
    *  already on screen instead of redrawing the line under the reader. */
-  const rendered = new Map<number, { span: HTMLElement; words: HTMLElement[]; text: string }>();
+  const rendered = new Map<
+    number,
+    { span: HTMLElement; tag: HTMLButtonElement | null; words: HTMLElement[]; text: string }
+  >();
+  /**
+   * Engine label → what the person calls that voice. Belongs to ONE meeting:
+   * the engine hands out "A" afresh each session, so the map is emptied when
+   * a meeting starts, never carried into the next.
+   */
+  let names: Record<string, string> = {};
+
+  /** The tag every turn with this label wears, as it should read now. The
+   *  name goes on the PILL, never on the button: the button is the tap
+   *  target and holds nothing but padding (see the stylesheet). */
+  function renderTag(entry: { tag: HTMLButtonElement | null }, label: string): void {
+    const tag = entry.tag;
+    if (!tag) return;
+    const shown = speakerDisplayName(label, names);
+    tag.dataset.speaker = label;
+    const pill = tag.querySelector('.meeting-speaker-pill');
+    if (pill) pill.textContent = shown;
+    tag.setAttribute('aria-label', `Name ${shown}`);
+  }
+
+  function nameSpeaker(label: string): void {
+    const current = speakerDisplayName(label, names);
+    const answer = clipSpeakerName(promptName(current)?.trim() ?? '');
+    if (!answer || answer === current) return;
+    names[label] = answer;
+    for (const entry of rendered.values()) {
+      if (entry.tag?.dataset.speaker === label) renderTag(entry, label);
+    }
+    if (socketOpen) {
+      socket?.send(JSON.stringify({ type: 'name_speaker', speaker: label, name: answer }));
+    }
+  }
 
   function renderCaption(): void {
     if (state.kind !== 'idle' && state.kind !== 'recording') return;
@@ -305,8 +381,32 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         const span = document.createElement('span');
         span.className = 'meeting-turn';
         line.append(span);
-        entry = { span, words: [], text: '' };
+        entry = { span, tag: null, words: [], text: '' };
         rendered.set(turn.turn, entry);
+      }
+      // The tag comes and goes with the label — the engine attributes a turn
+      // once it has heard enough of it, and may reattribute it at the end.
+      const label = turn.speaker;
+      if (label === undefined) {
+        entry.tag?.remove();
+        entry.tag = null;
+      } else {
+        if (!entry.tag) {
+          const tag = document.createElement('button');
+          tag.type = 'button';
+          tag.className = 'meeting-speaker';
+          tag.title = 'Tap to name this speaker';
+          // The pill is a child so the button itself can stay free of the
+          // overflow that clipping a long name needs — a clip anywhere on
+          // the button eats its own tap target.
+          const pill = document.createElement('span');
+          pill.className = 'meeting-speaker-pill';
+          tag.append(pill);
+          tag.addEventListener('click', () => nameSpeaker(tag.dataset.speaker ?? ''));
+          entry.span.prepend(tag);
+          entry.tag = tag;
+        }
+        renderTag(entry, label);
       }
       if (entry.text === turn.text) continue;
       const words = diffTurnWords(entry.text, turn.text);
@@ -439,7 +539,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         setState({ kind: 'recording', startedAt: now() });
         break;
       case 'transcript':
-        turns = rollTranscript(turns, { turn: msg.turn, text: msg.text, final: msg.final });
+        turns = rollTranscript(turns, {
+          turn: msg.turn,
+          text: msg.text,
+          final: msg.final,
+          ...(msg.speaker !== undefined ? { speaker: msg.speaker } : {}),
+        });
         renderCaption();
         break;
       case 'unavailable':
@@ -466,6 +571,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     if (state.kind === 'requesting' || state.kind === 'recording') return;
     const attempt = ++generation;
     turns = [];
+    names = {};
     tapToStart = false;
     setState({ kind: 'requesting' });
     const started = await startCapture({

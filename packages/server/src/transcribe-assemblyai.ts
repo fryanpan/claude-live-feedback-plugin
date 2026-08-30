@@ -27,6 +27,17 @@
  *    for the `Termination` reply. That wait is what flushes the open turn —
  *    closing the socket instead drops whatever was being said.
  *
+ * SPEAKER LABELS (https://www.assemblyai.com/docs/streaming/label-speakers-and-separate-channels
+ * and the streaming API reference, read 2026-08-29): `speaker_labels=true`
+ * on the same URL, supported on every streaming model, +$0.12/hr on top of
+ * the session rate. Each `Turn` then carries `speaker_label` — `"A"`, `"B"`,
+ * or a placeholder (`"PENDING"` / `"UNKNOWN"`) for a turn under about a
+ * second of audio — and a `SpeakerRevision` arrives before `Termination`
+ * listing the turns whose label the full-session pass changed. The
+ * placeholder is mapped to "no speaker" rather than shown; the revision is
+ * re-emitted through `onTurn` as a settled turn with its text retained, so
+ * the relay needs no second channel for it.
+ *
  * The socket is injected because a test of this mapping must not open one.
  */
 
@@ -129,8 +140,20 @@ export function streamingUrl(sampleRate: number): string {
     // unpunctuated text, and the transcript a notes agent reads later is the
     // rough draft rather than the sentence.
     format_turns: 'true',
+    // Who said it. Priced per session hour on top of the base rate (see the
+    // header); without it every turn reads as one voice.
+    speaker_labels: 'true',
   });
   return `${STREAM_URL}?${params.toString()}`;
+}
+
+/** Labels the engine uses to mean "not decided yet" — never a speaker. */
+const PLACEHOLDER_LABELS = new Set(['PENDING', 'UNKNOWN']);
+
+/** The `speaker` field for a Turn's `speaker_label`, or nothing. */
+export function speakerFromLabel(label: unknown): { speaker?: string } {
+  if (typeof label !== 'string' || label === '' || PLACEHOLDER_LABELS.has(label)) return {};
+  return { speaker: label };
 }
 
 function defaultSocketFactory(args: EngineSocketArgs): EngineSocket {
@@ -195,6 +218,13 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
         let terminating = false;
         /** Resolves `close()` once the engine says it has flushed. */
         let settleClose: (() => void) | null = null;
+        /**
+         * Every settled turn's text and label, kept so a `SpeakerRevision`
+         * — which names a turn but does not repeat its words — can be
+         * re-emitted as a whole turn. A meeting's worth of sentences is
+         * small next to the audio that produced them.
+         */
+        const settled = new Map<number, { text: string; speaker?: string }>();
 
         const cancelConnect = timer(connectTimeoutMs, () => {
           if (began) return;
@@ -233,14 +263,38 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
               const order = msg.turn_order;
               const transcript = msg.transcript;
               if (typeof order !== 'number' || typeof transcript !== 'string') return;
-              sessionOpts.onTurn({
-                turn: order,
-                text: transcript,
-                // Both flags, for the reason at the top of this file: with
-                // `format_turns` on the unformatted final arrives first and
-                // is superseded.
-                final: msg.end_of_turn === true && msg.turn_is_formatted === true,
-              });
+              // Both flags, for the reason at the top of this file: with
+              // `format_turns` on the unformatted final arrives first and
+              // is superseded.
+              const final = msg.end_of_turn === true && msg.turn_is_formatted === true;
+              const speaker = speakerFromLabel(msg.speaker_label);
+              if (final) settled.set(order, { text: transcript, ...speaker });
+              sessionOpts.onTurn({ turn: order, text: transcript, final, ...speaker });
+              return;
+            }
+            if (msg.type === 'SpeakerRevision') {
+              // The whole-session pass relabelled some turns. Re-emit each
+              // as the settled turn it already was, with the text we kept,
+              // so a revised label rides the same path as a revised word.
+              //
+              // The array is `revisions`, NOT `turns` — checked against both
+              // the guide and streaming/api-spec/streaming-websocket, which
+              // give the same payload. A reviewer has already called this a
+              // P1 for reading the wrong field; it reads the right one, and
+              // a "fix" to `turns` would silently drop every revision.
+              // Entries carry `turn_order` and `speaker_label` (plus `words`,
+              // which we do not need — text is never revised by this pass).
+              const revisions = Array.isArray(msg.revisions) ? msg.revisions : [];
+              for (const rev of revisions as Array<Record<string, unknown>>) {
+                const order = rev.turn_order;
+                if (typeof order !== 'number') continue;
+                const known = settled.get(order);
+                if (!known) continue;
+                const speaker = speakerFromLabel(rev.speaker_label);
+                if (speaker.speaker === known.speaker) continue;
+                settled.set(order, { text: known.text, ...speaker });
+                sessionOpts.onTurn({ turn: order, text: known.text, final: true, ...speaker });
+              }
               return;
             }
             if (msg.type === 'Termination') {
