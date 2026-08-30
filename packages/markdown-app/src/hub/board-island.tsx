@@ -724,6 +724,12 @@ function GoalEffort(props: {
         <span class="hub-goal-effort-left">
           {[label.leftText, label.finishText].filter(Boolean).join(' \u00b7 ')}
         </span>
+        {/* The caveat rides on BOTH variants, not just the phone's. It used
+            to live in the `title` alone up here, which put it out of reach on
+            the one device that matters most: an iPad reports a Mac UA, gets
+            this tier, and has no hover. A bar drawn over six of nine tickets
+            must say so wherever it is drawn. */}
+        {label.coverageText ? <span class="hub-goal-effort-note">{label.coverageText}</span> : null}
       </span>
     );
   }

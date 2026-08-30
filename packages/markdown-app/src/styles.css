@@ -2804,6 +2804,12 @@ body.hub-body {
   font-size: 11.5px;
   opacity: 0.85;
 }
+/* On the meta row the caveat follows the figures on one line, so it needs the
+   same separator they use between themselves. The strip stacks it instead and
+   must not get one. */
+.hub-goal-effort-inline .hub-goal-effort-note::before {
+  content: "\00b7\00a0";
+}
 .hub-goal-bar {
   display: inline-block;
   position: relative;

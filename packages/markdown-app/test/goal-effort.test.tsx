@@ -244,6 +244,35 @@ describe('the board renders the readout and leaves the rows alone', () => {
     expect(host.querySelector('.hub-goal-bar i')?.getAttribute('style')).toContain('60%');
   });
 
+  it('carries the coverage caveat on BOTH variants, not just the phone\u2019s', () => {
+    // A bar drawn over some of a band's tickets has to say so wherever it is
+    // drawn. It lived in the inline `title` alone until a measurement at
+    // 1180px — the iPad tier — showed the caveat was reachable only by hover,
+    // which that device does not have.
+    paint([
+      closed(DAY),
+      closed(2 * DAY),
+      closed(3 * DAY),
+      task(),
+      task({ effortEstimate: undefined }),
+      task({ effortEstimate: { status: 'failed', reason: 'the body was empty' } }),
+    ]);
+    const inline = host.querySelector('.hub-goal-effort-inline');
+    const strip = host.querySelector('.hub-goal-effort-strip');
+    expect(inline?.querySelector('.hub-goal-effort-note')?.textContent).toBe(
+      '2 not scored, 1 failed',
+    );
+    expect(strip?.querySelector('.hub-goal-effort-note')?.textContent).toBe(
+      '2 not scored, 1 failed',
+    );
+    // Positive control: a band where every ticket is scored gets no caveat,
+    // so the assertion above cannot be met by a note that is always drawn.
+    disposeBoards();
+    host.replaceChildren();
+    paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task()]);
+    expect(host.querySelector('.hub-goal-effort-note')).toBeNull();
+  });
+
   it('puts no numbers on a task row', () => {
     paint([closed(DAY), task()]);
     for (const row of host.querySelectorAll('.hub-task-row')) {
