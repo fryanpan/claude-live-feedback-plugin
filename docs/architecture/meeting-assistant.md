@@ -118,16 +118,20 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
 - The unit is an **item** — a top-level block, or one item of a list, because
   a bullet list is a single block and block granularity would hand the
   agent's whole list to the person who fixed one bullet.
-- Ownership is a **ledger** of the markdown the agent last wrote, held per
-  doc in memory. An item that still reads exactly as the agent left it is the
-  agent's to revise; anything else is a person's, and stays a person's. Only
-  agent items are ever deleted, and a person's item is never re-created —
-  the same Yjs element stays in place, so its marks and anchors survive.
+- Ownership is a **ledger keyed by the Yjs element**, holding the markdown
+  the agent left in it, held per doc in memory. An item is the agent's only
+  if the agent wrote that element AND it still reads exactly as the agent
+  left it. Both halves matter: text alone hands a person's element to the
+  agent the moment they type a line matching one of its own, and element
+  alone keeps calling a line the agent's after they rewrote it. Only agent
+  items are ever deleted, and a person's item is never re-created — the same
+  element stays in place, so its marks and anchors survive.
 - **`previous` is the live section**, not the composer's own last reply, so
   the composer sees what the person wrote. The first tick of a session still
   composes from scratch — otherwise every meeting would continue the last
   one's notes. Human items are listed in the prompt as theirs to reproduce
-  verbatim.
+  verbatim, and are gated on the same first-tick condition: on tick one they
+  are the LAST meeting's lines, and "reproduce verbatim" would copy them in.
 - **A changed version of a person's line becomes a suggestion**, not a
   rewrite: the redline marks in `suggest-ops.ts`, authored as "Meeting
   Assistant". The accepted state — what serializes to disk — stays his words
@@ -139,9 +143,9 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   since left the doc is one he edited mid-compose, so anything the compose
   says that reads like it is dropped rather than inserted. Nothing is lost —
   the composer returns the whole notes every tick.
-- **An empty ledger means "everything here is somebody else's"**, so a
-  restarted server adds and stops replacing rather than claiming prose it
-  has never seen.
+- **A ledger that claims nothing means "everything here is somebody
+  else's"**, so a restarted server adds and stops replacing rather than
+  claiming prose it has never seen.
 
 ## Task capture ("file a ticket for that")
 

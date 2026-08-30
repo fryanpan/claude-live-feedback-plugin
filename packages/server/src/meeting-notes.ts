@@ -401,7 +401,11 @@ export function beginNotesSession(
         // From the second tick on, `previous` is what the doc actually says,
         // which is how a person's edits reach the composer at all.
         previous: previous === null ? null : (live?.markdown ?? previous),
-        ...(live && live.human.length > 0 ? { humanNotes: live.human } : {}),
+        // Gated with `previous` for the same reason: on tick one the human
+        // lines in the section are the LAST meeting's, or an agenda written
+        // before this one, and telling a from-scratch compose to reproduce
+        // them verbatim would copy them into these notes.
+        ...(previous !== null && live && live.human.length > 0 ? { humanNotes: live.human } : {}),
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
       };
