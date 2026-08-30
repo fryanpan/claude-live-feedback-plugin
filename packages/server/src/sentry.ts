@@ -334,6 +334,37 @@ export function withRouteSpan<T>(req: Request, pathname: string, fn: () => Promi
 }
 
 /**
+ * Some of our own error classes carry a caller-chosen id as a STRUCTURED
+ * field precisely because it can't be redacted by shape: codex review found
+ * `ReservedDocIdError` (doc-ids.ts) formats an arbitrary `docId` — which can
+ * be a bound file's relative path or a `task:<id>` alias, exactly the
+ * caller-chosen shapes that don't match MINTED_ID_SHAPE — directly into its
+ * own `.message`, and it's thrown from a live code path (rooms.ts) with
+ * nothing catching it by name before it could reach captureServerError. This
+ * doesn't need to guess at a shape: when an Error exposes one of these
+ * fields, the exact value is known, so every occurrence of it in the
+ * message can be replaced outright before Sentry ever sees the object.
+ * Extend this list if a future error class follows the same pattern.
+ */
+const KNOWN_ID_FIELDS = ['docId', 'taskId', 'workspaceId'] as const;
+
+export function sanitizeErrorForCapture(err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  let message = err.message;
+  for (const field of KNOWN_ID_FIELDS) {
+    const value = (err as unknown as Record<string, unknown>)[field];
+    if (typeof value === 'string' && value.length > 0 && message.includes(value)) {
+      message = message.split(value).join('[id]');
+    }
+  }
+  if (message === err.message) return err; // nothing to change — don't rebuild the object
+  const sanitized = new Error(message);
+  sanitized.name = err.name;
+  sanitized.stack = err.stack;
+  return sanitized;
+}
+
+/**
  * Capture an error with whatever non-content context helps name the phase it
  * broke in (a route pattern, a socket kind — never a doc id, title, comment
  * body, or file path). No-op when Sentry isn't configured.
@@ -341,5 +372,5 @@ export function withRouteSpan<T>(req: Request, pathname: string, fn: () => Promi
 export function captureServerError(err: unknown, extra?: Record<string, string>): void {
   const Sentry = sentryModule;
   if (!Sentry) return;
-  Sentry.captureException(err, extra ? { extra } : undefined);
+  Sentry.captureException(sanitizeErrorForCapture(err), extra ? { extra } : undefined);
 }
