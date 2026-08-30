@@ -16,7 +16,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { b64urlEncode } from '../src/push-crypto.ts';
@@ -238,5 +238,94 @@ describe('filing a review item announces it', () => {
     expect(row).toBeDefined();
     expect(row.disabledAt).toBeGreaterThan(0);
     expect(row.disabledReason).toContain('410');
+  });
+});
+
+/**
+ * A WITHDRAWN item must not buzz anybody's phone.
+ *
+ * The announce call is shared with /revise, and reusing it here was the
+ * natural thing to write — which is how a retraction ends up sending the
+ * reader a notification whose title IS the ask that was just taken off their
+ * queue. The first test below is the positive control the second one needs:
+ * without proving a push happens on this exact route with this exact
+ * subscription, "nothing was sent" is not evidence of anything.
+ */
+describe('withdrawing a doc-thread review item', () => {
+  const AUTHOR = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
+
+  async function threadWithItem() {
+    const { base, sent } = await start();
+    const post = (path: string, body: unknown) =>
+      fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const sub = await realSubscription('https://push.example.com/s/device-1');
+    expect((await post('/api/push/subscriptions', { author: AGENT, subscription: sub })).ok).toBe(
+      true,
+    );
+    const dataDir = mkdtempSync(join(tmpdir(), 'lf-push-doc-'));
+    trash.push(dataDir);
+    const file = join(dataDir, 'notes.md');
+    writeFileSync(file, '# Notes\n\nThe phone layout holds together.\n');
+    const { docId } = (await (
+      await post('/api/docs', { docId: 'push-notes', type: 'markdown', sourceUrl: file })
+    ).json()) as { docId: string };
+    const { thread } = (await (
+      await post(`/api/docs/${docId}/threads/by_find`, {
+        find: 'The phone layout holds together.',
+        text: 'Checked this at 430px.',
+        author: AUTHOR,
+        review: {
+          shape: 'review',
+          review_type: 'question',
+          headline: 'Does the call to action need moving?',
+          detail: 'At 430px it falls below the fold. Worth moving it above the gallery?',
+        },
+      })
+    ).json()) as { thread: { id: string; comments: Array<{ id: string }> } };
+    return {
+      post,
+      sent,
+      docId,
+      threadId: thread.id,
+      commentId: (thread.comments[0] as { id: string }).id,
+    };
+  }
+
+  it('POSITIVE CONTROL: raising one on this route does reach the device', async () => {
+    const { sent } = await threadWithItem();
+    const out = await waitForSend(sent);
+    expect(out.url).toBe('https://push.example.com/s/device-1');
+  });
+
+  it('sends nothing on the way out, and announces again on the way back', async () => {
+    const { post, sent, docId, threadId, commentId } = await threadWithItem();
+    await waitForSend(sent);
+    const afterRaise = sent.length;
+
+    const gone = await post(`/api/docs/${docId}/threads/${threadId}/withdraw`, {
+      author: AUTHOR,
+      commentId,
+      reason: 'Superseded — I measured it wrong.',
+    });
+    expect(gone.status).toBe(200);
+    // Long enough that a send would have landed: the control above arrives
+    // well inside this window.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(sent.length).toBe(afterRaise);
+
+    const back = await post(`/api/docs/${docId}/threads/${threadId}/withdraw/undo`, {
+      author: AUTHOR,
+      commentId,
+    });
+    expect(back.status).toBe(200);
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && sent.length === afterRaise) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(sent.length).toBeGreaterThan(afterRaise);
   });
 });
