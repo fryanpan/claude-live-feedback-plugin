@@ -1002,6 +1002,50 @@ body.hub-body {
   font-size: 12px;
   color: var(--fg-subtle, var(--fg-muted));
 }
+/* The criteria row stacks — label, then the words, then the buttons — because
+   the words are the content here and a side-by-side label would leave the
+   textarea a column too narrow to read a sentence in. `column` on the ROW
+   rather than a new element: every other row in this panel is a flex row, and
+   a wrapper would have to re-state the padding and the type colour. */
+.hub-settings-row--criteria {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+/* Tall enough for the default's six lines at 430px, and capped so the panel's
+   own max-height (70vh) is never spent on this one field — on the iPad in
+   landscape, height is the scarce axis. Vertical resize stays available for a
+   reader who wants more. */
+.hub-criteria {
+  width: 100%;
+  min-height: 96px;
+  max-height: 34vh;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.hub-criteria:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.hub-criteria-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* `.hub-btn`'s own floor is 36px, which is a mouse target. These two are read
+   and pressed on a phone at 430px, so they take the 44px touch floor the rest
+   of the touch chrome uses. */
+.hub-criteria-actions .hub-btn {
+  min-height: 44px;
+}
 /* 24px keeps the hit area honest on a phone without making the panel taller
    on the iPad, where vertical room is the scarce axis. */
 .hub-check {
@@ -3889,6 +3933,29 @@ a.hub-link-chip:hover {
   display: block;
   color: var(--fg-muted);
   margin-top: 2px;
+}
+/* Who filed it and how long it has stood, with the override on the same line.
+   `space-between` puts the button at the edge the way the panel's other
+   secondary actions sit, and wrapping keeps the two off each other at 430px
+   where the meta alone can fill the width. */
+.hub-decide-held-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.hub-decide-held-meta {
+  color: var(--fg-subtle, var(--fg-muted));
+  font-size: 12px;
+}
+/* Never smaller than a finger, and quiet: overruling the gate is a real act,
+   but it is not the thing the eye should land on in a note about waiting. */
+.hub-decide-held-release {
+  flex: none;
+  min-height: 44px;
+  padding-inline: 12px;
 }
 /* A refusal said next to the control that refused. `role="alert"`, so it is
    announced rather than only drawn. */
