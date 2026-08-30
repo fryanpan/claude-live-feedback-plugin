@@ -52,6 +52,7 @@
  *     children is an element Preact never reaches into.
  */
 import { reviewItemBodyMarkdown } from '@feedback/core';
+import { judgeReasonClause } from '@feedback/core';
 import { signal } from '@preact/signals';
 import { type ComponentChildren, Fragment, type RefObject, render } from 'preact';
 import { type MutableRef, useLayoutEffect, useRef, useState } from 'preact/hooks';
@@ -67,6 +68,7 @@ import {
   answeredByLine,
   askedMetaLine,
   blockedNoteLine,
+  heldMetaLine,
   heldReviewItems,
   isTaskArchived,
   taskActivity,
@@ -402,8 +404,10 @@ function ReviewCard(props: {
  * see a question is coming and why it has not arrived; NOT a card, because
  * there is nothing for the reader to answer yet. Absent when nothing is held.
  */
-function HeldReviewNote(props: { task: HubTask }) {
-  const held = heldReviewItems(props.task);
+function HeldReviewNote(props: { task: HubTask; handlers: DetailHandlers; now: number }) {
+  const { task, handlers, now } = props;
+  const held = heldReviewItems(task);
+  const [releasing, setReleasing] = useState<string | null>(null);
   if (held.length === 0) return null;
   return (
     <section class="hub-decide hub-decide--held" aria-label="Review items being revised">
@@ -412,8 +416,36 @@ function HeldReviewNote(props: { task: HubTask }) {
           <span class="hub-decide-held-kicker">Held</span>
           <span class="hub-decide-held-ask">{item.review.headline}</span>
           <span class="hub-decide-held-why">
-            {item.judge?.reason ? `${item.judge.reason} — ` : ''}
+            {item.judge?.reason ? `${judgeReasonClause(item.judge.reason)} — ` : ''}
             the agent has been asked to revise it before it reaches your queue.
+          </span>
+          <span class="hub-decide-held-foot">
+            {/* Who filed it and how long it has stood, in the same words and
+                off the same clock as the answerable card's "Asked by … ago"
+                right above it. Both facts were in the projection and neither
+                was drawn, so the note named a fault and no agent (UX review,
+                2026-08-29). */}
+            <span class="hub-decide-held-meta">
+              {heldMetaLine(item.createdBy, item.judge?.at, now)}
+            </span>
+            {/* The way out when the judge is wrong. Without it a reader
+                looking at a question they could answer in ten seconds had to
+                wait for an agent to reword it — the gate had no override at
+                all from the UI. */}
+            {handlers.onReleaseHeld && (
+              <button
+                type="button"
+                class="hub-btn hub-btn-ghost hub-decide-held-release"
+                disabled={releasing === item.id}
+                onClick={() => {
+                  setReleasing(item.id);
+                  const done = handlers.onReleaseHeld?.(task, item);
+                  void Promise.resolve(done).then(() => setReleasing(null));
+                }}
+              >
+                {releasing === item.id ? 'Asking…' : 'Ask me anyway'}
+              </button>
+            )}
           </span>
         </p>
       ))}
@@ -1197,7 +1229,7 @@ function TaskDetailPanel(props: {
           together. There used to be two regions here, each rendering one item
           and each blind to the other. */}
       <ReviewRegion task={task} handlers={handlers} now={now} discussion={discussion} />
-      <HeldReviewNote task={task} />
+      <HeldReviewNote task={task} handlers={handlers} now={now} />
 
       {/* A heading above the description, because it is a SECTION and
           everything around it now announces itself. Without one the body ran

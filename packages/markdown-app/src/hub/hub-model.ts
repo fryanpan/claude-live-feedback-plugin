@@ -2747,6 +2747,35 @@ export function askedMetaLine(
 }
 
 /**
+ * "Filed by Index Keeper · held 4m" — the held note's provenance line, the
+ * counterpart to `askedMetaLine` on the answerable card directly above it.
+ *
+ * Its own line rather than `askedMetaLine` with the hold time passed in as
+ * the ask time: the only clock a held item carries in the projection is
+ * `judge.at`, which is when the HOLD was placed — on a re-hold after a
+ * revision that is minutes or hours after the question was asked, and a line
+ * reading "Asked by … 4m ago" over it would state a fact nothing measured.
+ * The judge was just tightened for doing exactly that (UX review,
+ * 2026-08-29). `waitShort` is shared with the card, so the two clocks beside
+ * each other cannot round differently.
+ *
+ * Both halves are optional and neither is invented: a projection with no
+ * filer says only how long, and one from a server older than `judge` says
+ * only who.
+ */
+export function heldMetaLine(
+  who: string | undefined,
+  heldAt: number | undefined,
+  now: number,
+): string {
+  const name = who?.trim();
+  const by = name ? `Filed by ${name}` : '';
+  const stood = heldAt === undefined ? '' : `held ${waitShort(heldAt, now)}`;
+  if (by && stood) return `${by} · ${stood}`;
+  return by || (stood ? stood.charAt(0).toUpperCase() + stood.slice(1) : '');
+}
+
+/**
  * Who is asking the decision a TASK carries — the name after "Asked by" on
  * the Home card and on the task panel's own decision card alike. One reader
  * so the two cannot name different people: the projection's `createdBy`

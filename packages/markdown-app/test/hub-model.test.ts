@@ -31,6 +31,7 @@ import {
   dropTarget,
   goalLabel,
   goalRank,
+  heldMetaLine,
   heldReviewItems,
   humanBlockerRows,
   initialsOf,
@@ -49,6 +50,7 @@ import {
   timeAgo,
   unplacedNotice,
   uptimeSummary,
+  waitShort,
 } from '../src/hub/hub-model.ts';
 
 /** All fixtures are synthetic — invented names, jordan@partner.example register. */
@@ -2261,5 +2263,29 @@ describe('heldReviewItems', () => {
 
   it('is empty on a task with no reviews field — an older projection', () => {
     expect(heldReviewItems(base)).toEqual([]);
+  });
+});
+
+describe('heldMetaLine — who filed a held item and how long it has stood', () => {
+  const NOW_MS = 1_700_000_000_000;
+
+  it('names the filer and the wait, off the same clock as the card beside it', () => {
+    const line = heldMetaLine('Index Keeper', NOW_MS - 4 * 60_000, NOW_MS);
+    expect(line).toContain('Filed by Index Keeper');
+    expect(line).toContain(waitShort(NOW_MS - 4 * 60_000, NOW_MS));
+  });
+
+  it('states only what it holds: no filer, or no hold time', () => {
+    expect(heldMetaLine(undefined, NOW_MS - 60_000, NOW_MS)).toMatch(/^Held /);
+    expect(heldMetaLine('  ', NOW_MS - 60_000, NOW_MS)).toMatch(/^Held /);
+    expect(heldMetaLine('Index Keeper', undefined, NOW_MS)).toBe('Filed by Index Keeper');
+    expect(heldMetaLine(undefined, undefined, NOW_MS)).toBe('');
+  });
+
+  // It is NOT askedMetaLine with the hold time in the ask slot: `judge.at` is
+  // when the hold was placed, which on a re-hold is long after the question
+  // was asked (UX review, 2026-08-29).
+  it('never claims the hold time is when the question was asked', () => {
+    expect(heldMetaLine('Index Keeper', NOW_MS - 4 * 60_000, NOW_MS)).not.toContain('Asked');
   });
 });

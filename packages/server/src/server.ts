@@ -17,7 +17,9 @@ import {
   contentKind,
   emailIdentityId,
   isEmailLike,
+  isReviewItemGated,
   isReviewItemHeld,
+  judgeReasonSentence,
   latestThreadedQuestion,
   locateReviewItemRange,
   normalizeEmail,
@@ -1442,7 +1444,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    *  fix rather than only at the verdict: the filer's next act is one call. */
   function heldMessage(taskId: string, reviewItemId: string, reason: string): string {
     return (
-      `Held off the reader's queue — ${reason} ` +
+      `Held off the reader's queue — ${judgeReasonSentence(reason)} ` +
       `It is on the ticket; revise it with revise_review_item(taskId="${taskId}", reviewItemId="${reviewItemId}"). ` +
       'Every revision is judged again, and the item reaches the queue when it passes.'
     );
@@ -6226,6 +6228,55 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         }
         // revise_review_item: the owner's answer to a question asked ON the
         // item — the words made clearer in place, the old words kept, and an
+        /**
+         * RELEASE a held review item — the reader overruling the gate.
+         *
+         * The gate is a judge, and a judge can be wrong about one item. Until
+         * this route existed the only way off a hold was the filer revising,
+         * so a reader looking at a question they could answer in ten seconds
+         * had to wait for an agent to reword it (UX review, 2026-08-29).
+         *
+         * It records an `ok` verdict naming the person, which is the truth of
+         * what happened: the item passed, on their authority rather than the
+         * judge's. That puts it on the queue by the same rule every passed
+         * item reaches it, and it is announced exactly as a filing is —
+         * nothing downstream needs to know a person did this.
+         *
+         * Releasing an item nothing is holding is a no-op success: two taps
+         * on a slow connection must not turn into an error the reader has to
+         * think about.
+         */
+        const taskReviewReleaseMatch = pathname.match(
+          /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/release$/,
+        );
+        if (taskReviewReleaseMatch && req.method === 'POST') {
+          const taskId = decodeURIComponent(taskReviewReleaseMatch[1] ?? '');
+          const reviewItemId = decodeURIComponent(taskReviewReleaseMatch[2] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const task = taskStore.getTask(taskId);
+          if (!task) return j(404, { error: 'not-found' });
+          const before = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
+          if (!before) return j(404, { error: 'not-found' });
+          if (!isReviewItemGated(before)) {
+            return j(200, { taskId, item: before, released: false });
+          }
+          const res = taskStore.recordReviewJudgement(
+            taskId,
+            reviewItemId,
+            {
+              at: Date.now(),
+              verdict: 'ok',
+              reason: `Released by ${author.name} — the gate was overruled.`,
+            },
+            { actor: author },
+          );
+          if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          announceTaskReview(res.task, res.item, author);
+          return j(200, { taskId, item: res.item, released: true });
+        }
         // optional reply on the thread that asked. Refusals happen before
         // any write: a reply with no thread to land on is refused here rather
         // than dropped after the revision applied, because "revised, and the

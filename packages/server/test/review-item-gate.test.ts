@@ -675,6 +675,79 @@ describe('the review-item quality gate', () => {
     });
   });
 
+  describe('the reader overruling the gate', () => {
+    // The UX review found 0 interactive elements in the held note against 2
+    // in the answerable card beside it: if the judge was wrong, the reader
+    // could do nothing but wait for an agent to reword the question.
+    it('releasing a held item puts it on the queue, and says who', async () => {
+      verdict = { ok: false, reason: 'No stakes.' };
+      const { workspaceId, taskId } = await board();
+      const { item } = await jj<{ item: { id: string } }>(
+        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+      );
+      expect(await queue(workspaceId)).toEqual([]);
+
+      const released = await jj<{
+        released: boolean;
+        item: { judge?: { verdict: string; reason: string } };
+      }>(await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, { author: PERSON }));
+      expect(released.released).toBe(true);
+      expect(released.item.judge?.verdict).toBe('ok');
+      expect(released.item.judge?.reason).toContain(PERSON.name);
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([item.id]);
+    });
+
+    it('is a no-op success on an item nothing is holding — two taps is not an error', async () => {
+      verdict = { ok: true, reason: 'Fine.' };
+      const { workspaceId, taskId } = await board();
+      const { item } = await jj<{ item: { id: string } }>(
+        await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }),
+      );
+      const res = await jj<{ released: boolean }>(
+        await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, { author: PERSON }),
+      );
+      expect(res.released).toBe(false);
+      // The control: it was already answerable, and still is.
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([item.id]);
+    });
+
+    it('refuses an unknown item and a body with no author', async () => {
+      verdict = { ok: false, reason: 'No stakes.' };
+      const { taskId } = await board();
+      expect(
+        (await post(`/api/tasks/${taskId}/review-items/ri-nope/release`, { author: PERSON }))
+          .status,
+      ).toBe(404);
+      const { item } = await jj<{ item: { id: string } }>(
+        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+      );
+      expect((await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, {})).status).toBe(
+        400,
+      );
+    });
+
+    it('a released item that its filer then revises is judged again', async () => {
+      verdict = { ok: false, reason: 'No stakes.' };
+      const { workspaceId, taskId } = await board();
+      const { item } = await jj<{ item: { id: string } }>(
+        await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }),
+      );
+      await jj(
+        await post(`/api/tasks/${taskId}/review-items/${item.id}/release`, { author: PERSON }),
+      );
+      expect((await queue(workspaceId)).length).toBe(1);
+      // The gate is not disarmed by a release — the next revision goes past
+      // the judge like any other, and a still-bad one is held again.
+      await jj(
+        await post(`/api/tasks/${taskId}/review-items/${item.id}/revise`, {
+          headline: 'ri-77 cfg still?',
+          author: FILER,
+        }),
+      );
+      expect(await queue(workspaceId)).toEqual([]);
+    });
+  });
+
   describe('agent wake', () => {
     it(
       'the filer is told which item was held, why, and to revise it',
