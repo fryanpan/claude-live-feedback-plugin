@@ -141,8 +141,14 @@ typed since the last one. Now (`meeting-notes-merge.ts`):
   compose read. An item missing from it arrived DURING the compose, so a
   collision with it is dropped rather than proposed; an item in it that has
   since left the doc is one he edited mid-compose, so anything the compose
-  says that reads like it is dropped rather than inserted. Nothing is lost —
-  the composer returns the whole notes every tick.
+  says that reads like it is dropped rather than inserted. `basedOn` holds
+  KEYS — kind plus text — so turning a paragraph into a bullet without
+  retyping it still counts as the edit it is. Nothing is lost — the composer
+  returns the whole notes every tick.
+- **A line the composer moved is not a new line.** Before an unmatched
+  incoming entry is inserted, it is matched against the person's items that
+  the diff did not line up with; an exact hit is the composer re-emitting
+  their note somewhere else, and inserting it would leave two of it.
 - **A ledger that claims nothing means "everything here is somebody
   else's"**, so a restarted server adds and stops replacing rather than
   claiming prose it has never seen.
