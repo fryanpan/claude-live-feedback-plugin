@@ -22,6 +22,7 @@ import {
 import {
   type NotesComposeInput,
   type NotesComposer,
+  type NotesRelabel,
   type NotesTick,
   type NotesUpdate,
   type TickScheduler,
@@ -276,6 +277,143 @@ describe('notes session', () => {
       ['Jordan', 'Speaker B'],
       ['Sam'],
     ]);
+  });
+
+  it('naming a voice rewrites the notes already composed, and what the composer remembers', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const relabels: NotesRelabel[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose(input) {
+        inputs.push(input);
+        // A composer that appends, so tick 2's notes carry tick 1's text —
+        // the shape that makes a stale label visible.
+        const line = input.tick.turns.map((t) => `- ${t.speaker}: ${t.text}`).join('\n');
+        return Promise.resolve([input.previous, line].filter(Boolean).join('\n'));
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'B' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    // The notes now say "Speaker B" and the doc has them.
+    expect(inputs[0]?.tick.turns[0]?.speaker).toBe('Speaker B');
+
+    session.nameSpeaker('B', 'Marisol');
+    session.onTurn({ turn: 1, text: 'By Thursday.', final: true, speaker: 'B' });
+    schedule.fire();
+    await session.end();
+
+    // The sink was told exactly what to change, in the words the composer
+    // had written — not the raw engine label.
+    expect(relabels).toEqual([
+      { docId: ids.docId, meetingId: ids.meetingId, from: 'Speaker B', to: 'Marisol' },
+    ]);
+    // And the session's memory of what it wrote was rewritten too, so the
+    // next compose never sees the placeholder come back.
+    expect(inputs[1]?.previous).toBe('- Marisol: Take it?');
+    expect(inputs[1]?.previous).not.toContain('Speaker B');
+  });
+
+  it('a rename during a compose lands after it, not under it', async () => {
+    // The compose in flight read `previous` before the rename and will
+    // return notes written the old way. The rewrite has to be queued behind
+    // it — ahead of it, the compose would put the placeholder straight back.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const relabels: NotesRelabel[] = [];
+    const order: string[] = [];
+    const composer: NotesComposer = {
+      name: 'slow',
+      async compose(input) {
+        inputs.push(input);
+        await new Promise((r) => setTimeout(r, 10));
+        order.push('composed');
+        return `${input.previous ? `${input.previous}\n` : ''}- ${input.tick.turns[0]?.speaker}: said it`;
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => {
+          order.push('relabelled');
+          relabels.push(r);
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    schedule.fire();
+    // Let the chained compose actually START — a rename before that point is
+    // the documented case where the name reaches the tick itself, which is a
+    // different behaviour and would not test the queue at all.
+    await new Promise((r) => setTimeout(r, 0));
+    // Renamed while the 10ms compose is still running.
+    session.nameSpeaker('A', 'Devi');
+    await session.end();
+
+    expect(order).toEqual(['composed', 'relabelled']);
+    expect(relabels).toEqual([
+      { docId: ids.docId, meetingId: ids.meetingId, from: 'Speaker A', to: 'Devi' },
+    ]);
+    // The compose that was in flight wrote "Speaker A"; the rewrite behind
+    // it corrected the memory, so a later tick starts from the name.
+    expect(inputs[0]?.tick.turns[0]?.speaker).toBe('Speaker A');
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'A' });
+  });
+
+  it('correcting a name already given rewrites from that name, not from the label', async () => {
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose: (input) =>
+        Promise.resolve(`- ${input.tick.turns[0]?.speaker}: ${input.tick.turns[0]?.text}`),
+    };
+    const session = beginNotesSession(
+      { composer, quietMs: 1000, schedule, onNotes: () => {}, onRelabel: (r) => relabels.push(r) },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Hello.', final: true, speaker: 'A' });
+    session.nameSpeaker('A', 'Devi');
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.nameSpeaker('A', 'Devi Raman');
+    await session.end();
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual([
+      'Speaker A->Devi',
+      'Devi->Devi Raman',
+    ]);
+  });
+
+  it('renaming a voice to what it is already called changes nothing', async () => {
+    const relabels: NotesRelabel[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('notes') },
+        quietMs: 1000,
+        schedule: new ManualScheduler(),
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+      },
+      ids,
+    );
+    session.nameSpeaker('A', 'Speaker A');
+    await session.end();
+    expect(relabels).toEqual([]);
   });
 
   it('the stub composer writes the speaker before the words', async () => {

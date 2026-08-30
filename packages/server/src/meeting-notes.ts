@@ -239,6 +239,25 @@ export interface NotesUpdate {
   notes: string;
 }
 
+/**
+ * "Every place the notes say `from`, they should say `to`" — a rename
+ * reaching notes already written.
+ *
+ * A SEPARATE SINK FROM `onNotes` ON PURPOSE. An update carries whole notes
+ * this module composed and replaces the section with them; a relabel carries
+ * two words and asks for those two words. Sent down the update path it would
+ * have to re-send a whole section built from `previous`, discarding anything
+ * the human typed into it since the last tick.
+ */
+export interface NotesRelabel {
+  docId: string;
+  meetingId: string;
+  /** The display name as already written — "Speaker B". */
+  from: string;
+  /** What that voice is called now. */
+  to: string;
+}
+
 export interface MeetingNotesDeps {
   composer: NotesComposer;
   /** Quiet threshold; defaults to {@link DEFAULT_NOTES_QUIET_MS}. */
@@ -264,6 +283,13 @@ export interface MeetingNotesDeps {
   }) => Promise<NoteTaskLink[]>;
   /** Where composed notes go. The doc-writing stage plugs in here. */
   onNotes: (update: NotesUpdate) => void;
+  /**
+   * Where a rename of a voice already written about goes. Optional: a
+   * session with no sink for it still renames the voices in its own
+   * `previous`, so nothing composed AFTER the rename disagrees with the
+   * strip; only the words already in the doc go unrevised.
+   */
+  onRelabel?: (relabel: NotesRelabel) => void;
   onError?: (message: string) => void;
 }
 
@@ -286,13 +312,53 @@ export type MeetingNotesOptions = Omit<MeetingNotesDeps, 'onNotes'> & {
 export interface MeetingNotesSession {
   onTurn(turn: EngineTurn): void;
   /**
-   * "Label `speaker` is `name`" from here on. Applied when a tick composes,
-   * so words already waiting pick the name up; notes already written keep
-   * the placeholder they were composed with until the composer revises them.
+   * "Label `speaker` is `name`" — backwards as well as forwards.
+   *
+   * Words still waiting on a tick pick the name up when that tick composes.
+   * Notes ALREADY composed are rewritten: the name replaces the placeholder
+   * in this session's memory of what it wrote, and a `NotesRelabel` goes to
+   * the sink so the same two words change in the doc. The owner's call
+   * (2026-08-29) is that a meeting must not read as "Speaker B" above the
+   * rename and by name below it.
+   *
+   * The rewrite is QUEUED BEHIND whatever is composing, so a rename that
+   * lands mid-compose corrects that compose's output rather than being
+   * overwritten by it.
    */
   nameSpeaker(speaker: string, name: string): void;
   /** Flush the tail delta and wait for every compose in flight. */
   end(): Promise<void>;
+}
+
+/**
+ * True when `ch` would make text adjacent to a match part of a longer word.
+ *
+ * Exported because the rename rewrites the same token in two places — this
+ * module's memory of the notes, and the doc itself — and a boundary rule the
+ * two disagreed about would leave one of them stale. Engine labels are single
+ * letters, so "Speaker A" is a prefix of "Speaker AB".
+ */
+export function extendsWord(ch: string | undefined): boolean {
+  return ch !== undefined && /[A-Za-z0-9]/.test(ch);
+}
+
+/**
+ * Replace every whole-token occurrence of `from` with `to`. A plain scan, not
+ * a RegExp: a speaker's name is arbitrary text a person typed, and escaping
+ * it for a pattern is a bug waiting for the first name with a dot in it.
+ */
+export function replaceWholeToken(text: string, from: string, to: string): string {
+  if (!from || from === to) return text;
+  let out = '';
+  let i = 0;
+  while (true) {
+    const at = text.indexOf(from, i);
+    if (at < 0) break;
+    const boundary = !extendsWord(text[at - 1]) && !extendsWord(text[at + from.length]);
+    out += text.slice(i, at) + (boundary ? to : from);
+    i = at + from.length;
+  }
+  return out + text.slice(i);
 }
 
 /**
@@ -372,7 +438,22 @@ export function beginNotesSession(
   return {
     onTurn: (turn) => ticker.onTurn(turn),
     nameSpeaker(speaker, name) {
+      // Read the OLD display name before the map moves — that is the string
+      // the composer actually wrote, whether it was "Speaker B" or an
+      // earlier name being corrected.
+      const from = speakerDisplayName(speaker, names);
       names[speaker] = name;
+      const to = speakerDisplayName(speaker, names);
+      if (from === to) return;
+      // On the chain, behind any compose in flight: that compose is still
+      // going to return notes written with the old name (it read `previous`
+      // before the rename), and the rewrite has to land after it, not under
+      // it. Every later tick then sees a `previous` that already reads
+      // correctly, so the name never comes back.
+      chain = chain.then(() => {
+        if (previous !== null) previous = replaceWholeToken(previous, from, to);
+        deps.onRelabel?.({ docId: ids.docId, meetingId: ids.meetingId, from, to });
+      });
     },
     async end(): Promise<void> {
       ticker.end();
