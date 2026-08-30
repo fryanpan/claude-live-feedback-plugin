@@ -4695,6 +4695,19 @@ a.hub-link-chip:hover {
   letter-spacing: 0.06em;
   color: var(--accent, #2e7dd7);
 }
+
+/* A retracted ask in the hub's comment stream. It stays in the history, and
+   the marking is what keeps it from reading as one more question — same
+   vocabulary as the threads pane's `.comment-review-withdrawn`, because the
+   two surfaces show the same item. */
+.hub-comment-review-k.is-withdrawn {
+  color: var(--muted, #8a8f98);
+}
+.hub-comment-review-headline.is-withdrawn {
+  color: var(--muted, #8a8f98);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
 .hub-comment-review-headline {
   margin: 2px 0 0;
   font-size: 14px;
