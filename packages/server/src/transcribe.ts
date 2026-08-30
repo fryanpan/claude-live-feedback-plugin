@@ -34,6 +34,14 @@ export interface EngineTurn {
   turn: number;
   text: string;
   final: boolean;
+  /**
+   * The engine's own label for who said this turn — `"A"`, `"B"` — when
+   * diarization gave one. Absent while the engine is still deciding (a turn
+   * under about a second of audio) and on engines without the feature. It
+   * is an identity WITHIN one session, never across meetings: the person
+   * names a label once per meeting, and that map lives with the meeting.
+   */
+  speaker?: string;
 }
 
 export interface TranscriptionOpenOpts {
@@ -61,6 +69,8 @@ export interface MockScriptTurn {
    * Defaults to the words joined by spaces.
    */
   settled?: string;
+  /** The label every frame of this turn carries, as a diarizing engine would. */
+  speaker?: string;
 }
 
 /**
@@ -105,10 +115,12 @@ export function createMockTranscriptionEngine(
         const text = whole
           ? (turn.settled ?? turn.words.join(' '))
           : turn.words.slice(0, revealed).join(' ');
-        opts.onTurn({ turn: index, text, final: true });
+        opts.onTurn({ turn: index, text, final: true, ...speakerOf(turn) });
         index++;
         revealed = 0;
       };
+      const speakerOf = (turn: MockScriptTurn): { speaker?: string } =>
+        turn.speaker !== undefined ? { speaker: turn.speaker } : {};
 
       return Promise.resolve({
         send(): void {
@@ -121,6 +133,7 @@ export function createMockTranscriptionEngine(
               turn: index,
               text: turn.words.slice(0, revealed).join(' '),
               final: false,
+              ...speakerOf(turn),
             });
             return;
           }
