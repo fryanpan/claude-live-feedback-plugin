@@ -254,6 +254,20 @@ export function createNotesOwnership(): NotesOwnership {
   };
 }
 
+/**
+ * The identity a merge compares on: an item's KIND and its markdown. Two
+ * items that read the same in different structures are not the same item —
+ * a paragraph a person turned into a bullet is an edit, and comparing text
+ * alone would call it unchanged.
+ */
+export function itemKey(item: { kind: string; md: string }): string {
+  return `${item.kind} ${item.md}`;
+}
+
+function mdOfKey(key: string): string {
+  return key.slice(key.indexOf(' ') + 1);
+}
+
 /** Which of these items the agent may revise. */
 export function classifyOwnership(
   items: readonly NoteItem[],
@@ -353,14 +367,19 @@ export function planNotesMerge(
   // An item the compose never saw is FRESH: it arrived while the compose was
   // in flight, so nothing the compose says about it can be an improvement on
   // it. Consumed in reading order, for the same multiset reason ownership is.
-  const fresh = current.map((item) => (seenBefore ? !seenBefore(item.md) : false));
+  const fresh = current.map((item) => (seenBefore ? !seenBefore(itemKey(item)) : false));
   // What the compose READ that is no longer in the doc: an item a person
-  // edited away, or deleted, while it was thinking. Everything these notes
-  // say about one of those was written from words that are already gone.
+  // edited away, deleted, or restructured while it was thinking. Everything
+  // these notes say about one of those was written from words already gone.
   const vanished = missingFrom(opts.basedOn ?? [], current);
 
-  const key = (item: { kind: string; md: string }): string => `${item.kind} ${item.md}`;
-  const pairs = lcsPairs(current.map(key), incoming.map(key));
+  const pairs = lcsPairs(current.map(itemKey), incoming.map(itemKey));
+  // The person's items that the composer's output does NOT line up with.
+  // An incoming entry matching one of these exactly is the composer echoing
+  // their line back somewhere else — the line is already in the doc, in
+  // their hand, so re-inserting it would leave two of it.
+  const anchored = new Set(pairs.map(([pi]) => pi));
+  const echoOf = consumable(current.filter((_, i) => !isAgent[i] && !anchored.has(i)).map(itemKey));
 
   const plan: MergePlan = {
     deletes: [],
@@ -379,9 +398,15 @@ export function planNotesMerge(
     gapFresh: boolean[],
     gapInc: IncomingItem[],
   ): void => {
+    // An entry that IS one of the person's lines, verbatim, is settled
+    // before anything else looks at it: it is neither a proposal nor a new
+    // note, it is their line, and it is already where they put it.
+    const claimed = new Set<number>();
+    for (let k = 0; k < gapInc.length; k++) {
+      if (echoOf(itemKey(gapInc[k]!))) claimed.add(k);
+    }
     // Pair each of the person's items with the incoming item that reads most
     // like it: that pairing is the composer proposing a rewrite of it.
-    const claimed = new Set<number>();
     const pairedWith = new Map<number, number>();
     for (let h = 0; h < gapCur.length; h++) {
       if (gapAgent[h]) continue;
@@ -449,16 +474,12 @@ export function planNotesMerge(
   return plan;
 }
 
-/** The `basedOn` entries no longer present among `current`, as a multiset. */
+/** The markdown of the `basedOn` entries no longer present among `current`,
+ *  matched by item key so a restructured item counts as gone. */
 function missingFrom(basedOn: readonly string[], current: readonly NoteItem[]): string[] {
-  const left = new Map<string, number>();
-  for (const item of current) left.set(item.md, (left.get(item.md) ?? 0) + 1);
+  const still = consumable(current.map(itemKey));
   const gone: string[] = [];
-  for (const md of basedOn) {
-    const n = left.get(md) ?? 0;
-    if (n > 0) left.set(md, n - 1);
-    else gone.push(md);
-  }
+  for (const key of basedOn) if (!still(key)) gone.push(mdOfKey(key));
   return gone;
 }
 
@@ -827,7 +848,9 @@ export function stripSectionHeading(markdown: string, heading: string): string {
 export interface NotesSectionRead {
   /** Heading line plus body, the accepted state. */
   markdown: string;
-  /** Every item's markdown, in reading order — the compose's `basedOn`. */
+  /** Every item's KEY, in reading order — the compose's `basedOn`. Keys
+   *  rather than plain markdown so that a paragraph a person turns into a
+   *  bullet mid-compose reads as the edit it is. Opaque to callers. */
   items: string[];
   /** The subset the agent did not write. */
   human: string[];
@@ -851,7 +874,7 @@ export function readNotesSection(
   const isAgent = classifyOwnership(items, ownership);
   return {
     markdown: parts.join('\n\n'),
-    items: items.map((i) => i.md),
+    items: items.map(itemKey),
     human: items.filter((_, i) => !isAgent[i]).map((i) => i.md),
   };
 }

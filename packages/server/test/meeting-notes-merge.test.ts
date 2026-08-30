@@ -85,6 +85,26 @@ function editBullet(ydoc: Y.Doc, index: number, text: string): void {
   }, 'browser');
 }
 
+/** Turn one of the section's paragraphs into a bullet at the end of the
+ *  list, the way a person tidying their notes mid-meeting would. The words
+ *  do not change; only the structure does. */
+function paragraphToBullet(ydoc: Y.Doc, text: string): void {
+  const fragment = prose.getProseFragment(ydoc);
+  const span = findNotesSection(fragment, HEADING)!;
+  const para = itemsInSection(fragment, span).find((i) => i.kind === 'block' && i.md === text)!;
+  const list = (fragment.toArray() as Y.XmlElement[]).find((el) => el.nodeName === 'bulletList')!;
+  const li = new Y.XmlElement('listItem');
+  const holder = new Y.XmlElement('paragraph');
+  const t = new Y.XmlText();
+  li.insert(0, [holder]);
+  holder.insert(0, [t]);
+  ydoc.transact(() => {
+    fragment.delete((fragment.toArray() as Y.XmlElement[]).indexOf(para.el), 1);
+    list.insert(list.length, [li]);
+    prose.insertTextWithMarks(t, 0, text, { parseInlineMarks: true });
+  }, 'browser');
+}
+
 describe('mergeNotesSection — a person writing in the section', () => {
   it("keeps a bullet the person typed, and still revises the agent's own", () => {
     const ydoc = docFrom('# Huddle\n');
@@ -331,6 +351,34 @@ describe('mergeNotesSection — the stale-compose race', () => {
     expect(md).not.toContain('polished');
   });
 
+  it('does not restore a paragraph the person turned into a bullet', () => {
+    // Same words, new structure. The compose read the paragraph; by the time
+    // it answers, that sentence is a bullet in his own list. Re-inserting
+    // the paragraph would leave him holding two copies of his own line.
+    const ydoc = docFrom('# Huddle\n');
+    const own = createNotesOwnership();
+    mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\nShip on Friday.\n\n- Dana owns the migration\n',
+      HEADING,
+      { ownership: own },
+    );
+    const read = readNotesSection(ydoc, HEADING, own)!;
+    paragraphToBullet(ydoc, 'Ship on Friday.');
+
+    const merged = mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\nShip on Friday.\n\n- Dana owns the migration\n',
+      HEADING,
+      { ownership: own, basedOn: read.items },
+    );
+    expect(merged.inserted).toBe(0);
+    expect(merged.dropped).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- Ship on Friday.');
+    expect(md.match(/Ship on Friday\./g)?.length).toBe(1);
+  });
+
   it('with no race, the same shape of revision lands normally', () => {
     // The positive control for the two above: identical inputs except that
     // the compose READ the current section, so nothing is withheld.
@@ -354,6 +402,35 @@ describe('mergeNotesSection — the stale-compose race', () => {
     expect(merged.dropped).toBe(0);
     expect(merged.suggested).toBe(1);
     expect(markdownOf(ydoc)).toContain('- New point from tick 2 — reworded by hand');
+  });
+});
+
+describe("mergeNotesSection — the composer moving a person's line", () => {
+  it('does not leave two of a note it reordered', () => {
+    // The prompt tells the composer to reproduce a person's lines verbatim.
+    // It does — but emits them in the other order. Its copy of the line it
+    // moved is that same line, not a new note, and must not be inserted.
+    const ydoc = docFrom('# Huddle\n');
+    const own = createNotesOwnership();
+    mergeNotesSection(ydoc, '## Meeting notes\n\n- Alpha\n- Beta\n', HEADING, {
+      ownership: own,
+    });
+    editBullet(ydoc, 0, 'Alpha, as I wrote it');
+    editBullet(ydoc, 1, 'Beta, as I wrote it');
+    const read = readNotesSection(ydoc, HEADING, own)!;
+    expect(read.human.length).toBe(2);
+
+    const merged = mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\n- Beta, as I wrote it\n- Alpha, as I wrote it\n',
+      HEADING,
+      { ownership: own, basedOn: read.items },
+    );
+    expect(merged.inserted).toBe(0);
+    expect(merged.suggested).toBe(0);
+    const md = markdownOf(ydoc);
+    expect(md.match(/Alpha, as I wrote it/g)?.length).toBe(1);
+    expect(md.match(/Beta, as I wrote it/g)?.length).toBe(1);
   });
 });
 
@@ -417,7 +494,9 @@ describe('ownership, items and similarity', () => {
     const all = itemsInSection(fragment, span);
     own.record(all.filter((i) => i.md !== 'two').map((i) => ({ el: i.el, md: i.md })));
     const read = readNotesSection(ydoc, HEADING, own);
-    expect(read?.items).toEqual(['one', 'two', 'three']);
+    // Items are keys — kind plus markdown — so a person restructuring a line
+    // without retyping it still reads as a change to the next compose.
+    expect(read?.items).toEqual(['item one', 'item two', 'item three']);
     expect(read?.human).toEqual(['two']);
   });
 
