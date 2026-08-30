@@ -1016,6 +1016,92 @@ Every count that went wrong had one.
   files. After landing a server-side fix, restart manually
   (`pkill -f bin.ts && bun run dev`) to verify it's loaded.
 
+## A bind probe that returns a boolean turns a host failure into a crash loop
+
+2026-08-29: the Mac lost all networking and needed a hard reboot. The
+workspaces server was the cause. The chain, from the logs:
+
+- **Defect 1 — the probe could not see the thing it was probing for.**
+  `pickFreePort` in `scripts/serve.ts` bound a `node:net` server to
+  `127.0.0.1`, then `::1`. Measured against a real `Bun.serve` holder:
+
+  ```
+  holder bound via Bun.serve on 19811
+  node bind 127.0.0.1 : BOUND (probe says free)
+  node bind ::1       : BOUND (probe says free)
+  node bind wildcard  : ERR EADDRINUSE
+  Bun.serve probe     : ERR EADDRINUSE
+  ```
+
+  BSD `SO_REUSEADDR` lets a bind to a *more specific* address succeed while a
+  wildcard listener holds the port, so the probe returned "free" for a port
+  that was very much taken. The supervisor pre-flighted 8787, was told it was
+  free, handed 8787 to its child, and the child's real bind then hit
+  EADDRINUSE and walked. **Probe by binding the way the server binds** — here,
+  `Bun.serve` itself. Anything weaker is a confident answer to a different
+  question.
+- **Defect 2 — the conflation.** That probe resolved `false` on *any* `error`
+  event, so "another process holds this port" and "this host cannot open a
+  socket right now" were the same answer. Only `EADDRINUSE` is a statement
+  about the port; `ENOBUFS`, `EADDRNOTAVAIL`, `EMFILE` are statements about
+  the host and are identical for all 50 ports. Classify the code — never a
+  boolean.
+- **The proof it was not occupancy.** The first `no free port near 8787`
+  (which requires all 50 probes to fail) sits 14 lines after
+  `[summarize] call failed: Unable to connect` — outbound HTTPS was already
+  dead. Seconds later the next process bound 8788 on its first walk step, so
+  49 of those "occupied" ports were demonstrably free.
+- **The amplifier: a walk in prod, plus a watchdog polling the wrong port.**
+  `bin.ts` walked to the next port on EADDRINUSE, so a restart *succeeded* on
+  8788 and nothing surfaced the problem — while the supervisor's bind-health
+  watchdog polled the port it had *requested* (8787), read "not listening",
+  and killed a perfectly healthy server. The log shows the ladder:
+  8787 -> 8788 -> ... -> 8795, one full `hydrated 5622 doc(s)` per step.
+- **Hydration happens BEFORE the bind.** `createServer` builds `Rooms` at
+  server.ts:1151 and calls `Bun.serve` at :3247, so every attempt paid a
+  5,622-document hydration and 2,553 watcher re-arms before it could discover
+  it had no port. Retrying `createServer` is therefore never the right retry:
+  probe the port cheaply, retry *that*, and construct the server once. (Caught
+  by running the fix end-to-end — the first version of the repair retried
+  `createServer` and re-hydrated on every backoff step, and leaked the
+  activity-writer lock each time.)
+- **The leak: SIGTERM without a wait is not a kill.** `cleanup()` fired
+  SIGTERM and called `process.exit` 300ms later without checking whether
+  anything died. A child mid-hydration does not exit in 300ms, so it was
+  reparented and kept its port, its 2,553 file watchers and its memory.
+  `activity-writer.lock is held by pid 88883` appears across seven
+  consecutive restarts — one orphan outliving them all. In the jetsam report
+  that pid is `bun` at 2,769 MB, the largest process on the machine, and 51
+  `bun` processes totalled 6.0 GB.
+- **Then the storm.** With the socket layer exhausted, every probe failed and
+  the supervisor threw. `KeepAlive` + `ThrottleInterval 10` relaunched it 393
+  times, each relaunch re-running two client builds and re-hydrating 5,622
+  documents *before* it could discover it had no port.
+
+Counts, all from the launchd logs: 393 `no free port`, 180 `[rooms] hydrated`,
+168 `listening on` (166 of them `:8787`), 11 `port N busy, trying`, 8
+`alive-but-unbound`.
+
+The rules that fall out, now enforced in `packages/server/src/port-bind.ts`:
+
+- **A probe must bind the way the real thing binds.** Otherwise it is a
+  second opinion about a different question, and it will be confident.
+- **Walking to another port is a DEV convenience only.** Under launchd the
+  port is the contract — the discovery file, peers' `CW_BASE_URL`, the
+  Cloudflare tunnel and the watchdog all name it. `--no-port-walk` forbids it
+  in prod on both sides.
+- **Back off inside the process, and bind before the expensive work.** A
+  supervisor that waits 1s, 2s, 4s ... 60s for its port costs a log line; one
+  that throws to launchd costs two builds and a full hydration every 10s.
+- **A supervisor that exits without reaping its children creates orphans.**
+  SIGTERM, then *wait* for the exit, then SIGKILL, plus a synchronous
+  `process.on('exit')` guard for the paths you did not think of.
+- **A watchdog may only poll a port the child cannot have moved off.** If you
+  ever re-enable walking in prod, the child must report the port it got.
+
+Related: "A negative probe needs a positive control" — the boolean probe here
+*was* the failed control, reporting a confident "no" it had no way to justify.
+
 ## macOS launchd + non-default home volume
 
 - **TCC blocks launchd-spawned processes from reading `/Volumes/<X>/Users/...`
