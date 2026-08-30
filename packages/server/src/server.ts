@@ -33,6 +33,10 @@ import {
   suggestOps,
   summaryHash,
 } from '@feedback/core';
+import {
+  DEFAULT_EFFORT_ESTIMATE_PROMPT,
+  EFFORT_ESTIMATE_PROMPT_VERSION,
+} from '@feedback/core/effort-estimate-prompt';
 import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
 import { needsCall } from '@feedback/core/summary-prompt';
 import type { Server as BunServer } from 'bun';
@@ -81,6 +85,11 @@ import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory, isValidDispatchTaskId } from './dispatch-registry.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
+import {
+  EFFORT_ESTIMATE_MODEL,
+  type EffortEstimateVerdict,
+  type EffortEstimator,
+} from './effort-estimator.ts';
 import { showFile } from './git-diff.ts';
 import {
   type BriefCoverage,
@@ -229,6 +238,7 @@ import {
   type HubWorkspace,
   LEGACY_REVIEW_ITEM_ID,
   type Task,
+  type TaskEffortEstimate,
   type TaskStatus,
   TaskStore,
   eventsLogPath,
@@ -443,6 +453,9 @@ function reviewFromBody(
  *  fine; a pasted document is not what the field is for, and every filing
  *  sends the whole thing to the judge. */
 const REVIEW_ITEM_CRITERIA_MAX_CHARS = 4_000;
+/** Same ceiling and the same reason as the review criteria above — a page
+ *  of instructions is fine, and every scoring run sends the whole thing. */
+const EFFORT_ESTIMATE_PROMPT_MAX_CHARS = 4_000;
 
 const ANONYMOUS_ACTOR: User = {
   id: 'anon-unattributed',
@@ -606,6 +619,15 @@ export interface ServerOptions {
    * one (`haikuReviewJudge`); tests pass a stub.
    */
   reviewJudge?: ReviewJudge;
+  /**
+   * The ticket-effort scorer (chunk 2 of the effort model). **No default**,
+   * the same seam rule as the review judge and the summarizer: omitting it
+   * leaves every ticket unscored — `Task.effortEstimate` stays absent
+   * rather than a failed run being recorded — and nothing that merely spins
+   * a server up can reach the network. `bin.ts` constructs the real one
+   * (`haikuEffortEstimator`); tests pass a stub.
+   */
+  effortEstimator?: EffortEstimator;
   /**
    * How long a held review item may stand before the stall loop complains
    * (default `HELD_ITEM_DEFAULT_MS`, five minutes; `CW_HELD_ITEM_MINUTES`
@@ -1658,6 +1680,129 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   function heldFields(gate: ReviewGate | undefined): Record<string, unknown> {
     return gate?.held ? { held: true, heldReason: gate.reason, message: gate.message } : {};
   }
+
+  /**
+   * The words a goal id resolves to, for the scorer's prompt — a small
+   * local copy of `task-queue.ts`'s private `goalTitleOf` (not exported,
+   * and not worth widening its module's surface for one more caller).
+   * Falls back to the raw id, the same as an unresolved `after` edge
+   * elsewhere: an id nothing can spell out is still something to hand the
+   * prompt rather than nothing, and `CHORES_GOAL_ID` — Backlog — is never
+   * in `workspace.goals` at all, so this is also how a backlogged ticket's
+   * goal renders as "chores" rather than empty.
+   */
+  function goalTitleFor(workspaceId: string, goalId: string): string {
+    const goals = taskStore.getWorkspace(workspaceId)?.goals ?? [];
+    for (const g of goals) {
+      if (g.id === goalId) return g.title;
+      for (const s of g.subgoals ?? []) {
+        if (s.id === goalId) return s.title;
+      }
+    }
+    return goalId;
+  }
+
+  /** Process-wide, so a thrown estimator is named once, not once per ticket. */
+  let warnedEstimatorThrew = false;
+
+  /**
+   * Score one ticket's effort in the background (chunk 2 of the effort
+   * model). Fire-and-forget, the same contract as
+   * `announceReviewItem`: the write that triggered this is already durable
+   * and its route has already answered by the time this runs, so nothing
+   * here may block or slow an edit.
+   *
+   * A produced estimate and a recorded failure are BOTH written — the
+   * positive control this feature was built under: a bad prompt must say
+   * so on the row, not read as data nobody tried to fetch. Only "no
+   * estimator wired at all" (no key, or `CW_EFFORT_ESTIMATE=0`) leaves the
+   * row untouched, the "gate off" contract `judgeReviewItem` also uses.
+   *
+   * Reads `titleWrittenAt`/`bodyWrittenAt` BEFORE the await, not after —
+   * they are the words this run is ABOUT, and `recordEffortEstimate`
+   * refuses the write if the ticket has moved on by the time the call
+   * returns, so a slow answer to old words can never overwrite a newer
+   * run's answer.
+   */
+  function scoreEffortEstimate(task: Task): void {
+    const estimator = opts.effortEstimator;
+    if (!estimator) return;
+    const prompt = taskStore.effortEstimatePrompt(task.workspaceId);
+    if (!prompt) return; // workspace gone
+    const forTitleWrittenAt = task.titleWrittenAt ?? task.createdAt;
+    const forBodyWrittenAt = task.bodyWrittenAt;
+    const forGoal = task.goal;
+    void (async () => {
+      let verdict: EffortEstimateVerdict | null = null;
+      try {
+        verdict = await estimator({
+          prompt: prompt.value,
+          ticket: {
+            title: task.title,
+            ...(task.body !== undefined ? { body: task.body } : {}),
+            goal: goalTitleFor(task.workspaceId, task.goal),
+          },
+        });
+      } catch (err) {
+        if (!warnedEstimatorThrew) {
+          warnedEstimatorThrew = true;
+          console.error(
+            '[effort-estimate] estimator threw; row marked failed:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+        verdict = null;
+      }
+      const base = {
+        model: EFFORT_ESTIMATE_MODEL,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+        estimatedAt: Date.now(),
+        forTitleWrittenAt,
+        ...(forBodyWrittenAt !== undefined ? { forBodyWrittenAt } : {}),
+        forGoal,
+      };
+      const record: TaskEffortEstimate =
+        verdict === null
+          ? { status: 'failed', reason: 'the scorer could not produce an estimate', ...base }
+          : {
+              status: 'ok',
+              handsOnSeconds: verdict.handsOnSeconds,
+              wallClockSeconds: verdict.wallClockSeconds,
+              ...base,
+            };
+      // A `stale` refusal here is expected under concurrent edits, not a
+      // bug — see the doc comment above — so it is silently dropped rather
+      // than logged.
+      taskStore.recordEffortEstimate(task.id, record);
+    })();
+  }
+
+  // Effort-estimate scoring: re-score a ticket in the background whenever
+  // its words — or its goal — change. `task.created`, `task.retitled` and
+  // `task.body_edited` are the three doors a title or a body move through —
+  // `applyTitle`'s own doc names the seven routes that converge on them —
+  // so subscribing here rather than at each route is what makes every one
+  // of those routes get scoring for free, batch creation included.
+  // `task.regrouped` is the fourth: the goal's own title is part of what the
+  // scorer weighs (see `scoreEffortEstimate` above), so moving a ticket to a
+  // DIFFERENT goal is a change to the scorer's input even when the title and
+  // body never moved. `task.regrouped` also fires on a pure reorder within
+  // the same goal (order changed, goal did not) — `fromGoal !== toGoal` is
+  // what tells the two apart, so a reorder alone triggers no extra call.
+  taskStore.onEvent((ev) => {
+    if (ev.type === 'task.created') {
+      scoreEffortEstimate(ev.task);
+      return;
+    }
+    if (
+      ev.type === 'task.retitled' ||
+      ev.type === 'task.body_edited' ||
+      (ev.type === 'task.regrouped' && ev.fromGoal !== ev.toGoal)
+    ) {
+      const task = taskStore.getTask(ev.taskId);
+      if (task) scoreEffortEstimate(task);
+    }
+  });
   // Every store event rides the existing SSE pipeline on the workspace
   // channel (`ws~<workspaceId>`, the same channel doc thread events use for
   // reviews) — no new transport (§3.6). The audit log
@@ -5416,11 +5561,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // rename_workspace. The name was set once at creation and nothing
         // changed it, which is how two live boards ended up sharing one — and
         // a name is how an agent picks which to work.
-        // Workspace settings — today one field: what the quality gate judges
-        // a review item against. GET reads the effective value and says
-        // whether it is the default; PUT writes it, and `null` (or blank)
-        // restores the default. A string field rather than a rule table
-        // because the owner edits it in their own words.
+        // Workspace settings — two tunable prompts today: what the quality
+        // gate judges a review item against, and what the effort scorer
+        // weighs. GET reads both effective values and says which are on the
+        // default; PUT MERGES — it writes only the field(s) the caller's
+        // body actually names, and `null` (or blank) on a named field
+        // restores that field's default. A caller changing one prompt must
+        // never silently clear the other back to its default, so absence of
+        // a key is "leave it", not "clear it" (`Object.hasOwn`, not `!==
+        // undefined` — a body that included the key as `undefined` would
+        // parse to the same JSON as one that omitted it entirely, so the two
+        // cannot be told apart and are treated alike). String fields rather
+        // than a rule table because the owner edits both in their own words.
         const wsSettingsMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/settings$/);
         if (wsSettingsMatch && (req.method === 'GET' || req.method === 'PUT')) {
           const workspaceId = decodeURIComponent(wsSettingsMatch[1] ?? '');
@@ -5428,30 +5580,64 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const body = await safeJson(req);
             const author = authorFor(body?.author);
             if (!author) return j(400, { error: 'author required' });
-            const raw = body?.reviewItemCriteria;
-            if (raw !== undefined && raw !== null && typeof raw !== 'string') {
-              return j(400, {
-                error: 'reviewItemCriteria must be a string, or null to restore the default',
-              });
+            // Validate EVERY supplied field before applying ANY of them. A
+            // caller sending both fields where only the second is malformed
+            // must get back a 400 that changed nothing — not a 400 that
+            // already wrote the first field to disk.
+            let hasReviewCriteria = false;
+            let reviewCriteriaValue: string | undefined;
+            if (body && Object.hasOwn(body, 'reviewItemCriteria')) {
+              const raw = body.reviewItemCriteria;
+              if (raw !== null && typeof raw !== 'string') {
+                return j(400, {
+                  error: 'reviewItemCriteria must be a string, or null to restore the default',
+                });
+              }
+              if (typeof raw === 'string' && raw.length > REVIEW_ITEM_CRITERIA_MAX_CHARS) {
+                return j(400, {
+                  error: `reviewItemCriteria is over ${REVIEW_ITEM_CRITERIA_MAX_CHARS} characters`,
+                });
+              }
+              hasReviewCriteria = true;
+              reviewCriteriaValue = typeof raw === 'string' ? raw : undefined;
             }
-            if (typeof raw === 'string' && raw.length > REVIEW_ITEM_CRITERIA_MAX_CHARS) {
-              return j(400, {
-                error: `reviewItemCriteria is over ${REVIEW_ITEM_CRITERIA_MAX_CHARS} characters`,
-              });
+            let hasEffortPrompt = false;
+            let effortPromptValue: string | undefined;
+            if (body && Object.hasOwn(body, 'effortEstimatePrompt')) {
+              const raw = body.effortEstimatePrompt;
+              if (raw !== null && typeof raw !== 'string') {
+                return j(400, {
+                  error: 'effortEstimatePrompt must be a string, or null to restore the default',
+                });
+              }
+              if (typeof raw === 'string' && raw.length > EFFORT_ESTIMATE_PROMPT_MAX_CHARS) {
+                return j(400, {
+                  error: `effortEstimatePrompt is over ${EFFORT_ESTIMATE_PROMPT_MAX_CHARS} characters`,
+                });
+              }
+              hasEffortPrompt = true;
+              effortPromptValue = typeof raw === 'string' ? raw : undefined;
             }
-            const res = taskStore.setReviewItemCriteria(
-              workspaceId,
-              typeof raw === 'string' ? raw : undefined,
-              { actor: author },
-            );
-            if (!res.ok) return j(404, res);
-            return j(200, { workspaceId, reviewItemCriteria: res.criteria });
+            if (hasReviewCriteria) {
+              const res = taskStore.setReviewItemCriteria(workspaceId, reviewCriteriaValue, {
+                actor: author,
+              });
+              if (!res.ok) return j(404, res);
+            }
+            if (hasEffortPrompt) {
+              const res = taskStore.setEffortEstimatePrompt(workspaceId, effortPromptValue, {
+                actor: author,
+              });
+              if (!res.ok) return j(404, res);
+            }
           }
           const criteria = taskStore.reviewItemCriteria(workspaceId);
-          if (!criteria) return j(404, { error: 'workspace not found' });
+          const effortPrompt = taskStore.effortEstimatePrompt(workspaceId);
+          if (!criteria || !effortPrompt) return j(404, { error: 'workspace not found' });
           return j(200, {
             workspaceId,
             reviewItemCriteria: { ...criteria, default: DEFAULT_REVIEW_ITEM_CRITERIA },
+            effortEstimatePrompt: { ...effortPrompt, default: DEFAULT_EFFORT_ESTIMATE_PROMPT },
           });
         }
         const wsBoardRenameMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/rename$/);
