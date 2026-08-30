@@ -108,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.127';
+const PLUGIN_VERSION = '0.1.128';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1840,19 +1840,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'revise_review_item',
       description:
-        "Rewrite one of your review items in place — the answer to a question somebody asked ON it (a comment anchored to a phrase of its text arrives on the task's thread with the reviewItemId), or the fix for an item the quality gate HELD (`held: true` on add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Every revision is judged again: a held item reaches the reader's queue when it passes, and an already-queued one returns marked Revised, with their question quoted and the changed span highlighted. `reply` posts on the thread that asked, in the same call.",
+        "Rewrite one of your review items in place — the answer to a question somebody asked ON it, or the fix for an item the quality gate HELD (`held: true` from add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Address the item wherever you raised it: on a TICKET, `taskId` + `reviewItemId` (the id rides with the question on the task's thread); on a DOC THREAD, `docId` + `threadId` + `commentId` — the review is a payload on one comment, and `commentId` is the `thread.comments[].id` that create_thread / post_reply already handed you when you raised it. Half an address is refused, not guessed. The ticket form re-judges every revision: a held item reaches the reader's queue when it passes, an already-queued one returns marked Revised with their question quoted and the changed span highlighted, and `reply` posts on the asking thread in the same call. The doc form has no quality gate and no `reply`; it rewrites the item and tells the thread's watchers.",
       inputSchema: {
         type: 'object',
         properties: {
-          taskId: { type: 'string' },
-          reviewItemId: { type: 'string', description: 'Which item on the ticket to revise.' },
+          taskId: {
+            type: 'string',
+            description: 'Ticket form: the ticket the item hangs on. Pass with reviewItemId.',
+          },
+          reviewItemId: {
+            type: 'string',
+            description: 'Ticket form: which item on the ticket to revise.',
+          },
+          docId: {
+            type: 'string',
+            description:
+              'Doc-thread form: the doc the thread lives on. Pass with threadId and commentId.',
+          },
+          threadId: {
+            type: 'string',
+            description: 'Doc-thread form: the thread the item was raised on.',
+          },
+          commentId: {
+            type: 'string',
+            description:
+              'Doc-thread form: the comment carrying the review payload — `thread.comments[].id` in what create_thread / post_reply returned when you raised the item.',
+          },
           headline: TASK_REVIEW_ITEM_SCHEMA.properties.headline,
           detail: TASK_REVIEW_ITEM_SCHEMA.properties.detail,
           options: TASK_REVIEW_ITEM_SCHEMA.properties.options,
           reply: {
             type: 'string',
             description:
-              'A reply on the thread that asked — one or two sentences pointing at what changed. Refused when nobody has asked on this item yet.',
+              'A reply on the thread that asked — one or two sentences pointing at what changed. Refused when nobody has asked on this item yet. Ticket form only: a doc-thread item already lives in a thread, so point at the change there with post_reply.',
           },
           revisedRange: {
             type: 'object',
@@ -1862,7 +1882,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             required: ['start', 'end'],
           },
         },
-        required: ['taskId', 'reviewItemId'],
+        // No unconditional required list: which ids are required depends on
+        // which of the two addresses the caller is using, and the handler
+        // refuses a half-written one by name.
+        required: [],
       },
     },
     {
@@ -3628,26 +3651,79 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         });
       }
       case 'revise_review_item': {
-        const { taskId, reviewItemId, headline, detail, options, reply, revisedRange } = a as {
-          taskId: string;
-          reviewItemId: string;
+        const {
+          taskId,
+          reviewItemId,
+          docId,
+          threadId,
+          commentId,
+          headline,
+          detail,
+          options,
+          reply,
+          revisedRange,
+        } = a as {
+          taskId?: string;
+          reviewItemId?: string;
+          docId?: string;
+          threadId?: string;
+          commentId?: string;
           headline?: string;
           detail?: string;
           options?: unknown;
           reply?: string;
           revisedRange?: { start: number; end: number };
         };
+        // The correction itself is the same words on either surface; only the
+        // handle differs, so the patch is built once and posted at whichever
+        // address the caller named.
+        const patch = {
+          ...(headline !== undefined ? { headline } : {}),
+          ...(detail !== undefined ? { detail } : {}),
+          ...(options !== undefined ? { options } : {}),
+          ...(revisedRange !== undefined ? { revisedRange } : {}),
+          author: AUTHOR,
+        };
+        // An item raised on a doc thread is a review payload on a COMMENT, so
+        // it is addressed (docId, threadId, commentId) — three ids, all or
+        // none. Half an address is a caller who meant one surface and mistyped
+        // it; picking a surface for them would revise an item nobody named.
+        if (docId !== undefined || threadId !== undefined || commentId !== undefined) {
+          if (taskId !== undefined || reviewItemId !== undefined) {
+            return err(
+              'two addresses in one call — pass taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread, not both',
+            );
+          }
+          if (docId === undefined || threadId === undefined || commentId === undefined) {
+            return err(
+              'the doc-thread form needs all three of docId + threadId + commentId — commentId is the thread.comments[].id that create_thread / post_reply returned when you raised the item',
+            );
+          }
+          // Dropping it silently would lose the one sentence the caller wrote
+          // for a person to read.
+          if (reply !== undefined) {
+            return err(
+              '`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply',
+            );
+          }
+          await http(
+            'POST',
+            `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`,
+            { ...patch, commentId },
+          );
+          // No held/reviewAdvice: the doc route runs no quality gate, and
+          // reporting a verdict nobody reached would read as a pass.
+          return ok({ docId, threadId, commentId, revised: true });
+        }
+        if (taskId === undefined || reviewItemId === undefined) {
+          return err(
+            'which item? taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread',
+          );
+        }
         const res = (await http(
           'POST',
           `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/revise`,
-          {
-            ...(headline !== undefined ? { headline } : {}),
-            ...(detail !== undefined ? { detail } : {}),
-            ...(options !== undefined ? { options } : {}),
-            ...(reply !== undefined ? { reply } : {}),
-            ...(revisedRange !== undefined ? { revisedRange } : {}),
-            author: AUTHOR,
-          },
+          { ...patch, ...(reply !== undefined ? { reply } : {}) },
         )) as {
           threadId?: string;
           reviewAdvice?: string;
