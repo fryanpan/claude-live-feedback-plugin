@@ -600,7 +600,11 @@ describe('server REST', () => {
       expect(payload.event).toBe('thread.created');
       expect(payload.docId).toBe(hookedId);
     } finally {
-      sink.stop();
+      // `true` force-closes: the server under test holds a keep-alive
+      // connection to this sink, and a bare `stop()` only shuts the door on
+      // new ones — the open socket outlives the fixture. See
+      // `server-stop-closes-sockets.test.ts`.
+      sink.stop(true);
     }
   });
 

@@ -85,10 +85,14 @@ const sentryDsn = readRenamedEnv(process.env, 'CW_SENTRY_DSN')?.trim();
 // and staging run straight from a checkout with no release directory, so
 // `sourceRef` is absent there — Sentry just omits the release tag rather
 // than guessing at one.
+// Resolved once and shared with the BROWSER (`sentryRelease` below), so a
+// page load and the server spans it continues carry the same release string
+// — that is the whole point of naming a deploy rather than a bundle hash.
+const releaseSourceRef = clientReleaseRootDir
+  ? clientReleaseStatus(clientReleaseRootDir).sourceRef
+  : null;
+
 if (sentryDsn) {
-  const releaseSourceRef = clientReleaseRootDir
-    ? clientReleaseStatus(clientReleaseRootDir).sourceRef
-    : null;
   await initServerSentry({ dsn: sentryDsn, release: releaseSourceRef });
   // A crash Sentry never gets to see is the exact failure mode this exists
   // to fix — so these two catch what a request-scoped span cannot: an error
@@ -602,6 +606,9 @@ while (!handle) {
       ...(ownerEmail ? { ownerEmail } : {}),
       // Browser Sentry DSN — box config, never the repo (see ServerOptions).
       ...(sentryDsn ? { sentryDsn } : {}),
+      // …and the deploy it should call itself, when this start is a published
+      // release. Same string `initServerSentry` got above.
+      ...(sentryDsn && releaseSourceRef ? { sentryRelease: releaseSourceRef } : {}),
       cfAccess,
       share,
       summarizer,

@@ -11,6 +11,7 @@
     "./anchor": "./src/anchor/index.ts",
     "./env-names": "./src/env-names.ts",
     "./machine-paths": "./src/machine-paths.ts",
+    "./trace-privacy": "./src/trace-privacy.ts",
     "./types": "./src/types.ts",
     "./summary-prompt": "./src/summary-prompt.ts",
     "./review-judge-prompt": "./src/review-judge-prompt.ts",
