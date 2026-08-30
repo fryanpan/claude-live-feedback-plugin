@@ -8,6 +8,8 @@ import {
   isReviewItemGated,
   isReviewItemHeld,
   isReviewItemOpen,
+  judgeReasonClause,
+  judgeReasonSentence,
   pendingDeclaration,
   readReviewPayload,
   readTaskReviewItem,
@@ -1090,5 +1092,37 @@ describe('an item whose verdict is still out', () => {
 
   it('reads a pending verdict off the wire', () => {
     expect(readTaskReviewItem(item('pending'))?.judge?.verdict).toBe('pending');
+  });
+});
+
+describe('the judge’s reason, as the surfaces around it need it', () => {
+  // Both spellings were live on the board: the ticket note read "…rather than
+  // 'see below'. — the agent has been asked…" and the filer's channel line
+  // read "…'see below'.. It has been held for 4m" (UX review, 2026-08-29).
+  it('drops the full stop when the sentence carries on after it', () => {
+    expect(judgeReasonClause('Links are bare rather than “see below”.')).toBe(
+      'Links are bare rather than “see below”',
+    );
+    expect(judgeReasonClause('  No stakes given.  ')).toBe('No stakes given');
+    expect(judgeReasonClause('Ends in several dots...')).toBe('Ends in several dots');
+  });
+
+  it('leaves a question, an exclamation and an ellipsis as written', () => {
+    expect(judgeReasonClause('What does this change?')).toBe('What does this change?');
+    expect(judgeReasonClause('A very long reason that ran on…')).toBe(
+      'A very long reason that ran on…',
+    );
+  });
+
+  it('gives exactly one terminal mark when the reason stands alone', () => {
+    expect(judgeReasonSentence('No stakes given')).toBe('No stakes given.');
+    expect(judgeReasonSentence('No stakes given.')).toBe('No stakes given.');
+    expect(judgeReasonSentence('No stakes given..')).toBe('No stakes given.');
+    expect(judgeReasonSentence('What does this change?')).toBe('What does this change?');
+  });
+
+  it('answers empty on an empty reason, so a caller appends nothing', () => {
+    expect(judgeReasonClause('   ')).toBe('');
+    expect(judgeReasonSentence('   ')).toBe('');
   });
 });

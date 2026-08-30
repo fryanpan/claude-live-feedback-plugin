@@ -328,6 +328,20 @@ export function stalledLine(p: StallPayload): string {
   return `[workspace.stalled] ${parts.join(' ') || 'the board reported a stall with no rows on it — treat this as a bug in the wake, not as a clear board.'}`;
 }
 
+/**
+ * The judge's reason as a CLAUSE — no trailing full stops — because every
+ * line here continues after it. Without this the channel read "…'see
+ * below'.. It has been held for 4m" and the lead's row read "…see below.;
+ * and 2 more" (UX review, 2026-08-29).
+ *
+ * Spelled here rather than imported: this package publishes standalone and
+ * does not depend on `@feedback/core`, whose `judgeReasonClause` is the same
+ * rule for the server and the hub.
+ */
+function judgeReasonClauseLocal(reason: string): string {
+  return reason.trim().replace(/\.+$/, '').trimEnd();
+}
+
 /** One held item as the lead's line names it: the ask, the ticket, who filed
  *  it, how long it has been held, and the gap the judge named. */
 function heldRowClause(row: HeldRowPayload): string {
@@ -336,7 +350,10 @@ function heldRowClause(row: HeldRowPayload): string {
   const id = row.id ? ` (${row.id})` : '';
   const by = row.filedBy ? ` filed by ${row.filedBy}` : '';
   const age = row.heldMs === undefined ? '' : ` held ${humanDuration(row.heldMs)}`;
-  const why = row.reason ? ` — ${truncate(row.reason, 120)}` : '';
+  // Trailing full stop off for the same reason as `reviewItemHeldLine` below:
+  // these clauses are joined with "; ", so a reason that ends in one reads
+  // "…see below.; and 2 more".
+  const why = row.reason ? ` — ${truncate(judgeReasonClauseLocal(row.reason), 120)}` : '';
   return `${ask}${on}${id}${by}${age}${why}`;
 }
 
@@ -361,7 +378,7 @@ export function reviewItemHeldLine(p: ReviewItemHeldPayload): string {
   const on = p.title ? ` on "${truncate(p.title, 40)}"` : '';
   const ids =
     p.taskId && p.reviewItemId ? ` (taskId ${p.taskId}, reviewItemId ${p.reviewItemId})` : '';
-  const why = p.reason ? ` — ${p.reason}` : '';
+  const why = p.reason ? ` — ${judgeReasonClauseLocal(p.reason)}` : '';
   const stood =
     p.overdue === true
       ? ` It has been held${p.heldMs === undefined ? '' : ` for ${humanDuration(p.heldMs)}`} and the reader still cannot see it.`

@@ -439,6 +439,25 @@ describe('reviewItemHeldLine — the filer’s own wake', () => {
     expect(reviewItemHeldLine(payload)).not.toContain('has been held');
   });
 
+  // The judge writes a sentence and this line carries on after it, so the
+  // channel read "…rather than 'see below'.. It has been held for 4m" (UX
+  // review, 2026-08-29).
+  it('does not double the full stop the judge already wrote', () => {
+    const line = reviewItemHeldLine({
+      ...payload,
+      reason: 'Links are bare rather than “see below”.',
+      overdue: true,
+      heldMs: 4 * 60_000,
+    });
+    // The line writes its own full stop, so the reason's comes off and
+    // exactly one is left between the two sentences.
+    expect(line).toContain('“see below”. It has been held');
+    expect(line).not.toContain('..');
+    // The control: a reason with no full stop is unchanged, and the sentence
+    // that follows still starts where it should.
+    expect(reviewItemHeldLine({ ...payload, reason: 'No stakes' })).toContain('No stakes.');
+  });
+
   it('the shipped switch renders the event with it', () => {
     expect(SRC).toContain("case 'workspace.review_item_held':");
     expect(SRC).toContain('reviewItemHeldLine(p)');
