@@ -10,6 +10,7 @@ import {
   SIGN_IN_REQUIRED_ERROR,
   isBrowserRequest,
   isGatedWrite,
+  isReadShapedPost,
   isSignInFlowPath,
   signInRequiredBody,
 } from '../src/middleware/write-gate.ts';
@@ -97,6 +98,25 @@ describe('which requests the gate governs', () => {
   it('does not let a lookalike path claim the sign-in exemption', () => {
     expect(isSignInFlowPath('/api/authors')).toBe(false);
     expect(isGatedWrite('POST', '/api/authors')).toBe(true);
+  });
+
+  it('lets a POST that only reads through', () => {
+    // `/api/links/titles` batches a render burst's URLs into one lookup and
+    // changes nothing. Gated, an unsigned reader's link chips silently never
+    // resolve and the refusal says "Reading needs no account" while refusing
+    // a read.
+    expect(isReadShapedPost('/api/links/titles')).toBe(true);
+    expect(isGatedWrite('POST', '/api/links/titles')).toBe(false);
+  });
+
+  it('matches the read exemption exactly, never as a prefix', () => {
+    // The control for the entry above: a route that merely starts the same
+    // way is a real write and must stay gated, or the exemption grows on its
+    // own every time somebody names a route conveniently.
+    for (const p of ['/api/links/titles/bulk', '/api/links', '/api/links/titlesX']) {
+      expect(isReadShapedPost(p)).toBe(false);
+      expect(isGatedWrite('POST', p)).toBe(true);
+    }
   });
 });
 

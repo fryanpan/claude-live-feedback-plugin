@@ -77,45 +77,51 @@ export async function fetchWriteAccess(): Promise<WriteAccess> {
 }
 
 /**
- * When this browser last did something a person meant.
+ * Which refusals interrupt, and how that is decided.
  *
  * The gate refuses EVERY unsigned write, and the app makes several on its
- * own: the reading tracker posts time-on-page, link titles are resolved, the
- * push subscription is reconciled. Measured on a real load of a gated doc,
- * one of those fired within a second and raised the modal over a document
- * the reader had not touched — a sign-in demand as the first thing they saw,
- * for a write they never made.
+ * own: the reading tracker posts time-on-page, the push subscription is
+ * reconciled. Measured on a real load of a gated doc, one of those fired
+ * within a second and raised the modal over a document the reader had not
+ * touched — a sign-in demand as the first thing they saw, for a write they
+ * never made.
  *
- * So the modal is reserved for a refusal that FOLLOWS a gesture. A
- * background POST has none behind it; a person pressing Comment has one
- * milliseconds earlier. Both still get the standing bar, which is the
- * honest answer to "this browser cannot write here" — it just does not
- * interrupt someone who was only reading.
+ * The first fix keyed the modal on a recent pointerdown, and that was a
+ * CLOCK: any background write landing within five seconds of any click
+ * inherited a gesture it had nothing to do with. It was right about most
+ * sequences and unable to be right about any particular one.
+ *
+ * So the call site says which it is, and the marked set is the SMALL one.
+ * Marking every deliberate write would be the enumeration this file exists
+ * to avoid — twenty-odd call sites, and a new one defaults to silence.
+ * Marking the background writers is three call sites that are already
+ * unusual enough to name, and a write nobody marked defaults to being
+ * treated as a person's, which errs toward telling them too much rather
+ * than losing their words.
  */
-let lastGestureAt = 0;
-const GESTURE_WINDOW_MS = 5_000;
+let backgroundDepth = 0;
 
-function watchGestures(): void {
-  if (typeof document === 'undefined') return;
-  const mark = () => {
-    lastGestureAt = Date.now();
-  };
-  for (const type of ['pointerdown', 'keydown']) {
-    // Capture phase, so a handler that stops propagation cannot hide the
-    // gesture from us.
-    document.addEventListener(type, mark, { capture: true, passive: true });
+/**
+ * Run a fetch the person did not ask for, so a refusal raises the standing
+ * bar instead of a modal.
+ *
+ * Synchronous by contract: the flag is read when `fetch` is CALLED, so the
+ * callback must start its request before it awaits anything. Returns
+ * whatever the callback returns, and restores the flag even if it throws.
+ */
+export function asBackgroundWrite<T>(run: () => T): T {
+  backgroundDepth++;
+  try {
+    return run();
+  } finally {
+    backgroundDepth--;
   }
 }
 
-/** `true` when a refusal can be attributed to something the person just did.
- *  Exported for tests, which have no real input events to fire. */
-export function recentGesture(now: number = Date.now()): boolean {
-  return lastGestureAt !== 0 && now - lastGestureAt <= GESTURE_WINDOW_MS;
-}
-
-/** Test seam: pretend a person just acted. */
-export function markGestureForTest(at: number = Date.now()): void {
-  lastGestureAt = at;
+/** `true` when the write now being issued was the app's idea, not a
+ *  person's. Exported for tests. */
+export function inBackgroundWrite(): boolean {
+  return backgroundDepth > 0;
 }
 
 /**
@@ -169,12 +175,57 @@ export function promptSignIn(message?: string): void {
   overlay.addEventListener('keydown', (e) => {
     if ((e as KeyboardEvent).key === 'Escape') close();
   });
+  // Clicking the scrim dismisses, the way every other scrim does. Guarded on
+  // the target being the scrim itself: a click that started inside the card
+  // bubbles up here too, and closing on that would make the card unusable.
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
 
   actions.append(later, go);
   card.append(title, body, actions);
   overlay.append(card);
   document.body.appendChild(overlay);
   go.focus();
+}
+
+/**
+ * Where the bar goes, per surface.
+ *
+ * It used to be one `position: fixed` box under the top of the viewport,
+ * offset by the doc topbar's measured height. That was wrong twice. On the
+ * board there is no `#topbar` at all, so the measurement fell back to a 52px
+ * constant and the bar landed on the action row — "Start a planning huddle"
+ * failed hit-testing entirely. At 430px on the doc it covered the H1 and the
+ * formatting toolbar. A fixed overlay covers whatever is beneath it, and a
+ * notice that says "reading is unchanged" cannot be the thing eating the
+ * document's title.
+ *
+ * So it is a LAYOUT ROW: it takes space and pushes the page down, on both
+ * surfaces, at every width. Each surface has one header the page starts
+ * with, and the row goes directly under it.
+ */
+function mountSignInBar(bar: HTMLElement): void {
+  // The board. `#hub-root` is ordinary flow, and `.conn-banner` already
+  // occupies this exact slot for the same kind of message.
+  const hubTopbar = document.querySelector('.hub-topbar');
+  if (hubTopbar?.parentElement) {
+    hubTopbar.insertAdjacentElement('afterend', bar);
+    return;
+  }
+  // The doc. `#shell` is a two-row grid (`48px 1fr`), so declaring the row is
+  // as necessary as inserting it — appended without the class the bar would
+  // land in the topbar's 48px track and be clipped.
+  const shell = document.getElementById('shell');
+  if (shell) {
+    shell.insertBefore(bar, shell.firstChild);
+    document.body.classList.add('signin-gated');
+    return;
+  }
+  // Any other surface: still say it, and float, because there is no header
+  // here to sit under and no layout to be sure of.
+  bar.classList.add('signin-bar--floating');
+  document.body.appendChild(bar);
 }
 
 /**
@@ -196,17 +247,50 @@ export function showSignInBar(): void {
   link.textContent = 'Sign in to comment or edit';
   link.href = signInHref(location.pathname, location.search);
   bar.append(text, link);
-  // The topbar's REAL height. A constant here would be wrong on at least one
-  // of the three width tiers, and wrong in the direction that covers the doc
-  // title.
-  const topbar = document.getElementById('topbar');
-  if (topbar) {
-    bar.style.setProperty(
-      '--signin-bar-top',
-      `${Math.round(topbar.getBoundingClientRect().height)}px`,
-    );
+  mountSignInBar(bar);
+}
+
+/**
+ * The marker on every control that can make the document editable.
+ *
+ * There were two of them and the gate knew about one. The edit toggle was
+ * disabled; Suggesting was not, and one click on it set
+ * `contenteditable="true"`, took the reader's typing, said "All changes
+ * saved", and lost every word on reload — verbatim the failure the top of
+ * this file describes as the reason the gate exists.
+ *
+ * A list in the gate's own code is the wrong place to keep that set: it is
+ * read by nobody who adds a button. The marker is an attribute in the markup,
+ * beside the button, where somebody adding the third one is already looking.
+ */
+export const WRITE_CONTROL_ATTR = 'data-write-control';
+
+/**
+ * Lock a doc surface to reading: every marked control disabled and saying
+ * why, and the caller's own state put back to view.
+ *
+ * Disabled, not hidden. A control that vanishes teaches nothing about why,
+ * and this reader can fix it — the bar above says how.
+ */
+export function lockDocToReading(opts: {
+  /** Leave Suggesting, if it was on. It is not a milder form of editing —
+   *  proposals ride the same socket the server is dropping. */
+  stopSuggesting: () => void;
+  /** Put the editor back in view mode. */
+  toViewMode: () => void;
+  root?: ParentNode;
+}): HTMLButtonElement[] {
+  const root = opts.root ?? (typeof document === 'undefined' ? null : document);
+  if (!root) return [];
+  opts.stopSuggesting();
+  opts.toViewMode();
+  const locked = Array.from(root.querySelectorAll<HTMLButtonElement>(`[${WRITE_CONTROL_ATTR}]`));
+  for (const btn of locked) {
+    btn.disabled = true;
+    btn.title = 'Sign in to edit this doc';
+    btn.setAttribute('aria-label', 'Sign in to edit this doc');
   }
-  document.body.appendChild(bar);
+  return locked;
 }
 
 /**
@@ -240,9 +324,12 @@ export function installWriteGateNotice(): void {
   if (installed) return;
   if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
   installed = true;
-  watchGestures();
   const original = window.fetch.bind(window);
   const wrapped = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    // Read BEFORE the await. `asBackgroundWrite` is synchronous, so the flag
+    // is only true during the call itself; by the time the response lands the
+    // stack that set it is long gone.
+    const background = inBackgroundWrite();
     const res = await original(input, init);
     // 401 only, so the common path costs one integer comparison and no clone.
     if (res.status === 401) {
@@ -250,9 +337,9 @@ export function installWriteGateNotice(): void {
         const body = (await res.clone().json()) as unknown;
         if (isSignInRequired(body)) {
           // A refusal the person can act on, either way — but only one of
-          // them interrupts. See `lastGestureAt`.
-          if (recentGesture()) promptSignIn((body as { message?: string }).message);
-          else showSignInBar();
+          // them interrupts. See `backgroundDepth`.
+          if (background) showSignInBar();
+          else promptSignIn((body as { message?: string }).message);
         }
       } catch {
         // Not JSON, already consumed, or a body that cannot be cloned. A

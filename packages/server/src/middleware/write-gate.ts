@@ -16,6 +16,9 @@
  *
  * 1. **Reads are never gated.** GET and HEAD pass whatever the flag says.
  *    Everyone who can reach this server can read it; that is the product.
+ *    A handful of routes are POSTs only because a batch of inputs does not
+ *    fit in a query string; `READ_SHAPED_POSTS` names them, and they pass
+ *    too.
  *
  * 2. **Agents are not browsers.** An MCP tool, a curl, a webhook and the
  *    plugin's own hooks write over loopback or the tailnet with no session
@@ -101,6 +104,30 @@ export function isSignInFlowPath(pathname: string): boolean {
 }
 
 /**
+ * Routes that are POSTs for their request SHAPE and reads in their effect.
+ *
+ * `POST /api/links/titles` batches a render burst's URLs into one lookup and
+ * changes nothing; gated, an unsigned reader's link chips silently never
+ * resolve, and the refusal tells them "Reading needs no account" while
+ * refusing a read.
+ *
+ * This is an enumeration, which `isGatedWrite` refuses to be — and the
+ * difference is which way a forgotten entry fails. A list of writes TO gate
+ * omits a route and lets a write through unchecked. A list of reads to EXEMPT
+ * omits a route and gates something harmlessly, which shows up as a visible
+ * refusal on a read rather than as a silent hole. Only add a path here after
+ * confirming its handler mutates nothing.
+ */
+const READ_SHAPED_POSTS: ReadonlySet<string> = new Set(['/api/links/titles']);
+
+/** `true` for a non-GET route that only reads. Exact match, never a prefix:
+ *  a prefix would hand the exemption to every future route that happens to
+ *  start with the same characters. */
+export function isReadShapedPost(pathname: string): boolean {
+  return READ_SHAPED_POSTS.has(pathname);
+}
+
+/**
  * `true` when this method+path is an ordinary write — the class of request
  * the gate governs.
  *
@@ -113,5 +140,6 @@ export function isSignInFlowPath(pathname: string): boolean {
 export function isGatedWrite(method: string, pathname: string): boolean {
   const m = method.toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return false;
+  if (isReadShapedPost(pathname)) return false;
   return !isSignInFlowPath(pathname);
 }

@@ -35,13 +35,44 @@ export function withoutHuddleStart(href: string): string {
 }
 
 /**
+ * Whether this browser has been told it may only read.
+ *
+ * A latch, and the reason it is one: the crumb is written on EVERY
+ * navigation, unconditionally, because a word left over from the last doc is
+ * a wrong label on this one. So a caller that sets "Reading:" once has it
+ * overwritten by the next in-place navigation, and the surface goes back to
+ * announcing "Editing:" to somebody who cannot edit. The fact belongs to the
+ * browser, not to the visit, so it is remembered here and re-applied by the
+ * same function that would otherwise undo it.
+ */
+let readingOnly = false;
+/** The last thing the crumb was told, so the latch can re-render it. */
+let lastHuddle = false;
+
+/** Say this browser may only read, and repaint the crumb now. */
+export function applyReadingCrumb(doc: Document): void {
+  readingOnly = true;
+  applyHuddleCrumb(doc, lastHuddle);
+}
+
+/** Test seam — the latch is module state and outlives a single test. */
+export function resetReadingCrumbForTest(): void {
+  readingOnly = false;
+  lastHuddle = false;
+}
+
+/**
  * Name a huddle doc in the crumb, or put "Editing:" back for the next doc.
- * Always writes both branches — navigation is in place, and a word left over
+ * Always writes every branch — navigation is in place, and a word left over
  * from the last doc is a wrong label on this one.
+ *
+ * "Huddle" survives the reading latch: it names WHAT the doc is, not what
+ * you may do to it. "Editing:" does not, because it claims the second thing.
  */
 export function applyHuddleCrumb(doc: Document, huddle: boolean): void {
+  lastHuddle = huddle;
   const label = doc.querySelector('.doc-crumb .doc-label');
   if (!label) return;
-  label.textContent = huddle ? 'Huddle' : 'Editing:';
+  label.textContent = huddle ? 'Huddle' : readingOnly ? 'Reading:' : 'Editing:';
   label.classList.toggle('doc-label-huddle', huddle);
 }
