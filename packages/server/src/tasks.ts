@@ -2103,10 +2103,12 @@ export type ReviseReviewItemResult =
         | 'unknown-review-item'
         | 'not-revisable'
         | 'answered'
+        | 'withdrawn'
         | 'empty-patch'
         | 'bad-review'
         | 'bad-range';
-      /** The verbatim refusal, present for 'bad-review', 'answered' and 'bad-range'. */
+      /** The verbatim refusal, present for 'bad-review', 'answered', 'withdrawn'
+       *  and 'bad-range'. */
       message?: string;
     };
 
