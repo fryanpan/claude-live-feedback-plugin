@@ -106,8 +106,44 @@ function shouldScrubKey(key: string): boolean {
   return SCRUB_KEY_SUBSTRINGS.some((needle) => lower.includes(needle));
 }
 
+/**
+ * Second floor, sitting under the key-targeted pass above: a VALUE-shaped
+ * scan for this repo's own minted-id shape. The key-targeted pass only looks
+ * at ATTRIBUTE NAMES — it does nothing for an id that leaks through an
+ * ordinary string under an ordinary key: a transaction/span `name` (if
+ * anything ever names one by raw path instead of routePatternForSpan), an
+ * exception `message` ("doc t-... not found"), a breadcrumb message, or a
+ * future `extra` string nobody thought to redact. A key list has to be right
+ * about every key anyone will ever add; a value-shaped check does not.
+ *
+ * Every id this codebase MINTS (doc-ids.ts's newDocId, tasks.ts's cryptoId,
+ * …) has the same shape: a short lowercase prefix, a dash, then 10+
+ * base64url characters — the same shape scripts/scrub-check.py's own
+ * denylist matches for the pre-push gate (`\bt-[A-Za-z0-9_-]{10,}\b`,
+ * generalized here to any prefix, not just task ids). Redacting that SHAPE
+ * wherever it appears in a string, independent of which key it's under,
+ * closes the gap a key list can never fully enumerate.
+ *
+ * What this does NOT catch: a caller-chosen docId that's a bound file's
+ * relative path or a `task:<id>` alias (see routePatternForSpan) embedded in
+ * free text — those read as ordinary words ("roadmap", "internal"), and no
+ * shape pattern can single them out of a message without also redacting
+ * ordinary English. routePatternForSpan already keeps that shape out of
+ * every span/transaction NAME; keeping a raw docId out of a hand-written
+ * message string is a code-review concern (don't interpolate one into an
+ * Error message), not something a generic scrubber can enforce.
+ */
+const MINTED_ID_SHAPE = /\b[a-z]{1,3}-[A-Za-z0-9_-]{10,}\b/g;
+
+function redactMintedIdShapes(text: string): string {
+  return text.replace(MINTED_ID_SHAPE, '[id]');
+}
+
 export function scrubEventForPrivacy(value: unknown, depth = 0): unknown {
   if (depth > 20) return value; // guard against pathological/cyclical shapes
+  if (typeof value === 'string') {
+    return redactMintedIdShapes(value);
+  }
   if (Array.isArray(value)) {
     return value.map((v) => scrubEventForPrivacy(v, depth + 1));
   }
