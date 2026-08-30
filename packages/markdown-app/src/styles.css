@@ -6279,9 +6279,14 @@ body.is-reading-width #editor > .ProseMirror {
      washing out the top of the CURRENT one. That is why the speaker pill
      rendered pale with no top border: it is 17.75px in an 18.125px window, so
      its top edge is at the window's top edge however well it is centred, and
-     the old ramp put alpha 0 exactly there. */
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 12px);
-  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 12px);
+     the old ramp put alpha 0 exactly there. Measured at 1180x820 the pill's
+     top lands 10.37px in, so the cut is HARD at 10px -- the content-box top.
+     Any ramp at all, however short, is inside the pill. The transparent 10px
+     is not decoration: overflow: hidden clips to the PADDING box, so the
+     rolled-off previous line really does paint over that strip, and the mask
+     is what hides it. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 10px);
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 10px);
 }
 .meeting-caption-line {
   margin: 0;
