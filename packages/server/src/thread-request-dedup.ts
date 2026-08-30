@@ -114,8 +114,18 @@ export class ThreadRequestDedup<T> {
     const key = this.key(docId, requestId);
     const entry: Entry<T> = { text, anchorKey, ts: now, promise: create() };
     this.seen.set(key, entry);
-    const value = await entry.promise;
-    if (value == null && this.seen.get(key) === entry) this.seen.delete(key);
-    return { value, deduped: false };
+    try {
+      const value = await entry.promise;
+      if (value == null && this.seen.get(key) === entry) this.seen.delete(key);
+      return { value, deduped: false };
+    } catch (err) {
+      // A rejection is a failed create too — unreserve it so a retry gets a
+      // fresh attempt instead of the same rejected promise for the rest of
+      // the TTL. A caller that was already awaiting THIS promise (a genuine
+      // concurrent duplicate) still sees the same rejection; only a later
+      // lookup is affected by the delete.
+      if (this.seen.get(key) === entry) this.seen.delete(key);
+      throw err;
+    }
   }
 }

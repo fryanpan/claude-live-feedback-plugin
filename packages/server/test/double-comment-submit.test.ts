@@ -134,6 +134,30 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
     expect(listed.threads).toHaveLength(2);
   });
 
+  it('a deduped retry still carries reviewAdvice — the early-return path must build the same response shape as a fresh create', async () => {
+    // A thin-but-valid `review` payload gets a 200 PLUS `reviewAdvice` (see
+    // review-item-routes.test.ts "a thin-but-valid declaration files"). The
+    // dedup escape hatch used to be built before `declared` existed and
+    // returned a bare `{ thread }`, silently dropping this on a retry.
+    const body = {
+      author: REVIEWER,
+      text: 'Worth a second look.',
+      anchor: anchor('effort model'),
+      requestId: 'req-advice',
+      review: { shape: 'review', headline: 'Cache size' },
+    };
+    const first = await jj<{ thread: { id: string }; reviewAdvice?: string }>(
+      await post(`/api/docs/${docId}/threads`, body),
+    );
+    expect(first.reviewAdvice).toContain('review.detail');
+
+    const second = await jj<{ thread: { id: string }; reviewAdvice?: string }>(
+      await post(`/api/docs/${docId}/threads`, body),
+    );
+    expect(second.thread.id).toBe(first.thread.id);
+    expect(second.reviewAdvice).toContain('review.detail');
+  });
+
   it('a reused requestId with different text is a new comment, not a collision', async () => {
     const first = await jj<{ thread: { id: string } }>(
       await post(`/api/docs/${docId}/threads`, {

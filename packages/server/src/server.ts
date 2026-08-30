@@ -8535,6 +8535,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // eventual write.
             const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
             const anchorKey = JSON.stringify(anchor);
+            // Computed early (not just before the write, where it used to
+            // live) so both the dedup escape hatch below and the normal
+            // return can build the SAME response shape — a retry must get
+            // its reviewAdvice back too, not just its thread.
+            const declared = reviewFromBody(body?.review, text);
+            if (!declared.ok) return j(400, { error: declared.error });
             // A retry of an already-handled request has to be caught HERE,
             // before the review-item validation below: that block refuses a
             // second ask while the item is `waiting`, a state the FIRST
@@ -8546,7 +8552,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const t = await priorThreadCreate;
               const handoff = threadUrl(docId, Boolean(visitor));
               return t
-                ? j(200, { thread: t, ...(handoff ? { threadUrl: handoff } : {}) })
+                ? j(200, {
+                    thread: t,
+                    ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
+                    ...(handoff ? { threadUrl: handoff } : {}),
+                  })
                 : j(500, { error: 'could not create thread' });
             }
             // A thread on a PHRASE of a review item — the doc-style question
@@ -8619,8 +8629,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               };
               itemAsk = { taskId, reviewItemId: item.id, range };
             }
-            const declared = reviewFromBody(body?.review, text);
-            if (!declared.ok) return j(400, { error: declared.error });
             // `dedupe` reserves (docId, requestId) synchronously and runs
             // this closure at most once for however many duplicate requests
             // arrive while it is in flight — the write AND the review-item

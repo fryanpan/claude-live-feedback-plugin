@@ -85,6 +85,24 @@ describe('ThreadRequestDedup', () => {
     expect(calls).toBe(2);
   });
 
+  it('a rejected create is not remembered — a retry after a thrown error gets a fresh attempt', async () => {
+    const d = new ThreadRequestDedup<string | null>();
+    let calls = 0;
+    await expect(
+      d.dedupe('doc1', 'r1', 'hello', 'anchor-a', async () => {
+        calls++;
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+    const { value, deduped } = await d.dedupe('doc1', 'r1', 'hello', 'anchor-a', async () => {
+      calls++;
+      return 't1';
+    });
+    expect(value).toBe('t1');
+    expect(deduped).toBe(false);
+    expect(calls).toBe(2);
+  });
+
   it('expires after the TTL', async () => {
     const d = new ThreadRequestDedup<string | null>(10);
     await d.dedupe('doc1', 'r1', 'hello', 'anchor-a', async () => 't1');
