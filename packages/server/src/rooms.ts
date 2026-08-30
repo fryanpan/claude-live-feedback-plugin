@@ -790,6 +790,11 @@ export class Rooms {
     this.evictTicker = null;
     if (this.filePollTicker) clearInterval(this.filePollTicker);
     this.filePollTicker = null;
+    // The presence ticker stops itself when the last Awareness goes, but a
+    // shutdown does not wait for that: leaving it running holds callbacks
+    // into a Rooms nobody is using any more.
+    if (this.awarenessTicker) clearInterval(this.awarenessTicker);
+    this.awarenessTicker = null;
   }
 
   /**
@@ -1004,7 +1009,8 @@ export class Rooms {
         bindingTimers +
         (this.awarenessTicker ? 1 : 0) +
         (this.filePollTicker ? 1 : 0) +
-        (this.memoryTicker ? 1 : 0),
+        (this.memoryTicker ? 1 : 0) +
+        (this.evictTicker ? 1 : 0),
       activations: [...this.activations.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, ACTIVATION_TAGS_REPORTED)
@@ -3664,7 +3670,9 @@ export class Rooms {
     // git operation that made it is usually about to make another. Promote
     // the binding to the fast lane so the next few writes are seen in one
     // tick rather than one rotation, and let it decay like any other access.
-    this.lastTouchedAt.set(docId, Date.now());
+    // `this.now()`, not `Date.now()`: residency runs on ONE clock, or an
+    // externally edited doc ages against an epoch the policy never sees.
+    this.lastTouchedAt.set(docId, this.now());
     // Debounce so we don't read a half-written file mid-save.
     if (binding.readTimer) clearTimeout(binding.readTimer);
     binding.readTimer = setTimeout(() => {
