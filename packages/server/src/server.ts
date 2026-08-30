@@ -4367,6 +4367,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           );
         }
 
+        // --- REST: what this process currently costs ---
+        //
+        // The 2026-08-29 jetsam kill left nothing to read: the server was at
+        // 2.6 GB and the only evidence of how it got there was the absence of
+        // the process. `Rooms.stats()` is also written to the log every five
+        // minutes; this route is the same numbers on demand, so the NEXT
+        // incident can be sampled over time instead of reconstructed.
+        //
+        // Counts only — no doc ids, no paths, no titles. That is what makes
+        // it safe to leave un-gated for anyone already past the front door,
+        // and it still refuses a share visitor: an external reviewer invited
+        // to one document has no business reading how many others exist.
+        if (pathname === '/api/metrics' && req.method === 'GET') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const stats = rooms.stats();
+          return j(200, { ...stats, uptimeSec: Math.round(process.uptime()) });
+        }
+
         // --- REST: docs ---
         if (pathname === '/api/docs' && req.method === 'POST') {
           const body = await safeJson(req);
