@@ -1018,16 +1018,34 @@ export class Rooms {
    * space, so the two branches can never both match.
    */
   get(docId: string): DocRoom | undefined {
-    const direct = this.rooms.get(docId);
-    if (direct) {
-      this.touchDoc(direct.docId);
-      return direct;
-    }
-    const aliased = this.aliases.get(docId);
-    if (!aliased) return undefined;
-    const room = this.rooms.get(aliased);
+    const room = this.peek(docId);
     if (room) this.touchDoc(room.docId);
     return room;
+  }
+
+  /**
+   * The same lookup as `get`, WITHOUT counting as an access.
+   *
+   * A scan that merely enumerates docs is not somebody reaching for one, and
+   * the difference is not cosmetic: `get` calls `touchDoc`, which puts a
+   * bound doc in the file poll's fast lane for `FILE_POLL_ACTIVE_MS`. One
+   * route that reads `meta.title` for every docId on a board therefore drags
+   * the WHOLE corpus into the fast lane, and a client polling that route
+   * keeps it there — measured on a copy of the production data directory,
+   * where a single `GET /` moved `activeBindings` from 0 to 122 and
+   * production reported all 2,549 bound docs active five minutes after boot
+   * with nobody connected.
+   *
+   * Use `peek` for labels, existence checks and routing metadata. Use `get`
+   * when the caller is about to read or write the doc's CONTENT — that is a
+   * real access and the poll should speed up for it.
+   */
+  peek(docId: string): DocRoom | undefined {
+    const direct = this.rooms.get(docId);
+    if (direct) return direct;
+    const aliased = this.aliases.get(docId);
+    if (!aliased) return undefined;
+    return this.rooms.get(aliased);
   }
 
   /**
