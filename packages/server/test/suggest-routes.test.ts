@@ -292,7 +292,11 @@ describe('suggested edits — HTTP routes', () => {
       expect(acceptedHit?.sid).toBe(created.suggestionId);
       expect(acceptedHit?.docId).toBe(hookDocId);
     } finally {
-      sink.stop();
+      // `true` force-closes: the server under test holds a keep-alive
+      // connection to this sink, and a bare `stop()` only shuts the door on
+      // new ones — the open socket outlives the fixture. See
+      // `server-stop-closes-sockets.test.ts`.
+      sink.stop(true);
     }
   });
   /**
