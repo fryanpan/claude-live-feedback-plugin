@@ -75,4 +75,46 @@ describe('attachNotes', () => {
     );
     expect(notes).toHaveLength(2);
   });
+
+  it('names the carry-over call, with the old id filled in, when the board knows one', () => {
+    // The session that respawned cannot name its predecessor; the seat it
+    // just took can. That id is the whole input the carry-over needs.
+    const notes = attachNotes(
+      { lead: true, seat: healthySeat, seatTakenFrom: 'agent-live-feedback' },
+      0,
+    );
+    const watches = notes.find((n) => n.includes('watching nothing')) ?? '';
+    expect(watches).toContain('/api/agents/agent-live-feedback/merge');
+  });
+
+  it('offers the carry-over off a stale seat it did NOT take', () => {
+    const notes = attachNotes(
+      {
+        lead: false,
+        seat: { leadAgentId: 'ghost', live: false, stale: true, notice: 'GHOST HOLDS THE SEAT' },
+      },
+      0,
+    );
+    expect(notes.find((n) => n.includes('watching nothing'))).toContain('/api/agents/ghost/merge');
+  });
+
+  it('does NOT offer a call whose argument the reader would have to guess', () => {
+    // No stale seat, no handover: the board knows of no previous identity, so
+    // the note stops at re-subscribing rather than naming an id at random.
+    // Moving one agent's watches onto another is the failure this avoids.
+    const notes = attachNotes({ lead: true, seat: healthySeat }, 0);
+    expect(notes[0]).not.toContain('/merge');
+    // Positive control that the clause CAN appear at all is the two tests
+    // above; this one asserts the condition, not the absence of the code.
+    expect(notes[0]).toContain('watching nothing');
+  });
+
+  it('does not offer the carry-over off a LIVE seat holder', () => {
+    // A live peer's watches are not yours to inherit under any reading.
+    const notes = attachNotes(
+      { lead: false, seat: { leadAgentId: 'peer', live: true, stale: false } },
+      0,
+    );
+    expect(notes[0]).not.toContain('/merge');
+  });
 });
