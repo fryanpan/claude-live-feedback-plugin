@@ -334,6 +334,63 @@ describe('effort-estimate scoring', () => {
     });
   });
 
+  /**
+   * The same collision as the test above, with the luck taken out.
+   *
+   * That one only exercises the guard when the create and the rename happen
+   * to land on DIFFERENT milliseconds — which is almost always, and was not
+   * on 2026-08-30: CI stamped both at 1788127001977, the create run's
+   * captured `forTitleWrittenAt` still matched the renamed row, and its
+   * 999/999 answer overwrote the rename's 111/222. Freezing the clock across
+   * both edits makes that collision happen every run, so the guard is proved
+   * rather than sampled.
+   */
+  it('refuses the older run when the create and the rename land in the SAME millisecond', async () => {
+    const { workspaceId } = await board();
+    const realNow = Date.now;
+    const frozen = realNow.call(Date);
+    verdict = 'defer';
+    let taskId: string;
+    let createCall: (v: EffortEstimateVerdict | null) => void;
+    let renameCall: (v: EffortEstimateVerdict | null) => void;
+    try {
+      // Every stamp taken inside this window falls on one tick — the create's
+      // titleWrittenAt and the rename's are then the same number.
+      Date.now = () => frozen;
+      taskId = await newTask(workspaceId, { title: 'Original title' });
+      createCall = await until(() => (parked.length >= 1 ? parked[0] : undefined));
+      verdict = 'defer';
+      await jj(
+        await post(`/api/tasks/${taskId}/title`, { title: 'Renamed title', author: PERSON }),
+      );
+      renameCall = await until(() => (parked.length >= 2 ? parked[1] : undefined));
+    } finally {
+      Date.now = realNow;
+    }
+
+    // The control: the collision really happened. The row's current title
+    // clock IS the one the create run captured, so a guard built on that
+    // token has nothing left to tell the two runs apart.
+    expect(handle.tasks.getTask(taskId)?.titleWrittenAt).toBe(frozen);
+
+    renameCall?.({ handsOnSeconds: 111, wallClockSeconds: 222 });
+    const est = await until(() => {
+      const e = handle.tasks.getTask(taskId)?.effortEstimate;
+      return e && e.status === 'ok' ? e : undefined;
+    });
+    expect(est).toMatchObject({ handsOnSeconds: 111, wallClockSeconds: 222 });
+    // Same frozen instant on the accepted record — the timestamp provenance
+    // the create run would have matched exactly.
+    expect(est.forTitleWrittenAt).toBe(frozen);
+
+    createCall?.({ handsOnSeconds: 999, wallClockSeconds: 999 });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(handle.tasks.getTask(taskId)?.effortEstimate).toMatchObject({
+      handsOnSeconds: 111,
+      wallClockSeconds: 222,
+    });
+  });
+
   describe('settings — both prompts are independently tunable', () => {
     it('reads the defaults until somebody writes, and round-trips a write to each', async () => {
       const { workspaceId } = await board();
