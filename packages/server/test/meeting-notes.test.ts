@@ -399,6 +399,92 @@ describe('notes session', () => {
     ]);
   });
 
+  it('refuses to rewrite when two voices share the name, rather than reattributing one', async () => {
+    // Two people called Alex. "Alex" in the notes already written does not
+    // say WHICH of them, so correcting one must not move the other's words.
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('- Alex: both of them') },
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
+    session.nameSpeaker('A', 'Alex');
+    session.nameSpeaker('B', 'Alex');
+    // Correcting one of the two Alexes.
+    session.nameSpeaker('A', 'Sam');
+    await session.end();
+    // The two naming steps went through — each was unambiguous when made.
+    // The correction did not: nothing after "Speaker B -> Alex" is emitted.
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual([
+      'Speaker A->Alex',
+      'Speaker B->Alex',
+    ]);
+    expect(errors.join(' ')).toContain('more than one voice');
+  });
+
+  it('an unnamed voice counts as a voice when deciding the name is ambiguous', async () => {
+    // B is unnamed, so it reads as "Speaker B". Someone types "Speaker B" as
+    // A's name, then corrects it: the notes' "Speaker B" is now two voices,
+    // and the `names` map alone would not have noticed.
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('notes') },
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
+    session.nameSpeaker('A', 'Speaker B');
+    session.nameSpeaker('A', 'Sam');
+    await session.end();
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual(['Speaker A->Speaker B']);
+    expect(errors.join(' ')).toContain('more than one voice');
+  });
+
+  it('an unrelated named voice does not make a rename ambiguous', async () => {
+    // The positive control for the two tests above: without it, a guard that
+    // refused every rename would pass both of them.
+    const schedule = new ManualScheduler();
+    const relabels: NotesRelabel[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 'x', compose: () => Promise.resolve('notes') },
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'A' });
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
+    session.nameSpeaker('B', 'Rin');
+    session.nameSpeaker('A', 'Sam');
+    await session.end();
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual(['Speaker B->Rin', 'Speaker A->Sam']);
+    expect(errors).toEqual([]);
+  });
+
   it('renaming a voice to what it is already called changes nothing', async () => {
     const relabels: NotesRelabel[] = [];
     const session = beginNotesSession(
