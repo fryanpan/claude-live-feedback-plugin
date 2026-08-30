@@ -79,6 +79,12 @@ import {
   mintWidgetToken,
   verifyWidgetToken,
 } from './auth/widget-token.ts';
+import {
+  type BrowserSentryConfig,
+  type PageType,
+  injectSentryHead,
+  sentryHeadTags,
+} from './browser-sentry.ts';
 import { ChatAudit, isSharedAgentName, localDay } from './chat-audit.ts';
 import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
@@ -501,6 +507,16 @@ export interface ServerOptions {
    * never loads the Sentry SDK at all.
    */
   sentryDsn?: string;
+  /**
+   * What the BROWSER should call this deploy in Sentry (`release`). The same
+   * provenance string the server stamps on its own events — `git describe`
+   * of the deploy source, from the published release's `release.json` — so a
+   * regression can be attributed to the deploy it arrived with, and the
+   * browser trace and the server span it continues agree on the release.
+   * Only prod resolves one; dev and staging leave it unset and Sentry simply
+   * omits the release, exactly as the server does. See browser-sentry.ts.
+   */
+  sentryRelease?: string;
   /**
    * The address whose email identity is the fleet OWNER (`CW_OWNER_EMAIL`).
    *
@@ -1090,6 +1106,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const clientReleaseRootDir = opts.clientReleaseRootDir ?? null;
   const widgetDist = opts.widgetDistDir ?? null;
   const markdownAppDist = opts.markdownAppDistDir ?? null;
+  /**
+   * Browser Sentry config for every shell this server renders or rewrites.
+   * `null` — not an empty DSN — when unconfigured, which is what makes the
+   * "no DSN, no tags, no script, no SDK, no outbound request" chain start
+   * from one check rather than five. See browser-sentry.ts.
+   */
+  const browserSentry: BrowserSentryConfig | null = opts.sentryDsn
+    ? { dsn: opts.sentryDsn, release: opts.sentryRelease ?? null }
+    : null;
   const demosDir = opts.demosDir ?? null;
 
   let shares: Shares | null = null;
@@ -3317,7 +3342,34 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         headers: { 'content-type': 'text/html; charset=utf-8' },
       });
     }
-    return serveStatic(join(markdownAppDist, 'index.html'));
+    // The doc editor's shell is a BUILT file, identical on every box, so the
+    // Sentry tags cannot be templated into it at build time — they are box
+    // config. Rewritten here on the way out instead, the same way a mockup's
+    // own HTML gets the widget. Unconfigured, `injectSentryHead` returns the
+    // bytes untouched and this is `serveStatic` with its own etag.
+    return serveShellHtml(join(markdownAppDist, 'index.html'), 'doc');
+  };
+
+  /**
+   * A built HTML shell, with the browser Sentry tags added for `pageType`.
+   *
+   * Reads and re-hashes rather than delegating to `serveStatic`, because the
+   * etag has to describe the bytes actually SENT: serving the file's own hash
+   * beside a rewritten body would hand a browser a 304 for a document it
+   * never received. Falls straight through to `serveStatic` when Sentry is
+   * unconfigured, so the common path is byte-identical to what it was.
+   */
+  const serveShellHtml = (path: string, pageType: PageType): Response | null => {
+    if (!browserSentry) return serveStatic(path);
+    if (!existsSync(path)) return null;
+    const html = injectSentryHead(readFileSync(path, 'utf8'), browserSentry, pageType);
+    return new Response(html, {
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-cache',
+        etag: `"${Bun.hash(html).toString(16)}"`,
+      },
+    });
   };
 
   /**
@@ -3358,7 +3410,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Only HTML gets rewritten; a mockup bound to anything else is served as-is.
     const ct = res.headers.get('content-type') ?? '';
     if (!ct.startsWith('text/html')) return res;
-    return new Response(injectWidget(readFileSync(room.meta.sourceUrl, 'utf8'), room.meta.docId), {
+    // Sentry tags ride out with the widget embed, for the same reason and by
+    // the same route: a mockup is somebody's own file, and neither the review
+    // scaffolding nor the box's monitoring config belongs in it on disk.
+    const withWidget = injectWidget(readFileSync(room.meta.sourceUrl, 'utf8'), room.meta.docId);
+    return new Response(injectSentryHead(withWidget, browserSentry, 'mockup'), {
       headers: res.headers,
     });
   };
@@ -9362,7 +9418,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return new Response(
             renderHubShell(workspace.id, workspace.name, {
               feedback: !visitor,
-              ...(opts.sentryDsn ? { sentryDsn: opts.sentryDsn } : {}),
+              sentry: browserSentry,
             }),
             { headers: { 'content-type': 'text/html; charset=utf-8' } },
           );
@@ -9516,7 +9572,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // the tailnet reaches everything signed out; this page only lets a
         // person claim who they are (`/api/auth/*` above).
         if (pathname === '/signin' && req.method === 'GET') {
-          return new Response(renderSigninShell(), {
+          return new Response(renderSigninShell(browserSentry), {
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
@@ -9530,7 +9586,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             collectLandingProjects(rooms),
             Date.now(),
           );
-          return new Response(renderLanding(model), {
+          return new Response(renderLanding(model, browserSentry), {
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
@@ -9548,7 +9604,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
           if (owner === '') return new Response('not found', { status: 404 });
           const artifacts = buildProjectArtifacts(rooms, withReviewUrl, owner);
-          return new Response(renderProjectPage(owner, artifacts), {
+          return new Response(renderProjectPage(owner, artifacts, browserSentry), {
             status: artifacts.length === 0 ? 404 : 200,
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
@@ -10077,13 +10133,12 @@ h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#555;margin:0}
 function renderHubShell(
   workspaceId: string,
   name: string,
-  opts: { feedback: boolean; sentryDsn?: string } = { feedback: false },
+  opts: { feedback: boolean; sentry?: BrowserSentryConfig | null } = { feedback: false },
 ): string {
   const safeName = escape(name);
   const safeId = escape(workspaceId);
-  const sentryMeta = opts.sentryDsn
-    ? `\n    <meta name="sentry-dsn" content="${escape(opts.sentryDsn)}" />`
-    : '';
+  const sentryTags = sentryHeadTags(opts.sentry ?? null, 'board');
+  const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
   // Deliberately NOT rendered for a share visitor. Every peer on a Yjs doc
   // syncs the whole doc, so one shared feedback doc would hand every hub
   // visitor every other workspace's feedback threads — including the hub
@@ -10126,7 +10181,9 @@ function renderHubShell(
  * the bundle (`/app/signin.js`), the app's own stylesheet so the page looks
  * like the product it signs you into.
  */
-function renderSigninShell(): string {
+function renderSigninShell(sentry: BrowserSentryConfig | null): string {
+  const sentryTags = sentryHeadTags(sentry, 'signin');
+  const sentryMeta = sentryTags ? `\n    ${sentryTags}` : '';
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -10134,7 +10191,7 @@ function renderSigninShell(): string {
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
     <title>Sign in · Fryanpan Workspaces</title>
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="theme-color" content="#2e7dd7" />
+    <meta name="theme-color" content="#2e7dd7" />${sentryMeta}
     <link rel="stylesheet" href="/app/styles.css" />
     <link rel="stylesheet" href="/app/tokens.css" />
   </head>
@@ -10525,14 +10582,16 @@ details[open] > summary::before{content:'\\25BE'}
 footer{margin-top:28px;color:#8b95a1;font-size:11px}
 `;
 
-function landingShell(title: string, body: string): string {
+function landingShell(title: string, body: string, sentry: BrowserSentryConfig | null): string {
+  const sentryTags = sentryHeadTags(sentry, 'landing');
+  const sentryMeta = sentryTags ? `\n${sentryTags}` : '';
   // The manifest belongs here most of all: `/` is the manifest's own
   // `start_url`, so this is the page a Home Screen install lands on and the
   // most likely page somebody installs FROM.
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<meta name="theme-color" content="#2e7dd7">
+<meta name="theme-color" content="#2e7dd7">${sentryMeta}
 <style>${LANDING_CSS}</style>
 ${body}
 <footer>POST /api/docs · /widget.iife.js · /demos/mockup</footer>`;
@@ -10566,7 +10625,7 @@ function renderLandingProjectLink(p: LandingProjectLink): string {
   </a></li>`;
 }
 
-function renderLanding(model: LandingModel): string {
+function renderLanding(model: LandingModel, sentry: BrowserSentryConfig | null): string {
   const days = Math.round(model.windowMs / 86_400_000);
   // Retired boards are NOT in this denominator. "Nothing active, 3 inactive
   // below" has to mean three rows a reader can go and look at; counting
@@ -10638,6 +10697,7 @@ ${active}
 ${inactive}
 ${retired}
 ${projects}`,
+    sentry,
   );
 }
 
@@ -10645,7 +10705,11 @@ ${projects}`,
  *  somebody asks for that project. Keeping this off `/` is what took the
  *  landing response from ~910 KB to a few KB — the nested per-file lists were
  *  most of the bytes and none of the reason anyone opened the page. */
-function renderProjectPage(owner: string, artifacts: LandingArtifact[]): string {
+function renderProjectPage(
+  owner: string,
+  artifacts: LandingArtifact[],
+  sentry: BrowserSentryConfig | null,
+): string {
   const body =
     artifacts.length === 0
       ? '<div class="empty">No artifacts in this project.</div>'
@@ -10658,6 +10722,7 @@ function renderProjectPage(owner: string, artifacts: LandingArtifact[]): string 
 <div class="summary">${escape(owner)}</div>
 <div class="summary">${artifacts.length} artifact${artifacts.length === 1 ? '' : 's'} · ${open} open thread${open === 1 ? '' : 's'}</div>
 ${body}`,
+    sentry,
   );
 }
 
