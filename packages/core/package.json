@@ -16,7 +16,8 @@
     "./summary-prompt": "./src/summary-prompt.ts",
     "./review-judge-prompt": "./src/review-judge-prompt.ts",
     "./effort-estimate-prompt": "./src/effort-estimate-prompt.ts",
-    "./goal-summary": "./src/goal-summary.ts"
+    "./goal-summary": "./src/goal-summary.ts",
+    "./goal-effort": "./src/goal-effort.ts"
   },
   "dependencies": {
     "lib0": "^0.2.117",
