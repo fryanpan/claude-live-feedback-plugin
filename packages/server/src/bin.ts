@@ -6,6 +6,7 @@ import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
+import { installLogSquelch } from './log-squelch.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
@@ -441,6 +442,19 @@ const deployer = args.includes('--deploy')
     })
   : null;
 
+// A ceiling on what a hot error loop can cost this process's log.
+//
+// launchd owns ~/Library/Logs/…err.log and /etc/newsyslog.d is not ours to
+// edit, so the bound has to be in-process. Installed HERE rather than in
+// createServer: patching a global console is the prerogative of the program
+// that owns the log, and every test that imports the server would otherwise
+// inherit it. Installed BEFORE createServer because hydrate — the loop that
+// put 357 MB in the file on 2026-08-29 — runs inside it.
+//
+// It also goes before the bind wait below, so that a server waiting hours for
+// an occupied port cannot spend the log on its own backoff lines either.
+const logSquelch = installLogSquelch();
+
 // DEV: try the requested port, and if it's taken (another agent owns it),
 // walk up to the next 20. That convenience is what keeps `bun run dev`
 // working with several agents on one machine.
@@ -676,6 +690,9 @@ if (pluginRefresher) {
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
     console.log(`[feedback] shutting down (${sig})`);
+    // Report whatever the current squelch window was still counting; nothing
+    // else will ask for it once the process is gone.
+    logSquelch.flush();
     // Cancels an in-flight backfill; without it a paced drain keeps spending
     // on a process that is on its way out.
     summarizer.dispose();
