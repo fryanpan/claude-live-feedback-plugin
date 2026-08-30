@@ -4611,6 +4611,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // it safe to leave un-gated for anyone already past the front door,
         // and it still refuses a share visitor: an external reviewer invited
         // to one document has no business reading how many others exist.
+        /**
+         * Run the one-shot summary backfill NOW, on request.
+         *
+         * It used to be reachable only by restarting the server with
+         * CW_SUMMARY_BACKFILL=1, which made a piece of catch-up work into a
+         * reason to bounce the process — the opposite of what a cheap boot
+         * is for. It is the same sweep with the same pacing and the same
+         * skip-if-summarized rule; what changed is that asking for it no
+         * longer costs a restart.
+         *
+         * Still deliberate rather than automatic: the backlog is hundreds of
+         * billed calls, so nothing schedules this. Somebody asks.
+         */
+        if (pathname === '/api/summaries/backfill' && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const body = await safeJson(req);
+          const minutes = Number(body?.windowMinutes ?? 15);
+          const windowMs = (Number.isFinite(minutes) && minutes > 0 ? minutes : 15) * 60_000;
+          const { queued, open, resolved } = rooms.backfillSummaries({ windowMs });
+          return j(200, { ok: true, queued, open, resolved, windowMs });
+        }
+
         if (pathname === '/api/metrics' && req.method === 'GET') {
           if (visitor) return j(403, { error: 'not available to share visitors' });
           const stats = rooms.stats();
@@ -9846,12 +9868,13 @@ function buildProjectArtifacts(
     if (meta.docId.startsWith('ws:') || meta.docId.startsWith('task:')) continue;
     if ((meta.owner || 'ungrouped') !== owner) continue;
 
-    const threads = rooms.listThreads(meta.docId);
-    const openCount = threads.filter((t) => t.status === 'open').length;
+    // Both from the doc's index row rather than its thread map — same
+    // numbers, without decoding every doc this owner has on every render.
+    const openCount = rooms.threadCounts(meta.docId).open;
     // Thread activity, never `meta.lastActivityAt` — see the header note in
     // landing.ts. That field is the `.ydoc` mtime and a snapshot rewrite
     // refreshes it, so it ranks by persistence noise.
-    const lastActivity = threads.reduce((max, t) => Math.max(max, t.lastActivity), 0);
+    const lastActivity = rooms.lastThreadActivity(meta.docId);
 
     if (meta.workspaceId) {
       let art = workspaceArtifacts.get(meta.workspaceId);
@@ -9886,7 +9909,7 @@ function buildProjectArtifacts(
       // A diff member marks the whole workspace as a diff review (members can
       // also include plain 'code' context docs — any diff doc wins).
       if (meta.type === 'diff') art.kind = 'diff';
-      art.threadCount += threads.length;
+      art.threadCount += rooms.threadCounts(meta.docId).total;
       if (lastActivity > art.lastActivity) art.lastActivity = lastActivity;
       continue;
     }
@@ -9898,7 +9921,7 @@ function buildProjectArtifacts(
       id: meta.docId,
       reviewUrl: decorated.reviewUrl,
       openCount,
-      threadCount: threads.length,
+      threadCount: rooms.threadCounts(meta.docId).total,
       lastActivity,
     });
   }
