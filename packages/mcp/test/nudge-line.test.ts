@@ -389,6 +389,32 @@ const HELD_ROW = {
   filedBy: 'Index Keeper',
 };
 
+describe('stalledLine tells a stand-in why it, and not the lead, was woken', () => {
+  it('leads with the unmanned seat, then still says what is stuck', () => {
+    const line = stalledLine({ ...STALL, escalatedFrom: 'agent-cartographer' });
+    // The reader's first question is why this arrived at all.
+    expect(line.indexOf('not this board')).toBeLessThan(line.indexOf('stopped moving'));
+    expect(line).toContain('agent-cartographer');
+    expect(line).toContain('attach_agent');
+    // …and the wake is still the wake: the rows survive the preamble.
+    expect(line).toContain('Rank results by recency');
+    expect(line).toContain('9 open');
+  });
+
+  it('POSITIVE CONTROL: an ordinary wake says none of it', () => {
+    const line = stalledLine(STALL);
+    expect(line).not.toContain('not this board');
+    expect(line).not.toContain('attach_agent');
+    expect(line.startsWith('[workspace.stalled] ')).toBe(true);
+  });
+
+  it('an empty escalatedFrom is not an escalation', () => {
+    // A server that sends the field blank must not produce a line naming
+    // nobody as the absent lead.
+    expect(stalledLine({ ...STALL, escalatedFrom: '' })).not.toContain('not this board');
+  });
+});
+
 describe('stalledLine names held review items as their own finding', () => {
   it('says how many are held, which, by whom, and what the judge found', () => {
     const line = stalledLine({ ...STALL, rows: [], stalledCount: 0, heldItems: [HELD_ROW] });

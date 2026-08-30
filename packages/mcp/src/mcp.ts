@@ -108,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.129';
+const PLUGIN_VERSION = '0.1.130';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -3929,6 +3929,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             boards: Array<{ workspaceId: string; name: string }>;
             notice: string;
           };
+          seat?: {
+            leadAgentId?: string;
+            live: boolean;
+            stale: boolean;
+            unattached?: boolean;
+            notice?: string;
+          };
+          seatTakenFrom?: string;
+          watching?: number;
+          notes?: string[];
         };
         // Only when this session attached as ITSELF: the keepalive proves
         // THIS process is alive, and refreshing somebody else's attachment
@@ -3994,6 +4004,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             text: q.text,
             ts: q.ts,
           })),
+          // WHAT THIS ATTACH DID NOT GIVE YOU. A session that respawns under
+          // a new name attaches successfully and comes up with no watches and
+          // no seat, and the success is all it was ever told — which is how a
+          // board went four and a half hours with its asks reaching nobody.
+          // These three fields are that silence made readable, and `notes`
+          // says in words what to do about it. Absent from an older server.
+          ...(res.notes !== undefined && res.notes.length > 0 ? { notes: res.notes } : {}),
+          ...(res.watching !== undefined ? { watching: res.watching } : {}),
+          // The board's lead seat as it stands now, INCLUDING when somebody
+          // else holds it: `stale` means its holder has stopped answering, so
+          // nothing addressed to the lead is arriving.
+          ...(res.seat !== undefined ? { seat: res.seat } : {}),
+          // This attach TOOK the seat from a holder that was gone. Say so
+          // wherever you report in — a handover is not a detail.
+          ...(res.seatTakenFrom !== undefined ? { seatTakenFrom: res.seatTakenFrom } : {}),
         });
       }
       case 'heartbeat': {
