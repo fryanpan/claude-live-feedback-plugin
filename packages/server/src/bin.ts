@@ -6,6 +6,7 @@ import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { clientReleaseStatus, resolveClientDists } from './client-release.ts';
 import { createDeployer } from './deploy.ts';
+import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.ts';
 import { installLogSquelch } from './log-squelch.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
 import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
@@ -419,6 +420,21 @@ if (!reviewJudge) {
   );
 }
 
+// The ONLY place the real effort-estimate scorer is constructed — same seam
+// rule and the same dedicated-key consent as the summarizer and the review
+// judge: a ticket's title and description leave the machine for this call.
+// Absent key or CW_EFFORT_ESTIMATE=0 → null → every ticket stays unscored,
+// which reads on the row exactly like a workspace that never wired this in.
+const effortEstimator = haikuEffortEstimator();
+if (!effortEstimator) {
+  console.log(
+    effortEstimateEnabled()
+      ? '[effort-estimate] no summary API key; tickets stay unscored. ' +
+          `Add one with: security add-generic-password -a "$USER" -s ${KEYCHAIN_SERVICE} -w`
+      : '[effort-estimate] off (CW_EFFORT_ESTIMATE=0); tickets stay unscored.',
+  );
+}
+
 // The ONLY place a real transcription engine is constructed — same seam rule,
 // and here it is also the difference between a test suite that is free and one
 // that opens a metered streaming session per server it spins up. No key → null
@@ -589,6 +605,7 @@ while (!handle) {
       ...(stallNudgeRepeatMs !== undefined ? { stallNudgeRepeatMs } : {}),
       ...(heldReviewItemMs !== undefined ? { heldReviewItemMs } : {}),
       ...(reviewJudge ? { reviewJudge } : {}),
+      ...(effortEstimator ? { effortEstimator } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
       ...(notesComposer ? { meetingNotes: { composer: notesComposer, taskExtractor } } : {}),
