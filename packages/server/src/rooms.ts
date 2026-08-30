@@ -366,6 +366,39 @@ const AWARENESS_TICK_MS = AWARENESS_OUTDATED_MS / 10;
 const MEMORY_LOG_MS = 5 * 60_000;
 
 /**
+ * How many distinct activation tags to keep. Everything past the cap folds
+ * into `other`, so a pathological caller cannot grow this map without bound.
+ */
+const ACTIVATION_TAG_CAP = 32;
+/** How many to report. The question is "who is doing this", not a census. */
+const ACTIVATION_TAGS_REPORTED = 8;
+
+/**
+ * Where the current `touchDoc` came from, as `packages/<path>:<line>`.
+ *
+ * Only ever called when a binding goes idle -> active, which in a healthy
+ * server is rare and in the case this exists to catch is exactly the thing
+ * worth paying for. Frames inside rooms.ts are skipped — every touch passes
+ * through `get` / `getOrCreate`, so the useful frame is the first one
+ * outside.
+ *
+ * Deliberately relative to `packages/`: the absolute path is a host-machine
+ * fact and this string is served by `GET /api/metrics`.
+ */
+function activationTag(): string {
+  const stack = new Error().stack;
+  if (!stack) return 'unknown';
+  for (const line of stack.split('\n').slice(1)) {
+    const m = line.match(/[/\\]packages[/\\]([^\s)]+?):(\d+):\d+/);
+    if (!m) continue;
+    const where = m[1].replace(/\\/g, '/');
+    if (where.endsWith('/rooms.ts')) continue;
+    return `packages/${where}:${m[2]}`;
+  }
+  return 'external';
+}
+
+/**
  * The maintenance y-protocols' `Awareness` constructor would run on its own
  * 3s interval: renew the local clock before it goes outdated, and evict
  * remote clients that have stopped reporting.
@@ -436,6 +469,18 @@ export class Rooms {
    */
   private activityMtime = new Map<string, number>();
 
+  /**
+   * Activation tag → how many times a binding went idle -> ACTIVE from there.
+   *
+   * The file poll's cost is driven entirely by how many bindings are active,
+   * and twice now a whole-corpus scan has quietly put every one of them in
+   * the fast lane by reading metadata through `get`. Both times the caller
+   * was found by instrumenting this path by hand on a copy of the production
+   * data directory; this makes the running server answer instead. Cumulative
+   * since boot, capped, and reported by `GET /api/metrics`.
+   */
+  private activations = new Map<string, number>();
+
   /** docId → last time anything reached for this doc (see `touchDoc`). */
   private lastTouchedAt = new Map<string, number>();
 
@@ -470,7 +515,10 @@ export class Rooms {
       const s = this.stats();
       console.error(
         `[rooms] mem rss=${s.rssMb}MB rooms=${s.rooms} bindings=${s.bindings} ` +
-          `activeBindings=${s.activeBindings} awareness=${s.awareness} timers=${s.timers}`,
+          `activeBindings=${s.activeBindings} awareness=${s.awareness} timers=${s.timers} ` +
+          // The busiest activator, so a log-only reading of an incident still
+          // names a caller instead of only a count.
+          `top=${s.activations[0]?.tag ?? 'none'}x${s.activations[0]?.count ?? 0}`,
       );
     }, MEMORY_LOG_MS);
     timer.unref?.();
@@ -496,6 +544,14 @@ export class Rooms {
     awareness: number;
     /** Timers owned by this Rooms: pending saves + file debounces + tickers. */
     timers: number;
+    /**
+     * Who has been promoting bindings into the file poll's fast lane, since
+     * boot, busiest first. Source locations and counts only — the whole point
+     * is to name a CALLER, and nothing here is derived from a doc.
+     */
+    activations: { tag: string; count: number }[];
+    /** Every activation, including the tags not listed above. */
+    activationsTotal: number;
   } {
     const now = Date.now();
     let activeBindings = 0;
@@ -517,6 +573,11 @@ export class Rooms {
         (this.awarenessTicker ? 1 : 0) +
         (this.filePollTicker ? 1 : 0) +
         (this.memoryTicker ? 1 : 0),
+      activations: [...this.activations.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, ACTIVATION_TAGS_REPORTED)
+        .map(([tag, count]) => ({ tag, count })),
+      activationsTotal: [...this.activations.values()].reduce((a, b) => a + b, 0),
     };
   }
 
@@ -3102,10 +3163,28 @@ export class Rooms {
       return;
     }
     const now = Date.now();
+    // Asked BEFORE the stamp moves: afterwards every touch looks active.
+    const wasActive = this.bindingIsActive(docId, binding, now);
     const prev = this.lastTouchedAt.get(docId);
     this.lastTouchedAt.set(docId, now);
     this.ensureFilePollTicker();
+    if (!wasActive) this.noteActivation();
     if (prev === undefined || now - prev >= FILE_POLL_MS) this.pollBinding(docId, binding);
+  }
+
+  /** One idle -> active transition, filed under where it came from. */
+  private noteActivation(): void {
+    const tag = activationTag();
+    const seen = this.activations.get(tag);
+    if (seen !== undefined) {
+      this.activations.set(tag, seen + 1);
+      return;
+    }
+    if (this.activations.size >= ACTIVATION_TAG_CAP) {
+      this.activations.set('other', (this.activations.get('other') ?? 0) + 1);
+      return;
+    }
+    this.activations.set(tag, 1);
   }
 
   /**
