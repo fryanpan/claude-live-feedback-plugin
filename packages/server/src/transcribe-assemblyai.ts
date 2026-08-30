@@ -276,6 +276,14 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
               // The whole-session pass relabelled some turns. Re-emit each
               // as the settled turn it already was, with the text we kept,
               // so a revised label rides the same path as a revised word.
+              //
+              // The array is `revisions`, NOT `turns` — checked against both
+              // the guide and streaming/api-spec/streaming-websocket, which
+              // give the same payload. A reviewer has already called this a
+              // P1 for reading the wrong field; it reads the right one, and
+              // a "fix" to `turns` would silently drop every revision.
+              // Entries carry `turn_order` and `speaker_label` (plus `words`,
+              // which we do not need — text is never revised by this pass).
               const revisions = Array.isArray(msg.revisions) ? msg.revisions : [];
               for (const rev of revisions as Array<Record<string, unknown>>) {
                 const order = rev.turn_order;
