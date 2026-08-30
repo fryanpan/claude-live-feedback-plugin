@@ -208,6 +208,21 @@ describe('the speaker tag', () => {
       firstOpaque!.at,
       `opaque only at ${firstOpaque!.at}px, ${capPad}px of padding — the ramp is inside the pill`,
     ).toBeLessThanOrEqual(capPad);
+    // Tighter, and the one that survives the next layout change: the cut must
+    // sit at or above where the pill's top ACTUALLY lands, not merely at the
+    // padding. Measured at 1180x820 the margin between them is 0.38px, and the
+    // line box has already moved twice under this feature (19 -> 22.9px).
+    // Either move would have eaten it silently; here it fails a test instead.
+    const pill = rule('.meeting-speaker-pill', declarationsOnly(SECTION));
+    const pillH =
+      px(decl(pill, 'font-size'), STRIP_FONT) * Number(decl(pill, 'line-height')) +
+      2 * px(/^([\d.]+px)/.exec(decl(pill, 'border') ?? '')?.[1], STRIP_FONT);
+    const window = px(decl(capt, 'height'), STRIP_FONT);
+    const pillTop = capPad + (window - pillH) / 2;
+    expect(
+      firstOpaque!.at,
+      `cut at ${firstOpaque!.at}px, pill top at ${pillTop}px — the cut is inside the pill`,
+    ).toBeLessThanOrEqual(pillTop);
     // And it must still be transparent right up to there, or the rolled-off
     // line stops being hidden and reappears above the current one.
     const lastClear = stops.filter((s) => !s.opaque).at(-1);
