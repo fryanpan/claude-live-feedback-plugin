@@ -72,6 +72,16 @@ interface Conn {
 
 export class MeetingRelay {
   private readonly conns = new WeakMap<MeetingClient, Conn>();
+  /**
+   * Teardowns started by a socket closing and not finished yet.
+   *
+   * `onClose` cannot await — it is a Bun websocket callback — but its work is
+   * durable: `stop()` flushes the engine's turn in progress and then the
+   * notes into the doc. On shutdown every socket closes at once and those
+   * writes have to land before the rooms are flushed, so `dispose()` waits
+   * here. A `WeakMap` of connections cannot be enumerated; this can.
+   */
+  private readonly ending = new Set<Promise<void>>();
 
   constructor(private readonly deps: MeetingRelayDeps) {}
 
@@ -132,11 +142,24 @@ export class MeetingRelay {
     const conn = this.conns.get(ws);
     if (!conn) return;
     this.conns.delete(ws);
-    void this.stop(ws, conn, false);
+    const ending = this.stop(ws, conn, false);
+    this.ending.add(ending);
+    void ending.finally(() => this.ending.delete(ending));
   }
 
-  /** Every live meeting ends — server shutdown. */
-  dispose(): void {
+  /**
+   * Every live meeting ends — server shutdown.
+   *
+   * Awaits the teardowns already running first: a shutdown force-closes the
+   * audio sockets, and each one's `onClose` is mid-flush when this is called.
+   * `stopAll()` after them is the belt — it ends a meeting whose connection
+   * never produced a close at all, so a restart never reads a doc as
+   * recording by a socket that is gone.
+   */
+  async dispose(): Promise<void> {
+    // allSettled: one meeting whose engine refuses to close must not keep the
+    // others' notes out of the flush that follows.
+    while (this.ending.size > 0) await Promise.allSettled([...this.ending]);
     this.deps.store.stopAll();
   }
 
