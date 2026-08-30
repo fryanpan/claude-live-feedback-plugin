@@ -5,6 +5,7 @@ import {
   type TaskReviewItem,
   answerFromReply,
   checkReviewPayload,
+  isReviewItemGated,
   isReviewItemHeld,
   isReviewItemOpen,
   pendingDeclaration,
@@ -1064,5 +1065,30 @@ describe('the quality gate’s verdict on a review item', () => {
       }),
     );
     expect(read ? isReviewItemHeld(read) : null).toBe(false);
+  });
+});
+
+describe('an item whose verdict is still out', () => {
+  const item = (verdict: 'ok' | 'held' | 'unavailable' | 'pending'): TaskReviewItem => ({
+    id: 'ri-1',
+    review: { shape: 'decision', headline: 'Which index?' },
+    createdAt: 1,
+    createdBy: 'Index Keeper',
+    judge: { at: 2, verdict, reason: '' },
+  });
+
+  it('is gated — off the queue — but not held: there is nothing to revise yet', () => {
+    expect(isReviewItemGated(item('pending'))).toBe(true);
+    expect(isReviewItemHeld(item('pending'))).toBe(false);
+  });
+
+  it('gated agrees with held on every settled verdict (control)', () => {
+    for (const v of ['ok', 'held', 'unavailable'] as const) {
+      expect(isReviewItemGated(item(v))).toBe(isReviewItemHeld(item(v)));
+    }
+  });
+
+  it('reads a pending verdict off the wire', () => {
+    expect(readTaskReviewItem(item('pending'))?.judge?.verdict).toBe('pending');
   });
 });

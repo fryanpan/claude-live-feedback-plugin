@@ -20,6 +20,7 @@ import {
   agentIdForName,
   changedRange,
   checkReviewPayload,
+  isReviewItemGated,
   isReviewItemHeld,
   isReviewItemOpen,
   latestThreadedQuestion,
@@ -4035,7 +4036,7 @@ export class TaskStore {
     // reader was never shown.
     const items = this.listReviewItems(taskId);
     const held = items.filter(isReviewItemHeld).length;
-    const open = items.filter((i) => isReviewItemOpen(i) && !isReviewItemHeld(i)).length;
+    const open = items.filter((i) => isReviewItemOpen(i) && !isReviewItemGated(i)).length;
     let unreadable = 0;
     for (const raw of task.reviews ?? []) {
       if (!readTaskReviewItem(raw)) unreadable++;
@@ -6772,6 +6773,18 @@ export class TaskStore {
             task.triagedAgainst === undefined
           ) {
             task.unplacedSince = task.createdAt;
+          }
+          // A judge call that was out when the last process died never
+          // came back. The item must not stay off the queue for it: a
+          // verdict nobody will deliver is a judge failure, and those pass.
+          for (const item of task.reviews ?? []) {
+            if (item?.judge?.verdict === 'pending') {
+              item.judge = {
+                at: item.judge.at,
+                verdict: 'unavailable',
+                reason: 'the server restarted before the judge answered',
+              };
+            }
           }
           tasks.set(task.id, task);
           this.taskIndex.set(task.id, workspace.id);

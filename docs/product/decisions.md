@@ -514,9 +514,13 @@ and a textarea pattern is its own piece of work. Reversible calls:
    agents filing asks would cost more than every bad item it ever caught.
    One call, no retries — a retry doubles the latency on the filing path
    for the case where the answer is "pass anyway".
-2. **Held is not open.** `reviewState.open` and the Home queue both exclude
-   held items, so the answerable count, the brief, and the review strip are
-   right by construction rather than by a second filter. The item stays on
+2. **Held is not open — and neither is "being judged".** `reviewState.open`
+   and the Home queue both exclude held items, so the answerable count, the
+   brief, and the review strip are right by construction rather than by a
+   second filter. The item is stamped `pending` before the judge is asked,
+   so the seconds the call takes are not seconds the reader can answer an
+   item about to be held; a `pending` found on disk at boot becomes
+   `unavailable` (a call nobody will answer is a judge failure, rule 1). The item stays on
    the ticket with the judge's reason ("Held: … — the agent has been asked
    to revise"), because the reader should see that a question is coming.
 3. **Five minutes, then one complaint per item.** `CW_HELD_ITEM_MINUTES`

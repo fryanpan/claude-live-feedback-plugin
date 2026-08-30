@@ -404,6 +404,44 @@ describe('the review-item quality gate', () => {
       expect(await queue(workspaceId)).toEqual([]);
     });
 
+    // Found by codex review, fourth pass: for the seconds the judge took,
+    // the item was on the queue — and answerable — before the hold landed.
+    it('an item is off the queue from the moment it is filed, while the judge is out', async () => {
+      verdict = 'defer';
+      const { workspaceId, taskId } = await board();
+      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      while (parked.length < 1) await settle(10);
+      expect(await queue(workspaceId)).toEqual([]);
+      const { tasks } = await jj<{
+        tasks: Array<{ id: string; reviews?: Array<{ id: string; judge?: { verdict: string } }> }>;
+      }>(await get(`/api/workspaces/${workspaceId}/tasks`));
+      expect(tasks.find((t) => t.id === taskId)?.reviews?.[0]?.judge?.verdict).toBe('pending');
+      // The control: the verdict arriving is what puts it on the queue.
+      parked[0]?.({ ok: true, reason: 'fine' });
+      const filed = await jj<{ item: { id: string } }>(await filing);
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([filed.item.id]);
+    });
+
+    it('a judge call the last process never got back from passes the item at boot', async () => {
+      verdict = 'defer';
+      const { workspaceId, taskId } = await board();
+      const filing = post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER });
+      while (parked.length < 1) await settle(10);
+      // The process dies with the call out: stop() flushes the store with
+      // `pending` on disk, and the parked judge never answers.
+      await handle.stop();
+      handle = createServer({ port: 0, dataDir, heldReviewItemMs: 0 });
+      base = `http://localhost:${handle.port}`;
+      const { tasks } = await jj<{
+        tasks: Array<{ id: string; reviews?: Array<{ id: string; judge?: { verdict: string } }> }>;
+      }>(await get(`/api/workspaces/${workspaceId}/tasks`));
+      const row = tasks.find((t) => t.id === taskId)?.reviews?.[0];
+      expect(row?.judge?.verdict).toBe('unavailable');
+      expect((await queue(workspaceId)).map((r) => r.reviewItemId)).toEqual([row?.id]);
+      parked[0]?.({ ok: false, reason: 'too late' });
+      await filing.catch(() => undefined);
+    });
+
     // Found by codex review: two judge calls in flight for one item — the
     // filing's and a revision's — can finish in either order, and the
     // earlier one used to stamp its verdict onto words it never read.

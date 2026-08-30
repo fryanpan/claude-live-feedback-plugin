@@ -168,7 +168,7 @@ export interface HubReviewItem {
   answer?: { text: string };
   /** The quality gate's verdict on the current words. `held` is the one
    *  that shows on the ticket. */
-  judge?: { at: number; verdict: 'ok' | 'held' | 'unavailable'; reason: string };
+  judge?: { at: number; verdict: 'ok' | 'held' | 'unavailable' | 'pending'; reason: string };
 }
 
 /** Review items the quality gate is holding — on the ticket, off the queue. */

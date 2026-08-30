@@ -541,9 +541,17 @@ export interface ReviewItemJudgement {
   reason: string;
 }
 
-export type ReviewJudgeVerdictKind = 'ok' | 'held' | 'unavailable';
+/**
+ * `pending` is the judge's call still out: stamped before the item is
+ * exposed, so an item the judge is about to hold never flashes onto the
+ * queue for the seconds the call takes. The server replaces it with the
+ * verdict, and turns a `pending` it finds on disk at boot into
+ * `unavailable` — a call that never came back is a pass, like any other
+ * judge failure.
+ */
+export type ReviewJudgeVerdictKind = 'ok' | 'held' | 'unavailable' | 'pending';
 
-const JUDGE_VERDICTS: ReadonlySet<string> = new Set(['ok', 'held', 'unavailable']);
+const JUDGE_VERDICTS: ReadonlySet<string> = new Set(['ok', 'held', 'unavailable', 'pending']);
 
 /**
  * Is this item HELD by the quality gate — filed, on the ticket, but kept off
@@ -555,6 +563,18 @@ const JUDGE_VERDICTS: ReadonlySet<string> = new Set(['ok', 'held', 'unavailable'
  */
 export function isReviewItemHeld(item: TaskReviewItem): boolean {
   return item.answer === undefined && item.judge?.verdict === 'held';
+}
+
+/**
+ * Is this item OFF the reader's queue because of the quality gate — held,
+ * or still being judged? The queue asks this one; the ticket's "Held: …"
+ * note asks `isReviewItemHeld`, because there is nothing to say about an
+ * item whose verdict is seconds away.
+ */
+export function isReviewItemGated(item: TaskReviewItem): boolean {
+  if (item.answer !== undefined) return false;
+  const verdict = item.judge?.verdict;
+  return verdict === 'held' || verdict === 'pending';
 }
 
 /**

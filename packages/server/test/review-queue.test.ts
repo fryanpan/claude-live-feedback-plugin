@@ -1080,6 +1080,7 @@ describe('taskReviewItems — a ticket contributes one row per OPEN review item'
           }),
           item({ id: 'ri-ok', judge: { at: T0 + 5, verdict: 'ok', reason: 'fine' } }),
           item({ id: 'ri-unjudged' }),
+          item({ id: 'ri-pending', judge: { at: T0 + 5, verdict: 'pending', reason: '' } }),
         ],
       },
     ]);
