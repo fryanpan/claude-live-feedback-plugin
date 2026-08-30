@@ -5659,9 +5659,17 @@ a.hub-link-chip:hover {
 
 /* ================= EDITOR ================= */
 
+/* The bottom padding is the document's SCROLL RUNWAY, and it has to cover an
+   open keyboard. iOS does not shrink the layout viewport for the keyboard, so
+   the last lines of a doc sit behind it with the scroller already at its
+   maximum — there is nothing left to scroll and the caret cannot be lifted
+   clear. `max()` rather than `+`: 160px is the resting comfort gap, and while
+   a keyboard is up the runway is whatever it is covering (--kb-bottom, from
+   keyboard-inset.ts). edit-viewport.ts does the scrolling; this is what makes
+   the scroll possible. */
 #editor {
   overflow-y: auto;
-  padding: 36px 40px calc(160px + var(--safe-bottom));
+  padding: 36px 40px calc(var(--safe-bottom) + max(160px, var(--kb-bottom, 0px)));
   -webkit-overflow-scrolling: touch;
 }
 /* Prose width: full by default (so wide tables breathe), with an opt-in
@@ -5743,7 +5751,8 @@ body.is-reading-width #editor > .ProseMirror {
    otherwise force horizontal scroll. */
 @media (max-width: 720px) {
   #editor {
-    padding: 16px 14px calc(160px + var(--safe-bottom));
+    /* Same keyboard runway as the base rule — see the comment there. */
+    padding: 16px 14px calc(var(--safe-bottom) + max(160px, var(--kb-bottom, 0px)));
   }
   #editor > .ProseMirror {
     font-size: 16px;
@@ -6243,6 +6252,33 @@ body.is-reading-width #editor > .ProseMirror {
   }
   .meeting-toggle {
     margin-left: auto;
+  }
+  /* ---- The strip yields while an editor has focus ----
+     Bryan, from his phone after tapping a table cell: "the keyboard and voice
+     recording panel moved up to cover what I'm editing. I don't need the voice
+     recording panel while editing." At this width the strip is a stacked
+     panel, ~70px of #editor-pane's third row, and it is also the one thing on
+     screen with nothing to say while somebody types.
+
+     `data-edit-viewport` is published by edit-viewport.ts from `stripYield()`.
+     Yielding is layout ONLY: the strip is never unmounted and never gets
+     `hidden` (that attribute means "no meeting surface here"), so the socket,
+     the state machine and any in-progress capture run straight through an
+     edit. Re-checked inside this media query as well as by the JS, so a mode
+     left over from a rotation cannot reach the iPad's 40px bar. */
+  body[data-edit-viewport="hidden"] .meeting-strip {
+    display: none;
+  }
+  /* A LIVE strip never disappears — a recording mic with no indicator is not a
+     thing to ship. It drops the transcript caption and keeps the meta row: the
+     pulsing dot, the clock, and Stop. */
+  body[data-edit-viewport="compact"] .meeting-strip {
+    gap: 0;
+    padding-top: 4px;
+    padding-bottom: calc(4px + var(--safe-bottom) + var(--kb-bottom, 0px));
+  }
+  body[data-edit-viewport="compact"] .meeting-caption {
+    display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
