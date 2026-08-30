@@ -211,21 +211,26 @@ describe('probeLocalPort', () => {
    * it reported "free" for a port a real server was holding. That is how the
    * supervisor came to hand a busy 8787 to its child on 2026-08-29. A pure
    * test cannot catch this; only binding for real can.
+   *
+   * Ports come from the OS (`port: 0`), never a constant — a fixed port makes
+   * this suite fail whenever anything else on the machine happens to hold it.
    */
   test('sees a running Bun.serve on the port', async () => {
-    const port = 19_733;
-    const holder = Bun.serve({ port, fetch: () => new Response('held') });
+    const holder = Bun.serve({ port: 0, fetch: () => new Response('held') });
     try {
-      expect(await probeLocalPort(port)).toBe('in-use');
+      expect(await probeLocalPort(holder.port)).toBe('in-use');
     } finally {
       holder.stop(true);
     }
   });
 
   test('reports a free port as free', async () => {
-    const port = 19_734;
-    // Positive control for the assertion above: the same call on an unheld
-    // port must answer null, or "in-use" would prove nothing.
+    // Positive control for the assertion above: without it, a probe that
+    // answered "in-use" for everything would pass that test vacuously.
+    // Borrow an OS-assigned port, release it, then ask about it.
+    const borrowed = Bun.serve({ port: 0, fetch: () => new Response('x') });
+    const port = borrowed.port;
+    borrowed.stop(true);
     expect(await probeLocalPort(port)).toBeNull();
   });
 });
