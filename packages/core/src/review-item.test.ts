@@ -35,10 +35,15 @@ function decision(over: Partial<ReviewPayload> = {}): unknown {
   };
 }
 
+// Not "Read the new onboarding copy", which is what this said until the
+// look-ask rule landed and correctly flagged it: a directive to go and read
+// something, with nowhere in the payload to go. The shared fixture's job is
+// to be well-formed, so it states its subject instead of directing at it.
+// The directive spellings get their own fixtures in the look-ask block below.
 function review(over: Partial<ReviewPayload> = {}): unknown {
   return {
     shape: 'review',
-    headline: 'Read the new onboarding copy',
+    headline: 'Onboarding copy — the second screen worries me',
     detail: 'Three screens of copy. The second one is the one I am least sure about.',
     ...over,
   };
@@ -356,6 +361,156 @@ describe('a review item has to be actionable from the card alone', () => {
 
   it('reads as filed, names the field, and says where the reader acts', () => {
     const advice = reviewGapAdvice(['detailLinkless']) ?? '';
+    expect(advice).toContain('review.detail');
+    expect(advice).toContain('Filed.');
+    expect(advice).not.toContain('cannot be filed');
+  });
+});
+
+/**
+ * Bryan, 2026-08-21: a review item asked him to go and look at something and
+ * the card carried no link, so he had to hunt for it. `detailLinkless` next
+ * door catches the version of this where the links exist in the comment; it
+ * needs a comment to compare against, so the ticket-borne doors were never
+ * judged on reachability at all. This block is the ask judged on its own.
+ *
+ * The two halves matter equally. The FIRES cases are the defect. The SILENT
+ * cases are what keeps the advice worth reading: an advisory that fired on
+ * every linkless item would be noise on most of them, and an agent that
+ * learns to skim this channel stops receiving the true positives too.
+ */
+describe('an ask that sends the reader somewhere has to say where', () => {
+  const look = (over: Partial<ReviewPayload> = {}) =>
+    checkReviewPayload({
+      shape: 'review',
+      headline: 'Review the nav mockup',
+      detail: 'It changes the header spacing on every page.',
+      ...over,
+    });
+
+  it('advises when the ask directs the reader and nothing says where', () => {
+    const c = look();
+    // Advice, never a refusal — the item is filed and answerable.
+    expect(c.ok).toBe(true);
+    expect(c.errors).toEqual([]);
+    expect(c.gaps).toContain('lookAskLinkless');
+  });
+
+  it('reads the directive in the detail as well as in the headline', () => {
+    expect(
+      look({ headline: 'Nav mockup is ready', detail: 'Take a look at the header spacing.' }).gaps,
+    ).toContain('lookAskLinkless');
+    // And a directive opening a bullet, which is how most details are written.
+    expect(
+      look({
+        headline: 'Two changes',
+        detail: '- Check the new empty state\n- it is the last blocker',
+      }).gaps,
+    ).toContain('lookAskLinkless');
+  });
+
+  it('is satisfied by a link anywhere in the payload, in either form', () => {
+    // An inline markdown link — the house style for a workspace path.
+    expect(look({ detail: 'Header spacing: [the mockup](/mockup/nav-v2).' }).gaps).toEqual([]);
+    // And a bare absolute URL. The two are NOT interchangeable in Bryan's
+    // house style, but this gap asks whether the reader can get there, and
+    // both forms render as something to tap. Advice that called a detail
+    // linkless while a URL sat in it would be describing something other
+    // than what it saw — which is how an advisory loses its reader.
+    expect(look({ detail: 'Spacing is off: https://example.invalid/nav' }).gaps).toEqual([]);
+    // A link in the headline counts too: the card renders both.
+    expect(look({ headline: 'Review [the mockup](/mockup/nav-v2)' }).gaps).toEqual([]);
+  });
+
+  it('says nothing about a report of work already done', () => {
+    // The commonest way these words appear in a detail that needs no link.
+    // Base form only, so the tense does the filtering for free.
+    expect(
+      look({
+        headline: 'Three bugs in the checkout flow',
+        detail: 'I reviewed the PR and checked the diff. Two are one-liners.',
+      }).gaps,
+    ).toEqual([]);
+    expect(
+      look({ headline: 'Status', detail: 'Reviewing the diff now; checking the tests after.' })
+        .gaps,
+    ).toEqual([]);
+  });
+
+  it('says nothing about an ask that has nothing to point at', () => {
+    // An open question. Guessing that this one has a target is what would
+    // fire the advice on the whole "what should we call it?" family.
+    expect(
+      look({
+        headline: 'What should we call it?',
+        detail: 'Naming the feature before the docs go out.',
+      }).gaps,
+    ).toEqual([]);
+    // And the case the rule was explicitly asked to leave alone: a decision
+    // whose options describe themselves. It is silent by construction — no
+    // directive — rather than by a special case for decisions.
+    expect(
+      checkReviewPayload({
+        shape: 'decision',
+        headline: 'Ship Tuesday or Thursday?',
+        detail: 'Tuesday beats the demo. Thursday gives QA a full day.',
+        options: [
+          { id: 'tue', label: 'Tuesday' },
+          { id: 'thu', label: 'Thursday' },
+        ],
+      }).gaps,
+    ).toEqual([]);
+  });
+
+  // Found by codex review: every verb in the list is also a noun or an
+  // adjective, and card titles are written as noun phrases. Position alone
+  // read all of these as imperatives and advised each one to link an artifact
+  // that does not exist — including the open-question family the rule above
+  // claims in writing to leave alone.
+  it('reads a noun phrase as a noun phrase, not as an order', () => {
+    for (const headline of [
+      'Open question: what should we call it?',
+      'Review complete',
+      'Test results',
+      'See you Tuesday',
+      'Check-in notes',
+      'Watch list for the release',
+    ]) {
+      expect(look({ headline }).gaps, headline).toEqual([]);
+    }
+  });
+
+  it('still fires on the directive spellings, including a possessive object', () => {
+    // The control for the case above: the narrowing that silenced those six
+    // has to leave these eight alone, or it bought its precision by turning
+    // the advisory off.
+    for (const headline of [
+      'Review the nav mockup',
+      'Read this before Thursday',
+      'Please look at the header spacing',
+      'Check the new empty state',
+      "Read Bryan's draft",
+      'Compare both mockups',
+      'Open the staging build',
+      'Try it on a phone',
+    ]) {
+      expect(look({ headline }).gaps, headline).toContain('lookAskLinkless');
+    }
+  });
+
+  it('does not say the same thing twice when the comment already explains it', () => {
+    // `detailLinkless` is the more actionable half — the links exist and are
+    // in the wrong place — so it is raised alone.
+    const c = checkReviewPayload(
+      { shape: 'review', headline: 'Review the nav mockup', detail: 'Header spacing changed.' },
+      { text: 'Mockup: [nav v2](/mockup/nav-v2)' },
+    );
+    expect(c.gaps).toContain('detailLinkless');
+    expect(c.gaps).not.toContain('lookAskLinkless');
+  });
+
+  it('reads as filed, names the field, and says where the reader acts', () => {
+    const advice = reviewGapAdvice(['lookAskLinkless']) ?? '';
     expect(advice).toContain('review.detail');
     expect(advice).toContain('Filed.');
     expect(advice).not.toContain('cannot be filed');

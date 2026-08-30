@@ -458,4 +458,122 @@ describe('task review-item routes', () => {
       expect((await queueRows(wsId)).some((r) => r.taskId === task.id)).toBe(false);
     });
   });
+
+  /**
+   * The look-ask advisory, through all four doors that file a review payload.
+   *
+   * It lives in `checkReviewPayload`, which every door already runs, so in
+   * principle one unit test covers it. In practice this repo has shipped the
+   * "accepted it, returned 200, discarded it" bug twice, and the advice is
+   * worth nothing unless it reaches the agent — so each door is asked here
+   * through its real route, and each is paired with the SAME payload carrying
+   * a link, which must come back with no advice at all. Without that control
+   * a route that returned the advice unconditionally would pass every case.
+   */
+  describe('an ask with nowhere to go is advised at every door', () => {
+    const LOOK = {
+      shape: 'review',
+      headline: 'Review the nav mockup',
+      detail: 'It changes the header spacing on every page.',
+    };
+    const LOOK_LINKED = {
+      ...LOOK,
+      detail: 'It changes the header spacing: [the mockup](/mockup/nav-v2).',
+    };
+    const says = (advice: string | undefined) => (advice ?? '').includes('go and look');
+
+    it('add_review_item — the ticket-borne door, which had no link advice at all', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId);
+      const filed = await jj<{ reviewAdvice?: string }>(
+        await post(`/api/tasks/${task.id}/review-items`, { review: LOOK, author: AGENT }),
+      );
+      expect(says(filed.reviewAdvice)).toBe(true);
+      expect(filed.reviewAdvice).toContain('review.detail');
+
+      const linked = await jj<{ reviewAdvice?: string }>(
+        await post(`/api/tasks/${task.id}/review-items`, { review: LOOK_LINKED, author: AGENT }),
+      );
+      expect(linked.reviewAdvice).toBeUndefined();
+    });
+
+    it('a review filed with the ticket', async () => {
+      const wsId = await seedWorkspace();
+      const made = await jj<{ reviewAdvice?: string }>(
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          title: 'Land the nav change',
+          assignee: 'Index Keeper',
+          author: AGENT,
+          review: LOOK,
+        }),
+      );
+      expect(says(made.reviewAdvice)).toBe(true);
+
+      const linked = await jj<{ reviewAdvice?: string }>(
+        await post(`/api/workspaces/${wsId}/tasks`, {
+          title: 'Land the nav change',
+          assignee: 'Index Keeper',
+          author: AGENT,
+          review: LOOK_LINKED,
+        }),
+      );
+      expect(linked.reviewAdvice).toBeUndefined();
+    });
+
+    it('create_thread — the path the fleet rules tell every agent to use', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId);
+      const made = await jj<{ thread: { id: string }; reviewAdvice?: string }>(
+        await post(`/api/docs/task:${task.id}/threads`, {
+          author: AGENT,
+          text: 'Nav mockup is ready.',
+          anchor: { kind: 'subject' },
+          review: LOOK,
+        }),
+      );
+      expect(says(made.reviewAdvice)).toBe(true);
+
+      const linked = await jj<{ reviewAdvice?: string }>(
+        await post(`/api/docs/task:${task.id}/threads`, {
+          author: AGENT,
+          text: 'Nav mockup is ready.',
+          anchor: { kind: 'subject' },
+          review: LOOK_LINKED,
+        }),
+      );
+      expect(linked.reviewAdvice).toBeUndefined();
+    });
+
+    it('post_reply, and the comment’s own links still take precedence', async () => {
+      const wsId = await seedWorkspace();
+      const task = await seedTask(wsId);
+      const { thread } = await jj<{ thread: { id: string } }>(
+        await post(`/api/docs/task:${task.id}/threads`, {
+          author: AGENT,
+          text: 'Opening the discussion.',
+          anchor: { kind: 'subject' },
+        }),
+      );
+      const replied = await jj<{ reviewAdvice?: string }>(
+        await post(`/api/docs/task:${task.id}/threads/${thread.id}/comments`, {
+          author: AGENT,
+          text: 'Nav mockup is ready.',
+          review: LOOK,
+        }),
+      );
+      expect(says(replied.reviewAdvice)).toBe(true);
+
+      // The older gap is the more actionable of the two when the links exist
+      // and sit in the wrong place, so it is the one that speaks.
+      const inComment = await jj<{ reviewAdvice?: string }>(
+        await post(`/api/docs/task:${task.id}/threads/${thread.id}/comments`, {
+          author: AGENT,
+          text: 'Mockup: [nav v2](/mockup/nav-v2)',
+          review: LOOK,
+        }),
+      );
+      expect(inComment.reviewAdvice).toContain('The comment carries links');
+      expect(says(inComment.reviewAdvice)).toBe(false);
+    });
+  });
 });
