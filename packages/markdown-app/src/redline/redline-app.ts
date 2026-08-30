@@ -208,6 +208,11 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
         baseText,
         isAdded,
         onSelectionChange,
+        // Read-only from its first paint for a browser the server refuses —
+        // not locked a round trip later, which is a round trip of live
+        // editor. The companion is still opened, so this reader sees the
+        // same markup and the same comment threads as everybody else.
+        editable: ctx.canWrite,
         docLink: ctx.workspaceId
           ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
           : undefined,

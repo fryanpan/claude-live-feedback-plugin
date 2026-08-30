@@ -4,6 +4,7 @@ import { saveStateView, settlePending, watchConnection } from './connection-stat
 import { renderDiffNav, setActiveFile } from './diff-nav.ts';
 import { fetchDocMeta } from './doc-meta.ts';
 import { docHref, workspaceIdFromPath } from './doc-path.ts';
+import { type EditMode, initialEditMode, writeEditModePref } from './edit-mode.ts';
 import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
@@ -35,7 +36,6 @@ import {
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
 import {
-  applyWriteAccess,
   fetchWriteAccess,
   installWriteGateNotice,
   lockDocToReading,
@@ -138,6 +138,9 @@ async function main(): Promise<void> {
   registerMarkdownMount(mountMarkdown);
   startRouter({
     user,
+    // The answer is already in hand — every mount gets it as a value rather
+    // than asking again. A mount that re-asks is editable while it waits.
+    canWrite: writeAccess.canWrite,
     fetchMeta: fetchDocMeta,
     connectFor: (docId, docType) => {
       const client = connect(DEFAULT_WS_PATH(docId, docType));
@@ -186,11 +189,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
    * editable and it only takes one to lose a person's writing — and by the
    * chrome that describes what this surface IS. Declared this high because
    * the save-state chip reads it, and that renders long before the toggles
-   * are wired. Starts `true` and is only ever narrowed: "may write" is the
-   * answer for every deployment with the gate off, which is all of them by
-   * default.
+   * are wired.
+   *
+   * The server's answer, carried in on the MountContext — not a hopeful
+   * `true` narrowed later. It used to start `true` and be corrected one
+   * round trip after the mount, and everything this flag guards was open
+   * for the length of that trip.
    */
-  let canWrite = true;
+  const canWrite = ctx.canWrite;
 
   // Forward ref: the chrome is mounted right after the editor, but editor
   // callbacks can fire during initial Yjs application — guard until set.
@@ -976,20 +982,8 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   //   still works in view mode and surfaces the comment pill. Persist the
   //   user's chosen mode in localStorage.
   // =========================================================================
-  type EditMode = 'view' | 'edit';
-  const EDIT_MODE_KEY = 'lf:edit-mode';
-  function defaultEditMode(): EditMode {
-    // Default to VIEW everywhere — a review surface reads first, edits by
-    // choice, and view mode avoids the mobile keyboard popping up on tap.
-    // View-mode commenting works: getSelectionRel() falls back to the raw DOM
-    // selection and the pill keys off it, so an iOS long-press raises the pill
-    // even though the doc is non-editable.
-    return 'view';
-  }
-  function readEditModePref(): EditMode {
-    const stored = localStorage.getItem(EDIT_MODE_KEY);
-    return stored === 'view' || stored === 'edit' ? stored : defaultEditMode();
-  }
+  //   The mode itself, and the stored preference behind it, live in
+  //   edit-mode.ts — including why the preference alone can never decide this.
   function applyEditMode(mode: EditMode): void {
     const editable = mode === 'edit';
     editor.editor.setEditable(editable);
@@ -1007,40 +1001,19 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       toggleFormat.setAttribute('aria-pressed', 'false');
     }
   }
-  let editMode: EditMode = readEditModePref();
+  // The stored preference is CONSULTED, not obeyed: `canWrite` is the answer
+  // main() already awaited, so the first `setEditable` of this mount is
+  // already the right one. There is no window in which the document is live
+  // and the answer is outstanding — the mount had the answer before it ran.
+  let editMode: EditMode = initialEditMode(canWrite);
   applyEditMode(editMode);
-  /**
-   * A browser the server will not accept writes from does not get an edit
-   * toggle — or a Suggesting toggle, which is the same door. The socket is
-   * already read-only server-side when this comes back false; this is what
-   * stops a person typing into it and watching the text vanish on reload.
-   */
-  void applyWriteAccess().then((allowed) => {
-    if (allowed) return;
-    canWrite = false;
-    // The chrome describes the surface, and it has stopped being an editor:
-    // the crumb said "Editing:" and the chip said "All changes saved" to
-    // somebody who could do neither.
-    applyReadingCrumb(document);
-    renderSaveState();
-    lockDocToReading({
-      stopSuggesting: () => {
-        suggesting = false;
-        applySuggestMode(false);
-      },
-      toViewMode: () => {
-        editMode = 'view';
-        applyEditMode('view');
-      },
-    });
-  });
   scope.listen(toggleEditMode, 'click', () => {
-    // A disabled button fires no click, so this guard is for the window
-    // before the session answer arrives — the toggles are live during it,
-    // and a click landing there must not outrun the answer.
+    // A disabled button fires no click. Kept anyway: `lockDocToReading` is
+    // what disables it, and a guard that depends on a DOM property having
+    // been set is one refactor away from being no guard at all.
     if (!canWrite) return;
     editMode = editMode === 'edit' ? 'view' : 'edit';
-    localStorage.setItem(EDIT_MODE_KEY, editMode);
+    writeEditModePref(editMode);
     applyEditMode(editMode);
   });
 
@@ -1083,11 +1056,41 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // Suggesting implies an editable surface — proposing requires typing.
     if (suggesting && editMode !== 'edit') {
       editMode = 'edit';
-      localStorage.setItem(EDIT_MODE_KEY, editMode);
+      writeEditModePref(editMode);
       applyEditMode(editMode);
     }
     applySuggestMode(suggesting);
   });
+
+  /**
+   * A browser the server will not accept writes from does not get an edit
+   * toggle — or a Suggesting toggle, which is the same door. The socket is
+   * already read-only server-side; this is what stops a person typing into it
+   * and watching the text vanish on reload.
+   *
+   * Synchronous, and last in the mount because it speaks for the whole
+   * surface: `canWrite` came in on the MountContext, so nothing here waits on
+   * a network answer and nothing is editable in the meantime. It used to be a
+   * `.then()` on a second `/api/auth/session` call, and everything above ran
+   * — editable — while that was in flight.
+   */
+  if (!canWrite) {
+    // The chrome describes the surface, and it has stopped being an editor:
+    // the crumb said "Editing:" and the chip said "All changes saved" to
+    // somebody who could do neither.
+    applyReadingCrumb(document);
+    renderSaveState();
+    lockDocToReading({
+      stopSuggesting: () => {
+        suggesting = false;
+        applySuggestMode(false);
+      },
+      toViewMode: () => {
+        editMode = 'view';
+        applyEditMode('view');
+      },
+    });
+  }
 
   // =========================================================================
   // HOTKEYS — ⌘M / Escape are wired by the shared chrome; only the

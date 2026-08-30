@@ -44,6 +44,19 @@ export interface MountContext extends DocMeta {
   scope: MountScope;
   client: FeedbackClient;
   user: User;
+  /**
+   * Whether the SERVER will accept writes from this browser — the answer to
+   * `/api/auth/session`, awaited once by `main()` before the router starts and
+   * handed to every mount, exactly like `user`.
+   *
+   * Required, not optional, and that is the whole point. A surface used to
+   * decide it was an editor from a stored preference and ask the server
+   * afterwards, which left the document live and typeable for one round trip
+   * and then silently threw the typing away (see `edit-mode.ts`). A required
+   * field means a surface cannot mount without having been told, and the
+   * compiler is what checks it rather than a reviewer.
+   */
+  canWrite: boolean;
 }
 
 /** A per-doc mount. Registers its teardown on `ctx.scope` (listeners via

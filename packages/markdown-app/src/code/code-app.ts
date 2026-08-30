@@ -100,6 +100,7 @@ export async function mountCode(
     diffTarget: ctx.diffTarget,
     relPath: ctx.relPath,
     diffStatus: diffInfo?.status,
+    canWrite: ctx.canWrite,
   });
   if (editable) {
     awareness.setLocalStateField('user', { name: user.name, color: user.color });
