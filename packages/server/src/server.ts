@@ -1448,7 +1448,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       const task = taskStore.getTask(docId.slice('task:'.length));
       if (task) return task.title;
     }
-    return rooms.peek(docId)?.meta.title ?? 'A document';
+    return rooms.peekMeta(docId)?.title ?? 'A document';
   }
 
   /** One spelling of "a declaration just landed on a comment", for the three
@@ -2230,7 +2230,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Exactly one hop from review to board — the same non-transitive rule
     // `shareWorkspacesOf` spells out, so what an agent HEARS about a review
     // and what a share visitor may OPEN in it cannot drift apart.
-    const reviewId = reviewIdOf(rooms.peek(docId)?.meta ?? {});
+    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
     for (const board of hubBoardsForDoc(docId)) {
       const rows = queueCommentRows(board, docId, payload);
       // rooms.ts already broadcast on the review's own channel; a second
@@ -2286,7 +2286,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         done: g.status === 'done',
       })),
       docs: workspace.docIds.map((docId) => {
-        const meta = rooms.peek(docId)?.meta;
+        const meta = rooms.peekMeta(docId);
         // Title, else the file's BASENAME — never `relPath` whole and
         // never `sourceUrl`. Those describe the host machine, and a
         // share visitor reads this route (§3.3): a label is workspace
@@ -2519,7 +2519,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     docResource: (workspaceId, docId) => {
       const workspace = taskStore.getWorkspace(workspaceId);
       if (!workspace) return undefined;
-      const meta = rooms.peek(docId)?.meta;
+      const meta = rooms.peekMeta(docId);
       // Title, else the file's BASENAME — never the path. Same rule, and the
       // same reason, as the review-items route: a label is workspace content,
       // a host path is not, and this text leaves the machine.
@@ -2562,7 +2562,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // board calls it. Title, else the file's basename — never the path, for
     // the reason given twice above.
     docTitle: (_workspaceId, docId) => {
-      const meta = rooms.peek(docId)?.meta;
+      const meta = rooms.peekMeta(docId);
       // Title, else the file's NAME. The review-items route stops at
       // `relPath`'s basename because a share visitor reads it; this label
       // reaches only the local speaker's ack and the classification prompt,
@@ -2629,9 +2629,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // readable URL handed to an outside reviewer would simply not open. This
     // is the one resolver every share-scope predicate reads, which is why the
     // fix belongs here and not in each of them.
-    const id = rooms.peek(rawId)?.docId ?? rawId;
+    const id = rooms.resolveDocId(rawId);
     const out = new Set<string>();
-    const reviewId = reviewIdOf(rooms.peek(id)?.meta ?? {});
+    const reviewId = reviewIdOf(rooms.peekMeta(id) ?? {});
     if (reviewId) out.add(reviewId);
     for (const board of hubWorkspacesHolding(id)) out.add(board);
     if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) out.add(board);
@@ -2680,7 +2680,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   function hubBoardsForDoc(docId: string): Set<string> {
     const boards = new Set(hubWorkspacesHolding(docId));
-    const reviewId = reviewIdOf(rooms.peek(docId)?.meta ?? {});
+    const reviewId = reviewIdOf(rooms.peekMeta(docId) ?? {});
     if (reviewId) for (const board of hubWorkspacesHolding(reviewId)) boards.add(board);
     return boards;
   }
@@ -3084,7 +3084,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * that is a security decision rather than an addressing one.
    */
   const resolveWorkspaceForDoc = (docId: string): string | null =>
-    backTargetFor(docId, reviewIdOf(rooms.peek(docId)?.meta ?? {}))?.id ?? null;
+    backTargetFor(docId, reviewIdOf(rooms.peekMeta(docId) ?? {}))?.id ?? null;
 
   /**
    * The workspace to send THIS caller to for a doc.
@@ -3156,7 +3156,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * `workspace` room also holds no content surface, but its route is the
    * board, not a mockup.
    */
-  const isMockupDoc = (docId: string): boolean => rooms.peek(docId)?.meta.type === 'mockup';
+  const isMockupDoc = (docId: string): boolean => rooms.peekMeta(docId)?.type === 'mockup';
 
   /**
    * A mockup's own HTML, streamed from the file the room is bound to — with
@@ -6125,9 +6125,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             linkTitlesFor(
               urls.filter((u): u is string => typeof u === 'string'),
               {
-                docMeta: (docId) => rooms.peek(docId)?.meta,
+                docMeta: (docId) => rooms.peekMeta(docId),
                 docInWorkspace: (docId, workspaceId) => {
-                  const meta = rooms.peek(docId)?.meta;
+                  const meta = rooms.peekMeta(docId);
                   if (!meta) return false;
                   if (meta.workspaceId === workspaceId) return true;
                   boardIndex ??= boardIndexForListing();
@@ -7088,7 +7088,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // for `ws:<id>` a hub workspace / review. Anything else
           // is a subscription the child would open against a 404 forever.
           const watchKeyExists = (key: string): boolean => {
-            if (rooms.peek(key)) return true;
+            if (rooms.docExists(key)) return true;
             if (!key.startsWith('ws:')) return false;
             const wsId = key.slice('ws:'.length);
             return (
@@ -9335,7 +9335,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Reuse `withReviewUrl` rather than rebuild the /review/ path here: it
     // already branches on doc type (a mockup is not served from /review/),
     // and one builder is the same reason `externalBaseUrl` is one function.
-    const meta = rooms.peek(docId)?.meta;
+    const meta = rooms.peekMeta(docId);
     return meta ? withReviewUrl(meta).reviewUrl : undefined;
   }
 
@@ -9511,6 +9511,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // via bin.ts, and before this call it lost exactly as much just-typed
       // content as SIGKILL (measured 0/100 kept on a burst killed 103ms
       // after the last keystroke, on both signals).
+      // Stop the sweeps BEFORE flushing: an eviction landing mid-flush would
+      // drop a room the flush is about to write.
+      rooms.stop();
       rooms.flush();
       // Hand the next process each channel's final event id. Without it every
       // subscriber's cursor is unrecognisable after the restart and every
