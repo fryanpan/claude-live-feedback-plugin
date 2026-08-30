@@ -149,13 +149,15 @@ export async function maybeCompress(req: Request, res: Response): Promise<Respon
   const headers = new Headers(res.headers);
   headers.set('vary', 'accept-encoding');
   // The body is about to be re-framed either way, so any length the route set
-  // by hand is stale; letting Response compute it is the only way it stays
-  // true for both branches below.
+  // by hand is stale. `rewrap` restates it from the bytes it actually sends —
+  // true for both branches by construction — so the `[timing]` line in the
+  // request wrapper can name the body size without consuming the body.
   headers.delete('content-length');
 
   const bytes = new Uint8Array(await res.arrayBuffer());
   const rewrap = (body: Uint8Array<ArrayBuffer>, extra?: [string, string]) => {
     if (extra) headers.set(extra[0], extra[1]);
+    headers.set('content-length', String(body.byteLength));
     return new Response(body, { status: res.status, statusText: res.statusText, headers });
   };
   if (!acceptsGzip(req.headers.get('accept-encoding'))) return rewrap(bytes);
