@@ -110,6 +110,20 @@ export interface ArtifactCheck {
   links: ArtifactLinkCheck[];
 }
 
+/** Cumulative reading-tracker attention on one task's body room. See
+ *  `Task.readingTime` for what counts and why absence isn't zero. */
+export interface TaskReadingTime {
+  /** Sum of every folded-in `read_session`'s clamped durationMs, in
+   *  seconds, across every visit and every reader — not per-person. */
+  totalSeconds: number;
+  /** How many `read_session` events have been folded in. NOT unique
+   *  visitors or unique visits: a tab that idles out mid-read and is
+   *  resumed later is two sessions, same as two different readers. */
+  sessionCount: number;
+  /** Wall-clock time (ms epoch) of the most recently folded-in session. */
+  lastSessionAt: number;
+}
+
 /** Schemes a `url` ref may carry. A ref is rendered as a clickable chip, so
  *  the value becomes an href — `javascript:` and `data:` are script injection
  *  and `file:` reads the host. Every other kind is an internal id and cannot
@@ -706,6 +720,21 @@ export interface Task {
    * row had no links or predates the check, never that the transition failed.
    */
   artifactCheck?: ArtifactCheck;
+  /**
+   * Cumulative HUMAN attention on this task's body room (`task:<id>`) —
+   * the sum of interaction-bounded `read_session` durations the reading
+   * tracker reports (idle time and agent traffic already excluded before
+   * this ever sees them; see `packages/markdown-app/src/reading-tracker.ts`
+   * and `recordReadingTime` below). Seconds, not milliseconds — Bryan's
+   * call (2026-08-30): this is a number a person looks at, not a wire
+   * format that benefits from sub-second precision.
+   *
+   * Absent means "not measured yet", never "measured at zero" — a task
+   * with nobody's read_session recorded against it (filed before the
+   * tracker existed, or never opened) must not read the same as a task
+   * someone opened and left instantly. No reader may default this to `0`.
+   */
+  readingTime?: TaskReadingTime;
   /** The thread/doc this was promoted from. */
   origin?: Ref;
   /**
@@ -5645,6 +5674,61 @@ export class TaskStore {
     const task = this.getTask(taskId);
     if (!task) return { ok: false, error: 'not-found' };
     task.artifactCheck = result;
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task };
+  }
+
+  /**
+   * Fold one interaction-bounded `read_session` into a task's cumulative
+   * reading time. The LIVE path — called once per session flush, right
+   * where the server already accepts the browser's `read_session` POST
+   * (see `rooms.recordReadEvent` and its caller in server.ts).
+   *
+   * Quiet like `recordArtifactCheck` and for the identical reason: no store
+   * event, no `updatedAt` bump. A person reading a ticket must not reset
+   * its own staleness clock — that would let attention masquerade as
+   * progress on the row.
+   *
+   * `deltaSeconds` is expected already server-clamped (`clampReadPayload`)
+   * before it reaches here; a non-finite or non-positive value is a no-op
+   * rather than an error, since it typically means the payload had nothing
+   * to record instead of nothing found.
+   */
+  recordReadingTime(
+    taskId: string,
+    deltaSeconds: number,
+  ): { ok: true; task: Task } | { ok: false; error: 'not-found' } {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) return { ok: true, task };
+    const prev = task.readingTime;
+    task.readingTime = {
+      totalSeconds: (prev?.totalSeconds ?? 0) + deltaSeconds,
+      sessionCount: (prev?.sessionCount ?? 0) + 1,
+      lastSessionAt: Date.now(),
+    };
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task };
+  }
+
+  /**
+   * Overwrite a task's `readingTime` with an already-computed total — the
+   * RECONCILIATION path, used by `reading-time-backfill.ts` to fold in
+   * `read_session` events that were live-captured (since #468) but never
+   * rolled up onto the task record before this field existed. A full
+   * replace, not an add: the caller recomputes each task's total from the
+   * complete activity log every run, so calling this twice with the same
+   * inputs is a no-op and calling it after `recordReadingTime` has already
+   * added some of the same events cannot double-count — the recompute
+   * already includes them. Quiet for the same reason as `recordArtifactCheck`.
+   */
+  setReadingTime(
+    taskId: string,
+    readingTime: TaskReadingTime,
+  ): { ok: true; task: Task } | { ok: false; error: 'not-found' } {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    task.readingTime = readingTime;
     this.scheduleSave(task.workspaceId);
     return { ok: true, task };
   }
