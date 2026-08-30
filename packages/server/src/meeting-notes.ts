@@ -27,12 +27,19 @@
  * writes them into the doc decides delivery (the CRDT, not the event hub).
  */
 
+import { speakerDisplayName } from '@feedback/core';
 import type { EngineTurn } from './transcribe.ts';
 
 /** One settled turn as a tick's delta carries it. */
 export interface NotesTurn {
   turn: number;
   text: string;
+  /**
+   * Who said it. Out of the ticker this is the engine's label (`"A"`); by
+   * the time a composer sees it the session has turned it into what the
+   * person calls that voice — their name, or "Speaker A" until named.
+   */
+  speaker?: string;
 }
 
 /** Why a tick fired: the speaker went quiet, or the meeting ended. */
@@ -113,9 +120,33 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
   return {
     onTurn(turn: EngineTurn): void {
       if (ended) return;
-      if (turn.final && !seen.has(turn.turn)) {
-        seen.add(turn.turn);
-        pending.push({ turn: turn.turn, text: turn.text });
+      if (turn.final) {
+        if (seen.has(turn.turn)) {
+          // A settled turn arriving AGAIN is the engine's end-of-session
+          // speaker pass changing its mind. One still waiting to compose
+          // takes the new label; one that already went out in a tick keeps
+          // what it was composed with — those words are in the doc, and the
+          // revision has nowhere left to land.
+          const at = pending.findIndex((t) => t.turn === turn.turn);
+          const waiting = pending[at];
+          // Rebuilt rather than patched: a revision can take the label away
+          // as well as change it, and an absent `speaker` is what "nobody"
+          // looks like everywhere else on this path.
+          if (waiting) {
+            pending[at] = {
+              turn: waiting.turn,
+              text: waiting.text,
+              ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
+            };
+          }
+        } else {
+          seen.add(turn.turn);
+          pending.push({
+            turn: turn.turn,
+            text: turn.text,
+            ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
+          });
+        }
       }
       // Any frame is speech: replace whatever countdown was running.
       disarm();
@@ -191,7 +222,9 @@ export function createStubNotesComposer(): NotesComposer {
     name: 'stub',
     compose(input: NotesComposeInput): Promise<string> {
       const head = input.previous ?? '## Notes';
-      const bullets = input.tick.turns.map((t) => `- ${t.text}`).join('\n');
+      const bullets = input.tick.turns
+        .map((t) => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`)
+        .join('\n');
       return Promise.resolve(bullets ? `${head}\n${bullets}` : head);
     },
   };
@@ -252,6 +285,12 @@ export type MeetingNotesOptions = Omit<MeetingNotesDeps, 'onNotes'> & {
 
 export interface MeetingNotesSession {
   onTurn(turn: EngineTurn): void;
+  /**
+   * "Label `speaker` is `name`" from here on. Applied when a tick composes,
+   * so words already waiting pick the name up; notes already written keep
+   * the placeholder they were composed with until the composer revises them.
+   */
+  nameSpeaker(speaker: string, name: string): void;
   /** Flush the tail delta and wait for every compose in flight. */
   end(): Promise<void>;
 }
@@ -272,16 +311,24 @@ export function beginNotesSession(
 ): MeetingNotesSession {
   const context = deps.resolveContext?.(ids.docId) ?? deps.context;
   let previous: string | null = null;
+  /** Raw engine labels, never display names — a carried turn is re-mapped
+   *  on its next attempt, and mapping a name a second time would wrap it. */
   let carry: NotesTurn[] = [];
   let lastTickNo = 0;
   let chain: Promise<void> = Promise.resolve();
+  const names: Record<string, string> = {};
+  const withNames = (turn: NotesTurn): NotesTurn =>
+    turn.speaker === undefined
+      ? turn
+      : { ...turn, speaker: speakerDisplayName(turn.speaker, names) };
 
   const composeTick = (tick: NotesTick): void => {
     lastTickNo = Math.max(lastTickNo, tick.tick);
     chain = chain.then(async () => {
-      const turns = [...carry, ...tick.turns];
+      const raw = [...carry, ...tick.turns];
       carry = [];
-      if (turns.length === 0) return;
+      if (raw.length === 0) return;
+      const turns = raw.map(withNames);
       let taskLinks: NoteTaskLink[] = [];
       if (deps.captureTasks) {
         try {
@@ -310,7 +357,7 @@ export function beginNotesSession(
         previous = notes;
         deps.onNotes({ docId: ids.docId, meetingId: ids.meetingId, tick: input.tick, notes });
       } catch (err) {
-        carry = [...turns, ...carry];
+        carry = [...raw, ...carry];
         deps.onError?.(err instanceof Error ? err.message : 'notes composer failed');
       }
     });
@@ -324,6 +371,9 @@ export function beginNotesSession(
 
   return {
     onTurn: (turn) => ticker.onTurn(turn),
+    nameSpeaker(speaker, name) {
+      names[speaker] = name;
+    },
     async end(): Promise<void> {
       ticker.end();
       await chain;

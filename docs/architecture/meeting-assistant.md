@@ -41,6 +41,14 @@ flowchart LR
 - **Turns revise in place.** A `transcript` frame carries the WHOLE turn text
   and a `final` flag; a later frame with the same turn number replaces the
   earlier text, which is how a mis-heard word corrects on screen.
+- **Who said it rides the same frame.** The engine's speaker label (`"A"`,
+  `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
+  a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
+  names that voice for the meeting — every turn with the label updates, the
+  strip sends `name_speaker` up the audio socket, and the record and the
+  notes composer read the name from then on. Labels are per SESSION: the
+  same letter is a different person next meeting, so the name map lives on
+  the meeting's index line, never on the doc.
 
 ## Engine choice
 
@@ -60,6 +68,21 @@ the errors. The engine sits behind the `TranscriptionEngine` interface
 (`packages/server/src/transcribe.ts`) so a later switch is a new adapter,
 not a rework.
 
+**Speaker labels** (added 2026-08-29): `speaker_labels=true` on the same
+streaming URL — supported on every streaming model, **+$0.12/hr** on top of
+the $0.15 base (docs: streaming/label-speakers-and-separate-channels). Each
+`Turn` carries `speaker_label`; turns under ~1s of audio carry a placeholder
+(`PENDING`/`UNKNOWN`) the engine adapter maps to "no speaker". A
+`SpeakerRevision` arrives before `Termination` naming turns the whole-session
+pass relabelled; the adapter re-emits those through `onTurn` as settled turns
+with retained text, so the relay needs no second channel. A turn still
+waiting on the pause tick takes the new label; notes ALREADY composed keep
+the label they were composed with — those words are in the doc and the
+revision has nowhere to land. The revision can also take a label away (a
+placeholder is "no speaker"), which the record writes as an explicit
+`speaker: null` relabel line — an absent field would read as "says nothing
+about the speaker" and leave an attribution the strip had already dropped.
+
 **Key wiring:** `ASSEMBLYAI_API_KEY` env, then Keychain
 (`transcribe-assemblyai.ts` names the service). No key → the socket answers
 `unavailable: not_configured` and the strip says so — a settled state, not
@@ -69,9 +92,13 @@ constructs a real one, so no test run ever opens a metered session.
 ## Persistence
 
 Append-only under `<dataDir>/meetings/<safeDocId>/`: one
-`<meetingId>.jsonl` of settled turns (`{turn, text, ts}`), plus a
-`meetings.jsonl` index whose start/stop lines fold into one record per
-meeting. Nothing deletes; ids sanitized `[^A-Za-z0-9._-] → _`.
+`<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
+`{turn, speaker, ts}` line with no text relabels a turn already written, and
+`speaker: null` there un-labels it),
+plus a `meetings.jsonl` index whose start/stop lines fold into one record
+per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
+into the record's name map, last word wins. Nothing deletes; ids sanitized
+`[^A-Za-z0-9._-] → _`.
 
 ## Notes composition
 
@@ -91,7 +118,12 @@ switch `CW_MEETING_TASKS=0` — extracts explicit task requests and references
 to tracked work from the new speech. Find-or-create is guarded
 deterministically (a model-claimed reference must share words with the tick's
 own transcript; a request that duplicates open work links the row instead of
-twinning it), because a wrong link is worse than no link. New rows are
+twinning it), because a wrong link is worse than no link. The pass reads the
+same speaker-prefixed transcript the composer does and may return a
+`requester` for a request — guarded on the same law, so it must be a voice
+that tick actually carried; the created row's body then says who asked,
+which is the half of "who said what" a task can still answer a week later,
+once the strip is gone. New rows are
 attributed to the `Meeting Assistant` agent actor and enter triage; a request
 judged clear-and-doable goes to the chores band at `todo` and wakes the
 board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
@@ -109,6 +141,42 @@ stored content.
   reads as settled — a silent failure.
 - **AssemblyAI auth is the bare key as the whole `Authorization` header** —
   no `Bearer` prefix.
+- **A speaker name is applied when a tick COMPOSES, not when it arrives** —
+  the compose runs on the session's promise chain, so a name given right
+  after the quiet timer fires still reaches that tick. Carried (failed)
+  turns keep the raw label and are re-mapped on retry; mapping a display
+  name twice would wrap it ("Speaker Jordan").
+- **A pseudo-element tap target is eaten by a clip on ANY ancestor —
+  including its own element.** Two review rounds were lost to this: the
+  caption's `overflow: hidden` ate it, then the button's own `overflow`,
+  added to give a long name an ellipsis, ate it again. It fails silently and
+  measures 19px against the 36px floor. The target is now the button's own
+  PADDING, which no ancestor property can clip away, and the button holds
+  nothing that clips: the pill inside it carries every visual and the only
+  overflow. Keep those two jobs on two elements. The caption still pads its
+  clip box (and the mask is px-anchored to the window's top edge, so the two
+  move together) because the clip box must still be at least as tall as the
+  target.
+- **A clipping inline-block's baseline is its BOTTOM MARGIN EDGE**, so the
+  pill hung above the text with the line's descender space empty under it —
+  the button was the size it was designed to be and still measured 34,
+  sitting 4.3px above the clip. It also put the pill's top inside the mask's
+  fade, so the label rendered washed out beside crisp words: one root cause,
+  two symptoms. `vertical-align: middle` positions the box from its own
+  margin box rather than from a baseline the overflow moves. Do not buy slack
+  with more padding — at 430px the caption is two lines and a taller target
+  reaches into the line above.
+- **Assert the measured box, never the declarations.** The test for that
+  floor passed through all three regressions in turn: it asserted the
+  ingredients, then the box but not its clip, then the box and the clip but
+  not the offset between them. It now computes the intersection of the button
+  with the clip at both widths, and asserts the alignment its arithmetic
+  assumes — a model whose premise is unasserted is the next silent pass.
+- **A turn must be a block, or its tag strands.** Inline, a turn began where
+  the last one ended and its tag landed at the end of the PREVIOUS visual
+  line — above its own words, and on a phone that is the faded line being
+  clipped away. A long turn still scrolls its own tag off the top, the same
+  way its words scroll; that is the window being smaller than the turn.
 - **Bun has ONE websocket handler per server.** Audio sockets are
   distinguished by `ws.data.kind`; the upgrade for `/audio/` sets it.
 - **Audio frames must be COPIED, not viewed** — Bun reuses the receive

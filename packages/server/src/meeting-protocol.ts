@@ -101,6 +101,13 @@ export class MeetingRelay {
       void this.start(ws, conn, msg.sampleRate);
       return;
     }
+    if (msg.type === 'name_speaker') {
+      // Both the record and the notes pipeline learn the name; the strip
+      // that sent it already knows. Nothing to answer.
+      conn.meeting?.nameSpeaker(msg.speaker, msg.name);
+      conn.notes?.nameSpeaker(msg.speaker, msg.name);
+      return;
+    }
     void this.stop(ws, conn, true);
   }
 
@@ -191,10 +198,11 @@ export class MeetingRelay {
             turn: turn.turn,
             text: turn.text,
             final: turn.final,
+            ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
           });
           // Only settled turns reach the file. A partial is a view of a turn
           // still being revised, and the record keeps what the turn became.
-          if (turn.final) meeting.recordTurn(turn.turn, turn.text);
+          if (turn.final) meeting.recordTurn(turn.turn, turn.text, turn.speaker);
           // The notes pipeline sees EVERY frame: a partial is speech in
           // progress, which is exactly the evidence that defers a pause tick.
           notes?.onTurn(turn);

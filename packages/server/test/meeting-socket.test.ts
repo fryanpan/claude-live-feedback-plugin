@@ -421,3 +421,79 @@ describe('a share visitor cannot open a doc’s meeting audio socket', () => {
     expect(shareScopeAllows('/y/standup-notes', 'GET', OTHER, workspaceOf)).toBe(true);
   });
 });
+
+describe('meeting audio socket with two voices', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let wsBase: string;
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-voices-'));
+    handle = createServer({
+      port: 0,
+      dataDir,
+      transcription: createMockTranscriptionEngine([
+        { words: ['can', 'you', 'take', 'it'], settled: 'Can you take it?', speaker: 'A' },
+        { words: ['sure'], settled: 'Sure.', speaker: 'B' },
+      ]),
+    });
+    base = `http://localhost:${handle.port}`;
+    wsBase = `ws://localhost:${handle.port}`;
+    const path = join(dataDir, 'pairing.md');
+    writeFileSync(path, '# pairing\n');
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'pairing', sourceUrl: path, title: 'pairing' }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('labels each turn on the wire, and a name given once lands on the record', async () => {
+    const client = await AudioClient.open(wsBase, 'pairing');
+    client.start();
+    const ready = await client.waitFor('ready');
+    // Four chunks reveal turn 0, the fifth settles it; one more reveals turn
+    // 1 and a seventh settles it.
+    client.speak(7);
+    const deadline = Date.now() + 2_000;
+    while (
+      Date.now() < deadline &&
+      client.of('transcript').filter((f) => f.final === true).length < 2
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const finals = client.of('transcript').filter((f) => f.final === true);
+    expect(finals.map((f) => [f.text, f.speaker])).toEqual([
+      ['Can you take it?', 'A'],
+      ['Sure.', 'B'],
+    ]);
+    // Partials carry the label too, so the tag is on screen from the first word.
+    expect(client.of('transcript')[0]?.speaker).toBe('A');
+
+    client.ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Jordan' }));
+    // A name the contract refuses is an unreadable frame, not a crash.
+    client.ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: '' }));
+    await client.waitFor('error');
+    client.stop();
+    await client.waitFor('stopped');
+
+    const list = (await (await fetch(`${base}/api/docs/pairing/meetings`)).json()) as {
+      meetings: Array<{ meetingId: string; speakers?: Record<string, string> }>;
+    };
+    expect(list.meetings.find((m) => m.meetingId === ready.meetingId)?.speakers).toEqual({
+      A: 'Jordan',
+    });
+    const one = (await (
+      await fetch(`${base}/api/docs/pairing/meetings/${String(ready.meetingId)}`)
+    ).json()) as { transcript: Array<{ text: string; speaker?: string }> };
+    expect(one.transcript.map((t) => t.speaker)).toEqual(['A', 'B']);
+    client.ws.close();
+  });
+});
