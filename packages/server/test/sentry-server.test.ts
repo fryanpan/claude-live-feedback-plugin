@@ -6,6 +6,7 @@ import {
   isServerSentryActive,
   resetServerSentryForTest,
   routePatternForSpan,
+  scrubEventForPrivacy,
   withRouteSpan,
 } from '../src/sentry.ts';
 
@@ -56,9 +57,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 describe('routePatternForSpan: default-deny redaction', () => {
   it('keeps known literal route keywords', () => {
-    expect(routePatternForSpan('/api/workspaces/w-abc123/tasks')).toBe(
-      '/api/workspaces/:id/tasks',
-    );
+    expect(routePatternForSpan('/api/workspaces/w-abc123/tasks')).toBe('/api/workspaces/:id/tasks');
     expect(routePatternForSpan('/api/tasks/t-xyz/transition')).toBe('/api/tasks/:id/transition');
     expect(routePatternForSpan('/y/w-abc123')).toBe('/y/:id');
     expect(routePatternForSpan('/')).toBe('/');
@@ -68,9 +67,7 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // docIds are caller-chosen and can embed a bound file's relative path
     // (binds.ts: `${groupId}:${relPath.replaceAll('/', '~')}`) or a
     // `task:<taskId>` alias (see workspace-board.md). Both must vanish.
-    const withFilePath = routePatternForSpan(
-      '/api/docs/g1:secret~internal~roadmap.md/content',
-    );
+    const withFilePath = routePatternForSpan('/api/docs/g1:secret~internal~roadmap.md/content');
     expect(withFilePath).toBe('/api/docs/:id/content');
     expect(withFilePath).not.toContain('secret');
     expect(withFilePath).not.toContain('roadmap');
@@ -84,6 +81,77 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // Default-deny: a route this file doesn't know about degrades to `:id`
     // segments rather than ever emitting free text.
     expect(routePatternForSpan('/some/future/route')).toBe('/:id/:id/:id');
+  });
+});
+
+describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a negative that can fail', () => {
+  // withRouteSpan / routePatternForSpan is the primary defense: it never
+  // hands a raw path to Sentry in the first place. scrubEventForPrivacy is
+  // the floor underneath it, for whatever withRouteSpan didn't see — a
+  // future default integration, or the SDK's own request handling, that
+  // attaches a URL somewhere on its own. A scrub test that only ever passes
+  // proves nothing (docs/process/learnings.md: "a negative probe needs a
+  // positive control") — so each case below first proves the raw fixture
+  // DOES contain the secret, then proves the scrub removes it.
+
+  it('the raw fixture actually contains the secret — the check has something to catch', () => {
+    const secret = crypto.randomUUID();
+    const raw = {
+      request: { url: `http://localhost/api/docs/${secret}/content`, cookies: { session: secret } },
+      contexts: {
+        trace: {
+          data: { 'url.full': `http://localhost/${secret}`, 'http.url': `http://x/${secret}` },
+        },
+      },
+      breadcrumbs: [{ category: 'fetch', data: { url: `http://x/${secret}` } }],
+    };
+    // If this assertion is ever false, the fixture below stopped exercising
+    // a real leak and the "scrub removes it" test next to it would pass
+    // vacuously — same failure mode as the BunServer discovery that started
+    // this whole floor.
+    expect(JSON.stringify(raw)).toContain(secret);
+  });
+
+  it('scrubEventForPrivacy removes the secret from every url/cookie/referrer-shaped key', () => {
+    const secret = crypto.randomUUID();
+    const raw = {
+      request: { url: `http://localhost/api/docs/${secret}/content`, cookies: { session: secret } },
+      contexts: {
+        trace: {
+          data: { 'url.full': `http://localhost/${secret}`, 'http.url': `http://x/${secret}` },
+        },
+      },
+      breadcrumbs: [
+        { category: 'fetch', data: { url: `http://x/${secret}`, referrer: `http://x/${secret}` } },
+      ],
+    };
+    const scrubbed = scrubEventForPrivacy(raw);
+    expect(JSON.stringify(scrubbed)).not.toContain(secret);
+  });
+
+  it('leaves an unrelated, non-url-keyed field alone — proving the scrub is targeted, not a blanket wipe', () => {
+    // The most important negative case: a stack-trace file path is an
+    // absolute path into OUR OWN source tree (not user content), and it's
+    // exactly the kind of string a blind "starts with /" scrub would have
+    // mangled. Keying on the ATTRIBUTE NAME instead of the string shape is
+    // what keeps this useful for debugging.
+    const raw = {
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [{ filename: '/repo/packages/server/src/server.ts', function: 'route' }],
+            },
+          },
+        ],
+      },
+      tags: { phase: 'ws.message' },
+    };
+    const scrubbed = scrubEventForPrivacy(raw) as typeof raw;
+    expect(scrubbed.exception.values[0].stacktrace.frames[0].filename).toBe(
+      '/repo/packages/server/src/server.ts',
+    );
+    expect(scrubbed.tags.phase).toBe('ws.message');
   });
 });
 
@@ -237,5 +305,42 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     expect(joined).not.toContain(docId);
     expect(joined).not.toContain('url.full');
     expect(joined).not.toContain('"url.path"');
+  });
+
+  it('the beforeSend/beforeSendTransaction scrub catches a raw URL that withRouteSpan never touched', async () => {
+    // Simulates the case the disabled-BunServer fix doesn't cover on its
+    // own: some OTHER code path — a future default integration, or a
+    // mistake like passing `{ url: req.url }` into extra data instead of
+    // the route pattern — attaches a raw URL directly, bypassing
+    // withRouteSpan/routePatternForSpan entirely. This only stays green
+    // because Sentry.init's beforeSend/beforeSendTransaction run on every
+    // outbound payload regardless of source.
+    capture.hits().length = 0;
+    const secret = crypto.randomUUID();
+    const Sentry = await import('@sentry/bun');
+
+    // A raw URL attached to an active span's attributes — the same shape a
+    // third-party OTel instrumentation (e.g. an outgoing-fetch integration)
+    // would add on its own, with no code in this repo asking for it.
+    await Sentry.startSpan({ name: 'GET /api/docs/:id/content', op: 'http.server' }, async () => {
+      Sentry.getActiveSpan()?.setAttribute(
+        'url.full',
+        `http://localhost/api/docs/${secret}/content?user=x`,
+      );
+    });
+
+    // A raw URL passed as `extra` — the mistake a future call site could
+    // make instead of `routePatternForSpan(pathname)`.
+    captureServerError(new Error('scrub floor probe'), {
+      url: `http://localhost/api/docs/${secret}/content?user=x`,
+    });
+
+    await flushServerSentry(5000);
+
+    const joined = capture
+      .hits()
+      .map((h) => h.text)
+      .join('\n');
+    expect(joined).not.toContain(secret);
   });
 });
