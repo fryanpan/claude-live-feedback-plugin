@@ -6271,13 +6271,17 @@ body.is-reading-width #editor > .ProseMirror {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent 10px,
-    #000 calc(10px + 0.8em)
-  );
-  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 calc(10px + 0.8em));
+  /* Hard off above the window, then opaque within 2px of its top edge. The
+     long 0.8em ramp this replaces was inherited from when the caption had no
+     padding and a rolled-off line WAS half-visible inside the window. It is
+     not any more — everything above the window sits in the transparent
+     padding — so the ramp had stopped softening a rolling line and was only
+     washing out the top of the CURRENT one. That is why the speaker pill
+     rendered pale with no top border: it is 17.75px in an 18.125px window, so
+     its top edge is at the window's top edge however well it is centred, and
+     the old ramp put alpha 0 exactly there. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 12px);
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 10px, #000 12px);
 }
 .meeting-caption-line {
   margin: 0;
