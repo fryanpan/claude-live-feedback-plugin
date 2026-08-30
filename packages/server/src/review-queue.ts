@@ -34,6 +34,7 @@ import {
   pendingDeclaration,
   reviewItemState,
   reviewPayloadRevision,
+  reviewWithdrawn,
 } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
@@ -700,6 +701,13 @@ export function taskReviewItems(tasks: ReviewTaskRef[]): ReviewTaskItem[] {
       // for the brief's count, the strip and the walkthrough, all of which
       // read this one list.
       if (isReviewItemGated(item)) continue;
+      // WITHDRAWN by its asker. The write door for this is the doc-thread
+      // route today — a ticket item has a per-item id and can already be
+      // retired one at a time, which is the asymmetry the doc side lacked —
+      // but the stamp lives on the shared payload and a peer can sync one
+      // here. Reading it on both surfaces costs a line and means no queue can
+      // carry an ask its author has taken back.
+      if (reviewWithdrawn(item.review)) continue;
       const state = reviewItemState(item);
       // Answered is closed; waiting is the OWNER's turn — the reader asked on
       // it and has nothing to do until the words come back revised.
