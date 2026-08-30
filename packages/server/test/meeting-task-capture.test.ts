@@ -20,6 +20,7 @@ import {
   parseTaskCaptureReply,
   requestMatchesCandidate,
   runTaskCapture,
+  speakerOnTick,
   taskCaptureUrl,
   tickMentionsCandidate,
 } from '../src/meeting-task-capture.ts';
@@ -354,5 +355,96 @@ describe('createHaikuTaskCaptureExtractor', () => {
       new Response('nope', { status: 500 })) as typeof fetch;
     const extractor = createHaikuTaskCaptureExtractor({ apiKey: 'k-test', fetchImpl: impl });
     await expect(extractor?.extract({ turns, candidates })).rejects.toThrow('HTTP 500');
+  });
+});
+
+/**
+ * WHO ASKED. The transcript's whole point is that notes and actions land on
+ * the right person, so the capture pass sees the speaker prefixes the notes
+ * composer already sees — and a requester is guarded exactly as a reference
+ * is: the tick must have carried that voice, or the row names nobody.
+ *
+ * The names here are invented. The repo is public.
+ */
+const spokenTurns: NotesTurn[] = [
+  { turn: 1, text: 'The strip covers the navbar on my phone.', speaker: 'Jordan' },
+  { turn: 2, text: 'File a ticket for that one.', speaker: 'Speaker B' },
+];
+
+describe('who asked for the task', () => {
+  it('prefixes the transcript with the speaker and asks for a requester', () => {
+    const { system, user } = buildTaskCapturePrompt({ turns: spokenTurns, candidates: [] });
+    expect(user).toContain('- Jordan: The strip covers the navbar on my phone.');
+    expect(user).toContain('- Speaker B: File a ticket for that one.');
+    expect(system).toContain('"requester"');
+    // The same law the notes composer states: an unnamed voice stays a label.
+    expect(system).toContain('never guess');
+  });
+
+  it('leaves the lines bare when the tick carried no labels', () => {
+    const { user } = buildTaskCapturePrompt({ turns, candidates: [] });
+    expect(user).toContain(`- ${turns[0]?.text}`);
+    expect(user).not.toContain('undefined:');
+  });
+
+  it('speakerOnTick answers the transcript spelling, or nothing', () => {
+    expect(speakerOnTick(spokenTurns, 'jordan')).toBe('Jordan');
+    expect(speakerOnTick(spokenTurns, 'Speaker B')).toBe('Speaker B');
+    expect(speakerOnTick(spokenTurns, 'Alex')).toBeUndefined();
+    expect(speakerOnTick(spokenTurns, '  ')).toBeUndefined();
+    expect(speakerOnTick(turns, 'Jordan')).toBeUndefined();
+  });
+
+  it('keeps a requester the tick actually heard', () => {
+    const raw = JSON.stringify({
+      items: [
+        {
+          kind: 'request',
+          title: 'Strip covers the navbar',
+          actionable: true,
+          requester: 'jordan',
+        },
+      ],
+    });
+    expect(parseTaskCaptureReply(raw, candidates, spokenTurns)).toEqual([
+      { kind: 'request', title: 'Strip covers the navbar', actionable: true, requester: 'Jordan' },
+    ]);
+  });
+
+  it('drops a requester the tick never heard, keeping the request itself', () => {
+    const raw = JSON.stringify({
+      items: [
+        { kind: 'request', title: 'Strip covers the navbar', actionable: true, requester: 'Alex' },
+        { kind: 'request', title: 'Second row survives too', actionable: false, requester: 42 },
+      ],
+    });
+    expect(parseTaskCaptureReply(raw, candidates, spokenTurns)).toEqual([
+      { kind: 'request', title: 'Strip covers the navbar', actionable: true },
+      { kind: 'request', title: 'Second row survives too', actionable: false },
+    ]);
+  });
+
+  it('writes the asker into the created row, and nothing when there is none', async () => {
+    const { board, created } = boardStub();
+    await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          {
+            kind: 'request',
+            title: 'Strip covers the navbar',
+            actionable: false,
+            requester: 'Speaker B',
+          },
+          { kind: 'request', title: 'Anonymous ask', actionable: false },
+        ]),
+      },
+      { ...tickInput, turns: spokenTurns },
+    );
+    expect(created).toHaveLength(2);
+    expect(created[0]?.body).toContain('Asked for by Speaker B.');
+    expect(created[1]?.body).not.toContain('Asked for by');
+    // The provenance line the row already carried is not displaced by it.
+    expect(created[0]?.body).toContain('meeting assistant');
   });
 });
