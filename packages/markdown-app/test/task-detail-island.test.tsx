@@ -679,7 +679,11 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
     expect(note?.getAttribute('data-review-item-id')).toBe('ri-1');
     expect(note?.textContent).toContain('Held');
     expect(note?.textContent).toContain('Which index do we rebuild?');
-    expect(note?.textContent).toContain('No option names its cost. — ');
+    // The judge writes a sentence and this line continues after it, so the
+    // full stop comes off: the note read "…its cost. — the agent has been
+    // asked…" before (UX review, 2026-08-29).
+    expect(note?.textContent).toContain('No option names its cost — ');
+    expect(note?.textContent).not.toContain('cost. — ');
     expect(note?.textContent).toContain('the agent has been asked to revise');
     // Not a card: there is nothing for the reader to answer yet.
     expect(host.querySelector('.hub-decide-card')).toBeNull();
@@ -702,5 +706,77 @@ describe('a review item the quality gate is holding shows on the ticket', () => 
     expect(host.querySelector('.hub-decide-held')).toBeNull();
     repaint(task(), EMPTY);
     expect(host.querySelector('.hub-decide-held')).toBeNull();
+  });
+
+  // Found by the UX review: the note named a fault and named no agent, while
+  // `createdBy` and `judge.at` sat in the projection unread.
+  it('names who filed it and how long it has stood', () => {
+    const host = mount();
+    repaint(
+      task({
+        reviews: [
+          {
+            id: 'ri-3',
+            review: { headline: 'Which index do we rebuild?' },
+            createdBy: 'Index Keeper',
+            // Off the WALL clock, not the fixture's `NOW`: the island reads
+            // the real one for its own `now`, and a fixed pair would drift.
+            judge: { at: Date.now() - 4 * 60_000, verdict: 'held', reason: 'No stakes.' },
+          },
+        ],
+      }),
+      EMPTY,
+    );
+    const meta = host.querySelector('.hub-decide-held-meta');
+    expect(meta?.textContent).toContain('Index Keeper');
+    // Spelled by `waitShort`, the same clock the answerable card above it
+    // uses, so the two can never round differently.
+    expect(meta?.textContent).toContain('4 minutes');
+  });
+
+  it('offers a way out: releasing the hold calls the handler with the item', async () => {
+    const host = mount();
+    const released: Array<{ taskId: string; itemId: string }> = [];
+    const held = task({
+      reviews: [
+        {
+          id: 'ri-4',
+          review: { headline: 'Which index do we rebuild?' },
+          judge: { at: NOW, verdict: 'held', reason: 'No stakes.' },
+        },
+      ],
+    });
+    repaint(held, EMPTY, {
+      onReleaseHeld: (t, item) => {
+        released.push({ taskId: t.id, itemId: item.id });
+        return Promise.resolve(true);
+      },
+    });
+    const btn = host.querySelector('.hub-decide-held-release') as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    btn.click();
+    await Promise.resolve();
+    expect(released).toEqual([{ taskId: held.id, itemId: 'ri-4' }]);
+  });
+
+  // The control for the finding itself: 0 interactive elements in the note is
+  // what the review measured, against 2 in the answerable card beside it.
+  it('has no release control when the app passes no handler (control)', () => {
+    const host = mount();
+    repaint(
+      task({
+        reviews: [
+          {
+            id: 'ri-5',
+            review: { headline: 'Which index do we rebuild?' },
+            judge: { at: NOW, verdict: 'held', reason: 'No stakes.' },
+          },
+        ],
+      }),
+      EMPTY,
+      { onReleaseHeld: undefined },
+    );
+    expect(host.querySelector('.hub-decide-held')).not.toBeNull();
+    expect(host.querySelector('.hub-decide-held-release')).toBeNull();
   });
 });
