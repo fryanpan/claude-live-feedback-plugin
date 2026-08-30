@@ -681,6 +681,9 @@ async function main(): Promise<void> {
     connect: (docId) => connect(wsUrl(docId, 'markdown')),
     loadEditor: () => import('./task-body-editor-chunk.ts'),
     user: { name: user.name, color: user.color },
+    // Already awaited above — the description box is never live before the
+    // answer, and never live after a "no".
+    canWrite: writeAccess.canWrite,
   });
 
   // ── Realtime: the ws:<id> board room ────────────────────────────────────
@@ -1980,6 +1983,28 @@ async function main(): Promise<void> {
   }
 
   // ── Mutations (all through the REST gate) ───────────────────────────────
+
+  /**
+   * Put the controls back to what the SERVER says, after a write it refused.
+   *
+   * A select and a rename are the two places on this board where the reader's
+   * gesture changes the DOM before the server has agreed. When the write is
+   * refused they were left showing the rejected value — a select reading
+   * "Done" over a task the server still has in triage, a row wearing a title
+   * nobody saved — and only a reload put it right. A board that displays a
+   * status nobody set is worse than the refusal it just reported.
+   *
+   * "+ New goal" never had the problem, because it changes nothing locally
+   * and waits for the projection to paint the row. This is that same rule
+   * applied to the controls that cannot wait: repaint from `state`, which is
+   * the projection and nothing else. `useSelectValue` and the title's
+   * every-render text write (board-island.tsx, task-detail-island.tsx) then
+   * put each control back on their next pass.
+   */
+  function revertToServerTruth(): void {
+    renderAll();
+  }
+
   async function transitionTask(task: HubTask, to: HubTask['status']): Promise<void> {
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/transition`, 'POST', {
       to,
@@ -1989,8 +2014,10 @@ async function main(): Promise<void> {
       const blockers = (res.data?.blockers as Array<{ taskId: string; title?: string }>) ?? [];
       const names = blockers.map((b) => b.title ?? b.taskId).join(', ');
       showToast(`Blocked by open dependency: ${names || 'an enforced dependency'}`);
+      revertToServerTruth();
     } else if (!res.ok) {
       showToast('Status change failed');
+      revertToServerTruth();
     }
   }
 
@@ -1999,7 +2026,10 @@ async function main(): Promise<void> {
       assignee,
       author,
     });
-    if (!res.ok) showToast('Assignment failed');
+    if (!res.ok) {
+      showToast('Assignment failed');
+      revertToServerTruth();
+    }
   }
 
   /**
@@ -2087,7 +2117,10 @@ async function main(): Promise<void> {
       after: target.after,
       author,
     });
-    if (!res.ok) showToast('Move failed');
+    if (!res.ok) {
+      showToast('Move failed');
+      revertToServerTruth();
+    }
   }
 
   async function renameTask(task: HubTask, title: string): Promise<void> {
@@ -2095,7 +2128,10 @@ async function main(): Promise<void> {
       title,
       author,
     });
-    if (!res.ok) showToast('Rename failed');
+    if (!res.ok) {
+      showToast('Rename failed');
+      revertToServerTruth();
+    }
   }
 
   /**
@@ -2113,7 +2149,10 @@ async function main(): Promise<void> {
       'POST',
       { goal: sectionId, title, author },
     );
-    if (!res.ok) showToast('Goal rename failed');
+    if (!res.ok) {
+      showToast('Goal rename failed');
+      revertToServerTruth();
+    }
   }
 
   /**
@@ -2128,7 +2167,10 @@ async function main(): Promise<void> {
       to,
       author,
     });
-    if (!res.ok) showToast('Goal status change failed');
+    if (!res.ok) {
+      showToast('Goal status change failed');
+      revertToServerTruth();
+    }
   }
 
   /** Add one band, for the same reason the rename above is its own route: a

@@ -46,6 +46,16 @@ export interface TaskBodyEditorDeps {
   connect: (docId: string) => FeedbackClient;
   loadEditor: () => Promise<EditorModule>;
   user: { name: string; color: string };
+  /**
+   * Whether the server accepts writes from this browser. Absent means yes.
+   *
+   * A description is PROSE OVER THE YJS SOCKET, like a doc's body: when the
+   * server refuses this browser it drops the update frames and answers
+   * nothing, so an editable box here would take the typing, show it, and lose
+   * every word on reload with no 401 anywhere to notice. So the editor is
+   * built read-only rather than built and locked — see `CreateEditorOpts.editable`.
+   */
+  canWrite?: boolean;
   /** Reached the room, mounted the editor. Test seam; the app has no use for it. */
   onMounted?: (taskId: string) => void;
 }
@@ -122,6 +132,7 @@ export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEdit
           awareness: client.awareness,
           user: deps.user,
           extraExtensions: extra,
+          editable: deps.canWrite !== false,
         });
         deps.onMounted?.(task.id);
       })
