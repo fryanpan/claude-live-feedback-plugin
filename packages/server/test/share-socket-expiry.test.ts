@@ -184,6 +184,31 @@ describe('expired shares lose their sockets', () => {
     void base;
   });
 
+  it('does not count as somebody reaching for every doc on the server', async () => {
+    // The sweep runs every 60s for the life of the server and reads one field
+    // of one Set. It used to reach each room through `list()` + `get()`, and
+    // `get` marks a doc ACCESSED — which puts its file binding in the poll's
+    // fast lane for FILE_POLL_ACTIVE_MS, also 60s. So from the first sweep
+    // onward the fast lane never emptied and every bound file was stat'd
+    // every 500ms. Production sat at 2,549 of 2,549 bound docs active from
+    // ~90s of uptime onward, with nobody connected.
+    await setup();
+    const rooms = (handle as ServerHandle).rooms;
+
+    // Control: this fixture HAS a bound doc, and it can be activated. Without
+    // it, "nothing active after the sweep" could just mean "nothing to
+    // activate".
+    expect(rooms.stats().bindings).toBeGreaterThan(0);
+    rooms.resetDerivedCaches();
+    expect(rooms.get('shared')).toBeDefined();
+    expect(rooms.stats().activeBindings).toBe(1);
+
+    rooms.resetDerivedCaches();
+    expect(rooms.stats().activeBindings).toBe(0);
+    sweep(handle as ServerHandle);
+    expect(rooms.stats().activeBindings).toBe(0);
+  });
+
   it('leaves the owner’s own socket alone — it carries no shareId', async () => {
     const { cookie, shareId } = await setup();
     const port = handle?.port ?? 0;
