@@ -458,7 +458,11 @@ describe('notes through the audio socket', () => {
     await waitFor(() => frames.some((f) => f.type === 'stopped'), 'stopped');
     await waitFor(() => updates.length === 2, 'the end tick');
     expect(updates[1]?.tick.reason).toBe('end');
-    expect(updates[1]?.notes).toContain(updates[0]?.notes ?? '@@');
+    // The second tick builds on the first. It is asserted through the WORDS
+    // rather than through tick 1's exact string: `previous` is now the live
+    // section as the doc renders it (heading and all), not the composer's
+    // own last reply, so that the person's writing is in front of it.
+    expect(updates[1]?.notes).toContain('So the sync is the bottleneck.');
     ws.close();
   });
 
@@ -551,5 +555,98 @@ describe('task capture riding the notes session', () => {
     expect(inputs[1]?.taskLinks).toBeUndefined();
     expect(updates.map((u) => u.notes)).toEqual(['notes 1', 'notes 2']);
     expect(errors).toEqual(['capture refused']);
+  });
+});
+
+describe('the composer reads the LIVE section, not only its own last answer', () => {
+  const ids = { docId: 'doc-live', meetingId: 'm-live' };
+
+  it('previous is what the doc now says, and the person’s lines are named', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const composer: NotesComposer = {
+      name: 'capture',
+      compose(input) {
+        inputs.push(input);
+        return Promise.resolve('## Meeting notes\n\n- composed');
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        readSection: () => ({
+          markdown: '## Meeting notes\n\n- composed\n- typed by hand',
+          items: ['composed', 'typed by hand'],
+          human: ['typed by hand'],
+        }),
+        onNotes: () => {},
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'First.', final: true });
+    schedule.fire();
+    session.onTurn({ turn: 1, text: 'Second.', final: true });
+    await session.end();
+    // Tick one starts clean — a doc's section may still hold the LAST
+    // meeting's notes, and no meeting is a continuation of that one.
+    expect(inputs[0]?.previous).toBeNull();
+    // Tick two reads the doc: not "## Meeting notes\n\n- composed", the
+    // composer's own last answer, but the section as it now stands, with the
+    // person's line in it and named as theirs.
+    expect(inputs[1]?.previous).toBe('## Meeting notes\n\n- composed\n- typed by hand');
+    expect(inputs[0]?.humanNotes).toEqual(['typed by hand']);
+    expect(inputs[1]?.humanNotes).toEqual(['typed by hand']);
+  });
+
+  it('the update carries the items the compose READ, for the sink’s race check', async () => {
+    const schedule = new ManualScheduler();
+    const updates: NotesUpdate[] = [];
+    // Reads change between ticks, the way a doc being typed into does.
+    const reads = [
+      { markdown: 'a', items: ['a'], human: [] as string[] },
+      { markdown: 'b', items: ['a', 'b'], human: ['b'] },
+    ];
+    let call = 0;
+    const session = beginNotesSession(
+      {
+        composer: { name: 's', compose: async () => '## Meeting notes\n\n- n' },
+        quietMs: 1000,
+        schedule,
+        readSection: () => reads[Math.min(call++, reads.length - 1)]!,
+        onNotes: (u) => updates.push(u),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'First.', final: true });
+    schedule.fire();
+    session.onTurn({ turn: 1, text: 'Second.', final: true });
+    await session.end();
+    expect(updates.map((u) => u.basedOn)).toEqual([['a'], ['a', 'b']]);
+  });
+
+  it('a section that cannot be read costs the tick its awareness, never its notes', async () => {
+    const schedule = new ManualScheduler();
+    const updates: NotesUpdate[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: { name: 's', compose: async () => 'notes' },
+        quietMs: 1000,
+        schedule,
+        readSection: () => {
+          throw new Error('doc gone');
+        },
+        onNotes: (u) => updates.push(u),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'First.', final: true });
+    await session.end();
+    expect(updates.length).toBe(1);
+    expect(updates[0]?.basedOn).toBeUndefined();
+    expect(errors).toEqual(['doc gone']);
   });
 });
