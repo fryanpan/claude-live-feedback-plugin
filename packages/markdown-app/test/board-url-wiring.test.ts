@@ -94,6 +94,19 @@ describe('the card hands off to its item in one history step', () => {
   // push — with the card's own repaint after it.
   // Both handlers now share `openFromWalk`, which is where the ordering lives
   // — and where the doc jump's undo lives too (see walk-return.test.ts).
+  //
+  // READ THIS BEFORE TRUSTING IT: what follows is a pin on the SHAPE of the
+  // source, not a test of the behaviour. It cannot fail on a change that
+  // keeps the ordering textually and breaks it in effect. Nothing in the
+  // suites covers the race itself — the walkthrough tests mock `onOpenItem`
+  // as `vi.fn()` and assert the island calls it — and nothing can, until
+  // this repo has a browser driver.
+  //
+  // To check the real thing by hand: plain Home → "Review All" → tap the
+  // card's task link, and watch that the `?task=` entry survives. It must be
+  // opened IN-PAGE. A walkthrough opened by pasting `?item=<key>` leaves
+  // `history.state` null, so syncBoardUrl replaces instead of calling
+  // `history.back()`, and the race cannot appear however broken the code is.
   it('renders the open before the walkthrough close', () => {
     const fn = HUB_APP.match(/function openFromWalk\([\s\S]*?\n {2}\}\n/)?.[0] ?? '';
     expect(fn, 'openFromWalk went missing').not.toBe('');
