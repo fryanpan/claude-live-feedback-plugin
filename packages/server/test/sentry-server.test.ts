@@ -486,3 +486,69 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
     expect(joined).not.toContain(secretDocId);
   });
 });
+
+describe("server Sentry: the SDK's own fatal-error integrations are disabled — bin.ts's handlers are the only ones", () => {
+  // codex review flagged that @sentry/bun's default `OnUncaughtException`
+  // and `OnUnhandledRejection` integrations each register their own
+  // `process.on('uncaughtException' | 'unhandledRejection', ...)` listener
+  // and call `captureException` on every fatal error — the same job bin.ts
+  // already does with its own listeners, registered right after
+  // `initServerSentry` returns. Left both active, a single crash would be
+  // reported twice. sentry.ts's `integrations` filter drops both by name;
+  // this proves that from the outside, not by re-reading the filter.
+  let capture: ReturnType<typeof startCaptureServer>;
+  let baselineUncaught = 0;
+  let baselineUnhandled = 0;
+  const release = 'b93a021-dirty';
+
+  beforeAll(async () => {
+    capture = startCaptureServer();
+    // Snapshot BEFORE init, not an absolute 0 — other test files in this
+    // same process register their own transient listeners, so the only
+    // claim this file can safely make is "initServerSentry added none",
+    // never "there are zero in the whole process".
+    baselineUncaught = process.listenerCount('uncaughtException');
+    baselineUnhandled = process.listenerCount('unhandledRejection');
+    await initServerSentry({ dsn: capture.dsn, release });
+  });
+
+  afterAll(async () => {
+    await flushServerSentry(2000);
+    resetServerSentryForTest();
+    capture.stop();
+  });
+
+  it('adds no listener for uncaughtException or unhandledRejection', () => {
+    // Before the integrations filter existed, this failed: each event
+    // gained exactly one listener from the SDK's own default integration.
+    expect(process.listenerCount('uncaughtException')).toBe(baselineUncaught);
+    expect(process.listenerCount('unhandledRejection')).toBe(baselineUnhandled);
+  });
+
+  it('a fatal error reaches Sentry exactly once — the SDK never captures it on its own', async () => {
+    capture.hits().length = 0;
+    // Mirrors bin.ts's own handler shape (capture, don't rethrow) without
+    // actually exiting this test process. `process.emit` invokes whatever
+    // listeners are registered right now — the same mechanism Node/Bun use
+    // to dispatch a real uncaught exception — without the "crash if nobody
+    // is listening" fallback, which only applies to an exception that
+    // actually unwinds to the top uncaught, not to `.emit()` calls.
+    const err = new Error(`synthetic fatal — ${crypto.randomUUID()}`);
+    const onFatal = (e: unknown) =>
+      captureServerError(e instanceof Error ? e : new Error(String(e)));
+    process.once('uncaughtException', onFatal);
+    try {
+      process.emit('uncaughtException', err);
+    } finally {
+      process.removeListener('uncaughtException', onFatal);
+    }
+
+    await flushServerSentry(5000);
+
+    // One request from OUR listener above. If the SDK's own
+    // OnUncaughtException integration were still active, it would
+    // independently call captureException on the same error the moment
+    // process.emit ran, adding a second request here.
+    expect(capture.hits().length).toBe(1);
+  });
+});

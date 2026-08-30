@@ -188,147 +188,205 @@ export async function flushServerSentry(timeoutMs = 2000): Promise<boolean> {
 }
 
 /**
- * Every literal (non-id) path segment the route table dispatches on. A
- * request whose segment isn't in this set is assumed to be an id — a
- * workspace id, task id, doc id, share token, thread id, or (for docIds
- * specifically) a caller-chosen string that can embed a bound file's
- * relative path or a `task:<taskId>` alias. That last case is exactly why
- * this is default-DENY: an allowlist of known-safe words, not a denylist of
- * known-dangerous shapes. A segment this file doesn't yet know about reads
- * as `:id` and just loses a little span-name precision — it never leaks
- * content. Adding a new route with a new literal keyword segment means
- * adding that word here, or it silently buckets into `:id` too (safe, just
- * less useful for grepping traces by route).
+ * Every REAL route this server dispatches on, as a whole-path template —
+ * literal segments verbatim, `:id` marking a caller-controlled slot. Built
+ * directly from server.ts's own route matchers (the `pathname.match(/^...$/)`
+ * regexes, the `/api/docs/:id` catch-all's `rest` dispatch, and its nested
+ * `threads`/`agent_anchors` sub-dispatches) — not retyped from memory.
+ *
+ * This used to be a flat allowlist of literal WORDS, checked per segment
+ * independently of where in the path it sat. That was wrong: whether a
+ * segment is static depends on its POSITION in a matched route, not its
+ * VALUE — a caller-chosen id can legally equal any English word, including
+ * one that happens to be a route keyword somewhere else in the API (a doc
+ * literally titled "content", landing at `/api/docs/content/content`, kept
+ * BOTH occurrences of "content" as static under the old check, leaking the
+ * id). Matching whole templates instead means a segment is only ever static
+ * when it sits at the position a REAL route puts a literal, never merely
+ * because its value happens to collide with one.
+ *
+ * A path that matches no template here still degrades to every segment
+ * becoming `:id` (see routePatternForSpan below) — safe by construction,
+ * same as an unknown segment always was. Missing a real route from this
+ * list costs span-name precision, never privacy: routePatternForSpan has no
+ * path where "no template matched" produces anything other than all-`:id`.
  */
-const STATIC_ROUTE_SEGMENTS = new Set([
-  // top-level API / auth / asset families
-  'api',
-  'auth',
-  'widget-token',
-  'widget-session',
-  'start',
-  'verify',
-  'session',
-  'logout',
-  'profile',
-  'share',
-  'enabled',
-  'doc',
-  'link',
-  'workspace',
-  'summaries',
-  'backfill',
-  'metrics',
-  'docs',
-  'workspaces',
-  'diffs',
-  'refs',
-  'backlinks',
-  'links',
-  'titles',
-  'dispatches',
-  'agent-notes',
-  'agents',
-  'chat-audit',
-  'plugin',
-  'refresh',
-  'push',
-  'key',
-  'subscriptions',
-  'deploy',
-  'reviews',
-  'archived',
-  'webhooks',
-  'log',
-  'ttl',
-  // static shells / bundles
-  'widget.js',
-  'widget.iife.js',
-  'widget.esm.js',
-  'widget-auth',
-  'signin',
-  'widget',
-  'review',
-  'app',
-  'mockup',
-  'demos',
-  'projects',
-  'audio',
-  'y',
-  'events',
-  // workspace sub-routes
-  'review-items',
-  'home',
-  'read',
-  'instructions',
-  'next',
-  'load-reports',
-  'goal',
-  'goals',
-  'retired',
-  'settings',
-  'rename',
-  'lead',
-  'voice',
-  'tasks',
-  'batch',
-  'import-tasks',
-  'huddles',
-  'add',
-  'reorder',
-  'attachments',
-  // task sub-routes
-  'transition',
-  'evidence',
-  'answer',
-  'undo',
-  'more-info',
-  'after',
-  'title',
-  'body',
-  'assignee',
-  'due',
-  'park',
-  'archive',
-  'restore',
-  'notes',
-  // doc sub-routes
-  'threads',
-  'content',
-  'status',
-  'reparse_from_disk',
-  'diff',
-  'activity',
-  'agent_anchors',
-  'find_and_replace',
-  'suggestions',
-  'resolve_all',
-  'delete_block_at_anchor',
-  'delete_blocks_in_range',
-  'delete_section',
-  'hooks',
-  'fire',
-  'by_find',
-  'meetings',
-  'unarchive',
-  'promote',
-  'comments',
-  // agent sub-routes
-  'watches',
-  'merge',
-]);
+const ROUTE_TEMPLATES: readonly (readonly string[])[] = [
+  // top-level static (no dynamic segment at all)
+  ['api', 'agent-notes'],
+  ['api', 'auth', 'logout'],
+  ['api', 'auth', 'profile'],
+  ['api', 'auth', 'session'],
+  ['api', 'auth', 'start'],
+  ['api', 'auth', 'verify'],
+  ['api', 'auth', 'widget-session'],
+  ['api', 'auth', 'widget-token'],
+  ['api', 'chat-audit'],
+  ['api', 'deploy'],
+  ['api', 'diffs'],
+  ['api', 'dispatches'],
+  ['api', 'docs'],
+  ['api', 'links', 'titles'],
+  ['api', 'metrics'],
+  ['api', 'plugin', 'refresh'],
+  ['api', 'push', 'key'],
+  ['api', 'push', 'subscriptions'],
+  ['api', 'refs', 'backlinks'],
+  ['api', 'reviews', 'archived'],
+  ['api', 'share'],
+  ['api', 'share', 'doc'],
+  ['api', 'share', 'enabled'],
+  ['api', 'share', 'link'],
+  ['api', 'share', 'workspace'],
+  ['api', 'summaries', 'backfill'],
+  ['api', 'webhooks', 'log'],
+  ['api', 'workspaces'],
+  ['signin'],
+  ['widget-auth'],
+  ['widget.esm.js'],
+  ['widget.iife.js'],
+  ['widget.js'],
+  // one id, top level
+  ['api', 'reviews', ':id'],
+  ['api', 'reviews', ':id', 'archive'],
+  ['api', 'reviews', ':id', 'unarchive'],
+  ['share', ':id'],
+  ['s', ':id'],
+  ['api', 'share', ':id'],
+  ['api', 'share', ':id', 'ttl'],
+  ['events', 'workspace', ':id'],
+  ['api', 'dispatches', ':id'],
+  ['api', 'chat-audit', ':id'],
+  ['review', ':id'],
+  ['mockup', ':id'],
+  ['audio', ':id'],
+  ['y', ':id'],
+  // /api/workspaces/:id/...
+  ['api', 'workspaces', ':id'],
+  ['api', 'workspaces', ':id', 'review-items'],
+  ['api', 'workspaces', ':id', 'home'],
+  ['api', 'workspaces', ':id', 'home', 'read'],
+  ['api', 'workspaces', ':id', 'home', 'instructions'],
+  ['api', 'workspaces', ':id', 'next'],
+  ['api', 'workspaces', ':id', 'load-reports'],
+  ['api', 'workspaces', ':id', 'events'],
+  ['api', 'workspaces', ':id', 'goal'],
+  ['api', 'workspaces', ':id', 'goals'],
+  ['api', 'workspaces', ':id', 'goals', 'rename'],
+  ['api', 'workspaces', ':id', 'goals', 'add'],
+  ['api', 'workspaces', ':id', 'goals', 'reorder'],
+  ['api', 'workspaces', ':id', 'retired'],
+  ['api', 'workspaces', ':id', 'settings'],
+  ['api', 'workspaces', ':id', 'rename'],
+  ['api', 'workspaces', ':id', 'lead'],
+  ['api', 'workspaces', ':id', 'voice'],
+  ['api', 'workspaces', ':id', 'docs'],
+  ['api', 'workspaces', ':id', 'import-tasks'],
+  ['api', 'workspaces', ':id', 'huddles'],
+  ['api', 'workspaces', ':id', 'tasks'],
+  ['api', 'workspaces', ':id', 'tasks', 'batch'],
+  ['api', 'workspaces', ':id', 'attachments'],
+  ['api', 'workspaces', ':id', 'attachments', ':id'],
+  ['api', 'workspaces', ':id', 'attachments', ':id', 'heartbeat'],
+  ['api', 'workspaces', ':id', 'comment-queue', ':id', 'ack'],
+  ['api', 'workspaces', ':id', 'voice-queue', ':id', 'ack'],
+  // /api/tasks/:id/...
+  ['api', 'tasks', ':id', 'transition'],
+  ['api', 'tasks', ':id', 'evidence'],
+  ['api', 'tasks', ':id', 'links'],
+  ['api', 'tasks', ':id', 'goal'],
+  ['api', 'tasks', ':id', 'answer'],
+  ['api', 'tasks', ':id', 'answer', 'undo'],
+  ['api', 'tasks', ':id', 'more-info'],
+  ['api', 'tasks', ':id', 'review-items'],
+  ['api', 'tasks', ':id', 'review-items', ':id', 'answer'],
+  ['api', 'tasks', ':id', 'review-items', ':id', 'more-info'],
+  ['api', 'tasks', ':id', 'review-items', ':id', 'release'],
+  ['api', 'tasks', ':id', 'review-items', ':id', 'revise'],
+  ['api', 'tasks', ':id', 'after'],
+  ['api', 'tasks', ':id', 'title'],
+  ['api', 'tasks', ':id', 'body'],
+  ['api', 'tasks', ':id', 'assignee'],
+  ['api', 'tasks', ':id', 'due'],
+  ['api', 'tasks', ':id', 'park'],
+  ['api', 'tasks', ':id', 'archive'],
+  ['api', 'tasks', ':id', 'restore'],
+  ['api', 'tasks', ':id', 'notes'],
+  // /api/agents/:id/...
+  ['api', 'agents', ':id', 'watches'],
+  ['api', 'agents', ':id', 'merge'],
+  ['api', 'agents', ':id', 'notes'],
+  // /api/docs/:id and its ~30 subroutes (canonicalized once in server.ts, then dispatched on the literal 'rest' of the path)
+  ['api', 'docs', ':id'],
+  ['api', 'docs', ':id', 'archive'],
+  ['api', 'docs', ':id', 'unarchive'],
+  ['api', 'docs', ':id', 'meetings'],
+  ['api', 'docs', ':id', 'meetings', ':id'],
+  ['api', 'docs', ':id', 'threads'],
+  ['api', 'docs', ':id', 'tasks'],
+  ['api', 'docs', ':id', 'content'],
+  ['api', 'docs', ':id', 'status'],
+  ['api', 'docs', ':id', 'reparse_from_disk'],
+  ['api', 'docs', ':id', 'diff'],
+  ['api', 'docs', ':id', 'activity'],
+  ['api', 'docs', ':id', 'find_and_replace'],
+  ['api', 'docs', ':id', 'suggestions'],
+  ['api', 'docs', ':id', 'suggestions', 'resolve_all'],
+  ['api', 'docs', ':id', 'delete_block_at_anchor'],
+  ['api', 'docs', ':id', 'delete_blocks_in_range'],
+  ['api', 'docs', ':id', 'delete_section'],
+  ['api', 'docs', ':id', 'hooks', 'fire'],
+  // /api/docs/:id/threads/:id/... (nested inside the rest dispatch above)
+  ['api', 'docs', ':id', 'threads', ':id', 'promote'],
+  ['api', 'docs', ':id', 'threads', ':id'],
+  ['api', 'docs', ':id', 'threads', ':id', 'comments'],
+  ['api', 'docs', ':id', 'threads', ':id', 'answer'],
+  ['api', 'docs', ':id', 'threads', ':id', 'revise'],
+  ['api', 'docs', ':id', 'threads', ':id', 'withdraw', 'undo'],
+  ['api', 'docs', ':id', 'threads', ':id', 'answer', 'undo'],
+  ['api', 'docs', ':id', 'threads', ':id', 'summary'],
+  ['api', 'docs', ':id', 'threads', ':id', 'resolve'],
+  ['api', 'docs', ':id', 'threads', ':id', 'reopen'],
+  ['api', 'docs', ':id', 'threads', ':id', 'reanchor'],
+  ['api', 'docs', ':id', 'threads', ':id', 'rewrite_region'],
+  ['api', 'docs', ':id', 'threads', ':id', 'insert_after'],
+  ['api', 'docs', ':id', 'threads', ':id', 'insert_blocks_after'],
+  ['api', 'docs', ':id', 'threads', 'by_find'],
+  // /api/docs/:id/agent_anchors/:id/... (nested inside the rest dispatch above)
+  ['api', 'docs', ':id', 'agent_anchors', ':id'],
+  ['api', 'docs', ':id', 'agent_anchors', ':id', 'edit'],
+  ['api', 'docs', ':id', 'agent_anchors', ':id', 'insert_blocks'],
+  // the frontend shell — /workspaces/:id and /workspaces/:id/(docs|mockups|reviews)/:id
+  ['workspaces', ':id'],
+  ['workspaces', ':id', 'home'],
+  ['workspaces', ':id', 'tasks'],
+  ['workspaces', ':id', 'mine'],
+  ['workspaces', ':id', 'activity'],
+  ['workspaces', ':id', 'docs', ':id'],
+  ['workspaces', ':id', 'mockups', ':id'],
+  ['workspaces', ':id', 'reviews', ':id'],
+];
+
+function matchesRouteTemplate(segments: readonly string[], template: readonly string[]): boolean {
+  if (segments.length !== template.length) return false;
+  return segments.every((seg, i) => template[i] === ':id' || template[i] === seg);
+}
 
 /**
  * Route pattern for a span/transaction name — NEVER `url.pathname` directly.
  * A raw path can carry a doc id that's a bound file's relative path, a task
  * title alias (`task:<taskId>`), or a share token; this collapses every
- * segment the route table doesn't dispatch on to `:id` so the name is safe
- * to send off-machine no matter what the id turns out to contain.
+ * segment that isn't at a literal position in a known route to `:id`, so the
+ * name is safe to send off-machine no matter what the id turns out to
+ * contain — see ROUTE_TEMPLATES above for why this matches whole shapes
+ * rather than classifying segments independently.
  */
 export function routePatternForSpan(pathname: string): string {
   const segments = pathname.split('/').filter((s) => s.length > 0);
   if (segments.length === 0) return '/';
-  return `/${segments.map((seg) => (STATIC_ROUTE_SEGMENTS.has(seg) ? seg : ':id')).join('/')}`;
+  const template = ROUTE_TEMPLATES.find((t) => matchesRouteTemplate(segments, t));
+  if (template) return `/${template.join('/')}`;
+  return `/${segments.map(() => ':id').join('/')}`;
 }
 
 /**
