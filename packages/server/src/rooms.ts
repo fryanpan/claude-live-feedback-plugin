@@ -77,6 +77,7 @@ import {
   DOC_INDEX_VERSION,
   type DocIndexEntry,
   deleteDocIndex,
+  docIndexPath,
   dropStagedDocIndex,
   moveDocIndex,
   readAllDocIndexes,
@@ -2821,21 +2822,33 @@ export class Rooms {
       } catch {}
       return false;
     }
-    // The index row is derived state: a failure to carry it is recoverable
-    // (the next persist rewrites it), so it never fails the move.
-    moveDocIndex(fromDir, toDir, docId);
     // Membership of the resident index map follows the FILE, in the one place
     // that knows the direction. Without this, archiving moved the .ydoc out
     // and dropped the room while the row stayed behind — and `list()` went on
     // reporting a doc that had just been archived, which is the whole failure
     // an archive is supposed to produce the opposite of.
+    const carried = moveDocIndex(fromDir, toDir, docId);
     if (toDir === this.cfg.dataDir) {
-      // Coming back. A missing row is fine: the doc is resident again, so
-      // `list()` sees it either way, and the next persist writes the row.
+      // Coming back. A failure here really is harmless: the doc is resident
+      // again, so `list()` sees it either way, and the next persist writes
+      // the row.
       const restored = readDocIndex(this.cfg.dataDir, docId);
       if (restored) this.docIndex.set(docId, restored);
     } else {
       this.docIndex.delete(docId);
+      // Leaving. A row left behind in the LIVE directory outlives the archive
+      // and comes back as a doc on the next restart, so it does not get to
+      // fail quietly. Deleting it destroys nothing — it is derived state, and
+      // the .ydoc it describes is safe in `toDir`.
+      if (!carried) {
+        console.error(`[rooms] could not move index for ${docId} to ${toDir}; dropping it`);
+        deleteDocIndex(fromDir, docId);
+        if (existsSync(docIndexPath(fromDir, docId))) {
+          console.error(
+            `[rooms] index for ${docId} is STILL in ${fromDir} — a restart will list it as live`,
+          );
+        }
+      }
     }
     return true;
   }

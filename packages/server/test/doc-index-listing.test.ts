@@ -14,11 +14,20 @@
  * CRDT, because those are exactly the ones a naive index would drop.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type DocMeta, createThread, setStatus } from '@feedback/core';
 import type * as Y from 'yjs';
+import { moveDocIndex } from '../src/doc-index.ts';
 import { Rooms } from '../src/rooms.ts';
 import { SseHub } from '../src/sse.ts';
 import { createWebhookDispatcher } from '../src/webhooks.ts';
@@ -217,6 +226,44 @@ describe('an index-backed listing equals the hydrated listing', () => {
 
     const counts = rooms.threadCountsFromIndex('counted');
     expect(counts).toEqual({ open: 1, total: 2 });
+  });
+
+  it('takes the index with it when a doc is archived', () => {
+    const rooms = makeRooms(dataDir);
+    rooms.getOrCreate('to-archive', { type: 'markdown', title: 'Leaving' });
+    rooms.flush();
+    // Control: the row is in the live directory to begin with.
+    expect(existsSync(join(dataDir, 'to-archive.index.json'))).toBe(true);
+
+    const res = rooms.archiveDoc('to-archive', { archivedBy: 'Tester' });
+    expect(res.ok).toBe(true);
+
+    // The row must not be left in the LIVE directory. If it is, a restart
+    // reads it and lists an archived doc as though it were still here — the
+    // exact opposite of what archiving is for.
+    expect(existsSync(join(dataDir, 'to-archive.index.json'))).toBe(false);
+    expect(rooms.list().some((r) => r.docId === 'to-archive')).toBe(false);
+    expect(
+      makeRooms(dataDir)
+        .list()
+        .some((r) => r.docId === 'to-archive'),
+    ).toBe(false);
+  });
+
+  it('reports a failed index move rather than swallowing it', () => {
+    const rooms = makeRooms(dataDir);
+    rooms.getOrCreate('stuck', { type: 'markdown', title: 'Stuck' });
+    rooms.flush();
+    // Control: it moves where the destination exists.
+    const good = join(dataDir, 'somewhere');
+    mkdirSync(good, { recursive: true });
+    expect(moveDocIndex(dataDir, good, 'stuck')).toBe(true);
+    expect(moveDocIndex(good, dataDir, 'stuck')).toBe(true);
+
+    // And says so where it does not. `moveDocFiles` relies on this answer to
+    // know it has a stale live row to clean up.
+    expect(moveDocIndex(dataDir, join(dataDir, 'no-such-dir'), 'stuck')).toBe(false);
+    expect(existsSync(join(dataDir, 'stuck.index.json'))).toBe(true);
   });
 
   it('drops the index when the doc is purged, so a listing cannot resurrect it', () => {

@@ -109,12 +109,22 @@ export function dropStagedDocIndex(dir: string, docId: string): void {
   } catch {}
 }
 
-/** Move a doc's index between directories, the way the sidecar moves. */
-export function moveDocIndex(fromDir: string, toDir: string, docId: string): void {
+/**
+ * Move a doc's index between directories, the way the sidecar moves.
+ *
+ * Returns false if a row was there and could not be moved — which matters
+ * only in one direction, and badly: a row left behind in the LIVE directory
+ * outlives the archive, and `list()` reads it back after a restart as a doc
+ * that is still here. The caller has to clean that up; see `moveDocFiles`.
+ */
+export function moveDocIndex(fromDir: string, toDir: string, docId: string): boolean {
   const from = docIndexPath(fromDir, docId);
   try {
     if (existsSync(from)) renameSync(from, docIndexPath(toDir, docId));
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
