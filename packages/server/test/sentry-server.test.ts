@@ -124,6 +124,26 @@ describe('routePatternForSpan: default-deny redaction', () => {
       );
     }
   });
+
+  it('names three more docs-subroute shapes missed on the first pass through the dispatch chain', () => {
+    // codex review, second pass: server.ts's docs dispatch also has a bare
+    // agent_anchors create route (only the :id-suffixed variants were
+    // templated), a bare threads/:id/withdraw (only its /undo sibling was),
+    // and suggestions/:id/(accept|reject) (only the bulk resolve_all and
+    // the plain listing were).
+    expect(routePatternForSpan('/api/docs/w-abc123/agent_anchors')).toBe(
+      '/api/docs/:id/agent_anchors',
+    );
+    expect(routePatternForSpan('/api/docs/w-abc123/threads/t-xyz789/withdraw')).toBe(
+      '/api/docs/:id/threads/:id/withdraw',
+    );
+    expect(routePatternForSpan('/api/docs/w-abc123/suggestions/s-1/accept')).toBe(
+      '/api/docs/:id/suggestions/:id/accept',
+    );
+    expect(routePatternForSpan('/api/docs/w-abc123/suggestions/s-1/reject')).toBe(
+      '/api/docs/:id/suggestions/:id/reject',
+    );
+  });
 });
 
 describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a negative that can fail', () => {
