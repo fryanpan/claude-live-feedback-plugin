@@ -14,7 +14,7 @@
  * `get` rather than by writing to the map behind it.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { memberDocId } from '../src/binds.ts';
@@ -65,6 +65,52 @@ describe('evicting an idle doc', () => {
   }
 
   const resident = (docId: string) => rooms.peek(docId) !== undefined;
+
+  it('a write-back that FAILS during eviction is repaired by the next boot', () => {
+    // `writeBoundFileNow` swallows its own errors, so a failed write looks
+    // exactly like a finished one to everything downstream — and eviction
+    // then wrote an index row saying there was nothing to reassert. For a
+    // doc nobody opens again, that is a stale `.md` for ever.
+    const path = bound('wedged');
+    rooms.flush();
+
+    expect(rooms.findAndReplace('wedged', { find: 'first line', replace: 'rescued' }).ok).toBe(
+      true,
+    );
+    // Make the write throw: an unwritable parent directory is a real
+    // transient failure (a permission change, a full disk) and needs no
+    // stubbing of the writer under test.
+    chmodSync(srcDir, 0o500);
+    try {
+      // `evictRoom`, not the idle sweep: the sweep holds a doc with a pending
+      // write (that is one of the four guards), so the flush-on-evict path
+      // belongs to the direct callers — the boot migration and the summary
+      // backfill, both of which put back every doc they had to open.
+      expect(rooms.evictRoom('wedged')).toBe(true);
+      expect(resident('wedged')).toBe(false);
+      // Control: the write really did fail — disk still holds the old line.
+      expect(onDisk(path)).toContain('first line');
+    } finally {
+      chmodSync(srcDir, 0o700);
+    }
+
+    // The row says come back for this one...
+    const row = JSON.parse(readFileSync(join(dataDir, 'wedged.index.json'), 'utf8')) as {
+      pendingFileWrite?: boolean;
+    };
+    expect(row.pendingFileWrite).toBe(true);
+
+    // ...and a restart does, without anybody opening it.
+    rooms.stop();
+    const next = makeRooms(dataDir);
+    try {
+      expect(next.residentCount()).toBe(1);
+      next.flush();
+      expect(onDisk(path)).toContain('rescued');
+    } finally {
+      next.stop();
+    }
+  });
 
   it('drops a doc idle for two days and keeps one touched an hour ago', () => {
     bound('stale');
