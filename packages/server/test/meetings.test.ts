@@ -226,6 +226,29 @@ describe('meeting store: who said it', () => {
     ]);
   });
 
+  it('a revision that takes the label away clears it, rather than leaving a stale one', () => {
+    const store = new MeetingStore(dataDir);
+    const meeting = store.start({ docId: 'unlabel', engine: 'mock', sampleRate: 16_000 });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.recordTurn(0, 'Sure.', 'A');
+    // The whole-session pass demoted the label to a placeholder, which the
+    // engine adapter maps to no speaker at all. The strip drops its tag; the
+    // durable record has to agree, or it keeps an attribution nobody saw.
+    meeting.recordTurn(0, 'Sure.', undefined);
+    // And having said nobody, it does not say it twice.
+    meeting.recordTurn(0, 'Sure.', undefined);
+    meeting.stop();
+    const lines = readFileSync(meetingTranscriptPath(dataDir, 'unlabel', meeting.meetingId), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatchObject({ turn: 0, speaker: null });
+    const [turn] = readTranscript(dataDir, 'unlabel', meeting.meetingId);
+    expect(turn).toMatchObject({ turn: 0, text: 'Sure.' });
+    expect('speaker' in (turn ?? {})).toBe(false);
+  });
+
   it('remembers the names a person gives the labels, on the meeting record', () => {
     const store = new MeetingStore(dataDir);
     const meeting = store.start({ docId: 'named', engine: 'mock', sampleRate: 16_000 });

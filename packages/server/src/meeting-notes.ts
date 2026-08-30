@@ -120,13 +120,33 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
   return {
     onTurn(turn: EngineTurn): void {
       if (ended) return;
-      if (turn.final && !seen.has(turn.turn)) {
-        seen.add(turn.turn);
-        pending.push({
-          turn: turn.turn,
-          text: turn.text,
-          ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
-        });
+      if (turn.final) {
+        if (seen.has(turn.turn)) {
+          // A settled turn arriving AGAIN is the engine's end-of-session
+          // speaker pass changing its mind. One still waiting to compose
+          // takes the new label; one that already went out in a tick keeps
+          // what it was composed with — those words are in the doc, and the
+          // revision has nowhere left to land.
+          const at = pending.findIndex((t) => t.turn === turn.turn);
+          const waiting = pending[at];
+          // Rebuilt rather than patched: a revision can take the label away
+          // as well as change it, and an absent `speaker` is what "nobody"
+          // looks like everywhere else on this path.
+          if (waiting) {
+            pending[at] = {
+              turn: waiting.turn,
+              text: waiting.text,
+              ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
+            };
+          }
+        } else {
+          seen.add(turn.turn);
+          pending.push({
+            turn: turn.turn,
+            text: turn.text,
+            ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
+          });
+        }
       }
       // Any frame is speech: replace whatever countdown was running.
       disarm();

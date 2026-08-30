@@ -145,6 +145,34 @@ describe('pause ticker', () => {
     ]);
   });
 
+  it('a revision relabels a turn still waiting to compose', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'A' });
+    // The end-of-session pass changed its mind before the pause ever fired.
+    ticker.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'B' });
+    // And can take the label away entirely, on turn 1.
+    ticker.onTurn({ turn: 1, text: 'Sure.', final: true, speaker: 'C' });
+    ticker.onTurn({ turn: 1, text: 'Sure.', final: true });
+    schedule.fire();
+    // Still one turn each — a revision revises, it never duplicates.
+    expect(ticks[0]?.turns).toEqual([
+      { turn: 0, text: 'Take it?', speaker: 'B' },
+      { turn: 1, text: 'Sure.' },
+    ]);
+  });
+
+  it('a revision of a turn already composed does not re-emit it', () => {
+    const { schedule, ticks, ticker } = setup();
+    ticker.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'A' });
+    schedule.fire();
+    ticker.onTurn({ turn: 0, text: 'Take it?', final: true, speaker: 'B' });
+    schedule.fire();
+    // Those words are already in the doc under 'A'; the revision has nowhere
+    // to land, and must not compose the same turn a second time.
+    expect(ticks).toHaveLength(1);
+    expect(ticks[0]?.turns).toEqual([{ turn: 0, text: 'Take it?', speaker: 'A' }]);
+  });
+
   it('end() with nothing pending emits nothing', () => {
     const { ticks, ticker } = setup();
     ticker.end();
