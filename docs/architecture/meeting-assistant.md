@@ -157,11 +157,21 @@ stored content.
   clip box (and the mask is px-anchored to the window's top edge, so the two
   move together) because the clip box must still be at least as tall as the
   target.
+- **A clipping inline-block's baseline is its BOTTOM MARGIN EDGE**, so the
+  pill hung above the text with the line's descender space empty under it —
+  the button was the size it was designed to be and still measured 34,
+  sitting 4.3px above the clip. It also put the pill's top inside the mask's
+  fade, so the label rendered washed out beside crisp words: one root cause,
+  two symptoms. `vertical-align: middle` positions the box from its own
+  margin box rather than from a baseline the overflow moves. Do not buy slack
+  with more padding — at 430px the caption is two lines and a taller target
+  reaches into the line above.
 - **Assert the measured box, never the declarations.** The test for that
-  floor passed through both regressions while the real target was 19px,
-  because it asserted the properties that should have produced 36px. It now
-  computes the hit box from the pill, the button's padding and every clip in
-  between.
+  floor passed through all three regressions in turn: it asserted the
+  ingredients, then the box but not its clip, then the box and the clip but
+  not the offset between them. It now computes the intersection of the button
+  with the clip at both widths, and asserts the alignment its arithmetic
+  assumes — a model whose premise is unasserted is the next silent pass.
 - **A turn must be a block, or its tag strands.** Inline, a turn began where
   the last one ended and its tag landed at the end of the PREVIOUS visual
   line — above its own words, and on a phone that is the faded line being

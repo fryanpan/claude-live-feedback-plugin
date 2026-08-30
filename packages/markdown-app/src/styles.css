@@ -6330,7 +6330,19 @@ body.is-reading-width #editor > .ProseMirror {
   /* 10px each side of the ~17.75px pill = 37.75px: the border box IS the
      target, and 9px would have missed the 36px floor by a quarter pixel. The
      negative vertical margin gives that height back to the line box, so the
-     caption's window stays one line and the words do not move. */
+     caption's window stays one line and the words do not move.
+
+     `middle`, NOT `baseline`, and this is a measured bug rather than taste.
+     An inline-block that clips has its baseline redefined to its bottom
+     margin edge, so a baseline-aligned pill hung above the text with the
+     line's descender space empty beneath it — the box was the 37.75px
+     designed but sat 4.3px above the clip, measuring 34, and its top was up
+     inside the mask's fade, rendering the label washed out beside crisp
+     words. `middle` positions the box from its own margin box instead of
+     from a baseline the pill's overflow moves, so the centring survives the
+     next change to the line box. Do not enlarge the padding to buy slack
+     instead: at 430px the caption is two lines, and a taller target reaches
+     into the line above. */
   padding: 10px 4px;
   margin: -10px 0 -10px -4px;
   border: 0;
@@ -6338,7 +6350,7 @@ body.is-reading-width #editor > .ProseMirror {
   font: inherit;
   line-height: 0;
   cursor: pointer;
-  vertical-align: baseline;
+  vertical-align: middle;
 }
 /* The pill: the whole look, and the clip that keeps a long name from wrapping
    the caption line. The max-width is load-bearing, not tidiness — a
