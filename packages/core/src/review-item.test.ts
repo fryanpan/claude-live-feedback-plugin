@@ -5,7 +5,11 @@ import {
   type TaskReviewItem,
   answerFromReply,
   checkReviewPayload,
+  isReviewItemGated,
+  isReviewItemHeld,
   isReviewItemOpen,
+  judgeReasonClause,
+  judgeReasonSentence,
   pendingDeclaration,
   readReviewPayload,
   readTaskReviewItem,
@@ -1007,5 +1011,118 @@ describe('answerFromReply', () => {
     expect(
       answerFromReply({ shape: 'decision', headline: 'Which way?' }, 'The second one'),
     ).toEqual({});
+  });
+});
+
+describe('the quality gate’s verdict on a review item', () => {
+  function item(over: Record<string, unknown> = {}): unknown {
+    return {
+      id: 'ri-7c1d',
+      review: decision(),
+      createdAt: 1700000000000,
+      createdBy: 'Scheduler Agent',
+      ...over,
+    };
+  }
+
+  it('reads a held verdict back with its reason and clock', () => {
+    const read = readTaskReviewItem(
+      item({ judge: { at: 1700000001000, verdict: 'held', reason: 'Headline is a ticket id.' } }),
+    );
+    expect(read?.judge).toEqual({
+      at: 1700000001000,
+      verdict: 'held',
+      reason: 'Headline is a ticket id.',
+    });
+    expect(read ? isReviewItemHeld(read) : null).toBe(true);
+  });
+
+  it('an ok or unavailable verdict is recorded but does not hold the item', () => {
+    for (const verdict of ['ok', 'unavailable']) {
+      const read = readTaskReviewItem(item({ judge: { at: 1, verdict, reason: 'r' } }));
+      expect(read?.judge?.verdict).toBe(verdict);
+      expect(read ? isReviewItemHeld(read) : null).toBe(false);
+    }
+  });
+
+  it('drops a verdict it cannot read rather than the row — an unreadable verdict is a pass', () => {
+    for (const judge of [
+      null,
+      'held',
+      { verdict: 'nonsense', at: 1 },
+      { at: 'x', verdict: 'held' },
+    ]) {
+      const read = readTaskReviewItem(item({ judge }));
+      expect(read?.id).toBe('ri-7c1d');
+      expect(read?.judge).toBeUndefined();
+      expect(read ? isReviewItemHeld(read) : null).toBe(false);
+    }
+  });
+
+  it('an answered item is never held — the answer is the fact that closes it', () => {
+    const read = readTaskReviewItem(
+      item({
+        judge: { at: 1, verdict: 'held', reason: 'r' },
+        answer: { text: 'Keep it', by: 'Jordan', ts: 2 },
+      }),
+    );
+    expect(read ? isReviewItemHeld(read) : null).toBe(false);
+  });
+});
+
+describe('an item whose verdict is still out', () => {
+  const item = (verdict: 'ok' | 'held' | 'unavailable' | 'pending'): TaskReviewItem => ({
+    id: 'ri-1',
+    review: { shape: 'decision', headline: 'Which index?' },
+    createdAt: 1,
+    createdBy: 'Index Keeper',
+    judge: { at: 2, verdict, reason: '' },
+  });
+
+  it('is gated — off the queue — but not held: there is nothing to revise yet', () => {
+    expect(isReviewItemGated(item('pending'))).toBe(true);
+    expect(isReviewItemHeld(item('pending'))).toBe(false);
+  });
+
+  it('gated agrees with held on every settled verdict (control)', () => {
+    for (const v of ['ok', 'held', 'unavailable'] as const) {
+      expect(isReviewItemGated(item(v))).toBe(isReviewItemHeld(item(v)));
+    }
+  });
+
+  it('reads a pending verdict off the wire', () => {
+    expect(readTaskReviewItem(item('pending'))?.judge?.verdict).toBe('pending');
+  });
+});
+
+describe('the judge’s reason, as the surfaces around it need it', () => {
+  // Both spellings were live on the board: the ticket note read "…rather than
+  // 'see below'. — the agent has been asked…" and the filer's channel line
+  // read "…'see below'.. It has been held for 4m" (UX review, 2026-08-29).
+  it('drops the full stop when the sentence carries on after it', () => {
+    expect(judgeReasonClause('Links are bare rather than “see below”.')).toBe(
+      'Links are bare rather than “see below”',
+    );
+    expect(judgeReasonClause('  No stakes given.  ')).toBe('No stakes given');
+    expect(judgeReasonClause('Ends in several dots...')).toBe('Ends in several dots');
+  });
+
+  it('leaves a question, an exclamation and an ellipsis as written', () => {
+    expect(judgeReasonClause('What does this change?')).toBe('What does this change?');
+    expect(judgeReasonClause('A very long reason that ran on…')).toBe(
+      'A very long reason that ran on…',
+    );
+  });
+
+  it('gives exactly one terminal mark when the reason stands alone', () => {
+    expect(judgeReasonSentence('No stakes given')).toBe('No stakes given.');
+    expect(judgeReasonSentence('No stakes given.')).toBe('No stakes given.');
+    expect(judgeReasonSentence('No stakes given..')).toBe('No stakes given.');
+    expect(judgeReasonSentence('What does this change?')).toBe('What does this change?');
+  });
+
+  it('answers empty on an empty reason, so a caller appends nothing', () => {
+    expect(judgeReasonClause('   ')).toBe('');
+    expect(judgeReasonSentence('   ')).toBe('');
   });
 });

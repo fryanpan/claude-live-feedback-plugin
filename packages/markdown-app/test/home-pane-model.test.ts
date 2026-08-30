@@ -156,8 +156,8 @@ describe('waitingLabel', () => {
     expect(waitingLabel(NOW - 12 * 60_000, NOW)).toBe('waiting 12 minutes');
   });
 
-  it('under a minute says moments, not 0 minutes', () => {
-    expect(waitingLabel(NOW - 20_000, NOW)).toBe('waiting moments');
+  it('under a minute says under a minute, not 0 minutes', () => {
+    expect(waitingLabel(NOW - 20_000, NOW)).toBe('waiting under a minute');
   });
 });
 

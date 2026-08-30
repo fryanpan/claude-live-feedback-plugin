@@ -147,6 +147,33 @@ export interface HubTask {
    *  decision — see `decisionAskedBy`. */
   createdBy?: string;
   updatedAt: number;
+  /**
+   * The ticket's review items as the server projects them (`projectReviews`
+   * — display names only). The panel's QUEUE still comes from the
+   * review-items route, which is where "waiting on the reader" is decided;
+   * this array is read for the one thing that route deliberately omits: an
+   * item the quality gate is HOLDING, which the ticket shows with its reason
+   * so the reader can see a question is coming. Absent when there are none,
+   * and on a projection from a server older than the field.
+   */
+  reviews?: HubReviewItem[];
+}
+
+/** A projected review item, as far as the hub reads it. */
+export interface HubReviewItem {
+  id: string;
+  review: { headline: string; detail?: string };
+  createdBy?: string;
+  /** Present when it has been answered; the hold is moot then. */
+  answer?: { text: string };
+  /** The quality gate's verdict on the current words. `held` is the one
+   *  that shows on the ticket. */
+  judge?: { at: number; verdict: 'ok' | 'held' | 'unavailable' | 'pending'; reason: string };
+}
+
+/** Review items the quality gate is holding — on the ticket, off the queue. */
+export function heldReviewItems(task: HubTask): HubReviewItem[] {
+  return (task.reviews ?? []).filter((r) => r.answer === undefined && r.judge?.verdict === 'held');
 }
 
 export interface HubSubgoal {
@@ -2614,10 +2641,16 @@ export function homeSinceLabel(payload: Pick<HomePayload, 'since' | 'brief'>, no
 
 /** "2 days" — how long something has waited, bare. The walkthrough card's
  *  wait chip (mockup: `2 days` beside the project chip). Same unit boundaries
- *  as timeAgo; under a minute says "moments" rather than a zero. */
+ *  as timeAgo; under a minute says "under a minute" rather than a zero.
+ *
+ *  It returns a DURATION, never an adverbial: every caller composes it into
+ *  its own sentence — "waiting …", "… ago", "held …" — and a helper that
+ *  returned "moments" read correctly only in the one that appends "ago".
+ *  The held note said "held moments" (UX review round two, 2026-08-29). One
+ *  contract, so a new caller cannot pick the broken half. */
 export function waitShort(since: number, now: number): string {
   const m = Math.round(Math.max(0, now - since) / 60_000);
-  if (m < 1) return 'moments';
+  if (m < 1) return 'under a minute';
   const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   if (m < 60) return unit(m, 'minute');
   const h = Math.round(m / 60);
@@ -2717,6 +2750,35 @@ export function askedMetaLine(
   const verb = asked ? 'Asked' : 'Posted';
   const when = `${waitShort(at, now)} ago`;
   return who && who.trim() !== '' ? `${verb} by ${who} ${when}` : `${verb} ${when}`;
+}
+
+/**
+ * "Filed by Index Keeper · held 4m" — the held note's provenance line, the
+ * counterpart to `askedMetaLine` on the answerable card directly above it.
+ *
+ * Its own line rather than `askedMetaLine` with the hold time passed in as
+ * the ask time: the only clock a held item carries in the projection is
+ * `judge.at`, which is when the HOLD was placed — on a re-hold after a
+ * revision that is minutes or hours after the question was asked, and a line
+ * reading "Asked by … 4m ago" over it would state a fact nothing measured.
+ * The judge was just tightened for doing exactly that (UX review,
+ * 2026-08-29). `waitShort` is shared with the card, so the two clocks beside
+ * each other cannot round differently.
+ *
+ * Both halves are optional and neither is invented: a projection with no
+ * filer says only how long, and one from a server older than `judge` says
+ * only who.
+ */
+export function heldMetaLine(
+  who: string | undefined,
+  heldAt: number | undefined,
+  now: number,
+): string {
+  const name = who?.trim();
+  const by = name ? `Filed by ${name}` : '';
+  const stood = heldAt === undefined ? '' : `held ${waitShort(heldAt, now)}`;
+  if (by && stood) return `${by} · ${stood}`;
+  return by || (stood ? stood.charAt(0).toUpperCase() + stood.slice(1) : '');
 }
 
 /**
