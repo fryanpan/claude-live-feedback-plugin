@@ -335,7 +335,7 @@ describe('the ticket panel states the numbers the board no longer shows', () => 
       rows.push(
         closed(2 * DAY, 2 * HOUR, {
           effortEstimate: { status: 'ok', handsOnSeconds: 600, wallClockSeconds: 3600 },
-          readingTime: { totalSeconds: 1200, sessionCount: 2, lastReadAt: NOW },
+          readingTime: { totalSeconds: 1200, sessionCount: 2, lastSessionAt: NOW },
         }),
       );
     }
