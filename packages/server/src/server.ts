@@ -8830,6 +8830,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // any weight. An unattributed read is now unattributed.
             const author = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
             const res = rooms.recordReadEvent(docId, type, payload, author);
+            // Fold a successful task read_session onto the task record's
+            // cumulative reading time. `recordReadEvent` clamps `payload`
+            // in place (see `clampReadPayload`), so `durationMs` here is
+            // already the server-trusted value, not whatever the browser
+            // sent. Quiet on the task (no event, no `updatedAt`) — see
+            // `TaskStore.recordReadingTime`.
+            if (res.ok && type === 'read_session') {
+              const taskId = taskIdOfBodyDoc(docId);
+              const durationMs = payload.durationMs;
+              if (taskId && typeof durationMs === 'number' && durationMs > 0) {
+                taskStore.recordReadingTime(taskId, Math.round(durationMs / 1000));
+              }
+            }
             return res.ok ? j(200, { ok: true }) : j(404, res);
           }
           if (rest === 'agent_anchors' && req.method === 'POST') {
