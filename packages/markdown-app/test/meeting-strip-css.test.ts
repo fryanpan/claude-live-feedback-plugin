@@ -186,6 +186,34 @@ describe('the speaker tag', () => {
     expect(rule('.meeting-speaker', declarationsOnly(SECTION))).toMatch(/vertical-align:\s*middle/);
   });
 
+  it('is fully opaque everywhere the current line can paint', () => {
+    // The caption's mask hides the line that has rolled off, which really does
+    // paint: overflow: hidden clips to the PADDING box, not the content box.
+    // So the transparent zone must be exactly the top padding and no more --
+    // measured at 1180x820 the pill's top edge lands 0.38px inside the content
+    // box, so a ramp of ANY length reaches into it. That is what rendered the
+    // pill pale with no top border next to crisp words.
+    const capt = rule('.meeting-caption', declarationsOnly(SECTION));
+    const STRIP_FONT = px(decl(rule('.meeting-strip', declarationsOnly(SECTION)), 'font-size'), 16);
+    const capPad = px(decl(capt, 'padding-block'), STRIP_FONT);
+    const mask = decl(capt, 'mask-image') ?? '';
+    expect(mask, 'no mask-image on the caption').toMatch(/linear-gradient/);
+    const stops = [...mask.matchAll(/(transparent|#000)\s+([\d.]+)px/g)].map((m) => ({
+      opaque: m[1] === '#000',
+      at: Number(m[2]),
+    }));
+    const firstOpaque = stops.find((s) => s.opaque);
+    expect(firstOpaque, 'the gradient never reaches opaque').toBeTruthy();
+    expect(
+      firstOpaque!.at,
+      `opaque only at ${firstOpaque!.at}px, ${capPad}px of padding — the ramp is inside the pill`,
+    ).toBeLessThanOrEqual(capPad);
+    // And it must still be transparent right up to there, or the rolled-off
+    // line stops being hidden and reappears above the current one.
+    const lastClear = stops.filter((s) => !s.opaque).at(-1);
+    expect(lastClear?.at).toBe(capPad);
+  });
+
   it('keeps the target and the clip on separate elements', () => {
     // The split IS the fix: the button holds the padding and nothing that
     // clips; the pill holds every visual and the only overflow. Collapse them
