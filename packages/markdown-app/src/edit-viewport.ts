@@ -64,6 +64,9 @@ export interface StripYieldInput {
   narrow: boolean;
   /** An editable element inside the document surface holds focus. */
   editing: boolean;
+  /** Something is actually covering the bottom of the window — the keyboard,
+   *  or the accessory bar on its own. `keyboardInset(...) > 0`. */
+  keyboardUp: boolean;
   /** A meeting is being recorded right now. */
   live: boolean;
 }
@@ -71,12 +74,23 @@ export interface StripYieldInput {
 /**
  * Should the strip give its grid row back, and how much of it?
  *
- * Pure, because the interesting part is the third case: a live recording is
- * the one state where "hide it" is the wrong answer, and that has to be
- * checkable without a browser.
+ * Pure, because two of the cases are ones a browser is a slow way to ask
+ * about.
+ *
+ * FOCUS IS NOT ENOUGH; the keyboard has to actually be up. iOS "Done" on the
+ * form-accessory bar dismisses the keyboard and can LEAVE FOCUS on the field,
+ * and a first version keyed on focus alone left the strip hidden with no
+ * keyboard on screen and the editor at full height — with Start, the only way
+ * into a meeting on this surface, unreachable until the reviewer thought to
+ * tap outside the document. A hardware keyboard and Android's back gesture
+ * reach the same state. The strip is only in anybody's way while something is
+ * covering the bottom of the window, so that is the condition.
+ *
+ * And a live recording is the one state where "hide it" is the wrong answer
+ * even then.
  */
 export function stripYield(i: StripYieldInput): StripMode {
-  if (!i.narrow || !i.editing) return 'full';
+  if (!i.narrow || !i.editing || !i.keyboardUp) return 'full';
   return i.live ? 'compact' : 'hidden';
 }
 
@@ -204,10 +218,15 @@ export function wireEditViewport(opts: EditViewportOpts): EditViewport {
     return false;
   }
 
+  function keyboardUp(): boolean {
+    return keyboardInset(window.innerHeight, window.visualViewport) > 0;
+  }
+
   function sync(): void {
     const mode = stripYield({
       narrow: media?.matches ?? false,
       editing: editing(),
+      keyboardUp: keyboardUp(),
       live: opts.strip()?.classList.contains('is-live') ?? false,
     });
     if (mode === 'full') delete document.body.dataset.editViewport;
@@ -232,8 +251,8 @@ export function wireEditViewport(opts: EditViewportOpts): EditViewport {
     const vv = window.visualViewport;
     // Nothing is covering the bottom (desktop, or the keyboard is down), so
     // the browser's own caret handling is enough and a scroll here would be
-    // an unexplained jump.
-    if (keyboardInset(window.innerHeight, vv) <= 0) return;
+    // an unexplained jump. Same question the strip's yield asks.
+    if (!keyboardUp()) return;
     const rect = rectOf();
     if (!rect) return;
     const vvTop = vv?.offsetTop ?? 0;
