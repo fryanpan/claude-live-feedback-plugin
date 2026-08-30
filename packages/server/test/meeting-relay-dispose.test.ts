@@ -94,6 +94,87 @@ describe('meeting relay dispose', () => {
     expect(stopped.length).toBe(1);
   });
 
+  // Found by codex review: `stop()` on a connection still mid-handshake only
+  // RECORDS the ask and returns, and the real flush runs later inside the
+  // handshake's own continuation. Waiting on that `stop` alone sees a
+  // connection that is already finished.
+  it('waits for a socket closed while the engine handshake was still out', async () => {
+    let openEngine!: (s: TranscriptionSession) => void;
+    let closed = false;
+    const engine: TranscriptionEngine = {
+      name: 'slow-handshake',
+      open: () =>
+        new Promise<TranscriptionSession>((resolve) => {
+          openEngine = resolve;
+        }),
+    };
+    const store = new MeetingStore(dataDir);
+    const stopped: string[] = [];
+    const relay = new MeetingRelay({
+      store,
+      engine,
+      notes: null,
+      broadcast: (_docId, payload) => {
+        if (payload.event === 'meeting.stopped') stopped.push(String(payload.meetingId));
+      },
+    });
+    const ws: MeetingClient = { data: { docId: 'handshake-doc' }, send: () => {} };
+    relay.onOpen(ws);
+    relay.onText(ws, JSON.stringify({ type: 'start', sampleRate: 16000, encoding: 'pcm_s16le' }));
+    await settle();
+
+    // The socket dies with the handshake still out.
+    relay.onClose(ws);
+    await settle();
+
+    let done = false;
+    const disposing = relay.dispose().then(() => {
+      done = true;
+    });
+    await settle();
+    await settle();
+    expect(done).toBe(false);
+
+    // The engine answers late; the deferred teardown runs now, and shutdown
+    // must still be here to see it.
+    openEngine({
+      send: () => {},
+      close: () => {
+        closed = true;
+        return Promise.resolve();
+      },
+    });
+    await disposing;
+    expect(closed).toBe(true);
+    expect(stopped.length).toBe(1);
+  });
+
+  it('goes anyway when a meeting will not finish — shutdown stays bounded', async () => {
+    const engine: TranscriptionEngine = {
+      name: 'wedged',
+      // A handshake that never answers: SIGTERM cannot wait on it forever.
+      open: () => new Promise<TranscriptionSession>(() => {}),
+    };
+    const store = new MeetingStore(dataDir);
+    const relay = new MeetingRelay({ store, engine, notes: null, broadcast: () => {} });
+    const ws: MeetingClient = { data: { docId: 'wedged-doc' }, send: () => {} };
+    relay.onOpen(ws);
+    relay.onText(ws, JSON.stringify({ type: 'start', sampleRate: 16000, encoding: 'pcm_s16le' }));
+    await settle();
+    relay.onClose(ws);
+
+    const startedAt = Date.now();
+    await relay.dispose();
+    const waited = Date.now() - startedAt;
+    // Bounded, and it did wait rather than skipping the drain outright.
+    expect(waited).toBeGreaterThanOrEqual(4_000);
+    expect(waited).toBeLessThan(15_000);
+    // The doc is claimable again even though the meeting never finished.
+    expect(
+      store.start({ docId: 'wedged-doc', engine: 'wedged', sampleRate: 16000 }),
+    ).not.toBeNull();
+  }, 20_000);
+
   it('still ends a meeting whose socket never produced a close', async () => {
     const engine: TranscriptionEngine = {
       name: 'plain',
