@@ -29,6 +29,7 @@ import {
   reviewGapAdvice,
   reviewPayloadMessage,
 } from '@feedback/core';
+import { DEFAULT_EFFORT_ESTIMATE_PROMPT } from '@feedback/core/effort-estimate-prompt';
 import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
 import { classifyActor } from './activity.ts';
 import {
@@ -109,6 +110,52 @@ export interface ArtifactCheck {
   ts: number;
   links: ArtifactLinkCheck[];
 }
+
+/**
+ * One scoring run's fields common to both outcomes — what generation of
+ * scoring made this, and against which words. `model` and `promptVersion`
+ * are what lets a stored run be told from one made under an older scorer or
+ * an older prompt frame; `forTitleWrittenAt`/`forBodyWrittenAt`/`forGoal` are
+ * the `task.titleWrittenAt`/`task.bodyWrittenAt`/`task.goal` this run read at
+ * the moment it asked — the provenance a reader compares against the task's
+ * CURRENT values to tell a fresh estimate from a stale one, and the guard
+ * `TaskStore.recordEffortEstimate` uses so a slow call that lands after a
+ * newer edit (or a re-triage to a different goal, which changes the goal
+ * title the scorer weighed) already re-scored the ticket cannot overwrite
+ * the newer answer with a stale one.
+ */
+interface TaskEffortEstimateProvenance {
+  model: string;
+  promptVersion: number;
+  estimatedAt: number;
+  forTitleWrittenAt: number;
+  forBodyWrittenAt?: number;
+  forGoal: string;
+}
+
+/** A produced guess at how long a ticket will take, in seconds — never a
+ *  promise, only what the scorer made of the words as they stood when this
+ *  ran. See `Task.effortEstimate` for what absence means and why a
+ *  `failed` run (below) is a distinct, visible state from either. */
+export interface TaskEffortEstimateOk extends TaskEffortEstimateProvenance {
+  status: 'ok';
+  /** The owner's own attention: reading, reviewing, deciding, testing. */
+  handsOnSeconds: number;
+  /** Filed-to-done calendar time. */
+  wallClockSeconds: number;
+}
+
+/** A scoring run that could not produce an estimate — a bad or unparseable
+ *  reply, a timeout, a down endpoint. Stored so the row can say "no
+ *  estimate, here's why" rather than reading identically to a ticket that
+ *  was simply never scored (`Task.effortEstimate` absent altogether). */
+export interface TaskEffortEstimateFailed extends TaskEffortEstimateProvenance {
+  status: 'failed';
+  /** Shown on the row. */
+  reason: string;
+}
+
+export type TaskEffortEstimate = TaskEffortEstimateOk | TaskEffortEstimateFailed;
 
 /** Cumulative reading-tracker attention on one task's body room. See
  *  `Task.readingTime` for what counts and why absence isn't zero. */
@@ -265,6 +312,14 @@ export interface HubWorkspace {
    * so the default lives in exactly one place.
    */
   reviewItemCriteria?: string;
+  /**
+   * What this board's ticket-effort scorer weighs — a natural-language
+   * prompt the owner edits, the same shape and the same reasoning as
+   * `reviewItemCriteria` (chunk 2 of the effort model). Absent means
+   * `DEFAULT_EFFORT_ESTIMATE_PROMPT`; `effortEstimatePrompt()` is the one
+   * reader, so the default lives in exactly one place.
+   */
+  effortEstimatePrompt?: string;
   createdAt: number;
 }
 
@@ -735,6 +790,16 @@ export interface Task {
    * someone opened and left instantly. No reader may default this to `0`.
    */
   readingTime?: TaskReadingTime;
+  /**
+   * The scoring model's last read on this ticket's effort — hands-on and
+   * wall-clock, in seconds — or a recorded failure to produce one (chunk 2
+   * of the effort model). Absent means "never
+   * scored": no estimator wired, scoring switched off, or a row that
+   * predates this field. DISTINCT from a `failed` run, which means an
+   * attempt ran and came back with nothing usable. No reader may treat
+   * absence as zero or a failure as a number.
+   */
+  effortEstimate?: TaskEffortEstimate;
   /** The thread/doc this was promoted from. */
   origin?: Ref;
   /**
@@ -4306,6 +4371,84 @@ export class TaskStore {
       workspace: state.workspace,
       criteria: read ?? { value: DEFAULT_REVIEW_ITEM_CRITERIA, isDefault: true },
     };
+  }
+
+  /**
+   * What this board's ticket-effort scorer weighs: the owner's own text, or
+   * the default when nobody has written any. The ONE reader of
+   * `HubWorkspace.effortEstimatePrompt`, the same shape and the same
+   * reasoning as `reviewItemCriteria` above. `undefined` for a board that
+   * does not exist — distinct from a board on the default.
+   */
+  effortEstimatePrompt(workspaceId: string): { value: string; isDefault: boolean } | undefined {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return undefined;
+    const own = state.workspace.effortEstimatePrompt;
+    return own !== undefined && own.trim() !== ''
+      ? { value: own, isDefault: false }
+      : { value: DEFAULT_EFFORT_ESTIMATE_PROMPT, isDefault: true };
+  }
+
+  /**
+   * Set — or, with `undefined`/blank, clear back to the default — what this
+   * board's effort scorer weighs. A settings write, not a board event, the
+   * same contract as `setReviewItemCriteria`: the next scoring run reads it.
+   */
+  setEffortEstimatePrompt(
+    workspaceId: string,
+    prompt: string | undefined,
+    _opts: { actor: { id: string; name: string; kind?: string } },
+  ):
+    | { ok: true; workspace: HubWorkspace; prompt: { value: string; isDefault: boolean } }
+    | { ok: false; error: 'workspace-not-found' } {
+    const state = this.workspaces.get(workspaceId);
+    if (!state) return { ok: false, error: 'workspace-not-found' };
+    const next = prompt?.trim();
+    if (next === undefined || next === '') state.workspace.effortEstimatePrompt = undefined;
+    else state.workspace.effortEstimatePrompt = next;
+    this.scheduleSave(workspaceId);
+    const read = this.effortEstimatePrompt(workspaceId);
+    return {
+      ok: true,
+      workspace: state.workspace,
+      prompt: read ?? { value: DEFAULT_EFFORT_ESTIMATE_PROMPT, isDefault: true },
+    };
+  }
+
+  /**
+   * Record one scoring run's read on a ticket — a produced estimate or a
+   * recorded failure. Quiet like `recordReadingTime`: no store event, no
+   * `updatedAt` bump, and for the same class of reason — a score is
+   * metadata ABOUT the ticket, not an edit OF it — plus one that reading
+   * time does not have: scoring itself is triggered off `task.created` /
+   * `task.retitled` / `task.body_edited` (server.ts), so a write here that
+   * emitted one of those would re-trigger its own scorer forever.
+   *
+   * Refused as `stale` when the words (or the goal) this run read are no
+   * longer the ticket's current words — `estimate.forTitleWrittenAt` /
+   * `forBodyWrittenAt` / `forGoal` must still match `task.titleWrittenAt` /
+   * `task.bodyWrittenAt` / `task.goal`. Guards against a slow call landing
+   * after a NEWER edit — or a re-triage to a different goal, which changes
+   * the goal title the scorer weighed — already started (or finished) its
+   * own re-score: that newer run's answer must stand, not be overwritten by
+   * a late answer to older words or an old goal.
+   */
+  recordEffortEstimate(
+    taskId: string,
+    estimate: TaskEffortEstimate,
+  ): { ok: true; task: Task } | { ok: false; error: 'not-found' | 'stale' } {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (
+      estimate.forTitleWrittenAt !== (task.titleWrittenAt ?? task.createdAt) ||
+      estimate.forBodyWrittenAt !== task.bodyWrittenAt ||
+      estimate.forGoal !== task.goal
+    ) {
+      return { ok: false, error: 'stale' };
+    }
+    task.effortEstimate = estimate;
+    this.scheduleSave(task.workspaceId);
+    return { ok: true, task };
   }
 
   /**
