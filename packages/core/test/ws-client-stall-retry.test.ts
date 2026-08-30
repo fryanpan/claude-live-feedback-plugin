@@ -77,6 +77,27 @@ class StubWebSocket {
       });
     }
   }
+
+  /**
+   * Test helper: simulate an ordinary broadcast update — what this socket
+   * receives when a CONCURRENT peer edits the room, not this connection's own
+   * sync-step-2 answer. Distinguishing these two is the point of the codex
+   * finding below.
+   */
+  triggerUpdate(): void {
+    const src = new Y.Doc();
+    src.getMap('tasks').set('t-1', 'x'); // produce a non-empty update
+    const update = Y.encodeStateAsUpdate(src);
+    const enc = encoding.createEncoder();
+    encoding.writeVarUint(enc, 0); // MSG_SYNC
+    syncProtocol.writeUpdate(enc, update);
+    const payload = encoding.toUint8Array(enc);
+    for (const cb of this.listeners.get('message') ?? []) {
+      cb({
+        data: payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+      });
+    }
+  }
 }
 
 let originalWebSocket: unknown;
@@ -188,6 +209,35 @@ describe('connect() stall recovery', () => {
     vi.advanceTimersByTime(600);
 
     expect(StubWebSocket.instances).toHaveLength(3);
+    client.close();
+  });
+
+  it("a concurrent peer update does NOT disarm the watchdog — only this attempt's own step-2 does", () => {
+    // codex review catch: the server broadcasts another peer's edit as a
+    // plain messageYjsUpdate, which this socket can receive before its OWN
+    // sync-step-1 request has been answered. gotInitialSync/onReady already
+    // treat that update as good enough (unchanged, pre-existing behavior) —
+    // but the watchdog must NOT, or a stalled step-2 response would go
+    // undetected forever because an unrelated update satisfied it first.
+    const client = connect('ws://localhost:0/y/test');
+    const first = StubWebSocket.instances[0]!;
+    first.triggerOpen();
+
+    let ready = false;
+    client.onReady(() => {
+      ready = true;
+    });
+
+    // An incidental broadcast from a concurrent peer's edit arrives first.
+    first.triggerUpdate();
+    expect(ready).toBe(true); // pre-existing onReady contract, unchanged
+
+    // This attempt's real sync-step-2 never arrives — the watchdog must
+    // still fire and force a retry, not be silenced by the update above.
+    vi.advanceTimersByTime(SYNC_TIMEOUT_MS + 1);
+    vi.advanceTimersByTime(600);
+
+    expect(StubWebSocket.instances).toHaveLength(2);
     client.close();
   });
 

@@ -169,17 +169,28 @@ export function connect(url: string): FeedbackClient {
         encoding.writeVarUint(enc, MSG_SYNC);
         const type = syncProtocol.readSyncMessage(dec, enc, ydoc, ws);
         if (encoding.length(enc) > 1) ws.send(encoding.toUint8Array(enc));
-        if (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate) {
+        if (type === syncProtocol.messageYjsSyncStep2) {
           // Disarms the watchdog on EVERY attempt, including a reconnect
           // long after the first sync — `gotInitialSync` below stays
-          // one-shot for onReady, which is a different contract.
+          // one-shot for onReady, which is a different contract. ONLY
+          // step2, never a plain update: codex review caught that a
+          // concurrent peer's edit broadcasts as messageYjsUpdate and can
+          // reach this socket before ITS OWN step-1 request gets answered
+          // (readSyncStep1 on the server always replies with step2, so that
+          // reply is guaranteed — but ordering isn't). Disarming on the
+          // incidental update would silence the watchdog before the actual
+          // full-state answer ever arrives, defeating the retry this exists
+          // for.
           syncedThisAttempt = true;
           if (syncTimer !== null) clearTimeout(syncTimer);
-          if (!gotInitialSync) {
-            gotInitialSync = true;
-            for (const cb of readyCbs) cb();
-            readyCbs = [];
-          }
+        }
+        if (
+          !gotInitialSync &&
+          (type === syncProtocol.messageYjsSyncStep2 || type === syncProtocol.messageYjsUpdate)
+        ) {
+          gotInitialSync = true;
+          for (const cb of readyCbs) cb();
+          readyCbs = [];
         }
       } else if (kind === MSG_AWARENESS) {
         awarenessProtocol.applyAwarenessUpdate(awareness, decoding.readVarUint8Array(dec), ws);
