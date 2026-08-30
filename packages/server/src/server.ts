@@ -8529,25 +8529,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // caller that wrote it has to be the one that hears about it.
             const anchorCheck = anchors.validateAnchor(anchor);
             if (!anchorCheck.ok) return j(400, { error: anchorCheck.error });
-            // Identity for the dedup below — computed from the RAW anchor, so
-            // a duplicate call (byte-identical JSON) matches regardless of
-            // how the review-item branch below rewrites `anchor` for the
-            // eventual write.
-            const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
-            const anchorKey = JSON.stringify(anchor);
             // Computed early (not just before the write, where it used to
             // live) so both the dedup escape hatch below and the normal
             // return can build the SAME response shape — a retry must get
             // its reviewAdvice back too, not just its thread.
+            const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
             const declared = reviewFromBody(body?.review, text);
             if (!declared.ok) return j(400, { error: declared.error });
+            // Identity for the dedup below — computed from the RAW anchor
+            // (so a duplicate call matches regardless of how the
+            // review-item branch below rewrites `anchor` for the eventual
+            // write) PLUS the declared review. Codex review caught that
+            // anchor alone let a requestId reuse with a CORRECTED review
+            // payload (e.g. filling in a missing detail) silently return
+            // the stale thread instead of ever persisting the correction.
+            const identityKey = JSON.stringify({ anchor, review: declared.review ?? null });
             // A retry of an already-handled request has to be caught HERE,
             // before the review-item validation below: that block refuses a
             // second ask while the item is `waiting`, a state the FIRST
             // request's own side effect sets — so a retry would otherwise
             // never reach the dedupe() call at the bottom and would get a
             // stale-state 409 instead of the thread it already made.
-            const priorThreadCreate = threadRequestDedup.lookup(docId, requestId, text, anchorKey);
+            const priorThreadCreate = threadRequestDedup.lookup(
+              docId,
+              requestId,
+              text,
+              identityKey,
+            );
             if (priorThreadCreate) {
               const t = await priorThreadCreate;
               const handoff = threadUrl(docId, Boolean(visitor));
@@ -8638,7 +8646,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               docId,
               requestId,
               text,
-              anchorKey,
+              identityKey,
               async () => {
                 const created = await rooms.postComment(docId, null, user, text, anchor, {
                   generate: !visitor,

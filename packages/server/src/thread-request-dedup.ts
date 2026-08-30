@@ -29,18 +29,27 @@
  * promise, so `create` — and everything inside it — runs exactly once no
  * matter how many duplicate requests arrive while it is running.
  *
- * In-memory, and the create's text + anchor are checked again on a repeat:
- * a caller that reuses an id for a genuinely different comment gets a fresh
- * thread, not a collision with someone else's. Deliberately NOT persisted —
- * a requestId is only ever replayed within the few seconds of one submit
+ * In-memory, and the create's text + identity (anchor AND any declared
+ * review — see `identityKey` below) are checked again on a repeat: a caller
+ * that reuses an id for a genuinely different comment gets a fresh thread,
+ * not a collision with someone else's. Deliberately NOT persisted — a
+ * requestId is only ever replayed within the few seconds of one submit
  * attempt's own retries, never across a restart.
+ *
+ * `identityKey` is caller-built (see `server.ts`'s POST /threads handler) and
+ * MUST fold in every field a repeat could plausibly change on purpose: not
+ * just the anchor, but the declared `review` payload too. Codex review
+ * caught this once already — an earlier version keyed on anchor alone, so
+ * reusing a requestId with the same text/anchor but a CORRECTED review
+ * declaration (e.g. filling in a missing `detail`) silently returned the
+ * stale thread instead of ever persisting the correction.
  */
 
 const DEFAULT_TTL_MS = 10_000;
 
 interface Entry<T> {
   text: string;
-  anchorKey: string;
+  identityKey: string;
   ts: number;
   promise: Promise<T>;
 }
@@ -75,19 +84,19 @@ export class ThreadRequestDedup<T> {
     docId: string,
     requestId: string | undefined,
     text: string,
-    anchorKey: string,
+    identityKey: string,
   ): Promise<T> | undefined {
     if (!requestId) return undefined;
     this.prune(Date.now());
     const existing = this.seen.get(this.key(docId, requestId));
-    return existing && existing.text === text && existing.anchorKey === anchorKey
+    return existing && existing.text === text && existing.identityKey === identityKey
       ? existing.promise
       : undefined;
   }
 
   /**
    * Run `create` for this comment, or — if a request with the same
-   * (docId, requestId, text, anchorKey) is already in flight or completed
+   * (docId, requestId, text, identityKey) is already in flight or completed
    * within the window — await ITS result instead of running `create` again.
    * `create` should perform the write and every side effect that must not
    * happen twice; a deduped caller never runs it.
@@ -101,10 +110,10 @@ export class ThreadRequestDedup<T> {
     docId: string,
     requestId: string | undefined,
     text: string,
-    anchorKey: string,
+    identityKey: string,
     create: () => Promise<T>,
   ): Promise<{ value: T; deduped: boolean }> {
-    const existing = this.lookup(docId, requestId, text, anchorKey);
+    const existing = this.lookup(docId, requestId, text, identityKey);
     if (existing) return { value: await existing, deduped: true };
     if (!requestId) return { value: await create(), deduped: false };
     const now = Date.now();
@@ -112,7 +121,7 @@ export class ThreadRequestDedup<T> {
     // loop between `lookup` above and this write, so a request arriving
     // while `create` is still running always finds this entry.
     const key = this.key(docId, requestId);
-    const entry: Entry<T> = { text, anchorKey, ts: now, promise: create() };
+    const entry: Entry<T> = { text, identityKey, ts: now, promise: create() };
     this.seen.set(key, entry);
     try {
       const value = await entry.promise;
