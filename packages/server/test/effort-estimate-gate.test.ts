@@ -1,6 +1,6 @@
 /**
- * Effort-estimate scoring, through the real routes (BRY t-go5Wj0kOcz_7,
- * chunk 2 of the effort model).
+ * Effort-estimate scoring, through the real routes (chunk 2 of the effort
+ * model).
  *
  * The estimator is a STUB throughout — never the real API. What is asserted
  * is everything around it: that scoring fires in the BACKGROUND on create

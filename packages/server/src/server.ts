@@ -620,7 +620,7 @@ export interface ServerOptions {
    */
   reviewJudge?: ReviewJudge;
   /**
-   * The ticket-effort scorer (BRY t-go5Wj0kOcz_7, chunk 2). **No default**,
+   * The ticket-effort scorer (chunk 2 of the effort model). **No default**,
    * the same seam rule as the review judge and the summarizer: omitting it
    * leaves every ticket unscored — `Task.effortEstimate` stays absent
    * rather than a failed run being recorded — and nothing that merely spins
@@ -1706,8 +1706,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   let warnedEstimatorThrew = false;
 
   /**
-   * Score one ticket's effort in the background (BRY t-go5Wj0kOcz_7, chunk
-   * 2 of the effort model). Fire-and-forget, the same contract as
+   * Score one ticket's effort in the background (chunk 2 of the effort
+   * model). Fire-and-forget, the same contract as
    * `announceReviewItem`: the write that triggered this is already durable
    * and its route has already answered by the time this runs, so nothing
    * here may block or slow an edit.
