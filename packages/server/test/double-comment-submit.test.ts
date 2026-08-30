@@ -27,6 +27,12 @@ import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 
 const REVIEWER = { id: 'known-reviewer', name: 'Reviewer', kind: 'known', color: '#2e7dd7' };
+const OTHER_REVIEWER = {
+  id: 'known-second-reviewer',
+  name: 'Second Reviewer',
+  kind: 'known',
+  color: '#c0392b',
+};
 
 /** A minimal valid anchor that skips `text-range`'s Yjs decode requirement —
  *  the composer's real anchors carry encoded RelativePositions, but nothing
@@ -207,6 +213,34 @@ describe('POST /api/docs/:id/threads dedupes a repeated requestId', () => {
       await fetch(`${base}/api/docs/${docId}/threads`),
     );
     expect(listed.threads).toHaveLength(2);
+  });
+
+  it('two different authors who happen to mint the same requestId get their own threads, not one attributed to the other', async () => {
+    // Codex review: requestId is client-controlled and not globally unique.
+    // Identity keyed on anchor+review alone let a second author's comment
+    // collide with a first author's in-flight/completed one and come back
+    // attributed to that first author.
+    const body = {
+      text: 'Same wording, different person.',
+      anchor: anchor('effort model'),
+      requestId: 'req-shared-by-coincidence',
+    };
+    const first = await jj<{ thread: { id: string } }>(
+      await post(`/api/docs/${docId}/threads`, { ...body, author: REVIEWER }),
+    );
+    const second = await jj<{ thread: { id: string } }>(
+      await post(`/api/docs/${docId}/threads`, { ...body, author: OTHER_REVIEWER }),
+    );
+    expect(second.thread.id).not.toBe(first.thread.id);
+
+    const listed = await jj<{ threads: Array<{ id: string; createdBy: { id: string } }> }>(
+      await fetch(`${base}/api/docs/${docId}/threads`),
+    );
+    expect(listed.threads).toHaveLength(2);
+    expect(listed.threads.find((t) => t.id === first.thread.id)?.createdBy.id).toBe(REVIEWER.id);
+    expect(listed.threads.find((t) => t.id === second.thread.id)?.createdBy.id).toBe(
+      OTHER_REVIEWER.id,
+    );
   });
 });
 
