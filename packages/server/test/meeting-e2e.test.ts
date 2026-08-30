@@ -29,7 +29,7 @@ import {
   type TickScheduler,
   createStubNotesComposer,
 } from '../src/meeting-notes.ts';
-import { readTranscript } from '../src/meetings.ts';
+import { listMeetings, readTranscript } from '../src/meetings.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { type MockScriptTurn, createMockTranscriptionEngine } from '../src/transcribe.ts';
 
@@ -57,13 +57,18 @@ class ManualScheduler implements TickScheduler {
  * one: the wrong word is on the strip mid-turn, and the settled turn takes
  * it back — the doc must only ever see what it settled to.
  */
+// Two voices, alternating and then returning to the first — so a rename has
+// more than one turn to reach, which is the whole claim behind relabelling.
+// The labels are the engine's own ('A', 'B', per MeetingServerMessage): the
+// word "Speaker" is added by `speakerDisplayName`, never carried on the wire.
 const SCRIPT: readonly MockScriptTurn[] = [
   {
     words: ['so', 'the', 'sink', 'is', 'the', 'bottleneck'],
     settled: 'So the sync is the bottleneck.',
+    speaker: 'A',
   },
-  { words: ['lets', 'measure', 'it'], settled: "Let's measure it first." },
-  { words: ['then', 'we', 'decide'], settled: 'Then we decide.' },
+  { words: ['lets', 'measure', 'it'], settled: "Let's measure it first.", speaker: 'B' },
+  { words: ['then', 'we', 'decide'], settled: 'Then we decide.', speaker: 'A' },
 ];
 
 interface ServerFrame {
@@ -303,5 +308,69 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
       expect(m.endedAt ?? Number.NEGATIVE_INFINITY).toBeGreaterThanOrEqual(m.startedAt);
     }
     expect(second?.startedAt ?? 0).toBeGreaterThanOrEqual(first?.startedAt ?? Number.MAX_VALUE);
+  });
+  it("carries each turn's speaker through the socket, the record and the notes", async () => {
+    // The gap this closes: diarization was tested at every layer and through
+    // none of them. `MockScriptTurn.speaker` exists precisely so the mock can
+    // diarize, and this script did not set it — so the one test that walks
+    // socket -> store -> notes -> doc walked it unlabelled.
+    const client = await AudioClient.open(wsBase, docId);
+    client.start();
+    await waitFor(() => client.frames.some((f) => f.type === 'ready'), 'ready');
+    const meetingId = String(client.frames.filter((f) => f.type === 'ready').at(-1)?.meetingId);
+
+    // Two turns from two different voices settle.
+    client.speak(7);
+    await waitFor(() => client.finals().length === 1, 'the first settled turn');
+    client.speak(4);
+    await waitFor(() => client.finals().length === 2, 'the second settled turn');
+
+    // 1. Two voices arrive as two distinct labels, on the wire.
+    expect(client.finals().map((f) => f.speaker)).toEqual(['A', 'B']);
+
+    // 2. The durable record keeps the label with the turn.
+    expect(readTranscript(dataDir, docId, meetingId).map((t) => t.speaker)).toEqual(['A', 'B']);
+
+    // 3. The notes name them. The composer stub renders `speaker: text`, and
+    //    the speaker it renders has been through `speakerDisplayName` — so
+    //    "Speaker A" in the doc means the label reached the composer's input,
+    //    not just the strip.
+    const before = updates.length;
+    schedule.fire();
+    await waitFor(() => updates.length > before, 'the notes update for this meeting');
+    const named = docMarkdown();
+    expect(named).toContain('Speaker A: So the sync is the bottleneck.');
+    expect(named).toContain("Speaker B: Let's measure it first.");
+
+    // 4. Naming a voice is a mapping the meeting keeps, not a rewrite of the
+    //    record: the transcript still says 'A' (it is what the engine heard),
+    //    and every later render of that label resolves to the name.
+    client.ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Dana' }));
+    await waitFor(
+      () => listMeetings(dataDir, docId).some((m) => m.meetingId === meetingId && m.speakers?.A),
+      'the name to reach the meeting record',
+    );
+    expect(listMeetings(dataDir, docId).find((m) => m.meetingId === meetingId)?.speakers).toEqual({
+      A: 'Dana',
+    });
+
+    // Turn three is voice A again. It composes under the new name without
+    // anyone renaming it a second time.
+    client.speak(4);
+    await waitFor(() => client.finals().length === 3, 'the third settled turn');
+    const beforeRenamed = updates.length;
+    schedule.fire();
+    await waitFor(() => updates.length > beforeRenamed, 'the notes update after the rename');
+    expect(docMarkdown()).toContain('Dana: Then we decide.');
+    // The record is unchanged by the naming — raw labels, all three turns.
+    expect(readTranscript(dataDir, docId, meetingId).map((t) => t.speaker)).toEqual([
+      'A',
+      'B',
+      'A',
+    ]);
+
+    client.stop();
+    await waitFor(() => client.frames.some((f) => f.type === 'stopped'), 'stopped');
+    client.ws.close();
   });
 });
