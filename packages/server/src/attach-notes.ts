@@ -44,11 +44,24 @@ export function attachNotes(outcome: AttachOutcome, watching: number): string[] 
     notes.push(outcome.seat.notice);
   }
   if (watching === 0) {
+    // The old id, when the board still knows one. A session that respawned
+    // under a new name usually cannot name its predecessor — but the seat it
+    // just found or took can, and that id is the whole input the carry-over
+    // needs. Only offered when we have it: an instruction whose argument the
+    // reader has to guess is how one agent's watches get moved onto another.
+    const previous =
+      outcome.seatTakenFrom ?? (outcome.seat.stale ? outcome.seat.leadAgentId : undefined);
+    const carry =
+      previous === undefined
+        ? ''
+        : ` If you are ${previous} under a new name, an operator can carry them across in one ` +
+          `call — POST /api/agents/${previous}/merge with {"into":"<your id>"} — rather than ` +
+          'subscribing to each doc again.';
     notes.push(
       'You are watching nothing on this board. An empty watch set reads the same whether ' +
         'you have not subscribed yet or a rename left your subscriptions behind on your ' +
         'old agent id — if you restarted under a new name, they are on the old one. ' +
-        'Re-subscribe to the docs you work, or board comments will not reach you.',
+        `Re-subscribe to the docs you work, or board comments will not reach you.${carry}`,
     );
   }
   return notes;
