@@ -14,7 +14,9 @@ import * as Y from 'yjs';
 import {
   type IncomingItem,
   type NoteItem,
+  type NotesOwnership,
   classifyOwnership,
+  createNotesOwnership,
   findNotesSection,
   itemsInSection,
   itemsOfMarkdown,
@@ -25,6 +27,13 @@ import {
 } from '../src/meeting-notes-merge.ts';
 
 const HEADING = 'Meeting notes';
+
+/** An ownership record that claims whatever markdown is listed, whichever
+ *  element carries it — for the pure-plan tests, which hold no real doc. */
+const claimsText = (mds: readonly string[]): NotesOwnership => ({
+  claims: (_el, md) => mds.includes(md),
+  record: () => {},
+});
 
 function docFrom(markdown: string): Y.Doc {
   const ydoc = new Y.Doc();
@@ -79,16 +88,17 @@ function editBullet(ydoc: Y.Doc, index: number, text: string): void {
 describe('mergeNotesSection — a person writing in the section', () => {
   it("keeps a bullet the person typed, and still revises the agent's own", () => {
     const ydoc = docFrom('# Huddle\n');
+    const own = createNotesOwnership();
     const first = mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Ship on Friday\n- Dana owns the migration\n',
       HEADING,
-      { owned: [] },
+      { ownership: own },
     );
     expect(first.mode).toBe('appended');
 
     typeBullet(ydoc, 1, 'MY OWN note, in my words');
-    const read = readNotesSection(ydoc, HEADING, first.owned)!;
+    const read = readNotesSection(ydoc, HEADING, own)!;
     expect(read.human).toEqual(['MY OWN note, in my words']);
 
     const merged = mergeNotesSection(
@@ -96,7 +106,7 @@ describe('mergeNotesSection — a person writing in the section', () => {
       '## Meeting notes\n\n- Ship on Friday, per Dana\n- MY OWN note, in my words\n' +
         '- Dana owns the migration\n- A new point from this tick\n',
       HEADING,
-      { owned: first.owned, basedOn: read.items },
+      { ownership: own, basedOn: read.items },
     );
     expect(merged.mode).toBe('merged');
     const md = markdownOf(ydoc);
@@ -111,17 +121,18 @@ describe('mergeNotesSection — a person writing in the section', () => {
 
   it("keeps the person's inline formatting, and the very same Yjs element", () => {
     const ydoc = docFrom('# Huddle\n');
-    const first = mergeNotesSection(ydoc, '## Meeting notes\n\n- Agent bullet\n', HEADING, {
-      owned: [],
+    const own = createNotesOwnership();
+    mergeNotesSection(ydoc, '## Meeting notes\n\n- Agent bullet\n', HEADING, {
+      ownership: own,
     });
     const typed = typeBullet(ydoc, 1, 'Keep the **bold** and the `code`');
-    const read = readNotesSection(ydoc, HEADING, first.owned)!;
+    const read = readNotesSection(ydoc, HEADING, own)!;
 
     mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Agent bullet, revised\n- Keep the **bold** and the `code`\n',
       HEADING,
-      { owned: first.owned, basedOn: read.items },
+      { ownership: own, basedOn: read.items },
     );
 
     expect(markdownOf(ydoc)).toContain('- Keep the **bold** and the `code`');
@@ -137,11 +148,17 @@ describe('mergeNotesSection — a person writing in the section', () => {
       '# Huddle\n\nShip on Friday — my own paragraph.\n\n' +
         '## Meeting notes\n\n- Ship on Friday\n\n## Next steps\n\nShip on Friday, again.\n',
     );
+    // The agent wrote that one bullet, so it is the only thing it may touch.
+    const own = createNotesOwnership();
+    const fragment = prose.getProseFragment(ydoc);
+    const span = findNotesSection(fragment, HEADING)!;
+    own.record(itemsInSection(fragment, span).map((i) => ({ el: i.el, md: i.md })));
+
     const merged = mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Ship on Friday, per Dana\n',
       HEADING,
-      { owned: ['Ship on Friday'] },
+      { ownership: own },
     );
     expect(merged.ok).toBe(true);
     const md = markdownOf(ydoc);
@@ -155,7 +172,7 @@ describe('mergeNotesSection — a person writing in the section', () => {
     // started: the first tick has no ledger, so it must add, never replace.
     const ydoc = docFrom('# Huddle\n\n## Meeting notes\n\n- My agenda, typed before we started\n');
     const merged = mergeNotesSection(ydoc, '## Meeting notes\n\n- First composed note\n', HEADING, {
-      owned: [],
+      ownership: createNotesOwnership(),
     });
     expect(merged.deleted).toBe(0);
     const md = markdownOf(ydoc);
@@ -163,16 +180,40 @@ describe('mergeNotesSection — a person writing in the section', () => {
     expect(md).toContain('- First composed note');
   });
 
+  it('a line the person typed that MATCHES an agent line is still theirs', () => {
+    // Ownership by text alone would consume the ledger entry in reading
+    // order and hand the person's element to the agent, which would then
+    // delete it on the next revision — the loss this module exists to stop.
+    const ydoc = docFrom('# Huddle\n');
+    const own = createNotesOwnership();
+    mergeNotesSection(ydoc, '## Meeting notes\n\n- Ship on Friday\n', HEADING, {
+      ownership: own,
+    });
+    const typed = typeBullet(ydoc, 0, 'Ship on Friday');
+    const read = readNotesSection(ydoc, HEADING, own)!;
+    expect(read.human).toEqual(['Ship on Friday']);
+
+    mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\n- Ship on Friday\n- Ship on Friday, per Dana\n',
+      HEADING,
+      { ownership: own, basedOn: read.items },
+    );
+    expect(sectionItems(ydoc).some((i) => i.el === typed)).toBe(true);
+    expect(markdownOf(ydoc)).toContain('- Ship on Friday, per Dana');
+  });
+
   it('a person’s edit of an agent bullet makes it theirs from then on', () => {
     const ydoc = docFrom('# Huddle\n');
-    const first = mergeNotesSection(
+    const own = createNotesOwnership();
+    mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Discussed teh budget\n- Second point\n',
       HEADING,
-      { owned: [] },
+      { ownership: own },
     );
     editBullet(ydoc, 0, 'Discussed the budget');
-    const read = readNotesSection(ydoc, HEADING, first.owned)!;
+    const read = readNotesSection(ydoc, HEADING, own)!;
     expect(read.human).toContain('Discussed the budget');
 
     // The composer now sees his spelling and reproduces it.
@@ -180,7 +221,7 @@ describe('mergeNotesSection — a person writing in the section', () => {
       ydoc,
       '## Meeting notes\n\n- Discussed the budget\n- Second point, revised\n',
       HEADING,
-      { owned: first.owned, basedOn: read.items },
+      { ownership: own, basedOn: read.items },
     );
     const md = markdownOf(ydoc);
     expect(md).toContain('- Discussed the budget');
@@ -191,21 +232,20 @@ describe('mergeNotesSection — a person writing in the section', () => {
 });
 
 describe('mergeNotesSection — proposing rather than rewriting', () => {
-  const setup = (): { ydoc: Y.Doc; owned: string[]; basedOn: string[] } => {
+  const setup = (): { ydoc: Y.Doc; own: NotesOwnership; basedOn: string[] } => {
     const ydoc = docFrom('# Huddle\n');
-    const first = mergeNotesSection(ydoc, '## Meeting notes\n\n- Agent bullet\n', HEADING, {
-      owned: [],
-    });
+    const own = createNotesOwnership();
+    mergeNotesSection(ydoc, '## Meeting notes\n\n- Agent bullet\n', HEADING, { ownership: own });
     typeBullet(ydoc, 1, 'we shuold ship on friday i think');
-    const read = readNotesSection(ydoc, HEADING, first.owned)!;
-    return { ydoc, owned: first.owned, basedOn: read.items };
+    const read = readNotesSection(ydoc, HEADING, own)!;
+    return { ydoc, own, basedOn: read.items };
   };
 
   const proposal = '## Meeting notes\n\n- Agent bullet\n- We should ship on Friday, I think\n';
 
   it('a changed version of a person’s line lands as a suggestion, not a rewrite', () => {
-    const { ydoc, owned, basedOn } = setup();
-    const merged = mergeNotesSection(ydoc, proposal, HEADING, { owned, basedOn });
+    const { ydoc, own, basedOn } = setup();
+    const merged = mergeNotesSection(ydoc, proposal, HEADING, { ownership: own, basedOn });
     expect(merged.suggested).toBe(1);
     expect(merged.inserted).toBe(0);
 
@@ -220,19 +260,19 @@ describe('mergeNotesSection — proposing rather than rewriting', () => {
   });
 
   it('accepting the suggestion is what changes his line', () => {
-    const { ydoc, owned, basedOn } = setup();
-    mergeNotesSection(ydoc, proposal, HEADING, { owned, basedOn });
+    const { ydoc, own, basedOn } = setup();
+    mergeNotesSection(ydoc, proposal, HEADING, { ownership: own, basedOn });
     const sid = suggestOps.listSuggestions(ydoc)[0]!.sid;
     expect(suggestOps.acceptSuggestion(ydoc, sid)).toEqual({ ok: true });
     expect(markdownOf(ydoc)).toContain('- We should ship on Friday, I think');
   });
 
   it('the same proposal is not raised again on the next tick', () => {
-    const { ydoc, owned, basedOn } = setup();
-    const one = mergeNotesSection(ydoc, proposal, HEADING, { owned, basedOn });
-    const read = readNotesSection(ydoc, HEADING, one.owned)!;
+    const { ydoc, own, basedOn } = setup();
+    mergeNotesSection(ydoc, proposal, HEADING, { ownership: own, basedOn });
+    const read = readNotesSection(ydoc, HEADING, own)!;
     const two = mergeNotesSection(ydoc, proposal, HEADING, {
-      owned: one.owned,
+      ownership: own,
       basedOn: read.items,
     });
     expect(two.suggested).toBe(0);
@@ -243,11 +283,12 @@ describe('mergeNotesSection — proposing rather than rewriting', () => {
 describe('mergeNotesSection — the stale-compose race', () => {
   it('a compose that never saw the edit does not propose over it', () => {
     const ydoc = docFrom('# Huddle\n');
-    const first = mergeNotesSection(ydoc, '## Meeting notes\n\n- Agent bullet\n', HEADING, {
-      owned: [],
+    const own = createNotesOwnership();
+    mergeNotesSection(ydoc, '## Meeting notes\n\n- Agent bullet\n', HEADING, {
+      ownership: own,
     });
     // The compose reads the section...
-    const read = readNotesSection(ydoc, HEADING, first.owned)!;
+    const read = readNotesSection(ydoc, HEADING, own)!;
     // ...and WHILE it is in flight, he types.
     typeBullet(ydoc, 1, 'my note, mid-compose, in my words');
 
@@ -255,7 +296,7 @@ describe('mergeNotesSection — the stale-compose race', () => {
       ydoc,
       '## Meeting notes\n\n- Agent bullet\n- My note, mid compose, in my words\n',
       HEADING,
-      { owned: first.owned, basedOn: read.items },
+      { ownership: own, basedOn: read.items },
     );
     expect(merged.suggested).toBe(0);
     expect(merged.dropped).toBe(1);
@@ -267,20 +308,21 @@ describe('mergeNotesSection — the stale-compose race', () => {
 
   it('older words for a line he changed mid-compose do not come back', () => {
     const ydoc = docFrom('# Huddle\n');
-    const first = mergeNotesSection(
+    const own = createNotesOwnership();
+    mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Ship on Friday\n- New point from tick 2\n',
       HEADING,
-      { owned: [] },
+      { ownership: own },
     );
-    const read = readNotesSection(ydoc, HEADING, first.owned)!;
+    const read = readNotesSection(ydoc, HEADING, own)!;
     editBullet(ydoc, 1, 'New point from tick 2 — reworded by hand');
 
     const merged = mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Ship on Friday\n- New point from tick two, polished\n',
       HEADING,
-      { owned: first.owned, basedOn: read.items },
+      { ownership: own, basedOn: read.items },
     );
     expect(merged.dropped).toBe(1);
     expect(merged.inserted).toBe(0);
@@ -293,20 +335,21 @@ describe('mergeNotesSection — the stale-compose race', () => {
     // The positive control for the two above: identical inputs except that
     // the compose READ the current section, so nothing is withheld.
     const ydoc = docFrom('# Huddle\n');
-    const first = mergeNotesSection(
+    const own = createNotesOwnership();
+    mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Ship on Friday\n- New point from tick 2\n',
       HEADING,
-      { owned: [] },
+      { ownership: own },
     );
     editBullet(ydoc, 1, 'New point from tick 2 — reworded by hand');
-    const read = readNotesSection(ydoc, HEADING, first.owned)!;
+    const read = readNotesSection(ydoc, HEADING, own)!;
 
     const merged = mergeNotesSection(
       ydoc,
       '## Meeting notes\n\n- Ship on Friday\n- New point from tick 2, reworded and polished\n',
       HEADING,
-      { owned: first.owned, basedOn: read.items },
+      { ownership: own, basedOn: read.items },
     );
     expect(merged.dropped).toBe(0);
     expect(merged.suggested).toBe(1);
@@ -322,7 +365,7 @@ describe('planNotesMerge', () => {
   it('never plans a delete for an item the ledger does not claim', () => {
     const current = [item('agent one'), item('a person typed this'), item('agent two')];
     const plan = planNotesMerge(current, [incoming('agent one revised')], {
-      owned: ['agent one', 'agent two'],
+      ownership: claimsText(['agent one', 'agent two']),
     });
     expect(plan.deletes.map((d) => d.md)).toEqual(['agent one', 'agent two']);
     expect(plan.deletes.some((d) => d.md === 'a person typed this')).toBe(false);
@@ -333,25 +376,47 @@ describe('planNotesMerge', () => {
     const plan = planNotesMerge(
       current,
       [incoming('agent one'), incoming('a person typed this'), incoming('agent two')],
-      { owned: ['agent one'] },
+      { ownership: claimsText(['agent one']) },
     );
-    expect(plan.owned).toEqual(['agent one', 'agent two']);
+    expect(plan.keptAgent.map((i) => i.md)).toEqual(['agent one']);
+    expect(plan.inserts.flatMap((r) => r.entries.map((e) => e.md))).toEqual(['agent two']);
     expect(plan.deletes).toEqual([]);
   });
 });
 
 describe('ownership, items and similarity', () => {
-  it('matches the ledger as a multiset, not a set', () => {
+  it('claims an ELEMENT, so an identical line the agent did not write is not its own', () => {
+    const own = createNotesOwnership();
+    const mine = new Y.XmlElement('listItem');
+    const theirs = new Y.XmlElement('listItem');
+    own.record([{ el: mine, md: 'same line' }]);
     const items = [
-      { md: 'same line', kind: 'item' } as NoteItem,
-      { md: 'same line', kind: 'item' } as NoteItem,
+      { md: 'same line', kind: 'item', el: theirs } as NoteItem,
+      { md: 'same line', kind: 'item', el: mine } as NoteItem,
     ];
-    expect(classifyOwnership(items, ['same line'])).toEqual([true, false]);
+    expect(classifyOwnership(items, own)).toEqual([false, true]);
+  });
+
+  it('stops claiming an element the moment its words change', () => {
+    const own = createNotesOwnership();
+    const el = new Y.XmlElement('listItem');
+    own.record([{ el, md: 'as the agent left it' }]);
+    expect(
+      classifyOwnership([{ md: 'as the agent left it', kind: 'item', el } as NoteItem], own),
+    ).toEqual([true]);
+    expect(
+      classifyOwnership([{ md: 'edited by hand', kind: 'item', el } as NoteItem], own),
+    ).toEqual([false]);
   });
 
   it('reads a list as its items, so one edited bullet does not seize the list', () => {
     const ydoc = docFrom('## Meeting notes\n\n- one\n- two\n- three\n');
-    const read = readNotesSection(ydoc, HEADING, ['one', 'three']);
+    const own = createNotesOwnership();
+    const fragment = prose.getProseFragment(ydoc);
+    const span = findNotesSection(fragment, HEADING)!;
+    const all = itemsInSection(fragment, span);
+    own.record(all.filter((i) => i.md !== 'two').map((i) => ({ el: i.el, md: i.md })));
+    const read = readNotesSection(ydoc, HEADING, own);
     expect(read?.items).toEqual(['one', 'two', 'three']);
     expect(read?.human).toEqual(['two']);
   });

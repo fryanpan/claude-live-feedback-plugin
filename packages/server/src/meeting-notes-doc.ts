@@ -28,7 +28,12 @@
 
 import { type DocType, contentKind, prose } from '@feedback/core';
 import type * as Y from 'yjs';
-import { mergeNotesSection, readNotesSection } from './meeting-notes-merge.ts';
+import {
+  type NotesOwnership,
+  createNotesOwnership,
+  mergeNotesSection,
+  readNotesSection,
+} from './meeting-notes-merge.ts';
 import type {
   MeetingNotesDeps,
   MeetingNotesOptions,
@@ -178,31 +183,33 @@ export interface NotesContextTasks {
 }
 
 /**
- * What the agent last wrote into each meeting doc's notes section — the
- * ownership ledger the merge needs, and the ONLY thing that separates the
- * agent's own bullets from a person's writing.
+ * One ownership record per meeting doc — what the agent wrote into that
+ * doc's notes section, and the ONLY thing separating the agent's own bullets
+ * from a person's writing.
  *
  * Per DOC, not per meeting, and it outlives a meeting deliberately: a second
  * meeting on the same doc still recognises the first one's notes as its own
  * and revises them, the way it always has. Nothing a person touched is in
- * here, so the longer life costs them nothing.
+ * there, so the longer life costs them nothing.
  *
- * In memory only, so a restarted server holds an EMPTY ledger — which the
- * merge reads as "everything in this section is somebody else's". That is
- * the safe direction: after a restart the note-taker adds and stops
- * replacing, rather than guessing that prose it has never seen is its own.
+ * In memory only, so a restarted server claims nothing — which the merge
+ * reads as "everything in this section is somebody else's". That is the safe
+ * direction: after a restart the note-taker adds and stops replacing, rather
+ * than guessing that prose it has never seen is its own.
  */
 export interface NotesLedger {
-  read(docId: string): readonly string[];
-  write(docId: string, owned: readonly string[]): void;
+  forDoc(docId: string): NotesOwnership;
 }
 
 export function createNotesLedger(): NotesLedger {
-  const byDoc = new Map<string, readonly string[]>();
+  const byDoc = new Map<string, NotesOwnership>();
   return {
-    read: (docId) => byDoc.get(docId) ?? [],
-    write: (docId, owned) => {
-      byDoc.set(docId, owned);
+    forDoc(docId) {
+      const existing = byDoc.get(docId);
+      if (existing) return existing;
+      const created = createNotesOwnership();
+      byDoc.set(docId, created);
+      return created;
     },
   };
 }
@@ -221,13 +228,10 @@ export function applyNotesUpdate(
   const room = rooms.get(update.docId);
   if (!room) return false;
   if (contentKind(room.meta.type) !== 'prose') return false;
-  const res = mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADING, {
-    owned: ledger.read(update.docId),
+  return mergeNotesSection(room.ydoc, update.notes, MEETING_NOTES_HEADING, {
+    ownership: ledger.forDoc(update.docId),
     ...(update.basedOn ? { basedOn: update.basedOn } : {}),
-  });
-  if (!res.ok) return false;
-  ledger.write(update.docId, res.owned);
-  return true;
+  }).ok;
 }
 
 /** The notes section as it currently reads, for the composer's `previous`. */
@@ -239,7 +243,7 @@ export function readNotesState(
   const room = rooms.get(ids.docId);
   if (!room) return null;
   if (contentKind(room.meta.type) !== 'prose') return null;
-  return readNotesSection(room.ydoc, MEETING_NOTES_HEADING, ledger.read(ids.docId));
+  return readNotesSection(room.ydoc, MEETING_NOTES_HEADING, ledger.forDoc(ids.docId));
 }
 
 /**

@@ -596,7 +596,10 @@ describe('the composer reads the LIVE section, not only its own last answer', ()
     // composer's own last answer, but the section as it now stands, with the
     // person's line in it and named as theirs.
     expect(inputs[1]?.previous).toBe('## Meeting notes\n\n- composed\n- typed by hand');
-    expect(inputs[0]?.humanNotes).toEqual(['typed by hand']);
+    // Human lines are gated with `previous`: on tick one the ones in the
+    // section are the last meeting's, and telling a from-scratch compose to
+    // reproduce them verbatim would copy them into these notes.
+    expect(inputs[0]?.humanNotes).toBeUndefined();
     expect(inputs[1]?.humanNotes).toEqual(['typed by hand']);
   });
 

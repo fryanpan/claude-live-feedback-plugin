@@ -16,12 +16,14 @@
  * returns can reach a human's item.
  *
  * WHAT "THE AGENT WROTE" MEANS. There is no per-character provenance in the
- * doc, so ownership is a LEDGER: the markdown of every item this module last
- * wrote. An item still reading exactly as the agent left it is the agent's;
- * an item that reads differently — edited, or typed fresh — is a person's,
- * and stays a person's from then on. Exact-match is the whole test, which is
- * why it cannot drift: the moment a human touches an item it leaves the
- * agent's half of the doc for good.
+ * doc, so ownership is a LEDGER keyed by the Yjs ELEMENT, holding the
+ * markdown this module left in it. An item is the agent's only if it is an
+ * element the agent wrote AND it still reads exactly as the agent left it;
+ * an item that reads differently — edited — is a person's, and stays a
+ * person's from then on, as does any element the agent never wrote. Both
+ * halves are load-bearing: text alone would hand a person's element to the
+ * agent the moment they typed a line that matched one of its own, and
+ * element alone would keep calling a line the agent's after they rewrote it.
  *
  * THE UNIT IS AN ITEM, NOT A BLOCK. A markdown bullet list is ONE top-level
  * block, so block granularity would hand the agent's entire list to the
@@ -231,13 +233,33 @@ export function itemsOfMarkdown(markdown: string): IncomingItem[] | null {
 }
 
 /**
- * Which items the agent wrote, matched against the ledger as a MULTISET in
- * reading order — two identical bullets, one of them the agent's, classify
- * one each rather than both one way.
+ * The ledger: which Yjs elements the agent wrote, and the markdown it left
+ * in each. Element-keyed and weak, so an item a person deletes takes its
+ * entry with it and nothing here outlives the doc.
  */
-export function classifyOwnership(items: readonly NoteItem[], owned: readonly string[]): boolean[] {
-  const take = consumable(owned);
-  return items.map((item) => take(item.md));
+export interface NotesOwnership {
+  /** Did the agent write this element, and does it still read as it left it? */
+  claims(el: Y.XmlElement, md: string): boolean;
+  /** Record what the agent owns after a write. */
+  record(items: ReadonlyArray<{ el: Y.XmlElement; md: string }>): void;
+}
+
+export function createNotesOwnership(): NotesOwnership {
+  const byElement = new WeakMap<Y.XmlElement, string>();
+  return {
+    claims: (el, md) => byElement.get(el) === md,
+    record(items) {
+      for (const item of items) byElement.set(item.el, item.md);
+    },
+  };
+}
+
+/** Which of these items the agent may revise. */
+export function classifyOwnership(
+  items: readonly NoteItem[],
+  ownership: NotesOwnership,
+): boolean[] {
+  return items.map((item) => ownership.claims(item.el, item.md));
 }
 
 /** Word-bag Dice coefficient — punctuation and case ignored. */
@@ -312,8 +334,9 @@ export interface MergePlan {
   /** Incoming items withheld because the person's item they collide with is
    *  newer than the compose that produced them. */
   dropped: string[];
-  /** The agent-owned ledger AFTER this plan applies. */
-  owned: string[];
+  /** Agent items this plan leaves exactly as they are — still the agent's
+   *  after the write, so still in the ledger. */
+  keptAgent: NoteItem[];
 }
 
 /**
@@ -323,9 +346,9 @@ export interface MergePlan {
 export function planNotesMerge(
   current: readonly NoteItem[],
   incoming: readonly IncomingItem[],
-  opts: { owned: readonly string[]; basedOn?: readonly string[] },
+  opts: { ownership: NotesOwnership; basedOn?: readonly string[] },
 ): MergePlan {
-  const isAgent = classifyOwnership(current, opts.owned);
+  const isAgent = classifyOwnership(current, opts.ownership);
   const seenBefore = opts.basedOn ? consumable(opts.basedOn) : null;
   // An item the compose never saw is FRESH: it arrived while the compose was
   // in flight, so nothing the compose says about it can be an improvement on
@@ -339,7 +362,13 @@ export function planNotesMerge(
   const key = (item: { kind: string; md: string }): string => `${item.kind} ${item.md}`;
   const pairs = lcsPairs(current.map(key), incoming.map(key));
 
-  const plan: MergePlan = { deletes: [], inserts: [], suggestions: [], dropped: [], owned: [] };
+  const plan: MergePlan = {
+    deletes: [],
+    inserts: [],
+    suggestions: [],
+    dropped: [],
+    keptAgent: [],
+  };
   let ci = 0;
   let ii = 0;
   let anchor: NoteItem | null = null;
@@ -397,7 +426,6 @@ export function planNotesMerge(
         continue;
       }
       entries.push(gapInc[k]!);
-      plan.owned.push(gapInc[k]!.md);
     }
     if (entries.length > 0) plan.inserts.push({ after: anchor, entries });
   };
@@ -412,7 +440,7 @@ export function planNotesMerge(
     );
     if (pi < current.length) {
       const kept = current[pi]!;
-      if (isAgent[pi]) plan.owned.push(kept.md);
+      if (isAgent[pi]) plan.keptAgent.push(kept);
       anchor = kept;
     }
     ci = pi + 1;
@@ -494,8 +522,13 @@ export interface MergeNotesResult {
   inserted: number;
   suggested: number;
   dropped: number;
-  /** The ledger to hand the next tick. */
-  owned: string[];
+}
+
+/** One item the agent now owns: the element it wrote, and the markdown it
+ *  left in it. */
+export interface OwnedItem {
+  el: Y.XmlElement;
+  md: string;
 }
 
 /**
@@ -508,10 +541,10 @@ function applyPlan(
   plan: MergePlan,
   heading: Y.XmlElement,
   author: suggestOps.SuggestionAuthor,
-): { deleted: number; inserted: number; suggested: number } {
+): { deleted: number; inserted: number; suggested: number; owned: OwnedItem[] } {
   const fragment = prose.getProseFragment(ydoc);
   let deleted = 0;
-  let inserted = 0;
+  const owned: OwnedItem[] = [];
   const touchedLists = new Set<Y.XmlElement>();
 
   ydoc.transact(() => {
@@ -539,12 +572,12 @@ function applyPlan(
       const idx = fragment.toArray().indexOf(list);
       if (idx >= 0) fragment.delete(idx, 1);
     }
-    for (const run of plan.inserts) inserted += applyRun(fragment, run, heading);
+    for (const run of plan.inserts) owned.push(...applyRun(fragment, run, heading));
   }, 'agent');
 
   let suggested = 0;
   for (const s of plan.suggestions) if (createSuggestion(ydoc, s, author)) suggested++;
-  return { deleted, inserted, suggested };
+  return { deleted, inserted: owned.length, suggested, owned };
 }
 
 /** Where the next inserted item goes: a slot in the top-level fragment, or a
@@ -553,9 +586,11 @@ type Cursor =
   | { at: 'top'; index: number }
   | { at: 'list'; list: Y.XmlElement; index: number; ordered: boolean };
 
-function applyRun(fragment: Y.XmlFragment, run: InsertRun, heading: Y.XmlElement): number {
+/** Insert a run, returning each new item paired with the element that now
+ *  holds it — the ledger's half of the write. */
+function applyRun(fragment: Y.XmlFragment, run: InsertRun, heading: Y.XmlElement): OwnedItem[] {
   let cursor = startCursor(fragment, run.after, heading);
-  let inserted = 0;
+  const owned: OwnedItem[] = [];
   for (const entry of run.entries) {
     // A single-line bullet joins the list the cursor is already in: that is
     // the ONLY path that does not re-create a block, which is why it is the
@@ -572,7 +607,7 @@ function applyRun(fragment: Y.XmlFragment, run: InsertRun, heading: Y.XmlElement
       const text = holder.toArray()[0] as Y.XmlText;
       prose.insertTextWithMarks(text, 0, entry.md, { parseInlineMarks: true });
       cursor = { ...cursor, index: cursor.index + 1 };
-      inserted++;
+      owned.push({ el: li, md: entry.md });
       continue;
     }
     const markdown = entry.kind === 'item' ? marker(entry.ordered) + entry.md : entry.md;
@@ -586,13 +621,20 @@ function applyRun(fragment: Y.XmlFragment, run: InsertRun, heading: Y.XmlElement
     const topIndex =
       cursor.at === 'top' ? cursor.index : fragment.toArray().indexOf(cursor.list) + 1;
     fragment.insert(topIndex, blocks);
-    inserted++;
+    const first = blocks[0]!;
+    // The element the ledger must key on is the one `itemsInSection` will
+    // hand back next time: a list contributes its listItem, not itself.
+    const holder = isList(first)
+      ? ((first.toArray().find((c) => c instanceof Y.XmlElement && c.nodeName === 'listItem') ??
+          first) as Y.XmlElement)
+      : first;
+    owned.push({ el: holder, md: entry.md });
     const last = blocks[blocks.length - 1]!;
     cursor = isList(last)
       ? { at: 'list', list: last, index: last.length, ordered: last.nodeName === 'orderedList' }
       : { at: 'top', index: topIndex + blocks.length };
   }
-  return inserted;
+  return owned;
 }
 
 function startCursor(
@@ -676,23 +718,21 @@ function createSuggestion(
 
 /**
  * Merge `notesMarkdown` into the doc's notes section, keeping every item the
- * agent did not write.
+ * agent did not write, and updating `ownership` to what it owns afterwards.
  *
- * `owned` is the ledger from the previous write; `basedOn` is the item list
- * the compose that produced these notes was reading. An EMPTY ledger means
- * this write knows of nothing it wrote — a meeting's first tick, or a server
- * that restarted — and everything already in the section is therefore
- * treated as a person's. That is the safe direction: a doc whose notes
- * section already holds an agenda somebody typed before pressing record
- * keeps it, at the price of last meeting's notes staying above this
- * meeting's.
+ * `basedOn` is the item list the compose that produced these notes was
+ * reading. An ownership record that claims nothing — a server that restarted
+ * — means everything already in the section reads as a person's. That is the
+ * safe direction: a doc whose notes section holds an agenda somebody typed
+ * before pressing record keeps it, at the price of the note-taker adding
+ * beneath rather than revising.
  */
 export function mergeNotesSection(
   ydoc: Y.Doc,
   notesMarkdown: string,
   heading: string,
   opts: {
-    owned: readonly string[];
+    ownership: NotesOwnership;
     basedOn?: readonly string[];
     author?: suggestOps.SuggestionAuthor;
   },
@@ -704,7 +744,6 @@ export function mergeNotesSection(
     inserted: 0,
     suggested: 0,
     dropped: 0,
-    owned: [...opts.owned],
   });
   if (!notesMarkdown.trim()) return empty('empty');
   const body = stripSectionHeading(notesMarkdown, heading);
@@ -727,20 +766,26 @@ export function mergeNotesSection(
     ydoc.transact(() => {
       fragment.insert(fragment.length, blocks);
     }, 'agent');
+    // Everything in a section that did not exist a moment ago is the
+    // agent's — read it back so the ledger keys on the elements the doc
+    // actually holds, not on the ones handed to `insert`.
+    const written = findNotesSection(fragment, heading);
+    const items = written ? itemsInSection(fragment, written) : [];
+    opts.ownership.record(items.map((i) => ({ el: i.el, md: i.md })));
     return {
       ok: true,
       mode: 'appended',
       deleted: 0,
-      inserted: incoming.length,
+      inserted: items.length,
       suggested: 0,
       dropped: 0,
-      owned: incoming.map((i) => i.md),
     };
   }
 
   const current = itemsInSection(fragment, span);
   const plan = planNotesMerge(current, incoming, opts);
   const applied = applyPlan(ydoc, plan, span.heading, opts.author ?? NOTES_SUGGESTION_AUTHOR);
+  opts.ownership.record([...plan.keptAgent.map((i) => ({ el: i.el, md: i.md })), ...applied.owned]);
   return {
     ok: true,
     mode: 'merged',
@@ -748,7 +793,6 @@ export function mergeNotesSection(
     inserted: applied.inserted,
     suggested: applied.suggested,
     dropped: plan.dropped.length,
-    owned: plan.owned,
   };
 }
 
@@ -792,7 +836,7 @@ export interface NotesSectionRead {
 export function readNotesSection(
   ydoc: Y.Doc,
   heading: string,
-  owned: readonly string[],
+  ownership: NotesOwnership,
 ): NotesSectionRead | null {
   const fragment = prose.getProseFragment(ydoc);
   const span = findNotesSection(fragment, heading);
@@ -804,7 +848,7 @@ export function readNotesSection(
     if (md.length > 0) parts.push(md);
   }
   const items = itemsInSection(fragment, span);
-  const isAgent = classifyOwnership(items, owned);
+  const isAgent = classifyOwnership(items, ownership);
   return {
     markdown: parts.join('\n\n'),
     items: items.map((i) => i.md),
