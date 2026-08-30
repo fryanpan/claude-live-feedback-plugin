@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
+import { ReservedDocIdError } from '../src/doc-ids.ts';
 import {
   captureServerError,
   flushServerSentry,
@@ -6,6 +7,7 @@ import {
   isServerSentryActive,
   resetServerSentryForTest,
   routePatternForSpan,
+  sanitizeErrorForCapture,
   scrubEventForPrivacy,
   withRouteSpan,
 } from '../src/sentry.ts';
@@ -63,6 +65,16 @@ describe('routePatternForSpan: default-deny redaction', () => {
     expect(routePatternForSpan('/')).toBe('/');
   });
 
+  it('keeps the route family for static-asset prefix routes at any depth', () => {
+    // server.ts serves these four with `pathname.startsWith('/<root>/')`,
+    // not a fixed segment count — codex review caught the whole-template
+    // rewrite silently collapsing them to the generic `/:id/:id` fallback.
+    expect(routePatternForSpan('/app/hub.js')).toBe('/app/:id');
+    expect(routePatternForSpan('/widget/assets/chunk-abc123.js')).toBe('/widget/:id');
+    expect(routePatternForSpan('/demos/some-demo/index.html')).toBe('/demos/:id');
+    expect(routePatternForSpan('/projects/octocat/hello-world')).toBe('/projects/:id');
+  });
+
   it('redacts a docId shaped like a bound file path or a task alias — never leaks it', () => {
     // docIds are caller-chosen and can embed a bound file's relative path
     // (binds.ts: `${groupId}:${relPath.replaceAll('/', '~')}`) or a
@@ -81,6 +93,66 @@ describe('routePatternForSpan: default-deny redaction', () => {
     // Default-deny: a route this file doesn't know about degrades to `:id`
     // segments rather than ever emitting free text.
     expect(routePatternForSpan('/some/future/route')).toBe('/:id/:id/:id');
+  });
+
+  it('redacts a caller-chosen id even when its VALUE collides with a literal keyword at a DIFFERENT position', () => {
+    // codex review: the old check classified each segment independently of
+    // where it sat, so a docId whose value happened to equal an allowlisted
+    // word (any of ~130 of them — "content", "home", "settings", "notes"...)
+    // was wrongly preserved. `content` is both a real docId here (position
+    // 2, the id slot of /api/docs/:id/...) and a real subroute keyword
+    // (position 3) — this is exactly the shape codex's example described.
+    expect(routePatternForSpan('/api/docs/content/content')).toBe('/api/docs/:id/content');
+    // Same collision against other real keywords, elsewhere in the route
+    // table — a docId literally named "home", or a taskId literally named
+    // "archive", must redact just as any other id would.
+    expect(routePatternForSpan('/api/docs/home/status')).toBe('/api/docs/:id/status');
+    expect(routePatternForSpan('/api/tasks/archive/transition')).toBe('/api/tasks/:id/transition');
+  });
+
+  it('names the reviewApi subroutes under both of their live aliases', () => {
+    // codex review: server.ts's `reviewApi(sub)` builds ONE regex per
+    // subroute that matches `/api/(?:reviews|workspaces)/:id/<sub>` — a
+    // review or a hub workspace addressed under either prefix (compat for
+    // long-running sessions and open tabs). Missing either alias here isn't
+    // a privacy bug (an unmatched path still redacts to all-:id), but it
+    // does lose the route name for every request to that alias — this
+    // exercises all 8 subroutes under both prefixes.
+    for (const sub of [
+      'refresh',
+      'groups',
+      'grouped',
+      'threads',
+      'files',
+      'tree',
+      'context-file',
+      'editable-file',
+    ]) {
+      expect(routePatternForSpan(`/api/reviews/r-abc123/${sub}`)).toBe(`/api/reviews/:id/${sub}`);
+      expect(routePatternForSpan(`/api/workspaces/w-abc123/${sub}`)).toBe(
+        `/api/workspaces/:id/${sub}`,
+      );
+    }
+  });
+
+  it('names three more docs-subroute shapes missed on the first pass through the dispatch chain', () => {
+    // codex review, second pass: server.ts's docs dispatch also has a bare
+    // agent_anchors create route (only the :id-suffixed variants were
+    // templated), a bare threads/:id/withdraw (only its /undo sibling was),
+    // and suggestions/:id/(accept|reject) (only the bulk resolve_all and
+    // the plain listing were).
+    expect(routePatternForSpan('/api/docs/w-abc123/agent_anchors')).toBe(
+      '/api/docs/:id/agent_anchors',
+    );
+    expect(routePatternForSpan('/api/docs/w-abc123/threads/t-xyz789/withdraw')).toBe(
+      '/api/docs/:id/threads/:id/withdraw',
+    );
+    expect(routePatternForSpan('/api/docs/w-abc123/suggestions/s-1/accept')).toBe(
+      '/api/docs/:id/suggestions/:id/accept',
+    );
+    expect(routePatternForSpan('/api/docs/w-abc123/suggestions/s-1/reject')).toBe(
+      '/api/docs/:id/suggestions/:id/reject',
+    );
   });
 });
 
@@ -195,6 +267,33 @@ describe('scrubEventForPrivacy: a floor beneath withRouteSpan, proven with a neg
 
     const scrubbed = scrubEventForPrivacy(nested);
     expect(JSON.stringify(scrubbed)).not.toContain(secretId);
+  });
+
+  it('sanitizeErrorForCapture strips a caller-chosen docId that ReservedDocIdError bakes into its own message', () => {
+    // codex review's third finding: neither scrub floor catches this,
+    // because a caller-chosen docId (a bound file's relative path, or a
+    // `task:<id>` alias) reads as ordinary text — MINTED_ID_SHAPE only
+    // matches OUR OWN minted-id shape. ReservedDocIdError is a real,
+    // currently-thrown error (rooms.ts) that puts the raw value straight
+    // into `.message`, with nothing catching it by name before it could
+    // reach captureServerError. This is the one place a structured field
+    // makes exact — not shape-guessed — redaction possible.
+    const secretDocId = 'g1:secret~internal~roadmap.md'; // a real bound-file-shaped docId
+    const err = new ReservedDocIdError(secretDocId);
+    expect(err.message).toContain(secretDocId); // the real class actually leaks first
+
+    const sanitized = sanitizeErrorForCapture(err) as Error;
+    expect(sanitized.message).not.toContain(secretDocId);
+    expect(sanitized.message).not.toContain('roadmap');
+    expect(sanitized.name).toBe('ReservedDocIdError');
+    // codex review, second pass: the first fix redacted `.message` but
+    // copied `.stack` across unchanged — and a stack's own first line is
+    // `${name}: ${message}` (V8's format), so the raw id came right back
+    // through that copy. Sentry parses the stack during captureException,
+    // so this is a real leak path, not a cosmetic one.
+    expect(err.stack).toContain(secretDocId); // the real class leaks here too
+    expect(sanitized.stack).not.toContain(secretDocId);
+    expect(sanitized.stack).not.toContain('roadmap');
   });
 });
 
@@ -422,5 +521,97 @@ describe('server Sentry: configured — reaches Sentry end to end', () => {
       .map((h) => h.text)
       .join('\n');
     expect(joined).not.toContain(secretDocId);
+  });
+
+  it('a real ReservedDocIdError caught and captured never ships its raw docId, end to end', async () => {
+    // The concrete instance codex review found: a bound-file-shaped docId
+    // that no shape-based scrub would ever catch, going through the real
+    // capture path a caller in rooms.ts actually hits. Built from
+    // crypto.randomUUID() rather than a hardcoded literal, same reasoning
+    // as elsewhere in this file: ContextLines attaches source snippets
+    // around the throw site, and a literal sitting in the SOURCE a few
+    // lines away would show up via that — this repo's own text, nothing to
+    // do with whether the runtime value actually left the process.
+    capture.hits().length = 0;
+    const secretDocId = `g1:${crypto.randomUUID()}~internal~plan.md`;
+    try {
+      throw new ReservedDocIdError(secretDocId);
+    } catch (err) {
+      captureServerError(err);
+    }
+
+    await flushServerSentry(5000);
+
+    const joined = capture
+      .hits()
+      .map((h) => h.text)
+      .join('\n');
+    expect(joined).not.toContain(secretDocId);
+  });
+});
+
+describe("server Sentry: the SDK's own fatal-error integrations are disabled — bin.ts's handlers are the only ones", () => {
+  // codex review flagged that @sentry/bun's default `OnUncaughtException`
+  // and `OnUnhandledRejection` integrations each register their own
+  // `process.on('uncaughtException' | 'unhandledRejection', ...)` listener
+  // and call `captureException` on every fatal error — the same job bin.ts
+  // already does with its own listeners, registered right after
+  // `initServerSentry` returns. Left both active, a single crash would be
+  // reported twice. sentry.ts's `integrations` filter drops both by name;
+  // this proves that from the outside, not by re-reading the filter.
+  let capture: ReturnType<typeof startCaptureServer>;
+  let baselineUncaught = 0;
+  let baselineUnhandled = 0;
+  const release = 'b93a021-dirty';
+
+  beforeAll(async () => {
+    capture = startCaptureServer();
+    // Snapshot BEFORE init, not an absolute 0 — other test files in this
+    // same process register their own transient listeners, so the only
+    // claim this file can safely make is "initServerSentry added none",
+    // never "there are zero in the whole process".
+    baselineUncaught = process.listenerCount('uncaughtException');
+    baselineUnhandled = process.listenerCount('unhandledRejection');
+    await initServerSentry({ dsn: capture.dsn, release });
+  });
+
+  afterAll(async () => {
+    await flushServerSentry(2000);
+    resetServerSentryForTest();
+    capture.stop();
+  });
+
+  it('adds no listener for uncaughtException or unhandledRejection', () => {
+    // Before the integrations filter existed, this failed: each event
+    // gained exactly one listener from the SDK's own default integration.
+    expect(process.listenerCount('uncaughtException')).toBe(baselineUncaught);
+    expect(process.listenerCount('unhandledRejection')).toBe(baselineUnhandled);
+  });
+
+  it('a fatal error reaches Sentry exactly once — the SDK never captures it on its own', async () => {
+    capture.hits().length = 0;
+    // Mirrors bin.ts's own handler shape (capture, don't rethrow) without
+    // actually exiting this test process. `process.emit` invokes whatever
+    // listeners are registered right now — the same mechanism Node/Bun use
+    // to dispatch a real uncaught exception — without the "crash if nobody
+    // is listening" fallback, which only applies to an exception that
+    // actually unwinds to the top uncaught, not to `.emit()` calls.
+    const err = new Error(`synthetic fatal — ${crypto.randomUUID()}`);
+    const onFatal = (e: unknown) =>
+      captureServerError(e instanceof Error ? e : new Error(String(e)));
+    process.once('uncaughtException', onFatal);
+    try {
+      process.emit('uncaughtException', err);
+    } finally {
+      process.removeListener('uncaughtException', onFatal);
+    }
+
+    await flushServerSentry(5000);
+
+    // One request from OUR listener above. If the SDK's own
+    // OnUncaughtException integration were still active, it would
+    // independently call captureException on the same error the moment
+    // process.emit ran, adding a second request here.
+    expect(capture.hits().length).toBe(1);
   });
 });
