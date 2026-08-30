@@ -51,6 +51,7 @@ import {
   type HubGoal,
   type HubNav,
   type HubPane,
+  type HubReviewItem,
   type HubTask,
   type HubWorkspaceInfo,
   type PluginRelease,
@@ -116,6 +117,7 @@ import {
 } from './presence-island.tsx';
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
+import { mountReviewCriteria } from './review-criteria.ts';
 import { createTaskBodyEditorHost } from './task-body-editor.ts';
 import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import {
@@ -370,6 +372,23 @@ function buildShell(root: HTMLElement, name: string): void {
           </span>
           <input type="checkbox" id="hub-push-toggle" class="hub-check" aria-describedby="hub-push-note" />
         </label>
+        <!-- What the quality gate judges an agent's ask against, in the
+             owner's own words (Bryan, 2026-08-29: "Something we can change in
+             the settings. It's a natural language prompt."). A textarea and
+             not a rule table for that reason. It shows the DEFAULT when this
+             board has never written one, so the words are always readable
+             even when nobody has edited them — a criterion you cannot read is
+             one your agents are judged against in secret. -->
+        <div class="hub-settings-row hub-settings-row--criteria">
+          <label class="hub-settings-label" for="hub-review-criteria">What makes a good review item
+            <small id="hub-review-criteria-note" class="hub-settings-note"></small>
+          </label>
+          <textarea id="hub-review-criteria" class="hub-criteria" rows="5" aria-describedby="hub-review-criteria-note" placeholder="Plain English: what an agent’s ask has to do before it reaches you."></textarea>
+          <div class="hub-criteria-actions">
+            <button type="button" id="hub-review-criteria-save" class="hub-btn hub-btn-primary">Save</button>
+            <button type="button" id="hub-review-criteria-default" class="hub-btn">Use the default</button>
+          </div>
+        </div>
       </div>
     </header>
     <div id="hub-connection" class="conn-banner hidden" role="status" aria-live="polite"></div>
@@ -1384,6 +1403,7 @@ async function main(): Promise<void> {
         onAnswer: (t, text, optionId) => answerTaskDecision(t, text, optionId),
         onAnswerThread: (t, item, text, optionId) => answerPanelThreadItem(t, item, text, optionId),
         onUndoAnswer: (t) => undoTaskAnswer(t),
+        onReleaseHeld: (t, item) => releaseHeldReviewItem(t, item),
         onUndoThreadAnswer: (t, item) => undoThreadAnswer(t, item),
         // So the answered record can say "Answered by you" for the reader's
         // own answer — the record compares display names, same as answer.by.
@@ -2117,6 +2137,29 @@ async function main(): Promise<void> {
   }
 
   /**
+   * Overrule the quality gate on one held item — "Ask me anyway".
+   *
+   * The item goes on the queue on the reader's authority, and the queue is
+   * re-read so it appears in the same repaint the note leaves in. No confirm:
+   * the act is undone by the filer revising, and a dialog in front of a
+   * one-tap override is what makes readers leave the hold alone.
+   */
+  async function releaseHeldReviewItem(task: HubTask, item: HubReviewItem): Promise<boolean> {
+    const res = await send(
+      `/api/tasks/${encodeURIComponent(task.id)}/review-items/${encodeURIComponent(item.id)}/release`,
+      'POST',
+      { author },
+    );
+    if (!res.ok) {
+      showToast('Could not put that item on your queue');
+      return false;
+    }
+    showToast('On your queue — the gate was overruled');
+    await loadReviewItems();
+    return true;
+  }
+
+  /**
    * Answer an item the panel's queue got from a THREAD or from the TICKET.
    *
    * Same routes the walkthrough uses, for the same reason: a declared thread
@@ -2791,12 +2834,44 @@ async function main(): Promise<void> {
   });
   void pushToggle.refresh();
 
+  // What the quality gate judges an agent's ask against, in the owner's own
+  // words. Read on every open, because an agent can rewrite it from a tool
+  // while this tab sits here and a stale box that got saved would put the old
+  // words back.
+  const reviewCriteria = mountReviewCriteria({
+    box: document.getElementById('hub-review-criteria') as HTMLTextAreaElement,
+    note: el('hub-review-criteria-note'),
+    save: el('hub-review-criteria-save') as HTMLButtonElement,
+    useDefault: el('hub-review-criteria-default') as HTMLButtonElement,
+    read: async () => {
+      const data = await fetchJson<{
+        reviewItemCriteria?: { value?: string; isDefault?: boolean };
+      }>(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`);
+      const criteria = data?.reviewItemCriteria;
+      return typeof criteria?.value === 'string'
+        ? { value: criteria.value, isDefault: criteria.isDefault === true }
+        : null;
+    },
+    write: async (value) => {
+      const res = await send(`/api/workspaces/${encodeURIComponent(workspaceId)}/settings`, 'PUT', {
+        reviewItemCriteria: value,
+        author,
+      });
+      return res.ok;
+    },
+    toast: showToast,
+  });
+
   el('hub-settings').addEventListener('click', () => {
     state.settingsOpen = !state.settingsOpen;
     renderSettingsPanel();
     // Re-read on open: permission can change in site settings while the tab
     // sits here, and the row is only ever read at the moment it is opened.
-    if (state.settingsOpen) void pushToggle.refresh();
+    // Same reason for the criteria, which an agent can rewrite from a tool.
+    if (state.settingsOpen) {
+      void pushToggle.refresh();
+      void reviewCriteria.refresh();
+    }
   });
   // A popover that only closes by hitting the same small button again is one
   // people leave open over the list they were trying to read.

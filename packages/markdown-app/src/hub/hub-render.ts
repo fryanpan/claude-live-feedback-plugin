@@ -26,6 +26,7 @@ import {
   type HomePayload,
   type HubDecisionOption,
   type HubGoal,
+  type HubReviewItem,
   type HubTask,
   type HubTransition,
   type ReviewQueue,
@@ -788,6 +789,16 @@ export interface DetailHandlers {
   /** Take back this task's recorded answer. Without it the answered banner
    *  renders with no way out, which is the state this handler exists to end. */
   onUndoAnswer?: (task: HubTask) => Promise<boolean> | undefined;
+  /**
+   * Overrule the quality gate on one HELD review item, putting it on the
+   * reader's queue without waiting for its filer to reword it.
+   *
+   * The gate is a judge, and a judge can be wrong about one item. Without
+   * this the held note had no interactive element at all: a reader looking at
+   * a question they could have answered in ten seconds could do nothing but
+   * wait for an agent (UX review, 2026-08-29).
+   */
+  onReleaseHeld?: (task: HubTask, item: HubReviewItem) => Promise<boolean> | undefined;
   /**
    * Take back an answer recorded on a THREAD-borne item — the persistent Undo
    * on the in-place answered record. Goes through

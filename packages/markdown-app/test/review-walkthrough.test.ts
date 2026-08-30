@@ -457,7 +457,7 @@ describe('the walkthrough matches the approved mockup', () => {
     expect(wait.textContent).not.toContain('waiting');
     // The fixture's decision has no recorded actor, so the meta states the
     // clock without inventing a name.
-    expect(wait.textContent).toBe('Asked moments ago');
+    expect(wait.textContent).toBe('Asked under a minute ago');
 
     renderReviewWalkthrough(root, reviewQueue([], [threadItem({ direct: true })], NOW), 0, walk());
     // A declared item reads as what it declared, not as the surface it arrived
