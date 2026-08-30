@@ -1,4 +1,5 @@
 import { escapeHtml, storeUserName } from '@feedback/core';
+import { signInHref } from '../signin/write-gate.ts';
 
 /**
  * The identity chip's menu — the sign-in entry point.
@@ -53,8 +54,10 @@ async function defaultSaveName(name: string): Promise<boolean> {
   return res.ok;
 }
 
+/** Re-exported shape, one definition. The write gate raises the same link
+ *  from a refused write, and two spellings of a URL drift. */
 export function defaultSigninHref(pathname: string, search: string): string {
-  return `/signin?next=${encodeURIComponent(pathname + search)}`;
+  return signInHref(pathname, search);
 }
 
 export function wireMeMenu(opts: MeMenuOpts): () => void {

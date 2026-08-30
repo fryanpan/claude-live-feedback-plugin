@@ -198,6 +198,16 @@ const requireEmailAuth = ['1', 'true', 'yes'].includes(
 );
 
 /**
+ * A browser must be SIGNED IN to write. Default off, and off means an
+ * unsigned browser writes exactly as it does today. Independent of
+ * `CW_REQUIRE_EMAIL_AUTH`, which governs what a session MEANS rather than
+ * whether one is needed — see ServerOptions and middleware/write-gate.ts.
+ */
+const requireSignInToWrite = ['1', 'true', 'yes'].includes(
+  (process.env.CW_REQUIRE_SIGNIN_TO_WRITE ?? '').trim().toLowerCase(),
+);
+
+/**
  * The address whose email identity is the fleet owner. Without it,
  * `isOwnerActor` keeps matching only the two pre-email spellings, and the
  * day the owner signs in by email the owner-activity view quietly reads
@@ -588,6 +598,7 @@ while (!handle) {
       publicBaseUrl: publicBaseUrlOverride,
       sharingEnvLocked,
       requireEmailAuth,
+      requireSignInToWrite,
       ...(ownerEmail ? { ownerEmail } : {}),
       // Browser Sentry DSN — box config, never the repo (see ServerOptions).
       ...(sentryDsn ? { sentryDsn } : {}),

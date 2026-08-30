@@ -34,6 +34,12 @@ import {
   setSidebarSignature,
   sidebarShowsSignature,
 } from './sidebar-nav-key.ts';
+import {
+  applyWriteAccess,
+  fetchWriteAccess,
+  installWriteGateNotice,
+  showSignInBar,
+} from './signin/write-gate.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -99,16 +105,31 @@ function wireDocSwitcher(): void {
  * runs; navigation swaps mounts in place with no reload.
  */
 async function main(): Promise<void> {
+  // Before anything can write: a refused write raises a sign-in prompt
+  // wherever it happened, rather than a "try again" this person can never
+  // satisfy. See signin/write-gate.ts.
+  installWriteGateNotice();
   wireKeyboardInset();
   wireDocSwitcher();
   const asParam = new URL(location.href).searchParams.get('as');
+  // May this browser write at all? Asked BEFORE the name prompt, because the
+  // answer decides whether that prompt should be shown: where the server
+  // requires a session, "what shall we call you?" is a modal that blocks boot
+  // to collect a name the server will not accept, in place of the one
+  // question this person actually has to answer.
+  const writeAccess = await fetchWriteAccess();
+  if (!writeAccess.canWrite) showSignInBar();
   // First arrival with no stored name shows the name prompt; this awaits the
   // user's answer (or skip) before anything connects, so awareness, comments,
   // and edits all carry the chosen identity from the first packet.
-  const user: User = await ensureUserIdentity(asParam, {
-    get: (k) => localStorage.getItem(k),
-    set: (k, v) => localStorage.setItem(k, v),
-  });
+  const user: User = await ensureUserIdentity(
+    asParam,
+    {
+      get: (k) => localStorage.getItem(k),
+      set: (k, v) => localStorage.setItem(k, v),
+    },
+    writeAccess.canWrite ? {} : { suppressNamePrompt: true },
+  );
   // Voice on the doc surface (§3.8): one dock for the whole session; each
   // utterance reads the CURRENT doc + topmost heading at release time, so
   // the anchor follows navigation without remounting.
@@ -965,6 +986,22 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
   }
   let editMode: EditMode = readEditModePref();
   applyEditMode(editMode);
+  /**
+   * A browser the server will not accept writes from does not get an edit
+   * toggle. Asked once per mount, and only ever narrowing: the answer is
+   * "may write" for every deployment with the gate off, which is all of them
+   * by default. The socket is already read-only server-side when this comes
+   * back false — this is what stops a person typing into it and watching the
+   * text vanish on reload.
+   */
+  void applyWriteAccess().then((canWrite) => {
+    if (canWrite) return;
+    editMode = 'view';
+    applyEditMode('view');
+    toggleEditMode.disabled = true;
+    toggleEditMode.title = 'Sign in to edit this doc';
+    toggleEditMode.setAttribute('aria-label', 'Sign in to edit this doc');
+  });
   scope.listen(toggleEditMode, 'click', () => {
     editMode = editMode === 'edit' ? 'view' : 'edit';
     localStorage.setItem(EDIT_MODE_KEY, editMode);

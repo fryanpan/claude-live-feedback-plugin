@@ -9538,6 +9538,63 @@ a.signin-link {
   }
 }
 
+/* ---------- Sign-in required (a refused write, and the standing notice) ----
+   Lives in this section rather than a new banner at EOF: it is sign-in UI,
+   and it reuses the identity prompt's scrim/card wholesale — only the primary
+   action differs (an <a>, because it navigates). The bar is fixed to the
+   bottom so it never covers the top bar's controls, and it wraps rather than
+   scrolls at 430px. */
+.signin-required-go {
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.signin-required-go:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+.signin-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  /* UNDER THE TOPBAR, not above the bottom edge. Measured at 430px: docked
+     to the bottom it landed on the meeting strip's timer, and the strip is
+     fixed too, so no z-index settles that — one of them covers the other.
+     The top is the only band nothing else claims, and a standing status
+     belongs there anyway; `--signin-bar-top` is set from the topbar's real
+     height at insert time, because that height changes with the tier. */
+  top: calc(var(--signin-bar-top, 52px) + 8px);
+  z-index: 900;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  max-width: min(560px, calc(100vw - 24px));
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.signin-bar a {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.signin-bar a:hover,
+.signin-bar a:focus-visible {
+  text-decoration: underline;
+}
+
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */
 /* Full-viewport scrim shown once per browser (until a name is stored or the
    prompt is skipped). Single fluid column, so it needs no separate mobile

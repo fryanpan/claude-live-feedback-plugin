@@ -20,6 +20,7 @@ import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
+import { fetchWriteAccess, installWriteGateNotice, showSignInBar } from '../signin/write-gate.ts';
 import { BUILD_ID, installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { activityCommentRequest, asksOf } from './activity-model.ts';
@@ -470,6 +471,10 @@ function buildShell(root: HTMLElement, name: string): void {
 }
 
 async function main(): Promise<void> {
+  // A refused write raises a sign-in prompt wherever it happened. The board's
+  // `send()` reports every failure as a toast, and "Couldn't save" is not
+  // something a signed-out person can act on. See signin/write-gate.ts.
+  installWriteGateNotice();
   const root = document.getElementById('hub-root');
   const workspaceId = workspaceIdFromPath();
   if (!root || !workspaceId) return;
@@ -481,10 +486,18 @@ async function main(): Promise<void> {
   // its accessory bar with no scroll left to reach it.
   wireKeyboardInset();
 
-  const user: User = await ensureUserIdentity(new URLSearchParams(location.search).get('as'), {
-    get: (k) => localStorage.getItem(k),
-    set: (k, v) => localStorage.setItem(k, v),
-  });
+  // Same order as the doc surface: the write answer decides whether the name
+  // prompt is worth showing. See signin/write-gate.ts.
+  const writeAccess = await fetchWriteAccess();
+  if (!writeAccess.canWrite) showSignInBar();
+  const user: User = await ensureUserIdentity(
+    new URLSearchParams(location.search).get('as'),
+    {
+      get: (k) => localStorage.getItem(k),
+      set: (k, v) => localStorage.setItem(k, v),
+    },
+    writeAccess.canWrite ? {} : { suppressNamePrompt: true },
+  );
   const author = { id: user.id, name: user.name, kind: user.kind, color: user.color };
 
   // Everything the address names, read once: nav destination, an open task
