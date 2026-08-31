@@ -78,7 +78,7 @@ describe('widget', () => {
 
   it('opens and closes the panel via the threads button', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-panel', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ docId: 't-panel', user: 'bryan' });
     const root = el.shadowRoot!;
     const listBtn = root.querySelector('.fab-list') as HTMLButtonElement;
     const panel = root.querySelector('.panel') as HTMLElement;
@@ -98,7 +98,7 @@ describe('widget', () => {
    */
   it('a click in feedback mode opens the composer and the mode survives it', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-multi', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ docId: 't-multi', user: 'bryan' });
     const root = el.shadowRoot!;
     const target = document.getElementById('hello') as HTMLElement;
     // happy-dom has no layout, so hit-testing by coordinates needs a stub.
@@ -148,7 +148,7 @@ describe('widget', () => {
 
   it('a click on the widget host in feedback mode is left alone', async () => {
     const mod = await importWidget();
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-chrome', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ docId: 't-chrome', user: 'bryan' });
     const root = el.shadowRoot!;
     // Shadow-DOM chrome (composer, FAB) resolves to the host element.
     document.elementFromPoint = () => el as unknown as HTMLElement;
@@ -193,7 +193,7 @@ describe('widget', () => {
   it('lists a thread that is about the page itself', async () => {
     const mod = await importWidget();
     const core = await import('@feedback/core');
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-subject', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ docId: 't-subject', user: 'bryan' });
     const inner = el as unknown as {
       client: { ydoc: import('yjs').Doc } | null;
       renderThreads: () => void;
@@ -255,14 +255,14 @@ describe('widget', () => {
 
       // Default scope: the guest namespace is empty, so the widget is anonymous.
       const guest = document.createElement('claude-feedback-widget');
-      guest.setAttribute('doc-id', 'w-scope-default');
+      guest.setAttribute('doc-id', 'scope-default');
       document.body.appendChild(guest);
       const guestName = (guest as unknown as { user: { name: string } }).user.name;
       expect(guestName).toMatch(/^Anonymous /);
 
       // scope=host: the SAME stored name is now the widget's identity.
       const hosted = document.createElement('claude-feedback-widget');
-      hosted.setAttribute('doc-id', 'w-scope-host');
+      hosted.setAttribute('doc-id', 'scope-host');
       hosted.setAttribute('identity-scope', 'host');
       document.body.appendChild(hosted);
       expect((hosted as unknown as { user: { name: string } }).user.name).toBe('Dana Reviewer');
@@ -280,7 +280,7 @@ describe('widget', () => {
     it('via FeedbackWidget.init as well as the attribute', async () => {
       const mod = await importWidget();
       localStorage.setItem('feedback-user-name', 'Reviewer');
-      const el = mod.FeedbackWidget.init({ docId: 'w-scope-init', identityScope: 'host' });
+      const el = mod.FeedbackWidget.init({ docId: 'scope-init', identityScope: 'host' });
       expect((el as unknown as { user: { name: string } }).user.name).toBe('Reviewer');
     });
   });
