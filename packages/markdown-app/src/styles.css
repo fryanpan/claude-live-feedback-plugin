@@ -6902,9 +6902,11 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-mode {
     margin-left: auto;
   }
-  .meeting-announce {
-    margin-left: 8px;
-  }
+  /* No margin of its own: `.meeting-strip-row` already carries an 8px gap
+     here, and the one on Start beside it predates that gap and doubles it.
+     Adding a third margin is what tips this row into a wrap at 430px, which
+     costs the phone 42px of its bottom edge for a state nobody is looking
+     at (idle, before Start). */
   .meeting-toggle {
     margin-left: 8px;
   }
