@@ -200,22 +200,54 @@ export function retagSpeakerInNotes(
     for (const node of nodes) {
       const edits: Array<{ offset: number; length: number; attributes: Record<string, unknown> }> =
         [];
+      // A tag is not always ONE delta op. Bold half a tag's name and Yjs
+      // carries it as two ops that share the link href, and a loop treating
+      // each op as a whole tag writes the new name once per op. So contiguous
+      // ops for this voice accumulate into a single run, and the run is what
+      // gets replaced. (Two tags for the same voice written back to back with
+      // nothing between them would merge into one — markdown that says the
+      // same name twice in a row with no words between it.)
+      let run: {
+        offset: number;
+        length: number;
+        attributes: Record<string, unknown>;
+        text: string;
+      } | null = null;
+      const flush = () => {
+        if (run && run.text !== want) {
+          edits.push({ offset: run.offset, length: run.length, attributes: run.attributes });
+        }
+        run = null;
+      };
       let offset = 0;
       for (const op of node.toDelta() as YTextOp[]) {
         // A non-string insert is an embed: one position wide, and never a
         // speaker tag. Counted so later offsets stay true.
         if (typeof op.insert !== 'string') {
+          flush();
           offset += 1;
           continue;
         }
         const length = op.insert.length;
         const attributes = op.attributes;
         const linked = attributes?.link as { href?: unknown } | undefined;
-        if (linked?.href === href && op.insert !== want) {
-          edits.push({ offset, length, attributes: attributes ?? {} });
+        if (linked?.href === href) {
+          // The FIRST op's marks carry the whole replacement: the text is
+          // being written anew, so emphasis that covered part of the old
+          // spelling has nothing left to cover. The link mark, which is the
+          // one that matters, is on every op of the run by definition.
+          if (run) {
+            run.length += length;
+            run.text += op.insert;
+          } else {
+            run = { offset, length, attributes: attributes ?? {}, text: op.insert };
+          }
+        } else {
+          flush();
         }
         offset += length;
       }
+      flush();
       // Descending, so every offset not yet used is still valid: an edit
       // only ever changes text at or after the site it lands on.
       for (let i = edits.length - 1; i >= 0; i--) {
@@ -462,9 +494,19 @@ export function applyNotesRelabel(
     MEETING_NOTES_HEADING,
     ledger.forDoc(relabel.docId),
     () => {
-      const tagged = retagSpeakerInNotes(room.ydoc, relabel.label, relabel.to).replaced;
-      if (!relabel.rewriteUntagged) return tagged;
-      return tagged + relabelNotesSection(room.ydoc, relabel.from, relabel.to).replaced;
+      // The untagged sweep runs FIRST, and the order is load-bearing. It
+      // looks for the old display name on word boundaries, and an extension
+      // rename leaves that name inside the new one — retag first and the
+      // sweep finds "Devi" inside the "@Devi Raman" it has just written, and
+      // makes it "@Devi Raman Raman". Sweeping first, the sweep sees only the
+      // old spelling everywhere it appears, and the retag that follows
+      // canonicalises every tag for this voice — including any the sweep had
+      // no way to reach, and including the ones it has just corrected, where
+      // it finds the right text already there and does nothing.
+      const swept = relabel.rewriteUntagged
+        ? relabelNotesSection(room.ydoc, relabel.from, relabel.to).replaced
+        : 0;
+      return swept + retagSpeakerInNotes(room.ydoc, relabel.label, relabel.to).replaced;
     },
   );
 }

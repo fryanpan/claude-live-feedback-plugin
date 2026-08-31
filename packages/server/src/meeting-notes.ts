@@ -673,8 +673,12 @@ export function beginNotesSession(
       // correctly, so the name never comes back.
       chain = chain.then(() => {
         if (previous !== null) {
-          previous = renameSpeakerTags(previous, speaker, names).markdown;
+          // Sweep, then retag — the same order the doc side uses, and for the
+          // same reason: "Devi" → "Devi Raman" leaves the old name inside the
+          // new one, so a sweep run after the retag would find it in the tag
+          // it had just written and say the surname twice.
           if (!ambiguous) previous = replaceWholeToken(previous, from, to);
+          previous = renameSpeakerTags(previous, speaker, names).markdown;
         }
         deps.onRelabel?.({
           docId: ids.docId,

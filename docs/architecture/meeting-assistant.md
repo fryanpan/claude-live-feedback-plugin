@@ -281,8 +281,15 @@ invented for this would have been lost on the first flush.
   rewrites the text of every run whose link href is `speaker:<label>`,
   in place, marks preserved — which is what makes two voices called Alex
   separable where the display-text sweep could not tell them apart. It runs
-  BEFORE the untagged sweep, so an already-retagged mention has nothing left
-  for the sweep to match.
+  AFTER the untagged sweep, and that order is load-bearing: an extension
+  rename ("Devi" → "Devi Raman") leaves the old name inside the new one, so a
+  sweep running second would find "Devi" inside the "@Devi Raman" the retag
+  had just written and make it "@Devi Raman Raman". Sweeping first, the retag
+  that follows canonicalises every tag for the voice and finds most of them
+  already right. Contiguous delta ops sharing the tag's href are coalesced
+  into one run before replacement, because a tag with an inner mark — half
+  its name bolded — reaches Yjs as several ops and would otherwise be
+  rewritten once per op.
 - **A suggestion may not re-attribute a person's note.** `canSuggestOn`
   refuses a rewrite that introduces a speaker label the target did not
   already carry, so the composer cannot attach a line someone typed to a

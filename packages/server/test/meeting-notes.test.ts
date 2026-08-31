@@ -1180,6 +1180,41 @@ describe('inline speaker tags', () => {
     expect(inputs[1]?.previous).not.toContain('Speaker B');
   });
 
+  it('extends a name in the session memory without saying it twice', async () => {
+    // "Devi" survives inside "Devi Raman", so the untagged sweep has to run
+    // before the retag rather than after it — otherwise it finds the old name
+    // inside the tag the retag has just written. Same order, same reason, as
+    // the doc side.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- [@Devi](speaker:B) wants it. Devi will file it.',
+            '## Meeting notes\n\n- more',
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+      },
+      ids,
+    );
+    session.nameSpeaker('B', 'Devi');
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.nameSpeaker('B', 'Devi Raman');
+    session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'B' });
+    await session.end();
+
+    expect(inputs[1]?.previous).toContain('[@Devi Raman](speaker:B) wants it.');
+    expect(inputs[1]?.previous).toContain('Devi Raman will file it.');
+    expect(inputs[1]?.previous).not.toContain('Raman Raman');
+  });
+
   it('leaves a line the person wrote exactly as they wrote it', async () => {
     // The composer is asked to reproduce their line verbatim and the merge
     // recognises it by exact text. Normalizing a tag inside it would break

@@ -31,6 +31,11 @@ function markdownOf(ydoc: Y.Doc): string {
   return prose.serializeFragmentToMarkdown(prose.getProseFragment(ydoc));
 }
 
+/** The doc's words with no markup at all — what a reader actually sees. */
+function plainTextOf(ydoc: Y.Doc): string {
+  return prose.locateMatches(prose.getProseFragment(ydoc), { find: '\u0000' }).plainText;
+}
+
 describe('replaceNotesSection', () => {
   it('appends the section at the end when the doc has none', () => {
     const ydoc = docFrom('# Agenda\n\nSome intro.\n');
@@ -229,6 +234,19 @@ describe('retagSpeakerInNotes — renaming by label rather than by spelling', ()
     expect(md).toContain('- [@Speaker A](speaker:A) pushed back.');
   });
 
+  it('renames a tag once when its text is split across marks', () => {
+    // A person bolds half of a tag's name. Yjs then carries that tag as two
+    // delta ops with the same link href, and a loop that treats each op as a
+    // whole tag writes the new name once per op.
+    const ydoc = docFrom('## Meeting notes\n\n- [@**Speaker** B](speaker:B) asked.\n');
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('speaker:B');
+    expect(md).not.toContain('DeviDevi');
+    expect(md).not.toContain('Devi](speaker:B)[@Devi');
+    expect(plainTextOf(ydoc)).toContain('@Devi asked.');
+  });
+
   it('separates two voices a person has given the same name', () => {
     // The thing `relabelNotesSection` cannot do, and the reason tags exist:
     // the text says "Alex" twice and the label says which Alex is which.
@@ -320,6 +338,23 @@ describe('applyNotesRelabel', () => {
     const md = markdownOf(ydoc);
     expect(md).toContain('- [@Devi](speaker:B) asked.');
     expect(md).toContain('- Devi also agreed.');
+  });
+
+  it('extends a name without saying it twice', () => {
+    // The sweep looks for the OLD display name on word boundaries, and after
+    // a retag the tag's own text still contains it: "Devi" lives inside
+    // "@Devi Raman". Run the retag first and the sweep corrupts what it just
+    // wrote. Raised by review before merge, not in the field.
+    const { rooms, ydoc } = roomsWith(
+      'doc-a',
+      'markdown',
+      '## Meeting notes\n\n- [@Devi](speaker:B) asked.\n- Devi also agreed.\n',
+    );
+    applyNotesRelabel(rooms, relabel('doc-a', 'Devi', 'Devi Raman'), createNotesLedger());
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Devi Raman](speaker:B) asked.');
+    expect(md).toContain('- Devi Raman also agreed.');
+    expect(md).not.toContain('Raman Raman');
   });
 
   it('renames only the tags when the display name belongs to more than one voice', () => {
