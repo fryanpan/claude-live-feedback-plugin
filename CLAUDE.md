@@ -98,8 +98,12 @@ The full delivery model is [docs/process/delivery.md](docs/process/delivery.md)
 
 ## Deploying prod — an agent action: do it, don't ask (Bryan, 2026-08-17)
 
-`POST /api/deploy` from the box does it all (pull `--ff-only`, restart,
-record; `GET` reads it back). Manual fallback when the server is down:
+`POST /api/deploy` from the box does it all (pull `--ff-only`, `bun install
+--frozen-lockfile`, restart, record; `GET` reads it back). The restart is
+recorded as an INTENT: `GET /api/deploy` shows `verification` — `pending`
+until the restarted server confirms its own boot, `boot-failed` if it never
+does (a 200 on the POST is not delivery; read the verdict). Manual fallback
+when the server is down (run `bun install` yourself after the pull):
 
 ```bash
 git pull --ff-only origin main    # in the PRIMARY checkout — prod's deploy source
@@ -107,9 +111,12 @@ launchctl kickstart -k gui/$(id -u)/com.fryanpan.claude-workspaces   # NOT ...li
 cat ~/.local/state/claude-workspaces/client/current/release.json
 ```
 
-Done when `release.json`'s `sourceRef` matches the commit you shipped — a
-healthy restart over an unpulled checkout republishes the OLD client. A bound
-doc with un-flushed edits refuses the deploy (`force` accepts the loss).
+Done when `release.json`'s `sourceRef` matches the commit you shipped AND the
+deploy's `verification` reads `healthy` — a healthy restart over an unpulled
+checkout republishes the OLD client, and `release.json` advances even when the
+server then crashes on boot. A bound doc with un-flushed edits refuses the
+deploy (`force` accepts the loss); a failed `bun install` refuses the restart
+(`install-failed` — the server keeps running on the old code).
 
 ## Staging — review a branch before merge
 
