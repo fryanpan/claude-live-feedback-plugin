@@ -35,6 +35,31 @@
  *     is the control to reach for when a failure looks like it might be the
  *     transport rather than the code under test.
  *
+ * ===== WHAT THIS COST, MEASURED =====
+ *
+ * Two full suites run concurrently, once each way, sampling every second:
+ *
+ *   listeners opened per run     628  ->   82
+ *   pcbcount growth over the arm +834 -> +590
+ *   loopback TIME_WAIT, average     6 ->    7   (peak 25 -> 29)
+ *   sockets live in the process     4 ->  212   (peak 29 -> 422)
+ *
+ * Two things in that table are worth carrying forward. The first is that the
+ * TIME_WAIT mechanism the outage was blamed on does not reproduce: a full run
+ * leaves single-digit resident TIME_WAIT entries, not thousands, because
+ * `stop(true)` closes a dying server's connections forcefully and an RST
+ * skips TIME_WAIT entirely. The listener count was real; the tail it was
+ * supposed to be leaving was not.
+ *
+ * The second is the last row, which is a real cost and not a rounding error.
+ * Every fetch in the suite now shares ONE origin, so Bun keeps that origin's
+ * pool warm — roughly fifty connections per test process, each counted twice
+ * because both ends live here — where before a dead server took its handful
+ * with it. The number is bounded rather than growing, and it does not respond
+ * to the front door's idle timeout (tried at 45s: 208 against 212), because
+ * the pool is being cycled rather than left idle. So the trade this file
+ * makes is 7.6x fewer sockets CREATED against about a hundred more held open.
+ *
  * A test that needs a REAL port passes `dedicatedListener: true` to
  * `createServer` and gets today's behaviour untouched. That is anything not
  * speaking through `globalThis.fetch`: a `WebSocket`, an `EventSource`, or a
