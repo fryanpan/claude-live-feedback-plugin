@@ -193,6 +193,37 @@ describe('mockup durability', () => {
       expect(again.headers.get('etag')).toBe(a.headers.get('etag'));
     });
 
+    it('a failed refresh leaves the previous capture whole, not truncated', async () => {
+      // The capture is written to a sibling and renamed over. Writing in
+      // place would open the durable copy for truncation FIRST, so a write
+      // that dies — full disk, killed process — would leave the fallback
+      // empty or half-written, destroying the one thing it exists to keep at
+      // exactly the moment it is needed.
+      const src = join(scratch, 'atomic.html');
+      writeFileSync(src, '<!doctype html><html><body><h1>Good capture</h1></body></html>');
+      const created = await bindOk({ docId: 'mock-atomic', type: 'mockup', sourceUrl: src });
+      const staging = `${mockupCapturePath(dataDir, created.meta.docId)}.tmp`;
+
+      // Block the staging write, then change the source so a refresh is due.
+      mkdirSync(staging, { recursive: true });
+      writeFileSync(src, '<!doctype html><html><body><h1>Never captured</h1></body></html>');
+      try {
+        // The live file still serves — a capture that cannot be refreshed is
+        // not a reason to withhold the page.
+        const live = await fetch(`${base}/mockup/mock-atomic`);
+        expect(live.headers.get('x-mockup-source')).toBe('live');
+        expect(await live.text()).toContain('Never captured');
+      } finally {
+        rmSync(staging, { recursive: true, force: true });
+      }
+
+      rmSync(src);
+      const after = await fetch(`${base}/mockup/mock-atomic`);
+      expect(after.headers.get('x-mockup-source')).toBe('captured');
+      // Whole, and the previous good bytes — not empty, not partial.
+      expect(await after.text()).toContain('Good capture');
+    });
+
     it('an unbound docId is still a 404 — the fallback invents nothing', async () => {
       const res = await fetch(`${base}/mockup/mock-never-bound`);
       expect(res.status).toBe(404);
