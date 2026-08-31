@@ -1469,9 +1469,9 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     // window where a stop lands before `speak()` is even called. Speaking
     // there tells a room it is being recorded when it is not.
     const announcer = new FakeAnnouncer();
-    let release: (() => void) | null = null;
+    const held: Array<() => void> = [];
     const mic = pumpCapture();
-    mic.setEchoCancellation.mockImplementation(() => new Promise<void>((r) => (release = r)));
+    mic.setEchoCancellation.mockImplementation(() => new Promise<void>((r) => void held.push(r)));
     const h = mount(mic.start, { mode: 'conversation', announcer });
     h.toggle().click();
     await settle();
@@ -1488,7 +1488,7 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     expect(announcer.said).toEqual([]);
     h.toggle().click();
     await settle();
-    release?.();
+    for (const r of held.splice(0)) r();
     await settle();
     // The room is not told about a meeting that is over.
     expect(announcer.said).toEqual([]);
