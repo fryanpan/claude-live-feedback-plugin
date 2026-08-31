@@ -149,6 +149,13 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
+import {
+  captureMockup,
+  checkMockupSource,
+  isHtmlMockupSource,
+  readMockupCapture,
+  readMockupHtml,
+} from './mockup-capture.ts';
 import { injectWidget } from './mockup-widget.ts';
 import {
   PARK_MIGRATION_ACTOR,
@@ -3403,6 +3410,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * that a build step generates, or that git tracks, never has to carry review
    * scaffolding to be reviewable. See mockup-widget.ts for the incident that
    * moved it. A page that embeds the widget itself is served untouched.
+   *
+   * The live file wins whenever it is readable, and serving refreshes the
+   * capture from it — so a mock that is still being edited behaves exactly as
+   * it always did, and the fallback holds the last thing anyone was shown
+   * rather than whatever round one looked like. Only when the file is gone
+   * does the capture answer, which is the case that used to be a 404 in front
+   * of the reviewer. See mockup-capture.ts.
    */
   const serveMockup = (docId: string): Response => {
     const notFound = () =>
@@ -3412,17 +3426,37 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       });
     const room = rooms.get(docId);
     if (!room || room.meta.type !== 'mockup' || !room.meta.sourceUrl) return notFound();
-    const res = serveStatic(room.meta.sourceUrl);
-    if (!res) return notFound();
-    // Only HTML gets rewritten; a mockup bound to anything else is served as-is.
-    const ct = res.headers.get('content-type') ?? '';
-    if (!ct.startsWith('text/html')) return res;
+    const source = room.meta.sourceUrl;
+    // A mockup bound to something that isn't HTML is served as-is, as before:
+    // nothing is injected into it and nothing is captured from it.
+    if (!isHtmlMockupSource(source)) return serveStatic(source) ?? notFound();
+    const live = readMockupHtml(source);
+    if (live !== null) captureMockup(dataDir, room.docId, live);
+    const html = live ?? readMockupCapture(dataDir, room.docId);
+    if (html === null) return notFound();
     // Sentry tags ride out with the widget embed, for the same reason and by
     // the same route: a mockup is somebody's own file, and neither the review
     // scaffolding nor the box's monitoring config belongs in it on disk.
-    const withWidget = injectWidget(readFileSync(room.meta.sourceUrl, 'utf8'), room.meta.docId);
-    return new Response(injectSentryHead(withWidget, browserSentry, 'mockup'), {
-      headers: res.headers,
+    const withWidget = injectWidget(html, room.meta.docId);
+    const body = injectSentryHead(withWidget, browserSentry, 'mockup');
+    return new Response(body, {
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-cache',
+        // Content-derived like serveStatic's, and for the same reason: a
+        // reload of an unchanged mock should cost a 304, and a deploy that
+        // changed nothing should not throw the cache away. Hashed from the
+        // BODY WE SEND rather than the file we read — the widget embed and
+        // the Sentry head are part of what the browser is holding, so a
+        // source-derived tag would revalidate a page whose injected half had
+        // changed underneath it. `serveShellHtml` hashes its injected HTML
+        // for the same reason.
+        etag: `"${Bun.hash(body).toString(16)}"`,
+        // Which copy answered. A page served from the capture is still the
+        // page — but "the source file is gone" is a fact somebody may want to
+        // act on, and it must not be inferred from the absence of an error.
+        'x-mockup-source': live !== null ? 'live' : 'captured',
+      },
     });
   };
 
@@ -4984,6 +5018,33 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               hint: 'Markdown and code review docs are backed by a file on disk. Pass sourceUrl: "/abs/path/to/file" in the POST body.',
             });
           }
+          // A mockup binds to a file OUTSIDE the repo, so this route was the
+          // one bind that took a path on faith: an unreachable one bound
+          // happily, and the 404 arrived weeks later in front of whoever
+          // opened the link. Markdown and code already fail their attach
+          // loudly; this is the same courtesy.
+          //
+          // Both the check AND the read happen here, before the room exists,
+          // for two reasons: a failed bind leaves nothing behind, and the
+          // content held from this read is what the capture below stores — so
+          // a source that goes away between the two steps is still a refusal
+          // rather than a doc bound to a copy nobody took.
+          let mockupHtml: string | null = null;
+          if (type === 'mockup' && sourceUrl) {
+            const unreadable = (reason: string) =>
+              j(400, {
+                error: 'mockup_source_unreadable',
+                path: sourceUrl,
+                reason,
+                hint: `Cannot read the mockup HTML at ${sourceUrl} (${reason}). Pass an absolute path to a readable file — the server captures its content at bind time so the link keeps working after the file is cleaned up, and it cannot capture a file it cannot read.`,
+              });
+            const check = checkMockupSource(sourceUrl);
+            if (!check.ok) return unreadable(check.reason);
+            if (isHtmlMockupSource(sourceUrl)) {
+              mockupHtml = readMockupHtml(sourceUrl);
+              if (mockupHtml === null) return unreadable('became unreadable while binding');
+            }
+          }
           // The caller NAMES the doc; the server decides its id. `docId` in
           // the body is therefore a readable alias from here on — which is
           // also what closes the write-anywhere hole this route was: a
@@ -5028,6 +5089,42 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           } else if (type === 'code' && sourceUrl) {
             attached = rooms.attachReadonlyFile(canonicalId, sourceUrl);
             if (!attached.ok) return j(409, { error: 'attach_failed', attached });
+          }
+          // Capture at bind, not merely on first serve: a mock that is bound
+          // and then never opened until after its scratch dir is cleaned is
+          // exactly the case that produced this. Keyed on the CANONICAL id,
+          // so a rebind under the same readable name replaces the same copy.
+          if (mockupHtml !== null) {
+            // `allowEmpty`: a bind REPLACES, including with nothing. The
+            // serve-time refusal protects a capture from its own source being
+            // caught mid-write; a rebind names a different file, and holding
+            // the old copy there would leave the link resolving to a mockup
+            // nobody pointed it at.
+            const captured = captureMockup(dataDir, canonicalId, mockupHtml, { allowEmpty: true });
+            if (captured === 'failed') {
+              // The bind READ fine — this is the data dir refusing the write,
+              // so it is the box's problem, not the caller's, and it gets a
+              // 5xx. It still fails: durability is part of what bind_mock now
+              // promises, and a 200 here would hand back a link that reads as
+              // durable and is not. That is the shape of the incident.
+              //
+              // DELIBERATELY not rolled back. The binding itself is in place
+              // and works — the doc is exactly as durable as every mockup was
+              // before this change — so the response says that rather than
+              // claiming nothing happened. Undoing it would mean purging a
+              // room, or restoring a previous sourceUrl, on the one path that
+              // only fires when the disk is already refusing writes; that is
+              // destructive machinery guarding a condition an operator has to
+              // fix anyway, and the capture write is atomic, so a failure here
+              // cannot have damaged an existing copy.
+              return j(500, {
+                error: 'mockup_capture_failed',
+                docId: canonicalId,
+                path: sourceUrl,
+                bound: true,
+                hint: `Bound ${canonicalId} to ${sourceUrl}, but could not store its captured copy under the data dir — see the server log for the write error. The binding works and serves from the file; it is NOT durable, so it will 404 once that file is gone. Fix the data dir and bind again.`,
+              });
+            }
           }
           return j(200, {
             docId: room.docId,
