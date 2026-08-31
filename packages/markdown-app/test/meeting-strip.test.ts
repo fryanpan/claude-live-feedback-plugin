@@ -24,6 +24,7 @@ import {
   parseMeetingServerMessage,
   rollTranscript,
 } from '../src/meeting-strip.ts';
+import type { DocSpeakers } from '../src/speaker-voices.ts';
 
 /**
  * The strip is the only surface a meeting has, so every way a meeting can fail
@@ -190,6 +191,8 @@ function mount(
     speakers?: number;
     room?: RoomAudioProcessing;
     announcer?: Announcer;
+    loadSpeakers?: () => Promise<DocSpeakers | null>;
+    postName?: (meetingId: string, speaker: string, name: string) => Promise<boolean>;
   } = {},
 ): Harness {
   const root = document.createElement('div');
@@ -855,6 +858,115 @@ describe('who is speaking', () => {
     h.sockets[1]?.serve({ type: 'ready', meetingId: 'm2', startedAt: 1_000, engine: 'test' });
     h.sockets[1]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
     expect(h.tags()).toEqual(['Speaker A']);
+  });
+});
+
+describe('naming a voice after the meeting', () => {
+  /** A two-voice conversation, recorded and then stopped by the server. */
+  const stopped = async (extra: Parameters<typeof mount>[1] = {}) => {
+    const h = mount(undefined, extra);
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
+    h.sockets[0]?.serve({
+      type: 'transcript',
+      turn: 0,
+      text: 'Take it?',
+      final: true,
+      speaker: 'A',
+    });
+    h.sockets[0]?.serve({ type: 'transcript', turn: 1, text: 'Sure.', final: true, speaker: 'B' });
+    h.sockets[0]?.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 });
+    return h;
+  };
+
+  const legendTags = (h: ReturnType<typeof mount>) =>
+    [...h.root.querySelectorAll('.meeting-legend .meeting-speaker')].map(
+      (el) => el.textContent ?? '',
+    );
+
+  it('the stopped strip keeps a rename surface: the cast, each voice a button', async () => {
+    const h = await stopped({ promptName: () => null });
+    expect(h.root.dataset.state).toBe('idle');
+    // The words are gone with the meeting; the voices are not.
+    expect(h.caption()).not.toContain('Sure.');
+    expect(legendTags(h)).toEqual(['Speaker A', 'Speaker B']);
+    // It says what it is for — the affordance Bryan could not find.
+    expect(h.caption()).toContain('Tap a voice to name it');
+  });
+
+  it('a tap after stop renames over HTTP — the socket is gone', async () => {
+    const postName = vi.fn(() => Promise.resolve(true));
+    const h = await stopped({ promptName: () => 'Priya', postName });
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
+    tag.click();
+    await settle();
+    expect(legendTags(h)).toEqual(['Speaker A', 'Priya']);
+    expect(postName).toHaveBeenCalledWith('m1', 'B', 'Priya');
+    // Nothing rode the dead socket.
+    const sent = (h.sockets[0]?.sent ?? []).filter((d) => typeof d === 'string');
+    expect(sent.some((d) => String(d).includes('name_speaker'))).toBe(false);
+  });
+
+  it('a name the server refused does not stay on screen claiming it was saved', async () => {
+    const postName = vi.fn(() => Promise.resolve(false));
+    const h = await stopped({ promptName: () => 'Priya', postName });
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
+    tag.click();
+    await settle();
+    expect(legendTags(h)).toEqual(['Speaker A', 'Speaker B']);
+  });
+
+  it('a reloaded doc offers its last meeting’s cast, and renames it over HTTP', async () => {
+    const postName = vi.fn(() => Promise.resolve(true));
+    const h = mount(undefined, {
+      promptName: () => 'Priya',
+      postName,
+      loadSpeakers: () =>
+        Promise.resolve({
+          meetingId: 'm-9',
+          voices: [
+            { label: 'A', name: 'Devi', lastSaid: 'Move the gate.' },
+            { label: 'B', name: 'Speaker B', lastSaid: 'Sure.' },
+          ],
+        }),
+    });
+    await settle();
+    // The names given live come back; the unnamed voice is still a label.
+    expect(legendTags(h)).toEqual(['Devi', 'Speaker B']);
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
+    tag.click();
+    await settle();
+    expect(legendTags(h)).toEqual(['Devi', 'Priya']);
+    expect(postName).toHaveBeenCalledWith('m-9', 'B', 'Priya');
+  });
+
+  it('starting a new capture clears the old cast — labels are per meeting', async () => {
+    const h = mount(undefined, {
+      loadSpeakers: () =>
+        Promise.resolve({
+          meetingId: 'm-9',
+          voices: [{ label: 'A', name: 'Devi', lastSaid: 'Hi.' }],
+        }),
+    });
+    await settle();
+    expect(legendTags(h)).toEqual(['Devi']);
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm2', startedAt: 1_000, engine: 'test' });
+    expect(legendTags(h)).toEqual([]);
+    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Hi.', final: true, speaker: 'A' });
+    // The new meeting's A is a different person; the old name must not stick.
+    expect(h.tags()).toEqual(['Speaker A']);
+  });
+
+  it('a doc with no meetings keeps its empty caption', async () => {
+    const h = mount(undefined, { loadSpeakers: () => Promise.resolve(null) });
+    await settle();
+    expect(legendTags(h)).toEqual([]);
+    expect(h.caption().trim()).toBe('');
   });
 });
 
