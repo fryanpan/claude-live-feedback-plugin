@@ -128,7 +128,7 @@ describe('widget', () => {
     const mod = await importWidget();
     (globalThis as unknown as { fetch: unknown }).fetch = async () =>
       new Response('{}', { status: 500 });
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-fail', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ docId: 't-fail', user: 'bryan' });
     const root = el.shadowRoot!;
     document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
     (root.querySelector('.fab') as HTMLButtonElement).click();
@@ -151,7 +151,7 @@ describe('widget', () => {
     (globalThis as unknown as { fetch: unknown }).fetch = async () => {
       throw new Error('net down');
     };
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-net', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ docId: 't-net', user: 'bryan' });
     const root = el.shadowRoot!;
     document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
     (root.querySelector('.fab') as HTMLButtonElement).click();
