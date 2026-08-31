@@ -1,24 +1,28 @@
 /**
- * The predicate that lets Recall's two callbacks past Cloudflare Access on
- * the operator's own proxied hostname — and, far more importantly, lets
- * nothing else past.
+ * The predicate that says what Recall's DEDICATED callback hostname serves —
+ * and, far more importantly, what it does not.
  *
- * Two axes, both load-bearing:
+ * It used to be an exemption from Cloudflare Access on the operator's own
+ * hostname. It is now the entire allowlist for a host class of its own
+ * (2026-08-31), which raises the stakes on exactly the same two axes: a false
+ * positive here is no longer "one request skipped a token on a hostname that
+ * gates everything else", it is an unauthenticated route on a hostname with
+ * no Access application in front of it at all.
  *
- *   1. SHAPE. Only `GET /recall/<32 hex>` and `POST /api/recall/status`, both
+ *   1. SHAPE. Only `GET /recall/<32 hex>` and `POST /recall/status`, both
  *      matched whole. Every near-miss below was chosen because a sloppier
  *      match (prefix, `startsWith`, a decoded path, a loose token regex)
  *      would have accepted it and put an unauthenticated door on the public
  *      internet.
- *   2. CREDENTIAL. Each exemption is conditional on the credential it rests
- *      on actually being configured. The false-flag cases are the ones that
- *      must go red if the conditions are ever dropped — an "it works" test
- *      alone passes against a build that exempts both paths always.
+ *   2. CREDENTIAL. Each route is admitted only while the credential it rests
+ *      on is actually configured. The false-flag cases are the ones that must
+ *      go red if the conditions are ever dropped — an "it works" test alone
+ *      passes against a build that admits both paths always.
  *
  * The HTTP layer is covered separately in recall-callback-gate-http.test.ts.
  */
 import { describe, expect, it } from 'bun:test';
-import { recallCallbackExempt } from '../src/middleware/recall-callback-gate.ts';
+import { recallCallbackAllows } from '../src/middleware/recall-callback-gate.ts';
 
 /** A token shaped exactly as `mintToken` produces one. */
 const TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
@@ -26,21 +30,21 @@ const BOTH = { relayConfigured: true, webhookSecretSet: true };
 const NEITHER = { relayConfigured: false, webhookSecretSet: false };
 
 describe('the two callbacks, when their credentials are configured', () => {
-  it('exempts the websocket upgrade Recall dials', () => {
-    expect(recallCallbackExempt(`/recall/${TOKEN}`, 'GET', BOTH)).toBe(true);
+  it('admits the websocket upgrade Recall dials', () => {
+    expect(recallCallbackAllows(`/recall/${TOKEN}`, 'GET', BOTH)).toBe(true);
     // The relay's own flag is the only one that matters for this path.
     expect(
-      recallCallbackExempt(`/recall/${TOKEN}`, 'GET', {
+      recallCallbackAllows(`/recall/${TOKEN}`, 'GET', {
         relayConfigured: true,
         webhookSecretSet: false,
       }),
     ).toBe(true);
   });
 
-  it('exempts the signed status webhook', () => {
-    expect(recallCallbackExempt('/api/recall/status', 'POST', BOTH)).toBe(true);
+  it('admits the signed status webhook', () => {
+    expect(recallCallbackAllows('/recall/status', 'POST', BOTH)).toBe(true);
     expect(
-      recallCallbackExempt('/api/recall/status', 'POST', {
+      recallCallbackAllows('/recall/status', 'POST', {
         relayConfigured: false,
         webhookSecretSet: true,
       }),
@@ -51,17 +55,17 @@ describe('the two callbacks, when their credentials are configured', () => {
     // A method arrives uppercase over HTTP, but the predicate is called with
     // whatever the caller has; the path must never be folded, because a
     // token is lowercase hex by construction.
-    expect(recallCallbackExempt(`/recall/${TOKEN}`, 'get', BOTH)).toBe(true);
-    expect(recallCallbackExempt(`/recall/${TOKEN.toUpperCase()}`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN}`, 'get', BOTH)).toBe(true);
+    expect(recallCallbackAllows(`/recall/${TOKEN.toUpperCase()}`, 'GET', BOTH)).toBe(false);
   });
 });
 
 describe('the credential conditions — the guards that must not be dropped', () => {
   it('refuses the websocket when the relay is NOT configured', () => {
     // Nothing can have minted a token on this server, so there is no
-    // credential behind the exemption — only a hole.
+    // credential behind the route — only a hole.
     expect(
-      recallCallbackExempt(`/recall/${TOKEN}`, 'GET', {
+      recallCallbackAllows(`/recall/${TOKEN}`, 'GET', {
         relayConfigured: false,
         webhookSecretSet: true,
       }),
@@ -72,7 +76,7 @@ describe('the credential conditions — the guards that must not be dropped', ()
     // With the secret unset the route accepts UNSIGNED bodies. That mode
     // must never be reachable from the tunnel without an Access token.
     expect(
-      recallCallbackExempt('/api/recall/status', 'POST', {
+      recallCallbackAllows('/recall/status', 'POST', {
         relayConfigured: true,
         webhookSecretSet: false,
       }),
@@ -80,60 +84,65 @@ describe('the credential conditions — the guards that must not be dropped', ()
   });
 
   it('refuses both when nothing is configured', () => {
-    expect(recallCallbackExempt(`/recall/${TOKEN}`, 'GET', NEITHER)).toBe(false);
-    expect(recallCallbackExempt('/api/recall/status', 'POST', NEITHER)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN}`, 'GET', NEITHER)).toBe(false);
+    expect(recallCallbackAllows('/recall/status', 'POST', NEITHER)).toBe(false);
   });
 });
 
 describe('near-misses fail closed', () => {
   it('refuses a token of the wrong shape', () => {
-    expect(recallCallbackExempt('/recall/abc', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt(`/recall/${TOKEN.slice(0, 31)}`, 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt(`/recall/${TOKEN}0`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/recall/abc', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN.slice(0, 31)}`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN}0`, 'GET', BOTH)).toBe(false);
     // Non-hex, right length.
-    expect(recallCallbackExempt('/recall/g1b2c3d4e5f60718293a4b5c6d7e8f90', 'GET', BOTH)).toBe(
+    expect(recallCallbackAllows('/recall/g1b2c3d4e5f60718293a4b5c6d7e8f90', 'GET', BOTH)).toBe(
       false,
     );
   });
 
   it('refuses anything under, beside or around the token', () => {
-    expect(recallCallbackExempt(`/recall/${TOKEN}/x`, 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt(`/recall/${TOKEN}/`, 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/recall/', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/recall', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt(`//recall/${TOKEN}`, 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt(`/api/recall/${TOKEN}`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN}/x`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN}/`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/recall/', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/recall', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`//recall/${TOKEN}`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/api/recall/${TOKEN}`, 'GET', BOTH)).toBe(false);
   });
 
   it('refuses a percent-encoded spelling of a real token', () => {
     // The ROUTE decodes before it looks the token up, so this would reach a
     // real bot. The gate deliberately does not: Recall dials the literal URL
     // we minted, so the encoded form is never a real caller.
-    expect(recallCallbackExempt(`/recall/%61${TOKEN.slice(1)}`, 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/%61${TOKEN.slice(1)}`, 'GET', BOTH)).toBe(false);
   });
 
   it('refuses the wrong method on either path', () => {
-    expect(recallCallbackExempt(`/recall/${TOKEN}`, 'POST', BOTH)).toBe(false);
-    expect(recallCallbackExempt(`/recall/${TOKEN}`, 'DELETE', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/api/recall/status', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/api/recall/status', 'PUT', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN}`, 'POST', BOTH)).toBe(false);
+    expect(recallCallbackAllows(`/recall/${TOKEN}`, 'DELETE', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/recall/status', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/recall/status', 'PUT', BOTH)).toBe(false);
   });
 
   it('refuses near-misses of the status path', () => {
-    expect(recallCallbackExempt('/api/recall/status/', 'POST', BOTH)).toBe(false);
-    expect(recallCallbackExempt('//api/recall/status', 'POST', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/api/recall/status/x', 'POST', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/api/recall/statuses', 'POST', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/api/recall', 'POST', BOTH)).toBe(false);
+    // The OLD path, which moved under the `/recall/` prefix with the
+    // hostname. Asserted because "it still answers on both" is the shape a
+    // half-done move takes, and a second unauthenticated spelling of the
+    // webhook is exactly what the consolidation exists to prevent.
+    expect(recallCallbackAllows('/api/recall/status', 'POST', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/recall/status/', 'POST', BOTH)).toBe(false);
+    expect(recallCallbackAllows('//recall/status', 'POST', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/api/recall/status/x', 'POST', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/recall/statuses', 'POST', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/api/recall', 'POST', BOTH)).toBe(false);
   });
 
   it('refuses the rest of the product, which is the whole point', () => {
     // The routes an unauthenticated tunnel visitor would most want.
-    expect(recallCallbackExempt('/api/docs', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/api/deploy', 'POST', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/y/some-doc', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt('/audio/some-doc', 'GET', BOTH)).toBe(false);
-    expect(recallCallbackExempt('', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/api/docs', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/api/deploy', 'POST', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/y/some-doc', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('/audio/some-doc', 'GET', BOTH)).toBe(false);
+    expect(recallCallbackAllows('', 'GET', BOTH)).toBe(false);
   });
 });

@@ -40,6 +40,8 @@
  * this mapping must not reach the vendor, and this one spends money per bot.
  */
 
+import { normalizeHost } from './middleware/host-guard.ts';
+import { RECALL_STATUS_PATH } from './middleware/recall-callback-gate.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 
 /** Keychain service holding the key. Env override: CLAUDE_WORKSPACES_RECALL_API_KEY. */
@@ -107,15 +109,20 @@ export interface RecallConfig {
   /**
    * The PUBLIC wss:// origin Recall dials back on, e.g. `wss://x.example.com`.
    *
-   * DERIVED from `CW_PUBLIC_BASE_URL`, never configured on its own. That
-   * value already exists because this deployment sits behind a Cloudflare
-   * Tunnel and the server cannot discover its own external origin; a second
-   * variable naming the same host would be a second thing to get wrong, and
-   * the failure when they disagreed would be a bot that joins, records,
-   * bills, and delivers nothing.
+   * Two sources, in order (`wsBaseForRecall`):
+   *
+   * 1. `CW_RECALL_CALLBACK_HOST` — the DEDICATED hostname Bryan's deployment
+   *    gives the vendor (2026-08-31). When it is set this is `wss://<that
+   *    host>` and `CW_PUBLIC_BASE_URL` is not consulted at all: the whole
+   *    point of the dedicated name is that the address the vendor dials is
+   *    not the address a person opens the product on.
+   * 2. `CW_PUBLIC_BASE_URL` — the fallback, and what every deployment
+   *    without a second hostname still uses. It already exists because this
+   *    server sits behind something that terminates TLS and cannot discover
+   *    its own external origin.
    *
    * Null is the ordinary state on a tailnet-only server and it disables the
-   * whole feature — see `wsBaseFromPublicBaseUrl` for exactly when.
+   * whole feature — see `wsBaseForRecall` for exactly when.
    */
   publicWsBase: string | null;
   retentionHours: number;
@@ -150,6 +157,11 @@ export function recallConfigFromEnv(
   env: Record<string, string | undefined>,
   publicBaseUrl?: string | null,
 ): RecallConfig {
+  // Read here rather than threaded from bin.ts so the derivation has ONE
+  // home: the callback hostname and the public base URL are two spellings of
+  // "where does the vendor dial", and a caller that passed one and forgot the
+  // other is how a bot ends up streaming to a hostname nobody listens on.
+  const callbackHost = env.CW_RECALL_CALLBACK_HOST;
   const rawRegion = env.RECALL_REGION?.trim() ?? '';
   const region: RecallRegion = isRecallRegion(rawRegion) ? rawRegion : 'us-east-1';
   const rawHours = Number(env.RECALL_RETENTION_HOURS);
@@ -159,7 +171,7 @@ export function recallConfigFromEnv(
       : DEFAULT_RETENTION_HOURS;
   return {
     region,
-    publicWsBase: wsBaseFromPublicBaseUrl(publicBaseUrl),
+    publicWsBase: wsBaseForRecall({ callbackHost, publicBaseUrl }),
     retentionHours,
     // Opt OUT rather than opt in: the accurate setting is the one a person
     // asked for when they asked for "who said what", and the cheap one is a
@@ -202,6 +214,154 @@ export function wsBaseFromPublicBaseUrl(raw: string | null | undefined): string 
   return `wss://${parsed.host}${path}`;
 }
 
+/**
+ * The bare hostname from `CW_RECALL_CALLBACK_HOST`, or null when it is unset
+ * or is not a hostname this server would put in front of a vendor.
+ *
+ * Normalized rather than trusted, because this value ends up in two places
+ * that are expensive to get wrong: the `wss://` URL a bot is created with,
+ * and the host classification that decides which requests the name serves at
+ * all. Lowercased (Host comparison is case-insensitive), a pasted origin
+ * (`https://recall.example.com/`) reduced to its host, and then required to
+ * be a plain dotted DNS name — no port, no userinfo, no path, no IPv6
+ * literal, at least one dot. Each of those refusals is a case where the
+ * alternative is not an error but a bot that joins a call, records, bills,
+ * and streams to a hostname nobody is listening on.
+ *
+ * A single-label name is refused with the rest: this hostname is dialled from
+ * the public internet over TLS, and nothing can present a valid certificate
+ * for a bare label.
+ */
+export function normalizeRecallCallbackHost(raw: string | null | undefined): string | null {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return null;
+  // Tolerate a pasted origin — that is what somebody copies out of a browser
+  // bar, and the scheme is not information we need to refuse over.
+  const withoutScheme = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  // A bare trailing slash is what a pasted origin carries and means nothing;
+  // anything else after the host is REFUSED rather than trimmed. Silently
+  // dropping a base path here would build `wss://host/recall/<token>` for a
+  // deployment mounted under a prefix, and the failure is a bot that streams
+  // to a URL that 404s.
+  const host = withoutScheme.replace(/\/+$/, '');
+  const LABEL = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?';
+  if (!new RegExp(`^${LABEL}(?:\\.${LABEL})+$`).test(host)) return null;
+  return host;
+}
+
+/**
+ * The `wss://` origin Recall should dial — the dedicated callback hostname
+ * when one is configured, otherwise the operator-declared external base URL.
+ * Null disables meeting bots.
+ *
+ * WHY THE CALLBACK HOST WINS OUTRIGHT rather than being validated against the
+ * public base URL. They are allowed to disagree; that is the feature. The
+ * public base URL is the address links point people at, and the callback host
+ * is the address a vendor's backend dials — Bryan split them precisely so the
+ * second one could stop being a hole in the first (2026-08-31). A check that
+ * they agree would refuse the configuration this exists to support.
+ *
+ * WHY `http://` IS REFUSED IN THE FALLBACK RATHER THAN DOWNGRADED TO `ws://`.
+ * A plain-http base means nothing is terminating TLS in front, so the only
+ * thing that could be derived is a plaintext socket carrying a meeting's
+ * audio and everything said in it across the public internet. Refusing it
+ * reads as "meeting bots are not configured", which is true and is the state
+ * the UI already knows how to show. Accepting it would be the quiet kind of
+ * wrong. The callback-host branch has no such choice to make: it builds
+ * `wss://` by construction.
+ */
+export function wsBaseForRecall(opts: {
+  callbackHost?: string | null;
+  publicBaseUrl?: string | null;
+}): string | null {
+  const host = normalizeRecallCallbackHost(opts.callbackHost);
+  if (host) return `wss://${host}`;
+  return wsBaseFromPublicBaseUrl(opts.publicBaseUrl);
+}
+
+/**
+ * The `https://` URL an operator pastes into the Recall dashboard as the bot
+ * status webhook, or null when there is no public address to build one from.
+ *
+ * This server never CALLS this URL — the webhook is configured at the vendor,
+ * workspace-wide — so the only way anyone learns the right value is for the
+ * process to say it at boot. That is the whole reason this function exists,
+ * and why it is derived from the same inputs as the websocket origin: the day
+ * the two disagree is the day the bot streams fine and every status change is
+ * delivered to the old hostname, which is exactly the failure the dedicated
+ * name was supposed to remove.
+ */
+export function recallStatusWebhookUrl(opts: {
+  callbackHost?: string | null;
+  publicBaseUrl?: string | null;
+}): string | null {
+  const host = normalizeRecallCallbackHost(opts.callbackHost);
+  if (host) return `https://${host}${RECALL_STATUS_PATH}`;
+  const wsBase = wsBaseFromPublicBaseUrl(opts.publicBaseUrl);
+  if (!wsBase) return null;
+  // Built from the SAME derivation the websocket uses (https for wss), so the
+  // two can never name different hosts or different path prefixes.
+  return `${wsBase.replace(/^wss:/, 'https:')}${RECALL_STATUS_PATH}`;
+}
+
+/**
+ * Why the address this server would hand Recall CANNOT be dialled, or null.
+ *
+ * The hole this closes is the one the dedicated hostname opened. Removing the
+ * bot callbacks' Cloudflare Access exemptions is right, and it silently
+ * invalidated the fallback: a deployment with a Recall key and a
+ * `CW_PUBLIC_BASE_URL` that names its Access-gated operator hostname still
+ * looks fully configured — the invite button renders, a bot is created, it
+ * joins the call and bills per meeting-hour — and then every callback it
+ * makes is answered 401 before any route runs. Transcript: none. That is the
+ * exact failure this file's comments keep citing, arrived at from the other
+ * direction, and a boot warning does not stop money being spent.
+ *
+ * So it is checked where it can refuse rather than only where it can complain.
+ * A reason string here disarms `configured()`, which is what makes the doc
+ * say "meeting bots are not set up on this server" instead of offering a
+ * button that always fails.
+ *
+ * Null in every other case, deliberately including the ones this cannot see:
+ * an Access application configured outside these lists, a WAF rule, a tunnel
+ * that never routes the hostname. This refuses what it can PROVE unreachable
+ * from configuration this process holds; it is not a reachability test.
+ */
+export function unreachableCallbackReason(args: {
+  /** The derived `wss://` origin — `RecallConfig.publicWsBase`. */
+  wsBase: string | null;
+  /** `CW_RECALL_CALLBACK_HOST`, already normalized, or null. */
+  callbackHost: string | null;
+  /**
+   * Hostnames this server puts a Cloudflare Access challenge in front of and
+   * exempts nothing on: the operator's own (`proxiedTrustedHosts`) and the
+   * collaboration hosts (`accessTunnelHosts`, where `/recall/*` is out of
+   * share scope anyway). Pass the EFFECTIVE lists — the ones the host guard
+   * will actually honour — not what the operator typed.
+   */
+  accessGatedHosts: string[];
+}): string | null {
+  // Nothing to dial, or already disabled: the caller's other checks own this.
+  if (!args.wsBase) return null;
+  // A dedicated callback host has no Access application in front of it by
+  // construction. That is what it is for.
+  if (args.callbackHost) return null;
+  let host: string;
+  try {
+    host = normalizeHost(new URL(args.wsBase).host);
+  } catch {
+    return null;
+  }
+  const gated = args.accessGatedHosts.map((h) => normalizeHost(h)).filter((h) => h !== '');
+  if (!gated.includes(host)) return null;
+  return (
+    `Recall would dial ${host}, which this server puts behind Cloudflare Access with no ` +
+    'exemptions — a bot would join, bill, and deliver nothing. Set CW_RECALL_CALLBACK_HOST ' +
+    'to a dedicated callback hostname (no Access application in front of it) pointed at ' +
+    'this server.'
+  );
+}
+
 /** What `createBot` needs that is not config. */
 export interface CreateBotArgs {
   meetingUrl: string;
@@ -233,7 +393,9 @@ export interface RecallClientOptions {
   /**
    * The operator-declared external base URL (`CW_PUBLIC_BASE_URL`, already
    * normalized by `normalizePublicBaseUrl`). Recall's realtime endpoint is
-   * derived from it; absent, meeting bots stay off.
+   * derived from it when no dedicated callback hostname is configured
+   * (`CW_RECALL_CALLBACK_HOST`, read from `env`); with neither, meeting bots
+   * stay off.
    */
   publicBaseUrl?: string | null;
   fetch?: FetchLike;

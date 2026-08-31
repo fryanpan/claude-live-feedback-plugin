@@ -333,23 +333,32 @@ flowchart LR
   Recall -->|per-participant audio| AAI["AssemblyAI v3 streaming<br/>(inside Recall)"]
   AAI -->|transcript.data + partial_data| WS["WS /recall/&lt;token&gt;<br/>Recall dials US"]
   WS --> API
-  Recall -->|bot.* status| Hook["POST /api/recall/status"]
+  Recall -->|bot.* status| Hook["POST /recall/status"]
   Hook --> API
   API -->|EngineTurn| Notes[MeetingNotesSession]
   API -->|settled turns| Store[MeetingStore]
   API -.->|meeting.bot| SSE[Doc SSE channel]
 ```
 
-**Both callbacks come in on the operator's own hostname, and skip Access
-there.** `CW_PUBLIC_BASE_URL` names the tunnel address Recall dials, which is
-the hostname the host guard classifies `proxied-local` — a verified Cloudflare
-Access token before any route runs, which Recall's backend cannot present. So
-`GET /recall/<token>` and `POST /api/recall/status` are exempted from that one
-check, each only while its own credential is configured (the per-bot token,
-and `RECALL_WEBHOOK_SECRET` respectively); everything else on the hostname is
-unchanged, and every near-miss fails closed. See
-`packages/server/src/middleware/recall-callback-gate.ts` and the "operator's
-own hostname" section of docs/product/sharing.md.
+**Both callbacks come in on a hostname of their own** (2026-08-31).
+`CW_RECALL_CALLBACK_HOST` names a dedicated first-level address
+(`recall.<domain>`) pointed at the same tunnel with **no Cloudflare Access
+application in front of it**, and both the websocket origin and the status
+webhook URL are derived from it. It classifies its own host kind that serves
+exactly `GET /recall/<token>` and `POST /recall/status` — each only while its
+own credential is configured (the per-bot token, and `RECALL_WEBHOOK_SECRET`)
+— and answers **404 to everything else**, including to a caller holding a
+valid operator Access token.
+
+This replaced two Access exemptions on the OPERATOR's hostname, which is the
+address a person opens the product on; that hostname now has no bypasses at
+all. With them gone, a deployment still deriving its callback URL from
+`CW_PUBLIC_BASE_URL` would look configured while every callback was refused,
+so meeting bots report themselves **not configured** when the address this
+server would hand Recall is one of its own Access-gated hostnames. See
+`packages/server/src/middleware/recall-callback-gate.ts`,
+`unreachableCallbackReason` in `packages/server/src/recall.ts`, and the
+"operator's own hostname" section of docs/product/sharing.md.
 
 **What streams, and why not the audio.** Recall can forward raw per-participant
 PCM (`audio_separate_raw.data`, 16 kHz mono S16LE), which would drop straight
@@ -439,14 +448,23 @@ sitting in the call billing.
 as the AssemblyAI key. `RECALL_REGION` picks the API host and a key is only
 valid in its own region (a mismatch is a 401, which the client's error names).
 **Recall dials this server**, and this server binds to localhost behind a
-Cloudflare Tunnel, so it has to be told the origin something in front of it
-answers on — which is already `CW_PUBLIC_BASE_URL`, the single source of every
-link the server hands a human. The realtime endpoint is DERIVED from it
-(`https://host` → `wss://host/recall/<token>`) rather than configured
-separately: two settings naming one host is two things to get wrong, and
-nothing reports the disagreement — just a bot that records into a hostname
-nobody is listening on. A base that is unset, or is plain `http`, disables
-bots rather than stream a meeting's audio in cleartext.
+Cloudflare Tunnel, so it has to be told the address something in front of it
+answers on. That is `CW_RECALL_CALLBACK_HOST` — a hostname, and everything the
+vendor is given is DERIVED from it (`recall.example.com` →
+`wss://recall.example.com/recall/<token>` and
+`https://recall.example.com/recall/status`) rather than configured separately:
+two settings naming one host is two things to get wrong, and nothing reports
+the disagreement — just a bot that records into a hostname nobody is listening
+on. Unset, the derivation falls back to `CW_PUBLIC_BASE_URL`, the single
+source of every link the server hands a human — but that hostname is
+Access-gated with no exemptions, so bots there report themselves not
+configured rather than bill for callbacks that will be refused. A fallback
+base that is plain `http` disables bots rather than stream a meeting's audio
+in cleartext; the callback host builds `wss://` by construction.
+
+The status webhook URL is printed at boot for exactly one reason: this server
+never calls it. It is configured at the vendor, workspace-wide, so the boot
+log is the only place the right value is ever stated.
 `RECALL_WEBHOOK_SECRET` verifies status webhooks (Svix HMAC); Recall publishes
 no static IPs to allowlist, so that signature is the only proof available.
 Retention is `{type: "timed", hours: 24}` by default — short, per the owner's
@@ -486,19 +504,15 @@ and a `calendar.sync_events` webhook consumer before any bot is scheduled.
   Recall's regions are isolated, so the key is entered separately for each one
   (docs.recall.ai/docs/assemblyai, Setup). It is never in a request body and
   never in this repo.
-- **Cloudflare Access sits in FRONT of both of the vendor's inbound channels,
-  and will refuse them.** `route()` classifies the request's Host and runs the
-  Access verifier before any path match (`server.ts`, the `classifyHost` block
-  — `viaProxy: req.headers.has('cf-ray')` means a tunnel request can never
-  claim to be local). Recall's backend cannot present an Access JWT, a share
-  cookie, or a proxied-trusted identity, so both `wss://<host>/recall/<token>`
-  and `POST /api/recall/status` are refused before they reach their routes.
-  Deriving the right URL is therefore necessary and NOT sufficient: the two
-  vendor paths need a route that Access does not front, either at the
-  Cloudflare edge or as an explicit exemption here. Both paths already carry
+- **Deriving the right URL is necessary and NOT sufficient — the hostname has
+  to be one Access does not front.** `route()` classifies the request's Host
+  and runs the Access verifier before any path match (`server.ts`, the
+  `classifyHost` block), and Recall's backend can present no Access JWT, no
+  share cookie and no proxied-trusted identity. Bryan's answer (2026-08-31)
+  was a hostname whose whole surface is the two vendor paths, rather than two
+  exemptions on the hostname that serves the product. Both paths already carry
   their own credential — a 128-bit per-bot token, and the Svix signature — so
-  an exemption would not be unauthenticated, but it is a change to this
-  server's auth boundary and is Bryan's call, not an implementation detail.
+  the unauthenticated surface is those credentials, not the API.
 
 ## Persistence
 
