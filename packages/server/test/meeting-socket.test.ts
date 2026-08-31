@@ -51,23 +51,13 @@ class AudioClient {
   }
 
   /** Solo by default — the mode a client that never heard of modes gets. */
-  start(
-    sampleRate = MEETING_SAMPLE_RATE,
-    mode: CaptureMode = 'solo',
-    announced?: AnnouncedBy,
-  ): void {
+  start(sampleRate = MEETING_SAMPLE_RATE, mode: CaptureMode = 'solo'): void {
     this.ws.send(
-      JSON.stringify({
-        type: 'start',
-        sampleRate,
-        encoding: MEETING_AUDIO_ENCODING,
-        mode,
-        ...(announced ? { announced } : {}),
-      }),
+      JSON.stringify({ type: 'start', sampleRate, encoding: MEETING_AUDIO_ENCODING, mode }),
     );
   }
 
-  /** The strip revising how the room ended up being told. */
+  /** The room HAS been told — never sent with `start`. */
   announced(by: AnnouncedBy): void {
     this.ws.send(JSON.stringify({ type: 'announced', by }));
   }
@@ -561,21 +551,38 @@ describe('the meeting record says how the room was told', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('keeps the path the start frame carried', async () => {
+  it('records the path only once the strip says the room was told', async () => {
     const canonical = await createDoc('device-said-it');
     const client = await AudioClient.open(wsBase, 'device-said-it');
-    client.start(MEETING_SAMPLE_RATE, 'conversation', 'device');
+    client.start(MEETING_SAMPLE_RATE, 'conversation');
     await client.waitFor('ready');
+    // Nothing claimed yet — a meeting stopped here would say nothing.
+    client.announced('device');
     client.stop();
     await client.waitFor('stopped');
     expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('device');
   });
 
+  it('claims NOTHING for a meeting stopped before the sentence finished', async () => {
+    // The whole reason the claim does not ride the start frame: the room
+    // heard half a sentence at most, so the record must not say it was told.
+    const canonical = await createDoc('cut-off-mid-sentence');
+    const client = await AudioClient.open(wsBase, 'cut-off-mid-sentence');
+    client.start(MEETING_SAMPLE_RATE, 'conversation');
+    await client.waitFor('ready');
+    client.stop();
+    await client.waitFor('stopped');
+    const record = listMeetings(dataDir, canonical)[0];
+    expect(record?.mode).toBe('conversation');
+    expect(record && 'announced' in record).toBe(false);
+  });
+
   it('takes the correction a mute device sends afterwards', async () => {
     const canonical = await createDoc('device-could-not');
     const client = await AudioClient.open(wsBase, 'device-could-not');
-    client.start(MEETING_SAMPLE_RATE, 'conversation', 'device');
+    client.start(MEETING_SAMPLE_RATE, 'conversation');
     await client.waitFor('ready');
+    client.announced('device');
     client.announced('spoken');
     client.stop();
     await client.waitFor('stopped');
@@ -598,8 +605,9 @@ describe('the meeting record says how the room was told', () => {
     // record keeps what the start frame claimed.
     const canonical = await createDoc('garbled-announcement');
     const client = await AudioClient.open(wsBase, 'garbled-announcement');
-    client.start(MEETING_SAMPLE_RATE, 'conversation', 'device');
+    client.start(MEETING_SAMPLE_RATE, 'conversation');
     await client.waitFor('ready');
+    client.announced('device');
     client.ws.send(JSON.stringify({ type: 'announced', by: 'shouted' }));
     await client.waitFor('error');
     client.stop();

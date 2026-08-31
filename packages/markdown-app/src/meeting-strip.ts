@@ -278,8 +278,9 @@ export interface MeetingStripHandle {
   /** What the next (or current) capture listens for. */
   mode(): CaptureMode;
   /**
-   * How this capture told the room, as currently believed. Undefined for a
-   * solo capture and before the first start.
+   * How this capture told the room, as far as it has actually happened.
+   * Undefined for a solo capture, before the first start, and while the
+   * device is still mid-sentence.
    */
   announced(): AnnouncedBy | undefined;
 }
@@ -419,11 +420,18 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    *  is the tap that supplies one, and says so. Cleared by any press. */
   let tapToStart = false;
   /**
-   * How THIS capture is telling the room, or undefined when it is telling
-   * nobody. Set at start from which button was pressed and revised down to
-   * `spoken` if the device turns out not to be able to speak — the record
-   * follows the same revision, because a claim that the device said it when
-   * it did not is worse than no claim at all.
+   * Which button started this capture, and so who is meant to say the
+   * sentence. Undefined when there is nobody to tell. This is an INTENTION —
+   * it is not what the record is told.
+   */
+  let announceBy: AnnouncedBy | undefined;
+  /**
+   * What has actually been claimed, which is a strictly later and smaller
+   * thing. `device` is set only once the browser reports the utterance
+   * finished, `spoken` the moment the sentence is on screen for a person.
+   * A meeting stopped mid-sentence leaves this undefined and the record
+   * saying nothing — which is correct: nobody heard the whole sentence, and
+   * a consent record must never claim more than happened.
    */
   let announced: AnnouncedBy | undefined;
 
@@ -669,7 +677,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // means the engine is receiving, so everything from here is in the
         // transcript — including this. Announcing before the mic was open
         // would leave the sentence in a moment nothing recorded.
-        if (announced) void announce(announced, generation);
+        if (announceBy) void announce(announceBy, generation);
         break;
       case 'transcript':
         turns = rollTranscript(turns, {
@@ -711,15 +719,30 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * thing anybody would later be asked to show.
    */
   async function announce(by: AnnouncedBy, attempt: number): Promise<void> {
+    /** Tell the server the room HAS been told — never before it has. */
+    const claim = (path: AnnouncedBy): void => {
+      announced = path;
+      if (socketOpen) socket?.send(JSON.stringify({ type: 'announced', by: path }));
+    };
     showNote(announcementNote(by));
-    if (by === 'spoken') return;
+    if (by === 'spoken') {
+      // The sentence is on screen, which is the whole of what `spoken`
+      // claims — the strip cannot know whether anybody read it aloud.
+      claim('spoken');
+      return;
+    }
     const spoke = await announcer.speak(RECORDING_ANNOUNCEMENT);
     // A stop, or a second meeting, during the sentence: this one no longer
-    // owns the strip or the socket.
-    if (disposed || attempt !== generation || spoke) return;
-    announced = 'spoken';
+    // owns the strip or the socket, and — the reason nothing is claimed at
+    // start — the room heard half a sentence at most, so the record is left
+    // saying nothing rather than saying the device announced it.
+    if (disposed || attempt !== generation) return;
+    if (spoke) {
+      claim('device');
+      return;
+    }
     showNote(announcementNote('spoken'));
-    if (socketOpen) socket?.send(JSON.stringify({ type: 'announced', by: 'spoken' }));
+    claim('spoken');
   }
 
   async function start(auto = false, by: AnnouncedBy = 'device'): Promise<void> {
@@ -732,7 +755,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // announce button is hidden there, but the mode can also come in off the
     // address, and the record must not claim a room was told when the mode
     // says there was no room.
-    announced = announcesRecording(mode) ? by : undefined;
+    announceBy = announcesRecording(mode) ? by : undefined;
+    announced = undefined;
     setState({ kind: 'requesting' });
     const started = await startCapture({
       onFrame: (pcm) => {
@@ -763,7 +787,6 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           sampleRate: MEETING_SAMPLE_RATE,
           encoding: MEETING_AUDIO_ENCODING,
           mode,
-          ...(announced ? { announced } : {}),
         }),
       );
     };

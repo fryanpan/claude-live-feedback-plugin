@@ -159,9 +159,10 @@ export function listMeetings(dataDir: string, docId: string): MeetingRecord[] {
     }
     if (typeof row.endedAt === 'number') existing.endedAt = row.endedAt;
     if (typeof row.turns === 'number') existing.turns = row.turns;
-    // A later announcement line REPLACES the one the start line claimed: the
-    // device was asked to speak, could not, and the strip fell back to a
-    // person. Last word wins, the same rule the speaker names fold under.
+    // The room was told. There is no announcement on the start line to
+    // replace — a later line can only ever be the first, or a correction
+    // from `device` to `spoken`. Last word wins, the same rule the speaker
+    // names fold under.
     const announced = parseAnnouncedBy(row.announced);
     if (announced) existing.announced = announced;
     // One line per naming, merged in order: a rename is a later line for
@@ -232,9 +233,8 @@ export interface ActiveMeeting {
   /** "Label `speaker` is `name`" — appended to the index, last word wins. */
   nameSpeaker(speaker: string, name: string): void;
   /**
-   * "The room was told this way after all." Appended to the index, last word
-   * wins — the start line carried the path the strip CHOSE, and this is the
-   * one it managed to carry out.
+   * "The room HAS been told, this way." Appended to the index, last word
+   * wins. The only writer of `announced` — nothing claims one at start.
    */
   setAnnounced(by: AnnouncedBy): void;
   /** End the meeting. Idempotent; returns the folded record either way. */
@@ -270,8 +270,6 @@ export class MeetingStore {
     engine: string;
     sampleRate: number;
     mode: CaptureMode;
-    /** How the room was told, if it was. See `MeetingRecord.announced`. */
-    announced?: AnnouncedBy;
     now?: number;
   }): ActiveMeeting | null {
     const { docId, engine, sampleRate, mode } = args;
@@ -289,7 +287,13 @@ export class MeetingStore {
       meetingId = `${meetingIdFor(docId, startedAt)}-${n}`;
       transcriptPath = meetingTranscriptPath(dataDir, docId, meetingId);
     }
-    let announced = args.announced;
+    /**
+     * Set only by `setAnnounced`, and never at start: an announcement is a
+     * thing that HAS happened, so the record cannot carry one from the
+     * moment the microphone opened. A meeting stopped mid-sentence leaves
+     * this undefined, which is the honest answer.
+     */
+    let announced: AnnouncedBy | undefined;
     appendLine(meetingIndexPath(dataDir, docId), {
       meetingId,
       docId,
@@ -297,9 +301,6 @@ export class MeetingStore {
       engine,
       sampleRate,
       mode,
-      // Absent when nothing was announced. Writing `undefined` here would
-      // land as a missing key anyway; the spread says so on purpose.
-      ...(announced ? { announced } : {}),
     });
     // Create the file at start so a meeting nobody spoke in still reads back
     // as an empty transcript rather than a missing one.

@@ -127,13 +127,6 @@ export type MeetingClientMessage =
        * session.
        */
       mode: CaptureMode;
-      /**
-       * How the room was told, when it was told at all. Absent on a `solo`
-       * capture (nobody to tell) and on a client built before announcements.
-       * It is the CHOICE at the moment the mic opened; an `announced` frame
-       * later corrects it if that choice could not be carried out.
-       */
-      announced?: AnnouncedBy;
     }
   | { type: 'stop' }
   /**
@@ -144,11 +137,16 @@ export type MeetingClientMessage =
    */
   | { type: 'name_speaker'; speaker: string; name: string }
   /**
-   * The announcement path, revised after the fact. Sent when the device was
-   * asked to speak and could not — no speech synthesis, a voice that never
-   * started — and the strip fell back to putting the sentence on screen. The
-   * record takes the last one, so what it ends up saying is what actually
-   * happened rather than what was intended.
+   * The room HAS been told, this way.
+   *
+   * Sent after the fact and never with the `start` frame, and that is the
+   * whole design: a claim made at the moment the mic opened would be a claim
+   * about something that had not happened yet, and a meeting stopped
+   * mid-sentence would leave it standing. `device` goes up only once the
+   * browser reports the utterance finished; `spoken` goes up the moment the
+   * sentence is put on screen, which is all `spoken` has ever claimed. A
+   * meeting that ends before either is a meeting whose record says nothing —
+   * which is the honest answer.
    */
   | { type: 'announced'; by: AnnouncedBy };
 
@@ -241,11 +239,6 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       // the field arrived after the meeting did, and the fallback is the one
       // that spends nothing.
       mode: parseCaptureMode(m.mode),
-      // Spread, not a bare property: `announced: undefined` on the object
-      // would serialize back out of the record as a field that exists, and
-      // "the room was told nothing" has to stay absent rather than present
-      // and empty.
-      ...(parseAnnouncedBy(m.announced) ? { announced: parseAnnouncedBy(m.announced) } : {}),
     };
   }
   return null;

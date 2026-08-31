@@ -959,6 +959,12 @@ async function recordingConversation(announcer: FakeAnnouncer, log: string[] = [
 const startFrame = (sock: { sent: Array<string | ArrayBufferView> } | undefined) =>
   parseMeetingClientMessage(sock?.sent.find((x) => typeof x === 'string') ?? '');
 
+/** Every JSON frame the strip put on the socket, in order. */
+const textFrames = (sock: { sent: Array<string | ArrayBufferView> } | undefined) =>
+  (sock?.sent ?? [])
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => JSON.parse(x) as { type: string; by?: AnnouncedBy });
+
 describe('announcing a room capture', () => {
   it('speaks only AFTER the mic is open and the audio path is live', async () => {
     const log: string[] = [];
@@ -998,11 +1004,36 @@ describe('announcing a room capture', () => {
     await settle();
   });
 
-  it('tells the server the room was told, and by what', async () => {
+  it('claims NOTHING while the device is still mid-sentence', async () => {
+    // The claim is not on the start frame and is not made early: a meeting
+    // stopped here leaves a record that says the room was never told, which
+    // is exactly what happened.
     const announcer = new FakeAnnouncer();
     const { sock, h } = await recordingConversation(announcer);
-    expect(startFrame(sock)).toMatchObject({ mode: 'conversation', announced: 'device' });
+    expect(startFrame(sock)).toMatchObject({ mode: 'conversation' });
+    expect(startFrame(sock) && 'announced' in (startFrame(sock) as object)).toBe(false);
+    expect(textFrames(sock).some((f) => f.type === 'announced')).toBe(false);
+    expect(h.strip.announced()).toBeUndefined();
+  });
+
+  it('tells the server the room was told once the sentence FINISHED', async () => {
+    const announcer = new FakeAnnouncer();
+    const { sock, h } = await recordingConversation(announcer);
+    announcer.settle(true);
+    await settle();
+    expect(textFrames(sock).at(-1)).toEqual({ type: 'announced', by: 'device' });
     expect(h.strip.announced()).toBe('device');
+  });
+
+  it('claims nothing when the meeting is stopped mid-sentence', async () => {
+    const announcer = new FakeAnnouncer();
+    const { sock, h } = await recordingConversation(announcer);
+    h.toggle().click();
+    announcer.settle(true);
+    await settle();
+    // Not even a late `device`: the room heard half a sentence at most.
+    expect(textFrames(sock).some((f) => f.type === 'announced')).toBe(false);
+    expect(h.strip.announced()).toBeUndefined();
   });
 
   it('shows the sentence on the strip while the device says it', async () => {
@@ -1090,7 +1121,11 @@ describe('"I\'ll say it" — the person takes the sentence', () => {
     });
     expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
     expect(h.note()).toMatch(/say this out loud/i);
-    expect(startFrame(h.sockets[0])).toMatchObject({ announced: 'spoken' });
+    // `spoken` is claimed at once, because putting the sentence on screen is
+    // the whole of what `spoken` claims — the strip cannot know whether
+    // anybody read it aloud, and it never pretends to.
+    expect(textFrames(h.sockets[0]).at(-1)).toEqual({ type: 'announced', by: 'spoken' });
+    expect(h.strip.announced()).toBe('spoken');
   });
 });
 
@@ -1107,12 +1142,10 @@ describe('a device that turns out not to be able to speak', () => {
     const { h, sock } = await failing(announcer);
     expect(h.note()).toMatch(/say this out loud/i);
     expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
-    // The correction is the point. A record saying the device announced it
+    // The fallback is the point. A record saying the device announced it
     // when the device said nothing is worse than one that claims less.
-    const frames = (sock?.sent ?? [])
-      .filter((x): x is string => typeof x === 'string')
-      .map((x) => JSON.parse(x) as { type: string; by?: AnnouncedBy });
-    expect(frames.at(-1)).toEqual({ type: 'announced', by: 'spoken' });
+    expect(textFrames(sock).at(-1)).toEqual({ type: 'announced', by: 'spoken' });
+    expect(textFrames(sock).filter((f) => f.type === 'announced')).toHaveLength(1);
     expect(h.strip.announced()).toBe('spoken');
   });
 

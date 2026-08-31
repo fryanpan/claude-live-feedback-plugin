@@ -349,75 +349,81 @@ describe('meeting store: how the room was told', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  const start = (docId: string, args: Partial<Parameters<MeetingStore['start']>[0]> = {}) =>
-    new MeetingStore(dataDir).start({
-      docId,
-      engine: 'mock',
-      sampleRate: 16_000,
-      mode: 'conversation',
-      ...args,
-    });
+  const start = (docId: string, mode: 'solo' | 'conversation' = 'conversation') =>
+    new MeetingStore(dataDir).start({ docId, engine: 'mock', sampleRate: 16_000, mode });
 
-  it('writes the announcement path on the start line and reads it back off disk', () => {
-    const meeting = start('doc-device', { announced: 'device' });
-    expect(meeting).not.toBeNull();
+  const indexLines = (docId: string) =>
+    readFileSync(meetingIndexPath(dataDir, docId), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+  it('claims NOTHING at start — an announcement is a thing that has happened', () => {
+    // The load-bearing one. A claim written when the mic opened would stand
+    // even for a meeting stopped mid-sentence, and this record is the thing
+    // anybody would later be asked to show.
+    const meeting = start('doc-just-started');
+    expect(indexLines('doc-just-started')[0]).not.toHaveProperty('announced');
+    const record = meeting?.stop();
+    expect(record && 'announced' in record).toBe(false);
+    const read = listMeetings(dataDir, 'doc-just-started')[0];
+    expect(read && 'announced' in read).toBe(false);
+  });
+
+  it('writes the path once the room has been told, and reads it back off disk', () => {
+    const meeting = start('doc-device');
+    meeting?.setAnnounced('device');
     meeting?.stop();
     expect(listMeetings(dataDir, 'doc-device')[0]?.announced).toBe('device');
   });
 
-  it('leaves it ABSENT when nothing was announced — a solo capture claims nothing', () => {
-    const meeting = start('doc-solo', { mode: 'solo' });
-    const record = meeting?.stop();
-    expect(record && 'announced' in record).toBe(false);
-    const read = listMeetings(dataDir, 'doc-solo')[0];
-    expect(read && 'announced' in read).toBe(false);
-  });
-
-  it('takes a LATER correction over the start line', () => {
+  it('takes a LATER correction over an earlier one', () => {
     // The device was asked to speak, could not, and a person was asked to
-    // read the sentence instead. The record has to end up saying what
-    // actually happened, not what the strip set out to do.
-    const meeting = start('doc-fallback', { announced: 'device' });
+    // read the sentence instead.
+    const meeting = start('doc-fallback');
+    meeting?.setAnnounced('device');
     meeting?.setAnnounced('spoken');
-    const record = meeting?.stop();
-    expect(record?.announced).toBe('spoken');
+    expect(meeting?.stop().announced).toBe('spoken');
     expect(listMeetings(dataDir, 'doc-fallback')[0]?.announced).toBe('spoken');
-    // Append-only: the start line still says what was intended.
-    const lines = readFileSync(meetingIndexPath(dataDir, 'doc-fallback'), 'utf8')
-      .split('\n')
-      .filter((l) => l.trim())
-      .map((l) => JSON.parse(l) as Record<string, unknown>);
-    expect(lines[0]?.announced).toBe('device');
-    expect(lines[1]?.announced).toBe('spoken');
+    // Append-only: both lines are still there, in order.
+    const announcements = indexLines('doc-fallback').filter((l) => 'announced' in l);
+    expect(announcements.map((l) => l.announced)).toEqual(['device', 'spoken']);
   });
 
-  it('writes no line when the correction says what the record already says', () => {
-    const meeting = start('doc-noop', { announced: 'spoken' });
+  it('writes no line when the claim repeats one already made', () => {
+    const meeting = start('doc-noop');
+    meeting?.setAnnounced('spoken');
     meeting?.setAnnounced('spoken');
     meeting?.stop();
-    const lines = readFileSync(meetingIndexPath(dataDir, 'doc-noop'), 'utf8')
-      .split('\n')
-      .filter((l) => l.trim());
-    // Start and stop, and nothing in between.
-    expect(lines).toHaveLength(2);
+    expect(indexLines('doc-noop').filter((l) => 'announced' in l)).toHaveLength(1);
   });
 
-  it('ignores a correction after the meeting stopped', () => {
-    const meeting = start('doc-late', { announced: 'device' });
+  it('ignores a claim after the meeting stopped', () => {
+    const meeting = start('doc-late');
     meeting?.stop();
     meeting?.setAnnounced('spoken');
-    expect(listMeetings(dataDir, 'doc-late')[0]?.announced).toBe('device');
+    const read = listMeetings(dataDir, 'doc-late')[0];
+    expect(read && 'announced' in read).toBe(false);
   });
 
   it('does not invent a path from an unreadable index line', () => {
     // The permissive direction here would write a consent record out of a
     // typo, so an unknown value has to fold to "nothing is claimed".
-    const meeting = start('doc-garbage', { announced: 'device' });
+    const meeting = start('doc-garbage');
+    meeting?.setAnnounced('device');
     meeting?.stop();
     appendFileSync(
       meetingIndexPath(dataDir, 'doc-garbage'),
       `${JSON.stringify({ meetingId: meeting?.meetingId, announced: 'shouted' })}\n`,
     );
     expect(listMeetings(dataDir, 'doc-garbage')[0]?.announced).toBe('device');
+  });
+
+  it('a solo meeting nobody claimed anything for reads back with no field', () => {
+    const meeting = start('doc-solo', 'solo');
+    meeting?.stop();
+    const read = listMeetings(dataDir, 'doc-solo')[0];
+    expect(read?.mode).toBe('solo');
+    expect(read && 'announced' in read).toBe(false);
   });
 });

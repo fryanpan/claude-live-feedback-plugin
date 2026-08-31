@@ -416,10 +416,11 @@ sequenceDiagram
   S->>S: announcer.prime() — SYNCHRONOUS, spends the gesture
   S->>M: getUserMedia + AudioWorklet
   M-->>S: frames
-  S->>R: start {mode, announced: "device"}
+  S->>R: start {mode}
   R-->>S: ready (engine is receiving)
   S->>S: speechSynthesis.speak(RECORDING_ANNOUNCEMENT)
   Note over M,R: the sentence is spoken INTO an open mic —<br/>it rides the same frames as everything else
+  S->>R: announced {by: "device"} — only now
 ```
 
 Announcing before the mic opened would leave the sentence in a moment nothing
@@ -442,6 +443,17 @@ later be asked to show, and deliberately passive about who is recording — the
 same words are correct in the device's mouth and in a person's, and a sentence
 that only worked in one would need a second sentence for the other.
 
+**The claim is never on the `start` frame**, and this is the one thing here
+that a review caught rather than the design getting right first time. A
+capture that announced its intention when the microphone opened would leave
+`announced: 'device'` standing on a meeting somebody stopped four words into
+the sentence — the record asserting the room was told, about a room that heard
+half a sentence. So `announced` is its own frame, sent after the fact:
+`device` only once the browser reports the utterance FINISHED, `spoken` the
+moment the sentence goes on screen (which is the whole of what `spoken` ever
+claims). A meeting that ends before either leaves the field absent, and that
+is the correct answer rather than a gap.
+
 **What the record claims, and what it does not.** `announced` on the meeting
 record is `'device'`, `'spoken'`, or ABSENT.
 
@@ -449,7 +461,7 @@ record is `'device'`, `'spoken'`, or ABSENT.
 |---|---|
 | `device` | the browser reported the utterance finished |
 | `spoken` | the sentence was PUT ON SCREEN for a person to read |
-| absent | no announcement was made — a solo capture, or a client too old to say |
+| absent | nothing is claimed — a solo capture, a meeting stopped mid-sentence, or a client too old to say |
 
 `spoken` is the weaker claim and the code never treats it as more: the client
 knows it displayed the sentence and cannot know anybody read it. Absent is
@@ -461,10 +473,11 @@ consent record out of a typo.
 engine, a refused gesture, and an utterance that is accepted and then never
 fires `end` or `error` (a real browser bug, hence the 12s timeout in
 `meeting-announce.ts`) are indistinguishable from the strip and all end the
-same way: the sentence goes on screen for a person, and an `announced` frame
-goes up the socket so the record says `spoken`. A record claiming the device
-announced it when the device said nothing is worse than one that claims less.
-The index folds it last-word-wins, the same rule the speaker names fold under.
+same way: the sentence goes on screen for a person, and the `announced` frame
+that goes up says `spoken` instead. A record claiming the device announced it
+when the device said nothing is worse than one that claims less. The index
+folds `announced` last-word-wins, the same rule the speaker names fold under,
+so a `device` that is later corrected to `spoken` reads as `spoken`.
 
 **The strip says REC at every width while live**, not only on the phone. A
 pulsing dot was enough while the strip reported only to the person holding the
@@ -479,7 +492,9 @@ speaking through its own microphone. What the suites prove is the mechanism:
 the ordering (`meeting-strip.test.ts` — speech happens only after the mic is
 open and the `start` frame is away, and audio keeps reaching the socket
 throughout the sentence), every fallback path, and what the record ends up
-saying (`meetings.test.ts`, `meeting-socket.test.ts`).
+saying — including the two cases it must refuse to claim anything for, a
+solo capture and a meeting stopped mid-sentence (`meetings.test.ts`,
+`meeting-socket.test.ts`).
 
 **Two things stay unverified in a real room as of 2026-08-30.** First, nobody
 has run this with a live engine and two people. Second, and more specific:

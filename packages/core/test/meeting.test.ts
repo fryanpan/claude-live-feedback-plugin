@@ -139,26 +139,27 @@ describe('the announcement on the wire', () => {
       }),
     );
 
-  it('carries the path the strip chose on the start frame', () => {
-    expect(startFrame({ announced: 'device' })).toMatchObject({ announced: 'device' });
-    expect(startFrame({ announced: 'spoken' })).toMatchObject({ announced: 'spoken' });
-  });
-
-  it('leaves the field ABSENT when nothing was announced', () => {
-    // Absent, not present-and-empty: a record with an `announced` key is a
-    // record that says something happened.
-    const frame = startFrame({});
-    expect(frame).not.toBeNull();
+  it('is NEVER carried by the start frame', () => {
+    // A claim made when the microphone opened is a claim about something
+    // that has not happened yet, and a meeting stopped mid-sentence would
+    // leave it standing. The parser drops the field outright.
+    const frame = startFrame({ announced: 'device' });
+    expect(frame).toMatchObject({ mode: 'conversation' });
     expect(frame && 'announced' in frame).toBe(false);
-    const garbage = startFrame({ announced: 'nobody' });
-    expect(garbage && 'announced' in garbage).toBe(false);
   });
 
-  it('accepts the after-the-fact correction, and drops one that names nothing', () => {
+  it('is its own frame, sent after the room has actually been told', () => {
     expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'spoken' }))).toEqual({
       type: 'announced',
       by: 'spoken',
     });
+    expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'device' }))).toEqual({
+      type: 'announced',
+      by: 'device',
+    });
+  });
+
+  it('drops a frame that names no path rather than defaulting one', () => {
     expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced' }))).toBeNull();
     expect(
       parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'shouted' })),
