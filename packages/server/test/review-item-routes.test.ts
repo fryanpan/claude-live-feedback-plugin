@@ -480,6 +480,52 @@ describe("a person's plain reply answers the item it lands on", () => {
     expect(review?.answeredWith).toBeUndefined();
   });
 
+  it('does not stamp a QUESTION — asking back is not answering', async () => {
+    // The incident this pins (Bryan, 2026-08-30): "Why is this important?"
+    // recorded as an answer closed the item, `revise` refused it, and the only
+    // way to keep asking was a duplicate row. A person's reply that ends
+    // asking posts as the ordinary reply it is; the item stays open behind it.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/comments`, {
+      author: PERSON,
+      text: 'Why is this important?',
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const stored = await firstThread(docId);
+    expect(stored.comments[1]?.text).toBe('Why is this important?');
+    const review = stored.comments[0]?.review;
+    expect(review?.answeredAt).toBeUndefined();
+    expect(review?.answeredBy).toBeUndefined();
+  });
+
+  it('does not stamp a question through /answer either, and says it asked', async () => {
+    // The explicit answer composer is the door the incident came through.
+    const docId = await mkdoc();
+    const seeded = await seedThread(docId, QUESTION);
+    const res = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+      author: PERSON,
+      text: 'Why is this important?',
+      commentId: seeded.comments[0]?.id,
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(((await res.json()) as { asked?: boolean }).asked).toBe(true);
+    const stored = await firstThread(docId);
+    expect(stored.comments[1]?.text).toBe('Why is this important?');
+    const review = stored.comments[0]?.review;
+    expect(review?.answeredAt).toBeUndefined();
+    expect(review?.answeredBy).toBeUndefined();
+    // Positive control: prose through the same door still answers — the
+    // question above narrowed the verb without breaking it.
+    const picked = await post(`/api/docs/${docId}/threads/${seeded.id}/answer`, {
+      author: PERSON,
+      text: 'Cut the second sentence.',
+      commentId: seeded.comments[0]?.id,
+    });
+    expect(picked.status).toBe(200);
+    expect((await firstThread(docId)).comments[0]?.review?.answeredBy).toBe(PERSON.name);
+  });
+
   it("does not stamp an agent's reply", async () => {
     // The addressee is a person. An agent posting a closing note under its own
     // question must not answer it on the reader's behalf — the whole point of
