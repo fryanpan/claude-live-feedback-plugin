@@ -131,15 +131,23 @@ export const EFFORT_SHRINK_K = 5;
 export const EFFORT_PACE_WINDOW_DAYS = 14;
 
 /**
- * And the floor, because a young goal's window shrinks toward zero.
+ * And the floor, because an active window shrinks toward zero.
  *
- * A goal whose first ticket was filed an hour ago would otherwise divide its
- * closes by 1/24 of a day and claim a pace twenty-four times anything it has
- * actually demonstrated. One day is the shortest span this board is willing
- * to call a rate — below it, the goal is reported at the pace it managed in
- * its first day, which is the most a few hours of evidence can honestly say.
+ * Three tickets closed within a minute of each other span almost no time at
+ * all, and dividing their estimates by that span claims a rate no work
+ * produced: at a two-minute window, a goal with an afternoon of work left
+ * projects "done in ten minutes". So one hour is the shortest span this
+ * board is willing to call a rate. Below it a goal is reported at the pace
+ * it managed in an hour, which is the most a burst of evidence can honestly
+ * say, and the soonest finish any goal can be given is an hour out.
+ *
+ * An hour rather than a day, because a day here is not a floor but a
+ * different answer. The case this window exists for is a goal that closed
+ * most of itself in one afternoon; rounding that afternoon up to a day puts
+ * its finish back out past tomorrow, which is the exact reading the active
+ * window was introduced to stop.
  */
-export const EFFORT_MIN_PACE_WINDOW_DAYS = 1;
+export const EFFORT_MIN_PACE_WINDOW_DAYS = 1 / 24;
 
 /** Below this many OBSERVED closes inside the pace window there is no
  *  projection — a date drawn from one or two closes is a number pretending
@@ -356,37 +364,68 @@ export function effortFirstSeenAt(task: EffortTaskInput): number | null {
 /**
  * How many days of history a goal's pace is divided by.
  *
- * The goal's own age — first ticket filed to now — clamped into
- * `[EFFORT_MIN_PACE_WINDOW_DAYS, EFFORT_PACE_WINDOW_DAYS]`. This is the
- * denominator that used to be a flat fourteen, and the fix is the whole of
- * ticket "goal pace reflects how long the goal has actually run": two closes
- * on a three-day-old goal are two closes in three days, not two closes in a
- * fortnight.
+ * The span its counted closes actually happened in — the earliest one to
+ * now — clamped into `[EFFORT_MIN_PACE_WINDOW_DAYS, EFFORT_PACE_WINDOW_DAYS]`.
  *
- * The goal's OWN creation date would be the better input and this module
- * never sees it — `summarizeGoalEffort` is handed a list of tickets, by
- * design, so that the board can recompute it client-side from the rows it
- * already holds. The oldest live ticket in the band is the closest honest
- * proxy, and it errs the safe way: a goal cannot have been running before
- * anything was filed under it, so the window can only come out too SHORT,
- * never too long. Where it is too short — a goal whose early tickets were
- * all archived — the clamp still bounds the damage to a single day.
+ * This began as the goal's AGE, first ticket filed to now. That fixed the
+ * flat fortnight and then failed the case it was written for. Measured on
+ * the live board: a goal three and a half days old closed most of itself in
+ * a single four-hour run, and dividing that run by the goal's age still read
+ * as a trickle and still put the finish a day and a half out. Age is how
+ * long a goal has EXISTED; a pace is a fact about the stretch in which it
+ * moved. A goal that sat for three days and then ran for four hours has a
+ * four-hour window, and the three quiet days are not evidence about its rate.
+ *
+ * "Counted" is the same predicate the numerator uses — an observed close
+ * (`isObservedClose`) carrying an estimate, inside the fourteen-day ceiling —
+ * so this is exactly the span of the closes it will be divided into, and no
+ * counted close can fall outside a window derived from it. Deriving the two
+ * halves separately is how a rate ends up measured over one period and
+ * divided by another.
+ *
+ * Closes are summed, never serialized: two tickets worked in parallel and
+ * closed the same hour are two closes in that hour, not one after the other.
+ * Throughput is what a goal got through, not what one worker could have.
+ *
+ * The window ends at `now` rather than at the last close, so it decays on its
+ * own: an afternoon's burst is a four-hour window that afternoon and a
+ * twenty-eight-hour window a day later. No goal keeps claiming a sprint's
+ * rate for having sprinted once.
+ *
+ * When nothing has closed there is no span to measure, and the fallback is
+ * the goal's age — its oldest live ticket's `createdAt`, or that ticket's
+ * earliest transition. No date is drawn from it (that needs
+ * `EFFORT_MIN_CLOSES_FOR_PROJECTION` closes); it only answers "how long has
+ * this been going" for the sentence that names the window.
  *
  * Archived rows are already out of the list the caller passes (see
  * `countsTowardEffort`); nothing here re-filters them.
  */
 export function goalPaceWindowDays(tasks: EffortTaskInput[], now: number): number {
-  let earliest: number | null = null;
+  const ceiling = now - EFFORT_PACE_WINDOW_DAYS * DAY_MS;
+  let earliestClose: number | null = null;
+  for (const task of tasks) {
+    if (!isObservedClose(task)) continue;
+    if (!estimateNumbers(task)) continue;
+    const closedAt = effortClosedAt(task);
+    if (closedAt === null || closedAt > now || closedAt < ceiling) continue;
+    if (earliestClose === null || closedAt < earliestClose) earliestClose = closedAt;
+  }
+  if (earliestClose !== null) return clampPaceWindowDays((now - earliestClose) / DAY_MS);
+  let earliestSeen: number | null = null;
   for (const task of tasks) {
     const seen = effortFirstSeenAt(task);
     if (seen === null) continue;
-    if (earliest === null || seen < earliest) earliest = seen;
+    if (earliestSeen === null || seen < earliestSeen) earliestSeen = seen;
   }
-  // A band with no timestamp anywhere gets the old behaviour rather than the
-  // floor: nothing is known about its age, and one day is a CLAIM about a
+  // A band with no timestamp anywhere gets the full window rather than the
+  // floor: nothing is known about its age, and an hour is a CLAIM about a
   // young goal, not a neutral answer.
-  if (earliest === null) return EFFORT_PACE_WINDOW_DAYS;
-  const days = (now - earliest) / DAY_MS;
+  if (earliestSeen === null) return EFFORT_PACE_WINDOW_DAYS;
+  return clampPaceWindowDays((now - earliestSeen) / DAY_MS);
+}
+
+function clampPaceWindowDays(days: number): number {
   if (!Number.isFinite(days)) return EFFORT_PACE_WINDOW_DAYS;
   return Math.min(EFFORT_PACE_WINDOW_DAYS, Math.max(EFFORT_MIN_PACE_WINDOW_DAYS, days));
 }
@@ -798,9 +837,12 @@ export interface GoalEffortReady {
   projectedLatestAt?: number;
   /** Estimate-seconds closed per calendar day over the window. */
   paceSecondsPerDay: number;
-  /** How many days that rate was measured over — the goal's own age, capped
+  /** How many days that rate was measured over — the span the goal's counted
+   *  closes happened in (its age, while nothing has closed), capped
    *  at `EFFORT_PACE_WINDOW_DAYS` and floored at
-   *  `EFFORT_MIN_PACE_WINDOW_DAYS`. On the summary rather than recomputed by
+   *  `EFFORT_MIN_PACE_WINDOW_DAYS` (one hour), so a sub-day window is a
+   *  fraction here and any surface naming it must say hours, not round it up
+   *  to a day it never used. On the summary rather than recomputed by
    *  each surface, because the sentence a header prints ("on the last N
    *  days' pace") has to name the same N the arithmetic used. */
   paceWindowDays: number;

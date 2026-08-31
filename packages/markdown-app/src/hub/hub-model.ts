@@ -752,6 +752,29 @@ export interface GoalEffortLabel {
 }
 
 /**
+ * The pace window as a reader says it: "4 hours", "3 days".
+ *
+ * Two units, because the window spans two orders of magnitude — it floors at
+ * one hour and caps at fourteen days — and the sentence that names it is the
+ * reader's only check that the date came from the stretch they think it did.
+ * Rounding a four-hour window up to "1 day" is not a rounding error in that
+ * sentence, it is a different claim about how the number was made.
+ *
+ * Never below one of whatever unit it lands in: the window itself is clamped
+ * to at least an hour, so "0 hours" would describe a span the arithmetic
+ * cannot produce.
+ */
+function formatPaceWindow(days: number): string {
+  if (!Number.isFinite(days) || days <= 0) return '1 hour';
+  if (days < 1) {
+    const hours = Math.max(1, Math.round(days * 24));
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  const whole = Math.max(1, Math.round(days));
+  return `${whole} day${whole === 1 ? '' : 's'}`;
+}
+
+/**
  * Turn one goal's rollup into the words the header prints.
  *
  * The board never says "hands on" or "wall clock" — Bryan struck both from
@@ -807,12 +830,15 @@ export function goalEffortLabel(
   const date = (at: number): string => formatEffortDate(at, now, locale);
   // The pace window is the GOAL's, not a constant, so the sentence has to
   // read it off the summary: a three-day-old goal saying "the last 14 days'
-  // pace" would be quoting a denominator its own arithmetic never used. It
-  // is rounded to whole days for the reader and never below one, matching
-  // the floor the rate itself is clamped to.
-  const paceWindowDays = Math.max(1, Math.round(summary.paceWindowDays));
-  const paceDays = `${paceWindowDays} day${paceWindowDays === 1 ? '' : 's'}`;
-  const paceWindow = `${paceDays}${paceWindowDays === 1 ? "'s" : "'"}`;
+  // pace" would be quoting a denominator its own arithmetic never used.
+  //
+  // And it has to be able to say HOURS. The window floors at one hour, not
+  // one day, so a goal that closed most of itself in an afternoon carries a
+  // window of 0.4 days — which the old whole-day rounding printed as "the
+  // last 1 day's pace", quoting a denominator two and a half times the one
+  // the date came from. Under a day the sentence counts hours.
+  const paceDays = formatPaceWindow(summary.paceWindowDays);
+  const paceWindow = `${paceDays}${paceDays.endsWith('s') ? "'" : "'s"}`;
   // The two visible numbers are in different currencies: the bar is CALENDAR
   // time and the figure beside it is Bryan's own attention. Read together
   // unlabelled they invite one reading — "67% done, 40 minutes to go" — and
