@@ -388,6 +388,27 @@ describe('the bot meeting', () => {
     expect(readTranscript(dataDir, 'doc-1', record?.meetingId ?? '')).toHaveLength(1);
     expect(notesSeen).toHaveLength(0);
   });
+  it('keeps the PUNCTUATED text when the provider settles a turn twice', async () => {
+    // format_turns ends a turn twice, rough then punctuated, and Recall
+    // normalises away the flag that told the two apart. Folding them onto
+    // one turn is right — but the durable record used to ignore the second
+    // write and keep the rough words forever, while the notes composer
+    // worked from the good ones. Raised by review.
+    const relay = relayWith(new FakeRecall(config()));
+    await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL });
+    const say = (text: string): void => {
+      relay.onSocketText(TOKEN, transcriptFrame({ final: true, id: 7, name: 'Devi Raman', text }));
+    };
+    say('so the sync is the bottleneck');
+    say('So the sync is the bottleneck.');
+    relay.onStatus({ botId: 'bot_1', state: 'left' });
+    await new Promise((r) => setTimeout(r, 10));
+    const record = store.list('doc-1')[0];
+    const turns = readTranscript(dataDir, 'doc-1', record?.meetingId ?? '');
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.text).toBe('So the sync is the bottleneck.');
+  });
+
   it('creates ONE bot when two invites for a doc overlap', async () => {
     // Every guard in `invite` is synchronous, so before the doc was claimed
     // up front both of these passed while the first was still waiting on the
