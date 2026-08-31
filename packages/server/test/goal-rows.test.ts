@@ -101,24 +101,19 @@ describe('goal rows', () => {
     expect(store.getGoalRow(G.fast)?.title).toBe('Make review instant');
   });
 
-  it('flattens a subgoal into a row of its own', () => {
+  it('mints a row for every band in the list', () => {
     const ws = store.createWorkspace('Board');
     const G = seedGoals(
       store,
       ws.id,
       [
-        {
-          key: 'fast',
-          title: 'Make review fast',
-          subgoals: [{ key: 'sub', title: 'Cut latency' }],
-        },
+        { key: 'fast', title: 'Make review fast' },
+        { key: 'latency', title: 'Cut latency' },
       ],
       AGENT,
     );
-    // A subgoal is a top-level row in the position the board already draws it
-    // — the board has rendered one flat level all along.
-    expect(store.getGoalRow(G.sub)?.title).toBe('Cut latency');
-    expect(store.getGoalRow(G.sub)?.kind).toBe('goal');
+    expect(store.getGoalRow(G.latency)?.title).toBe('Cut latency');
+    expect(store.getGoalRow(G.latency)?.kind).toBe('goal');
   });
 
   describe('are invisible to every task reader', () => {

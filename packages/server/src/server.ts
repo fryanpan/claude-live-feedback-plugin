@@ -178,6 +178,10 @@ import {
   type ReadyWorkSnapshot,
   isBoardActivity,
 } from './ready-nudge.ts';
+import { RecallMeetingRelay } from './recall-meeting.ts';
+import { parseBotStatusWebhook } from './recall-status.ts';
+import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
+import type { RecallClient } from './recall.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
@@ -256,7 +260,6 @@ import {
   type TaskStatus,
   TaskStore,
   eventsLogPath,
-  flattenGoals,
   isAttachmentRuntime,
   isRetired,
   isValidRef,
@@ -312,8 +315,10 @@ async function mapBounded<T, R>(
  * Structural validation for PUT /api/workspaces/:id/goals. Returns the
  * sanitized list, or null if any entry is malformed. Unknown keys are
  * dropped rather than persisted — the sidecar shape is a contract, not a
- * junk drawer. ONE subgoal level max (§3.2); a subgoal with subgoals is
- * malformed, not silently flattened.
+ * A stored or in-flight `subgoals` array is still ACCEPTED and validated one
+ * level deep — the REST route has callers this build cannot restart, and a
+ * board written before subgoals were removed still has them on disk. The
+ * store FLATTENS what comes through; nothing here nests any more.
  *
  * `id` is OPTIONAL and that is the create/keep switch (see `GoalListEntry`):
  * omitted means "create this band, mint me an id", present means "the band
@@ -872,6 +877,23 @@ export interface ServerOptions {
    */
   transcription?: TranscriptionEngine;
   /**
+   * The Recall.ai client that puts a BOT in a Zoom / Meet call. **No
+   * default**, the same seam rule as `transcription` directly above and for
+   * the same reason doubled: creating a bot bills the vendor per meeting-hour
+   * AND opens an AssemblyAI streaming session behind it. Omitting it makes
+   * the invite route answer `not_configured`, which the doc's strip renders
+   * as a settled state. Only `bin.ts` constructs a real one
+   * (`createRecallClient`).
+   */
+  meetingBot?: RecallClient;
+  /**
+   * Shared secret for verifying Recall's status webhooks (Svix format).
+   * When set, an unsigned or badly signed webhook is REFUSED; when unset the
+   * route falls back to the bot id being unguessable, which is weaker. The
+   * operator sets `RECALL_WEBHOOK_SECRET`.
+   */
+  meetingBotWebhookSecret?: string;
+  /**
    * Pause-driven meeting notes: composer, quiet threshold, optionally an
    * observing sink. **No default**, same seam rule as `transcription`
    * directly above — the real composer is an LLM call, and nothing that
@@ -1332,6 +1354,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // Lifecycle only. The words never touch this hub — see meeting-protocol.
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
   });
+  /**
+   * The bot path into the SAME pipeline. It gets the relay's own notes deps
+   * rather than a second set built from the same options: two sets would be
+   * two ownership ledgers over one doc's notes section, and the ledger is
+   * what stops a tick from eating what a person typed.
+   */
+  const recallRelay = new RecallMeetingRelay({
+    store: meetingStore,
+    notes: meetingRelay.notesDeps,
+    client: opts.meetingBot ?? null,
+    broadcast: (docId, payload) => sse.broadcast(docId, payload),
+  });
   // Late-bound because Rooms is constructed before the task store and the
   // projection it needs. Nothing can fire through it until a room exists,
   // which is after both.
@@ -1753,9 +1787,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const goals = taskStore.getWorkspace(workspaceId)?.goals ?? [];
     for (const g of goals) {
       if (g.id === goalId) return g.title;
-      for (const s of g.subgoals ?? []) {
-        if (s.id === goalId) return s.title;
-      }
     }
     return goalId;
   }
@@ -1787,6 +1818,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * sees the post-edit value and the run it overtook holds a smaller one.
    */
   function scoreEffortEstimate(task: Task): void {
+    void runEffortEstimate(task);
+  }
+
+  /**
+   * The same run, awaitable — for the boot pass, which must space its calls
+   * out rather than firing one per open ticket at once.
+   *
+   * Resolves once the record has been written (or refused). The event-driven
+   * caller above throws the promise away, which is the fire-and-forget
+   * contract it has always had; only the backfill awaits it.
+   */
+  async function runEffortEstimate(task: Task): Promise<void> {
     const estimator = opts.effortEstimator;
     if (!estimator) return;
     const prompt = taskStore.effortEstimatePrompt(task.workspaceId);
@@ -1795,7 +1838,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const forBodyWrittenAt = task.bodyWrittenAt;
     const forGoal = task.goal;
     const forWordsRevision = wordsRevisionOf(task);
-    void (async () => {
+    {
       let verdict: EffortEstimateVerdict | null = null;
       try {
         verdict = await estimator({
@@ -1837,8 +1880,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // A `stale` refusal here is expected under concurrent edits, not a
       // bug — see the doc comment above — so it is silently dropped rather
       // than logged.
-      taskStore.recordEffortEstimate(task.id, record);
-    })();
+      const written = taskStore.recordEffortEstimate(task.id, record);
+      // Re-project the board, because NOTHING ELSE WILL. `recordEffortEstimate`
+      // is deliberately quiet — no store event, no `updatedAt` bump, or the
+      // write would re-trigger its own scorer forever — and the projection
+      // refreshes off store events. So an estimate landed in the store and the
+      // board kept drawing the goal it drew before, until some unrelated edit
+      // happened to refresh the workspace. The bar is the only surface these
+      // numbers appear on; a score nobody can see is a score that did not
+      // happen. Refresh is diff-aware, so a projection already in step is a
+      // no-op transaction.
+      if (written.ok) taskProjection.refresh(task.workspaceId);
+    }
   }
 
   // Effort-estimate scoring: re-score a ticket in the background whenever
@@ -1912,6 +1965,76 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
+
+  /**
+   * Re-score every OPEN ticket whose estimate predates the current ask.
+   *
+   * Scoring is otherwise event-driven — it fires on create, on a retitle, on
+   * a body edit and on a re-triage — and none of those events happen when
+   * the PROMPT changes. Without this pass a prompt bump reaches only tickets
+   * somebody happens to edit afterwards, so a board keeps forecasting from
+   * answers to a question nobody is asking any more, indefinitely and
+   * silently. `EFFORT_ESTIMATE_PROMPT_VERSION` is the token that makes the
+   * staleness decidable; this is the thing that acts on it.
+   *
+   * Open rows only. A closed ticket's estimate is HISTORY — it is one half
+   * of a calibration sample whose other half already happened, and
+   * re-scoring it under a new prompt would be scoring a ticket whose outcome
+   * is known, which is the one thing the effort plan's backfill section says
+   * never to do ("blind scoring is the whole point"). The calibrator drops
+   * old-generation samples instead (`isCurrentGenerationEstimate`), which
+   * costs the board its learned factors and is why the priors exist.
+   *
+   * SEQUENTIAL, with a gap between calls. A hundred open rows is a hundred
+   * API calls, and firing them together on boot would spend the rate limit
+   * that live edits need on work nobody is waiting for. Nothing is waiting
+   * on this loop, so it can afford to be slow.
+   *
+   * Never blocks startup and never fails one: the promise is thrown away,
+   * every call already records its own failure on the row, and a server with
+   * no estimator wired does nothing here at all.
+   */
+  const EFFORT_RESCORE_GAP_MS = 250;
+  let effortRescoreStopped = false;
+  async function rescoreStaleEffortEstimates(): Promise<void> {
+    if (!opts.effortEstimator) return;
+    const stale: Task[] = [];
+    for (const ws of taskStore.listWorkspaces()) {
+      for (const task of taskStore.listTasks(ws.id)) {
+        if (task.status === 'done') continue;
+        // Absent AND older-generation, both. A never-scored open ticket is
+        // the same problem from the other side — it contributes nothing to
+        // its goal's bar and says "not scored" forever unless somebody edits
+        // it — and this loop is already walking past it.
+        if (task.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION) continue;
+        stale.push(task);
+      }
+    }
+    if (stale.length === 0) return;
+    console.log(
+      `[effort-estimate] re-scoring ${stale.length} open ticket${stale.length === 1 ? '' : 's'} under prompt version ${EFFORT_ESTIMATE_PROMPT_VERSION}`,
+    );
+    for (const task of stale) {
+      if (effortRescoreStopped) return;
+      // Re-read: the row may have been edited, archived or closed since the
+      // list was taken, and a rescore of a row that moved on is wasted at
+      // best — `recordEffortEstimate` would refuse it as stale anyway.
+      const current = taskStore.getTask(task.id);
+      if (!current || current.status === 'done' || current.archivedAt !== undefined) continue;
+      // And re-ask the question this loop exists to answer. A row queued
+      // behind a hundred others can be edited while it waits, and an edit
+      // triggers its own scoring — so by the time the loop reaches it the row
+      // may already carry a current-generation estimate. Without this check
+      // the pass spends a second call and can land its answer on top of the
+      // newer one, which `recordEffortEstimate`'s guard does not catch
+      // because no words changed between the two reads.
+      if (current.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION) continue;
+      await runEffortEstimate(current);
+      if (effortRescoreStopped) return;
+      await new Promise((r) => setTimeout(r, EFFORT_RESCORE_GAP_MS));
+    }
+    console.log('[effort-estimate] re-scoring pass done');
+  }
 
   // The done-artifact check (artifact-check.ts): a move to done gets the
   // row's links verified after the transition commits — a dead PR link or a
@@ -2084,7 +2207,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const stallVerdict = (workspace: HubWorkspace): StallVerdict => {
     const tasks = taskStore.listTasks(workspace.id);
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
-    const goals = flattenGoals(workspace.goals);
+    const goals = workspace.goals;
     // Matching on the owner's NAME would be wrong — it appears in ordinary
     // goal titles. Only the decisions band is his queue.
     const ownerBand = new Set(
@@ -3851,7 +3974,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // socket and the editing socket are told apart by what the upgrade
   // attached. Absent means the editing socket, which is every upgrade that
   // predates meetings.
-  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' }>({
+  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>({
     port,
     // Explicit because the DEFAULT is what broke the event streams: Bun's is
     // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
@@ -3909,7 +4032,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // table lives in here unchanged.
       async function route(
         req: Request,
-        server: BunServer<{ docId: string; kind?: 'yjs' | 'audio' }>,
+        server: BunServer<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>,
       ): Promise<Response | undefined> {
         const url = new URL(req.url);
         const { pathname } = url;
@@ -4910,6 +5033,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const error = err instanceof Error ? err.message : 'delete_share_failed';
             return j(502, { error });
           }
+        }
+
+        // --- WebSocket upgrade: Recall dialling US with a bot's words ---
+        //
+        // NO Origin check, unlike `/audio/` and `/y/` below. That guard exists
+        // because a browser will open a socket from any page the user visits
+        // and hand it the data regardless of CORS. This caller is a vendor's
+        // backend: there is no origin, and requiring one would refuse every
+        // real connection. The unguessable per-bot token in the path is the
+        // authentication — 128 CSPRNG bits, one bot, forgotten when that
+        // bot's meeting ends (see RecallMeetingRelay's mintToken).
+        if (pathname.startsWith('/recall/')) {
+          const token = decodeURIComponent(pathname.slice('/recall/'.length));
+          // Shape-checked before it is looked up so a lookup is never the
+          // thing that distinguishes a malformed token from an unknown one.
+          if (!/^[0-9a-f]{32}$/.test(token) || !recallRelay.acceptsToken(token)) {
+            return j(404, { error: 'unknown endpoint' });
+          }
+          const upgraded = server.upgrade(req, {
+            data: { docId: '', token, kind: 'recall' as const },
+          });
+          if (!upgraded) return new Response('upgrade required', { status: 426 });
+          return undefined;
         }
 
         // --- WebSocket upgrade: a doc's live meeting audio ---
@@ -6647,7 +6793,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, { ok: true, changed: res.changed, task: res.task });
         }
-        // set_task_goal (§3.10): goal/subgoal + exact position — the write
+        // set_task_goal (§3.10): goal + exact position — the write
         // half of triage and the board's regroup gesture. Every field here is
         // hand-copied; each has an HTTP-level test in task-tool-routes.test.ts.
         //
@@ -7254,8 +7400,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // a goal id squeezed through `/api/tasks/:id/archive`. The transition
         // route accepts either kind because a status change is literally the
         // same write on both; an archive is not — this one cascades to the
-        // band's subgoals and tasks, and its response carries the ids it
-        // moved. A caller that cannot tell which of those two things it just
+        // band's tasks, and its response carries the ids it moved. A caller that cannot tell which of those two things it just
         // did is a caller that cannot report the count to the person who
         // asked for it.
         //
@@ -8616,6 +8761,76 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { ...record, transcript: meetingStore.transcript(docId, meetingId) });
         }
 
+        // --- Recall's bot status-change webhook ---
+        //
+        // Workspace-level at the vendor, so it carries no token of ours and
+        // arrives for every bot this account creates; the relay ignores bot
+        // ids it does not know. Answered 200 even for an event we do not
+        // model — a non-2xx makes the vendor retry, and retrying will not
+        // make an unmodelled code become one.
+        if (pathname === '/api/recall/status' && req.method === 'POST') {
+          const raw = await req.text();
+          const secret = opts.meetingBotWebhookSecret;
+          if (secret) {
+            const signed = await verifySvixSignature({
+              secret,
+              body: raw,
+              headers: svixHeadersFrom(req.headers),
+            });
+            if (!signed) return j(401, { error: 'bad signature' });
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            return j(400, { error: 'bad json' });
+          }
+          const event = parseBotStatusWebhook(parsed);
+          if (event) recallRelay.onStatus(event);
+          return j(200, { ok: true });
+        }
+
+        // --- A doc's meeting bot: invite one, read its state, send it home ---
+        const botMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meeting-bot$/);
+        if (botMatch) {
+          const addressed = decodeURIComponent(botMatch[1] ?? '');
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const docId = rooms.get(addressed)?.docId ?? addressed;
+          if (req.method === 'GET') {
+            // `configured` is why the UI can say "meeting bots are not set up
+            // on this server" instead of offering a button that always fails.
+            return j(200, {
+              docId,
+              configured: recallRelay.configured(),
+              bot: recallRelay.status(docId),
+            });
+          }
+          if (req.method === 'POST') {
+            // A bot costs money the moment it is created, so unlike the
+            // read above this one insists the doc actually exists.
+            if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+            const body = (await req.json().catch(() => null)) as { meetingUrl?: unknown } | null;
+            const meetingUrl = typeof body?.meetingUrl === 'string' ? body.meetingUrl : '';
+            if (!meetingUrl) return j(400, { error: 'meetingUrl required' });
+            const result = await recallRelay.invite({ docId, meetingUrl });
+            if (result.ok) return j(200, { bot: result.status });
+            const status =
+              result.reason === 'not_configured'
+                ? 503
+                : result.reason === 'already_recording'
+                  ? 409
+                  : result.reason === 'vendor_error'
+                    ? 502
+                    : 400;
+            return j(status, { error: result.reason, message: result.message });
+          }
+          if (req.method === 'DELETE') {
+            const left = await recallRelay.leave(docId);
+            return left ? j(200, { ok: true }) : j(404, { error: 'no bot on this doc' });
+          }
+          return j(405, { error: 'method not allowed' });
+        }
+
         const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
         if (docMatch) {
           const addressed = decodeURIComponent(docMatch[1] ?? '');
@@ -9869,6 +10084,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // context per socket.
       perMessageDeflate: true,
       open(ws) {
+        if (ws.data.kind === 'recall') return;
         if (ws.data.kind === 'audio') {
           meetingRelay.onOpen(ws);
           return;
@@ -9882,6 +10098,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         onOpen(room, typed);
       },
       message(ws, message) {
+        if (ws.data.kind === 'recall') {
+          // Text only. Recall's realtime transcript events are JSON frames;
+          // this endpoint subscribes no binary media, so a binary frame here
+          // is not ours to interpret.
+          if (typeof message === 'string' && ws.data.token) {
+            recallRelay.onSocketText(ws.data.token, message);
+          }
+          return;
+        }
         if (ws.data.kind === 'audio') {
           if (typeof message === 'string') {
             meetingRelay.onText(ws, message);
@@ -9911,6 +10136,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         onMessage(room, typed, data);
       },
       close(ws) {
+        if (ws.data.kind === 'recall') {
+          // NOT the end of the meeting — see RecallMeetingRelay.onSocketClose.
+          if (ws.data.token) recallRelay.onSocketClose(ws.data.token);
+          return;
+        }
         if (ws.data.kind === 'audio') {
           meetingRelay.onClose(ws);
           return;
@@ -9919,6 +10149,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       },
     },
   });
+
+  // The effort re-scoring pass starts HERE, after the port is bound, not
+  // where it is defined. `createServer` THROWS when the port is taken, and
+  // `bin.ts` answers by constructing a whole new server on the next port —
+  // so a pass kicked off during construction runs once for every attempt,
+  // from stores belonging to servers nobody kept, all writing the same data
+  // directory. Observed on a dev box where 8788 was already held: two passes
+  // over the same 99 rows, and the abandoned one still calling the API.
+  // Reaching this line is what makes a server real.
+  void rescoreStaleEffortEstimates();
 
   /**
    * The base every human-facing URL this server emits is built on.
@@ -10143,6 +10383,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // server that is going away.
       readyNudger.stop();
       stallNudger.stop();
+      // The boot re-scoring pass runs for as long as there are stale rows, so
+      // a short-lived server (every test) can still be mid-loop here. Setting
+      // the flag is enough: the loop checks it either side of each call, so
+      // it stops before the next write rather than being torn out mid-write.
+      effortRescoreStopped = true;
       // Close the worktree watchers with the loop that read them; the
       // persisted dispatch set survives for the next process to re-arm.
       dispatches.stop();
@@ -10165,6 +10410,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // because the close handlers above start their teardowns async, and
       // their notes belong in the rooms this flushes next.
       await meetingRelay.dispose();
+      // And the bots. A bot left in a call after this process is gone bills
+      // two vendors and delivers nothing — see RecallMeetingRelay.dispose.
+      await recallRelay.dispose();
       // Flush pending body snapshots into the store BEFORE the store's own
       // flush, so the last keystrokes in a task body reach the sidecar.
       taskProjection.stop();

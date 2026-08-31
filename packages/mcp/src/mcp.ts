@@ -108,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.131';
+const PLUGIN_VERSION = '0.1.132';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1396,7 +1396,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 goal: {
                   type: 'string',
                   description:
-                    'Goal/subgoal id, or "chores". OMIT to leave this row UNPLACED at the bottom of Backlog for the lead to place. An explicit goal — even "chores" — is a placement.',
+                    'Goal id, or "chores". OMIT to leave this row UNPLACED at the bottom of Backlog for the lead to place. An explicit goal — even "chores" — is a placement.',
                 },
                 order: { type: 'number', description: 'Fractional position within the goal.' },
                 after: {
@@ -1463,7 +1463,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "'person' or 'agent' — say which whenever `assignee` is a name that is not your own. The board cannot tell a person from an agent of the same name and will not guess, so an undeclared owner shows as \"not recorded\". Not needed for yourself or for 'human'.",
           },
           needs: { type: 'string', enum: ['action', 'decision'] },
-          goal: { type: 'string', description: 'Goal/subgoal id. OMIT to route through triage.' },
+          goal: { type: 'string', description: 'Goal id. OMIT to route through triage.' },
           dueAt: { type: 'number' },
           links: { type: 'array', items: { type: 'object' } },
         },
@@ -1680,7 +1680,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           taskId: { type: 'string' },
-          goal: { type: 'string', description: 'Goal/subgoal id, or "chores".' },
+          goal: { type: 'string', description: 'Goal id, or "chores".' },
           position: { type: 'number' },
           batchId: {
             type: 'string',
@@ -1711,21 +1711,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 },
                 title: { type: 'string' },
                 dueAt: { type: 'number' },
-                subgoals: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      id: {
-                        type: 'string',
-                        description: 'Omit to create; include to keep. Same rule as a goal id.',
-                      },
-                      title: { type: 'string' },
-                      dueAt: { type: 'number' },
-                    },
-                    required: ['title'],
-                  },
-                },
               },
               required: ['title'],
             },
@@ -1734,7 +1719,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              'Goal/subgoal ids you intend to remove even though they still hold tasks — the acknowledgement that turns the refusal into the removal. Read what the refusal said each band holds first. Ids that are not actually being removed are ignored.',
+              'Goal ids you intend to remove even though they still hold tasks — the acknowledgement that turns the refusal into the removal. Read what the refusal said each band holds first. Ids that are not actually being removed are ignored.',
           },
         },
         required: ['workspaceId', 'goals'],
@@ -1743,14 +1728,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'rename_goal',
       description:
-        "Change a goal's or subgoal's title in place, by id. The id never moves, so no task moves. Use this rather than set_goal_list, which would make you restate every other band. dueAt is optional: a number sets it, null clears it, omitting it leaves it alone.",
+        "Change a goal's title in place, by id. The id never moves, so no task moves. Use this rather than set_goal_list, which would make you restate every other band. dueAt is optional: a number sets it, null clears it, omitting it leaves it alone.",
       inputSchema: {
         type: 'object',
         properties: {
           workspaceId: { type: 'string' },
           goal: {
             type: 'string',
-            description: 'The goal or subgoal id to retitle. Get it from get_workspace.',
+            description: 'The goal id to retitle. Get it from get_workspace.',
           },
           title: { type: 'string' },
           dueAt: {
@@ -1764,7 +1749,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reorder_goals',
       description:
-        "Change the priority order of a board's goals — order is priority. Permutation only: order must be exactly the ids already at one scope, so nothing can be created, renamed or lost. Take the ids from get_workspace and send every row at your scope whose reorderable is true. Use set_goal_list only when you actually mean to add or remove a band.",
+        "Change the priority order of a board's goals — order is priority. Permutation only: order must be exactly the ids the board already holds, so nothing can be created, renamed or lost. Take the ids from get_workspace and send every row whose reorderable is true. Use set_goal_list only when you actually mean to add or remove a band.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1773,12 +1758,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'array',
             items: { type: 'string' },
             description:
-              'EVERY reorderable goal id at this scope, in the new priority order, highest first. Leaving one out is an error, not a demotion; including a non-reorderable row (Backlog) is an error too.',
-          },
-          parent: {
-            type: 'string',
-            description:
-              "Reorder this goal's SUBGOALS instead of the top-level list. Omit for the top level. A subgoal id is not a valid parent — nesting is one level deep.",
+              'EVERY reorderable goal id, in the new priority order, highest first. Leaving one out is an error, not a demotion; including a non-reorderable row (Backlog) is an error too.',
           },
         },
         required: ['workspaceId', 'order'],
@@ -3562,7 +3542,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           author: AUTHOR,
         })) as {
           changed: boolean;
-          created: Array<{ id: string; title: string; parent?: string }>;
+          created: Array<{ id: string; title: string }>;
           movedToChores: string[];
           strandedDone: string[];
           bucketReview?: {
@@ -3611,23 +3591,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         return ok({ workspaceId, goal: res.goal, changed: res.changed });
       }
       case 'reorder_goals': {
-        const { workspaceId, order, parent } = a as {
+        const { workspaceId, order } = a as {
           workspaceId: string;
           order: string[];
-          parent?: string;
         };
         const res = (await http(
           'POST',
           `/api/workspaces/${encodeURIComponent(workspaceId)}/goals/reorder`,
-          {
-            order,
-            ...(parent !== undefined ? { parent } : {}),
-            author: AUTHOR,
-          },
+          { order, author: AUTHOR },
         )) as { changed: boolean; order: string[] };
         return ok({
           workspaceId,
-          ...(parent !== undefined ? { parent } : {}),
           order: res.order,
           changed: res.changed,
         });

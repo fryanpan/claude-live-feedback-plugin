@@ -61,16 +61,16 @@ describe('where a goal row starts', () => {
       }
     });
 
-    it('lands a SUBGOAL in triage too', () => {
+    it('lands every band of a multi-goal list in triage', () => {
       const wsId = store.createWorkspace('board').id;
       const res = store.setGoalList(
         wsId,
-        [{ title: 'Ship the ranker', subgoals: [{ title: 'Index rebuild' }] }],
+        [{ title: 'Ship the ranker' }, { title: 'Index rebuild' }],
         { actor: PERSON },
       );
       if (!res.ok) throw new Error('goal list refused');
-      // Both rows, since subgoals flatten into rows of their own and a
-      // subgoal that skipped the default would be a hole in the same shape.
+      // Both rows: one band that skipped the default would be a hole in the
+      // same shape, and the mint runs per row rather than per call.
       expect(res.created.map((g) => store.getGoalRow(g.id)?.status)).toEqual(['triage', 'triage']);
     });
 

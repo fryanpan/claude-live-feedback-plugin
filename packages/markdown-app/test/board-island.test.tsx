@@ -64,7 +64,8 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
 }
 
 const GOALS: HubGoal[] = [
-  { id: 'g-pr', title: '1. Get the PR out', subgoals: [{ id: 'g-sub', title: '1.1 Tickets' }] },
+  { id: 'g-pr', title: '1. Get the PR out' },
+  { id: 'g-sub', title: '1.1 Tickets' },
 ];
 
 const filters: BoardFilters = {
@@ -509,18 +510,16 @@ describe('renderBoard', () => {
     expect(row?.querySelector('.hub-task-badges')?.textContent ?? '').not.toMatch(/blocked/i);
   });
 
-  // Display-only flattening. The goal LIST still nests — `boardSections`
-  // reports the subgoal at depth 1 and this test asserts that first, so a
-  // change that flattened the DATA would fail here rather than pass quietly.
-  // What stops is the indent: a subgoal is work with the same claim on the
-  // day as anything else on the list.
-  it('renders a subgoal as a plain section, with the nesting still in the model', () => {
+  // Every band is a section of its own, in list order, and none of them is
+  // indented — a goal further down the list is work with the same claim on
+  // the day as the one above it.
+  it('renders every band as a plain section, in list order', () => {
     const h = handlers();
     const sections = boardSections(GOALS, [task({ goal: 'g-sub' })], filters);
-    // The premise, asserted rather than assumed: this fixture HAS a subgoal.
-    expect(sections.map((s) => s.depth)).toContain(1);
+    // The premise, asserted rather than assumed: the fixture really does have
+    // more than one band, so "in list order" is saying something.
+    expect(sections.length).toBeGreaterThan(1);
     renderBoard(root, sections, h);
-    expect(root.querySelector('.hub-subgoal')).toBeNull();
     // Positive control: the section it would have been on is really there,
     // in board order, with its task in it.
     const rendered = [...root.querySelectorAll('.hub-section')].map(

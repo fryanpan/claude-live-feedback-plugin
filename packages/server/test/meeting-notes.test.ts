@@ -446,7 +446,14 @@ describe('notes session', () => {
     // The sink was told exactly what to change, in the words the composer
     // had written — not the raw engine label.
     expect(relabels).toEqual([
-      { docId: ids.docId, meetingId: ids.meetingId, from: 'Speaker B', to: 'Marisol' },
+      {
+        docId: ids.docId,
+        meetingId: ids.meetingId,
+        label: 'B',
+        from: 'Speaker B',
+        to: 'Marisol',
+        rewriteUntagged: true,
+      },
     ]);
     // And the session's memory of what it wrote was rewritten too, so the
     // next compose never sees the placeholder come back.
@@ -496,7 +503,14 @@ describe('notes session', () => {
 
     expect(order).toEqual(['composed', 'relabelled']);
     expect(relabels).toEqual([
-      { docId: ids.docId, meetingId: ids.meetingId, from: 'Speaker A', to: 'Devi' },
+      {
+        docId: ids.docId,
+        meetingId: ids.meetingId,
+        label: 'A',
+        from: 'Speaker A',
+        to: 'Devi',
+        rewriteUntagged: true,
+      },
     ]);
     // The compose that was in flight wrote "Speaker A"; the rewrite behind
     // it corrected the memory, so a later tick starts from the name.
@@ -528,9 +542,10 @@ describe('notes session', () => {
     ]);
   });
 
-  it('refuses to rewrite when two voices share the name, rather than reattributing one', async () => {
-    // Two people called Alex. "Alex" in the notes already written does not
-    // say WHICH of them, so correcting one must not move the other's words.
+  it('narrows to tagged mentions when two voices share the name, rather than reattributing one', async () => {
+    // Two people called Alex. The WORDS "Alex" in the notes do not say which
+    // of them, so correcting one must not move the other's words — but an
+    // inline tag carries the label, so it does say, and it still renames.
     const schedule = new ManualScheduler();
     const relabels: NotesRelabel[] = [];
     const errors: string[] = [];
@@ -552,13 +567,18 @@ describe('notes session', () => {
     // Correcting one of the two Alexes.
     session.nameSpeaker('A', 'Sam');
     await session.end();
-    // The two naming steps went through — each was unambiguous when made.
-    // The correction did not: nothing after "Speaker B -> Alex" is emitted.
+    // All three go out — including the correction, which the tags can carry.
     expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual([
       'Speaker A->Alex',
       'Speaker B->Alex',
+      'Alex->Sam',
     ]);
-    expect(errors.join(' ')).toContain('more than one voice');
+    // But the correction is marked: the untagged sweep, which can only match
+    // the word "Alex", is switched off for it. The first two were
+    // unambiguous when made and keep it.
+    expect(relabels.map((r) => r.rewriteUntagged)).toEqual([true, true, false]);
+    expect(relabels[2]?.label).toBe('A');
+    expect(errors.join(' ')).toContain('only tagged mentions');
   });
 
   it('an unnamed voice counts as a voice when deciding the name is ambiguous', async () => {
@@ -584,8 +604,12 @@ describe('notes session', () => {
     session.nameSpeaker('A', 'Speaker B');
     session.nameSpeaker('A', 'Sam');
     await session.end();
-    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual(['Speaker A->Speaker B']);
-    expect(errors.join(' ')).toContain('more than one voice');
+    expect(relabels.map((r) => `${r.from}->${r.to}`)).toEqual([
+      'Speaker A->Speaker B',
+      'Speaker B->Sam',
+    ]);
+    expect(relabels.map((r) => r.rewriteUntagged)).toEqual([true, false]);
+    expect(errors.join(' ')).toContain('only tagged mentions');
   });
 
   it('an unrelated named voice does not make a rename ambiguous', async () => {
@@ -1049,5 +1073,373 @@ describe('the composer reads the LIVE section, not only its own last answer', ()
     expect(updates.length).toBe(1);
     expect(updates[0]?.basedOn).toBeUndefined();
     expect(errors).toEqual(['doc gone']);
+  });
+});
+
+describe('inline speaker tags', () => {
+  const ids = { docId: 'doc-tags', meetingId: 'm-tags' };
+
+  /** A composer that returns whatever the test hands it, and records what it
+   *  was given. */
+  const scripted = (replies: string[], inputs: NotesComposeInput[]): NotesComposer => ({
+    name: 'scripted',
+    compose(input) {
+      inputs.push(input);
+      return Promise.resolve(replies.shift() ?? '## Meeting notes');
+    },
+  });
+
+  it('hands the composer the label beside the name, so it can tag the mention', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const session = beginNotesSession(
+      { composer: scripted([], inputs), quietMs: 1000, schedule, onNotes: () => {} },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    await session.end();
+    expect(inputs[0]?.tick.turns[0]).toMatchObject({
+      speaker: 'Speaker B',
+      speakerLabel: 'B',
+    });
+  });
+
+  it('a turn with no voice carries no label either', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const session = beginNotesSession(
+      { composer: scripted([], inputs), quietMs: 1000, schedule, onNotes: () => {} },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true });
+    await session.end();
+    expect(inputs[0]?.tick.turns[0]?.speakerLabel).toBeUndefined();
+    expect(inputs[0]?.tick.turns[0]?.speaker).toBeUndefined();
+  });
+
+  it('re-renders a tag from the name map rather than trusting the model to spell it', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const updates: NotesUpdate[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          ['## Meeting notes\n\n- [@speaker b](speaker:B) wants the gate moved.'],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: (u) => updates.push(u),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    await session.end();
+    expect(updates[0]?.notes).toContain('[@Speaker B](speaker:B) wants the gate moved.');
+  });
+
+  it('unwraps a tag naming a voice the meeting never carried, and says so', async () => {
+    // The deterministic gate on a model-made claim. The words stay; the
+    // attribution — the only part that was invented — goes.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const updates: NotesUpdate[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          ['## Meeting notes\n\n- [@Priya](speaker:C) volunteered to run it.'],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: (u) => updates.push(u),
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Somebody should run it.', final: true, speaker: 'B' });
+    await session.end();
+    expect(updates[0]?.notes).toContain('- Priya volunteered to run it.');
+    expect(updates[0]?.notes).not.toContain('speaker:C');
+    expect(errors.join(' ')).toContain('no such voice');
+  });
+
+  it('a tag survives the round trip into the next compose', async () => {
+    // The positive control for the gate above: a tag for a voice the meeting
+    // DID carry is left alone, so `previous` still carries the attribution.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- [@Speaker B](speaker:B) wants the gate moved.',
+            '## Meeting notes\n\n- [@Speaker B](speaker:B) wants the gate moved, by Friday.',
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'B' });
+    await session.end();
+    expect(inputs[1]?.previous).toContain('[@Speaker B](speaker:B)');
+  });
+
+  it('a rename rewrites the tags in the session memory and names the label to the sink', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const relabels: NotesRelabel[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- [@Speaker B](speaker:B) wants the gate moved.',
+            '## Meeting notes\n\n- more',
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onRelabel: (r) => relabels.push(r),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.nameSpeaker('B', 'Devi');
+    session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'B' });
+    await session.end();
+
+    expect(relabels[0]).toMatchObject({ label: 'B', from: 'Speaker B', to: 'Devi' });
+    expect(inputs[1]?.previous).toContain('[@Devi](speaker:B) wants the gate moved.');
+    expect(inputs[1]?.previous).not.toContain('Speaker B');
+  });
+
+  it('extends a name in the session memory without saying it twice', async () => {
+    // "Devi" survives inside "Devi Raman", so the untagged sweep has to run
+    // before the retag rather than after it — otherwise it finds the old name
+    // inside the tag the retag has just written. Same order, same reason, as
+    // the doc side.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- [@Devi](speaker:B) wants it. Devi will file it.',
+            '## Meeting notes\n\n- more',
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+      },
+      ids,
+    );
+    session.nameSpeaker('B', 'Devi');
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.nameSpeaker('B', 'Devi Raman');
+    session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'B' });
+    await session.end();
+
+    expect(inputs[1]?.previous).toContain('[@Devi Raman](speaker:B) wants it.');
+    expect(inputs[1]?.previous).toContain('Devi Raman will file it.');
+    expect(inputs[1]?.previous).not.toContain('Raman Raman');
+  });
+
+  it('leaves a line the person wrote exactly as they wrote it', async () => {
+    // The composer is asked to reproduce their line verbatim and the merge
+    // recognises it by exact text. Normalizing a tag inside it would break
+    // that match and land a second copy of their own note beside it.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const updates: NotesUpdate[] = [];
+    const mine = '[@speaker b](speaker:B) — my own wording';
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- notes',
+            `## Meeting notes\n\n- ${mine}\n- [@speaker b](speaker:B) said it.`,
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        readSection: () => ({
+          markdown: `## Meeting notes\n\n- ${mine}`,
+          items: [`item ${mine}`],
+          human: [mine],
+        }),
+        onNotes: (u) => updates.push(u),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'One.', final: true, speaker: 'B' });
+    schedule.fire();
+    await new Promise((r) => setTimeout(r, 0));
+    session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
+    await session.end();
+    expect(updates[1]?.notes).toContain(`- ${mine}`);
+    expect(updates[1]?.notes).toContain('- [@Speaker B](speaker:B) said it.');
+  });
+});
+
+describe('a tagged meeting through the audio socket', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  const schedule = new ManualScheduler();
+  const updates: NotesUpdate[] = [];
+
+  /** Two voices, so a rename has something it must NOT touch. */
+  const script = [
+    { words: ['move', 'the', 'gate'], settled: 'Move the gate.', speaker: 'A' },
+    { words: ['not', 'before', 'friday'], settled: 'Not before Friday.', speaker: 'B' },
+  ];
+
+  /** Writes one tagged bullet per new turn, the way the real composer is
+   *  asked to. Everything downstream of the model is under test here; what
+   *  the model would have produced is not. */
+  const taggingComposer: NotesComposer = {
+    name: 'tagging',
+    compose(input) {
+      const bullets = input.tick.turns.map(
+        (t) => `- [@${t.speaker}](speaker:${t.speakerLabel}) said "${t.text}"`,
+      );
+      const head = input.previous ?? '## Meeting notes';
+      return Promise.resolve([head, ...bullets].join('\n'));
+    },
+  };
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-tags-'));
+    handle = createServer({
+      port: 0,
+      dataDir,
+      transcription: createMockTranscriptionEngine(script),
+      meetingNotes: {
+        composer: taggingComposer,
+        quietMs: 1000,
+        schedule,
+        onNotes: (u) => updates.push(u),
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('writes tags into the doc, and a rename moves one voice and not the other', async () => {
+    const base = `http://localhost:${handle.port}`;
+    const path = join(dataDir, 'huddle.md');
+    writeFileSync(path, '# huddle\n');
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId: 'huddle', sourceUrl: path, title: 'huddle' }),
+    });
+    expect(res.status).toBe(200);
+
+    const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath('huddle')}`);
+    ws.binaryType = 'arraybuffer';
+    const frames: { type: string; final?: boolean; mode?: string }[] = [];
+    ws.addEventListener('message', (ev) => {
+      frames.push(JSON.parse(ev.data as string) as (typeof frames)[number]);
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('audio socket refused')));
+    });
+    const waitFor = async (pred: () => boolean, what: string): Promise<void> => {
+      const deadline = Date.now() + 2000;
+      while (!pred()) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    };
+    const docMarkdown = (): string =>
+      prose.serializeFragmentToMarkdown(prose.getProseFragment(handle.rooms.get('huddle')!.ydoc));
+
+    // A conversation, explicitly. Since #501 diarization is opt-in per
+    // capture and solo is the default, so a capture that does not ask gets
+    // no speaker labels — and a note with no voice has nothing to tag.
+    ws.send(
+      JSON.stringify({
+        type: 'start',
+        sampleRate: MEETING_SAMPLE_RATE,
+        encoding: MEETING_AUDIO_ENCODING,
+        mode: 'conversation',
+      }),
+    );
+    await waitFor(() => frames.some((f) => f.type === 'ready'), 'ready');
+    // The mode the SERVER opened, not the one asked for: every tag below is
+    // only meaningful if diarization actually reached the engine.
+    expect(frames.find((f) => f.type === 'ready')?.mode).toBe('conversation');
+    // Both turns settle: four chunks each (three words, then the settle).
+    for (let i = 0; i < 8; i++) ws.send(new Uint8Array(640));
+    await waitFor(
+      () => frames.filter((f) => f.type === 'transcript' && f.final).length === 2,
+      'both settled turns',
+    );
+    schedule.fire();
+    await waitFor(() => updates.length === 1, 'the pause tick');
+
+    // 1. The notes in the DOC carry a tag per mention, one per voice.
+    const tagged = docMarkdown();
+    expect(tagged).toContain('[@Speaker A](speaker:A) said "Move the gate."');
+    expect(tagged).toContain('[@Speaker B](speaker:B) said "Not before Friday."');
+
+    // 2. Naming a voice renames its tags where they already stand — the
+    //    label, not the words, is what the rename matched on.
+    ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Dana' }));
+    await waitFor(
+      () => docMarkdown().includes('[@Dana](speaker:A)'),
+      'the rename to reach the tag already written',
+    );
+    const renamed = docMarkdown();
+    expect(renamed).toContain('[@Dana](speaker:A) said "Move the gate."');
+    // 3. And the other voice is untouched: it was never this label.
+    expect(renamed).toContain('[@Speaker B](speaker:B) said "Not before Friday."');
+    expect(renamed).not.toContain('speaker:A) said "Not before Friday."');
+
+    // 4. THE DISCRIMINATOR. Everything above would also pass on the old
+    //    text-only rewrite, because the tag's own text spelled "Speaker A".
+    //    So: call the second voice Dana as well, then correct the first to
+    //    "Dana Ruiz". Now the words "Dana" name two voices, the untagged
+    //    sweep is switched off, and only a rename keyed on the LABEL can
+    //    reach anything at all.
+    ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'B', name: 'Dana' }));
+    await waitFor(
+      () => docMarkdown().includes('[@Dana](speaker:B)'),
+      'the second voice to take the same name',
+    );
+    ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Dana Ruiz' }));
+    await waitFor(
+      () => docMarkdown().includes('[@Dana Ruiz](speaker:A)'),
+      'the ambiguous correction to reach the tag it belongs to',
+    );
+    const corrected = docMarkdown();
+    // The other Dana kept her tag. A text sweep for "Dana" would have taken
+    // this one too — that it did not is the proof the label did the work.
+    expect(corrected).toContain('[@Dana](speaker:B) said "Not before Friday."');
+
+    ws.send(JSON.stringify({ type: 'stop' }));
+    await waitFor(() => frames.some((f) => f.type === 'stopped'), 'stopped');
+    ws.close();
   });
 });

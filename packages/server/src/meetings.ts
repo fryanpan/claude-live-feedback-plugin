@@ -196,7 +196,15 @@ export function readTranscript(
         ts: typeof row.ts === 'number' ? row.ts : 0,
         ...(speaker !== undefined ? { speaker } : {}),
       };
-      turns.push(turn);
+      // A second line WITH words for a turn already written is a REVISION of
+      // the words, not a second turn — the bot path's providers settle a turn
+      // twice, rough then punctuated, and only the last one should be read.
+      // Replaced in place rather than appended, because a turn settled where
+      // it settled; correcting the words does not move it in the meeting.
+      const priorText = byTurn.get(row.turn);
+      const at = priorText ? turns.indexOf(priorText) : -1;
+      if (at >= 0) turns[at] = turn;
+      else turns.push(turn);
       byTurn.set(row.turn, turn);
       continue;
     }
@@ -308,8 +316,8 @@ export class MeetingStore {
     // as an empty transcript rather than a missing one.
     mkdirSync(dirname(transcriptPath), { recursive: true });
     appendFileSync(transcriptPath, '');
-    /** Turn → the label it was written with (undefined for none). */
-    const written = new Map<number, string | undefined>();
+    /** Turn → the words and label it was last written with. */
+    const written = new Map<number, { text: string; speaker: string | undefined }>();
     const speakers: Record<string, string> = {};
     let stopped = false;
     const live = this.live;
@@ -320,11 +328,13 @@ export class MeetingStore {
       startedAt,
       recordTurn(turn: number, text: string, speaker?: string): void {
         if (stopped) return;
-        // An engine that settles the same turn twice would otherwise double
-        // it in the record, and appending is not something we can take back.
-        if (written.has(turn)) {
-          if (written.get(turn) === speaker) return;
-          written.set(turn, speaker);
+        const prior = written.get(turn);
+        // An engine that settles the same turn twice with the same words and
+        // the same label would otherwise double it in the record, and
+        // appending is not something we can take back.
+        if (prior && prior.text === text && prior.speaker === speaker) return;
+        written.set(turn, { text, speaker });
+        if (prior && prior.text === text) {
           // Explicit `null`, never an absent field: a relabel line says what
           // the label IS now, and the revision pass can take one away as
           // well as change it. Absent would read as "this line says nothing
@@ -332,7 +342,11 @@ export class MeetingStore {
           appendLine(transcriptPath, { turn, speaker: speaker ?? null, ts: Date.now() });
           return;
         }
-        written.set(turn, speaker);
+        // Either the turn is new, or its WORDS were revised. The bot path
+        // settles a turn twice — rough, then punctuated by `format_turns` —
+        // and without this the durable record would keep the rough one
+        // forever while the notes composer worked from the good one. A line
+        // with words for a turn already written replaces it on read.
         appendLine(transcriptPath, {
           turn,
           text,

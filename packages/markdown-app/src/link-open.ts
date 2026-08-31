@@ -8,6 +8,7 @@
  * mailto/tel) should all open — EXCEPT script-bearing schemes, which must
  * never be handed to window.open.
  */
+import { SPEAKER_TAG_SCHEME } from '@feedback/core';
 import { docHref } from './doc-path.ts';
 
 const UNSAFE_SCHEME = /^(?:javascript|data|vbscript):/i;
@@ -16,6 +17,11 @@ export function safeLinkHref(href: string | null | undefined): string | null {
   if (!href) return null;
   const trimmed = href.trim();
   if (!trimmed) return null;
+  // A speaker tag is a link in shape only: its href names the voice a note
+  // came from (`speaker:B`), and there is nothing at the other end of it to
+  // open. Refused here rather than left to `window.open`, which would answer
+  // a Cmd+Click with a blank tab or a protocol prompt.
+  if (trimmed.toLowerCase().startsWith(SPEAKER_TAG_SCHEME)) return null;
   // Browsers ignore embedded whitespace/control chars (tabs, newlines, NUL)
   // when resolving a URL's scheme — so `java\tscript:` still executes. Drop
   // every char with code point <= 0x20 before matching the denylist so

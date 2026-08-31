@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { summarizeGoals } from '../src/task-queue.ts';
 import {
   CHORES_GOAL_ID,
   RESERVED_GOAL_IDS,
@@ -77,7 +78,11 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
     expect(newGoalId()).not.toBe(newGoalId());
   });
 
-  it('a subgoal with no id is created too, keyed to its parent', () => {
+  // Subgoals are gone (Bryan, 2026-08-30), but a board written before that is
+  // still on disk and the REST route has callers this build cannot restart —
+  // so a nested payload still LOADS, flattened into bands of its own directly
+  // after the entry that carried them. Each one is minted like any other band.
+  it('a legacy nested payload flattens into bands of its own', () => {
     const ws = store.createWorkspace('board');
     const res = store.setGoalList(ws.id, [{ title: 'Launch', subgoals: [{ title: 'QA pass' }] }], {
       actor: PERSON,
@@ -85,9 +90,12 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.created.map((c) => c.title)).toEqual(['Launch', 'QA pass']);
-    const parent = res.created[0]?.id;
-    expect(res.created[1]?.parent).toBe(parent);
     expect(res.created[1]?.id).toMatch(GENERATED);
+    // Stored FLAT, in the position the board already drew them, and nothing
+    // nested comes back — the shape is not written back out.
+    const stored = store.getWorkspace(ws.id)?.goals ?? [];
+    expect(stored.map((g) => g.title)).toEqual(['Launch', 'QA pass']);
+    expect(stored.every((g) => !('subgoals' in g))).toBe(true);
   });
 
   it('an id this board does not hold is REFUSED, and nothing is written', () => {
@@ -318,7 +326,7 @@ describe('a board that already holds slug ids keeps working', () => {
     return out;
   };
 
-  const wsId = 'w-legacyboard1';
+  const wsId = 'w-legacy1';
 
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'goal-legacy-'));
@@ -463,5 +471,269 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('goals must be');
     expect((await (await fetch(`${base}/api/workspaces/${wsId}`)).json()) as unknown).toBeDefined();
+  });
+});
+
+/**
+ * A board on disk that still holds SUBGOALS.
+ *
+ * Subgoals were removed from the product (Bryan, 2026-08-30), and that
+ * decision does not rewrite anything already written. Every reader in the
+ * store now looks at `workspace.goals` alone, so a nested band that survived
+ * the load would exist nowhere: its tasks would read as unknown-goal work,
+ * and the next goal-list edit would strand them for real. The load path
+ * flattens instead — each child becoming a band directly after its old
+ * parent, which is the position the board has drawn it in all along.
+ *
+ * On disk, not through the API: this shape can no longer be submitted, which
+ * is exactly why the fixture has to be written straight to the sidecar.
+ */
+describe('a board written before subgoals were removed loads flat', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  const wsId = 'w-nested1';
+
+  const nested = () => ({
+    workspace: {
+      id: wsId,
+      name: 'live board',
+      goal: 'Make feedback as fast as pointing.',
+      goals: [
+        {
+          id: 'g-launch',
+          title: '1. Ship the launch post',
+          dueAt: 1_766_000_000_000,
+          subgoals: [
+            { id: 'g-launch-qa', title: '1.1 QA pass' },
+            { id: 'g-launch-copy', title: '1.2 Copy edit', dueAt: 1_767_000_000_000 },
+          ],
+        },
+        { id: 'g-perf', title: '2. Cut page weight' },
+      ],
+      docIds: [],
+      createdAt: 1_700_000_000_000,
+    },
+    tasks: [
+      {
+        id: 't-nest1',
+        workspaceId: wsId,
+        title: 'proof the headline',
+        status: 'todo',
+        goal: 'g-launch-qa',
+        order: 1,
+        assignee: 'Jordan',
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+        transitions: [],
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'goal-nested-'));
+    mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
+    writeFileSync(tasksSidecarPath(dataDir, wsId), `${JSON.stringify(nested(), null, 2)}\n`);
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('splices every subgoal in after its parent, keeping titles and dueAt', () => {
+    const goals = store.getWorkspace(wsId)?.goals ?? [];
+    expect(goals.map((g) => [g.id, g.title])).toEqual([
+      ['g-launch', '1. Ship the launch post'],
+      ['g-launch-qa', '1.1 QA pass'],
+      ['g-launch-copy', '1.2 Copy edit'],
+      ['g-perf', '2. Cut page weight'],
+    ]);
+    expect(goals[0]?.dueAt).toBe(1_766_000_000_000);
+    expect(goals[2]?.dueAt).toBe(1_767_000_000_000);
+    // Nothing nested survives the load, so nothing downstream can find one.
+    expect(goals.every((g) => !('subgoals' in g))).toBe(true);
+  });
+
+  it('gives the flattened band a goal ROW, so it is a band in every sense', () => {
+    // Without this the row exists in the list and nowhere else: no status, no
+    // description, no archive — the half a reader would notice first.
+    expect(store.getGoalRow('g-launch-qa')?.title).toBe('1.1 QA pass');
+    expect(store.getGoalRow('g-launch-qa')?.kind).toBe('goal');
+  });
+
+  it('leaves the task in a real band rather than orphaning it', () => {
+    // The failure this guards: a load that dropped the nested band would
+    // leave this task pointing at an id the list no longer has. Asserted
+    // through `summarizeGoals` rather than through `task.goal`, which is a
+    // stored string and reads the same either way — the question is whether
+    // the id still names a band the board ORDERS, and an orphan comes back
+    // as a bare `reorderable: false` row instead.
+    const goals = store.getWorkspace(wsId)?.goals ?? [];
+    const row = summarizeGoals(store.listTasks(wsId), goals).find((r) => r.id === 'g-launch-qa');
+    expect(row?.reorderable).toBe(true);
+    expect(row?.todo).toBe(1);
+    // Positive control for the field: an id that really is gone reads false.
+    const orphaned = summarizeGoals(
+      store.listTasks(wsId),
+      goals.filter((g) => g.id !== 'g-launch-qa'),
+    ).find((r) => r.id === 'g-launch-qa');
+    expect(orphaned?.reorderable).toBe(false);
+  });
+
+  it('accepts the flattened list back as a reorder, which the nested one could not be', () => {
+    const res = store.reorderGoals(wsId, ['g-perf', 'g-launch', 'g-launch-qa', 'g-launch-copy'], {
+      actor: PERSON,
+    });
+    expect(res.ok).toBe(true);
+    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([
+      'g-perf',
+      'g-launch',
+      'g-launch-qa',
+      'g-launch-copy',
+    ]);
+    // And the task did not move with the band's position.
+    expect(store.getTask('t-nest1')?.goal).toBe('g-launch-qa');
+  });
+});
+
+/**
+ * A board on disk where a parent goal's archive took a subgoal with it.
+ *
+ * The shape the removal has to land on its feet from: the subgoal's row was
+ * stamped `archivedWithGoal: <parent>`, and its TASKS were stamped with the
+ * parent's id too — which is what made the pair restore together. Flattened,
+ * that band restores on its own, so left alone it would come back empty with
+ * its work still archived, while restoring the old parent would revive those
+ * tasks under a band that is still off the board. Neither restore would be
+ * the whole of one decision.
+ *
+ * No live board is in this state (there are no subgoals in any store), so
+ * this is a migration for a shape that is possible rather than present.
+ */
+describe('a board whose archive cascaded into a subgoal loads coherently', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  const wsId = 'w-casc1';
+  const AT = 1_700_000_500_000;
+
+  const goalRow = (id: string, title: string, over: Record<string, unknown> = {}) => ({
+    id,
+    workspaceId: wsId,
+    kind: 'goal',
+    title,
+    status: 'todo',
+    createdAt: 1_700_000_000_000,
+    updatedAt: AT,
+    ...over,
+  });
+
+  const cascaded = () => ({
+    workspace: {
+      id: wsId,
+      name: 'live board',
+      goal: 'Make feedback as fast as pointing.',
+      goals: [
+        {
+          id: 'g-launch',
+          title: '1. Ship the launch post',
+          subgoals: [{ id: 'g-launch-qa', title: '1.1 QA pass' }],
+        },
+      ],
+      docIds: [],
+      createdAt: 1_700_000_000_000,
+    },
+    goalRows: [
+      goalRow('g-launch', '1. Ship the launch post', { archivedAt: AT, archivedBy: 'Jordan' }),
+      goalRow('g-launch-qa', '1.1 QA pass', {
+        archivedAt: AT,
+        archivedBy: 'Jordan',
+        archivedWithGoal: 'g-launch',
+      }),
+    ],
+    tasks: [
+      {
+        id: 't-par1',
+        workspaceId: wsId,
+        title: 'book the slot',
+        status: 'todo',
+        goal: 'g-launch',
+        order: 1,
+        assignee: 'Jordan',
+        archivedAt: AT,
+        archivedWithGoal: 'g-launch',
+        createdAt: 1_700_000_000_000,
+        updatedAt: AT,
+        transitions: [],
+      },
+      {
+        id: 't-sub1',
+        workspaceId: wsId,
+        title: 'proof the headline',
+        status: 'todo',
+        goal: 'g-launch-qa',
+        order: 1,
+        assignee: 'Jordan',
+        archivedAt: AT,
+        // Stamped with the PARENT, which is the marker this migration moves.
+        archivedWithGoal: 'g-launch',
+        createdAt: 1_700_000_000_000,
+        updatedAt: AT,
+        transitions: [],
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'goal-cascade-'));
+    mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
+    writeFileSync(tasksSidecarPath(dataDir, wsId), `${JSON.stringify(cascaded(), null, 2)}\n`);
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('re-points a cascaded band’s tasks at the band they actually sit in', () => {
+    // Premise, asserted rather than assumed: both rows really are archived.
+    expect(store.getGoalRow('g-launch')?.archivedAt).toBe(AT);
+    expect(store.getGoalRow('g-launch-qa')?.archivedAt).toBe(AT);
+    expect(store.getTask('t-sub1')?.archivedWithGoal).toBe('g-launch-qa');
+    // The parent's own task is untouched — the re-point is scoped to the
+    // band that moved, not applied to every marker on the board.
+    expect(store.getTask('t-par1')?.archivedWithGoal).toBe('g-launch');
+  });
+
+  it('restores each band with its own work, and leaves the other alone', () => {
+    const sub = store.unarchiveGoal('g-launch-qa', { actor: PERSON });
+    if (!sub.ok) throw new Error('unarchiveGoal refused');
+    // The failure this guards: an empty band back on the board under a
+    // control that had just promised to bring its tasks.
+    expect(sub.taskIds).toEqual(['t-sub1']);
+    expect(store.getTask('t-sub1')?.archivedAt).toBeUndefined();
+    // The other direction, in the same read: the parent is still archived,
+    // with its own task still off the board.
+    expect(store.getGoalRow('g-launch')?.archivedAt).toBe(AT);
+    expect(store.getTask('t-par1')?.archivedAt).toBe(AT);
+
+    const parent = store.unarchiveGoal('g-launch', { actor: PERSON });
+    if (!parent.ok) throw new Error('unarchiveGoal refused');
+    expect(parent.taskIds).toEqual(['t-par1']);
+    expect(
+      store
+        .listTasks(wsId)
+        .map((t) => t.id)
+        .sort(),
+    ).toEqual(['t-par1', 't-sub1'].sort());
+  });
+
+  it('stops writing the marker back, so the shape does not outlive the migration', () => {
+    const row = store.getGoalRow('g-launch-qa') as { archivedWithGoal?: string } | undefined;
+    expect(row?.archivedWithGoal).toBeUndefined();
+    // Positive control for the read: the row is really here and really
+    // archived, so `undefined` is about the field rather than the lookup.
+    expect(store.getGoalRow('g-launch-qa')?.archivedBy).toBe('Jordan');
   });
 });

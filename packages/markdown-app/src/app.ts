@@ -18,7 +18,9 @@ import { trackGesture } from './gesture.ts';
 import { huddleCaptureMode, wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
+import { mountMeetingBotRow } from './meeting-bot-row.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
+import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
@@ -48,6 +50,8 @@ import {
   lockDocToReading,
   showSignInBar,
 } from './signin/write-gate.ts';
+import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
+import { loadDocVoices } from './speaker-voices.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -341,6 +345,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         withoutHuddleStart(location.pathname + location.search + location.hash),
       );
     }
+    // `?timing=1` measures this meeting's stage latencies and shows the
+    // running numbers. Left in the address on purpose, unlike the huddle
+    // flag: a reload should keep measuring, and it opens no mic by itself —
+    // which is also why it is read after the huddle flag has been stripped.
     const strip = mountMeetingStrip({
       docId,
       root: meetingStripEl,
@@ -349,9 +357,28 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // fact, read from `location.search` there too, so both come off the
       // same address; see `huddleCaptureMode`.
       mode: huddleMode,
+      timing: wantsLatencyTiming(location.search),
     });
     scope.onCleanup(() => strip.destroy());
+    // A sibling of the strip, not part of it: a bot has its own lifecycle and
+    // shares none of the microphone's state. It hides itself when the server
+    // has no Recall key, so this costs one GET on a doc that cannot use it.
+    const botRow = mountMeetingBotRow({ docId, root: meetingStripEl });
+    scope.onCleanup(() => botRow.destroy());
   }
+
+  // Tapping a speaker tag in the notes offers the voices this doc's meetings
+  // had. Mounted whatever the doc type, and independent of the strip: notes
+  // outlive the meeting that produced them, and correcting an attribution a
+  // week later is the ordinary case rather than the exotic one.
+  const reassign = mountSpeakerReassign({
+    editor: editor.editor,
+    loadVoices: () => loadDocVoices(docId),
+    // Permission, not mode: a reader in view mode may still fix an
+    // attribution, and a reader without write access may not.
+    canWrite: () => canWrite,
+  });
+  scope.onCleanup(() => reassign.destroy());
 
   // Editing under an on-screen keyboard: the meeting strip gives its grid row
   // back while a phone-width editor has focus, and the caret is kept above
