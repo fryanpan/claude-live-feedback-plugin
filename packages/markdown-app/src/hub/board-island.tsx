@@ -674,27 +674,21 @@ function TaskRow(props: {
 }
 
 /**
- * The goal header's effort readout: a bar, what is left, and roughly when.
+ * The goal header's progress strip: how much of your own attention this goal
+ * still wants, how far along it is, and roughly when it lands.
  *
- * TWO variants of the same summary, and only one of them is ever visible —
- * CSS picks by available width and `display: none` keeps the other out of
- * the accessibility tree, so nothing is announced twice.
+ * Bryan's approved treatment (mock round six, variant 1, 2026-08-30): a row
+ * of its own beneath the goal header, hands-on pinned to the LEFT, progress
+ * and projected finish pinned to the RIGHT, every label 12px uppercase above
+ * a 16px value. The two corrections he made in approving it are both in the
+ * stylesheet rather than here, because both are layout: the right-hand slots
+ * are fixed-width so PROGRESS and PROJECTED FINISH land on the same x in
+ * every band on the page, and below 1100px the strip folds to exactly two
+ * rows with progress on the first.
  *
- * Which one, and why it is not a single element: both were drawn against the
- * real board markup and measured. The bar cannot "sit in the due-date slot"
- * — `.hub-goal-meta` shrink-wraps its date at 65px with no slack, so a
- * pill in that row takes ~166px from the goal title. Above 1100px the title
- * has room to spare and the pill costs no HEIGHT, which is the scarce axis
- * on the iPad this board is read from. At 430px the same readout leaves the
- * title 78px and clips a 61-character goal story to about 17 characters —
- * it eats the subject of every sentence. So the phone gets the strip, which
- * leaves the title alone and spends a row instead; on a surface that already
- * scrolls, a row is the cheap axis.
- *
- * The A/B was drawn for Bryan and never answered. It is resolved this way
- * rather than left open because the acceptance criteria settle it: a
- * projected finish date has to be on the board, and there is no width in the
- * meta row for one at 430px.
+ * ONE structure at every width. The narrow tier reflows this markup; it is
+ * not given a second, shorter string — so nothing is announced twice, and a
+ * reader on a phone is not quietly told less than a reader on a laptop.
  */
 function GoalEffort(props: { section: BoardSection }): ComponentChildren {
   const { section } = props;
@@ -704,39 +698,65 @@ function GoalEffort(props: { section: BoardSection }): ComponentChildren {
   const label = goalEffortLabel(section.effort, Date.now());
   if (!label.show) return null;
   // No bar on an unscored goal, deliberately. An empty grey track is exactly
-  // how this component draws "0% done", and a goal nobody has scored is not
-  // a goal at zero — it gets the sentence instead.
-  const bar = label.showBar ? (
-    <span class="hub-goal-bar" aria-hidden="true">
-      <i style={`width:${label.percentFill}%`} />
-    </span>
-  ) : null;
-  const wide = [label.percentText, label.leftText, label.finishText].filter(Boolean);
-  const narrow = [label.percentText, label.leftTextShort].filter(Boolean);
+  // how this strip draws "0% done", and a goal nobody has scored is not a
+  // goal at zero — it gets the sentence, alone on the strip, instead.
+  if (!label.showBar) {
+    return (
+      <div class="hub-goal-effort hub-goal-effort-bare" title={label.title}>
+        <span class="hub-goal-effort-pair hub-goal-effort-hands">
+          <span class="hub-goal-effort-v">{label.leftText}</span>
+        </span>
+      </div>
+    );
+  }
+  // The strip's one colour, and it says the thing a date alone cannot. What
+  // is compared is the CENTRAL projection, not the late end of its range: a
+  // goal whose worst case crosses its due date is not yet a late goal.
+  const late =
+    section.dueAt !== undefined &&
+    section.effort.kind === 'ready' &&
+    section.effort.projectedFinishAt !== undefined &&
+    section.effort.projectedFinishAt > section.dueAt;
   return (
-    <span
-      class={`hub-goal-effort hub-goal-effort-inline${label.showBar ? '' : ' hub-goal-effort-bare'}`}
-      title={label.title}
-    >
-      {bar}
-      {/* Two strings, one row, and CSS picks which. The readout rides the
-          meta row at EVERY width now, because the row below it that the
-          narrow tier used to get was the thing Bryan rejected: *"The second
-          option takes up too much space for progress"* — measured at 26px a
-          goal, 156px across six bands, three collapsed goals of his screen.
-          What the narrow tier drops instead is words, not the numbers: the
-          percentage and the hands-on figure both survive, which are the two
-          things he asked to see. `display: none` rather than a shorter
-          string built in JS, so the hidden one is out of the accessibility
-          tree and nothing is announced twice. */}
-      <span class="hub-goal-effort-left hub-goal-effort-wide">{wide.join(' \u00b7 ')}</span>
-      <span class="hub-goal-effort-left hub-goal-effort-narrow">{narrow.join(' \u00b7 ')}</span>
-      {/* The caveat is not hover-only — an iPad reports a Mac UA, gets the
-          wide tier, and has no hover, so a bar drawn over six of nine tickets
-          has to say so on screen. It is the first thing dropped when width
-          runs out, because the TITLE is the primary task at that end. */}
-      {label.coverageText ? <span class="hub-goal-effort-note">{label.coverageText}</span> : null}
-    </span>
+    <div class="hub-goal-effort" title={label.title}>
+      <span class="hub-goal-effort-pair hub-goal-effort-hands">
+        {/* The word the narrow tier drops. Measured at 430px: the full pair
+            of labels needs 454px of a 364px row, so row two cannot hold both
+            of them and the two figures — and shrinking type to fit is the one
+            trade this treatment does not make. What goes is words, never a
+            number, which is the shape of every narrow-tier decision on this
+            board; the phone labels are V5's from the same mock round. */}
+        <span class="hub-goal-effort-k">
+          Hands-on<span class="hub-goal-effort-k-long"> left</span>
+        </span>
+        <span class="hub-goal-effort-v">{label.leftTextShort}</span>
+        {/* The coverage caveat rides the FLEXIBLE column and never a pinned
+            one: a band carrying "4 not scored" must not push the two
+            right-hand labels out of the column its neighbours drew them in.
+            That column is exactly what Bryan's alignment note was about. */}
+        {label.coverageText ? <span class="hub-goal-effort-note">{label.coverageText}</span> : null}
+      </span>
+      <span class="hub-goal-effort-pair hub-goal-effort-progress">
+        <span class="hub-goal-effort-k">Progress</span>
+        <span class="hub-goal-bar" aria-hidden="true">
+          <i style={`width:${label.percentFill}%`} />
+        </span>
+        <span class="hub-goal-effort-v hub-goal-effort-pct">{label.percentText}</span>
+      </span>
+      {/* A finished goal has no date to project, and the slot stays empty
+          rather than collapsing: the grid track is what holds the column
+          straight for the bands above and below it. */}
+      {label.finishText ? (
+        <span class="hub-goal-effort-pair hub-goal-effort-fin">
+          <span class="hub-goal-effort-k">
+            <span class="hub-goal-effort-k-long">Projected </span>finish
+          </span>
+          <span class={`hub-goal-effort-v${late ? ' hub-goal-effort-late' : ''}`}>
+            {label.finishText}
+          </span>
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -902,7 +922,6 @@ function GoalBand(props: {
             band takes the due date's SLOT rather than sitting beside it,
             because a date a finished goal ran past is noise. */}
         <span class="hub-goal-meta">
-          <GoalEffort section={section} />
           {!section.isChores && section.status === 'done' ? (
             <span class="hub-done-note">done</span>
           ) : !section.isChores && section.dueAt !== undefined ? (
@@ -950,6 +969,13 @@ function GoalBand(props: {
             ))}
         </span>
       </div>
+      {/* The progress strip, on a row of its own beneath the header — the
+          treatment Bryan approved on 2026-08-30 (mock round six, variant 1).
+          It sits OUTSIDE `.hub-band-tasks` on purpose, so a folded band keeps
+          it: a one-line summary of a goal you have folded away is the moment
+          the summary is worth most, and it is not "something extra in place
+          of the tasks" that the folding decision struck. */}
+      <GoalEffort section={section} />
       {/* The band's tasks, on the rail that says "these belong to the row
           above". A folded band hides this container in CSS and renders NOTHING
           in its place — a collapsed band shows nothing extra, by decision. */}

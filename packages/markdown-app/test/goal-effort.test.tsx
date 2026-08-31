@@ -313,28 +313,43 @@ describe('the board renders the readout and leaves the rows alone', () => {
     renderBoard(host, boardSectionsWithEffort(GOALS, tasks, filters(), NOW), {} as never);
   };
 
-  it('draws ONE readout, on the meta row, with both strings inside it', () => {
+  it('draws the strip on its own row beneath the header, not on the meta row', () => {
     paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
-    const readouts = host.querySelectorAll('.hub-goal-effort');
-    // One node per goal — never a second row under it. The row of its own is
-    // what Bryan rejected as "too much space for progress".
-    expect(readouts).toHaveLength(1);
-    const inline = host.querySelector('.hub-goal-effort-inline');
-    expect(inline?.closest('.hub-goal-meta')).not.toBeNull();
-    expect(host.querySelector('.hub-goal-effort-strip')).toBeNull();
-    // Both strings are in the DOM; the stylesheet picks one (asserted in the
-    // stylesheet block below).
-    expect(inline?.querySelector('.hub-goal-effort-wide')?.textContent).toContain('~Sep 10');
-    expect(inline?.querySelector('.hub-goal-effort-narrow')?.textContent).toContain('60%');
-    expect(inline?.querySelector('.hub-goal-effort-narrow')?.textContent).not.toContain('~Sep');
+    const strips = host.querySelectorAll('.hub-goal-effort');
+    // One strip per goal — the treatment Bryan approved on 2026-08-30 (mock
+    // round six, variant 1): a row of its own under the header, not a
+    // fragment tucked into the due date's slot.
+    expect(strips).toHaveLength(1);
+    const strip = strips[0] as HTMLElement;
+    expect(strip.closest('.hub-goal-meta')).toBeNull();
+    // A SIBLING of the goal row, and after it — which is what the "one block"
+    // hairline rule and the folded-band rule in the stylesheet both key on.
+    expect(strip.previousElementSibling?.classList.contains('hub-goal-row')).toBe(true);
+    // …and outside the task list, so folding the band keeps the strip.
+    expect(strip.closest('.hub-band-tasks')).toBeNull();
+    // Three labelled facts, in Bryan's order: hands-on on the left, then
+    // progress, then the projected finish.
+    const label = (sel: string): string =>
+      strip.querySelector(`${sel} .hub-goal-effort-k`)?.textContent ?? '';
+    const value = (sel: string): string =>
+      strip.querySelector(`${sel} .hub-goal-effort-v`)?.textContent ?? '';
+    expect(label('.hub-goal-effort-hands')).toBe('Hands-on left');
+    expect(label('.hub-goal-effort-progress')).toBe('Progress');
+    expect(label('.hub-goal-effort-fin')).toBe('Projected finish');
+    expect(value('.hub-goal-effort-progress')).toBe('60%');
+    expect(value('.hub-goal-effort-fin')).toContain('~Sep 10');
+    // The figure is the figure alone: the words are the label's job now, so
+    // the value must not repeat them.
+    expect(value('.hub-goal-effort-hands')).not.toContain('hands-on');
     expect(host.querySelector('.hub-goal-bar i')?.getAttribute('style')).toContain('60%');
   });
 
-  it('carries the coverage caveat on screen, not in a tooltip', () => {
-    // A bar drawn over some of a band's tickets has to say so. It lived in
-    // the `title` alone until a measurement at 1180px — the iPad tier, and
-    // the device this board is mostly read from — showed the caveat was
-    // reachable only by hover, which that device does not have.
+  it('keeps the coverage caveat in the FLEXIBLE column, off the pinned ones', () => {
+    // A bar drawn over some of a band's tickets has to say so on screen — the
+    // device this board is read from has no hover. Where it says so is the
+    // alignment correction Bryan asked for: the caveat rides the left column,
+    // because anything in a pinned column would push PROGRESS and PROJECTED
+    // FINISH off the x its neighbouring bands drew them on.
     paint([
       closed(DAY),
       closed(2 * DAY),
@@ -343,16 +358,41 @@ describe('the board renders the readout and leaves the rows alone', () => {
       task({ effortEstimate: undefined }),
       task({ effortEstimate: { status: 'failed', reason: 'the body was empty' } }),
     ]);
-    const inline = host.querySelector('.hub-goal-effort-inline');
-    expect(inline?.querySelector('.hub-goal-effort-note')?.textContent).toBe(
-      '2 not scored, 1 failed',
-    );
+    const note = host.querySelector('.hub-goal-effort-note');
+    expect(note?.textContent).toBe('2 not scored, 1 failed');
+    expect(note?.closest('.hub-goal-effort-hands')).not.toBeNull();
+    expect(note?.closest('.hub-goal-effort-progress')).toBeNull();
+    expect(note?.closest('.hub-goal-effort-fin')).toBeNull();
     // Positive control: a band where every ticket is scored gets no caveat,
     // so the assertion above cannot be met by a note that is always drawn.
     disposeBoards();
     host.replaceChildren();
     paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task()]);
     expect(host.querySelector('.hub-goal-effort-note')).toBeNull();
+  });
+
+  it('reddens a projected finish that lands past the goal’s due date', () => {
+    // The strip's one colour. The fixture projects ~Sep 10; a goal due Sep 5
+    // is late by it, a goal due Sep 20 is not — the same tasks either way, so
+    // what is under test is the comparison and not the projection.
+    const withDue = (dueAt: number): HTMLElement => {
+      disposeBoards();
+      host.replaceChildren();
+      const goals: HubGoal[] = [{ id: 'g-ship', title: 'Ship the thing', dueAt }];
+      renderBoard(
+        host,
+        boardSectionsWithEffort(
+          goals,
+          [closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()],
+          filters(),
+          NOW,
+        ),
+        {} as never,
+      );
+      return host.querySelector('.hub-goal-effort-fin .hub-goal-effort-v') as HTMLElement;
+    };
+    expect(withDue(Date.UTC(2026, 8, 5)).className).toContain('hub-goal-effort-late');
+    expect(withDue(Date.UTC(2026, 8, 20)).className).not.toContain('hub-goal-effort-late');
   });
 
   it('puts no numbers on a task row', () => {
@@ -379,7 +419,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
   });
 });
 
-describe('the stylesheet picks exactly one variant per tier', () => {
+describe('the stylesheet pins the columns and folds to two rows', () => {
   const CSS = readFileSync(resolve(import.meta.dirname, '../src/styles.css'), 'utf8');
 
   /** Every `@media <query> { … }` block's inner text, brace-matched. */
@@ -411,29 +451,53 @@ describe('the stylesheet picks exactly one variant per tier', () => {
     return m?.[1] ?? '';
   }
 
-  it('draws the readout on ONE row at every width', () => {
-    // The row of its own that the narrow tier used to get is what Bryan
-    // rejected — "the second option takes up too much space for progress".
-    // There is no strip left to hide.
-    expect(CSS).not.toContain('.hub-goal-effort-strip');
-    expect(body(CSS, '.hub-goal-effort-narrow')).toContain('display: none');
+  it('gives the two right-hand columns a FIXED width, which is what aligns them', () => {
+    // Bryan's first correction: *"please align the PROGRESS label and
+    // PROJECTED FINISH label across goals so it doesn't look shabby"*. Each
+    // band is its own grid, so an `auto` track is sized by that band's own
+    // content and the labels land somewhere different in every band. Only a
+    // px track pins them without the bands agreeing on a width first — this
+    // assertion is the invariant the 0px measurement rests on.
+    const cols = body(CSS, '.hub-goal-effort').match(/grid-template-columns:([^;]*)/)?.[1] ?? '';
+    expect(cols).toMatch(/minmax\(0,\s*1fr\)\s+\d+px\s+\d+px/);
+    // …and the flexible track is the LEFT one, so nothing on the left can
+    // move anything on the right.
+    expect(cols.trimStart().startsWith('minmax(0, 1fr)')).toBe(true);
   });
 
-  it('sheds words rather than numbers below 1100px', () => {
+  it('holds the readability floor at both tiers: 12px labels, 16px values', () => {
+    // The floor that got this variant through five rounds of mocks. It is
+    // asserted at BOTH tiers because the cheapest way to win a row on a phone
+    // is to shrink type, and that trade is not one this branch may make.
+    expect(body(CSS, '.hub-goal-effort-k')).toContain('font-size: 12px');
+    expect(body(CSS, '.hub-goal-effort-v')).toContain('font-size: 16px');
     const mobile = mediaBlocks('(max-width: 1100px)');
-    // The title is the primary task at this end, so the date, the caveat and
-    // the long label go — and the readout stays on the meta row.
-    expect(body(mobile, '.hub-goal-effort-narrow')).toContain('display: inline');
-    expect(mobile).toMatch(
-      /\.hub-goal-effort-wide,\s*\n\s*\.hub-goal-effort-note \{[^}]*display: none/,
-    );
-    expect(body(mobile, '.hub-goal-bar')).toContain('width: 40px');
+    const strip = mobile.slice(mobile.indexOf('.hub-goal-effort'));
+    expect(strip).not.toMatch(/\.hub-goal-effort-[kv]\s*\{[^}]*font-size/);
   });
 
-  it('leaves the goal row a five-track grid — the readout takes no track', () => {
-    // The inline variant nests inside `.hub-goal-meta` rather than becoming a
-    // sixth child of the row, which is what keeps the avatar column aligned
-    // with the task rows'. A sixth track here would break both.
+  it('folds to exactly two rows below 1100px, progress first', () => {
+    // Bryan's second correction: *"on mobile, put PROGRESS on the first row
+    // and Hands-on on the second row"*. Two area rows, and `prog` is the
+    // first of them — the row count is asserted here in the template and
+    // measured in a real browser at 430px.
+    const mobile = mediaBlocks('(max-width: 1100px)');
+    const areas = body(mobile, '.hub-goal-effort').match(/grid-template-areas:([^;]*)/)?.[1] ?? '';
+    const rows = areas.match(/"[^"]*"/g) ?? [];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toBe('"prog prog"');
+    expect(rows[1]).toBe('"hands fin"');
+    expect(body(mobile, '.hub-goal-effort-progress')).toContain('grid-area: prog');
+    expect(body(mobile, '.hub-goal-effort-hands')).toContain('grid-area: hands');
+    // The bar takes the first row's slack rather than a fixed width — that,
+    // and not a smaller type size, is what buys the row.
+    expect(body(mobile, '.hub-goal-effort-progress .hub-goal-bar')).toContain('width: auto');
+  });
+
+  it('leaves the goal row a five-track grid — the strip takes no track', () => {
+    // The strip is a SIBLING of the row, not a sixth child of it. A sixth
+    // track here would knock the goal's owner avatar out of the column the
+    // task rows' avatars sit in.
     expect(body(CSS, '.hub-goal-row')).toContain('auto minmax(0, 1fr) auto auto auto');
   });
 });
