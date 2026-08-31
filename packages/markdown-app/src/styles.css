@@ -5891,6 +5891,30 @@ body.is-reading-width #editor > .ProseMirror {
 #editor > .ProseMirror a:hover {
   text-decoration-color: currentColor;
 }
+/* Speaker tags: who said the note, rendered as a quiet chip rather than as
+   the link it is made of. The href names a VOICE (`speaker:B`), so it is not
+   somewhere to go — no underline, no accent colour, nothing that invites the
+   click that `safeLinkHref` then refuses. Attribution is context for the
+   sentence it opens; it must not out-shout the words.
+
+   Selected on the href, so it needs no decoration plugin and costs the
+   editor bundle nothing. The whole tag is one run, so it wraps as one. */
+#editor > .ProseMirror a[href^="speaker:"] {
+  color: var(--fg-muted, #6b7280);
+  text-decoration: none;
+  font-size: 0.88em;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  padding: 0.05em 0.4em;
+  margin-right: 0.15em;
+  border-radius: 999px;
+  background: var(--chip-bg, rgba(127, 127, 127, 0.12));
+  white-space: nowrap;
+  cursor: default;
+}
+#editor > .ProseMirror a[href^="speaker:"]:hover {
+  text-decoration: none;
+}
 /* Mobile prose tuning. Trim horizontal padding (40px → 16px) so a
    ~390px viewport doesn't have content squeezed into the middle 300px,
    and scale headings down — 2rem h1 at desktop is gigantic on mobile.
