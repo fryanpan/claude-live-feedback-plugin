@@ -1684,8 +1684,13 @@ export function effortComputationLines(
   // What it actually took, once it is closed. Measured numbers are never
   // multiplied — these are reported exactly as they happened, beside the
   // corrected guess rather than folded into it.
-  const actualWall = effortActualWallClockSeconds(task);
-  const actualHands = effortActualHandsOnSeconds(task);
+  // Only for a ticket that is closed RIGHT NOW. A reopened one still carries
+  // the `done` transition from its first life, so both helpers keep answering
+  // — and the drawer would report how long the ticket took as a finished fact
+  // about a ticket somebody is working on again.
+  const closedNow = task.status === 'done';
+  const actualWall = closedNow ? effortActualWallClockSeconds(task) : null;
+  const actualHands = closedNow ? effortActualHandsOnSeconds(task) : null;
   if (actualWall !== null || actualHands !== null) {
     const took: string[] = [];
     if (actualHands !== null) took.push(`${formatEffortSeconds(actualHands)} of reading`);

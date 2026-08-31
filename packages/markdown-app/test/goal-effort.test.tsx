@@ -589,6 +589,44 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     expect(lines).toContain('Actually took 20m of reading over 2h of calendar time');
   });
 
+  it('stops reporting what it took once the ticket is reopened', () => {
+    // A reopened ticket keeps the `done` transition from its first life, so
+    // the measurement helpers keep answering — and the drawer would report
+    // how long it took as a finished fact about work that is running again.
+    const cal = computeEffortCalibration(closedSet());
+    const wall = ratioForGoal(cal.wallClock, 'g-ship');
+    const hands = ratioForGoal(cal.handsOn, 'g-ship');
+    const wasClosed = closedSet()[0] as HubTask;
+    // Positive control: the same row, still closed, does report it — so the
+    // absence below is the status and not a fixture that never had actuals.
+    expect(
+      effortComputationLines(
+        wasClosed,
+        { handsOnSeconds: 600, wallClockSeconds: 3600 },
+        wall,
+        hands,
+      ).join(' '),
+    ).toContain('Actually took');
+    const reopened: HubTask = {
+      ...wasClosed,
+      status: 'in-progress',
+      transitions: [
+        ...wasClosed.transitions,
+        { ts: NOW, from: 'done', to: 'in-progress', by: { name: 'Bryan', kind: 'person' } },
+      ],
+    };
+    const lines = effortComputationLines(
+      reopened,
+      { handsOnSeconds: 600, wallClockSeconds: 3600 },
+      wall,
+      hands,
+    ).join(' ');
+    expect(lines).not.toContain('Actually took');
+    // The rest of the drawer is unchanged — the correction it was scaled by
+    // is still true of a reopened ticket.
+    expect(lines).toContain('\u00d72.00');
+  });
+
   it('never prints one factor over two different corrections', () => {
     // The two axes learn from different samples: a close with a transition
     // trail and no reading time teaches the calendar and nothing about your

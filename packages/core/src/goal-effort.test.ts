@@ -5,6 +5,7 @@ import {
   EFFORT_PACE_WINDOW_DAYS,
   type EffortCalibrationTask,
   type EffortTaskInput,
+  type GoalEffortReady,
   applyEffortRatio,
   clampEffortRatio,
   computeEffortCalibration,
@@ -502,6 +503,55 @@ describe('summarizeGoalEffort — projection', () => {
     if (spread.kind !== 'ready') throw new Error('expected ready');
     expect(spread.wallClockRatio.spread).toBeGreaterThan(1);
     expect(spread.projectedLatestAt).toBeGreaterThan(spread.projectedFinishAt ?? 0);
+  });
+
+  it('drops the later end when the RANGE runs past the horizon', () => {
+    // The central date can sit inside the year while the spread throws the
+    // late end well outside it. Naming that date is exactly what the horizon
+    // refuses to do for a central projection, so a range may not do it either.
+    const c = computeEffortCalibration([
+      { goal: 'g1', ...closed(4 * DAY, HOUR) },
+      { goal: 'g1', ...closed(5 * DAY, HOUR) },
+      { goal: 'g1', ...closed(6 * DAY, 1.8 * HOUR) },
+      { goal: 'g1', ...closed(7 * DAY, 1.8 * HOUR) },
+    ]);
+    const closes = [closed(DAY), closed(2 * DAY), closed(3 * DAY)];
+    const openWork = (wallClockSeconds: number): EffortTaskInput =>
+      task({ effortEstimate: ok(wallClockSeconds, 600) });
+    // Read the pace and the spread off the fixture rather than assuming them,
+    // then size the open pile to land the central date a chosen number of
+    // days out.
+    const probe = summarizeGoalEffort([...closes, openWork(3600)], 'g1', c, NOW);
+    if (probe.kind !== 'ready') throw new Error('expected ready');
+    const spread = probe.wallClockRatio.spread;
+    expect(spread).toBeGreaterThan(1);
+    const remainingFor = (days: number): number =>
+      (days * probe.paceSecondsPerDay) / probe.wallClockRatio.ratio;
+    const at = (days: number): GoalEffortReady => {
+      const s = summarizeGoalEffort([...closes, openWork(remainingFor(days))], 'g1', c, NOW);
+      if (s.kind !== 'ready') throw new Error('expected ready');
+      return s;
+    };
+
+    // Far: the central date inside the horizon, the late end outside it. The
+    // fixture is checked, not assumed — a spread too small to leave the
+    // horizon would make the assertion below pass for the wrong reason.
+    const farDays = EFFORT_MAX_PROJECTION_DAYS * 0.95;
+    expect(farDays * spread).toBeGreaterThan(EFFORT_MAX_PROJECTION_DAYS);
+    const far = at(farDays);
+    // Positive control on the central date: an absent late end here must not
+    // be the horizon check on the CENTRAL projection firing instead.
+    expect(far.projectedFinishAt).toBeDefined();
+    expect(far.projectionOverHorizonDays).toBeUndefined();
+    expect(far.projectedLatestAt).toBeUndefined();
+
+    // Near: both ends inside the horizon, and the range is still drawn — the
+    // other half of the rule, and the control that says the drop above is the
+    // horizon and not the range being switched off.
+    const nearDays = 30;
+    expect(nearDays * spread).toBeLessThan(EFFORT_MAX_PROJECTION_DAYS);
+    const near = at(nearDays);
+    expect(near.projectedLatestAt).toBeGreaterThan(near.projectedFinishAt ?? 0);
   });
 });
 

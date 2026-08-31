@@ -572,7 +572,16 @@ export function summarizeGoalEffort(
       } else {
         summary.projectedFinishAt = now + days * DAY_MS;
         if (wallClockRatio.spread > 1) {
-          summary.projectedLatestAt = now + days * wallClockRatio.spread * DAY_MS;
+          // The late end obeys the SAME horizon as the central date. A goal
+          // 300 days out with a spread of 2 would otherwise print "likely by"
+          // a day 600 out — precisely the far-future date the horizon exists
+          // to refuse, smuggled in on the end of a range whose first half is
+          // inside it. When the range runs past the horizon the central date
+          // stands alone: "finishing around X", with no second date.
+          const latestDays = days * wallClockRatio.spread;
+          if (latestDays <= EFFORT_MAX_PROJECTION_DAYS) {
+            summary.projectedLatestAt = now + latestDays * DAY_MS;
+          }
         }
       }
     }
