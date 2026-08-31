@@ -155,7 +155,7 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
-import { recallCallbackExempt } from './middleware/recall-callback-gate.ts';
+import { RECALL_STATUS_PATH, recallCallbackAllows } from './middleware/recall-callback-gate.ts';
 import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import {
   captureMockup,
@@ -188,7 +188,7 @@ import {
 import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
 import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
-import type { RecallClient } from './recall.ts';
+import { type RecallClient, unreachableCallbackReason } from './recall.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
@@ -914,6 +914,20 @@ export interface ServerOptions {
    */
   meetingBotWebhookSecret?: string;
   /**
+   * The dedicated hostname Recall.ai's backend dials this deployment on —
+   * `CW_RECALL_CALLBACK_HOST`, e.g. `recall.<domain>`, pointed at the same
+   * tunnel as the operator hostname and with NO Cloudflare Access
+   * application in front of it.
+   *
+   * A hostname of its own rather than a hole in the operator's (Bryan,
+   * 2026-08-31). It classifies its own host kind and serves exactly two
+   * routes — the per-bot websocket upgrade and the status webhook — each
+   * armed only while the credential it carries is configured; everything
+   * else on it is 404. Unset is the ordinary state, and then the hostname is
+   * unknown like any other and denied.
+   */
+  recallCallbackHost?: string;
+  /**
    * Pause-driven meeting notes: composer, quiet threshold, optionally an
    * observing sink. **No default**, same seam rule as `transcription`
    * directly above — the real composer is an LLM call, and nothing that
@@ -1321,6 +1335,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // needed to honour it exists, so a half-configured deployment answers
   // 403 unknown_host rather than reaching a branch that then has to refuse.
   const proxiedTrustedHosts = proxiedTrustedVerifier ? (opts.proxiedTrustedHosts ?? []) : [];
+  /**
+   * Recall's dedicated callback hostname, or null.
+   *
+   * Deliberately NOT conditioned on a verifier the way the list above is:
+   * there is no Access application in front of this name and there cannot be
+   * one (Recall's backend has no browser). What arms it is the credential
+   * each of its two routes carries, checked per request in
+   * `recallCallbackAllows` — so a server with no Recall key and no webhook
+   * secret answers 404 to everything on the hostname rather than serving a
+   * route with nothing behind it.
+   */
+  const recallCallbackHost = opts.recallCallbackHost?.trim() || null;
 
   const sse = new SseHub();
   // Pick up where the last clean shutdown left off, so a deploy is silent on
@@ -1396,10 +1422,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * two ownership ledgers over one doc's notes section, and the ledger is
    * what stops a tick from eating what a person typed.
    */
+  /**
+   * Is the address we would hand Recall one this server itself refuses?
+   *
+   * Computed here rather than in bin.ts because the effective host lists are
+   * here — `proxiedTrustedHosts` above is already the post-verifier one — and
+   * because a server spun up any other way (staging, a test) deserves the
+   * same answer. Null means nothing known says the callbacks are unreachable.
+   */
+  const recallUnreachable = unreachableCallbackReason({
+    wsBase: opts.meetingBot?.config.publicWsBase ?? null,
+    callbackHost: recallCallbackHost,
+    accessGatedHosts: [...proxiedTrustedHosts, ...(opts.accessTunnelHosts ?? [])],
+  });
+  if (recallUnreachable) console.error(`[meetings] bots are OFF: ${recallUnreachable}`);
   const recallRelay = new RecallMeetingRelay({
     store: meetingStore,
     notes: meetingRelay.notesDeps,
     client: opts.meetingBot ?? null,
+    unreachable: recallUnreachable,
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
   });
   // Late-bound because Rooms is constructed before the task store and the
@@ -4790,6 +4831,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // with the same static-audience verifier behind it.
             proxiedTrustedHosts,
             accessFronted: staticAccessVerifier !== null,
+            // Recall's own hostname. Neither `viaProxy` nor `accessFronted`
+            // applies to it — see the field on TrustedHostOpts for why both
+            // absences are deliberate.
+            recallCallbackHost,
             lookupShare: (h) => {
               // LIVE, not merely known: an expired share's hostname must stop
               // being a share hostname, or expiry never takes effect for
@@ -4889,6 +4934,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // metadata redacted, `visitor`-gated routes closed. What it does
             // NOT get is a `visitorShareId` — there is no share behind it.
             visitor = scope.target;
+          } else if (decision.kind === 'recall-callback') {
+            // Recall's dedicated hostname. No Access token is demanded and
+            // none could be presented: this caller is a vendor's backend.
+            // What stands in for it is that the hostname serves TWO routes
+            // and each one carries its own credential — a 128-bit per-bot
+            // token in the websocket path, a Svix signature over the webhook
+            // body — verified by the routes themselves one layer in. So the
+            // gate's whole job here is to refuse everything else, and it is
+            // an allowlist rather than a denylist: a route added to this
+            // server tomorrow is closed on this hostname by default.
+            //
+            // 404 rather than 403, and rather than the 401 the operator
+            // hostname answers: this name is not an address the product is
+            // served on, so "there is nothing here" is both true and the
+            // least it can say about what this deployment runs.
+            //
+            // Deliberately NOT under the external-access master switch above.
+            // That switch answers "is anything reachable from outside right
+            // now?" about workspace CONTENT reached by people; these two
+            // routes read no doc and are reachable only by whoever holds a
+            // token this server minted for one bot. Turning sharing off in
+            // the middle of a meeting must not silently strand its bot.
+            if (
+              !recallCallbackAllows(pathname, req.method, {
+                relayConfigured: recallRelay.configured(),
+                webhookSecretSet: Boolean(opts.meetingBotWebhookSecret),
+              })
+            ) {
+              return j(404, { error: 'not_found' });
+            }
+            // Nothing else: no `visitor`, no scope, no accessEmail. The two
+            // routes below authenticate themselves.
           } else if (decision.kind === 'proxied-local') {
             // The operator's own hostname through the tunnel: an Access
             // application in front of it, and the WHOLE product behind it.
@@ -4901,42 +4978,30 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // proxied-local otherwise), re-checked because "I could not
             // verify" must never mean "serve it".
             //
-            // TWO REQUESTS SKIP THE TOKEN, and only these two: the meeting
-            // bot's callbacks. Recall.ai's backend dials this server on the
-            // one public address it has — this hostname — and it has no
-            // browser, no Access session and no way to get either, so
-            // demanding a token here refuses every bot callback and a bot
-            // joins, records, bills and delivers nothing. Both callbacks
-            // carry their OWN credential (a 128-bit per-bot token in the
-            // websocket path; a Svix signature over the webhook body), so
-            // what the Access token would add is a second one — and each
-            // exemption is conditional on that credential actually being
-            // configured, which is what stops it from being a hole on a
-            // server that has no bots or no signing secret. Shape rules and
-            // the fail-closed near-misses live in the predicate.
-            const botCallback = recallCallbackExempt(pathname, req.method, {
-              relayConfigured: recallRelay.configured(),
-              webhookSecretSet: Boolean(opts.meetingBotWebhookSecret),
-            });
-            if (!botCallback) {
-              if (!proxiedTrustedVerifier) {
-                return j(503, { error: 'access_not_configured' });
-              }
-              const result = await proxiedTrustedVerifier(req);
-              if (!result.ok) return j(result.status, { error: result.error });
-              // A token is admission, not identity. The Access policy this
-              // server cannot read may admit collaborators through the same
-              // application, and their tokens verify exactly as the
-              // operator's does. The verified email is the only thing that
-              // says WHO, so it must be on the allowlist — folded the way the
-              // roster folds — or the door stays shut. The body names
-              // nothing: not the email, not that an allowlist exists.
-              const who = result.email ? normalizeEmail(result.email) : '';
-              if (who === '' || !proxiedTrustedEmails.has(who)) {
-                return j(403, { error: 'forbidden' });
-              }
-              accessEmail = result.email ?? null;
+            // NOTHING SKIPS THE TOKEN HERE. Two requests used to — Recall's
+            // bot callbacks, because the operator hostname was the only
+            // public address this deployment had. They now arrive on a
+            // hostname of their own (`recallCallbackHost`, handled above),
+            // which is a strictly better trade: what a vendor's backend can
+            // reach and what a person can reach are two names, and this one
+            // is back to having no holes in it at all.
+            if (!proxiedTrustedVerifier) {
+              return j(503, { error: 'access_not_configured' });
             }
+            const result = await proxiedTrustedVerifier(req);
+            if (!result.ok) return j(result.status, { error: result.error });
+            // A token is admission, not identity. The Access policy this
+            // server cannot read may admit collaborators through the same
+            // application, and their tokens verify exactly as the operator's
+            // does. The verified email is the only thing that says WHO, so it
+            // must be on the allowlist — folded the way the roster folds — or
+            // the door stays shut. The body names nothing: not the email, not
+            // that an allowlist exists.
+            const who = result.email ? normalizeEmail(result.email) : '';
+            if (who === '' || !proxiedTrustedEmails.has(who)) {
+              return j(403, { error: 'forbidden' });
+            }
+            accessEmail = result.email ?? null;
             // Nothing else: no `visitor`, no scope. From here on the request
             // is what a loopback request is.
           } else if (cfAccessVerifier && !shares) {
@@ -5566,6 +5631,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const error = err instanceof Error ? err.message : 'delete_share_failed';
             return j(502, { error });
           }
+        }
+
+        // --- Recall's bot status-change webhook ---
+        //
+        // Workspace-level at the vendor, so it carries no token of ours and
+        // arrives for every bot this account creates; the relay ignores bot
+        // ids it does not know. Answered 200 even for an event we do not
+        // model — a non-2xx makes the vendor retry, and retrying will not
+        // make an unmodelled code become one.
+        //
+        // It lives under `/recall/` with the websocket upgrade below, and
+        // IMMEDIATELY above it, both on purpose. One prefix is the whole bot
+        // surface, which is what the dedicated callback hostname admits and
+        // what a tunnel rule can be written against; and the upgrade's own
+        // test is `startsWith('/recall/')`, so a status POST reaching it
+        // first would be answered `404 unknown endpoint` by the token
+        // lookup. Order is load-bearing — keep these two adjacent.
+        if (pathname === RECALL_STATUS_PATH && req.method === 'POST') {
+          const raw = await req.text();
+          const secret = opts.meetingBotWebhookSecret;
+          if (secret) {
+            const signed = await verifySvixSignature({
+              secret,
+              body: raw,
+              headers: svixHeadersFrom(req.headers),
+            });
+            if (!signed) return j(401, { error: 'bad signature' });
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            return j(400, { error: 'bad json' });
+          }
+          const event = parseBotStatusWebhook(parsed);
+          if (event) recallRelay.onStatus(event);
+          return j(200, { ok: true });
         }
 
         // --- WebSocket upgrade: Recall dialling US with a bot's words ---
@@ -9394,35 +9496,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // their own field, so a caller reading one is never reading the
           // other by accident.
           return j(200, { ...record, transcript: meetingStore.transcript(docId, meetingId) });
-        }
-
-        // --- Recall's bot status-change webhook ---
-        //
-        // Workspace-level at the vendor, so it carries no token of ours and
-        // arrives for every bot this account creates; the relay ignores bot
-        // ids it does not know. Answered 200 even for an event we do not
-        // model — a non-2xx makes the vendor retry, and retrying will not
-        // make an unmodelled code become one.
-        if (pathname === '/api/recall/status' && req.method === 'POST') {
-          const raw = await req.text();
-          const secret = opts.meetingBotWebhookSecret;
-          if (secret) {
-            const signed = await verifySvixSignature({
-              secret,
-              body: raw,
-              headers: svixHeadersFrom(req.headers),
-            });
-            if (!signed) return j(401, { error: 'bad signature' });
-          }
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {
-            return j(400, { error: 'bad json' });
-          }
-          const event = parseBotStatusWebhook(parsed);
-          if (event) recallRelay.onStatus(event);
-          return j(200, { ok: true });
         }
 
         // --- A doc's meeting bot: invite one, read its state, send it home ---

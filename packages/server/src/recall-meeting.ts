@@ -71,6 +71,19 @@ export interface RecallMeetingDeps {
   now?: () => number;
   /** Injected so a test can assert the URL Recall is actually handed. */
   mintToken?: () => string;
+  /**
+   * Why the address this server would hand Recall cannot be dialled, or null
+   * when nothing known says so (`unreachableCallbackReason`).
+   *
+   * A key and a public origin are not the same thing as a REACHABLE origin.
+   * Since the bot callbacks stopped being exempt from Cloudflare Access on
+   * the operator's hostname, a deployment that still derives its callback
+   * URL from `CW_PUBLIC_BASE_URL` looks configured and is not: the bot joins,
+   * bills per meeting-hour, and every callback it makes is refused before any
+   * route runs. So this disarms `configured()` as firmly as a missing key
+   * does — the invite must not be offered, not merely warned about.
+   */
+  unreachable?: string | null;
 }
 
 export type InviteRefusal =
@@ -130,7 +143,12 @@ export class RecallMeetingRelay {
 
   /** Whether this server can invite bots at all. */
   configured(): boolean {
-    return this.deps.client !== null && this.deps.client.config.publicWsBase !== null;
+    if (this.deps.client === null) return false;
+    if (this.deps.client.config.publicWsBase === null) return false;
+    // A callback address nothing can reach is not a configuration; see the
+    // dep. This is also what closes the `/recall/<token>` upgrade on the
+    // callback hostname, since that route is armed by `configured()`.
+    return !this.deps.unreachable;
   }
 
   /** The bot on this doc, as the UI renders it. */
@@ -148,13 +166,19 @@ export class RecallMeetingRelay {
         message: 'No Recall.ai API key is configured on this server.',
       };
     }
+    // Checked BEFORE the origin itself, because it is the more specific
+    // answer: there IS an origin, and it is one Recall cannot dial.
+    const unreachable = this.deps.unreachable;
+    if (unreachable) {
+      return { ok: false, reason: 'not_configured', message: unreachable };
+    }
     const wsBase = client.config.publicWsBase;
     if (!wsBase) {
       return {
         ok: false,
         reason: 'not_configured',
         message:
-          'Recall dials this server back, so CW_PUBLIC_BASE_URL must name the public https origin this server is reached on. It is unset or is not https.',
+          'Recall dials this server back, so it needs a public address: set CW_RECALL_CALLBACK_HOST to the dedicated callback hostname, or CW_PUBLIC_BASE_URL to the public https origin this server is reached on. Neither is set to a usable value.',
       };
     }
     const meetingUrl = args.meetingUrl.trim();
