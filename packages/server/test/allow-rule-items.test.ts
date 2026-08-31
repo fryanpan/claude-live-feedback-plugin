@@ -246,6 +246,17 @@ describe('allow-rule review items', () => {
     const older = await inProgressRow(wsId, 'Older row');
     await deny('git push');
     await settle(5);
+    // The older row closes before the newer opens: an agent holding two rows
+    // at once would have its denial left unfiled rather than guessed onto
+    // one of them (see agent-notes-routes.test.ts), and this test is about
+    // the WINDOW and the cross-task tally, not about ambiguity.
+    await jj(
+      await post(`/api/tasks/${older}/transition`, {
+        to: 'done',
+        author: LEAD,
+        workspaceId: wsId,
+      }),
+    );
     const newer = await inProgressRow(wsId, 'Newer row');
     // Two denials that fell out of the window are on the tally but must not
     // count — seeded into the sidecar the way a week-old server left them.
