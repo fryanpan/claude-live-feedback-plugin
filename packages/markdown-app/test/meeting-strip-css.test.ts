@@ -66,8 +66,8 @@ describe('the strip lives in its own section of the stylesheet', () => {
 
 describe('the editor pane reserves a row for the strip', () => {
   it('gives #editor-pane a final, content-sized track', () => {
-    // Four tracks since the plan-tasks strip claimed the second: format bar,
-    // derived-work strip, document, transcript strip. The strip's track is
+    // Four tracks since the plan gate claimed the second: format bar,
+    // plan gate, document, transcript strip. The strip's track is
     // still the LAST auto — content-sized, after the editor's 1fr.
     expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto auto 1fr auto/);
   });

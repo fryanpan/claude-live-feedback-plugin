@@ -7536,9 +7536,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   // the status machine, and a pasted goal link should read
                   // as its title + status like any other row.
                   const t = taskStore.getTask(taskId) ?? taskStore.getGoalRow(taskId);
-                  return t
-                    ? { title: t.title, workspaceId: t.workspaceId, status: t.status }
-                    : undefined;
+                  if (!t) return undefined;
+                  return {
+                    title: t.title,
+                    workspaceId: t.workspaceId,
+                    status: t.status,
+                    // Only a Task can be a held draft; a GoalRow never
+                    // carries the field.
+                    ...('planHold' in t && t.planHold !== undefined ? { planHeld: true } : {}),
+                  };
                 },
                 workspaceName: (workspaceId) => taskStore.getWorkspace(workspaceId)?.name,
               },

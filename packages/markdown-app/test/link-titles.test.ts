@@ -176,6 +176,25 @@ describe('hydrateLinkTitles', () => {
     expect(chip?.classList.contains('ws-chip-in-progress')).toBe(true);
   });
 
+  it('a plan-held draft chips as "Draft", not its parked status', async () => {
+    const taskUrl = `${location.origin}/workspaces/w-abc123?task=t-42fixture`;
+    const el = mount(taskUrl);
+    const fetcher = async () =>
+      new Response(
+        JSON.stringify({
+          titles: { [taskUrl]: 'Draft the slice' },
+          statuses: { [taskUrl]: 'triage' },
+          planHeld: { [taskUrl]: true },
+        }),
+        { status: 200 },
+      );
+    await hydrateLinkTitles(el, fetcher);
+    const chip = el.querySelector('a')?.querySelector('.ws-status-chip');
+    expect(chip?.textContent).toBe('Draft');
+    expect(chip?.classList.contains('ws-chip-draft')).toBe(true);
+    expect(chip?.classList.contains('ws-chip-triage')).toBe(false);
+  });
+
   it('keeps a custom label and still appends the chip', async () => {
     const taskUrl = `${location.origin}/workspaces/w-abc123?task=t-42fixture`;
     const el = mount(`[my words](${taskUrl})`);
