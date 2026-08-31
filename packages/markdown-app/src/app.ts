@@ -48,6 +48,8 @@ import {
   lockDocToReading,
   showSignInBar,
 } from './signin/write-gate.ts';
+import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
+import { loadDocVoices } from './speaker-voices.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -352,6 +354,19 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     });
     scope.onCleanup(() => strip.destroy());
   }
+
+  // Tapping a speaker tag in the notes offers the voices this doc's meetings
+  // had. Mounted whatever the doc type, and independent of the strip: notes
+  // outlive the meeting that produced them, and correcting an attribution a
+  // week later is the ordinary case rather than the exotic one.
+  const reassign = mountSpeakerReassign({
+    editor: editor.editor,
+    loadVoices: () => loadDocVoices(docId),
+    // Permission, not mode: a reader in view mode may still fix an
+    // attribution, and a reader without write access may not.
+    canWrite: () => canWrite,
+  });
+  scope.onCleanup(() => reassign.destroy());
 
   // Editing under an on-screen keyboard: the meeting strip gives its grid row
   // back while a phone-width editor has focus, and the caret is kept above

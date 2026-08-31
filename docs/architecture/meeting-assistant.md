@@ -335,15 +335,44 @@ invented for this would have been lost on the first flush.
   into one run before replacement, because a tag with an inner mark — half
   its name bolded — reaches Yjs as several ops and would otherwise be
   rewritten once per op.
+- **A name loses its brackets on the way into a tag.** A display name is free
+  text somebody typed, and a tag is a link: "Sam [PM]" written between the
+  brackets produces `[@Sam [PM]](speaker:C)`, which no longer parses as a tag
+  at all — the finder cannot see it, so every later rename silently reaches
+  nothing and the attribution is frozen on that spelling. `speakerTagText`
+  removes `[`, `]` and `\` for the tag only; the roster and the strip still
+  show the name as typed. Removed rather than backslash-escaped because
+  escaping is only safe if every writer escapes, and one of the writers is
+  the doc serializer, which wraps EVERY link's text in brackets and escapes
+  none of it — a pre-existing bug worth fixing on its own, but not one this
+  feature should depend on. A name that cannot break the syntax is safe
+  whichever path writes it. Found in the browser, reassigning a mention to a
+  seeded "Sam [PM]"; the unit tests had only ever used plain names.
 - **A suggestion may not re-attribute a person's note.** `canSuggestOn`
   refuses a rewrite that introduces a speaker label the target did not
   already carry, so the composer cannot attach a line someone typed to a
   voice in the room.
 - **The editor renders a tag as a quiet chip, not a link.** Tiptap blanks an
   href whose scheme is not in `protocols`, so the Link extension is
-  configured with `speaker`; `safeLinkHref` then refuses the scheme, so
-  clicking a tag navigates nowhere. Reassigning a tag inline is designed but
-  NOT built — the mock is the current artefact for it.
+  configured with `speaker`; `safeLinkHref` refuses the scheme, so a tag
+  never navigates. Clicking one opens the reassign menu instead.
+- **Correcting a tag is one mention, always** (owner's call, 2026-08-31:
+  *"reassigning should just affect the one item being reassigned"*).
+  `speaker-reassign.ts` rewrites the link mark under the finger and nothing
+  else — not the turn, not that voice's other notes. The larger gestures
+  ("…and every other note from this turn", reaching back into the
+  transcript) are each a different promise about scope, and the narrow one is
+  the promise nobody has to think about before tapping. The menu offers the
+  voices from `speakerRoster` — the meeting's cast, each with the last thing
+  it said, because "Speaker A" identifies nobody — plus *Nobody — this is not
+  a quote*, which takes the claim off and leaves the words. It is a popover
+  on a pointer and a bottom sheet under 560px.
+- **The correction is an ordinary document edit**, dispatched through the
+  editor the person is already in: same Yjs sync, same undo, same ~1s flush
+  to the `.md`. Nothing about it reaches the server as a special verb, and a
+  correction made a week after the meeting works exactly like one made
+  during it — which is why the menu is mounted whatever the doc, rather than
+  alongside the strip.
 
 ## Task capture ("file a ticket for that")
 
