@@ -138,11 +138,11 @@ Each
 `SpeakerRevision` arrives before `Termination` naming turns the whole-session
 pass relabelled; the adapter re-emits those through `onTurn` as settled turns
 with retained text, so the relay needs no second channel. A turn still
-waiting on the pause tick takes the new label; notes ALREADY composed keep
-the label they were composed with — those words are in the doc and the
-revision has nowhere to land — but a person RENAMING a voice does reach
-them, retroactively, through both the tag rewrite and the text sweep; see
-"A rename reaches backwards" below. The revision
+waiting on the pause tick takes the new label; a turn whose words are
+ALREADY in the doc is a correction, and reaches them — see "A late
+correction lands on the mentions it can prove" below. A person RENAMING a
+voice reaches them too, by a different route: through the tag rewrite and
+the text sweep; see "A rename reaches backwards". The revision
 can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
@@ -539,6 +539,74 @@ invented for this would have been lost on the first flush.
   during it — which is why the menu is mounted whatever the doc, rather than
   alongside the strip.
 
+### A late correction lands on the mentions it can prove
+
+The engine changes its mind about who spoke. A `SpeakerRevision` arrives
+before `Termination` naming turns the whole-session pass relabelled, and
+until now it reached only the turns still waiting on a tick — words already
+composed kept the voice they were composed with, so a meeting could end with
+its transcript and its notes disagreeing.
+
+**A rename and a revision are different facts, and only one of them is about
+a voice.** "B is Devi" is true of every mention of B, which is why the label
+in the href was enough for it. "Turn 12 was not B after all" is true of one
+turn, and `speaker:B` cannot say which of B's sentences a mention came from.
+
+**So the href also carries the turns behind the mention** —
+`[@Devi](speaker:B?t=10,12)`. Stamped by the deterministic pass, never by the
+composer: the model's job is to say which voice, and everything a later
+correction has to trust is supplied by code. A tag arriving WITHOUT
+provenance is stamped with the tick's turns for that voice; one that already
+has some keeps them, because the composer returns the whole notes every tick
+and restamping would move a mention's provenance forward to words it was
+never written from. Past `MAX_SPEAKER_TAG_TURNS` (12) nothing is stamped: a
+mention that could have come from thirty turns is not one a revision can
+place, and saying so is cheaper than pretending.
+
+Then, per mention, every turn behind it is asked what it is attributed to
+now — a revised turn answers with its new label, an untouched one with the
+label the mention already carries:
+
+- **all agree on another voice** → the mention MOVES. Not a guess: every turn
+  that could have produced those words belongs to that voice now.
+- **all agree on nobody** → the claim comes off and the words stay, the same
+  remedy `normalizeSpeakerTags` gives a voice the meeting never carried.
+- **they disagree** → the mention is marked `unsure=1` and the session says so
+  through `onError`. It belongs to one of two voices and the notes do not
+  record which; a coin flip would put a name against words somebody else
+  said, and silence would hide that the meeting no longer stands behind the
+  name already there. The chip draws it — the warning colour and a "?" — so
+  the doubt is visible to a reader and not only to a reader of the raw `.md`.
+- **no provenance** → untouched. That is every tag written before this
+  existed and, deliberately, every mention a PERSON has reassigned:
+  `applyReassign` writes a bare `speaker:<label>`, so a human answer is never
+  revisited by a machine pass. It also makes tapping the voice a mention
+  already claims a real edit rather than a no-op, which is how somebody
+  settles an unsure one.
+
+Three things the plumbing has to get right, each tested:
+
+- **The correction rides the compose chain**, behind anything in flight —
+  same reason as the rename. That compose read the old labels.
+- **One chain step per BATCH.** The engine sends a single `SpeakerRevision`
+  and the adapter re-emits it turn by turn in a synchronous loop. Applied one
+  at a time, a two-turn mention would be moved by the first revision and then
+  found disagreeing with itself by the second.
+- **A turn that has fallen back into `carry`** — its compose failed — leaves
+  the batch and takes the new label into its retry. Correcting words nobody
+  has read is nothing.
+
+**In the doc the walk is scoped to the items the LEDGER still claims**, which
+a rename is not. What a voice is called is true wherever it is written; a
+machine's second thoughts about who spoke do not get to edit a sentence a
+person has taken over. The same boundary keeps this off an EARLIER meeting's
+leftovers in the same doc, whose turn numbers start again from the beginning
+and could otherwise collide with this meeting's.
+
+What this still cannot do: a turn the revision gives a label to for the FIRST
+time (a `PENDING` placeholder resolving) composed as untagged prose, and there
+is no mention to move — the notes gain no attribution they did not have.
+
 ## Task capture ("file a ticket for that")
 
 Each pause tick ALSO runs a task-capture pass (`meeting-task-capture.ts`)
@@ -709,7 +777,12 @@ readout, the CSV).
 `packages/server/src/meetings.ts` (store) ·
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
-keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
+keeps a person's writing) · `packages/core/src/speaker-tags.ts` (the tag
+grammar, its provenance, and the late correction) +
+`speaker-roster.ts` (the meeting's cast) ·
+`packages/markdown-app/src/speaker-reassign.ts` +
+`speaker-reassign-menu.ts` (correcting one mention) ·
+`packages/markdown-app/src/meeting-strip.ts`
 (UI) · `packages/server/src/recall.ts` (vendor client) ·
 `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
 `recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
