@@ -178,15 +178,19 @@ per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized
 `[^A-Za-z0-9._-] → _`.
 
-**What the vendor keeps: nothing.** Streaming is zero-data-retention for
-audio and transcripts while the account is opted out of model training (it
-is) — only logging/billing metadata survives, and ZDR is an ACCOUNT setting,
-not a session parameter, so no code here can assert it. The 30-day retention
-that applies to AssemblyAI's ASYNC transcripts never engages: this repo makes
-no `POST /v2/transcript` call, and on 2026-08-31 the account listed zero
-stored transcripts. `bun run scripts/assemblyai-retention-sweep.ts` re-checks
-that and deletes anything found (`--delete`); the mechanics it has to get
-right are in `packages/server/src/assemblyai-retention.ts`.
+**What the vendor keeps: nothing, and a 3-day floor under everything else.**
+The account (owner, 2026-08-31, Workspace → Settings → Data Controls) is
+opted out of model training with a 3-day TTL on audio and transcripts. The
+opt-out is what makes Streaming — the only thing this subsystem uses — ZERO
+retention of audio and transcripts, leaving just logging/billing metadata.
+The TTL caps AssemblyAI's ASYNC side at 3 days instead of the 30-day default,
+which is belt and braces here: this repo makes no `POST /v2/transcript` call,
+and on 2026-08-31 the account listed zero stored transcripts. Both are
+ACCOUNT settings, not session parameters, so no code here can set or assert
+them — `bun run scripts/assemblyai-retention-sweep.ts` is how you re-check
+what is actually stored, and deletes anything found (`--delete`); the
+mechanics it has to get right are in
+`packages/server/src/assemblyai-retention.ts`.
 
 ## Notes composition
 

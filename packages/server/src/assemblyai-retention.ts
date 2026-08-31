@@ -10,11 +10,13 @@
  *    logging/billing metadata survives. There is no per-session parameter for
  *    it — the opt-out is an ACCOUNT setting, so no code in this repo can turn
  *    it on or assert it.
- *  - **Async (`POST /v2/transcript`) keeps a lot longer.** Uploaded audio
- *    starts deleting at 24h (at most 48h); the transcript artifact starts
- *    deleting at 30 DAYS. A shorter TTL is configurable, but from the
- *    dashboard's Data Controls — there is no `ttl` field on the transcript
- *    request body.
+ *  - **Async (`POST /v2/transcript`) keeps a lot longer by default.**
+ *    Uploaded audio starts deleting at 24h (at most 48h); the transcript
+ *    artifact starts deleting at 30 DAYS. A shorter TTL is configurable, but
+ *    from the dashboard's Data Controls — there is no `ttl` field on the
+ *    transcript request body. THIS account sets it to 3 days (owner,
+ *    2026-08-31), so the 30-day figure is the vendor's default rather than
+ *    what we are exposed to.
  *
  * This repo creates NO async transcripts: the engine is Universal Streaming
  * v3 over a WebSocket (`transcribe-assemblyai.ts`), and on 2026-08-31 the
