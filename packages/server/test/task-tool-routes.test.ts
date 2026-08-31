@@ -88,12 +88,9 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       base,
       workspace.id,
       [
-        {
-          key: 'g1',
-          title: '1. Get the PR out',
-          subgoals: [{ key: 'g1a', title: 'Post-PR tickets' }],
-        },
-        { key: 'g2', title: '2. Blog post' },
+        { key: 'g1', title: '1. Get the PR out' },
+        { key: 'g1a', title: '2. Post-PR tickets' },
+        { key: 'g2', title: '3. Blog post' },
       ],
       PERSON,
     );
@@ -157,17 +154,13 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
   // ── PUT /api/workspaces/:id/goals ─────────────────────────────────────────
 
   describe('PUT /api/workspaces/:id/goals', () => {
-    it('forwards the goal list — subgoals and dueAt included — and GET reads it back', async () => {
+    it('forwards the goal list — dueAt included — and GET reads it back', async () => {
       const { workspace } = await jj<{ workspace: { id: string } }>(
         await post('/api/workspaces', { name: 'goals-fwd', goal: 'North star.' }),
       );
       const goals = [
-        {
-          title: 'First',
-          dueAt: 1765000000000,
-          subgoals: [{ title: 'Sub one', dueAt: 1766000000000 }],
-        },
-        { title: 'Second' },
+        { title: 'First', dueAt: 1765000000000 },
+        { title: 'Second', dueAt: 1766000000000 },
       ];
       const res = await jj<{
         ok: true;
@@ -175,22 +168,42 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
         created: Array<{ id: string; title: string; parent?: string }>;
       }>(await put(`/api/workspaces/${workspace.id}/goals`, { goals, author: PERSON }));
       expect(res.changed).toBe(true);
-      // The ids come back from the server, in submission order: each entry,
-      // then its subgoals.
-      expect(res.created.map((c) => c.title)).toEqual(['First', 'Sub one', 'Second']);
-      const [first, sub, second] = res.created.map((c) => c.id) as [string, string, string];
-      expect(res.created[1]?.parent).toBe(first);
+      // The ids come back from the server, in submission order.
+      expect(res.created.map((c) => c.title)).toEqual(['First', 'Second']);
+      const [first, second] = res.created.map((c) => c.id) as [string, string];
 
       const got = await jj<{ workspace: { goals: unknown } }>(
         await fetch(`${base}/api/workspaces/${workspace.id}`),
       );
       expect(got.workspace.goals).toEqual([
-        {
-          id: first,
-          title: 'First',
-          dueAt: 1765000000000,
-          subgoals: [{ id: sub, title: 'Sub one', dueAt: 1766000000000 }],
-        },
+        { id: first, title: 'First', dueAt: 1765000000000 },
+        { id: second, title: 'Second', dueAt: 1766000000000 },
+      ]);
+    });
+
+    // Subgoals are gone from the product, but the route has callers this
+    // build cannot restart and boards on disk that still hold them. A nested
+    // payload is accepted and FLATTENED — each child becomes a band of its
+    // own directly after its old parent, which is the position the board drew
+    // it in all along — and nothing nested comes back out.
+    it('accepts a legacy nested payload and reads it back flat', async () => {
+      const { workspace } = await jj<{ workspace: { id: string } }>(
+        await post('/api/workspaces', { name: 'goals-legacy', goal: 'North star.' }),
+      );
+      const res = await jj<{ created: Array<{ id: string; title: string }> }>(
+        await put(`/api/workspaces/${workspace.id}/goals`, {
+          goals: [{ title: 'First', subgoals: [{ title: 'Sub one' }] }, { title: 'Second' }],
+          author: PERSON,
+        }),
+      );
+      expect(res.created.map((c) => c.title)).toEqual(['First', 'Sub one', 'Second']);
+      const [first, sub, second] = res.created.map((c) => c.id) as [string, string, string];
+      const got = await jj<{ workspace: { goals: unknown } }>(
+        await fetch(`${base}/api/workspaces/${workspace.id}`),
+      );
+      expect(got.workspace.goals).toEqual([
+        { id: first, title: 'First' },
+        { id: sub, title: 'Sub one' },
         { id: second, title: 'Second' },
       ]);
     });
@@ -384,7 +397,7 @@ describe('task tool routes (plan §3.12 commit 6)', () => {
       expect(chores.task.order).toBe(0.5);
     });
 
-    it('accepts a subgoal id as the target', async () => {
+    it('accepts any listed band id as the target', async () => {
       const { wsId, G } = await seedWorkspace();
       const task = await seedTask(wsId, G.g1);
       const res = await jj<{ task: Task }>(

@@ -841,14 +841,9 @@ describe('hub workspace + task routes', () => {
         base,
         wsId,
         [
-          {
-            key: 'ship',
-            title: '1. Ship',
-            subgoals: [
-              { key: 'blockers', title: '1.1 Blockers' },
-              { key: 'loop', title: '1.2 Loop' },
-            ],
-          },
+          { key: 'ship', title: '1. Ship' },
+          { key: 'blockers', title: '2. Blockers' },
+          { key: 'loop', title: '3. Loop' },
         ],
         PERSON,
       );
@@ -880,7 +875,7 @@ describe('hub workspace + task routes', () => {
         tasks: Array<{ id: string; goalTitle: string; body: string }>;
       };
       expect(tasks.map((t) => t.id)).toEqual([ids.blocker, ids.loop, ids.chore]);
-      expect(tasks[0]?.goalTitle).toBe('1.1 Blockers');
+      expect(tasks[0]?.goalTitle).toBe('2. Blockers');
       // The WHOLE description, not a first line — the row has to be
       // pickup-able without a second call.
       expect(tasks[0]?.body).toBe(
@@ -927,14 +922,17 @@ describe('hub workspace + task routes', () => {
   });
 
   describe('GET /api/workspaces/:id (goal summary)', () => {
-    it('returns the ordered goals with counts, parent then subgoals, Backlog last', async () => {
+    it('returns the ordered goals with counts, Backlog last', async () => {
       const { wsId, G } = await (async () => {
         const r = await post('/api/workspaces', { name: 'summary-ws', goal: 'Ship it.' });
         const id = ((await r.json()) as { workspace: { id: string } }).workspace.id;
         const goals = await seedGoalsOverHttp(
           base,
           id,
-          [{ key: 'one', title: '1. One', subgoals: [{ key: 'oneA', title: '1.1 One A' }] }],
+          [
+            { key: 'one', title: '1. One' },
+            { key: 'oneA', title: '2. One A' },
+          ],
           PERSON,
         );
         // PERSON, so these land in `todo` and the assertion below is about
@@ -942,7 +940,7 @@ describe('hub workspace + task routes', () => {
         // covered on its own in task-triage-status.test.ts.
         await post(`/api/workspaces/${id}/tasks`, {
           author: PERSON,
-          title: 'in a subgoal',
+          title: 'in the second band',
           goal: goals.oneA,
         });
         await post(`/api/workspaces/${id}/tasks`, {
@@ -956,10 +954,9 @@ describe('hub workspace + task routes', () => {
       const res = await local(`/api/workspaces/${wsId}`);
       expect(res.status).toBe(200);
       const { goalSummary } = (await res.json()) as {
-        goalSummary: Array<{ id: string; title: string; depth: number; todo: number }>;
+        goalSummary: Array<{ id: string; title: string; todo: number }>;
       };
       expect(goalSummary.map((g) => g.id)).toEqual([G.one, G.oneA, 'chores']);
-      expect(goalSummary.map((g) => g.depth)).toEqual([0, 1, 0]);
       expect(goalSummary.find((g) => g.id === G.oneA)?.todo).toBe(1);
       expect(goalSummary.find((g) => g.id === 'chores')?.todo).toBe(1);
     });

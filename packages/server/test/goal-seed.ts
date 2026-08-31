@@ -20,36 +20,20 @@ export interface SeedGoalSpec {
   key: string;
   title: string;
   dueAt?: number;
-  /** One level, same as the board (§3.2). */
-  subgoals?: SeedGoalSpec[];
 }
 
 /** label → the id the server minted for it. */
 export type GoalIds = Record<string, string>;
 
-/** Keys in the order `setGoalList` reports created rows: each entry, then its
- *  subgoals, in list order. */
+/** Keys in the order `setGoalList` reports created rows — list order. */
 function keysInCreatedOrder(spec: SeedGoalSpec[]): string[] {
-  const out: string[] = [];
-  for (const g of spec) {
-    out.push(g.key);
-    for (const s of g.subgoals ?? []) out.push(s.key);
-  }
-  return out;
+  return spec.map((g) => g.key);
 }
 
 function entriesFor(spec: SeedGoalSpec[]): unknown[] {
   return spec.map((g) => ({
     title: g.title,
     ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
-    ...(g.subgoals !== undefined
-      ? {
-          subgoals: g.subgoals.map((s) => ({
-            title: s.title,
-            ...(s.dueAt !== undefined ? { dueAt: s.dueAt } : {}),
-          })),
-        }
-      : {}),
   }));
 }
 

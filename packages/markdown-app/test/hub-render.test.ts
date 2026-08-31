@@ -58,7 +58,8 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
 }
 
 const GOALS: HubGoal[] = [
-  { id: 'g-pr', title: '1. Get the PR out', subgoals: [{ id: 'g-sub', title: '1.1 Tickets' }] },
+  { id: 'g-pr', title: '1. Get the PR out' },
+  { id: 'g-sub', title: '1.1 Tickets' },
 ];
 
 let root: HTMLElement;
@@ -3297,7 +3298,7 @@ describe('the panel’s review queue', () => {
     expect(sel.value).toBe('g-gone');
     expect([...sel.options].map((o) => o.textContent)).toEqual([
       '1. Get the PR out',
-      '— 1.1 Tickets',
+      '1.1 Tickets',
       'Goal g-gone',
     ]);
     sel.value = 'g-sub';
