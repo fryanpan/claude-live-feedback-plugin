@@ -223,6 +223,17 @@ export interface DocRoom {
    * cause the wake this removes, never suppress a real one.
    */
   lastContentChangeAt?: number;
+  /**
+   * An authoring edit has been seen and its `contentRevision` bump has not
+   * been committed yet — the debounce is running. Read by
+   * `settledContentRevision`, which commits early so a task derived from the
+   * doc mid-burst stamps the POST-edit revision (otherwise the debounce
+   * firing a second later would immediately flag the task the creator just
+   * derived from those very edits).
+   */
+  pendingRevisionBump?: boolean;
+  /** The debounce timer for the pending bump, so an early commit can cancel it. */
+  revisionTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 /** A file leaf in the workspace tree (a single bound review doc). */
@@ -418,6 +429,33 @@ const PRIVATE_META_GUARD_ORIGIN = 'private-meta-guard';
  * wired after `loadFromDisk`, so a room's load never reaches the hook at all.
  */
 const REANCHOR_ORIGIN = 'agent-reanchor';
+
+/** Yjs origin for the server's own `contentRevision` / plan-state meta
+ *  writes. Deliberately NOT agent-shaped: these land in the room's update
+ *  hook, and an authoring origin would re-arm the debounce that fired them. */
+const CONTENT_REVISION_ORIGIN = 'content-revision';
+
+/** How long a doc must go quiet before an authoring burst commits one
+ *  `contentRevision` bump. Same order as the ~1s write-back flush: a burst
+ *  is a person or agent mid-thought, not N revisions. */
+const REVISION_SETTLE_MS = 1000;
+
+/**
+ * Meta keys ONLY the server may write, though they live in the synced CRDT
+ * map (they must: planState is what the doc page renders, and contentRevision
+ * has to survive a restart). The map is writable by any connected editor —
+ * share visitors included — so without a guard a peer could set
+ * `planState: 'approved'` and file rows past the hold, or move
+ * `contentRevision` and suppress or fabricate stale flags. `guardServerMeta`
+ * reverts any write to these keys whose transaction origin is not the
+ * server's own.
+ */
+const SERVER_META_KEYS = [
+  'planState',
+  'planApprovedBy',
+  'planApprovedAt',
+  'contentRevision',
+] as const;
 
 function isAuthoringOrigin(room: DocRoom, origin: unknown): boolean {
   if (typeof origin === 'string') return origin.startsWith('agent') && origin !== REANCHOR_ORIGIN;
@@ -696,6 +734,11 @@ export class Rooms {
     const room = this.rooms.get(docId);
     if (!room) return false;
     const binding = this.fileBindings.get(docId);
+
+    // 0. Settle the revision debounce BEFORE the flush below persists the
+    //    doc: a pending bump lost at eviction is an edit burst whose derived
+    //    tasks would never learn the plan moved.
+    this.commitRevisionBump(room);
 
     // 1. FLUSH. Same order and same calls as `flush()`, so a doc leaving
     //    memory is saved exactly the way a shutdown saves it.
@@ -1304,6 +1347,12 @@ export class Rooms {
   private teardownRoom(room: DocRoom, closeReason: string): void {
     const docId = room.docId;
     this.releaseAliases(docId);
+    // A doc being deleted has no derived-task bookkeeping left to do — but a
+    // live timer firing on a destroyed ydoc does. Drop the debounce, not
+    // commit it: this path destroys the doc.
+    if (room.revisionTimer) clearTimeout(room.revisionTimer);
+    room.revisionTimer = null;
+    room.pendingRevisionBump = false;
     const saveTimer = this.saveTimers.get(docId);
     if (saveTimer) clearTimeout(saveTimer);
     this.saveTimers.delete(docId);
@@ -4564,6 +4613,95 @@ export class Rooms {
     return this.peek(docId)?.lastContentChangeAt;
   }
 
+  /**
+   * Somebody with derived tasks to keep honest — the server wires this to
+   * `TaskStore.flagStaleFromDocEdit` plus a projection refresh. Called once
+   * per settled authoring burst with the doc's canonical id, its alias when
+   * it has one (origin refs routinely hold the caller-chosen name), and the
+   * revision the burst landed on.
+   */
+  onContentRevision?: (docIds: string[], revision: number) => void;
+
+  /**
+   * The doc's content revision with any pending bump COMMITTED first — what a
+   * create-from-doc stamps onto the task, so words typed before the create
+   * can never flag the task they produced (see `DocRoom.pendingRevisionBump`).
+   * `peek`, not `get`: a task citing an unloaded doc answers undefined and the
+   * task simply never joins the staleness comparison, which is the quiet
+   * direction to be wrong in.
+   */
+  settledContentRevision(docId: string): number | undefined {
+    const room = this.peek(docId);
+    if (!room) return undefined;
+    this.commitRevisionBump(room);
+    return room.meta.contentRevision ?? 0;
+  }
+
+  /**
+   * One bump per authoring BURST, not per keystroke: every Yjs update while
+   * somebody types re-arms the timer, and the counter moves once when the
+   * doc goes quiet. The burst is the honest unit — "the plan changed" is a
+   * statement about an edit session, and per-update bumps would write CRDT
+   * meta on every keypress.
+   */
+  private scheduleRevisionBump(room: DocRoom): void {
+    room.pendingRevisionBump = true;
+    if (room.revisionTimer) clearTimeout(room.revisionTimer);
+    room.revisionTimer = setTimeout(() => this.commitRevisionBump(room), REVISION_SETTLE_MS);
+  }
+
+  private commitRevisionBump(room: DocRoom): void {
+    if (!room.pendingRevisionBump) return;
+    room.pendingRevisionBump = false;
+    if (room.revisionTimer) {
+      clearTimeout(room.revisionTimer);
+      room.revisionTimer = null;
+    }
+    const revision = (room.meta.contentRevision ?? 0) + 1;
+    const m = room.ydoc.getMap('meta');
+    // A string origin that does NOT start with 'agent': the meta write lands
+    // back in the room's own update hook, and an authoring-shaped origin here
+    // would re-arm the very debounce that just fired.
+    room.ydoc.transact(() => m.set('contentRevision', revision), CONTENT_REVISION_ORIGIN);
+    room.meta.contentRevision = revision;
+    const ids = room.meta.alias ? [room.docId, room.meta.alias] : [room.docId];
+    this.onContentRevision?.(ids, revision);
+  }
+
+  /**
+   * Move a doc's plan gate. `'pending'` marks the doc a plan whose derived
+   * tasks are drafts; `'approved'` records who released it. Releasing the
+   * HELD TASKS is the task store's half — the route calls both, because the
+   * two stores deliberately do not know each other.
+   */
+  setPlanState(
+    docId: string,
+    state: 'pending' | 'approved',
+    by?: string,
+  ): { ok: true; docId: string; changed: boolean } | { ok: false; error: 'not-found' } {
+    const room = this.get(docId);
+    if (!room) return { ok: false, error: 'not-found' };
+    if (room.meta.planState === state) return { ok: true, docId: room.docId, changed: false };
+    const m = room.ydoc.getMap('meta');
+    const approvedAt = state === 'approved' ? Date.now() : undefined;
+    room.ydoc.transact(() => {
+      m.set('planState', state);
+      if (state === 'approved') {
+        if (by !== undefined) m.set('planApprovedBy', by);
+        m.set('planApprovedAt', approvedAt);
+      } else {
+        // Back to pending: the old approval is a claim about a released
+        // plan, and keeping it beside `pending` would say two things at once.
+        m.delete('planApprovedBy');
+        m.delete('planApprovedAt');
+      }
+    }, CONTENT_REVISION_ORIGIN);
+    room.meta.planState = state;
+    room.meta.planApprovedBy = state === 'approved' ? by : undefined;
+    room.meta.planApprovedAt = approvedAt;
+    return { ok: true, docId: room.docId, changed: true };
+  }
+
   noteHumanEdit(docId: string, at: number = Date.now()): void {
     const room = this.get(docId);
     if (room) room.lastHumanEditAt = at;
@@ -5409,15 +5547,48 @@ export class Rooms {
     });
   }
 
+  /**
+   * Revert any write to a SERVER_META_KEY that did not come from the server.
+   *
+   * Different repair from `guardPrivateMeta`, because the server DOES write
+   * these keys into the CRDT: a bare delete would erase legitimate state, so
+   * the guard restores each touched key from the in-memory mirror — which is
+   * authoritative here by construction: it is populated from the loaded doc
+   * before this observer attaches (`wireEvents` runs after `loadFromDisk`),
+   * and every server write to these keys updates it in the same call.
+   */
+  private guardServerMeta(room: DocRoom): void {
+    const meta = room.ydoc.getMap('meta');
+    meta.observe((event, tr) => {
+      if (tr.origin === CONTENT_REVISION_ORIGIN || tr.origin === PRIVATE_META_GUARD_ORIGIN) return;
+      const touched = SERVER_META_KEYS.filter((key) => event.keysChanged.has(key));
+      if (touched.length === 0) return;
+      room.ydoc.transact(() => {
+        for (const key of touched) {
+          const want = room.meta[key];
+          if (want === undefined) meta.delete(key);
+          else meta.set(key, want);
+        }
+      }, PRIVATE_META_GUARD_ORIGIN);
+      console.error(
+        `[rooms] ${room.docId}: reverted peer write to server meta key(s): ${touched.join(', ')}`,
+      );
+    });
+  }
+
   private wireEvents(room: DocRoom): void {
     room.ydoc.on('update', (_update: Uint8Array, origin: unknown) => {
       // One hook, every writer. See `DocRoom.lastContentChangeAt` for why the
       // three pre-existing timestamps could not be used, and
       // `isAuthoringOrigin` for what counts as somebody working and why.
-      if (isAuthoringOrigin(room, origin)) room.lastContentChangeAt = Date.now();
+      if (isAuthoringOrigin(room, origin)) {
+        room.lastContentChangeAt = Date.now();
+        this.scheduleRevisionBump(room);
+      }
       this.saveToDisk(room);
     });
     this.guardPrivateMeta(room);
+    this.guardServerMeta(room);
     // Code and diff docs have no prose fragment — the prose-fragment
     // auto-reanchor sweep below would find nothing and orphan every thread.
     // Run the flat-text twin instead: observe the raw `content` Y.Text and
@@ -5594,6 +5765,11 @@ export class Rooms {
    * the deploy's refusal logic stays on `pendingFileWrites`.
    */
   flush(): void {
+    // Settle revision debounces FIRST: the commit writes CRDT meta, which
+    // schedules the very saves the passes below persist. After a restart the
+    // counter is all that remains of an edit burst — the in-memory clocks are
+    // deliberately not durable.
+    for (const room of this.rooms.values()) this.commitRevisionBump(room);
     // A write-back can re-arm a timer while flushing (the reconcile guard's
     // conflict path re-schedules the flush it just consumed), so sweep until
     // quiescent — bounded, so a wedged binding cannot loop forever.

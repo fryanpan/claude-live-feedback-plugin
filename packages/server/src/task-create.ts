@@ -233,11 +233,22 @@ function batchRefIn(raw: unknown): string | undefined {
  * review item is ordinarily visible): a note that is always there is a note
  * nobody reads.
  */
-export function createdVisibility(status: string, hasReview: boolean): string | undefined {
+export function createdVisibility(
+  status: string,
+  hasReview: boolean,
+  planHeld = false,
+): string | undefined {
   const triage = status === 'triage';
   if (!triage && !hasReview) return undefined;
   const parts: string[] = [];
-  if (triage) {
+  if (planHeld) {
+    // The stronger sentence REPLACES the triage one: a held draft cannot be
+    // transitioned out, so naming task_transition as the way forward would
+    // send the caller to a door that refuses.
+    parts.push(
+      'This row is a plan draft: visible on the board, in no dispatch read, and held in triage until the plan doc is approved — approval releases it to todo.',
+    );
+  } else if (triage) {
     parts.push(
       'This row is in triage: no dispatch read returns it until task_transition moves it to todo or in-progress.',
     );
