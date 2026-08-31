@@ -282,8 +282,15 @@ export const HELD_ITEM_DEFAULT_MS = 5 * 60_000;
 /** One held review item as the wake names it. `id` is the TICKET's id — the
  *  row the lead drives — and `reviewItemId` the item on it. */
 export interface HeldItemRow {
+  /** The row's opaque key — its TICKET's id for an item filed on a ticket,
+   *  its DOC's id for one filed on a comment. It is what the stall stamp
+   *  dedupes on, so it only has to be stable and unique, and both id spaces
+   *  already are. */
   id: string;
   title: string;
+  /** The item's id on whichever surface holds it: the review item's id on a
+   *  ticket, the COMMENT's id on a doc thread. Both address exactly one ask,
+   *  which is all `filerKey` and the stamp need of it. */
   reviewItemId: string;
   headline: string;
   /** The judge's reason: the gap the filer was asked to close. */
@@ -297,10 +304,27 @@ export interface HeldItemRow {
   filedBy: string;
   /** The filer's agent id, for the addressed nudge. Absent when unknown. */
   filerAgentId?: string;
+  /**
+   * The paste-ready `revise_review_item(…)` call that ends this hold —
+   * spelled by whoever built the row, because only they know which surface
+   * the item is on. Carried rather than re-derived so the lead's line, the
+   * filer's wake and the filing route's own result cannot name three
+   * different addresses for one item.
+   */
+  revise?: string;
+  /** The doc-thread address, when that is where the item lives. Absent on a
+   *  ticket item, which has `taskId` instead. */
+  docId?: string;
+  threadId?: string;
+  commentId?: string;
+  /** The ticket the item hangs on, when it hangs on one. */
+  taskId?: string;
 }
 
 export interface HeldItemInput {
-  taskId: string;
+  /** Absent for an item filed on a plain doc thread — there is no ticket.
+   *  `docId` is then what identifies the row. */
+  taskId?: string;
   title: string;
   reviewItemId: string;
   headline: string;
@@ -308,6 +332,10 @@ export interface HeldItemInput {
   heldAt: number;
   filedBy: string;
   filerAgentId?: string;
+  revise?: string;
+  docId?: string;
+  threadId?: string;
+  commentId?: string;
 }
 
 /**
@@ -325,8 +353,14 @@ export function overdueHeldItems(
   for (const item of items) {
     const age = now - item.heldAt;
     if (age <= heldMs) continue;
+    // Ticket id where there is one, doc id where there is not — see `id`. An
+    // item with neither is unaddressable: it would render as a hold nobody
+    // can find and would collide with every other such row in the stamp, so
+    // it is dropped rather than shown.
+    const id = item.taskId ?? item.docId;
+    if (id === undefined) continue;
     out.push({
-      id: item.taskId,
+      id,
       title: item.title,
       reviewItemId: item.reviewItemId,
       headline: item.headline,
@@ -335,6 +369,11 @@ export function overdueHeldItems(
       heldAt: item.heldAt,
       filedBy: item.filedBy,
       ...(item.filerAgentId !== undefined ? { filerAgentId: item.filerAgentId } : {}),
+      ...(item.revise !== undefined ? { revise: item.revise } : {}),
+      ...(item.taskId !== undefined ? { taskId: item.taskId } : {}),
+      ...(item.docId !== undefined ? { docId: item.docId } : {}),
+      ...(item.threadId !== undefined ? { threadId: item.threadId } : {}),
+      ...(item.commentId !== undefined ? { commentId: item.commentId } : {}),
     });
   }
   return out.sort((a, b) => b.heldMs - a.heldMs);
