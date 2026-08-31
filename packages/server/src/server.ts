@@ -7685,11 +7685,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(200, { asked: true, task: asked.task, item: asked.item });
             }
             const item = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
-            // An unknown item and an already-answered one both fall through to
-            // the ordinary answer path below, which owns those refusals — an
-            // answered item's exchange is closed, and a question recorded on
-            // it would reach nobody (`reviewItemState` reads `answer` first).
-            if (item && item.answer === undefined) {
+            // An unknown item falls through to the ordinary answer path below,
+            // which owns that refusal. An ANSWERED one is refused here: the
+            // fall-through would let `answerTaskReview`'s legal repeat-answer
+            // displace the standing answer with a question — a stale form
+            // racing another reader's answer would overwrite it with the exact
+            // words this conversion exists to keep out of that field (codex
+            // review). A question recorded on a closed item would also reach
+            // nobody: `reviewItemState` reads `answer` first.
+            if (item?.answer !== undefined) {
+              return j(409, {
+                error: 'answered',
+                message:
+                  'this item is already answered — a question cannot displace the recorded answer; undo the answer first, or ask on the item’s thread',
+              });
+            }
+            if (item) {
               // One open question at a time, the anchored ask's own rule: a
               // second would orphan the first, because revise only answers the
               // newest threaded question (`latestThreadedQuestion`).

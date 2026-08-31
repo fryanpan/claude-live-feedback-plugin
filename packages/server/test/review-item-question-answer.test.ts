@@ -232,6 +232,28 @@ describe('answering with a question asks back instead of closing', () => {
       expect((await storedItem(ws, task.id, itemId)).infoRequests?.length).toBe(1);
     });
 
+    it('refuses a question on an ANSWERED item — it must not displace the recorded answer', async () => {
+      // The stale-form race: reader A answers, reader B's card still shows the
+      // open item and B types a question. Falling through to the answer path
+      // would move A's answer into priorAnswers and stamp B's question as the
+      // decision — the incident, one displacement deeper (codex review).
+      const ws = await seedWorkspace();
+      const task = await seedTask(ws);
+      const itemId = await seedItem(task.id);
+      await jj(await answer(task.id, itemId, { text: 'Keep it — disk is cheap.', author: PERSON }));
+
+      const stale = await answer(task.id, itemId, {
+        text: 'Why is this important?',
+        author: { id: 'known-riley', name: 'Riley', kind: 'known', color: '#3a7' },
+      });
+      expect(stale.status).toBe(409);
+      expect(((await stale.json()) as { error: string }).error).toBe('answered');
+      // The standing answer survives, undisplaced.
+      const item = await storedItem(ws, task.id, itemId);
+      expect(item.answer?.text).toBe('Keep it — disk is cheap.');
+      expect(item.infoRequests).toBeUndefined();
+    });
+
     it('positive control: plain prose still answers and clears the row', async () => {
       const ws = await seedWorkspace();
       const task = await seedTask(ws);
