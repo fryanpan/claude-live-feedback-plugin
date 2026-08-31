@@ -254,6 +254,26 @@ button {
   color: #fff;
   border-color: var(--accent);
 }
+/* A control that cannot be used has to LOOK unusable. Same treatment as
+   `.comment-nav:disabled` above, hoisted to every icon button, because the
+   sign-in gate disables the edit and Suggesting toggles and they sat
+   pixel-identical to the live controls beside them. A `title` is not a
+   substitute: the primary device here is an iPad, where nothing hovers.
+   The `:hover` and pressed-state overrides are the point — without them a
+   disabled toggle still lights up under a pointer and a disabled
+   `aria-pressed` toggle still paints itself accent. */
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.icon-btn:disabled:hover {
+  background: var(--bg);
+}
+.icon-btn:disabled[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  border-color: var(--border);
+}
 /* In view mode, the editor is read-only — formatting commands are no-ops
    and the Aa toggle would just confuse. Hide it. The 💬 (threads) and
    ✏️ (edit-mode) buttons stay useful. */
@@ -1081,6 +1101,20 @@ body.hub-body {
 .hub-btn:hover {
   background: var(--bg-hover);
 }
+/* Unusable has to look unusable — see `.icon-btn:disabled`. The `:hover`
+   override is the load-bearing half on a pointer device, and the reason this
+   is not left to a `title` is that the primary device here has no hover at
+   all. */
+.hub-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.hub-btn:disabled:hover {
+  background: var(--bg-panel);
+}
+.hub-btn-primary:disabled:hover {
+  background: var(--accent);
+}
 .hub-btn-primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -1314,7 +1348,8 @@ body.hub-body {
 /* The same stroked glyphs the rail wears, sized as boxes — decoration, not a
    target (see `.voice-mic svg`). */
 .hub-quick-new svg,
-.hub-huddle-start svg {
+.hub-huddle-start svg,
+.hub-conversation-start svg {
   display: block;
   width: 15px;
   height: 15px;
@@ -2764,6 +2799,143 @@ body.hub-body {
 .hub-due-overdue {
   color: var(--red);
   font-weight: 600;
+}
+/* The goal's progress strip: how much of your own attention this goal still
+   wants, how far along it is, and roughly when it lands.
+
+   Bryan's approved treatment (mock round six, variant 1, 2026-08-30). A row
+   of its own beneath the goal header — hands-on pinned LEFT, progress and
+   projected finish pinned RIGHT, 12px uppercase labels over 16px values.
+   That floor is why this variant survived five rounds of mocks: nothing here
+   paints below 12px and no value below 16px, at any width.
+
+   THE TWO RIGHT-HAND COLUMNS ARE FIXED IN PIXELS, and that is the layout
+   rather than an accident of it. Every band is its own grid, so `auto`
+   tracks get sized by that band's own content and the two labels land on a
+   different x in each band — 13.5px of drift, measured on the mock, which is
+   the correction Bryan made in approving it (*"please align the PROGRESS
+   label and PROJECTED FINISH label across goals so it doesn't look shabby"*).
+   Fixed tracks pin both labels by construction, for any content, without the
+   bands having to agree on a width first. The FLEXIBLE track is the left
+   one, so a long hands-on figure or a coverage caveat cannot move anything
+   to its right.
+
+   The tracks are sized from measured text, not guessed: 246px holds
+   PROGRESS (69) + bar (110) + `100%` (46) with the gaps; 280px holds
+   PROJECTED FINISH (122) and the widest string the model prints on one line
+   — `date after 3 closes` (141), longer than any date it can produce. A
+   string wider still (a two-ended projection carrying years) wraps under its
+   own label rather than clipping or shoving the column: a wrap spends
+   height, the cheap axis on a surface that already scrolls, and it keeps the
+   alignment the strip exists for. */
+.hub-goal-effort {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 246px 280px;
+  align-items: center;
+  gap: 0 20px;
+  padding: 9px 14px 10px 30px;
+  background: var(--bg-panel);
+  border-left: 3px solid var(--accent);
+}
+/* The header and its strip read as ONE block, so the hairline that separates
+   a goal from its tasks moves down to the strip when there is one rather
+   than drawing a line through the middle of the header. */
+.hub-band:not(.is-collapsed) .hub-goal-row:has(+ .hub-goal-effort) {
+  border-bottom: none;
+}
+.hub-band:not(.is-collapsed) .hub-goal-effort {
+  border-bottom: 1px solid var(--border);
+}
+.hub-goal-effort-pair {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+/* Every label. 12px is the floor and nothing goes under it; uppercase at 600
+   is what keeps a 12px label legible beside a 16px value without competing
+   with it for the eye. */
+.hub-goal-effort-k {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.hub-goal-effort-v {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+/* The strip's one colour: the projection lands past the goal's own due date.
+   It is on the date and not the whole strip, because that is the fact that
+   is late. */
+.hub-goal-effort-late {
+  color: var(--red);
+}
+/* An 8px rule has no baseline of its own to share with the values, so it
+   centres on the row instead. */
+.hub-goal-effort-progress .hub-goal-bar {
+  align-self: center;
+}
+/* The percentage keeps a slot of its own, so `8%` and `100%` leave PROJECTED
+   FINISH in the same place as each other. */
+.hub-goal-effort-pct {
+  min-width: 44px;
+  text-align: right;
+}
+/* The date sits at the right edge of its fixed track and the label at the
+   left edge, so neither moves when the date's width does. */
+.hub-goal-effort-fin {
+  justify-content: space-between;
+}
+.hub-goal-effort-fin .hub-goal-effort-v {
+  text-align: right;
+  white-space: normal;
+}
+/* How many of the band's tickets the bar does NOT cover. It rides the
+   flexible column with the hands-on figure — never a pinned one. Muted, and
+   at the label's 12px rather than the value's 16px, because it is a caveat
+   in words and not a third number. */
+.hub-goal-effort-note {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+/* The caveat follows the figure it qualifies, so it needs the separator the
+   strip uses between two facts on one line. */
+.hub-goal-effort-note::before {
+  content: "\00b7\00a0";
+}
+/* A goal nobody has scored gets one sentence and no columns — there is no
+   number to align it with. Neither a label nor a value: an absence, drawn as
+   ordinary muted prose, still above the 12px floor. */
+.hub-goal-effort-bare {
+  grid-template-columns: minmax(0, 1fr);
+}
+.hub-goal-effort-bare .hub-goal-effort-v {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  white-space: normal;
+}
+.hub-goal-bar {
+  display: inline-block;
+  position: relative;
+  flex: 0 0 auto;
+  width: 110px;
+  height: 8px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 99px;
+}
+.hub-goal-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
 }
 /* The goal's open caret: the task row's hover affordance, same size, same
    opacity reveal. Hidden on mobile (the whole row opens there) — see the
@@ -5215,6 +5387,73 @@ a.hub-link-chip:hover {
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
+  /* TWO ROWS, and Progress on the first — Bryan, approving the strip:
+     *"on mobile, put PROGRESS on the first row and Hands-on on the second
+     row"*. Projected finish is the one he did not place; it joins hands-on
+     on row two, keeping the strip's left/right pairing, and that is also the
+     only placement that holds the count at two rows.
+
+     Nothing here shrinks type — the floor is 12px labels and 16px values at
+     every width, and a row bought by shrinking a value is not a row Bryan
+     asked for. What buys this one is the bar taking the row's slack instead
+     of a fixed 110px, and the pinned columns letting go: there is no column
+     to align at a width where one band fills the screen on its own.
+
+     The strip stays on a COLLAPSED band, unlike `.hub-band-tasks`. The "a
+     folded band shows nothing extra" decision is about what replaces the
+     task list; a one-line summary of a goal you have folded away is the
+     moment the summary is worth most. */
+  .hub-goal-effort {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "prog prog"
+      "hands fin";
+    gap: 6px 12px;
+    padding: 8px 12px 9px 24px;
+  }
+  .hub-goal-effort-progress {
+    grid-area: prog;
+  }
+  .hub-goal-effort-hands {
+    grid-area: hands;
+  }
+  .hub-goal-effort-fin {
+    grid-area: fin;
+    justify-content: flex-end;
+  }
+  .hub-goal-effort-progress .hub-goal-bar {
+    flex: 1 1 auto;
+    width: auto;
+  }
+  /* Which half of row two gives way when the two of them cannot both fit is
+     decided here, and it decides in favour of the LEFT one: hands-on takes
+     the width it needs (`auto`) and the date takes what is left. The other
+     way round — measured — squeezed the hands-on pair to 78px and drew "20m"
+     straight over the PROJECTED FINISH label beside it. A date too long for
+     what remains wraps under its own label instead, which spends a row and
+     draws nothing on top of anything. */
+  .hub-goal-effort-fin {
+    min-width: 0;
+  }
+  /* The words row two cannot afford. With both labels whole it wants 454px
+     of the 364px it has; without these two fragments it wants 341px and
+     every string the model can print — the longest date, the longest "no
+     date yet" sentence — fits on two rows with room to spare. Type sizes are
+     untouched: 12px labels, 16px values, here as everywhere. */
+  .hub-goal-effort-k-long {
+    display: none;
+  }
+  /* The caveat is the first thing dropped when width runs out: the TITLE is
+     the primary task at this end (*"Primary task is still to read the title
+     so don't block that on mobile"*), and a second row that has to hold two
+     figures cannot also hold a sentence. */
+  .hub-goal-effort-note {
+    display: none;
+  }
+  .hub-goal-effort-bare {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "hands";
+  }
   .hub-band-tasks {
     padding-left: 24px;
   }
@@ -6494,6 +6733,37 @@ body.is-reading-width #editor > .ProseMirror {
   color: var(--fg-muted);
   cursor: default;
 }
+/* "Detect multiple speakers" — a switch, not a second Start. Unpressed it is
+   the quiet default (one voice, no diarization bill); pressed it fills, the
+   way the strip's own live state does. The label never changes with the
+   state: `aria-pressed` carries that, and a button whose words flip between
+   the state and the action reads as neither.
+
+   Same 36px floor as the toggle beside it (design-mobile.md) and nothing
+   inside it clips — the tag's lesson higher up this section. */
+.meeting-mode {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-mode[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  color: var(--accent);
+}
+.meeting-mode:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
 @media (min-width: 721px) {
   /* The strip is one row here, so the micro-row stops being a box and its
      children join the strip's own flex line. That flattens them in SOURCE
@@ -6508,8 +6778,11 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-caption {
     order: 2;
   }
-  .meeting-toggle {
+  .meeting-mode {
     order: 3;
+  }
+  .meeting-toggle {
+    order: 4;
   }
 }
 @media (max-width: 720px) {
@@ -6538,8 +6811,18 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-caption {
     height: 2.9em;
   }
-  .meeting-toggle {
+  /* The stacked micro-row: the mode sits with the clock and Start is pushed
+     to the far edge. Below 380px the words and both controls no longer fit on
+     one line, so the row wraps rather than squeezing the tap targets. */
+  .meeting-mode {
     margin-left: auto;
+  }
+  .meeting-toggle {
+    margin-left: 8px;
+  }
+  .meeting-strip-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
   /* ---- The strip yields while an editor has focus ----
      Bryan, from his phone after tapping a table cell: "the keyboard and voice
@@ -6566,6 +6849,12 @@ body.is-reading-width #editor > .ProseMirror {
     padding-bottom: calc(4px + var(--safe-bottom) + var(--kb-bottom, 0px));
   }
   body[data-edit-viewport="compact"] .meeting-caption {
+    display: none;
+  }
+  /* A live strip keeps the dot, the clock and Stop. The mode switch is
+     disabled for the length of a meeting anyway, and this row has no room to
+     spare while a keyboard is up. */
+  body[data-edit-viewport="compact"] .meeting-mode {
     display: none;
   }
 }
@@ -9600,6 +9889,77 @@ a.signin-link {
     height: 50px;
     font-size: 20px;
   }
+}
+
+/* ---------- Sign-in required (a refused write, and the standing notice) ----
+   Lives in this section rather than a new banner at EOF: it is sign-in UI,
+   and it reuses the identity prompt's scrim/card wholesale — only the primary
+   action differs (an <a>, because it navigates). The bar is fixed to the
+   bottom so it never covers the top bar's controls, and it wraps rather than
+   scrolls at 430px. */
+.signin-required-go {
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.signin-required-go:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+/* An in-flow row, not an overlay. It used to be `position: fixed` under the
+   viewport top, offset by the doc topbar's measured height; on the board
+   there is no `#topbar` to measure, so it fell back to a constant and landed
+   on the action row, and at 430px on the doc it covered the H1 and the format
+   bar. A fixed box over a page covers something at some width — the fix is to
+   take space rather than to find a band that looks free. `mountSignInBar`
+   puts it under each surface's header. */
+.signin-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  /* Reads as chrome attached to the header above it, which is what it is. */
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+/* The doc shell declares its rows, so the row this bar occupies has to be
+   declared too — `#shell`'s `48px 1fr` has no track for a third child, and
+   without this the bar is laid into the topbar's 48px and clipped. */
+body.signin-gated #shell {
+  grid-template-rows: auto 48px 1fr;
+}
+/* Fallback for a surface with no header to sit under (see mountSignInBar).
+   Bottom-docked, because the top of an unknown page is the band most likely
+   to already be spoken for. */
+.signin-bar--floating {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(12px + var(--safe-bottom, 0px));
+  z-index: 900;
+  max-width: min(560px, calc(100vw - 24px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.signin-bar a {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.signin-bar a:hover,
+.signin-bar a:focus-visible {
+  text-decoration: underline;
 }
 
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */

@@ -149,6 +149,7 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
+import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import {
   captureMockup,
   checkMockupSource,
@@ -508,6 +509,30 @@ export interface ServerOptions {
    * whichever way the flag is set.
    */
   requireEmailAuth?: boolean;
+  /**
+   * A browser must be SIGNED IN to write (`CW_REQUIRE_SIGNIN_TO_WRITE`).
+   * Default off, and off means byte-for-byte today's behaviour.
+   *
+   * Deliberately a second switch rather than a widening of
+   * `requireEmailAuth`. That one governs what a session MEANS and has never
+   * governed whether you need one — with it on and this one off, a browser
+   * that signs in is believed over its own claimed body, and a browser that
+   * does not sign in still writes as whatever it typed. This flag is the
+   * other half: with it on, an ordinary write from a browser that has proven
+   * nothing is refused, and the person is told to sign in.
+   *
+   * Two flags because the two answers are independently useful. Trustworthy
+   * attribution for whoever does sign in costs nobody anything and can go on
+   * first; requiring it of everyone makes a first-time reviewer sign in
+   * before their first comment, which is a decision about audience, not
+   * about identity plumbing.
+   *
+   * What it does NOT gate: reads (never — everyone who can reach this server
+   * can read it), the `/api/auth/*` flow (gating it would be a deadlock),
+   * and anything that is not a browser. See middleware/write-gate.ts for why
+   * agents are outside the gate and what that boundary is worth.
+   */
+  requireSignInToWrite?: boolean;
   /**
    * Sentry DSN for the BROWSER apps (`CW_SENTRY_DSN`). Server config on the
    * box, never the public repo: a DSN is a public client key, but committing
@@ -3622,6 +3647,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
   const codeSender = opts.codeSender ?? createLogCodeSender();
   const requireEmailAuth = opts.requireEmailAuth ?? false;
+  const requireSignInToWrite = opts.requireSignInToWrite ?? false;
   // Teach the owner check the owner's email identity. Without this the check
   // keeps matching only `known-bryan` / "Bryan", and the day the owner's
   // identity becomes `user-<hash>` the owner-activity view quietly reads
@@ -4292,6 +4318,40 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           }
         }
 
+        /**
+         * `true` when this request comes from a browser that has proven
+         * nobody. The three proofs, in the order `authorFor` ranks them: a
+         * widget popup-token, a Cloudflare Access claim, a session cookie —
+         * the last two both resolved by `provenIdentityFor`.
+         *
+         * Shared by the write gate below and by the `/y/` upgrade, which is
+         * the one write surface that is not an HTTP write: a markdown doc's
+         * prose is edited over the websocket, so a gate that only looked at
+         * methods would refuse the comment and wave the edit through.
+         */
+        const browserProvedNobody = (): boolean =>
+          isBrowserRequest(req.headers) && widgetIdentity === null && provenIdentityFor() === null;
+
+        // --- Sign-in write gate ---
+        // Every ordinary write — a comment, a task edit, a review answer, a
+        // doc bind — passes through here, because every one of them is a
+        // non-GET and every route on this server lives below this line. The
+        // predicate is method-keyed rather than a route list on purpose: a
+        // list is a thing that silently stops being complete.
+        //
+        // Reads are untouched, agents are untouched (see write-gate.ts for
+        // what tells them apart and what that boundary is worth), and the
+        // refusal carries the URL that fixes it — a bare 401 is
+        // indistinguishable from a bug, and the client turns this body into
+        // a sign-in prompt.
+        //
+        // Order: below the widget-token gate so a valid token counts as
+        // proof, and below the host/Access gates so an Access visitor's
+        // verified email is already in hand.
+        if (requireSignInToWrite && isGatedWrite(req.method, pathname) && browserProvedNobody()) {
+          return j(401, signInRequiredBody());
+        }
+
         // --- The widget popup-token handshake ---
         // The popup page itself. The handshake is popup-only: framed, it
         // would mint with nothing visible on screen, so DENY.
@@ -4472,6 +4532,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // signed in" from "signing in does not matter here yet".
             required: requireEmailAuth,
             authenticated: rec !== null,
+            /**
+             * Whether this deployment refuses unsigned browser writes, and
+             * whether THIS browser may make one.
+             *
+             * The client needs both BEFORE it offers a surface, not only
+             * after a write is refused. A reader who is allowed to type into
+             * a doc whose every keystroke the server will drop has been told
+             * nothing — the text appears, syncs to nobody, and is gone on
+             * reload. So the review app asks here first and stays in view
+             * mode with a sign-in bar when the answer is no; the 401 below
+             * remains the backstop for a session that ends mid-visit.
+             *
+             * `canWrite` resolves the same three proofs the gate does, so a
+             * Cloudflare Access visitor and a widget token both read true
+             * even though neither is the session cookie `authenticated`
+             * reports on.
+             */
+            signInToWrite: requireSignInToWrite,
+            canWrite: !requireSignInToWrite || !browserProvedNobody(),
             ...(rec ? { user: userForIdentity(rec) } : {}),
           });
         }
@@ -4889,8 +4968,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               return j(404, { error: 'doc not found' });
             }
           }
+          // READ-ONLY, not refused. The editing socket is also the READING
+          // socket — a markdown doc's text arrives over it and nowhere else
+          // — so refusing the upgrade would gate reading, which this gate
+          // must never do. The socket opens, sync step 1 hands over the
+          // whole doc, and `onMessage` drops anything that would change it
+          // (see yjs-protocol.ts). Decided once here, at the handshake, and
+          // then carried for the life of the connection: the same shape the
+          // share authorization uses two lines up.
+          const readOnly = requireSignInToWrite && browserProvedNobody();
           const upgraded = server.upgrade(req, {
-            data: { docId, ...(visitorShareId ? { shareId: visitorShareId } : {}) },
+            data: {
+              docId,
+              ...(visitorShareId ? { shareId: visitorShareId } : {}),
+              ...(readOnly ? { readOnly: true } : {}),
+            },
           });
           if (!upgraded) return new Response('upgrade required', { status: 426 });
           return undefined;

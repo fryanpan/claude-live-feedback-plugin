@@ -42,6 +42,20 @@ flowchart LR
 - **Turns revise in place.** A `transcript` frame carries the WHOLE turn text
   and a `final` flag; a later frame with the same turn number replaces the
   earlier text, which is how a mis-heard word corrects on screen.
+- **A capture says who is expected to be in the room, and pays for that.**
+  `solo` is the default and the whole of the default: no diarization, no
+  surcharge, one voice assumed. `conversation` is asked for, and it is the
+  only thing that turns speaker labels on. The choice is made BEFORE the mic
+  opens and cannot move while it runs — a streaming session's configuration
+  is its connect URL — so the strip's switch is disabled for the length of a
+  meeting and says to stop and start. Two ways in: the Board's "Record a
+  conversation" button (the press IS the announcement — nothing else tells a
+  server that two people sat down), which carries `mode=conversation` on the
+  address beside `huddle=1`; and the strip's own "Detect multiple speakers"
+  switch, for a doc already open. `ready` echoes back the mode the SERVER
+  opened, so the strip reports the session being billed rather than the one
+  it asked for, and the meeting record keeps it because it is what the
+  meeting cost.
 - **Who said it rides the same frame.** The engine's speaker label (`"A"`,
   `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
   a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
@@ -75,6 +89,33 @@ not a rework.
 streaming URL — supported on every streaming model, **+$0.12/hr** on top of
 the $0.15 base (docs: streaming/label-speakers-and-separate-channels for the
 parameter, assemblyai.com/pricing for both figures, re-checked 2026-08-30).
+**Sent only for a `conversation` capture** (2026-08-30, owner: *"assume by
+default that Bryan is alone"*): the parameter is absent — not `false` — on a
+solo session, because an unpriced session is one that never asked.
+
+**A meeting is a CHAIN of sessions, because a session ends at three hours.**
+AssemblyAI closes one with code 3008 ("Session Expired: Maximum session
+duration exceeded") and bills the full three hours
+(streaming/common-session-errors-and-closures and the streaming API
+reference, read 2026-08-30). There is no idle limit alongside it —
+`inactivity_timeout` is optional and this adapter does not send one — so a
+long QUIET session was never the risk; the wall was, and a solo working
+session reaches it. A minute before the `expires_at` the engine gave in
+`Begin`, the adapter opens the next session, waits for its `Begin`, moves
+the audio across, and only then terminates the old one, whose flush still
+delivers the sentence it was mid-way through. Two things it has to get
+right, both tested: turn ids CONTINUE across the join, and a retired session
+is TERMINATED rather than dropped (a socket merely closed leaves the session
+open on their side, billed to the cap). Ids are the adapter's own, allocated
+the first time a leg emits a given `turn_order` and then remembered per leg
+— a fresh session counts from zero, and downstream a turn id is the identity
+a transcript revises in place and the key the record is written under, so
+the two legs must never name the same id. Allocating on first emission is
+what makes that safe during the overlap: the old leg can still open a turn
+while the new one is already carrying audio, and a base fixed at rollover
+time would hand both of them the same number.
+The two sockets overlap for one handshake and both are billed for it; that
+is the price of not cutting a meeting in half at hour three.
 
 **What a meeting costs.** Streaming is billed on the seconds the SOCKET IS
 OPEN, not on the audio sent — silence in the room costs the same as speech,
@@ -82,12 +123,13 @@ and the meeting's length is the bill.
 
 | | per hour | **per meeting-minute** |
 |---|---|---|
-| Universal-Streaming English | $0.15 | $0.0025 |
-| + speaker labels | $0.27 | **$0.0045** |
+| Universal-Streaming English (a `solo` capture) | $0.15 | $0.0025 |
+| + speaker labels (a `conversation` capture) | $0.27 | **$0.0045** |
 
 So labels add **$0.002 per meeting-minute** — $0.12 on a one-hour meeting,
 against $0.15 the meeting already cost. Roughly a 1.8x transcription bill for
-knowing who spoke. The notes composer and task capture are separate Haiku
+knowing who spoke, which is why the room has to be claimed rather than
+assumed. The notes composer and task capture are separate Haiku
 calls and are not in these numbers.
 
 Each
@@ -109,8 +151,11 @@ about the speaker" and leave an attribution the strip had already dropped.
 MOCK engine, which returns labels a fixture chose. That covers the plumbing
 end to end — label on the wire, in the record, in the composed notes, and the
 rename that rewrites them (`meeting-e2e.test.ts`) — and it cannot show that
-AssemblyAI separates two real voices, because no fixture can. Run
-`bun run scripts/diarize-check.ts` for that: it speaks a two-voice script
+AssemblyAI separates two real voices, because no fixture can. The mock also diarizes ONLY when the open asked it to, which is what makes
+the mode testable end to end: the same two-voice fixture comes back
+unlabelled in solo mode, so the e2e proves the flag reached an engine rather
+than proving the fixture has a `speaker` field. Run
+`bun run scripts/diarize-check.ts` for the part no fixture can do: it speaks a two-voice script
 through the real engine with two macOS `say` voices and prints the labels.
 It needs a key, opens a metered session (~$0.001), and is deliberately not
 part of any suite. As of 2026-08-30 the live half has NOT been run — no key
@@ -132,6 +177,20 @@ plus a `meetings.jsonl` index whose start/stop lines fold into one record
 per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized
 `[^A-Za-z0-9._-] → _`.
+
+**What the vendor keeps: nothing, and a 3-day floor under everything else.**
+The account (owner, 2026-08-31, Workspace → Settings → Data Controls) is
+opted out of model training with a 3-day TTL on audio and transcripts. The
+opt-out is what makes Streaming — the only thing this subsystem uses — ZERO
+retention of audio and transcripts, leaving just logging/billing metadata.
+The TTL caps AssemblyAI's ASYNC side at 3 days instead of the 30-day default,
+which is belt and braces here: this repo makes no `POST /v2/transcript` call,
+and on 2026-08-31 the account listed zero stored transcripts. Both are
+ACCOUNT settings, not session parameters, so no code here can set or assert
+them — `bun run scripts/assemblyai-retention-sweep.ts` is how you re-check
+what is actually stored, and deletes anything found (`--delete`); the
+mechanics it has to get right are in
+`packages/server/src/assemblyai-retention.ts`.
 
 ## Notes composition
 
@@ -268,7 +327,27 @@ same speaker-prefixed transcript the composer does and may return a
 `requester` for a request — guarded on the same law, so it must be a voice
 that tick actually carried; the created row's body then says who asked,
 which is the half of "who said what" a task can still answer a week later,
-once the strip is gone. New rows are
+once the strip is gone.
+
+**Each pass also reads the tail of the one before it**, marked as already
+read — the boundary between two ticks falls where the room went quiet, which
+is nowhere near where an ask ends. Measured live, both halves: "…that is the
+real cost" / boundary / "can you file a ticket for that one?" filed a row
+titled *"file a ticket for that one, a small spike would do"*, and "we should
+file tickets for the next few things I mention" / boundary / the things
+themselves lost the ask entirely. The window is the previous tick's TAIL —
+180 characters, six turns, the newest line clipped rather than dropped — kept
+raw so a voice named since then reads under its new name. Marking is what
+stops a second filing: the prompt says those lines were read last pass and
+that every item must draw part of itself from the new ones, and the board's
+own find-or-create folds a re-file into a link to the row the previous pass
+created. Both the guards and the model see exactly the same window, or the
+reference guard would reject the very matches the overlap exists to enable.
+Cost, measured on the capture model with `count_tokens` rather than estimated
+(`scripts/capture-overlap-cost.ts`): **+92 input tokens per tick** at a full
+window — 43 for the standing instruction, 49 for the speech.
+
+New rows are
 attributed to the `Meeting Assistant` agent actor and enter triage; a request
 judged clear-and-doable goes to the chores band at `todo` and wakes the
 board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
@@ -340,7 +419,7 @@ stored content.
 
 ## Where things live
 
-`packages/core/src/meeting.ts` (wire contract) ·
+`packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode`) ·
 `packages/server/src/meeting-protocol.ts` (lifecycle) ·
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·

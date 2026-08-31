@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The two buttons that replaced the Board's quick-add box, as stylesheet
+ * The buttons that replaced the Board's quick-add box, as stylesheet
  * facts — happy-dom resolves no layout, so the two numbers that matter are
  * asserted against the rules.
  *
@@ -26,6 +26,22 @@ function rule(selector: string, within: string = declarationsOnly(CSS)): string 
     `(^|\\n|\\{)\\s*${selector.replace(/[.+*[\]():#-]/g, '\\$&')}\\s*\\{([^}]*)\\}`,
   ).exec(within);
   return at?.[2] ?? '';
+}
+
+/**
+ * The block whose selector LIST contains this selector — `rule()` above only
+ * finds a selector that is the last one before the brace, which silently
+ * stops seeing a rule the moment somebody adds another selector after it.
+ */
+function ruleWith(
+  selector: string,
+  within: string = declarationsOnly(CSS),
+): { selectors: string; decls: string } {
+  for (const m of within.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sels = (m[1] ?? '').split(',').map((s) => s.trim());
+    if (sels.includes(selector)) return { selectors: m[1] ?? '', decls: m[2] ?? '' };
+  }
+  return { selectors: '', decls: '' };
 }
 
 function media(query: string): string {
@@ -77,7 +93,7 @@ describe('the quick-add box is gone from the stylesheet too', () => {
   });
 });
 
-describe('the pair sits in the slot the box had', () => {
+describe('the buttons sit in the slot the box had', () => {
   it('is one wrapping row in the WORKSPACE HUB section', () => {
     const hub = section(/\/\* =+ WORKSPACE HUB =+/);
     expect(hub, 'the hub banner went missing').not.toBe('');
@@ -110,10 +126,24 @@ describe('the pair sits in the slot the box had', () => {
     );
   });
 
-  it('sizes the huddle button’s mic glyph as a box, like every other mic', () => {
-    const glyph = rule('.hub-huddle-start svg');
-    expect(glyph).toMatch(/width:\s*\d+px/);
-    expect(glyph).toMatch(/height:\s*\d+px/);
+  it('sizes EVERY quick-action glyph as a box, like every other mic', () => {
+    // Measured in headless Chromium, 2026-08-30: the conversation button's
+    // two-person glyph was left out of this rule and rendered at its
+    // intrinsic 24px, which stretched the whole row from 44px to 71px — on
+    // the tier where height is the scarce axis. A grouped rule is easy to
+    // add a button beside and forget, so this asserts the LIST.
+    const glyph = ruleWith('.hub-conversation-start svg');
+    expect(glyph.decls).toMatch(/width:\s*\d+px/);
+    expect(glyph.decls).toMatch(/height:\s*\d+px/);
+    for (const sel of [
+      '.hub-quick-new svg',
+      '.hub-huddle-start svg',
+      '.hub-conversation-start svg',
+    ]) {
+      expect(glyph.selectors, `${sel} is not sized`).toContain(sel);
+    }
+    // Control: the finder answers nothing for a selector nobody styles.
+    expect(ruleWith('.hub-nonexistent-button svg').decls).toBe('');
   });
 });
 

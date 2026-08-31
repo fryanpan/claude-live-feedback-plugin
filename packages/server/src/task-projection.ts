@@ -325,6 +325,27 @@ export function projectTask(
     // row) and the REST queue say the same name. Omitted when nothing is
     // known, and the card states the clock alone rather than a guess.
     ...(taskAskedBy(task) !== '' ? { createdBy: taskAskedBy(task) } : {}),
+    // The effort model's two numbers, and the measured attention behind one
+    // of them. Projected because the GOAL BAR is computed in the browser
+    // (`@feedback/core/goal-effort`): the board already holds every row and
+    // its trail over this ydoc, so the bar and the finish date recompute the
+    // instant an estimate lands, with no fetch and no second implementation
+    // of the arithmetic to keep in step with this one.
+    //
+    // Conditional, like every other optional key here, and that is the whole
+    // contract rather than a style rule. Both fields are documented on `Task`
+    // as absent-means-not-measured, never zero; projecting `{ totalSeconds: 0 }`
+    // for a ticket nobody has read, or a zeroed estimate for one nobody has
+    // scored, would erase that distinction at the last step before the screen.
+    // `refresh` deletes projected keys absent from this object, so an estimate
+    // that is later withdrawn takes its key with it.
+    //
+    // The FAILED variant is projected too, in full. A row that says "we tried
+    // and got nothing" is a different thing to show than a row that was never
+    // scored, and the board can only draw the difference if the difference
+    // reaches it.
+    ...(task.effortEstimate !== undefined ? { effortEstimate: task.effortEstimate } : {}),
+    ...(task.readingTime !== undefined ? { readingTime: task.readingTime } : {}),
     updatedAt: task.updatedAt,
   };
 }

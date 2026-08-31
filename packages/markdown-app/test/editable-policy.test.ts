@@ -9,7 +9,7 @@ import { isEditableFileMember, isEditableRedlineMember } from '../src/code/edita
  * binding behind the member even though it is a live working-tree diff doc.
  */
 describe('isEditableFileMember', () => {
-  const live = { isDiff: true, diffTarget: '', relPath: 'app/src/Main.kt' };
+  const live = { isDiff: true, diffTarget: '', relPath: 'app/src/Main.kt', canWrite: true };
 
   it('live working-tree source member: editable', () => {
     expect(isEditableFileMember({ ...live, diffStatus: 'modified' })).toBe(true);
@@ -31,6 +31,15 @@ describe('isEditableFileMember', () => {
 
   it('non-diff docs: read-only', () => {
     expect(isEditableFileMember({ ...live, isDiff: false })).toBe(false);
+  });
+
+  // The same rule asked of the other end. The server drops every update
+  // frame from a browser that has proven nobody (`WsCtx.readOnly`), which is
+  // an unbound doc by another name and loses the typing just as silently —
+  // and unlike a REST write there is no 401 for the UI to notice.
+  it('a browser the server refuses: read-only, however live the member is', () => {
+    expect(isEditableFileMember({ ...live, diffStatus: 'modified', canWrite: false })).toBe(false);
+    expect(isEditableFileMember({ ...live, canWrite: false })).toBe(false);
   });
 });
 

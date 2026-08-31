@@ -74,4 +74,40 @@ describe('sign-in page css', () => {
     expect(chip).toContain('width: 36px');
     expect(chip).toContain('height: 36px');
   });
+
+  it('makes the read-only notice a layout row, not an overlay', () => {
+    // It shipped as one `position: fixed` box offset by the doc topbar's
+    // measured height. On the board there is no `#topbar` to measure, so the
+    // fallback constant put it on the action row and "Start a planning
+    // huddle" could not be clicked at all; at 430px on the doc it covered the
+    // H1 and the format bar. A fixed box over a page covers something at some
+    // width — taking space is the fix, not finding a band that looks free.
+    const bar = rule('.signin-bar');
+    expect(bar).not.toContain('position: fixed');
+    expect(bar).toContain('display: flex');
+    // The doc shell declares its own rows, so the bar's row has to be
+    // declared too — otherwise it lands inside the topbar's 48px and clips.
+    expect(rule('body.signin-gated #shell')).toContain('grid-template-rows: auto 48px 1fr');
+    // The fallback for a surface with no header still floats, and docks to
+    // the bottom rather than to the band the doc title lives in.
+    const floating = rule('.signin-bar--floating');
+    expect(floating).toContain('position: fixed');
+    expect(floating).toContain('bottom:');
+    expect(floating).not.toContain('top:');
+  });
+
+  it('makes a control the write gate disabled LOOK disabled', () => {
+    // Both gated toggles were pixel-identical to the live control beside
+    // them: opacity 1, cursor pointer. A `title` is not the substitute — the
+    // primary device here is an iPad, where nothing hovers.
+    for (const sel of ['.icon-btn:disabled', '.hub-btn:disabled']) {
+      const disabled = rule(sel);
+      expect(disabled).toContain('opacity: 0.35');
+      expect(disabled).toContain('cursor: default');
+    }
+    // And does not light up under a pointer, which is where the convention
+    // at `.comment-nav:disabled` stops and these two needed more.
+    expect(rule('.icon-btn:disabled:hover')).toContain('background:');
+    expect(rule('.icon-btn:disabled[aria-pressed="true"]')).toContain('background: var(--bg)');
+  });
 });

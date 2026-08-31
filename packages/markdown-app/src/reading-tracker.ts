@@ -1,4 +1,5 @@
 import type { User } from '@feedback/core';
+import { asBackgroundWrite } from './signin/write-gate.ts';
 
 /**
  * Interaction-bounded reading-session tracker — IRONCLAD against idle
@@ -141,11 +142,17 @@ export function startReadingTracker(opts: ReadingTrackerOptions): () => void {
       // fall through to fetch
     }
     try {
-      void fetch(postUrl, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body,
-        keepalive: true,
+      // Nobody asked for this POST — it fires on load and on leave. Marked,
+      // so that when the sign-in gate refuses it the reader gets the standing
+      // bar rather than a modal demanding they sign in to do something they
+      // never did.
+      asBackgroundWrite(() => {
+        void fetch(postUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          keepalive: true,
+        });
       });
     } catch {
       // best-effort; never throw from a tracker
