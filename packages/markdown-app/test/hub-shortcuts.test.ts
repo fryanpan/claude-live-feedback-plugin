@@ -32,8 +32,13 @@ function fixture(detailTaskId: string | null) {
   panel.className = 'hub-detail-panel';
   panel.tabIndex = -1;
   document.body.append(help, ...rows, panel);
-  const state = {
+  const state: {
+    detailTaskId: string | null;
+    detailGoalId: string | null;
+    tasks: Map<string, { id: string }>;
+  } = {
     detailTaskId,
+    detailGoalId: null,
     tasks: new Map([
       ['t1', { id: 't1' }],
       ['t2', { id: 't2' }],
@@ -201,6 +206,25 @@ describe('hub row shortcuts with the detail panel focused (the #250 focus steal)
     f.panel.focus();
     press('Escape', f.handler);
     expect(f.closedCount()).toBe(1);
+  });
+
+  it('Escape closes the GOAL panel too, which has no task id at all', () => {
+    // The two panels float over the same board and never share a container,
+    // so "no task open" is not "nothing open" — the goal panel used to sit
+    // through the key its neighbour obeyed, which reads as stuck.
+    const f = fixture(null);
+    f.state.detailGoalId = 'g-pr';
+    f.panel.focus();
+    press('Escape', f.handler);
+    expect(f.closedCount()).toBe(1);
+  });
+
+  it('Escape with neither panel open closes nothing', () => {
+    // The control: the branch must be reading the two ids, not firing on
+    // every Escape the board ever sees.
+    const f = fixture(null);
+    press('Escape', f.handler);
+    expect(f.closedCount()).toBe(0);
   });
 });
 
