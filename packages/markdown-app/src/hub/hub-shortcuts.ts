@@ -15,6 +15,11 @@ export interface HubShortcutDeps {
    *  never a snapshot of it. Structurally minimal so tests need no HubTask. */
   state: {
     detailTaskId: string | null;
+    /** The goal panel's row, read for the same reason the task's is: Escape
+     *  has to close whichever of the two overlays is up. They share the
+     *  screen and never the container, so "no task open" is not "nothing
+     *  open". */
+    detailGoalId?: string | null;
     tasks: { get(id: string): { id: string } | undefined };
   };
   helpEl: () => HTMLElement;
@@ -66,7 +71,7 @@ export function hubShortcutKeydown(deps: HubShortcutDeps): (ev: KeyboardEvent) =
     }
     if (ev.key === 'Escape') {
       deps.helpEl().classList.add('hidden');
-      if (state.detailTaskId) deps.closeDetail();
+      if (state.detailTaskId || state.detailGoalId) deps.closeDetail();
       return;
     }
     const rows = Array.from(document.querySelectorAll<HTMLElement>('.hub-task-row'));

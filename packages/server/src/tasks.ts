@@ -786,6 +786,19 @@ export interface Task {
    *  a decision was made and not what it was. Cleared by a restore, since a
    *  reason about a removal that has been undone is a claim nobody makes. */
   archiveReason?: string;
+  /**
+   * The GOAL whose archive took this row with it — present iff this archive
+   * was a cascade rather than somebody's decision about this task.
+   *
+   * It exists so that restoring the goal restores exactly the rows its
+   * archive removed. Without it a restore would have to guess from
+   * `task.goal`, and it would guess wrong in the one case that matters: a row
+   * somebody archived on its own weeks earlier, which the goal's archive
+   * never touched and which its restore must therefore not resurrect. Cleared
+   * by `unarchiveTask`, alongside the other three, so a row restored by hand
+   * stops belonging to the cascade.
+   */
+  archivedWithGoal?: string;
   links: Ref[];
   /**
    * What the done-artifact check found in this row's `links` the last time it
@@ -1034,6 +1047,29 @@ export interface GoalRow {
   status: TaskStatus;
   /** Append-only audit trail — who declared the goal done, and when. */
   transitions: TaskTransition[];
+  /**
+   * When this BAND was archived — the same three soft-delete fields a task
+   * carries, read through the same `isArchived`, and for the same reason: a
+   * band the board has moved past had no reversible removal at all. Dropping
+   * it from `workspace.goals[]` was the only way out, and that is the one
+   * edit `setGoalList` refuses while the band still holds tasks.
+   *
+   * The goal stays in `workspace.goals[]` while archived. That is deliberate:
+   * the list is what `syncGoalRows` reconciles against and what `reorderGoals`
+   * permutes, so taking the entry out would make a restore an insertion into
+   * somebody else's priority order rather than a field clear. The BOARD hides
+   * it — `boardSections` skips an archived band — which is the whole of what
+   * "off the board" means here, exactly as it is for a task.
+   */
+  archivedAt?: number;
+  /** Who archived the band, as a display name. */
+  archivedBy?: string;
+  /** Why, in the archiver's words. Cleared by a restore. */
+  archiveReason?: string;
+  /** The PARENT goal whose archive took this subgoal with it — the subgoal's
+   *  half of `Task.archivedWithGoal`, and read for the same reason: a restore
+   *  must put back the subgoals its own archive removed and no others. */
+  archivedWithGoal?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -1797,7 +1833,23 @@ export interface TaskArchivedEvent {
    *  because the trail is read long after, and the restore surfaces name it —
    *  a later rewrite must not change what this line says happened. */
   title: string;
+  /** Set when the archived row is a GOAL. Absent for a task, exactly as on
+   *  `task.transitioned` — goal rows ride the task events with this one
+   *  discriminator rather than growing a parallel event family nothing else
+   *  on the wire knows how to read. */
+  kind?: 'goal';
   reason?: string;
+  /** Batch key, on the GOAL's own event: every task and subgoal the cascade
+   *  took carries it as `partOf`. The same shape `workspace.goals_changed`
+   *  uses for the moves it fans out. */
+  batchId?: string;
+  /** Set on a MEMBER of a cascade — the batchId of the goal archive that
+   *  removed this row. A reader that only knows about single archives sees an
+   *  ordinary `task.archived`, which is what it is. */
+  partOf?: string;
+  /** How many tasks went with the band, on the goal's own event. The number
+   *  the confirmation promised, recorded as what actually happened. */
+  cascadeTasks?: number;
   actor: TaskActor;
   ts: number;
 }
@@ -1807,9 +1859,16 @@ export interface TaskRestoredEvent {
   workspaceId: string;
   taskId: string;
   title: string;
+  /** Set when the restored row is a GOAL — see `TaskArchivedEvent.kind`. */
+  kind?: 'goal';
   /** The reason the archive carried, echoed here so the pair reads as one
    *  story without a lookup. Absent when it was archived without one. */
   reason?: string;
+  /** Batch key on the goal's own event; members carry it as `partOf`. */
+  batchId?: string;
+  partOf?: string;
+  /** How many tasks came back with the band. */
+  cascadeTasks?: number;
   actor: TaskActor;
   ts: number;
 }
@@ -2366,6 +2425,28 @@ export type SetAssigneeResult =
       /** False when the new assignee equals the old one — no write, no event.
        *  A hand-off to whoever already holds it is not a hand-off. */
       changed: boolean;
+    }
+  | { ok: false; error: 'not-found' };
+
+/**
+ * What a band's archive or restore actually moved.
+ *
+ * The two id lists are the point: the caller shows "Archived “Ship W3” and 14
+ * tasks", and the number in that sentence is what happened rather than what
+ * the confirmation guessed a moment earlier. `changed: false` means the band
+ * was already in the state asked for — nothing written, nothing emitted, and
+ * both lists empty, which is honest rather than a re-listing of rows this
+ * call did not touch.
+ */
+export type ArchiveGoalResult =
+  | {
+      ok: true;
+      goal: GoalRow;
+      changed: boolean;
+      /** Tasks this call archived (or restored), in board order. */
+      taskIds: string[];
+      /** Subgoal bands that went with it. */
+      subgoalIds: string[];
     }
   | { ok: false; error: 'not-found' };
 
@@ -5220,6 +5301,10 @@ export class TaskStore {
     task.archivedAt = undefined;
     task.archivedBy = undefined;
     task.archiveReason = undefined;
+    // The cascade marker goes with them. A row put back by hand is no longer
+    // part of the band's archive, so restoring that band later must not claim
+    // it a second time — and archiving the band again re-stamps it anyway.
+    task.archivedWithGoal = undefined;
     task.updatedAt = ts;
     this.scheduleSave(task.workspaceId);
     this.emit({
@@ -5232,6 +5317,233 @@ export class TaskStore {
       ts,
     });
     return { ok: true, task, changed: true };
+  }
+
+  /**
+   * Every row a goal's archive would take with it: the band itself, its
+   * subgoals, and every task standing under any of them that is not already
+   * archived.
+   *
+   * Public because the CONFIRMATION needs it before the write. "Archive this
+   * goal and its 14 tasks?" is the whole point of the dialog — the blast
+   * radius is the part a reader cannot see from a band header — and a count
+   * the client derived for itself would be a second implementation of this
+   * walk, free to disagree with the one that actually runs.
+   *
+   * Already-archived rows are deliberately absent: the cascade does not touch
+   * them, so counting them would promise a removal that does not happen, and
+   * — worse — the restore would then bring back a row somebody had put away
+   * on its own.
+   *
+   * That skip carries a live task with it, and on purpose. Archive a subgoal,
+   * then put ONE of its tasks back by hand: the board draws that task in
+   * Backlog, because an archived subgoal is not a band anything can sit
+   * under. Archiving the parent therefore leaves it there. Sweeping it up
+   * would take a row off Backlog — somewhere the reader is not looking, and
+   * not in the band they just archived — which is the surprise the
+   * confirmation exists to prevent. What the board shows under the band is
+   * what goes.
+   */
+  goalCascade(goalId: string): { goalIds: string[]; subgoalIds: string[]; taskIds: string[] } {
+    const empty = { goalIds: [], subgoalIds: [], taskIds: [] };
+    const row = this.getGoalRow(goalId);
+    if (!row) return empty;
+    const state = this.workspaces.get(row.workspaceId);
+    if (!state) return empty;
+    const subgoalIds = (state.workspace.goals.find((g) => g.id === goalId)?.subgoals ?? [])
+      .map((s) => s.id)
+      .filter((id) => {
+        const sub = state.goalRows.get(id);
+        return sub !== undefined && !isArchived(sub);
+      });
+    const under = new Set<string>([goalId, ...subgoalIds]);
+    const taskIds = Array.from(state.tasks.values())
+      .filter((t) => under.has(t.goal) && !isArchived(t))
+      .sort((a, b) => a.order - b.order || a.createdAt - b.createdAt)
+      .map((t) => t.id);
+    return { goalIds: [goalId], subgoalIds, taskIds };
+  }
+
+  /**
+   * Take a BAND off the board, reversibly, with everything standing under it.
+   *
+   * The cascade is the decision (Bryan, 2026-08-30: archiving a goal archives
+   * its tasks too). The alternative — archive the band and leave its tasks
+   * behind — either strands them under a header nobody can see or silently
+   * dumps them into Backlog, and both are a bigger surprise than the one the
+   * reader asked for. Soft on every row it touches, so the whole gesture is
+   * still nothing but field writes, and `unarchiveGoal` is still a field
+   * clear.
+   *
+   * Each cascaded row is stamped with `archivedWithGoal`, which is what makes
+   * the restore exact rather than a guess from `task.goal` — see the field.
+   *
+   * Events: the band's own `task.archived` carries `kind: 'goal'`, the
+   * `batchId` and the task count; every member carries `partOf: batchId`. The
+   * trail therefore reads as one decision with its consequences attached
+   * rather than as fifteen unexplained removals, and a per-row feed still
+   * gets the line it needs. Same shape `workspace.goals_changed` already uses
+   * for the moves a goal-list edit fans out.
+   *
+   * Idempotent, like `archiveTask`: re-archiving an archived band reports
+   * `changed: false`, writes nothing and emits nothing.
+   */
+  archiveGoal(
+    goalId: string,
+    opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
+  ): ArchiveGoalResult {
+    const goal = this.getGoalRow(goalId);
+    if (!goal) return { ok: false, error: 'not-found' };
+    if (isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [], subgoalIds: [] };
+    const { subgoalIds, taskIds } = this.goalCascade(goalId);
+    const ts = Date.now();
+    const reason = normalizeReason(opts.reason);
+    const by: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    const batchId = cryptoId('ga');
+
+    const stamp = (row: { archivedAt?: number; archivedBy?: string; updatedAt: number }): void => {
+      row.archivedAt = ts;
+      row.archivedBy = by.name;
+      row.updatedAt = ts;
+    };
+    stamp(goal);
+    goal.archiveReason = reason;
+
+    for (const id of subgoalIds) {
+      const sub = this.getGoalRow(id);
+      if (!sub) continue;
+      stamp(sub);
+      sub.archiveReason = reason;
+      sub.archivedWithGoal = goalId;
+    }
+    for (const id of taskIds) {
+      const task = this.getTask(id);
+      if (!task) continue;
+      stamp(task);
+      task.archiveReason = reason;
+      task.archivedWithGoal = goalId;
+    }
+    this.scheduleSave(goal.workspaceId);
+
+    this.emit({
+      type: 'task.archived',
+      workspaceId: goal.workspaceId,
+      taskId: goal.id,
+      kind: 'goal',
+      title: goal.title,
+      ...(reason !== undefined ? { reason } : {}),
+      batchId,
+      cascadeTasks: taskIds.length,
+      actor: by,
+      ts,
+    });
+    for (const id of [...subgoalIds, ...taskIds]) {
+      const row = this.getGoalRow(id) ?? this.getTask(id);
+      if (!row) continue;
+      this.emit({
+        type: 'task.archived',
+        workspaceId: goal.workspaceId,
+        taskId: id,
+        ...(isGoalRow(row) ? { kind: 'goal' as const } : {}),
+        title: row.title,
+        ...(reason !== undefined ? { reason } : {}),
+        partOf: batchId,
+        actor: by,
+        ts,
+      });
+    }
+    return { ok: true, goal, changed: true, taskIds, subgoalIds };
+  }
+
+  /**
+   * Put an archived band back, with exactly the rows its archive removed.
+   *
+   * "Exactly" is `archivedWithGoal`: a row somebody archived on its own before
+   * the band went is not part of this restore and stays where they put it.
+   * That asymmetry is the reason the marker exists at all — see the field.
+   */
+  unarchiveGoal(
+    goalId: string,
+    opts: { actor: { id: string; name: string; kind?: string } },
+  ): ArchiveGoalResult {
+    const goal = this.getGoalRow(goalId);
+    if (!goal) return { ok: false, error: 'not-found' };
+    if (!isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [], subgoalIds: [] };
+    const state = this.workspaces.get(goal.workspaceId);
+    if (!state) return { ok: false, error: 'not-found' };
+    const ts = Date.now();
+    // Read before it is cleared, so the pair reads as one story in the trail.
+    const reason = goal.archiveReason;
+    const by: TaskActor = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    const batchId = cryptoId('ga');
+
+    const clear = (row: {
+      archivedAt?: number;
+      archivedBy?: string;
+      archiveReason?: string;
+      archivedWithGoal?: string;
+      updatedAt: number;
+    }): void => {
+      // Assignment rather than `delete` (biome noDelete); JSON.stringify drops
+      // an undefined-valued key, so the sidecar comes back without it.
+      row.archivedAt = undefined;
+      row.archivedBy = undefined;
+      row.archiveReason = undefined;
+      row.archivedWithGoal = undefined;
+      row.updatedAt = ts;
+    };
+    clear(goal);
+
+    const subgoalIds: string[] = [];
+    for (const sub of state.goalRows.values()) {
+      if (sub.archivedWithGoal !== goalId) continue;
+      subgoalIds.push(sub.id);
+      clear(sub);
+    }
+    const taskIds: string[] = [];
+    for (const task of state.tasks.values()) {
+      if (task.archivedWithGoal !== goalId) continue;
+      taskIds.push(task.id);
+      clear(task);
+    }
+    this.scheduleSave(goal.workspaceId);
+
+    this.emit({
+      type: 'task.restored',
+      workspaceId: goal.workspaceId,
+      taskId: goal.id,
+      kind: 'goal',
+      title: goal.title,
+      ...(reason !== undefined ? { reason } : {}),
+      batchId,
+      cascadeTasks: taskIds.length,
+      actor: by,
+      ts,
+    });
+    for (const id of [...subgoalIds, ...taskIds]) {
+      const row = this.getGoalRow(id) ?? this.getTask(id);
+      if (!row) continue;
+      this.emit({
+        type: 'task.restored',
+        workspaceId: goal.workspaceId,
+        taskId: id,
+        ...(isGoalRow(row) ? { kind: 'goal' as const } : {}),
+        title: row.title,
+        ...(reason !== undefined ? { reason } : {}),
+        partOf: batchId,
+        actor: by,
+        ts,
+      });
+    }
+    return { ok: true, goal, changed: true, taskIds, subgoalIds };
   }
 
   /**
