@@ -20,7 +20,12 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { computeEffortCalibration, ratioForGoal } from '@feedback/core/goal-effort';
+import { EFFORT_ESTIMATE_PROMPT_VERSION } from '@feedback/core/effort-estimate-prompt';
+import {
+  computeEffortCalibration,
+  neutralCalibration,
+  ratioForGoal,
+} from '@feedback/core/goal-effort';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type BoardFilters,
@@ -58,7 +63,12 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
     bodyDocId: `task:t-${seq}`,
     createdAt: NOW - 30 * DAY,
     updatedAt: NOW,
-    effortEstimate: { status: 'ok', handsOnSeconds: 600, wallClockSeconds: 3600 },
+    effortEstimate: {
+      status: 'ok',
+      handsOnSeconds: 600,
+      wallClockSeconds: 3600,
+      promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+    },
     ...overrides,
   };
 }
@@ -233,12 +243,19 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(enough.percentText).toBe('60%');
     // The remainder names whose time it is. The bar beside it is CALENDAR
     // time and this figure is Bryan's attention; unlabelled they invite the
-    // reading "60% done, 20 minutes to go", and the calendar remainder on
+    // reading "60% done, a minute to go", and the calendar remainder on
     // this same goal is 2h.
-    expect(enough.leftText).toBe('20m hands-on left');
+    //
+    // 1m, not the 20m the raw estimates sum to: none of these closes carries
+    // a reading time, so hands-on has no sample and sits at its prior
+    // (1/15). The DATE above is untouched by the same prior on wall-clock,
+    // and that is a property worth noticing rather than a coincidence — the
+    // pace and the remainder are both in estimate-seconds, so a factor
+    // applied to both cancels out of the division.
+    expect(enough.leftText).toBe('1m hands-on left');
     // At the narrow tier the label goes and the NUMBER stays: the title is
     // the primary task there, and 430px does not have room for both.
-    expect(enough.leftTextShort).toBe('20m');
+    expect(enough.leftTextShort).toBe('1m');
   });
 
   it('says WHY there is no date, rather than just omitting one', () => {
@@ -254,10 +271,20 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(finished.finishText).toBe('');
 
     const tiny = {
-      effortEstimate: { status: 'ok' as const, handsOnSeconds: 600, wallClockSeconds: 600 },
+      effortEstimate: {
+        status: 'ok' as const,
+        handsOnSeconds: 600,
+        wallClockSeconds: 600,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+      },
     };
     const huge = {
-      effortEstimate: { status: 'ok' as const, handsOnSeconds: 3600, wallClockSeconds: 144000 },
+      effortEstimate: {
+        status: 'ok' as const,
+        handsOnSeconds: 3600,
+        wallClockSeconds: 144000,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+      },
     };
     const faraway = labelFor([
       closed(DAY, HOUR, tiny),
@@ -277,10 +304,20 @@ describe('goalEffortLabel keeps three states apart', () => {
     // A bare "~Dec 29" was rendered for a date in 2041 — the same four
     // characters a date four months out gets.
     const tiny = {
-      effortEstimate: { status: 'ok' as const, handsOnSeconds: 600, wallClockSeconds: 600 },
+      effortEstimate: {
+        status: 'ok' as const,
+        handsOnSeconds: 600,
+        wallClockSeconds: 600,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+      },
     };
     const mid = {
-      effortEstimate: { status: 'ok' as const, handsOnSeconds: 600, wallClockSeconds: 1300 },
+      effortEstimate: {
+        status: 'ok' as const,
+        handsOnSeconds: 600,
+        wallClockSeconds: 1300,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+      },
     };
     const l = labelFor([
       closed(DAY, HOUR, tiny),
@@ -522,7 +559,12 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     for (let i = 0; i < 6; i += 1) {
       rows.push(
         closed(2 * DAY, 2 * HOUR, {
-          effortEstimate: { status: 'ok', handsOnSeconds: 600, wallClockSeconds: 3600 },
+          effortEstimate: {
+            status: 'ok',
+            handsOnSeconds: 600,
+            wallClockSeconds: 3600,
+            promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+          },
           readingTime: { totalSeconds: 1200, sessionCount: 2, lastSessionAt: NOW },
         }),
       );
@@ -659,6 +701,40 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     expect(agreed.detail.textContent).toContain('Scaled ×2.00 from 6 closed tickets');
   });
 
+  it('accounts for a factor with no closed tickets behind it — the board\u2019s prior', () => {
+    // A board that has closed nothing still scales, because the priors are
+    // not 1 (see EFFORT_PRIOR_* in core). Until they existed, a factor of 1
+    // needed no sentence because it changed nothing; a silent \u00d70.07 would
+    // leave a reader looking at a figure fifteen times smaller than the
+    // scorer's own with nothing on the panel accounting for it.
+    const fresh = effortFields(task(), neutralCalibration());
+    if (!fresh) throw new Error('expected fields');
+    const text = fresh.detail.textContent ?? '';
+    expect(text).toContain('starting assumption that agents do the work');
+    expect(text).toContain('nothing has closed under this goal to measure yet');
+    // Both factors named, and NOT as a learned correction — the "from N
+    // closed tickets" wording must never appear over a number no ticket
+    // produced.
+    expect(text).toContain('\u00d70.07');
+    expect(text).toContain('\u00d70.14');
+    expect(text).not.toContain('closed ticket');
+    // And the figure on the panel really is the scaled one, so the sentence
+    // is describing the arithmetic rather than decorating it: 600s of
+    // hands-on at the 1/15 prior is 40s, which reads as 1m.
+    expect(fresh.handsOn.textContent).toBe('1m');
+    // Control: with no calibration passed at all the panel shows the raw
+    // 600s as 10m, so the line above is the prior and not the formatter.
+    expect(effortFields(task())?.handsOn.textContent).toBe('10m');
+
+    // Positive control: a board WITH closes says the learned thing instead,
+    // so the assertion above cannot be met by a panel that always prints the
+    // prior sentence.
+    const learned = effortFields(task(), computeEffortCalibration(closedSet()));
+    if (!learned) throw new Error('expected fields');
+    expect(learned.detail.textContent).toContain('closed tickets');
+    expect(learned.detail.textContent).not.toContain('starting assumption');
+  });
+
   it('looks the correction up by BAND, the way the board filed it', () => {
     // Two populations: six closes under a real band that all ran 2x long,
     // and four under a goal id no band answers to, which all landed on their
@@ -666,7 +742,12 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     // correction is Backlog's — four samples, not the board's ten.
     const onTime = closed(2 * DAY, HOUR, {
       goal: 'g-vanished',
-      effortEstimate: { status: 'ok', handsOnSeconds: 1200, wallClockSeconds: 3600 },
+      effortEstimate: {
+        status: 'ok',
+        handsOnSeconds: 1200,
+        wallClockSeconds: 3600,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+      },
       readingTime: { totalSeconds: 1200, sessionCount: 1, lastSessionAt: NOW },
     });
     const rows = [...closedSet(), onTime, { ...onTime }, { ...onTime }, { ...onTime }];
