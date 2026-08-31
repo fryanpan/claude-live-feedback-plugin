@@ -17,6 +17,14 @@
  * person is already in, so it rides the same Yjs sync, the same undo, and
  * the same ~1s flush to the .md as typing a word does. Nothing here talks to
  * the server: a correction is not a different kind of writing.
+ *
+ * A CORRECTION IS WRITTEN BARE — `speaker:C`, with none of the provenance the
+ * composer's own tags carry (`speaker:B?t=10,12`, see core/speaker-tags.ts).
+ * That is what takes the mention out of reach of the engine's end-of-session
+ * revision: a person has answered, and a later machine guess does not get to
+ * revisit it. It is also how tapping the voice a mention ALREADY claims is a
+ * real edit rather than a no-op — on a mention the engine marked unsure, that
+ * tap is somebody settling it, and the flag goes.
  */
 
 import { type RosterVoice, speakerTagHref, speakerTagLabel, speakerTagText } from '@feedback/core';
@@ -31,6 +39,10 @@ export interface SpeakerTagRange {
   to: number;
   /** The voice the tag currently claims. */
   label: string;
+  /** The href exactly as the document holds it, provenance and all. The
+   *  identity of one tag: two mentions of the same voice from different
+   *  turns are two hrefs, and must not be grown into one range. */
+  href: string;
   /** What the tag reads now, sigil included. */
   text: string;
 }
@@ -51,7 +63,7 @@ export function findSpeakerTagAt(state: EditorState, pos: number): SpeakerTagRan
 
   const start = $pos.start();
   const offset = $pos.pos - start;
-  let found: { from: number; to: number; label: string } | null = null;
+  let found: { from: number; to: number; label: string; href: string } | null = null;
   parent.forEach((child, childOffset) => {
     if (found || !child.isText) return;
     const end = childOffset + child.nodeSize;
@@ -59,16 +71,20 @@ export function findSpeakerTagAt(state: EditorState, pos: number): SpeakerTagRan
     // finds it; a caret sitting just after the name is still on the name.
     if (offset < childOffset || offset > end) return;
     const mark = child.marks.find((m) => m.type === linkType);
-    const label = mark ? speakerTagLabel(String(mark.attrs.href ?? '')) : null;
+    const href = mark ? String(mark.attrs.href ?? '') : '';
+    const label = mark ? speakerTagLabel(href) : null;
     if (label === null) return;
     // Grow across every neighbouring node carrying the SAME href: one tag,
-    // however many nodes an inner mark has split it into.
+    // however many nodes an inner mark has split it into. Compared on the
+    // WHOLE href rather than on the voice, because two mentions of one voice
+    // composed from different turns carry different provenance and are two
+    // tags — growing across them would reassign both on one tap.
     let from = childOffset;
     let to = end;
     parent.forEach((sibling, siblingOffset) => {
       if (!sibling.isText) return;
       const siblingMark = sibling.marks.find((m) => m.type === linkType);
-      if (!siblingMark || speakerTagLabel(String(siblingMark.attrs.href ?? '')) !== label) return;
+      if (!siblingMark || String(siblingMark.attrs.href ?? '') !== href) return;
       const siblingEnd = siblingOffset + sibling.nodeSize;
       // Contiguity matters: the same voice tagged twice in one paragraph is
       // two tags, and only the one under the finger is being changed.
@@ -76,10 +92,10 @@ export function findSpeakerTagAt(state: EditorState, pos: number): SpeakerTagRan
       from = Math.min(from, siblingOffset);
       to = Math.max(to, siblingEnd);
     });
-    found = { from: start + from, to: start + to, label };
+    found = { from: start + from, to: start + to, label, href };
   });
   if (!found) return null;
-  const range = found as { from: number; to: number; label: string };
+  const range = found as { from: number; to: number; label: string; href: string };
   return { ...range, text: state.doc.textBetween(range.from, range.to) };
 }
 
@@ -103,7 +119,13 @@ export function applyReassign(
     ? speakerTagText(voice.label, { [voice.label]: voice.name })
     : stripSigil(tag.text);
   const wantHref = voice ? speakerTagHref(voice.label) : null;
-  if (voice && voice.label === tag.label && wantText === tag.text) return false;
+  // The HREF is part of what may change, not only the voice and the words: a
+  // mention the engine marked unsure reads exactly as it did before, and
+  // tapping its own voice is the person settling it. Comparing text and
+  // label alone would call that a no-op and leave the mark in place.
+  if (voice && voice.label === tag.label && wantText === tag.text && tag.href === wantHref) {
+    return false;
+  }
 
   const { state } = editor;
   const linkType = state.schema.marks.link;

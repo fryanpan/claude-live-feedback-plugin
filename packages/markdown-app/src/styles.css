@@ -6227,6 +6227,36 @@ body.is-reading-width #editor > .ProseMirror {
   background: var(--accent-soft, rgba(46, 125, 215, 0.14));
   color: var(--accent, #2e7dd7);
 }
+/* An attribution the ENGINE could not settle. Its end-of-session pass moved
+   some of the turns this mention was composed from and left the others, so
+   it belongs to one of two voices and the notes do not record which
+   (`unsure=1` in the href — see core/speaker-tags.ts). Marked rather than
+   guessed: a coin flip would put a name against words somebody else said.
+
+   A ring and a trailing "?", both keyed off the href, so this costs the
+   editor no plugin and no bundle. The ring is an inset box-shadow rather
+   than a border because a border would grow the chip's box, and that box is
+   the touch target the mobile rule below measures. Tapping the chip and
+   picking a voice — even the one it already claims — writes a bare
+   `speaker:<label>`, so a person settling it clears the mark. */
+#editor > .ProseMirror a[href^="speaker:"][href*="unsure=1"] {
+  position: relative;
+  padding-right: 1.1em;
+  color: var(--warn-fg, #b25e09);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn-fg, #b25e09) 45%, transparent);
+}
+#editor > .ProseMirror a[href^="speaker:"][href*="unsure=1"]::before {
+  content: "?";
+  position: absolute;
+  right: 0.36em;
+  font-weight: 700;
+  /* Absolute, so the glyph sits after the name without entering the text —
+     the tag's words are the display name and a rename compares against them
+     exactly. A character inserted into the run would break that match. */
+}
+#editor > .ProseMirror a[href^="speaker:"][href*="unsure=1"]:hover {
+  color: var(--warn-fg, #b25e09);
+}
 /* An inline chip is only as tall as the text around it — around 23px, which
    is under a fingertip. On a touch pointer the hit box grows past the ink
    without moving a character of layout; on a mouse the same overlay would
