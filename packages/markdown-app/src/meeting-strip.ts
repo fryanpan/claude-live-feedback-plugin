@@ -57,6 +57,7 @@ import {
   type MeetingCaptureStart,
   ROOM_AUDIO_DEFAULT,
   type RoomAudioProcessing,
+  captureConstraints,
   startMeetingCapture,
 } from './meeting-audio.ts';
 import { type TimingSession, createTimingSession } from './meeting-timing-client.ts';
@@ -817,9 +818,19 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
   }
 
-  /** What this room asked for, with the same default the capture used. */
+  /**
+   * What the microphone that is open right now was OPENED with.
+   *
+   * Read off `captureConstraints` at the press, so this is the same rule the
+   * capture itself used rather than a second copy of it that has to be kept
+   * in step. Deriving it from `opts.room` instead would be wrong for any mode
+   * the room config does not apply to — solo does not announce today, so that
+   * path is unreachable, but the invariant should not depend on a guard two
+   * hundred lines away staying where it is.
+   */
+  let openedEchoCancellation: boolean = ROOM_AUDIO_DEFAULT.echoCancellation;
   function wantsEchoCancellation(): boolean {
-    return (opts.room ?? ROOM_AUDIO_DEFAULT).echoCancellation;
+    return openedEchoCancellation;
   }
 
   function endAnnouncement(): void {
@@ -1000,6 +1011,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       mode,
       ...(opts.room ? { room: opts.room } : {}),
     });
+    // The same call the capture just made, so the announcement restores what
+    // was actually asked for rather than what a different mode would want.
+    openedEchoCancellation =
+      (captureConstraints(mode, opts.room).audio as MediaTrackConstraints).echoCancellation ===
+      true;
     if (disposed || attempt !== generation) {
       if (started.ok) started.capture.stop();
       return;

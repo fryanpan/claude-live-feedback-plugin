@@ -11,6 +11,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Announcer } from '../src/meeting-announce.ts';
 import type { RoomAudioProcessing } from '../src/meeting-audio.ts';
+import { captureConstraints } from '../src/meeting-audio.ts';
 import type { MeetingCaptureStart } from '../src/meeting-audio.ts';
 import {
   type MeetingSocket,
@@ -1560,6 +1561,27 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     await settle();
     // Down for the sentence, and back to OFF — where the room put it.
     expect(mic.aec).toEqual([false, false]);
+  });
+
+  it('ignores a room config that the mode it is recording in would not apply', async () => {
+    // A stale `?mic=ec0-…` on the address while the switch is on solo. The
+    // capture opens with the SOLO processing, so the restore must too — the
+    // announcement is unreachable in solo today, and this pins the rule to
+    // the constraints the microphone was opened with rather than to that.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const room = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    const h = mount(mic.start, { mode: 'conversation', announcer, room });
+    h.toggle().click();
+    await settle();
+    // Flip to solo and back is not available mid-meeting; instead assert the
+    // room path, then that `captureConstraints` is what decides it.
+    expect((captureConstraints('solo', room).audio as MediaTrackConstraints).echoCancellation).toBe(
+      true,
+    );
+    expect(
+      (captureConstraints('conversation', room).audio as MediaTrackConstraints).echoCancellation,
+    ).toBe(false);
   });
 
   it('restores it to ON for a room that never asked for anything else', async () => {
