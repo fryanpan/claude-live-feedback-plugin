@@ -129,9 +129,11 @@ import {
   buildLandingModel,
 } from './landing.ts';
 import { linkTitlesFor } from './link-titles.ts';
+import { type LookupDoc, boardLookupDocs } from './meeting-lookup.ts';
 import { withServerNotesSinks } from './meeting-notes-doc.ts';
 import type { MeetingNotesOptions } from './meeting-notes.ts';
 import { MeetingRelay } from './meeting-protocol.ts';
+import { MEETING_CAPTURE_ACTOR } from './meeting-task-capture.ts';
 import { MeetingStore } from './meetings.ts';
 import {
   LOOPBACK_HOSTS,
@@ -1343,12 +1345,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // gets. Both close over consts declared below; a meeting can only
           // start long after createServer has returned.
           captureBoard: () => taskStore,
+          // Where "pull up last week's notes" looks. Board docs and when
+          // each last carried a meeting; the meeting's own doc is dropped
+          // by the caller, since "the last meeting" means the one before.
+          lookup: { docs: (workspaceId, exceptDocId) => lookupDocs(workspaceId, exceptDocId) },
           onTaskReady: (wake) =>
             readyNudger.taskReady({
               workspaceId: wake.workspaceId,
               taskId: wake.taskId,
               taskTitle: wake.title,
             }),
+          // The two steps `addReviewItem` cannot take for itself, exactly as
+          // `proposeAllowRule` takes them: re-project so the board room
+          // carries the item, and announce so it reaches the reader's queue.
+          onReviewFiled: ({ task, item }) => {
+            taskProjection.ensureWorkspace(task.workspaceId);
+            announceTaskReview(task, item, {
+              id: MEETING_CAPTURE_ACTOR.id,
+              name: MEETING_CAPTURE_ACTOR.name,
+              kind: 'known',
+              color: ANONYMOUS_ACTOR.color,
+            });
+          },
         })
       : null,
     // Lifecycle only. The words never touch this hub — see meeting-protocol.
@@ -1438,6 +1456,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // reads the task notes the routes below append and writes nothing but its
   // own sidecar — never a settings file.
   const allowRules = new AllowRuleProposals(dataDir);
+  /**
+   * The board's docs as a lookup ask sees them — the three narrow questions
+   * `boardLookupDocs` asks, answered from this server's own stores. The
+   * rules about what qualifies live there, where they are tested.
+   */
+  function lookupDocs(workspaceId: string, exceptDocId: string): LookupDoc[] {
+    return boardLookupDocs(
+      {
+        docIds: (id) => taskStore.getWorkspace(id)?.docIds,
+        docTitle: (docId) => rooms.peekMeta(docId)?.title,
+        // Oldest first, so the newest meeting is the tail.
+        lastMeetingAt: (docId) => meetingStore.list(docId).at(-1)?.startedAt,
+      },
+      workspaceId,
+      exceptDocId,
+    );
+  }
+
   /** A denial's own agent, as the author of the item it triggered — so the
    *  card says who was blocked, the way a comment-borne ask names its poster. */
   function proposeAllowRule(

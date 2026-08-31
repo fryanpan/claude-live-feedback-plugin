@@ -615,6 +615,109 @@ decoration (markdown-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
 
+## Acting on speech, not only recording it
+
+Two more intents ride the SAME capture call — no router, no second pass, per
+the 2026-08-30 decision *"One call per tick carries every intent"*. One reply,
+one `items` array, a `kind` per intent, rows parsed independently so a
+malformed one never costs the others. The module is still called
+`meeting-task-capture.ts`; its name predates half of what it carries.
+
+**They are not symmetrical, and that is the design.** A LOOKUP only reads, so
+a wrong one costs a link nobody wanted. A RESEARCH ask SPENDS — an agent goes
+away and burns tokens on a report — so it is never acted on from speech
+alone.
+
+### "Go look into that" — research, confirmed before it is spent
+
+The ask this catches almost never contains the word *research*: it is "go
+look into that", "dig into why it does that", "find out what it would take".
+So the prompt teaches the shape rather than the word, and the guard is the
+transcript, not the model: `phraseSpokenOnTick` requires the returned topic's
+significant words to have actually been said (two of them, or its only one),
+which is the `requestMatchesCandidate` threshold and holds for the same
+reason. A topic with no significant words at all — "that thing" — is dropped
+rather than let through on an empty match.
+
+What lands is **a row in triage plus a decision review item**, and the
+confirmation is enforced rather than promised:
+
+- **The row is never set moving.** Dispatch works `todo` rows; this one stays
+  at `triage`, unvetted until a person places it, the way every other
+  agent-filed row is. It is filed asking for no band — but note that the
+  store fills `chores` in anyway (`opts.goal ?? CHORES_GOAL_ID`), so the
+  absent band is *not* what protects it. An earlier draft of this section
+  claimed it was, and the integration test against the real store said
+  otherwise.
+- **An open review item holds the row.** `ready-gate.ts` reports
+  `awaiting-answer` for a row carrying an unanswered item, so it stays held
+  even once somebody triages it.
+
+Answering it needs no new machinery: `decision.answered` already wakes the
+board's lead through `ReadyWorkNudger.reviewAnswered`. A second ask for the
+same topic — in the same tick or a later one — links the row rather than
+filing a second card, on the board's own find-or-create.
+
+`addReviewItem` emits no store event by design, so the caller owes the item
+two steps this module cannot reach: `taskProjection.ensureWorkspace` and
+`announceTaskReview`. That is the `onReviewFiled` callback, and it is the
+contract `proposeAllowRule` (allow-rules.ts) already honours. Filing through
+the store rather than the HTTP route also means the item skips the LLM
+quality gate, exactly as an allow-rule proposal does.
+
+### "Pull in last week's notes" — lookup
+
+Resolution lives in `meeting-lookup.ts`, and reaches docs and past meetings,
+not only board rows:
+
+1. **By title** — the board's docs (huddles included: a huddle IS a doc,
+   filed on the board like any other) and its task rows, in ONE pool through
+   `resolveByTitle`, the matcher voice navigation already uses. One pool so
+   its spoken kind word ("the DOC about x") can narrow.
+2. **By when** — "last week", "yesterday", "Tuesday", "this morning", "the
+   last meeting", against the docs that carry a past meeting, newest inside
+   the window.
+
+**Recency is its own path because a past meeting has no title.** A
+`MeetingRecord` carries times and no subject; the readable name of one is the
+doc it was held on. So "last week's notes" has nothing to match against —
+"notes" matches every doc on the board and "week" is a stopword — and time is
+the only thing spoken that identifies it. An ambiguous title match falls
+THROUGH to recency rather than failing, because two docs that score alike are
+exactly what a spoken "yesterday" was there to separate.
+
+**Two things about the windows themselves**, both found in review rather than
+in writing. Each part of a day is its own window — morning, afternoon and
+evening do not collapse into "today" — because the resolver answers with the
+NEWEST meeting inside a window, so a single all-day window would answer "what
+did we say this morning", asked after lunch, with the lunch meeting. And every
+boundary is a calendar operation (`setDate`, `setHours`), never a multiple of
+86,400,000 ms: a local day is 23 or 25 hours twice a year, and on those two
+days fixed arithmetic lands "yesterday" at 01:00 or 23:00 of the wrong date,
+putting a meeting held near midnight into the day next door.
+
+**What the link may say about *when*** is not free either. A doc found by
+recency may be labelled in the speaker's own frame ("last week") — the window
+is what selected it. A doc found by NAME gets a plain date, because a doc
+that matched on its title may not be from last week at all, and echoing the
+phrase would put a date in the notes that nothing checked.
+
+The composer gets these as a second link block beside the task links
+(`docLinks` on `NotesComposeInput`), told to cite them where the note asked
+and explicitly NOT to summarize what is inside — it has not read them.
+
+### Cost
+
+Both intents are prompt text on a call that was already being made.
+Measured with `count_tokens` on the capture model
+(`scripts/intent-prompt-cost.ts`), the system prompt goes **482 → 630 → 716
+input tokens**: **+148 for research, +86 for lookup, +234 per tick**. At ~200
+ticks per meeting-hour and $1/MTok that is **≈ $0.047 per meeting-hour**,
+taking the measured $0.84 to about **$0.89**. Roughly twice the decision's
+~58-tokens-per-intent figure, because both rules carry the example phrasings
+that teach an ask nobody states explicitly — which is the feature. Output is
+unchanged on the ticks that carry neither, which is most of them.
+
 ## Measuring the latency (`?timing=1`)
 
 **How long a spoken word takes to become a word on the screen, and which hop
@@ -926,7 +1029,8 @@ making before the cheap hedge has been measured.
 `packages/server/src/meeting-protocol.ts` (lifecycle) ·
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
-`packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
+`packages/server/src/meeting-lookup.ts` (what a "pull that in" ask points
+at) · `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
 (UI) · `packages/markdown-app/src/meeting-announce.ts` (speech synthesis and

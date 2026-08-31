@@ -185,6 +185,29 @@ describe('captured task links in the prompt', () => {
   });
 });
 
+describe('material pulled in, in the prompt', () => {
+  it('offers each doc link, its when, and the rule against summarizing it', () => {
+    const { user } = buildNotesPrompt({
+      ...input,
+      docLinks: [
+        { title: 'Offline queue notes', url: '/workspaces/w-b/docs/d-q', when: 'last week' },
+        { title: 'Team charter', url: '/workspaces/w-b/docs/d-c' },
+      ],
+    });
+    expect(user).toContain('[Offline queue notes](/workspaces/w-b/docs/d-q) — last week');
+    // A doc with no meeting behind it gets no when, and no dangling dash.
+    expect(user).toContain('[Team charter](/workspaces/w-b/docs/d-c)\n');
+    expect(user).not.toContain('[Team charter](/workspaces/w-b/docs/d-c) —');
+    // It has not read them, so it may not say what is in them.
+    expect(user).toContain('Do not summarize what is inside');
+  });
+
+  it('says nothing about material when the tick asked for none', () => {
+    const { user } = buildNotesPrompt(input);
+    expect(user).not.toContain('asked to have pulled in');
+  });
+});
+
 describe('the person’s own lines in the prompt', () => {
   it('names them, and says reproduce them verbatim or propose a change', () => {
     const { system, user } = buildNotesPrompt({

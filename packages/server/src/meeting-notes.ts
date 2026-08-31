@@ -277,6 +277,20 @@ export interface NoteTaskLink {
   status: string;
 }
 
+/**
+ * Material this tick's speech asked to have pulled in — a doc, or the notes
+ * of an earlier meeting — already found, and offered to the composer as a
+ * link it may cite. Resolution lives in `meeting-lookup.ts`.
+ */
+export interface NoteDocLink {
+  title: string;
+  url: string;
+  /** When the meeting behind it was, in the speaker's own frame ("last
+   *  week") or as a date. Absent for a doc that carried no meeting: dating
+   *  one would invent a meeting that never happened. */
+  when?: string;
+}
+
 export interface NotesComposeInput {
   docId: string;
   meetingId: string;
@@ -298,6 +312,9 @@ export interface NotesComposeInput {
   /** Tasks captured from THIS tick's speech. Absent when capture is off,
    *  found nothing, or failed — the notes compose either way. */
   taskLinks?: readonly NoteTaskLink[];
+  /** Material THIS tick's speech asked to have pulled in, already resolved.
+   *  Absent on the same terms as `taskLinks`, and for the same reason. */
+  docLinks?: readonly NoteDocLink[];
 }
 
 export interface NotesComposer {
@@ -407,13 +424,17 @@ export interface MeetingNotesDeps {
    */
   resolveContext?: (docId: string) => NotesProjectContext | undefined;
   /**
-   * The task-capture pass, run per tick BEFORE the compose so the links it
+   * The capture pass, run per tick BEFORE the compose so the links it
    * returns can ride the same compose input. Its failure costs the tick its
    * links, never its notes — capture is an enhancement on the same terms as
    * context. Sees the tick's settled turns, carried words included, plus the
    * previous tick's for the sake of asks that span the boundary.
+   *
+   * ONE seam for every intent, not one per intent: the pass behind it is one
+   * LLM call carrying all four (decisions.md, 2026-08-30), and a second seam
+   * here would be a standing invitation to make it a second call.
    */
-  captureTasks?: (input: {
+  captureIntents?: (input: {
     docId: string;
     meetingId: string;
     turns: readonly NotesTurn[];
@@ -423,7 +444,7 @@ export interface MeetingNotesDeps {
      * downstream; the capture pass decides how much of it to use.
      */
     priorTurns: readonly NotesTurn[];
-  }) => Promise<NoteTaskLink[]>;
+  }) => Promise<{ tasks: readonly NoteTaskLink[]; docs: readonly NoteDocLink[] }>;
   /**
    * Read the doc's notes section at the START of each compose, so the
    * composer sees what the person has written rather than only what it last
@@ -452,7 +473,7 @@ export interface MeetingNotesDeps {
  * `taskExtractor` is the capture analogue of `composer`: the caller supplies
  * the LLM seam and the server assembles the board access around it
  * (`withServerNotesSinks`), the way it already supplies the doc sink. A
- * caller-supplied `captureTasks` wins over that assembly.
+ * caller-supplied `captureIntents` wins over that assembly.
  */
 export type MeetingNotesOptions = Omit<MeetingNotesDeps, 'onNotes'> & {
   onNotes?: (update: NotesUpdate) => void;
@@ -566,19 +587,22 @@ export function beginNotesSession(
       carry = [];
       if (raw.length === 0) return;
       const turns = raw.map(withNames);
-      let taskLinks: NoteTaskLink[] = [];
+      let taskLinks: readonly NoteTaskLink[] = [];
+      let docLinks: readonly NoteDocLink[] = [];
       // Read before the pass, written after it: this tick's words are the
       // NEXT tick's overlap, never their own.
       const priorTurns = priorRaw.map(withNames);
       priorRaw = raw;
-      if (deps.captureTasks) {
+      if (deps.captureIntents) {
         try {
-          taskLinks = await deps.captureTasks({
+          const captured = await deps.captureIntents({
             docId: ids.docId,
             meetingId: ids.meetingId,
             turns,
             priorTurns,
           });
+          taskLinks = captured.tasks;
+          docLinks = captured.docs;
         } catch (err) {
           // Unlike a failed compose, nothing is carried: the words still
           // compose below, and the transcript remains the durable record a
@@ -614,6 +638,7 @@ export function beginNotesSession(
         ...(previous !== null && live && live.human.length > 0 ? { humanNotes: live.human } : {}),
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
+        ...(docLinks.length > 0 ? { docLinks } : {}),
       };
       try {
         const composed = await deps.composer.compose(input);
