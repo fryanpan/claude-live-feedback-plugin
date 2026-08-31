@@ -20,6 +20,7 @@ import {
   type CaptureMode,
   type MeetingServerMessage,
   detectsSpeakers,
+  maxSpeakersFor,
   parseMeetingClientMessage,
 } from '@feedback/core';
 import {
@@ -124,7 +125,7 @@ export class MeetingRelay {
       return;
     }
     if (msg.type === 'start') {
-      this.track(this.start(ws, conn, msg.sampleRate, msg.mode));
+      this.track(this.start(ws, conn, msg.sampleRate, msg.mode, msg.speakers));
       return;
     }
     if (msg.type === 'name_speaker') {
@@ -208,8 +209,12 @@ export class MeetingRelay {
     conn: Conn,
     sampleRate: number,
     mode: CaptureMode,
+    speakers?: number,
   ): Promise<void> {
     if (conn.state !== 'idle') return;
+    // Resolved once, here, so the default for "nobody said how many" lives in
+    // one place and the engine call below reads as the decision it is.
+    const maxSpeakers = maxSpeakersFor(mode, speakers);
     const docId = ws.data.docId;
     const engine = this.deps.engine;
     if (!engine) {
@@ -254,6 +259,10 @@ export class MeetingRelay {
         // The mode is the only thing that turns diarization on, and it turns
         // it on for the ENGINE SESSION — there is no later switch.
         detectSpeakers: detectsSpeakers(mode),
+        // And how many voices it may name. Same one-shot rule: the cap is
+        // part of the session's configuration, so a person arriving late does
+        // not raise it.
+        ...(maxSpeakers !== undefined ? { maxSpeakers } : {}),
         onTurn: (turn) => {
           this.send(ws, {
             type: 'transcript',
