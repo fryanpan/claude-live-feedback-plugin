@@ -7567,10 +7567,32 @@ export class TaskStore {
           this.taskIndex.set(task.id, workspace.id);
         }
         const goalRows = new Map<string, GoalRow>();
+        // Goals archived as somebody ELSE's cascade member — the shape a
+        // subgoal's archive left behind, and the second half of the same
+        // migration. A goal row no longer carries `archivedWithGoal` at all,
+        // so the stored key is read once here and cleared.
+        const cascadedGoals = new Set<string>();
         for (const row of parsed.goalRows ?? []) {
           if (typeof row?.id !== 'string') continue;
+          const legacy = row as { archivedWithGoal?: string };
+          if (legacy.archivedWithGoal !== undefined) {
+            cascadedGoals.add(row.id);
+            legacy.archivedWithGoal = undefined;
+          }
           goalRows.set(row.id, row);
           this.goalIndex.set(row.id, workspace.id);
+        }
+        // Its tasks were stamped with the PARENT's id, which is what made the
+        // pair restore together. Flattened, that band restores on its own —
+        // and would come back empty, its work still archived, while restoring
+        // the old parent revived those tasks under a band that is still off
+        // the board. Re-point them at the band they actually sit in, so
+        // either restore is the whole of one decision again.
+        if (cascadedGoals.size > 0) {
+          for (const task of parsed.tasks ?? []) {
+            if (task?.archivedWithGoal === undefined) continue;
+            if (cascadedGoals.has(task.goal)) task.archivedWithGoal = task.goal;
+          }
         }
         this.workspaces.set(workspace.id, {
           workspace,

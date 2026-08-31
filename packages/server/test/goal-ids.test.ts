@@ -596,3 +596,144 @@ describe('a board written before subgoals were removed loads flat', () => {
     expect(store.getTask('t-nested-1')?.goal).toBe('g-launch-qa');
   });
 });
+
+/**
+ * A board on disk where a parent goal's archive took a subgoal with it.
+ *
+ * The shape the removal has to land on its feet from: the subgoal's row was
+ * stamped `archivedWithGoal: <parent>`, and its TASKS were stamped with the
+ * parent's id too — which is what made the pair restore together. Flattened,
+ * that band restores on its own, so left alone it would come back empty with
+ * its work still archived, while restoring the old parent would revive those
+ * tasks under a band that is still off the board. Neither restore would be
+ * the whole of one decision.
+ *
+ * No live board is in this state (there are no subgoals in any store), so
+ * this is a migration for a shape that is possible rather than present.
+ */
+describe('a board whose archive cascaded into a subgoal loads coherently', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  const wsId = 'w-cascadeboard1';
+  const AT = 1_700_000_500_000;
+
+  const goalRow = (id: string, title: string, over: Record<string, unknown> = {}) => ({
+    id,
+    workspaceId: wsId,
+    kind: 'goal',
+    title,
+    status: 'todo',
+    createdAt: 1_700_000_000_000,
+    updatedAt: AT,
+    ...over,
+  });
+
+  const cascaded = () => ({
+    workspace: {
+      id: wsId,
+      name: 'live board',
+      goal: 'Make feedback as fast as pointing.',
+      goals: [
+        {
+          id: 'g-launch',
+          title: '1. Ship the launch post',
+          subgoals: [{ id: 'g-launch-qa', title: '1.1 QA pass' }],
+        },
+      ],
+      docIds: [],
+      createdAt: 1_700_000_000_000,
+    },
+    goalRows: [
+      goalRow('g-launch', '1. Ship the launch post', { archivedAt: AT, archivedBy: 'Jordan' }),
+      goalRow('g-launch-qa', '1.1 QA pass', {
+        archivedAt: AT,
+        archivedBy: 'Jordan',
+        archivedWithGoal: 'g-launch',
+      }),
+    ],
+    tasks: [
+      {
+        id: 't-under-parent',
+        workspaceId: wsId,
+        title: 'book the slot',
+        status: 'todo',
+        goal: 'g-launch',
+        order: 1,
+        assignee: 'Jordan',
+        archivedAt: AT,
+        archivedWithGoal: 'g-launch',
+        createdAt: 1_700_000_000_000,
+        updatedAt: AT,
+        transitions: [],
+      },
+      {
+        id: 't-under-sub',
+        workspaceId: wsId,
+        title: 'proof the headline',
+        status: 'todo',
+        goal: 'g-launch-qa',
+        order: 1,
+        assignee: 'Jordan',
+        archivedAt: AT,
+        // Stamped with the PARENT, which is the marker this migration moves.
+        archivedWithGoal: 'g-launch',
+        createdAt: 1_700_000_000_000,
+        updatedAt: AT,
+        transitions: [],
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'goal-cascade-'));
+    mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
+    writeFileSync(tasksSidecarPath(dataDir, wsId), `${JSON.stringify(cascaded(), null, 2)}\n`);
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('re-points a cascaded band’s tasks at the band they actually sit in', () => {
+    // Premise, asserted rather than assumed: both rows really are archived.
+    expect(store.getGoalRow('g-launch')?.archivedAt).toBe(AT);
+    expect(store.getGoalRow('g-launch-qa')?.archivedAt).toBe(AT);
+    expect(store.getTask('t-under-sub')?.archivedWithGoal).toBe('g-launch-qa');
+    // The parent's own task is untouched — the re-point is scoped to the
+    // band that moved, not applied to every marker on the board.
+    expect(store.getTask('t-under-parent')?.archivedWithGoal).toBe('g-launch');
+  });
+
+  it('restores each band with its own work, and leaves the other alone', () => {
+    const sub = store.unarchiveGoal('g-launch-qa', { actor: PERSON });
+    if (!sub.ok) throw new Error('unarchiveGoal refused');
+    // The failure this guards: an empty band back on the board under a
+    // control that had just promised to bring its tasks.
+    expect(sub.taskIds).toEqual(['t-under-sub']);
+    expect(store.getTask('t-under-sub')?.archivedAt).toBeUndefined();
+    // The other direction, in the same read: the parent is still archived,
+    // with its own task still off the board.
+    expect(store.getGoalRow('g-launch')?.archivedAt).toBe(AT);
+    expect(store.getTask('t-under-parent')?.archivedAt).toBe(AT);
+
+    const parent = store.unarchiveGoal('g-launch', { actor: PERSON });
+    if (!parent.ok) throw new Error('unarchiveGoal refused');
+    expect(parent.taskIds).toEqual(['t-under-parent']);
+    expect(
+      store
+        .listTasks(wsId)
+        .map((t) => t.id)
+        .sort(),
+    ).toEqual(['t-under-parent', 't-under-sub'].sort());
+  });
+
+  it('stops writing the marker back, so the shape does not outlive the migration', () => {
+    const row = store.getGoalRow('g-launch-qa') as { archivedWithGoal?: string } | undefined;
+    expect(row?.archivedWithGoal).toBeUndefined();
+    // Positive control for the read: the row is really here and really
+    // archived, so `undefined` is about the field rather than the lookup.
+    expect(store.getGoalRow('g-launch-qa')?.archivedBy).toBe('Jordan');
+  });
+});
