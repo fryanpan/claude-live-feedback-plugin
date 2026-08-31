@@ -1094,7 +1094,7 @@ describe('runTaskCapture — a lookup reaches docs and past meetings', () => {
       { board, extractor: extractorOf([{ kind: 'lookup', query: 'the offline queue notes' }]) },
       lookupInput,
     );
-    expect(links).toEqual({ tasks: [], docs: [] });
+    expect(links).toEqual({ tasks: [], docs: [], corrections: [] });
   });
 
   it('a lookup source that throws costs the link, not the pass', async () => {
@@ -1129,5 +1129,105 @@ describe('runTaskCapture — a lookup reaches docs and past meetings', () => {
     // The reference beside it still landed.
     expect(links.tasks[0]?.url).toBe('/workspaces/w-board?task=t-pop');
     expect(errors).toEqual(['doc index unreadable']);
+  });
+});
+
+describe('the correction intent', () => {
+  /** A tick where somebody fixes a note the assistant already wrote. */
+  const correcting: NotesTurn[] = [
+    { turn: 40, speaker: 'Priya', text: 'So the gate lands Tuesday, before the review.' },
+    { turn: 41, speaker: 'Priya', text: 'No — I said Thursday. Tuesday is the offsite.' },
+  ];
+
+  const reply = (items: unknown[]): string => JSON.stringify({ items });
+
+  it('is offered in the prompt, with the words that separate it from new speech', () => {
+    const { system } = buildTaskCapturePrompt({ turns: correcting, candidates: [] });
+    expect(system).toContain('"kind":"correction","wrong":"...","right":"..."');
+    expect(system).toContain('A CORRECTION');
+    // The distinction the intent lives or dies on: overturning a decision is
+    // the composer's job, not a correction.
+    expect(system).toContain('CHANGING THEIR MIND');
+  });
+
+  it('reads a correction whose corrected words the tick actually carried', () => {
+    const items = parseTaskCaptureReply(
+      reply([{ kind: 'correction', wrong: 'Tuesday', right: 'Thursday' }]),
+      [],
+      correcting,
+    );
+    expect(items).toEqual([{ kind: 'correction', wrong: 'Tuesday', right: 'Thursday' }]);
+  });
+
+  it('drops a correction to words nobody said — the invented-correction guard', () => {
+    // The positive control is the test above: the same shape on the same
+    // turns parses when the corrected words WERE spoken, so this "dropped" is
+    // the guard firing rather than the parse being unable to read the row.
+    const items = parseTaskCaptureReply(
+      reply([{ kind: 'correction', wrong: 'Tuesday', right: 'Saturday' }]),
+      [],
+      correcting,
+    );
+    expect(items).toEqual([]);
+  });
+
+  it('vouches against the marked overlap too, so a correction may span the boundary', () => {
+    // "No, I said Thursday" lands on the tick AFTER the one that misheard.
+    const prior: NotesTurn[] = [{ turn: 41, speaker: 'Priya', text: 'No — I said Thursday.' }];
+    const now: NotesTurn[] = [{ turn: 42, speaker: 'Marcus', text: 'Right, noted.' }];
+    expect(
+      parseTaskCaptureReply(
+        reply([{ kind: 'correction', wrong: 'Tuesday', right: 'Thursday' }]),
+        [],
+        now,
+        prior,
+      ),
+    ).toEqual([{ kind: 'correction', wrong: 'Tuesday', right: 'Thursday' }]);
+  });
+
+  it('drops the malformed shapes without costing the good rows beside them', () => {
+    const items = parseTaskCaptureReply(
+      reply([
+        { kind: 'correction', wrong: 'Tuesday' }, // no corrected words
+        { kind: 'correction', right: 'Thursday' }, // nothing to correct
+        { kind: 'correction', wrong: 'on', right: 'Thursday' }, // points at half the notes
+        { kind: 'correction', wrong: 'Thursday', right: 'thursday' }, // says the same thing
+        { kind: 'correction', wrong: 'x'.repeat(80), right: 'Thursday' }, // a rewrite
+        { kind: 'correction', wrong: 'Tuesday', right: 'Thursday' },
+      ]),
+      [],
+      correcting,
+    );
+    expect(items).toEqual([{ kind: 'correction', wrong: 'Tuesday', right: 'Thursday' }]);
+  });
+
+  it('says the same correction once, however often the model repeats it', () => {
+    const items = parseTaskCaptureReply(
+      reply([
+        { kind: 'correction', wrong: 'Tuesday', right: 'Thursday' },
+        { kind: 'correction', wrong: 'tuesday', right: 'THURSDAY' },
+      ]),
+      [],
+      correcting,
+    );
+    expect(items).toHaveLength(1);
+  });
+
+  it('carries corrections out of the pass untouched, and files no board row for them', async () => {
+    const { board, created } = boardStub();
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([{ kind: 'correction', wrong: 'Tuesday', right: 'Thursday' }]),
+      },
+      { workspaceId: 'w-board', docId: 'doc-m', turns: correcting },
+    );
+    expect(links).toEqual({
+      tasks: [],
+      docs: [],
+      corrections: [{ wrong: 'Tuesday', right: 'Thursday' }],
+    });
+    // A correction is not work: nothing is filed, and nothing is linked.
+    expect(created).toHaveLength(0);
   });
 });

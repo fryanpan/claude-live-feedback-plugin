@@ -22,6 +22,7 @@ import {
 import {
   type NotesComposeInput,
   type NotesComposer,
+  type NotesCorrection,
   type NotesReattribution,
   type NotesRelabel,
   type NotesTick,
@@ -1458,6 +1459,137 @@ describe('a tagged meeting through the audio socket', () => {
     ws.send(JSON.stringify({ type: 'stop' }));
     await waitFor(() => frames.some((f) => f.type === 'stopped'), 'stopped');
     ws.close();
+  });
+});
+
+describe('a spoken correction riding the notes session', () => {
+  const ids = { docId: 'doc-fix', meetingId: 'm-doc-fix-1' };
+
+  it('reaches the doc BEFORE the section is read for the compose', async () => {
+    // Ordering is the whole design: the note being corrected was written on
+    // an earlier tick and is already in the doc, so the correction lands
+    // first and this tick's compose reads the corrected words as `previous`.
+    // Land it after the compose instead and the composer echoes the old
+    // wording back, and the merge has to fight over which one wins.
+    const schedule = new ManualScheduler();
+    const order: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: {
+          name: 'recording-stub',
+          compose: () => {
+            order.push('compose');
+            return Promise.resolve('## Meeting notes\n\n- noted');
+          },
+        },
+        quietMs: 1000,
+        schedule,
+        onNotes: () => order.push('write'),
+        readSection: () => {
+          order.push('read');
+          return null;
+        },
+        captureIntents: () =>
+          Promise.resolve({
+            tasks: [],
+            docs: [],
+            corrections: [{ wrong: 'Tuesday', right: 'Thursday' }],
+          }),
+        onCorrection: (c) => {
+          order.push(`correct ${c.wrong}->${c.right}`);
+          return 'revised';
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'No, I said Thursday.', final: true });
+    schedule.fire();
+    await session.end();
+    expect(order).toEqual(['correct Tuesday->Thursday', 'read', 'compose', 'write']);
+  });
+
+  it('carries the meeting’s ids so the sink knows which doc to correct', async () => {
+    const schedule = new ManualScheduler();
+    const seen: NotesCorrection[] = [];
+    const session = beginNotesSession(
+      {
+        composer: createStubNotesComposer(),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        captureIntents: () =>
+          Promise.resolve({
+            tasks: [],
+            docs: [],
+            corrections: [{ wrong: 'Tuesday', right: 'Thursday' }],
+          }),
+        onCorrection: (c) => {
+          seen.push(c);
+          return 'revised';
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'No, I said Thursday.', final: true });
+    schedule.fire();
+    await session.end();
+    expect(seen).toEqual([
+      { docId: 'doc-fix', meetingId: 'm-doc-fix-1', wrong: 'Tuesday', right: 'Thursday' },
+    ]);
+  });
+
+  it('a sink that throws costs the correction, never the tick’s notes', async () => {
+    const schedule = new ManualScheduler();
+    const updates: NotesUpdate[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: createStubNotesComposer(),
+        quietMs: 1000,
+        schedule,
+        onNotes: (u) => updates.push(u),
+        onError: (m) => errors.push(m),
+        captureIntents: () =>
+          Promise.resolve({
+            tasks: [],
+            docs: [],
+            corrections: [{ wrong: 'Tuesday', right: 'Thursday' }],
+          }),
+        onCorrection: () => {
+          throw new Error('doc write refused');
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'No, I said Thursday.', final: true });
+    schedule.fire();
+    await session.end();
+    expect(errors).toContain('doc write refused');
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.notes).toContain('No, I said Thursday.');
+  });
+
+  it('a pass that returns no corrections asks the sink nothing', async () => {
+    const schedule = new ManualScheduler();
+    let calls = 0;
+    const session = beginNotesSession(
+      {
+        composer: createStubNotesComposer(),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        captureIntents: () => Promise.resolve({ tasks: [], docs: [] }),
+        onCorrection: () => {
+          calls++;
+          return 'none';
+        },
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Ordinary speech about the gate.', final: true });
+    schedule.fire();
+    await session.end();
+    expect(calls).toBe(0);
   });
 });
 

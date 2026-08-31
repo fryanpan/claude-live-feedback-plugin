@@ -825,16 +825,18 @@ stored content.
 
 ## Acting on speech, not only recording it
 
-Two more intents ride the SAME capture call — no router, no second pass, per
+Three more intents ride the SAME capture call — no router, no second pass, per
 the 2026-08-30 decision *"One call per tick carries every intent"*. One reply,
 one `items` array, a `kind` per intent, rows parsed independently so a
 malformed one never costs the others. The module is still called
-`meeting-task-capture.ts`; its name predates half of what it carries.
+`meeting-task-capture.ts`; its name predates most of what it carries.
 
 **They are not symmetrical, and that is the design.** A LOOKUP only reads, so
 a wrong one costs a link nobody wanted. A RESEARCH ask SPENDS — an agent goes
 away and burns tokens on a report — so it is never acted on from speech
-alone.
+alone. A CORRECTION does neither: it *changes something already written*, so
+it is the only intent whose guard cannot be finished in the capture pass at
+all.
 
 ### "Go look into that" — research, confirmed before it is spent
 
@@ -914,17 +916,100 @@ The composer gets these as a second link block beside the task links
 (`docLinks` on `NotesComposeInput`), told to cite them where the note asked
 and explicitly NOT to summarize what is inside — it has not read them.
 
+### "No, I said Thursday" — a correction of a note already written
+
+Correcting the note-taker out loud is how a person naturally fixes a note.
+Before this, it added a second note and the doc held both, disagreeing.
+
+**Why it is not left to the composer.** The composer already revises — it
+receives the whole notes and returns the whole notes, and its prompt tells it
+to "correct earlier notes the new speech overturns". What it cannot be is
+*relied on*: the output is a section rewritten from a model's reading, so the
+same ask lands as a fix on one tick and as an extra bullet on the next, and
+either way the merge reconciles a section that changed everywhere. A person
+saying two words wants two words changed. So a correction is a **targeted,
+in-place replacement** — the same mechanic as the speaker rename above, for
+the same reason.
+
+**The two halves are vouched by different things, and that is the design.**
+
+| half | vouched by | why not the other one |
+|---|---|---|
+| the corrected words ("Thursday") | the transcript window | they were just spoken; `correctionSpokenOnTick` can ask |
+| the mistaken words ("Tuesday") | the **notes** | by the time anybody corrects a mishearing, the tick that carried it is usually outside the ~180-char overlap window |
+
+Vouching the mistaken half against the notes is *stronger* than a transcript
+check, not weaker: the phrase must sit in exactly one note, and that
+resolution is what makes the correction land on something real. A phrase the
+model invented matches nothing and is dropped.
+
+**More than one match is a drop.** Three notes saying "Tuesday" and a person
+saying "no, Thursday" is not a correction anybody can execute — fix the newest
+and two stale ones remain and the choice looks arbitrary; fix all three and
+the edit is wider than the words asked for. Ambiguity drops, the way every
+other reading in this pipeline drops what it cannot prove.
+
+**Whose note it is decides the verb.** Ownership is the merge ledger's: the
+agent may revise only an item it wrote *that still reads as it left it*.
+
+- **an agent note** → rewritten in place, under `reclaimAfterInPlaceEdit`, so
+  the ledger learns the line's new wording and the note-taker keeps owning it.
+  Without the wrapper the correction would hand every line it fixed to the
+  person and the notes would freeze at the correction.
+- **a person's note** — one they wrote, or one the agent wrote and they have
+  since edited — → a **redline suggestion** on the phrase, the same
+  `suggestOps` path the composer uses when it wants different words in
+  somebody's line. Accepting it is their move. One pending proposal per item:
+  somebody who has not answered the last one does not collect a fresh copy
+  every tick.
+- **both carry the phrase** → the agent's own note wins, and theirs is left
+  alone. Not a tiebreak so much as the definition: the note the correction is
+  about is the one the assistant wrote from the mishearing.
+
+**A site inside a speaker tag is refused outright.** Rewriting the text of
+`[@Devi](speaker:B)` while its href still names voice B would leave the tag
+claiming B is called something B is not. Attribution moves by the reassign
+gesture, never by a correction of the words around it — the same law
+`attributesToNewVoice` holds the composer to from the other side. The words
+*beside* the tag in the same note are still fair game.
+
+The refusal keys on the `speaker:` scheme, so it holds for a tag carrying its
+provenance (`speaker:B?t=10,12`, and the unsure form) exactly as it does for a
+bare one — and a revision beside such a tag leaves the whole href, query and
+all, as it found it. That matters in one direction in particular: the turn
+list is what [a late correction](#a-late-correction-lands-on-the-mentions-it-can-prove)
+reads to decide which mentions move, so a correction that truncated it would
+leave the mention looking untouched and quietly unmovable.
+
+**Ordering inside the tick is load-bearing.** The correction reaches the doc
+**after the capture pass and before the section is read** for the compose. The
+note it fixes was written on an earlier tick and is already in the doc, so
+correcting first means this tick's compose reads the corrected words as
+`previous` — and the merge never has to reconcile a note the composer echoed
+back in its old wording.
+
+**A correction and a self-correction are different things.** Somebody who
+changes their mind ("actually, let's do Thursday") is speaking, and the
+composer revises the notes for it as it always has. The prompt rule spends
+most of its tokens on that distinction, because it is the one that decides
+whether this intent is useful or a nuisance.
+
 ### Cost
 
-Both intents are prompt text on a call that was already being made.
+The three intents are prompt text on a call that was already being made.
 Measured with `count_tokens` on the capture model
-(`scripts/intent-prompt-cost.ts`), the system prompt goes **482 → 630 → 716
-input tokens**: **+148 for research, +86 for lookup, +234 per tick**. At ~200
-ticks per meeting-hour and $1/MTok that is **≈ $0.047 per meeting-hour**,
-taking the measured $0.84 to about **$0.89**. Roughly twice the decision's
-~58-tokens-per-intent figure, because both rules carry the example phrasings
-that teach an ask nobody states explicitly — which is the feature. Output is
-unchanged on the ticks that carry neither, which is most of them.
+(`scripts/intent-prompt-cost.ts`, on a fixture tick carrying all three), the
+prompt goes **501 → 649 → 735 → 888 input tokens**: **+148 for research, +86
+for lookup, +153 for correction — +387 per tick.** At ~200 ticks per
+meeting-hour and $1/MTok that is **≈ $0.077 per meeting-hour**, taking the
+measured $0.84 to about **$0.92**.
+
+Roughly two to three times the decision's ~58-tokens-per-intent figure,
+because each rule carries the example phrasings that teach an ask nobody
+states explicitly — which is the feature. Correction is the priciest of the
+three for the same reason it is the most likely to misfire: most of its rule
+is the line separating a correction from somebody changing their mind. Output
+is unchanged on the ticks that carry none of them, which is most of them.
 
 ## Measuring the latency (`?timing=1`)
 
@@ -1240,9 +1325,11 @@ making before the cheap hedge has been measured.
 `packages/server/src/meeting-lookup.ts` (what a "pull that in" ask points
 at) · `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
-keeps a person's writing) · `packages/core/src/speaker-tags.ts` (the tag
-grammar, its provenance, and the late correction) +
-`speaker-roster.ts` (the meeting's cast) ·
+keeps a person's writing, and the ownership ledger everything else asks) ·
+`packages/server/src/meeting-notes-correction.ts` (which note a spoken
+correction lands on, and whether it may) ·
+`packages/core/src/speaker-tags.ts` (the tag grammar, its provenance, and the
+late correction) + `speaker-roster.ts` (the meeting's cast) ·
 `packages/markdown-app/src/speaker-reassign.ts` +
 `speaker-reassign-menu.ts` (correcting one mention) ·
 `packages/markdown-app/src/meeting-strip.ts`
