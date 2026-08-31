@@ -218,6 +218,16 @@ export class MeetingRelay {
       if (conn.pending.length < 256) {
         conn.pending.push(chunk);
         if (conn.wantsTiming) conn.pendingRecv.push(Date.now());
+      } else if (conn.wantsTiming) {
+        // The buffer is full, so this frame is being dropped — and the two
+        // sides count frames independently: the client numbers what it SENT,
+        // the ledger numbers what we FORWARDED. From the first dropped frame
+        // the two ordinals name different audio, and every later sample would
+        // be priced against an emit one frame per drop too early, with
+        // nothing on screen to say so. Refuse to measure rather than measure
+        // wrongly; the transcript itself is unaffected.
+        conn.wantsTiming = false;
+        conn.pendingRecv = [];
       }
       return;
     }
@@ -338,7 +348,11 @@ export class MeetingRelay {
             text: turn.text,
             final: turn.final,
             ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
-            ...timingFor(ledger, turn.audioEndMs, turn.engineMs),
+            // The ledger is a local (see above) but the PERMISSION is read
+            // off the connection every frame: the ledger is built before the
+            // handshake is awaited, and audio dropped during that wait
+            // withdraws the permission after the fact.
+            ...timingFor(conn.wantsTiming ? ledger : null, turn.audioEndMs, turn.engineMs),
           });
           // Only settled turns reach the file. A partial is a view of a turn
           // still being revised, and the record keeps what the turn became.

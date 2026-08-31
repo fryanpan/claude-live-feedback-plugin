@@ -193,6 +193,13 @@ export class AudioChunkLedger {
    * nothing: the engine's stream clock can run a hair ahead of the bytes we
    * have accounted for, and refusing those samples would silently drop the
    * newest — which is every partial, the population we most want.
+   *
+   * The upper edge belongs to the chunk BELOW it. A word ending at exactly
+   * 100ms was carried to its last sample by the frame spanning 0–100, not by
+   * the one that starts there — and frames here are 100ms by construction, so
+   * a word ending on a boundary is an ordinary event, not a curiosity.
+   * Reading it the other way moves a whole frame out of the vendor's leg and
+   * into capture.
    */
   chunkAt(ms: number): AudioChunkMark | null {
     const marks = this.marks;
@@ -206,7 +213,7 @@ export class AudioChunkLedger {
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
       const m = marks[mid] as AudioChunkMark;
-      if (ms >= m.audioEndMs) lo = mid + 1;
+      if (ms > m.audioEndMs) lo = mid + 1;
       else hi = mid;
     }
     return marks[lo] ?? null;

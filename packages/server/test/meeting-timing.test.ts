@@ -265,6 +265,45 @@ describe('audio held through the handshake reads as the server holding it', () =
   });
 });
 
+describe('a handshake long enough to drop audio stops the measurement instead of skewing it', () => {
+  /**
+   * The relay's handshake buffer is bounded, and a client that talks past the
+   * bound has frames thrown away. The two sides count frames independently —
+   * the browser numbers what it SENT, the ledger numbers what we FORWARDED —
+   * so from the first dropped frame every ordinal names different audio, and
+   * every later sample would be priced against an emit 100ms per drop too
+   * early with nothing on screen to say so.
+   */
+  async function speakThroughTheHandshake(docId: string, frames: number): Promise<ServerFrame[]> {
+    const env = await makeServer(createOffsetEngine(600));
+    try {
+      await env.createDoc(docId);
+      const client = await AudioClient.open(env.wsBase, docId);
+      client.start(true);
+      // No session exists yet, so all of this lands in the bounded buffer.
+      client.speak(frames);
+      const turns = await client.waitForCount('transcript', 8, 6_000);
+      client.close();
+      return turns;
+    } finally {
+      await env.handle.stop();
+      rmSync(env.dataDir, { recursive: true, force: true });
+    }
+  }
+
+  it('measures a handshake the buffer absorbed — the control', async () => {
+    // Without this the assertion below would pass on a relay that can never
+    // attach a block through a slow handshake at all.
+    const turns = await speakThroughTheHandshake('buffer-fits', 200);
+    for (const t of turns) expect(t.timing).toBeDefined();
+  }, 15_000);
+
+  it('measures nothing once a frame has been dropped', async () => {
+    const turns = await speakThroughTheHandshake('buffer-overflows', 320);
+    for (const t of turns) expect(t.timing).toBeUndefined();
+  }, 15_000);
+});
+
 describe('the engine adapter reads the word offsets AssemblyAI actually sends', () => {
   it('takes the end of the last word', () => {
     expect(

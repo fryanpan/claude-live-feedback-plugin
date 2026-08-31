@@ -44,11 +44,17 @@ describe('the chunk ledger maps an audio offset back to the chunk that carried i
     for (let i = 0; i < 20; i++) ledger.record(FRAME_BYTES, 1000 + i, 1000 + i);
     expect(ledger.chunkAt(0)?.seq).toBe(0);
     expect(ledger.chunkAt(99.9)?.seq).toBe(0);
-    // A boundary belongs to the chunk that STARTS there — the sample at
-    // 100ms is the first sample of chunk 1, not the last of chunk 0.
-    expect(ledger.chunkAt(100)?.seq).toBe(1);
+    // A boundary belongs to the chunk BELOW it. A word ending at 100ms was
+    // carried to its last sample by the frame spanning 0–100; frames are
+    // 100ms by construction, so words ending on a boundary are ordinary, and
+    // reading them the other way moves a whole frame out of the vendor's leg
+    // and into capture.
+    expect(ledger.chunkAt(100)?.seq).toBe(0);
+    expect(ledger.chunkAt(100.1)?.seq).toBe(1);
     expect(ledger.chunkAt(570)?.seq).toBe(5);
     expect(ledger.chunkAt(1999)?.seq).toBe(19);
+    // Including the boundary at the very end, where the tail rule agrees.
+    expect(ledger.chunkAt(2000)?.seq).toBe(19);
   });
 
   it('resolves an offset past the newest chunk to that chunk, and one before the window to nothing', () => {

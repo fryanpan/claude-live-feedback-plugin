@@ -321,6 +321,13 @@ painted.
 - **Paint is a frame after rAF, not rAF.** `requestAnimationFrame` runs
   BEFORE style, layout and paint, so marking inside it would time the work up
   to the frame and call it painted.
+- **A handshake long enough to drop audio turns the measurement OFF.** The
+  relay's opening buffer is bounded, and the two sides count frames
+  independently — the browser numbers what it sent, the ledger what we
+  forwarded. One dropped frame and every later ordinal names different audio,
+  so from that point the relay attaches no blocks at all. The readout going
+  quiet on a pathological start is the design; a plausible wrong number would
+  not be.
 - **What it does NOT separate.** The vendor leg is one number: the network
   round trip to AssemblyAI is inside it, and nothing the vendor sends carries
   a wall clock to subtract. Microphone and device input latency are before the
