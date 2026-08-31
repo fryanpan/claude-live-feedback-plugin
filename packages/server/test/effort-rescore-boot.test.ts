@@ -204,6 +204,37 @@ describe('a prompt bump re-scores the open rows on boot', () => {
     expect(calls).toEqual([]);
   });
 
+  it('never runs from a server whose port was taken', async () => {
+    // `createServer` THROWS when the port is busy, and bin.ts answers by
+    // constructing a whole new server on the next port. A pass kicked off
+    // during construction therefore runs once per ATTEMPT, from stores
+    // belonging to servers nobody kept, all writing the same data directory
+    // — two passes over the same 99 rows on a dev box where 8788 was already
+    // held, the abandoned one still calling the API. So the pass starts after
+    // the port is bound, and this is what holds that line.
+    await seedOldGenerationBoard();
+    const squatter = Bun.serve({ port: 0, fetch: () => new Response('busy') });
+    try {
+      expect(() =>
+        createServer({
+          port: squatter.port,
+          dataDir,
+          effortEstimator: async (input) => {
+            calls.push(input.ticket.title);
+            return NEW;
+          },
+          stallNudgeQuietMs: 60 * 60_000,
+        }),
+      ).toThrow();
+      // The store hydrated and the stale rows are right there; what must not
+      // have happened is a single call out.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(calls).toEqual([]);
+    } finally {
+      squatter.stop(true);
+    }
+  });
+
   it('does nothing at all when no estimator is wired', async () => {
     // Same contract as the event-driven scorer: no key, or the kill switch,
     // and the row is left exactly as it was — never scored is a state, and

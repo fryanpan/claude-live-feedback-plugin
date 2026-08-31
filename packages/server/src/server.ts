@@ -2004,7 +2004,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     }
     console.log('[effort-estimate] re-scoring pass done');
   }
-  void rescoreStaleEffortEstimates();
 
   // The done-artifact check (artifact-check.ts): a move to done gets the
   // row's links verified after the transition commits — a dead PR link or a
@@ -10012,6 +10011,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       },
     },
   });
+
+  // The effort re-scoring pass starts HERE, after the port is bound, not
+  // where it is defined. `createServer` THROWS when the port is taken, and
+  // `bin.ts` answers by constructing a whole new server on the next port —
+  // so a pass kicked off during construction runs once for every attempt,
+  // from stores belonging to servers nobody kept, all writing the same data
+  // directory. Observed on a dev box where 8788 was already held: two passes
+  // over the same 99 rows, and the abandoned one still calling the API.
+  // Reaching this line is what makes a server real.
+  void rescoreStaleEffortEstimates();
 
   /**
    * The base every human-facing URL this server emits is built on.
