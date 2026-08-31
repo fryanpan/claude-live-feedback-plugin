@@ -661,8 +661,16 @@ export interface GoalEffortLabel {
   percentText: string;
   /** Bar fill, 0–100. */
   percentFill: number;
-  /** `2h 40m left`, or the not-scored sentence. */
+  /** `2h 40m hands-on left`, or the not-scored sentence. */
   leftText: string;
+  /** The same figure with no words at all, for the narrow tier — where the
+   *  goal TITLE is the primary task and everything else spends its width
+   *  (Bryan, 2026-08-30: *"Primary task is still to read the title so don't
+   *  block that on mobile"*). Measured at 430px against a 103-character goal
+   *  title: the labelled string left the title 152px of a 354px row, and
+   *  this one leaves it 207px. The label is a real loss and it is the one
+   *  his ordering says to take. */
+  leftTextShort: string;
   /** `~Sep 12`, or `''` below the projection floor. */
   finishText: string;
   /** `4 not scored` / `4 not scored, 1 failed`, or `''` at full coverage. */
@@ -695,6 +703,7 @@ export function goalEffortLabel(
     percentText: '',
     percentFill: 0,
     leftText,
+    leftTextShort: leftText,
     finishText: '',
     coverageText: '',
     title,
@@ -736,7 +745,8 @@ export function goalEffortLabel(
   // was 2h. The sentence that disambiguated them lived only in the `title`,
   // and the device this board is mostly read from has no hover. So the
   // remainder now names whose time it is, on screen.
-  const leftText = summary.complete ? 'done' : `${left} of your time left`;
+  const leftText = summary.complete ? 'done' : `${left} hands-on left`;
+  const leftTextShort = summary.complete ? 'done' : left;
   // Why there is no date is as much of an answer as a date, and it was also
   // hover-only. Three different absences, three different sentences.
   const finishText = summary.complete
@@ -750,7 +760,7 @@ export function goalEffortLabel(
         : `date after ${EFFORT_MIN_CLOSES_FOR_PROJECTION} closes`;
   const titleParts = [
     summary.complete
-      ? `Every scored ticket in this goal is closed.`
+      ? 'Every scored ticket in this goal is closed.'
       : `${summary.percentComplete}% of this goal's estimated calendar time is done.`,
   ];
   if (!summary.complete) {
@@ -789,6 +799,7 @@ export function goalEffortLabel(
     percentText: `${summary.percentComplete}%`,
     percentFill: Math.min(100, Math.max(0, summary.percentComplete)),
     leftText,
+    leftTextShort,
     finishText,
     coverageText,
     title: titleParts.join(' '),

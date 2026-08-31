@@ -20,7 +20,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { computeEffortCalibration } from '@feedback/core/goal-effort';
+import { computeEffortCalibration, ratioForGoal } from '@feedback/core/goal-effort';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type BoardFilters,
@@ -35,7 +35,7 @@ import {
   goalBandIds,
   goalEffortLabel,
 } from '../src/hub/hub-model.ts';
-import { effortCellText } from '../src/hub/hub-render.ts';
+import { effortComputationLines, effortFields } from '../src/hub/hub-render.ts';
 import { disposeBoards, renderBoard } from './support/board.ts';
 
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);
@@ -199,13 +199,24 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(withFailure.coverageText).toBe('2 not scored, 1 failed');
   });
 
-  it('never puts the words "hands on" or "wall clock" on the board', () => {
+  it('names the hands-on figure on the goal, and never the calendar one', () => {
+    // This assertion used to ban BOTH phrases from the board, reading "No
+    // need to show hands on or wall clock hours in the board" (Bryan,
+    // 2026-08-30 morning) as covering the goal header. His later words on
+    // the same day are narrower and explicit: *"Secondary task is to see
+    // progress and understand how much work is left. And know how much hands
+    // on time is left."* So on the GOAL HEADER the hands-on figure is asked
+    // for by name — leaving it unlabelled was the defect. The ban survives
+    // where it was aimed: on the TASK ROWS, asserted below.
     const l = labelFor([closed(DAY), task()]);
     const printed = [l.percentText, l.leftText, l.finishText, l.coverageText].join(' ');
-    expect(printed.toLowerCase()).not.toContain('hands on');
-    expect(printed.toLowerCase()).not.toContain('hands-on');
+    expect(printed.toLowerCase()).toContain('hands-on');
+    // The calendar figure is the BAR and is never given as a duration here —
+    // two durations side by side in different currencies is what made the
+    // readout misleading in the first place.
     expect(printed.toLowerCase()).not.toContain('wall clock');
     expect(printed.toLowerCase()).not.toContain('wall-clock');
+    expect(printed.toLowerCase()).not.toContain('calendar');
   });
 
   it('withholds a finish date until enough has closed, and says why', () => {
@@ -224,7 +235,10 @@ describe('goalEffortLabel keeps three states apart', () => {
     // time and this figure is Bryan's attention; unlabelled they invite the
     // reading "60% done, 20 minutes to go", and the calendar remainder on
     // this same goal is 2h.
-    expect(enough.leftText).toBe('20m of your time left');
+    expect(enough.leftText).toBe('20m hands-on left');
+    // At the narrow tier the label goes and the NUMBER stays: the title is
+    // the primary task there, and 430px does not have room for both.
+    expect(enough.leftTextShort).toBe('20m');
   });
 
   it('says WHY there is no date, rather than just omitting one', () => {
@@ -299,26 +313,28 @@ describe('the board renders the readout and leaves the rows alone', () => {
     renderBoard(host, boardSectionsWithEffort(GOALS, tasks, filters(), NOW), {} as never);
   };
 
-  it('draws both variants, so CSS can pick one by width', () => {
+  it('draws ONE readout, on the meta row, with both strings inside it', () => {
     paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
+    const readouts = host.querySelectorAll('.hub-goal-effort');
+    // One node per goal — never a second row under it. The row of its own is
+    // what Bryan rejected as "too much space for progress".
+    expect(readouts).toHaveLength(1);
     const inline = host.querySelector('.hub-goal-effort-inline');
-    const strip = host.querySelector('.hub-goal-effort-strip');
-    expect(inline).not.toBeNull();
-    expect(strip).not.toBeNull();
-    // The inline one rides the meta row; the strip is a sibling of the row.
     expect(inline?.closest('.hub-goal-meta')).not.toBeNull();
-    expect(strip?.closest('.hub-goal-row')).toBeNull();
-    expect(strip?.parentElement?.classList.contains('hub-band')).toBe(true);
-    expect(strip?.textContent).toContain('60%');
-    expect(strip?.textContent).toContain('~Sep 10');
+    expect(host.querySelector('.hub-goal-effort-strip')).toBeNull();
+    // Both strings are in the DOM; the stylesheet picks one (asserted in the
+    // stylesheet block below).
+    expect(inline?.querySelector('.hub-goal-effort-wide')?.textContent).toContain('~Sep 10');
+    expect(inline?.querySelector('.hub-goal-effort-narrow')?.textContent).toContain('60%');
+    expect(inline?.querySelector('.hub-goal-effort-narrow')?.textContent).not.toContain('~Sep');
     expect(host.querySelector('.hub-goal-bar i')?.getAttribute('style')).toContain('60%');
   });
 
-  it('carries the coverage caveat on BOTH variants, not just the phone\u2019s', () => {
-    // A bar drawn over some of a band's tickets has to say so wherever it is
-    // drawn. It lived in the inline `title` alone until a measurement at
-    // 1180px — the iPad tier — showed the caveat was reachable only by hover,
-    // which that device does not have.
+  it('carries the coverage caveat on screen, not in a tooltip', () => {
+    // A bar drawn over some of a band's tickets has to say so. It lived in
+    // the `title` alone until a measurement at 1180px — the iPad tier, and
+    // the device this board is mostly read from — showed the caveat was
+    // reachable only by hover, which that device does not have.
     paint([
       closed(DAY),
       closed(2 * DAY),
@@ -328,11 +344,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
       task({ effortEstimate: { status: 'failed', reason: 'the body was empty' } }),
     ]);
     const inline = host.querySelector('.hub-goal-effort-inline');
-    const strip = host.querySelector('.hub-goal-effort-strip');
     expect(inline?.querySelector('.hub-goal-effort-note')?.textContent).toBe(
-      '2 not scored, 1 failed',
-    );
-    expect(strip?.querySelector('.hub-goal-effort-note')?.textContent).toBe(
       '2 not scored, 1 failed',
     );
     // Positive control: a band where every ticket is scored gets no caveat,
@@ -399,14 +411,23 @@ describe('the stylesheet picks exactly one variant per tier', () => {
     return m?.[1] ?? '';
   }
 
-  it('hides the strip above the mobile tier', () => {
-    expect(body(CSS, '.hub-goal-effort-strip')).toContain('display: none');
+  it('draws the readout on ONE row at every width', () => {
+    // The row of its own that the narrow tier used to get is what Bryan
+    // rejected — "the second option takes up too much space for progress".
+    // There is no strip left to hide.
+    expect(CSS).not.toContain('.hub-goal-effort-strip');
+    expect(body(CSS, '.hub-goal-effort-narrow')).toContain('display: none');
   });
 
-  it('swaps them below 1100px', () => {
+  it('sheds words rather than numbers below 1100px', () => {
     const mobile = mediaBlocks('(max-width: 1100px)');
-    expect(body(mobile, '.hub-goal-effort-inline')).toContain('display: none');
-    expect(body(mobile, '.hub-goal-effort-strip')).toContain('display: flex');
+    // The title is the primary task at this end, so the date, the caveat and
+    // the long label go — and the readout stays on the meta row.
+    expect(body(mobile, '.hub-goal-effort-narrow')).toContain('display: inline');
+    expect(mobile).toMatch(
+      /\.hub-goal-effort-wide,\s*\n\s*\.hub-goal-effort-note \{[^}]*display: none/,
+    );
+    expect(body(mobile, '.hub-goal-bar')).toContain('width: 40px');
   });
 
   it('leaves the goal row a five-track grid — the readout takes no track', () => {
@@ -418,12 +439,16 @@ describe('the stylesheet picks exactly one variant per tier', () => {
 });
 
 /**
- * The ticket's Effort field — the other half of the trade Bryan made when he
- * struck the numbers from the board rows. If this cell does not carry them,
- * they are nowhere a person can read: the goal header states the calibration
- * factor in a `title`, and the primary device has no hover.
+ * The ticket panel's two estimate fields.
+ *
+ * *"On task details, the estimate is a secondary function. Don't use so much
+ * space for it. Just show the hands on and wall clock estimates with other
+ * top level fields. And if I click on one show the detailed estimation
+ * computation."* (Bryan, 2026-08-30.) So: two ordinary fields, and the
+ * arithmetic only on a tap — which also has to be a TAP, because the device
+ * this is read on has no hover.
  */
-describe('the ticket panel states the numbers the board no longer shows', () => {
+describe('the ticket panel shows two estimates and hides the arithmetic', () => {
   const closedSet = (): HubTask[] => {
     // Six closes, each of which took twice its estimate — 2h of wall clock
     // against an hour estimated, 20m read against 10m — so the learned factor
@@ -440,74 +465,96 @@ describe('the ticket panel states the numbers the board no longer shows', () => 
     }
     return rows;
   };
+  const text = (el: HTMLElement): string => el.textContent ?? '';
 
-  it('says nothing at all about a ticket nobody scored', () => {
-    // Absent is not zero, and an unscored ticket gets no field rather than a
-    // field reading "0m". Positive control below: the same call on a SCORED
-    // row is non-empty, so an always-empty implementation cannot pass.
-    expect(effortCellText(task({ effortEstimate: undefined }))).toBe('');
-    expect(effortCellText(task())).not.toBe('');
+  it('draws no estimate fields at all for a ticket nobody scored', () => {
+    // Absent is not zero: an unscored ticket gets no fields rather than
+    // fields reading "0m". Positive control below, on a scored row.
+    expect(effortFields(task({ effortEstimate: undefined }))).toBeNull();
+    expect(effortFields(task())).not.toBeNull();
+  });
+
+  it('puts the two numbers in two ordinary fields, not one sentence', () => {
+    const f = effortFields(task(), computeEffortCalibration(closedSet()));
+    if (!f) throw new Error('expected fields');
+    // 600s x 2.00 = 20m of attention; 3600s x 2.00 = 2h of calendar.
+    expect(text(f.handsOn)).toBe('20m');
+    expect(text(f.wallClock)).toBe('2h');
+    // The calibration sentence is NOT in the field — that is the space Bryan
+    // asked not to spend.
+    expect(text(f.handsOn)).not.toContain('scaled');
+    expect(text(f.wallClock)).not.toContain('scaled');
+  });
+
+  it('keeps the arithmetic behind a tap, and opens it on either field', () => {
+    const f = effortFields(task(), computeEffortCalibration(closedSet()));
+    if (!f) throw new Error('expected fields');
+    expect(f.detail.hidden).toBe(true);
+    expect(text(f.detail)).toContain('×2.00');
+    expect(text(f.detail)).toContain('6 closed tickets');
+    // A tap, not a hover: the primary device has no hover, and this used to
+    // be the only place the factor appeared.
+    (f.handsOn as HTMLButtonElement).click();
+    expect(f.detail.hidden).toBe(false);
+    (f.handsOn as HTMLButtonElement).click();
+    expect(f.detail.hidden).toBe(true);
+    const g = effortFields(task(), computeEffortCalibration(closedSet()));
+    if (!g) throw new Error('expected fields');
+    (g.wallClock as HTMLButtonElement).click();
+    expect(g.detail.hidden).toBe(false);
   });
 
   it('says the scorer failed, rather than looking unscored', () => {
-    const text = effortCellText(
-      task({ effortEstimate: { status: 'failed', reason: 'the body was empty' } }),
-    );
-    expect(text).toContain('could not produce');
-    // The distinction the acceptance criterion turns on.
-    expect(text).not.toBe(effortCellText(task({ effortEstimate: undefined })));
+    const f = effortFields(task({ effortEstimate: { status: 'failed', reason: 'empty body' } }));
+    if (!f) throw new Error('a failed run still draws its fields');
+    expect(text(f.handsOn)).toBe('not estimated');
+    expect(text(f.wallClock)).toBe('not estimated');
+    expect(text(f.detail)).toContain('could not produce an estimate');
+    // The distinction the acceptance criterion turns on: never scored draws
+    // nothing at all, a failed run draws fields that say so.
+    expect(effortFields(task({ effortEstimate: undefined }))).toBeNull();
   });
 
-  it('shows the raw numbers when no board is behind the panel', () => {
-    const text = effortCellText(task());
-    expect(text).toContain('10m');
-    expect(text).toContain('1h');
-    // No factor is invented out of nothing.
-    expect(text).not.toContain('scaled');
-  });
-
-  it('states the calibration factor and what it was learned from', () => {
-    const calibration = computeEffortCalibration(closedSet());
-    const text = effortCellText(task(), calibration);
-    // 3600s estimated x 2.00 learned = 7200s = 2h, said out loud with its
-    // sample count so the reader can weigh it.
-    expect(text).toContain('×2.00');
-    expect(text).toContain('6 closed tickets');
-    expect(text).toContain('2h');
+  it('reports what a closed ticket actually took, unmultiplied', () => {
+    const lines = effortComputationLines(
+      closedSet()[0] as HubTask,
+      { handsOnSeconds: 600, wallClockSeconds: 3600 },
+      ratioForGoal(computeEffortCalibration(closedSet()).wallClock, 'g-ship'),
+      ratioForGoal(computeEffortCalibration(closedSet()).handsOn, 'g-ship'),
+    ).join(' ');
+    expect(lines).toContain('Actually took 20m of reading over 2h of calendar time');
   });
 
   it('never prints one factor over two different corrections', () => {
     // The two axes learn from different samples: a close with a transition
     // trail and no reading time teaches the calendar and nothing about your
-    // attention. One "×N" printed over two DIFFERENT factors would be a
-    // claim about a number that was never scaled that way.
-    // Only one close records reading time, and it read for HALF its estimate
-    // while the calendar ran double — so the two factors genuinely differ.
+    // attention. One line printed over two DIFFERENT factors would be a claim
+    // about a number that was never scaled that way.
     const rows = closedSet().map((t, i) =>
       i === 0
         ? { ...t, readingTime: { totalSeconds: 300, sessionCount: 1, lastSessionAt: NOW } }
         : { ...t, readingTime: undefined },
     ) as HubTask[];
-    const text = effortCellText(task(), computeEffortCalibration(rows));
-    expect(text).toContain('your time');
-    expect(text).toContain('the calendar');
-    expect(text).not.toContain('scaled ×');
+    const differ = effortFields(task(), computeEffortCalibration(rows));
+    if (!differ) throw new Error('expected fields');
+    expect(differ.detail.textContent).toContain('Hands-on scaled');
+    expect(differ.detail.textContent).toContain('Calendar time scaled');
 
     // When the FACTOR agrees, it is one correction to a reader and is said
     // once — even where the two axes learned it from different numbers of
-    // closes. Keying that on the counts too printed the same number twice in
-    // a hundred characters.
+    // closes. Keying that on the counts too printed the same number twice.
     const uneven = closedSet().map((t, i) =>
       i < 2 ? t : ({ ...t, readingTime: undefined } as HubTask),
     );
-    const once = effortCellText(task(), computeEffortCalibration(uneven));
-    expect(once).toContain('scaled ×2.00 from 2–6 closed tickets');
-    expect(once).not.toContain('the calendar');
+    const once = effortFields(task(), computeEffortCalibration(uneven));
+    if (!once) throw new Error('expected fields');
+    expect(once.detail.textContent).toContain('Scaled ×2.00 from 2–6 closed tickets');
+    expect(once.detail.textContent).not.toContain('Calendar time scaled');
 
     // Positive control: agreeing on both still reads as one plain count.
-    const agreed = effortCellText(task(), computeEffortCalibration(closedSet()));
-    expect(agreed).toContain('scaled ×2.00 from 6 closed tickets');
-    expect(agreed).not.toContain('the calendar');
+    const agreed = effortFields(task(), computeEffortCalibration(closedSet()));
+    if (!agreed) throw new Error('expected fields');
+    expect(agreed.detail.textContent).toContain('Scaled ×2.00 from 6 closed tickets');
   });
 
   it('looks the correction up by BAND, the way the board filed it', () => {
@@ -525,16 +572,12 @@ describe('the ticket panel states the numbers the board no longer shows', () => 
     const orphan = task({ goal: 'g-vanished' });
     const band = bandOfGoal(goalBandIds(GOALS), orphan.goal);
     expect(band).toBe(CHORES_ID);
-    expect(effortCellText(orphan, calibration, band)).toContain('from 4 closed tickets');
+    const filed = effortFields(orphan, calibration, band);
+    const stale = effortFields(orphan, calibration, 'g-vanished');
+    expect(filed?.detail.textContent).toContain('4 closed tickets');
     // Keyed on the stale id the lookup misses the bucket entirely and falls
     // back to the board's ten — a different number, quoted about the same
-    // ticket. That is the bug this parameter exists to close.
-    expect(effortCellText(orphan, calibration, 'g-vanished')).toContain('from 10 closed tickets');
-  });
-
-  it('reports what a closed ticket actually took, unmultiplied', () => {
-    const text = effortCellText(closedSet()[0], computeEffortCalibration(closedSet()));
-    expect(text).toContain('actually took 2h');
-    expect(text).toContain('20m of it read');
+    // ticket. That is the parameter this exists to close.
+    expect(stale?.detail.textContent).toContain('10 closed tickets');
   });
 });

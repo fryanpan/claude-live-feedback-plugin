@@ -1540,66 +1540,131 @@ export function detailFields(
   // Three states, three sentences, and an unscored ticket gets NO cell at
   // all rather than a zero — the same line `Task.effortEstimate` draws in
   // its own type doc.
-  const effortText = effortCellText(task, calibration, calibrationGoal);
-  if (effortText !== '') cell('Effort', effortText);
+  // Two ordinary top-level fields, and the computation only when it is asked
+  // for. *"On task details, the estimate is a secondary function. Don't use
+  // so much space for it. Just show the hands on and wall clock estimates
+  // with other top level fields. And if I click on one show the detailed
+  // estimation computation."* (Bryan, 2026-08-30.) It replaced one prose
+  // field that spent a whole row on the calibration sentence.
+  const effort = effortFields(task, calibration, calibrationGoal);
+  if (effort) {
+    cell('Hands-on', effort.handsOn);
+    cell('Wall clock', effort.wallClock);
+    dl.append(effort.detail);
+  }
   return dl;
 }
 
+/** What the two estimate fields and their shared drawer hold, or `null` for a
+ *  ticket nobody has scored — which gets no fields at all rather than fields
+ *  reading "0m". */
+export interface EffortFields {
+  handsOn: HTMLElement;
+  wallClock: HTMLElement;
+  detail: HTMLElement;
+}
+
 /**
- * The Effort cell's words, or `''` for "draw no cell".
+ * The panel's two estimate fields plus the drawer behind them.
  *
- * Written as a pure function of the row so it can be asserted without a DOM:
- * the thing worth testing here is which of the three states produces which
- * sentence, not that a `<dd>` got appended.
+ * Each value is a button rather than text: tapping either opens the same
+ * drawer, which is where the arithmetic lives — what was estimated, what the
+ * board scaled it by and on what evidence, and what the ticket actually took
+ * once it closed. A button because the reveal has to work by TAP; a `title`
+ * would have put the whole explanation behind a hover the primary device
+ * does not have.
+ *
+ * The three estimate states stay three: never scored returns `null` and draws
+ * nothing, a failed run draws both fields reading "not estimated" with the
+ * drawer saying the scorer ran, and a real estimate draws numbers.
  */
-export function effortCellText(
+export function effortFields(
   task: HubTask,
   calibration?: EffortCalibration,
-  /** The BAND this ticket renders under, which is its own goal id unless
-   *  that id matches no band and the board files it under Backlog. The
-   *  calibration is keyed by band for exactly that reason, so a lookup by
-   *  the raw `task.goal` would read a bucket the board never built. */
   calibrationGoal?: string,
-): string {
+): EffortFields | null {
   const state = effortEstimateState(task);
-  if (state === 'none') return '';
-  if (state === 'failed') {
+  if (state === 'none') return null;
+  const est = state === 'ok' ? estimateNumbers(task) : null;
+  const band = calibrationGoal ?? task.goal;
+  const wallRatio = calibration ? ratioForGoal(calibration.wallClock, band) : undefined;
+  const handsRatio = calibration ? ratioForGoal(calibration.handsOn, band) : undefined;
+  const hands =
+    est && handsRatio
+      ? applyEffortRatio(est.handsOnSeconds, handsRatio.ratio)
+      : est?.handsOnSeconds;
+  const wall =
+    est && wallRatio
+      ? applyEffortRatio(est.wallClockSeconds, wallRatio.ratio)
+      : est?.wallClockSeconds;
+
+  const detail = document.createElement('div');
+  detail.className = 'hub-detail-field hub-detail-effort-detail';
+  detail.hidden = true;
+  const detailBody = document.createElement('dd');
+  detailBody.className = 'hub-detail-field-v hub-detail-effort-why';
+  detail.append(detailBody);
+  for (const line of effortComputationLines(task, est, wallRatio, handsRatio)) {
+    const p = document.createElement('p');
+    p.textContent = line;
+    detailBody.append(p);
+  }
+
+  const value = (text: string): HTMLElement => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hub-detail-effort-value';
+    btn.textContent = text;
+    btn.setAttribute('aria-expanded', 'false');
+    btn.title = 'How this estimate was worked out';
+    btn.addEventListener('click', () => {
+      const open = detail.hidden;
+      detail.hidden = !open;
+      for (const other of [
+        ...(btn.closest('dl')?.querySelectorAll('.hub-detail-effort-value') ?? []),
+      ]) {
+        other.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+    });
+    return btn;
+  };
+  const notEstimated = 'not estimated';
+  return {
+    handsOn: value(hands === undefined ? notEstimated : formatEffortSeconds(hands)),
+    wallClock: value(wall === undefined ? notEstimated : formatEffortSeconds(wall)),
+    detail,
+  };
+}
+
+/**
+ * The drawer's sentences: the guess, the correction, and what happened.
+ *
+ * Split out from the fields so the wording is testable without a DOM — which
+ * of the three states says what is the thing worth an assertion, not that a
+ * `<p>` got appended.
+ */
+export function effortComputationLines(
+  task: HubTask,
+  est: { handsOnSeconds: number; wallClockSeconds: number } | null,
+  wallRatio?: EffortRatio,
+  handsRatio?: EffortRatio,
+): string[] {
+  if (!est) {
     // Said out loud, because the alternative is a ticket that reads exactly
     // like one nobody has scored. This is the visible half of the positive
     // control: a scorer that produces nothing must be legible as producing
     // nothing.
-    return 'no estimate — the scorer could not produce one';
+    return ['The scorer ran on this ticket and could not produce an estimate.'];
   }
-  const est = estimateNumbers(task);
-  if (!est) return '';
-  const band = calibrationGoal ?? task.goal;
-  const wallRatio = calibration ? ratioForGoal(calibration.wallClock, band) : undefined;
-  const handsRatio = calibration ? ratioForGoal(calibration.handsOn, band) : undefined;
-  const hands = handsRatio
-    ? applyEffortRatio(est.handsOnSeconds, handsRatio.ratio)
-    : est.handsOnSeconds;
-  const wall = wallRatio
-    ? applyEffortRatio(est.wallClockSeconds, wallRatio.ratio)
-    : est.wallClockSeconds;
-  const parts = [`${formatEffortSeconds(hands)} of yours over ${formatEffortSeconds(wall)}`];
-  // The factor, and what it was learned from — never a bare multiplier. A
-  // correction with no sample count behind it is a number nobody can argue
-  // with.
-  //
-  // The two axes are calibrated from SEPARATE sample sets on purpose (a
-  // ticket with a transition trail but no reading time teaches the calendar
-  // and not your attention), so they can disagree — in both the factor and
-  // the count behind it. One "×N" printed over two different corrections
-  // would be a claim about numbers that were never scaled that way, so they
-  // are only spoken as one when they are in fact one.
+  const lines = [
+    `Scored at ${formatEffortSeconds(est.handsOnSeconds)} hands-on over ${formatEffortSeconds(est.wallClockSeconds)} of calendar time.`,
+  ];
   const said = (r: EffortRatio): string =>
     `\u00d7${r.ratio.toFixed(2)} from ${r.samples} closed ticket${r.samples === 1 ? '' : 's'}`;
   // Agreeing on the FACTOR is what makes it one correction to a reader; the
   // sample counts behind it can differ and the sentence is still about one
   // number. Keying "is this one correction?" on the counts as well printed
-  // "your time ×2.00 from 2 closed tickets · the calendar ×2.00 from 4 closed
-  // tickets" — correct, and a hundred characters that read as a bug. Equal
-  // factors are said once, with the range of evidence behind them.
+  // the same figure twice in a hundred characters.
   const same =
     handsRatio !== undefined &&
     wallRatio !== undefined &&
@@ -1609,22 +1674,25 @@ export function effortCellText(
   if (same && handsRatio !== undefined && wallRatio !== undefined) {
     const lo = Math.min(handsRatio.samples, wallRatio.samples);
     const hi = Math.max(handsRatio.samples, wallRatio.samples);
-    const count = lo === hi ? `${hi}` : `${lo}\u2013${hi}`;
-    parts.push(
-      `scaled \u00d7${wallRatio.ratio.toFixed(2)} from ${count} closed ticket${hi === 1 ? '' : 's'}`,
+    lines.push(
+      `Scaled \u00d7${wallRatio.ratio.toFixed(2)} from ${lo === hi ? hi : `${lo}\u2013${hi}`} closed ticket${hi === 1 ? '' : 's'} on this goal.`,
     );
   } else {
-    if (handsRatio && handsRatio.samples > 0) parts.push(`your time ${said(handsRatio)}`);
-    if (wallRatio && wallRatio.samples > 0) parts.push(`the calendar ${said(wallRatio)}`);
+    if (handsRatio && handsRatio.samples > 0) lines.push(`Hands-on scaled ${said(handsRatio)}.`);
+    if (wallRatio && wallRatio.samples > 0) lines.push(`Calendar time scaled ${said(wallRatio)}.`);
   }
   // What it actually took, once it is closed. Measured numbers are never
   // multiplied — these are reported exactly as they happened, beside the
   // corrected guess rather than folded into it.
   const actualWall = effortActualWallClockSeconds(task);
   const actualHands = effortActualHandsOnSeconds(task);
-  if (actualWall !== null) parts.push(`actually took ${formatEffortSeconds(actualWall)}`);
-  if (actualHands !== null) parts.push(`${formatEffortSeconds(actualHands)} of it read`);
-  return parts.join(' \u00b7 ');
+  if (actualWall !== null || actualHands !== null) {
+    const took: string[] = [];
+    if (actualHands !== null) took.push(`${formatEffortSeconds(actualHands)} of reading`);
+    if (actualWall !== null) took.push(`${formatEffortSeconds(actualWall)} of calendar time`);
+    lines.push(`Actually took ${took.join(' over ')}.`);
+  }
+  return lines;
 }
 
 /** An epoch-ms instant as the `YYYY-MM-DD` a `<input type="date">` wants, in

@@ -696,11 +696,8 @@ function TaskRow(props: {
  * projected finish date has to be on the board, and there is no width in the
  * meta row for one at 430px.
  */
-function GoalEffort(props: {
-  section: BoardSection;
-  variant: 'inline' | 'strip';
-}): ComponentChildren {
-  const { section, variant } = props;
+function GoalEffort(props: { section: BoardSection }): ComponentChildren {
+  const { section } = props;
   // Backlog is a bucket, not a goal — no bar, no date (plan §4). A band the
   // caller built without a rollup says nothing rather than guessing.
   if (section.isChores || !section.effort) return null;
@@ -714,42 +711,32 @@ function GoalEffort(props: {
       <i style={`width:${label.percentFill}%`} />
     </span>
   ) : null;
-  if (variant === 'inline') {
-    return (
-      <span
-        class={`hub-goal-effort hub-goal-effort-inline${label.showBar ? '' : ' hub-goal-effort-bare'}`}
-        title={label.title}
-      >
-        {bar}
-        {/* The percentage rides BOTH variants. It used to be computed and
-            then dropped here, so the phone showed "67% · …" and the iPad —
-            the tier this readout was designed for, and the device the board
-            is mostly read from — showed only a bar to eyeball. On a feature
-            whose subject is percent complete, that was backwards. */}
-        <span class="hub-goal-effort-left">
-          {[label.percentText, label.leftText, label.finishText].filter(Boolean).join(' \u00b7 ')}
-        </span>
-        {/* The caveat rides on BOTH variants, not just the phone's. It used
-            to live in the `title` alone up here, which put it out of reach on
-            the one device that matters most: an iPad reports a Mac UA, gets
-            this tier, and has no hover. A bar drawn over six of nine tickets
-            must say so wherever it is drawn. */}
-        {label.coverageText ? <span class="hub-goal-effort-note">{label.coverageText}</span> : null}
-      </span>
-    );
-  }
+  const wide = [label.percentText, label.leftText, label.finishText].filter(Boolean);
+  const narrow = [label.percentText, label.leftTextShort].filter(Boolean);
   return (
-    <div
-      class={`hub-goal-effort hub-goal-effort-strip${label.showBar ? '' : ' hub-goal-effort-bare'}`}
+    <span
+      class={`hub-goal-effort hub-goal-effort-inline${label.showBar ? '' : ' hub-goal-effort-bare'}`}
       title={label.title}
     >
       {bar}
-      <span class="hub-goal-effort-left">
-        {[label.percentText, label.leftText].filter(Boolean).join(' \u00b7 ')}
-      </span>
+      {/* Two strings, one row, and CSS picks which. The readout rides the
+          meta row at EVERY width now, because the row below it that the
+          narrow tier used to get was the thing Bryan rejected: *"The second
+          option takes up too much space for progress"* — measured at 26px a
+          goal, 156px across six bands, three collapsed goals of his screen.
+          What the narrow tier drops instead is words, not the numbers: the
+          percentage and the hands-on figure both survive, which are the two
+          things he asked to see. `display: none` rather than a shorter
+          string built in JS, so the hidden one is out of the accessibility
+          tree and nothing is announced twice. */}
+      <span class="hub-goal-effort-left hub-goal-effort-wide">{wide.join(' \u00b7 ')}</span>
+      <span class="hub-goal-effort-left hub-goal-effort-narrow">{narrow.join(' \u00b7 ')}</span>
+      {/* The caveat is not hover-only — an iPad reports a Mac UA, gets the
+          wide tier, and has no hover, so a bar drawn over six of nine tickets
+          has to say so on screen. It is the first thing dropped when width
+          runs out, because the TITLE is the primary task at that end. */}
       {label.coverageText ? <span class="hub-goal-effort-note">{label.coverageText}</span> : null}
-      {label.finishText ? <span class="hub-goal-effort-fin">{label.finishText}</span> : null}
-    </div>
+    </span>
   );
 }
 
@@ -915,7 +902,7 @@ function GoalBand(props: {
             band takes the due date's SLOT rather than sitting beside it,
             because a date a finished goal ran past is noise. */}
         <span class="hub-goal-meta">
-          <GoalEffort section={section} variant="inline" />
+          <GoalEffort section={section} />
           {!section.isChores && section.status === 'done' ? (
             <span class="hub-done-note">done</span>
           ) : !section.isChores && section.dueAt !== undefined ? (
@@ -963,7 +950,6 @@ function GoalBand(props: {
             ))}
         </span>
       </div>
-      <GoalEffort section={section} variant="strip" />
       {/* The band's tasks, on the rail that says "these belong to the row
           above". A folded band hides this container in CSS and renders NOTHING
           in its place — a collapsed band shows nothing extra, by decision. */}
