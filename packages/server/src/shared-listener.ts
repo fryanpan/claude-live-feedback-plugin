@@ -235,18 +235,46 @@ function installFetchShim(): void {
     const reg = byPort.get(Number(url.port));
     if (!reg || sharedPort === null) return original(input as RequestInfo, init);
     url.port = String(sharedPort);
-    if (input instanceof Request && init === undefined) {
-      const rewritten = new Request(url.href, input);
+    if (input instanceof Request) {
+      // Everything the caller's Request carried — method, body, credentials,
+      // redirect — has to survive the rewrite, and `init` has to override it
+      // exactly as it would through an unshimmed fetch. Building the options
+      // out of `init` alone turns `fetch(postRequest, { signal })` into a
+      // bodyless GET, which is the kind of bug that reads as a route bug.
+      const rewritten =
+        init === undefined
+          ? new Request(url.href, input)
+          : new Request(new Request(url.href, input), init);
       rewritten.headers.set(TEST_LISTENER_HEADER, reg.id);
       return original(rewritten);
     }
-    const headers = new Headers(
-      init?.headers ?? (input instanceof Request ? input.headers : undefined),
-    );
+    const headers = new Headers(init?.headers);
     headers.set(TEST_LISTENER_HEADER, reg.id);
     return original(url.href, { ...init, headers });
   }) as typeof globalThis.fetch;
   globalThis.fetch = shim;
+}
+
+/**
+ * Install before anything else can capture the unshimmed function.
+ *
+ * The suite mocks `globalThis.fetch` in a couple of places by saving what is
+ * there, assigning a delegating mock, and assigning the saved value back
+ * afterwards. That composes correctly — the mock calls the shim, the shim
+ * calls the real fetch — but ONLY if what those files saved was already the
+ * shim. Installing lazily, at the first `createServer`, made that a question
+ * about which test file bun happened to evaluate first: a file that captured
+ * earlier would put a pre-shim fetch back on teardown and uninstall the shim
+ * for the rest of the process, leaving every later shared server reachable
+ * only at a virtual port nothing is bound to.
+ *
+ * Installing at module load closes that window, because every test that can
+ * reach a shared server imports server.ts, which imports this file, and an
+ * import graph resolves before any module body runs. The guard is the same
+ * one `shouldShareListener` uses, so production never gets a wrapped fetch.
+ */
+if (process.env.NODE_ENV === 'test' && process.env.CW_DEDICATED_TEST_LISTENERS !== '1') {
+  installFetchShim();
 }
 
 /**
