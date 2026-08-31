@@ -71,14 +71,45 @@ export function speakerTagLabel(href: string): string | null {
   return label.length > 0 ? label : null;
 }
 
-/** The visible text of a tag for a voice: `"@Devi"`, or `"@Speaker B"`. */
+/**
+ * The visible text of a tag for a voice: `"@Devi"`, or `"@Speaker B"`.
+ *
+ * BRACKETS ARE REMOVED, because a name is free text somebody typed and a tag
+ * is a markdown link. "Sam [PM]" written into one produces
+ * `[@Sam [PM]](speaker:C)`, which is not a tag any more: the finder cannot
+ * see it, normalization skips it, and every later rename silently updates
+ * nothing — the attribution stuck on that spelling for good.
+ *
+ * Removed rather than backslash-escaped, and that is the deliberate half.
+ * Escaping only works if every path that writes a tag escapes, and one of
+ * them is the document serializer, which writes `[` + text + `](href)` for
+ * EVERY link and escapes none of them (a pre-existing bug this module is not
+ * the place to fix). A name that cannot break the syntax is safe whichever
+ * path writes it — the server composing markdown, or a person reassigning a
+ * mention in the editor. The strip still shows the name as typed; it is only
+ * inside a tag that the brackets go.
+ */
 export function speakerTagText(label: string, names: Readonly<Record<string, string>>): string {
-  return `${SPEAKER_TAG_SIGIL}${speakerDisplayName(label, names)}`;
+  return `${SPEAKER_TAG_SIGIL}${tagSafeName(speakerDisplayName(label, names))}`;
+}
+
+/** A display name with the two characters that would end a link's text
+ *  taken out, and the hole they leave tidied up. */
+function tagSafeName(name: string): string {
+  return name
+    .replace(/[[\]\\]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 /** A whole tag as markdown: `[@Devi](speaker:B)`. */
 export function renderSpeakerTag(label: string, names: Readonly<Record<string, string>>): string {
   return `[${speakerTagText(label, names)}](${speakerTagHref(label)})`;
+}
+
+/** Undo a backslash escape, for a tag an older build wrote that way. */
+function unescapeTagText(text: string): string {
+  return text.replace(/\\(.)/g, '$1');
 }
 
 /** One tag found in a markdown string. */
@@ -89,8 +120,12 @@ export interface SpeakerTagMatch {
   end: number;
   /** The engine label the href carries. */
   label: string;
-  /** The tag's visible text, sigil included. */
+  /** The tag's visible text, sigil included and UNESCAPED — what a reader
+   *  sees, and what a caller compares against a display name. */
   text: string;
+  /** The tag exactly as it appears in the source, escapes and all. Compared
+   *  against a freshly rendered tag to tell "already right" from "changed". */
+  raw: string;
 }
 
 /**
@@ -103,12 +138,20 @@ export interface SpeakerTagMatch {
  */
 export function findSpeakerTags(markdown: string): SpeakerTagMatch[] {
   const out: SpeakerTagMatch[] = [];
-  const re = /\[([^\][]*)\]\(([^\s)]+)\)/g;
+  // Link text is anything but an unescaped bracket; `\\.` lets an escaped
+  // one through, which is how a name containing brackets stays findable.
+  const re = /\[((?:\\.|[^\][\\])*)\]\(([^\s)]+)\)/g;
   for (const m of markdown.matchAll(re)) {
     const label = speakerTagLabel(m[2] ?? '');
     if (label === null) continue;
     const start = m.index;
-    out.push({ start, end: start + m[0].length, label, text: m[1] ?? '' });
+    out.push({
+      start,
+      end: start + m[0].length,
+      label,
+      text: unescapeTagText(m[1] ?? ''),
+      raw: m[0],
+    });
   }
   return out;
 }
@@ -195,8 +238,7 @@ export function normalizeSpeakerTags(
         return text.trim().length > 0 ? text : '';
       }
       const want = renderSpeakerTag(tag.label, opts.names);
-      const already = `[${tag.text}](${speakerTagHref(tag.label)})`;
-      if (want === already) return null;
+      if (want === tag.raw) return null;
       renamed++;
       return want;
     }).markdown;
@@ -220,8 +262,7 @@ export function renameSpeakerTags(
   const want = renderSpeakerTag(label, names);
   const { markdown: next, changed } = rewriteTags(markdown, (tag) => {
     if (tag.label !== label) return null;
-    const already = `[${tag.text}](${speakerTagHref(tag.label)})`;
-    return already === want ? null : want;
+    return tag.raw === want ? null : want;
   });
   return { markdown: next, replaced: changed };
 }

@@ -27,7 +27,9 @@ describe('the tag itself', () => {
 describe('findSpeakerTags', () => {
   it('finds tags among ordinary links and leaves the ordinary ones alone', () => {
     const md = '- [@Devi](speaker:B) will file [the ticket](/w/w-1/t/t-1) today.';
-    expect(findSpeakerTags(md)).toEqual([{ start: 2, end: 20, label: 'B', text: '@Devi' }]);
+    expect(findSpeakerTags(md)).toEqual([
+      { start: 2, end: 20, label: 'B', text: '@Devi', raw: '[@Devi](speaker:B)' },
+    ]);
   });
 
   it('reports every voice a note attributes anything to, once each', () => {
@@ -37,6 +39,52 @@ describe('findSpeakerTags', () => {
 
   it('does not read a bracketed phrase inside link text as a tag', () => {
     expect(findSpeakerTags('[see [1] below](speaker:B)')).toEqual([]);
+  });
+});
+
+describe('a name with markdown in it', () => {
+  // Names come from a free-text prompt, so "Sam [PM]" is reachable. Written
+  // raw it produces `[@Sam [PM]](speaker:B)`, which the finder cannot see —
+  // and an unfindable tag is one normalization skips and every later rename
+  // silently fails to update. The doc serializer escapes brackets the same
+  // way, so this is the house convention rather than a new one.
+  const named = { B: 'Sam [PM]' };
+
+  it('drops the brackets so the tag stays a tag', () => {
+    const md = renderSpeakerTag('B', named);
+    expect(md).toBe('[@Sam PM](speaker:B)');
+    expect(findSpeakerTags(md)).toHaveLength(1);
+    expect(speakerLabelsIn(md)).toEqual(['B']);
+  });
+
+  it('still finds a tag an older build wrote with escapes in it', () => {
+    // Nothing writes this shape any more, but a doc on disk may carry one,
+    // and an unfindable tag is one no rename can ever reach again.
+    const found = findSpeakerTags('- [@Sam \\[PM\\]](speaker:B) asked.');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.text).toBe('@Sam [PM]');
+    expect(renameSpeakerTags('- [@Sam \\[PM\\]](speaker:B) asked.', 'B', named).replaced).toBe(1);
+  });
+
+  it('renames such a voice, where a raw-bracket tag renamed nothing at all', () => {
+    const line = `- ${renderSpeakerTag('B', named)} asked.`;
+    const out = renameSpeakerTags(line, 'B', { B: 'Sam Patel' });
+    expect(out.replaced).toBe(1);
+    expect(out.markdown).toBe('- [@Sam Patel](speaker:B) asked.');
+  });
+
+  it('leaves an already-canonical escaped tag exactly alone', () => {
+    const md = renderSpeakerTag('B', named);
+    const out = normalizeSpeakerTags(md, { names: named, known: new Set(['B']) });
+    expect(out.markdown).toBe(md);
+    expect(out.renamed).toBe(0);
+  });
+
+  it('keeps the words when the voice turns out to be unknown', () => {
+    const md = renderSpeakerTag('C', { C: 'Sam [PM]' });
+    const out = normalizeSpeakerTags(md, { names: {}, known: new Set(['B']) });
+    expect(out.markdown).toBe('Sam PM');
+    expect(out.unknown).toEqual(['C']);
   });
 });
 
