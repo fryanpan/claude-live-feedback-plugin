@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_ROOM_SPEAKERS,
+  MAX_ROOM_SPEAKERS,
   MEETING_AUDIO_ENCODING,
+  MIN_ROOM_SPEAKERS,
   RECORDING_ANNOUNCEMENT,
   announcesRecording,
   detectsSpeakers,
+  maxSpeakersFor,
   parseAnnouncedBy,
   parseCaptureMode,
   parseMeetingClientMessage,
+  parseRoomSpeakers,
   speakerDisplayName,
 } from '../src/meeting.ts';
 
@@ -86,6 +91,62 @@ describe('speakerDisplayName', () => {
     expect(speakerDisplayName('A', {})).toBe('Speaker A');
     expect(speakerDisplayName('A', { A: 'Jordan' })).toBe('Jordan');
     expect(speakerDisplayName('B', { A: 'Jordan' })).toBe('Speaker B');
+  });
+});
+
+describe('room speaker cap', () => {
+  it('caps a conversation at the room it was told about, and at two when it was told nothing', () => {
+    expect(maxSpeakersFor('conversation')).toBe(DEFAULT_ROOM_SPEAKERS);
+    expect(maxSpeakersFor('conversation', 4)).toBe(4);
+  });
+
+  it('asks for no cap at all on a solo capture', () => {
+    // Not "a cap of one": a solo session sends no `speaker_labels` either, so
+    // a cap would be a parameter with nothing to apply. Both directions
+    // matter — a builder that always returned a number and one that always
+    // returned undefined each pass half of this.
+    expect(maxSpeakersFor('solo')).toBeUndefined();
+    expect(maxSpeakersFor('solo', 4)).toBeUndefined();
+  });
+
+  it('clamps a room size into the range the engine accepts rather than refusing it', () => {
+    // The number reaches here from an address bar. Out of range, the engine
+    // refuses the whole session, which would read as "transcription is
+    // broken" rather than "that number is silly".
+    expect(parseRoomSpeakers(0)).toBe(MIN_ROOM_SPEAKERS);
+    expect(parseRoomSpeakers(99)).toBe(MAX_ROOM_SPEAKERS);
+    expect(parseRoomSpeakers('3')).toBe(3);
+    expect(parseRoomSpeakers(2.4)).toBe(2);
+  });
+
+  it('says nothing for a room size nobody gave, so the default lives in one place', () => {
+    expect(parseRoomSpeakers(undefined)).toBeUndefined();
+    // `?speakers=` with the value deleted. `Number('')` is 0, which would
+    // clamp to ONE label and merge the room into a single voice — the
+    // opposite of the cap's purpose, from a parameter that said nothing.
+    expect(parseRoomSpeakers('')).toBeUndefined();
+    expect(parseRoomSpeakers('   ')).toBeUndefined();
+    expect(parseRoomSpeakers('two')).toBeUndefined();
+    expect(parseRoomSpeakers(null)).toBeUndefined();
+  });
+
+  it('carries a room size on the start frame, and leaves it off when unreadable', () => {
+    const start = (over: Record<string, unknown>) =>
+      parseMeetingClientMessage(
+        JSON.stringify({
+          type: 'start',
+          sampleRate: 16_000,
+          encoding: MEETING_AUDIO_ENCODING,
+          mode: 'conversation',
+          ...over,
+        }),
+      );
+    expect(start({ speakers: 3 })).toMatchObject({ speakers: 3 });
+    expect(start({ speakers: 40 })).toMatchObject({ speakers: MAX_ROOM_SPEAKERS });
+    // A frame from a client built before the cap existed is a valid frame,
+    // not a refused one — it just says nothing about the room.
+    expect(start({})).not.toHaveProperty('speakers');
+    expect(start({ speakers: 'lots' })).not.toHaveProperty('speakers');
   });
 });
 

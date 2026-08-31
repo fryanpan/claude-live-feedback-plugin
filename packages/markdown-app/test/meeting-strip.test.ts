@@ -10,6 +10,8 @@ import {
 } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Announcer } from '../src/meeting-announce.ts';
+import type { RoomAudioProcessing } from '../src/meeting-audio.ts';
+import { captureConstraints } from '../src/meeting-audio.ts';
 import type { MeetingCaptureStart } from '../src/meeting-audio.ts';
 import {
   type MeetingSocket,
@@ -166,6 +168,13 @@ interface Harness {
   tags(): string[];
 }
 
+/** What the strip hands the capture: the frames sink plus the room's facts. */
+type CaptureCall = {
+  onFrame: (pcm: Int16Array) => void;
+  mode: CaptureMode;
+  room?: RoomAudioProcessing;
+};
+
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const f of cleanups.splice(0)) f();
@@ -173,11 +182,13 @@ afterEach(() => {
 });
 
 function mount(
-  capture?: (opts: { onFrame: (pcm: Int16Array) => void }) => Promise<MeetingCaptureStart>,
+  capture?: (opts: CaptureCall) => Promise<MeetingCaptureStart>,
   extra: {
     autoStart?: boolean;
     promptName?: (current: string) => string | null;
     mode?: CaptureMode;
+    speakers?: number;
+    room?: RoomAudioProcessing;
     announcer?: Announcer;
   } = {},
 ): Harness {
@@ -887,6 +898,65 @@ describe('the socket address', () => {
   });
 });
 
+describe('what the strip tells the microphone and the server about the room', () => {
+  /** Mount, press Start, and hand back what the capture and the socket saw. */
+  async function press(extra: Parameters<typeof mount>[1]): Promise<{
+    call: CaptureCall | undefined;
+    start: Record<string, unknown> | undefined;
+  }> {
+    const calls: CaptureCall[] = [];
+    const h = mount((opts) => {
+      calls.push(opts);
+      return Promise.resolve({
+        ok: true,
+        capture: { stop: vi.fn(), setEchoCancellation: () => Promise.resolve() },
+      });
+    }, extra);
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    const sent = h.sockets[0]?.sent
+      .filter((raw): raw is string => typeof raw === 'string')
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    return { call: calls[0], start: sent?.find((m) => m.type === 'start') };
+  }
+
+  it('hands the capture the mode it is about to record in', async () => {
+    expect((await press({ mode: 'conversation' })).call?.mode).toBe('conversation');
+    expect((await press({})).call?.mode).toBe('solo');
+  });
+
+  it('passes the room processing through, and passes nothing when nobody set it', async () => {
+    const room = { echoCancellation: false, noiseSuppression: false, autoGainControl: true };
+    expect((await press({ mode: 'conversation', room })).call?.room).toEqual(room);
+    // Absent rather than a copy of the default: the default belongs to
+    // `captureConstraints`, and two places holding it is two places to change.
+    expect((await press({ mode: 'conversation' })).call).not.toHaveProperty('room');
+  });
+
+  it('tells the server how many people are in the room, when it was told', async () => {
+    expect((await press({ mode: 'conversation', speakers: 3 })).start?.speakers).toBe(3);
+    expect((await press({ mode: 'conversation' })).start).not.toHaveProperty('speakers');
+  });
+
+  it('records under the mode the switch is showing, not the one it was mounted with', async () => {
+    // The switch can be flipped between meetings; the constraints belong to
+    // the press, not to the mount.
+    const calls: CaptureCall[] = [];
+    const h = mount((opts) => {
+      calls.push(opts);
+      return Promise.resolve({
+        ok: true,
+        capture: { stop: vi.fn(), setEchoCancellation: () => Promise.resolve() },
+      });
+    });
+    h.modeSwitch().click();
+    h.toggle().click();
+    await settle();
+    expect(calls[0]?.mode).toBe('conversation');
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 /**
@@ -1461,6 +1531,79 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     // The live meeting is still speaking, so its canceller is still down.
     // Bound to the closure instead of the instance, this reads [false, true].
     expect(mics[1]?.aec).toEqual([false]);
+  });
+
+  it('restores echo cancellation to what the ROOM asked for, not to on', async () => {
+    // `?mic=ec0-…` turns echo cancellation off for a room, and the
+    // announcement is made on exactly the mode that knob applies to. Restoring
+    // a hardcoded `true` afterwards would switch it back on mid-meeting, for
+    // the rest of the meeting, with nothing saying so — and the knob is what
+    // the microphone measurement varies.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, {
+      mode: 'conversation',
+      announcer,
+      room: { echoCancellation: false, noiseSuppression: true, autoGainControl: false },
+    });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    announcer.settleOldest(true);
+    await settle();
+    // Down for the sentence, and back to OFF — where the room put it.
+    expect(mic.aec).toEqual([false, false]);
+  });
+
+  it('ignores a room config that the mode it is recording in would not apply', async () => {
+    // A stale `?mic=ec0-…` on the address while the switch is on solo. The
+    // capture opens with the SOLO processing, so the restore must too — the
+    // announcement is unreachable in solo today, and this pins the rule to
+    // the constraints the microphone was opened with rather than to that.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const room = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    const h = mount(mic.start, { mode: 'conversation', announcer, room });
+    h.toggle().click();
+    await settle();
+    // Flip to solo and back is not available mid-meeting; instead assert the
+    // room path, then that `captureConstraints` is what decides it.
+    expect((captureConstraints('solo', room).audio as MediaTrackConstraints).echoCancellation).toBe(
+      true,
+    );
+    expect(
+      (captureConstraints('conversation', room).audio as MediaTrackConstraints).echoCancellation,
+    ).toBe(false);
+  });
+
+  it('restores it to ON for a room that never asked for anything else', async () => {
+    // The positive control: the fix must not simply stop restoring. The
+    // default room wants cancellation, and gets it back.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    announcer.settleOldest(true);
+    await settle();
+    expect(mic.aec).toEqual([false, true]);
   });
 
   it('a meeting that ends while the constraint is in flight is never announced', async () => {

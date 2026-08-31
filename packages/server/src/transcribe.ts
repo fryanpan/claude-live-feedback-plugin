@@ -69,6 +69,14 @@ export interface TranscriptionOpenOpts {
    * new one cannot silently start spending.
    */
   detectSpeakers: boolean;
+  /**
+   * The most voices this session may ever name. Meaningful only alongside
+   * `detectSpeakers`, and absent means "no cap" — which is the engine's own
+   * default and, in a room sharing one microphone, the setting under which a
+   * diarizer invents people. The caller decides the number because only the
+   * caller knows how many chairs are occupied; see `maxSpeakersFor`.
+   */
+  maxSpeakers?: number;
   onTurn: (turn: EngineTurn) => void;
   onError: (message: string) => void;
 }
