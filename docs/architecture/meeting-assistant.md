@@ -543,6 +543,12 @@ and bumps the generation. Without that the device carries on saying "this
 conversation is being recorded" into a room where it is not, and the
 sentence's late resolution writes a claim onto a meeting that failed.
 
+Cancelling reaches an utterance that has started; it cannot reach one that has
+not. Suspending echo cancellation is itself a promise, so a stop can land in
+the window between the suspension and `speak()` — and there the announcement
+has to check for the terminal event rather than be told about it. That check
+is the reason the generation is read twice in one function.
+
 **The SERVER's mode decides whether there is a room.** `ready` echoes the mode
 that was actually opened, and the announcement is reconciled against that
 echo rather than against the request — otherwise an old server answering

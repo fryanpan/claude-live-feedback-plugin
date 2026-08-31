@@ -1463,6 +1463,38 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     expect(mics[1]?.aec).toEqual([false]);
   });
 
+  it('a meeting that ends while the constraint is in flight is never announced', async () => {
+    // `cancel()` reaches an utterance that has started. It cannot reach one
+    // that has not — and suspending the canceller is a promise, so there is a
+    // window where a stop lands before `speak()` is even called. Speaking
+    // there tells a room it is being recorded when it is not.
+    const announcer = new FakeAnnouncer();
+    let release: (() => void) | null = null;
+    const mic = pumpCapture();
+    mic.setEchoCancellation.mockImplementation(() => new Promise<void>((r) => (release = r)));
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    // Suspension still pending, so nothing has been spoken yet.
+    expect(announcer.said).toEqual([]);
+    h.toggle().click();
+    await settle();
+    release?.();
+    await settle();
+    // The room is not told about a meeting that is over.
+    expect(announcer.said).toEqual([]);
+    expect(h.strip.announced()).toBeUndefined();
+  });
+
   it('announces anyway when the browser REFUSES the constraint', async () => {
     // The hedge is best-effort, and its failure must not take the sentence
     // down with it — the one thing that must never happen here is silence.

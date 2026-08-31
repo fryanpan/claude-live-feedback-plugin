@@ -852,6 +852,16 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // into, and the only one this call may touch again.
     const mic = capture;
     await suspendEchoCancellation(mic, true);
+    // Suspending is a promise, and a meeting can end inside it. `cancel()`
+    // silences an utterance that is already underway — it cannot silence one
+    // that has not been started yet, and speaking here would announce a
+    // recording to a room that is no longer being recorded. This is the one
+    // window where the terminal paths cannot reach the announcement, so the
+    // announcement has to check for them.
+    if (disposed || attempt !== generation) {
+      await suspendEchoCancellation(mic, false);
+      return;
+    }
     const spoke = await announcer.speak(RECORDING_ANNOUNCEMENT);
     await suspendEchoCancellation(mic, false);
     // A stop, or a second meeting, during the sentence: this one no longer
