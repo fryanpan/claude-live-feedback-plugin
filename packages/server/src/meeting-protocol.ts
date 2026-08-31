@@ -212,6 +212,13 @@ export class MeetingRelay {
       this.track(this.start(ws, conn, msg.sampleRate, msg.mode));
       return;
     }
+    if (msg.type === 'announced') {
+      // The room has been told. Only ever after the fact — the strip does
+      // not claim one when the mic opens — so this is the single place a
+      // record learns it. Nothing to answer; the record is the only reader.
+      conn.meeting?.setAnnounced(msg.by);
+      return;
+    }
     if (msg.type === 'name_speaker') {
       // Both the record and the notes pipeline learn the name; the strip
       // that sent it already knows. Nothing to answer.
