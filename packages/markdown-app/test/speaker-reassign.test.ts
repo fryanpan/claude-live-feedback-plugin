@@ -152,3 +152,56 @@ describe('applyReassign — one mention, and only one', () => {
     expect(markdownOf(ydoc)).toContain('- Before [@Marisol](speaker:A) after.');
   });
 });
+
+describe('a correction outranks the engine', () => {
+  it('answers with a BARE href, out of reach of a later engine revision', () => {
+    // The composer's tags carry the turns they were composed from, so the
+    // end-of-session speaker pass can find and move them. A person's answer
+    // carries none: it is not a guess, and no machine pass gets to revisit
+    // it. (`reattributeSpeakerTags` in core leaves a tag with no provenance
+    // alone; this is the half that writes one.)
+    const { editor, ydoc } = editorFor('- [@Devi](speaker:B?t=10,12) asked.\n');
+    const tag = findSpeakerTagAt(editor.state, posOf(editor, 'Devi'));
+    expect(tag?.label).toBe('B');
+    expect(tag?.href).toBe('speaker:B?t=10,12');
+    expect(applyReassign(editor, tag!, { label: 'C', name: 'Rowan', lastSaid: '' })).toBe(true);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Rowan](speaker:C) asked.');
+    expect(md).not.toContain('t=10,12');
+  });
+
+  it('settling an unsure mention on the voice it already claims is a real edit', () => {
+    // It reads exactly as it did before, so comparing the words and the
+    // voice alone would call this a no-op — and the person's answer would
+    // never clear the mark the engine left.
+    const { editor, ydoc } = editorFor('- [@Devi](speaker:B?t=10,12&unsure=1) asked.\n');
+    const tag = findSpeakerTagAt(editor.state, posOf(editor, 'Devi'));
+    expect(applyReassign(editor, tag!, { label: 'B', name: 'Devi', lastSaid: '' })).toBe(true);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Devi](speaker:B) asked.');
+    expect(md).not.toContain('unsure');
+  });
+
+  it('two mentions of one voice from different turns are two tags', () => {
+    // They sit side by side with the same label and different provenance.
+    // Growing the range across the voice rather than across the href would
+    // reassign both on one tap — and this feature's whole promise is that
+    // reassigning touches the one mention under the finger.
+    const { editor, ydoc } = editorFor(
+      '- [@Devi](speaker:B?t=10) [@Devi](speaker:B?t=12) asked.\n',
+    );
+    const tag = findSpeakerTagAt(editor.state, posOf(editor, 'Devi'));
+    expect(tag?.href).toBe('speaker:B?t=10');
+    applyReassign(editor, tag!, { label: 'C', name: 'Rowan', lastSaid: '' });
+    const md = markdownOf(ydoc);
+    expect(md).toContain('[@Rowan](speaker:C)');
+    expect(md).toContain('[@Devi](speaker:B?t=12)');
+  });
+
+  it('still finds a tag written before provenance existed', () => {
+    const { editor } = editorFor('- [@Devi](speaker:B) asked.\n');
+    const tag = findSpeakerTagAt(editor.state, posOf(editor, 'Devi'));
+    expect(tag?.label).toBe('B');
+    expect(tag?.href).toBe('speaker:B');
+  });
+});

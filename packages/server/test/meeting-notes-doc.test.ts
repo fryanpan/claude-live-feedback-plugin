@@ -11,15 +11,17 @@ import { type DocType, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import {
   MEETING_NOTES_HEADING,
+  applyNotesReattribution,
   applyNotesRelabel,
   applyNotesUpdate,
   createNotesLedger,
+  reattributeNotesSection,
   relabelNotesSection,
   replaceNotesSection,
   retagSpeakerInNotes,
   withServerNotesSinks,
 } from '../src/meeting-notes-doc.ts';
-import type { NotesRelabel, NotesUpdate } from '../src/meeting-notes.ts';
+import type { NotesReattribution, NotesRelabel, NotesUpdate } from '../src/meeting-notes.ts';
 
 function docFrom(markdown: string): Y.Doc {
   const ydoc = new Y.Doc();
@@ -831,5 +833,219 @@ describe('withServerNotesSinks — the person’s writing survives the next tick
     const md = markdownOf(ydoc);
     expect(md).toContain('- from before the restart');
     expect(md).toContain('- after the restart');
+  });
+});
+
+describe('applyNotesReattribution — the engine changes its mind after the words are written', () => {
+  /** A doc plus the ledger that has just written these notes into it, which
+   *  is the state a real correction arrives in: the agent owns its bullets. */
+  function composed(notes: string) {
+    const ydoc = docFrom('# Huddle\n\nSome intro.\n');
+    const ledger = createNotesLedger();
+    const rooms = {
+      get: (id: string) =>
+        id === 'doc-a' ? { ydoc, meta: { type: 'markdown' as DocType } } : undefined,
+    };
+    const update: NotesUpdate = {
+      docId: 'doc-a',
+      meetingId: 'm-1',
+      tick: { tick: 1, reason: 'pause', turns: [] },
+      notes: `## ${MEETING_NOTES_HEADING}\n\n${notes}`,
+    };
+    expect(applyNotesUpdate(rooms, update, ledger)).toBe(true);
+    return { ydoc, ledger, rooms };
+  }
+
+  const reattribution = (
+    revisions: Record<number, string | null>,
+    names: Record<string, string> = {},
+  ): NotesReattribution => ({
+    docId: 'doc-a',
+    meetingId: 'm-1',
+    revisions: new Map(Object.entries(revisions).map(([turn, label]) => [Number(turn), label])),
+    names,
+  });
+
+  /** A person typing into one of the agent's bullets, which is what takes it
+   *  out of the ledger's hands. */
+  function appendInside(ydoc: Y.Doc, contains: string, extra: string): void {
+    const texts: Y.XmlText[] = [];
+    const walk = (el: Y.XmlElement | Y.XmlFragment): void => {
+      for (const child of el.toArray()) {
+        if (child instanceof Y.XmlText) texts.push(child);
+        else if (child instanceof Y.XmlElement) walk(child);
+      }
+    };
+    walk(prose.getProseFragment(ydoc));
+    for (const node of texts) {
+      const plain = (node.toDelta() as Array<{ insert: unknown }>)
+        .map((op) => (typeof op.insert === 'string' ? op.insert : ''))
+        .join('');
+      if (plain.includes(contains)) {
+        node.insert(node.length, extra);
+        return;
+      }
+    }
+    throw new Error(`no text node containing ${contains}`);
+  }
+
+  /** A person typing INTO a chip's words — inside the link run, so the mark
+   *  carries over exactly as it does in the editor. */
+  function typeInside(ydoc: Y.Doc, contains: string, offset: number, extra: string): void {
+    const texts: Y.XmlText[] = [];
+    const walk = (el: Y.XmlElement | Y.XmlFragment): void => {
+      for (const child of el.toArray()) {
+        if (child instanceof Y.XmlText) texts.push(child);
+        else if (child instanceof Y.XmlElement) walk(child);
+      }
+    };
+    walk(prose.getProseFragment(ydoc));
+    for (const node of texts) {
+      const plain = (node.toDelta() as Array<{ insert: unknown }>)
+        .map((op) => (typeof op.insert === 'string' ? op.insert : ''))
+        .join('');
+      const at = plain.indexOf(contains);
+      if (at >= 0) {
+        node.insert(at + offset, extra);
+        return;
+      }
+    }
+    throw new Error(`no text node containing ${contains}`);
+  }
+
+  /** Every element in the doc, for asserting the rewrite itself rather than
+   *  the ledger scope that normally narrows it. */
+  function everyElementIn(ydoc: Y.Doc): Set<Y.XmlElement> {
+    const out = new Set<Y.XmlElement>();
+    const walk = (el: Y.XmlElement | Y.XmlFragment): void => {
+      for (const child of el.toArray()) {
+        if (child instanceof Y.XmlElement) {
+          out.add(child);
+          walk(child);
+        }
+      }
+    };
+    walk(prose.getProseFragment(ydoc));
+    return out;
+  }
+
+  it('moves a mention whose every turn moved the same way', () => {
+    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10,12) wants the gate.\n');
+    expect(
+      applyNotesReattribution(rooms, reattribution({ 10: 'C', 12: 'C' }, { C: 'Rowan' }), ledger),
+    ).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- [@Rowan](speaker:C?t=10,12) wants the gate.');
+  });
+
+  it('marks a mention it cannot place rather than guessing between two voices', () => {
+    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10,12) wants the gate.\n');
+    expect(applyNotesReattribution(rooms, reattribution({ 12: 'C' }, { C: 'Rowan' }), ledger)).toBe(
+      1,
+    );
+    expect(markdownOf(ydoc)).toContain(
+      '- [@Speaker B](speaker:B?t=10,12&unsure=1) wants the gate.',
+    );
+  });
+
+  it('takes the claim off, and the link with it, when the words are nobody s', () => {
+    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    expect(applyNotesReattribution(rooms, reattribution({ 10: null }), ledger)).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- Speaker B wants the gate.');
+    expect(md).not.toContain('speaker:');
+  });
+
+  it('moves a mention whose visible text carries a bracket', () => {
+    // Every writer of chip text strips brackets today, so the pipeline does
+    // not produce this — which is exactly why the unit is asserted here and
+    // not through applyNotesReattribution: the rewrite rebuilds a one-tag
+    // markdown string out of the text it finds in the DOC, and text it did
+    // not compose must not be able to close the link early and make the
+    // mention invisible to the correction.
+    const { ydoc } = composed('- [@Sam](speaker:B?t=10) wants the gate.\n');
+    typeInside(ydoc, '@Sam', 3, ']');
+    expect(plainTextOf(ydoc)).toContain('@Sa]m');
+    expect(
+      reattributeNotesSection(
+        ydoc,
+        { revisions: new Map([[10, 'C']]), names: { C: 'Rowan' } },
+        everyElementIn(ydoc),
+      ).replaced,
+    ).toBe(1);
+    // A move re-renders the tag from the new voice's name, as it does for
+    // any other mention — the bracket's only job here was to be findable.
+    expect(markdownOf(ydoc)).toContain('[@Rowan](speaker:C?t=10)');
+  });
+
+  it('leaves the tag a tag, so a later rename still finds it', () => {
+    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    applyNotesReattribution(rooms, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger);
+    expect(retagSpeakerInNotes(ydoc, 'C', 'Rowan Pike').replaced).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- [@Rowan Pike](speaker:C?t=10) wants the gate.');
+  });
+
+  it('keeps two voices with the same display name apart', () => {
+    // Both answer to "Alex", so nothing about the visible text says which
+    // mention moved. The label in the href does.
+    const { ydoc, ledger, rooms } = composed(
+      '- [@Alex](speaker:A?t=10) proposed it.\n- [@Alex](speaker:B?t=11) objected.\n',
+    );
+    expect(
+      applyNotesReattribution(rooms, reattribution({ 10: 'B' }, { A: 'Alex', B: 'Alex' }), ledger),
+    ).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Alex](speaker:B?t=10) proposed it.');
+    expect(md).toContain('- [@Alex](speaker:B?t=11) objected.');
+    // And afterwards each is still renameable on its own terms: renaming B
+    // now reaches BOTH, because both really are B — which is the point.
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Alex Yun').replaced).toBe(2);
+    expect(markdownOf(ydoc)).not.toContain('speaker:A');
+  });
+
+  it('never touches a mention a PERSON reassigned — it carries no provenance', () => {
+    const { ydoc, ledger, rooms } = composed('- [@Rowan](speaker:C) wants the gate.\n');
+    expect(applyNotesReattribution(rooms, reattribution({ 10: 'B' }), ledger)).toBe(0);
+    expect(markdownOf(ydoc)).toContain('- [@Rowan](speaker:C) wants the gate.');
+  });
+
+  it('never touches a line the person has taken over', () => {
+    // Ownership is element AND text, so typing into one of the agent's
+    // bullets makes it theirs. A machine's second thoughts about who spoke
+    // do not get to edit somebody's own sentence — and the same boundary is
+    // what keeps this off an earlier meeting's leftovers in the same doc,
+    // whose turn numbers start again from the beginning.
+    const { ydoc, ledger, rooms } = composed(
+      '- [@Speaker B](speaker:B?t=10) wants the gate.\n- [@Speaker B](speaker:B?t=10) said why.\n',
+    );
+    appendInside(ydoc, 'said why', ' — my note');
+    expect(applyNotesReattribution(rooms, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger)).toBe(
+      1,
+    );
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Rowan](speaker:C?t=10) wants the gate.');
+    expect(md).toContain('- [@Speaker B](speaker:B?t=10) said why. — my note');
+  });
+
+  it('cannot reach a tag outside the notes section', () => {
+    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    prose.applyMarkdownToFragment(
+      prose.getProseFragment(ydoc),
+      `${markdownOf(ydoc)}\n## Next steps\n\n- [@Speaker B](speaker:B?t=10) to file it.\n`,
+    );
+    applyNotesReattribution(rooms, reattribution({ 10: 'C' }, { C: 'Rowan' }), ledger);
+    expect(markdownOf(ydoc)).toContain('- [@Speaker B](speaker:B?t=10) to file it.');
+  });
+
+  it('a doc the meeting has outlived is a zero, not a throw', () => {
+    const { ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    expect(
+      applyNotesReattribution(rooms, { ...reattribution({ 10: 'C' }), docId: 'doc-gone' }, ledger),
+    ).toBe(0);
+  });
+
+  it('an empty revision writes nothing', () => {
+    const { ydoc, ledger, rooms } = composed('- [@Speaker B](speaker:B?t=10) wants the gate.\n');
+    expect(applyNotesReattribution(rooms, reattribution({}), ledger)).toBe(0);
+    expect(markdownOf(ydoc)).toContain('- [@Speaker B](speaker:B?t=10) wants the gate.');
   });
 });
