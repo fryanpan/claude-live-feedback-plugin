@@ -160,11 +160,11 @@ Each
 `SpeakerRevision` arrives before `Termination` naming turns the whole-session
 pass relabelled; the adapter re-emits those through `onTurn` as settled turns
 with retained text, so the relay needs no second channel. A turn still
-waiting on the pause tick takes the new label; notes ALREADY composed keep
-the label they were composed with — those words are in the doc and the
-revision has nowhere to land — but a person RENAMING a voice does reach
-them, retroactively, through both the tag rewrite and the text sweep; see
-"A rename reaches backwards" below. The revision
+waiting on the pause tick takes the new label; a turn whose words are
+ALREADY in the doc is a correction, and reaches them — see "A late
+correction lands on the mentions it can prove" below. A person RENAMING a
+voice reaches them too, by a different route: through the tag rewrite and
+the text sweep; see "A rename reaches backwards". The revision
 can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
@@ -712,6 +712,74 @@ invented for this would have been lost on the first flush.
   during it — which is why the menu is mounted whatever the doc, rather than
   alongside the strip.
 
+### A late correction lands on the mentions it can prove
+
+The engine changes its mind about who spoke. A `SpeakerRevision` arrives
+before `Termination` naming turns the whole-session pass relabelled, and
+until now it reached only the turns still waiting on a tick — words already
+composed kept the voice they were composed with, so a meeting could end with
+its transcript and its notes disagreeing.
+
+**A rename and a revision are different facts, and only one of them is about
+a voice.** "B is Devi" is true of every mention of B, which is why the label
+in the href was enough for it. "Turn 12 was not B after all" is true of one
+turn, and `speaker:B` cannot say which of B's sentences a mention came from.
+
+**So the href also carries the turns behind the mention** —
+`[@Devi](speaker:B?t=10,12)`. Stamped by the deterministic pass, never by the
+composer: the model's job is to say which voice, and everything a later
+correction has to trust is supplied by code. A tag arriving WITHOUT
+provenance is stamped with the tick's turns for that voice; one that already
+has some keeps them, because the composer returns the whole notes every tick
+and restamping would move a mention's provenance forward to words it was
+never written from. Past `MAX_SPEAKER_TAG_TURNS` (12) nothing is stamped: a
+mention that could have come from thirty turns is not one a revision can
+place, and saying so is cheaper than pretending.
+
+Then, per mention, every turn behind it is asked what it is attributed to
+now — a revised turn answers with its new label, an untouched one with the
+label the mention already carries:
+
+- **all agree on another voice** → the mention MOVES. Not a guess: every turn
+  that could have produced those words belongs to that voice now.
+- **all agree on nobody** → the claim comes off and the words stay, the same
+  remedy `normalizeSpeakerTags` gives a voice the meeting never carried.
+- **they disagree** → the mention is marked `unsure=1` and the session says so
+  through `onError`. It belongs to one of two voices and the notes do not
+  record which; a coin flip would put a name against words somebody else
+  said, and silence would hide that the meeting no longer stands behind the
+  name already there. The chip draws it — the warning colour and a "?" — so
+  the doubt is visible to a reader and not only to a reader of the raw `.md`.
+- **no provenance** → untouched. That is every tag written before this
+  existed and, deliberately, every mention a PERSON has reassigned:
+  `applyReassign` writes a bare `speaker:<label>`, so a human answer is never
+  revisited by a machine pass. It also makes tapping the voice a mention
+  already claims a real edit rather than a no-op, which is how somebody
+  settles an unsure one.
+
+Three things the plumbing has to get right, each tested:
+
+- **The correction rides the compose chain**, behind anything in flight —
+  same reason as the rename. That compose read the old labels.
+- **One chain step per BATCH.** The engine sends a single `SpeakerRevision`
+  and the adapter re-emits it turn by turn in a synchronous loop. Applied one
+  at a time, a two-turn mention would be moved by the first revision and then
+  found disagreeing with itself by the second.
+- **A turn that has fallen back into `carry`** — its compose failed — leaves
+  the batch and takes the new label into its retry. Correcting words nobody
+  has read is nothing.
+
+**In the doc the walk is scoped to the items the LEDGER still claims**, which
+a rename is not. What a voice is called is true wherever it is written; a
+machine's second thoughts about who spoke do not get to edit a sentence a
+person has taken over. The same boundary keeps this off an EARLIER meeting's
+leftovers in the same doc, whose turn numbers start again from the beginning
+and could otherwise collide with this meeting's.
+
+What this still cannot do: a turn the revision gives a label to for the FIRST
+time (a `PENDING` placeholder resolving) composed as untagged prose, and there
+is no mention to move — the notes gain no attribution they did not have.
+
 ## Task capture ("file a ticket for that")
 
 Each pause tick ALSO runs a task-capture pass (`meeting-task-capture.ts`)
@@ -754,6 +822,109 @@ plain markdown links into the notes; the doc editor's `TaskLinkChips`
 decoration (markdown-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
+
+## Acting on speech, not only recording it
+
+Two more intents ride the SAME capture call — no router, no second pass, per
+the 2026-08-30 decision *"One call per tick carries every intent"*. One reply,
+one `items` array, a `kind` per intent, rows parsed independently so a
+malformed one never costs the others. The module is still called
+`meeting-task-capture.ts`; its name predates half of what it carries.
+
+**They are not symmetrical, and that is the design.** A LOOKUP only reads, so
+a wrong one costs a link nobody wanted. A RESEARCH ask SPENDS — an agent goes
+away and burns tokens on a report — so it is never acted on from speech
+alone.
+
+### "Go look into that" — research, confirmed before it is spent
+
+The ask this catches almost never contains the word *research*: it is "go
+look into that", "dig into why it does that", "find out what it would take".
+So the prompt teaches the shape rather than the word, and the guard is the
+transcript, not the model: `phraseSpokenOnTick` requires the returned topic's
+significant words to have actually been said (two of them, or its only one),
+which is the `requestMatchesCandidate` threshold and holds for the same
+reason. A topic with no significant words at all — "that thing" — is dropped
+rather than let through on an empty match.
+
+What lands is **a row in triage plus a decision review item**, and the
+confirmation is enforced rather than promised:
+
+- **The row is never set moving.** Dispatch works `todo` rows; this one stays
+  at `triage`, unvetted until a person places it, the way every other
+  agent-filed row is. It is filed asking for no band — but note that the
+  store fills `chores` in anyway (`opts.goal ?? CHORES_GOAL_ID`), so the
+  absent band is *not* what protects it. An earlier draft of this section
+  claimed it was, and the integration test against the real store said
+  otherwise.
+- **An open review item holds the row.** `ready-gate.ts` reports
+  `awaiting-answer` for a row carrying an unanswered item, so it stays held
+  even once somebody triages it.
+
+Answering it needs no new machinery: `decision.answered` already wakes the
+board's lead through `ReadyWorkNudger.reviewAnswered`. A second ask for the
+same topic — in the same tick or a later one — links the row rather than
+filing a second card, on the board's own find-or-create.
+
+`addReviewItem` emits no store event by design, so the caller owes the item
+two steps this module cannot reach: `taskProjection.ensureWorkspace` and
+`announceTaskReview`. That is the `onReviewFiled` callback, and it is the
+contract `proposeAllowRule` (allow-rules.ts) already honours. Filing through
+the store rather than the HTTP route also means the item skips the LLM
+quality gate, exactly as an allow-rule proposal does.
+
+### "Pull in last week's notes" — lookup
+
+Resolution lives in `meeting-lookup.ts`, and reaches docs and past meetings,
+not only board rows:
+
+1. **By title** — the board's docs (huddles included: a huddle IS a doc,
+   filed on the board like any other) and its task rows, in ONE pool through
+   `resolveByTitle`, the matcher voice navigation already uses. One pool so
+   its spoken kind word ("the DOC about x") can narrow.
+2. **By when** — "last week", "yesterday", "Tuesday", "this morning", "the
+   last meeting", against the docs that carry a past meeting, newest inside
+   the window.
+
+**Recency is its own path because a past meeting has no title.** A
+`MeetingRecord` carries times and no subject; the readable name of one is the
+doc it was held on. So "last week's notes" has nothing to match against —
+"notes" matches every doc on the board and "week" is a stopword — and time is
+the only thing spoken that identifies it. An ambiguous title match falls
+THROUGH to recency rather than failing, because two docs that score alike are
+exactly what a spoken "yesterday" was there to separate.
+
+**Two things about the windows themselves**, both found in review rather than
+in writing. Each part of a day is its own window — morning, afternoon and
+evening do not collapse into "today" — because the resolver answers with the
+NEWEST meeting inside a window, so a single all-day window would answer "what
+did we say this morning", asked after lunch, with the lunch meeting. And every
+boundary is a calendar operation (`setDate`, `setHours`), never a multiple of
+86,400,000 ms: a local day is 23 or 25 hours twice a year, and on those two
+days fixed arithmetic lands "yesterday" at 01:00 or 23:00 of the wrong date,
+putting a meeting held near midnight into the day next door.
+
+**What the link may say about *when*** is not free either. A doc found by
+recency may be labelled in the speaker's own frame ("last week") — the window
+is what selected it. A doc found by NAME gets a plain date, because a doc
+that matched on its title may not be from last week at all, and echoing the
+phrase would put a date in the notes that nothing checked.
+
+The composer gets these as a second link block beside the task links
+(`docLinks` on `NotesComposeInput`), told to cite them where the note asked
+and explicitly NOT to summarize what is inside — it has not read them.
+
+### Cost
+
+Both intents are prompt text on a call that was already being made.
+Measured with `count_tokens` on the capture model
+(`scripts/intent-prompt-cost.ts`), the system prompt goes **482 → 630 → 716
+input tokens**: **+148 for research, +86 for lookup, +234 per tick**. At ~200
+ticks per meeting-hour and $1/MTok that is **≈ $0.047 per meeting-hour**,
+taking the measured $0.84 to about **$0.89**. Roughly twice the decision's
+~58-tokens-per-intent figure, because both rules carry the example phrasings
+that teach an ask nobody states explicitly — which is the feature. Output is
+unchanged on the ticks that carry neither, which is most of them.
 
 ## Measuring the latency (`?timing=1`)
 
@@ -1066,9 +1237,15 @@ making before the cheap hedge has been measured.
 `packages/server/src/meeting-protocol.ts` (lifecycle) ·
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
-`packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
+`packages/server/src/meeting-lookup.ts` (what a "pull that in" ask points
+at) · `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
-keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
+keeps a person's writing) · `packages/core/src/speaker-tags.ts` (the tag
+grammar, its provenance, and the late correction) +
+`speaker-roster.ts` (the meeting's cast) ·
+`packages/markdown-app/src/speaker-reassign.ts` +
+`speaker-reassign-menu.ts` (correcting one mention) ·
+`packages/markdown-app/src/meeting-strip.ts`
 (UI) · `packages/markdown-app/src/meeting-audio.ts` (capture + the room's
 microphone config) · `packages/markdown-app/src/meeting-announce.ts` (speech
 synthesis and every way it fails) · `packages/server/src/recall.ts` (vendor

@@ -111,6 +111,18 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
     );
   }
 
+  if (input.docLinks?.length) {
+    parts.push(
+      [
+        'Material somebody in this meeting asked to have pulled in, already',
+        'found. Cite it in the note that asked for it, as a markdown link.',
+        'Do not summarize what is inside it — you have not read it, and the',
+        'link is the answer.',
+        ...input.docLinks.map((l) => `- [${l.title}](${l.url})${l.when ? ` — ${l.when}` : ''}`),
+      ].join('\n'),
+    );
+  }
+
   parts.push(
     `Current notes:\n${input.previous ?? '(none yet — this is the first update of the meeting)'}`,
   );

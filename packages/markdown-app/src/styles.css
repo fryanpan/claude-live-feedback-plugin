@@ -6227,6 +6227,36 @@ body.is-reading-width #editor > .ProseMirror {
   background: var(--accent-soft, rgba(46, 125, 215, 0.14));
   color: var(--accent, #2e7dd7);
 }
+/* An attribution the ENGINE could not settle. Its end-of-session pass moved
+   some of the turns this mention was composed from and left the others, so
+   it belongs to one of two voices and the notes do not record which
+   (`unsure=1` in the href — see core/speaker-tags.ts). Marked rather than
+   guessed: a coin flip would put a name against words somebody else said.
+
+   A ring and a trailing "?", both keyed off the href, so this costs the
+   editor no plugin and no bundle. The ring is an inset box-shadow rather
+   than a border because a border would grow the chip's box, and that box is
+   the touch target the mobile rule below measures. Tapping the chip and
+   picking a voice — even the one it already claims — writes a bare
+   `speaker:<label>`, so a person settling it clears the mark. */
+#editor > .ProseMirror a[href^="speaker:"][href*="unsure=1"] {
+  position: relative;
+  padding-right: 1.1em;
+  color: var(--warn-fg, #b25e09);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn-fg, #b25e09) 45%, transparent);
+}
+#editor > .ProseMirror a[href^="speaker:"][href*="unsure=1"]::before {
+  content: "?";
+  position: absolute;
+  right: 0.36em;
+  font-weight: 700;
+  /* Absolute, so the glyph sits after the name without entering the text —
+     the tag's words are the display name and a rename compares against them
+     exactly. A character inserted into the run would break that match. */
+}
+#editor > .ProseMirror a[href^="speaker:"][href*="unsure=1"]:hover {
+  color: var(--warn-fg, #b25e09);
+}
 /* An inline chip is only as tall as the text around it — around 23px, which
    is under a fingertip. On a touch pointer the hit box grows past the ink
    without moving a character of layout; on a mouse the same overlay would
@@ -6900,13 +6930,44 @@ body.is-reading-width #editor > .ProseMirror {
    and this button fills it. */
 .meeting-note-dismiss {
   font: inherit;
-  color: inherit;
+  /* NOT the strip's 12.5px, and not `--fg-muted`. Every other string here is
+     a readout, glanced at by the one person holding the device. This one is a
+     SCRIPT: somebody reads it out loud to a room, off an iPad at arm's
+     length, while people wait. It gets body size and body colour because it
+     is the only line in the strip with an audience. */
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--fg);
   background: none;
   border: 0;
   padding: 0;
   margin: 0;
   text-align: left;
   cursor: pointer;
+}
+/* And it needs somewhere to be that size. The caption is a fixed window —
+   1.45em here, 2.9em on a phone — measured against the strip's 12.5px, so a
+   16px sentence would be clipped by the very rule that keeps a rolling
+   transcript from growing the bar. While the announcement holds the line the
+   window is released; it closes again the moment a settled turn arrives or
+   the line is tapped away.
+
+   Keyed off `:has()` rather than a class because the button IS the state:
+   it exists only while the announcement is up, so there is nothing to keep
+   in sync. Base section on purpose — the media queries set the fixed
+   heights, and one rule at higher specificity beats both. */
+.meeting-caption:has(.meeting-note-dismiss) {
+  height: auto;
+}
+/* And the bar gives it the room, rather than clipping it at 40px. Measured:
+   one line of the sentence makes a 42px caption, and in the 721-900px band
+   where the bar is narrow it wraps to two and asks for 64. The editor pane's
+   third grid track is `auto` — the strip RESERVES its height instead of
+   covering the prose — so growing here shortens the editor by exactly this
+   much and gives it straight back. Transient by construction: the rule stops
+   applying the moment a settled turn arrives or the line is tapped away. */
+.meeting-strip:has(.meeting-note-dismiss) {
+  height: auto;
 }
 .meeting-toggle {
   flex: none;
