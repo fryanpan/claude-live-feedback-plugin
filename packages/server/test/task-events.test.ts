@@ -37,15 +37,13 @@ const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' 
  *  one. The board's rows — with the ids the server minted — come back from
  *  `created` / `getWorkspace`, and that is what the assertions compare. */
 const GOAL_ENTRIES: GoalListEntry[] = [
-  { title: '1. Ship the launch post', subgoals: [{ title: '1.1 QA pass' }] },
+  { title: '1. Ship the launch post' },
+  { title: '1.1 QA pass' },
   { title: '2. Cut page weight' },
 ];
 const GOAL_SPEC: SeedGoalSpec[] = [
-  {
-    key: 'launch',
-    title: '1. Ship the launch post',
-    subgoals: [{ key: 'qa', title: '1.1 QA pass' }],
-  },
+  { key: 'launch', title: '1. Ship the launch post' },
+  { key: 'qa', title: '1.1 QA pass' },
   { key: 'perf', title: '2. Cut page weight' },
 ];
 
@@ -211,19 +209,16 @@ describe('task store events + audit log', () => {
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.changed).toBe(true);
-      // Every band is new, so every id came back in `created` — parent first,
-      // then its subgoal, in submission order.
+      // Every band is new, so every id came back in `created`, in submission
+      // order.
       expect(res.created.map((c) => c.title)).toEqual([
         '1. Ship the launch post',
         '1.1 QA pass',
         '2. Cut page weight',
       ]);
       const expected: WorkspaceGoal[] = [
-        {
-          id: res.created[0]?.id as string,
-          title: '1. Ship the launch post',
-          subgoals: [{ id: res.created[1]?.id as string, title: '1.1 QA pass' }],
-        },
+        { id: res.created[0]?.id as string, title: '1. Ship the launch post' },
+        { id: res.created[1]?.id as string, title: '1.1 QA pass' },
         { id: res.created[2]?.id as string, title: '2. Cut page weight' },
       ];
       expect(res.workspace.goals).toEqual(expected);
@@ -235,7 +230,7 @@ describe('task store events + audit log', () => {
       expect(e.newGoals).toEqual(expected);
       expect(e.actor.kind).toBe('person');
       expect(e.kind).toBe('edit');
-      // A task can now be created under the new goal id (subgoal too).
+      // A task can now be created under any of the new goal ids.
       const t = store.createTask(ws.id, { title: 'QA sweep', goal: res.created[1]?.id });
       expect(t.ok).toBe(true);
     });
@@ -244,7 +239,7 @@ describe('task store events + audit log', () => {
       const ws = store.createWorkspace('search-revamp');
       const { goals } = seedBoard(ws.id);
       events.length = 0;
-      const reordered = [goals[1], goals[0]] as WorkspaceGoal[];
+      const reordered = [goals[1], goals[0], goals[2]] as WorkspaceGoal[];
       const res = store.setGoalList(ws.id, reordered, { actor: PERSON });
       expect(res.ok).toBe(true);
       if (!res.ok) return;

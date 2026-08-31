@@ -40,28 +40,16 @@ import { type GoalIds, type SeedGoalSpec, seedGoals, seedGoalsOverHttp } from '.
 const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
 
-/** Three top-level bands, the first with two subgoals — enough to reorder at
- *  both scopes and to prove the untouched scope stayed untouched. The labels
- *  are what used to be hard-coded ids (`launch` was `g-launch`). */
+/** Three bands, two of them dated — enough to permute, and enough to prove
+ *  that a band's own fields ride along untouched. The labels are what used to
+ *  be hard-coded ids (`launch` was `g-launch`). */
 const GOAL_SPEC: SeedGoalSpec[] = [
-  {
-    key: 'launch',
-    title: '1. Ship the launch post',
-    dueAt: 1766000000000,
-    subgoals: [
-      { key: 'launchQa', title: '1.1 QA pass' },
-      { key: 'launchCopy', title: '1.2 Copy edit', dueAt: 1767000000000 },
-    ],
-  },
+  { key: 'launch', title: '1. Ship the launch post', dueAt: 1766000000000 },
   { key: 'perf', title: '2. Cut page weight' },
-  {
-    key: 'docs',
-    title: '3. Rewrite the docs',
-    subgoals: [{ key: 'docsApi', title: '3.1 API reference' }],
-  },
+  { key: 'docs', title: '3. Rewrite the docs', dueAt: 1767000000000 },
 ];
 
-type Bands = Record<'launch' | 'launchQa' | 'launchCopy' | 'perf' | 'docs' | 'docsApi', string>;
+type Bands = Record<'launch' | 'perf' | 'docs', string>;
 
 /** The seed map, narrowed to the labels these tests index. A missing label is
  *  a broken fixture, not an undefined id flowing into an assertion. */
@@ -71,34 +59,15 @@ function bands(ids: GoalIds): Bands {
     if (id === undefined) throw new Error(`seed produced no id for "${key}"`);
     return id;
   };
-  return {
-    launch: at('launch'),
-    launchQa: at('launchQa'),
-    launchCopy: at('launchCopy'),
-    perf: at('perf'),
-    docs: at('docs'),
-    docsApi: at('docsApi'),
-  };
+  return { launch: at('launch'), perf: at('perf'), docs: at('docs') };
 }
 
 /** The seeded board restated as a submittable list — `setGoalList` is a full
  *  replace, so keeping a band means naming it by the id the seed minted. */
 const boardFor = (G: Bands): WorkspaceGoal[] => [
-  {
-    id: G.launch,
-    title: '1. Ship the launch post',
-    dueAt: 1766000000000,
-    subgoals: [
-      { id: G.launchQa, title: '1.1 QA pass' },
-      { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
-    ],
-  },
+  { id: G.launch, title: '1. Ship the launch post', dueAt: 1766000000000 },
   { id: G.perf, title: '2. Cut page weight' },
-  {
-    id: G.docs,
-    title: '3. Rewrite the docs',
-    subgoals: [{ id: G.docsApi, title: '3.1 API reference' }],
-  },
+  { id: G.docs, title: '3. Rewrite the docs', dueAt: 1767000000000 },
 ];
 
 /** A throwaway board, seeded, handing back the list it holds. The pure
@@ -142,7 +111,7 @@ describe('TaskStore.reorderGoals', () => {
     return { wsId: ws.id, G };
   }
 
-  it('permutes the top-level list, carries title/dueAt/subgoals along, and emits one reorder event', () => {
+  it('permutes the list, carries title and dueAt along, and emits one reorder event', () => {
     const { wsId, G } = seed();
     const res = store.reorderGoals(wsId, [G.perf, G.docs, G.launch], { actor: PERSON });
     expect(res.ok).toBe(true);
@@ -155,7 +124,7 @@ describe('TaskStore.reorderGoals', () => {
     const launch = goals.find((g) => g.id === G.launch);
     expect(launch?.title).toBe('1. Ship the launch post');
     expect(launch?.dueAt).toBe(1766000000000);
-    expect(launch?.subgoals?.map((s) => s.id)).toEqual([G.launchQa, G.launchCopy]);
+    expect(goals.find((g) => g.id === G.docs)?.dueAt).toBe(1767000000000);
 
     expect(events).toHaveLength(1);
     const e = events[0];
@@ -224,48 +193,26 @@ describe('TaskStore.reorderGoals', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('reorders one parent’s subgoals, leaving the top level and the other parent alone', () => {
+  /** `parent` scoped a reorder to one band's subgoals. Subgoals are gone
+   *  (Bryan, 2026-08-30), so no id can name a sublist to order — and the field
+   *  is REFUSED rather than ignored, because a caller who meant "order these
+   *  children" must not silently reorder the whole board instead. It is still
+   *  accepted as input, because the REST route has callers this build cannot
+   *  restart; what changed is that every value is now `parent-not-found`. */
+  it('refuses any `parent` scope, including a real band id, and writes nothing', () => {
     const { wsId, G } = seed();
-    const res = store.reorderGoals(wsId, [G.launchCopy, G.launchQa], {
-      parent: G.launch,
-      actor: PERSON,
-    });
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.changed).toBe(true);
-
-    const goals = store.getWorkspace(wsId)?.goals ?? [];
-    expect(goals.map((g) => g.id)).toEqual([G.launch, G.perf, G.docs]);
-    expect(goals[0]?.subgoals?.map((s) => s.id)).toEqual([G.launchCopy, G.launchQa]);
-    // The moved subgoal kept its own fields, and the other parent is intact.
-    expect(goals[0]?.subgoals?.[0]?.dueAt).toBe(1767000000000);
-    expect(goals[2]?.subgoals?.map((s) => s.id)).toEqual([G.docsApi]);
-
-    const e = events[0];
-    if (e?.type !== 'workspace.goals_changed') throw new Error('expected goals_changed');
-    expect(e.kind).toBe('reorder');
-    // Same aliasing trap, one level deeper: the event's old copy must still
-    // hold the pre-reorder subgoal order.
-    expect(e.oldGoals[0]?.subgoals?.map((s) => s.id)).toEqual([G.launchQa, G.launchCopy]);
-    expect(e.newGoals[0]?.subgoals?.map((s) => s.id)).toEqual([G.launchCopy, G.launchQa]);
-  });
-
-  it('refuses an unknown parent, and refuses a SUBGOAL as parent (one level max)', () => {
-    const { wsId, G } = seed();
-    const missing = store.reorderGoals(wsId, [G.launchQa], {
-      parent: 'g-nope',
-      actor: PERSON,
-    });
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) expect(missing.error).toBe('parent-not-found');
-
-    const nested = store.reorderGoals(wsId, [G.launchQa], {
-      parent: G.launchCopy,
-      actor: PERSON,
-    });
-    expect(nested.ok).toBe(false);
-    if (!nested.ok) expect(nested.error).toBe('parent-not-found');
+    for (const parent of ['g-nope', G.launch]) {
+      const res = store.reorderGoals(wsId, [G.perf, G.docs], { parent, actor: PERSON });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toBe('parent-not-found');
+    }
+    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([G.launch, G.perf, G.docs]);
     expect(events).toHaveLength(0);
+    // Positive control: the same order WITHOUT a parent is a real reorder, so
+    // the refusals above are about the scope rather than about the ids.
+    const ok = store.reorderGoals(wsId, [G.perf, G.docs, G.launch], { actor: PERSON });
+    expect(ok.ok).toBe(true);
+    expect(events).toHaveLength(1);
   });
 
   it('is a no-op when the order already matches: changed=false, no event', () => {
@@ -288,14 +235,14 @@ describe('TaskStore.reorderGoals', () => {
   it('never moves a task: every task keeps its goal across a reorder, where set_goal_list would not', () => {
     const { wsId, G } = seed();
     const a = store.createTask(wsId, { title: 'Trim the bundle', goal: G.perf });
-    const b = store.createTask(wsId, { title: 'Proof the copy', goal: G.launchCopy });
+    const b = store.createTask(wsId, { title: 'Proof the copy', goal: G.docs });
     if (!a.ok || !b.ok) throw new Error('create failed');
     events.length = 0;
 
     const res = store.reorderGoals(wsId, [G.docs, G.perf, G.launch], { actor: PERSON });
     expect(res.ok).toBe(true);
     expect(store.getTask(a.task.id)?.goal).toBe(G.perf);
-    expect(store.getTask(b.task.id)?.goal).toBe(G.launchCopy);
+    expect(store.getTask(b.task.id)?.goal).toBe(G.docs);
     expect(events.filter((e) => e.type === 'task.regrouped')).toHaveLength(0);
 
     // Positive control for the assertion above: the SAME omission expressed
@@ -304,9 +251,9 @@ describe('TaskStore.reorderGoals', () => {
     // `drop` names the band being removed — the acknowledgement the guard
     // now asks for. It changes who has to SAY the removal, not what one does.
     const board = boardFor(G);
-    const dropped = store.setGoalList(wsId, [board[2], board[1]] as WorkspaceGoal[], {
+    const dropped = store.setGoalList(wsId, [board[0], board[1]] as WorkspaceGoal[], {
       actor: PERSON,
-      drop: [G.launchCopy],
+      drop: [G.docs],
     });
     expect(dropped.ok).toBe(true);
     if (dropped.ok) expect(dropped.movedToChores).toEqual([b.task.id]);
@@ -314,26 +261,14 @@ describe('TaskStore.reorderGoals', () => {
   });
 });
 
-describe('summarizeGoals names each subgoal’s parent', () => {
-  it('stamps parent on subgoal rows only, so a reorder call can be written from the read', () => {
-    const { goals, G } = seededGoalList();
-    const rows = summarizeGoals([], goals);
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    expect(byId.get(G.launch)?.parent).toBeUndefined();
-    expect(byId.get(G.launchQa)?.parent).toBe(G.launch);
-    expect(byId.get(G.docsApi)?.parent).toBe(G.docs);
-  });
-});
-
 /**
- * `parent` scopes a SUBGOAL reorder. Nothing scoped the TOP-LEVEL one, and
- * "every depth-0 row" — the only rule the read offered — is wrong: the list
+ * Nothing scoped a reorder, and "every row in the read" is wrong: the list
  * ends with rows that are not goals at all. `chores` is appended whenever it
  * holds anything, and a goal id that a `setGoalList` removal left behind on a
- * DONE task comes back as a bare row so the work stays visible. Both render
- * at depth 0, identical in shape to a real band, and both are refused by
- * `reorderGoals` — so the most obvious way to write the call from the read is
- * a 400. `reorderable` is the field that says which rows the write accepts.
+ * DONE task comes back as a bare row so the work stays visible. Both are
+ * identical in shape to a real band, and both are refused by `reorderGoals` —
+ * so the most obvious way to write the call from the read is a 400.
+ * `reorderable` is the field that says which rows the write accepts.
  */
 describe('summarizeGoals marks which rows a reorder accepts', () => {
   /** Rows for a workspace built by `seed`, read the way the route reads them,
@@ -358,19 +293,12 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
     }
   }
 
-  it('marks every real goal reorderable, at both depths', () => {
+  it('marks every real goal reorderable', () => {
     const { goals, G } = seededGoalList();
     const rows = summarizeGoals([], goals);
     // Positive control for the negative assertions below: the field is
     // present and TRUE on every row that is genuinely in the ordered list.
-    expect(rows.map((r) => r.id)).toEqual([
-      G.launch,
-      G.launchQa,
-      G.launchCopy,
-      G.perf,
-      G.docs,
-      G.docsApi,
-    ]);
+    expect(rows.map((r) => r.id)).toEqual([G.launch, G.perf, G.docs]);
     expect(rows.every((r) => r.reorderable === true)).toBe(true);
   });
 
@@ -381,7 +309,6 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
     const chores = rows.find((r) => r.id === CHORES_GOAL_ID);
     // Presence first: the row this asserts about must actually be here.
     expect(chores).toBeDefined();
-    expect(chores?.depth).toBe(0);
     expect(chores?.reorderable).toBe(false);
     // …and the real goals in the same payload still say true, so `false` is
     // reporting something about this row rather than about the field.
@@ -405,7 +332,6 @@ describe('summarizeGoals marks which rows a reorder accepts', () => {
     const orphan = rows.find((r) => r.id === G.perf);
     expect(orphan).toBeDefined();
     expect(orphan?.done).toBe(1);
-    expect(orphan?.depth).toBe(0);
     expect(orphan?.reorderable).toBe(false);
     expect(rows.find((r) => r.id === G.launch)?.reorderable).toBe(true);
   });
@@ -554,21 +480,18 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
     expect((await readGoals(wsId)).map((g) => g.id)).toEqual([G.docs, G.launch, G.perf]);
   });
 
-  it('forwards `parent` — the subgoal scope actually moves, and the top level does not', async () => {
+  it('refuses a `parent` scope over HTTP rather than reordering the whole board', async () => {
     const { wsId, G } = await seedWorkspace();
-    await jj(
-      await post(`/api/workspaces/${wsId}/goals/reorder`, {
-        order: [G.launchCopy, G.launchQa],
-        parent: G.launch,
-        author: PERSON,
-      }),
-    );
-    const goals = await readGoals(wsId);
-    // A dropped `parent` would have been read as a top-level reorder and
-    // refused as a mismatch — so a 200 here is only meaningful alongside the
-    // subgoal order actually having changed.
-    expect(goals.map((g) => g.id)).toEqual([G.launch, G.perf, G.docs]);
-    expect(goals[0]?.subgoals?.map((s) => s.id)).toEqual([G.launchCopy, G.launchQa]);
+    const res = await post(`/api/workspaces/${wsId}/goals/reorder`, {
+      order: [G.perf, G.docs],
+      parent: G.launch,
+      author: PERSON,
+    });
+    expect(res.status).toBe(400);
+    // The half that matters: a route that DROPPED the field would have read
+    // this as a top-level reorder — and `[perf, docs]` omits `launch`, so it
+    // would still 400. The board is what tells the two apart.
+    expect((await readGoals(wsId)).map((g) => g.id)).toEqual([G.launch, G.perf, G.docs]);
   });
 
   it('forwards `author` into the goals_changed event (person and agent both classify)', async () => {
@@ -664,16 +587,6 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
     expect(tasks.find((t) => t.id === task.id)?.goal).toBe(G.perf);
   });
 
-  it('GET /api/workspaces/:id carries parent on subgoal rows, so the reorder call is writable from the read', async () => {
-    const { wsId, G } = await seedWorkspace();
-    const got = await jj<{ goalSummary: Array<{ id: string; depth: number; parent?: string }> }>(
-      await fetch(`${base}/api/workspaces/${wsId}`),
-    );
-    const byId = new Map(got.goalSummary.map((r) => [r.id, r]));
-    expect(byId.get(G.launchQa)?.parent).toBe(G.launch);
-    expect(byId.get(G.launch)?.parent).toBeUndefined();
-  });
-
   /** The whole round trip, over HTTP, exactly as an agent performs it. The
    *  store-level tests above prove `reorderable` is computed; only this one
    *  proves the field survives the route and that filtering on it produces an
@@ -724,18 +637,18 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
       return { wsId, G };
     }
 
-    it('sending back every reorderable depth-0 row succeeds; sending every depth-0 row does not', async () => {
+    it('sending back every reorderable row succeeds; sending every row does not', async () => {
       const { wsId, G } = await seedBoardWithBuckets();
       const rows = await readRows(wsId);
 
       // Presence control: the payload really does carry rows that are NOT
       // goals, otherwise the filter below proves nothing.
-      const notGoals = rows.filter((r) => r.depth === 0 && !r.reorderable).map((r) => r.id);
+      const notGoals = rows.filter((r) => !r.reorderable).map((r) => r.id);
       expect(notGoals.sort()).toEqual([CHORES_GOAL_ID, G.perf].sort());
 
       // The naive read → write, which is what an agent writes when the only
-      // rule available is "the depth-0 rows": refused.
-      const naive = rows.filter((r) => r.depth === 0).map((r) => r.id);
+      // rule available is "every row in the summary": refused.
+      const naive = rows.map((r) => r.id);
       const naiveRes = await post(`/api/workspaces/${wsId}/goals/reorder`, {
         order: [...naive].reverse(),
         author: PERSON,
@@ -744,7 +657,7 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
 
       // The same gesture written from `reorderable`: accepted, and the board
       // actually moved.
-      const scoped = rows.filter((r) => r.depth === 0 && r.reorderable).map((r) => r.id);
+      const scoped = rows.filter((r) => r.reorderable).map((r) => r.id);
       expect(scoped).toEqual([G.launch, G.docs]);
       const res = await jj<{ changed: boolean; order: string[] }>(
         await post(`/api/workspaces/${wsId}/goals/reorder`, {
@@ -754,25 +667,6 @@ describe('POST /api/workspaces/:id/goals/reorder', () => {
       );
       expect(res.changed).toBe(true);
       expect((await readGoals(wsId)).map((g) => g.id)).toEqual([G.docs, G.launch]);
-    });
-
-    it('the same filter scopes a SUBGOAL reorder from the read alone', async () => {
-      const { wsId, G } = await seedBoardWithBuckets();
-      const rows = await readRows(wsId);
-      const subgoals = rows.filter((r) => r.parent === G.launch && r.reorderable).map((r) => r.id);
-      expect(subgoals).toEqual([G.launchQa, G.launchCopy]);
-      await jj(
-        await post(`/api/workspaces/${wsId}/goals/reorder`, {
-          order: [...subgoals].reverse(),
-          parent: G.launch,
-          author: PERSON,
-        }),
-      );
-      const goals = await readGoals(wsId);
-      expect(goals.find((g) => g.id === G.launch)?.subgoals?.map((s) => s.id)).toEqual([
-        G.launchCopy,
-        G.launchQa,
-      ]);
     });
 
     it('the refusal calls `chores` reserved, not unknown, and says what to send', async () => {
