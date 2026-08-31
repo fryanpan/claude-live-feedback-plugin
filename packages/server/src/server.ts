@@ -4,6 +4,7 @@ import {
   type Anchor,
   type DocMeta,
   type DocType,
+  type ReviewItemJudgement,
   type ReviewPayload,
   type TaskReviewItem,
   type Thread,
@@ -19,6 +20,8 @@ import {
   isEmailLike,
   isReviewItemGated,
   isReviewItemHeld,
+  isReviewPayloadGated,
+  isReviewPayloadHeld,
   judgeReasonSentence,
   latestThreadedQuestion,
   locateReviewItemRange,
@@ -30,6 +33,7 @@ import {
   reviewIdOf,
   reviewItemState,
   reviewPayloadMessage,
+  reviewPayloadVersion,
   suggestOps,
   summaryHash,
 } from '@feedback/core';
@@ -215,6 +219,7 @@ import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
 import {
   HELD_ITEM_DEFAULT_MS,
+  type HeldItemInput,
   type StallVerdict,
   evaluateStalls,
   overdueHeldItems,
@@ -454,10 +459,22 @@ function anchorSnippetText(anchor: Anchor): string | undefined {
  * the Home card, and the comment is not on it.
  */
 function reviewFromBody(
-  raw: unknown,
+  rawIn: unknown,
   text?: string,
 ): { ok: true; review?: ReviewPayload; advice?: string } | { ok: false; error: string } {
-  if (raw === undefined || raw === null) return { ok: true };
+  if (rawIn === undefined || rawIn === null) return { ok: true };
+  // The gate's own verdict is NEVER read off a caller's body. `judge` is
+  // written by `runReviewGate` and restored from the CRDT by
+  // `readReviewPayload`; accepting it here would let any filing clear the
+  // gate with one key — `judge: {verdict: "ok"}` — which is a hole the
+  // ticket form never had, because its verdict lives on a wrapper the
+  // caller cannot address. Dropped silently: a payload carrying it is
+  // almost certainly a peer echoing back an item it read, not an attack,
+  // and refusing would bounce an otherwise honest ask.
+  const raw =
+    typeof rawIn === 'object' && rawIn !== null && 'judge' in (rawIn as Record<string, unknown>)
+      ? (({ judge: _dropped, ...rest }) => rest)(rawIn as Record<string, unknown>)
+      : rawIn;
   const check = checkReviewPayload(raw, { text });
   if (!check.ok) return { ok: false, error: reviewPayloadMessage(check) };
   const advice = reviewGapAdvice(check.gaps);
@@ -1646,6 +1663,55 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
   }
 
+  /**
+   * The comment a just-written declaration landed on.
+   *
+   * The write routes hand back the whole THREAD, not the comment, so the id
+   * the gate addresses has to be recovered from it. Newest-first and matched
+   * on the payload's own identity — a thread can already carry other
+   * declarations, and holding the wrong one would take somebody else's live
+   * ask off the queue.
+   */
+  function commentBearing(thread: Thread, review: ReviewPayload): string | undefined {
+    for (let i = thread.comments.length - 1; i >= 0; i--) {
+      const c = thread.comments[i];
+      if (c?.review === review || (c?.review && c.review.headline === review.headline)) {
+        return c.id;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * File a comment-borne declaration through the gate, then announce it only
+   * if it passed.
+   *
+   * ONE funnel for the routes that can write one — `create_thread`,
+   * `threads/by_find`, `post_reply` — because "judged, then announced, in
+   * that order" is the rule that keeps a held item off every surface at
+   * once. A push whose title is the item's headline says "here is something
+   * to review"; sending it for an item the reader's queue omits is the exact
+   * lie the gate exists to prevent.
+   *
+   * A comment whose id cannot be recovered is announced unjudged, which is
+   * the same fail-open answer every other judge failure gets.
+   */
+  async function gateThreadDeclaration(
+    docId: string,
+    thread: Thread,
+    review: ReviewPayload,
+    author: User,
+  ): Promise<ThreadReviewGate> {
+    const commentId = commentBearing(thread, review);
+    if (commentId === undefined) {
+      announceThreadReview(docId, thread.id, review, author);
+      return { held: false, review };
+    }
+    const gate = await judgeThreadReview(docId, thread.id, commentId, review, author);
+    if (!gate.held) announceThreadReview(docId, thread.id, gate.review, author);
+    return gate;
+  }
+
   /** The same, for a declaration that hangs on a TICKET rather than a
    *  comment. Both land in the reviewer's queue, so both are announced. */
   function announceTaskReview(task: Task, item: TaskReviewItem, author: User): void {
@@ -1658,12 +1724,36 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
   }
 
+  /**
+   * WHERE a held item lives, and therefore how its filer addresses the fix.
+   *
+   * Two surfaces file review items and both are gated, so the hold has to be
+   * able to name either address. A hold whose message points at the wrong
+   * verb is a dead end — the item sits off the queue, the stall loop
+   * complains at five minutes, and the filer cannot comply — which is
+   * exactly the objection that kept the thread path ungated until
+   * `revise_review_item` grew its doc form.
+   */
+  type ReviewGateAddress =
+    | { kind: 'task'; taskId: string; reviewItemId: string }
+    | { kind: 'thread'; docId: string; threadId: string; commentId: string };
+
+  /** The paste-ready call that ends a hold, per surface. One spelling, used by
+   *  the tool result, the filer's wake and the stall report alike — three
+   *  copies of an address is how one of them ends up naming a verb that
+   *  refuses. */
+  function reviseCallFor(address: ReviewGateAddress): string {
+    return address.kind === 'task'
+      ? `revise_review_item(taskId="${address.taskId}", reviewItemId="${address.reviewItemId}")`
+      : `revise_review_item(docId="${address.docId}", threadId="${address.threadId}", commentId="${address.commentId}")`;
+  }
+
   /** What a filing route says when the gate held the item. Points at the
    *  fix rather than only at the verdict: the filer's next act is one call. */
-  function heldMessage(taskId: string, reviewItemId: string, reason: string): string {
+  function heldMessage(address: ReviewGateAddress, reason: string): string {
     return (
       `Held off the reader's queue — ${judgeReasonSentence(reason)} ` +
-      `It is on the ticket; revise it with revise_review_item(taskId="${taskId}", reviewItemId="${reviewItemId}"). ` +
+      `It is on the ${address.kind === 'task' ? 'ticket' : 'thread'}; revise it with ${reviseCallFor(address)}. ` +
       'Every revision is judged again, and the item reaches the queue when it passes.'
     );
   }
@@ -1672,71 +1762,118 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     | { held: false; item: TaskReviewItem }
     | { held: true; item: TaskReviewItem; reason: string; message: string };
 
+  /** The gate's answer for a COMMENT-borne item. Same three facts as
+   *  `ReviewGate`; a bare payload where that one carries the wrapper. */
+  type ThreadReviewGate =
+    | { held: false; review: ReviewPayload }
+    | { held: true; review: ReviewPayload; reason: string; message: string };
+
   /** Process-wide: a judge that throws is named once, not once per filing. */
   let warnedJudgeThrew = false;
 
   /**
-   * Put a filed or revised review item through the quality gate.
+   * One review item as the gate needs to see and write it — the seam that
+   * lets a TICKET item and a COMMENT-borne one run the same gate.
+   *
+   * It exists because "gated" must not become two rules. The gate shipped for
+   * the ticket form alone, and the fleet rule tells every peer to file asks
+   * with `create_thread(review=…)` — so the documented path reached the
+   * reader's queue with the judge called zero times, and the confidence the
+   * gate produced was confidence it had not earned. A second implementation
+   * for the second surface would have re-created that gap one drift at a
+   * time; this way there is one order of operations, one failure policy, and
+   * one shape of hold, and a route only says where the words live.
+   *
+   * `T` is the surface's own row — a `TaskReviewItem` or a bare
+   * `ReviewPayload` — so a caller gets back the thing it already holds.
+   */
+  interface ReviewGateTarget<T> {
+    workspaceId: string;
+    /** How the filer addresses the fix. See `ReviewGateAddress`. */
+    address: ReviewGateAddress;
+    /** The ticket's or the doc's name — what the wake calls the thing the
+     *  item hangs on. */
+    title: string;
+    /** The row as it stands NOW, re-read from the store. `undefined` means it
+     *  has gone. */
+    current: () => T | undefined;
+    words: (row: T) => ReviewPayload;
+    version: (row: T) => number;
+    held: (row: T) => boolean;
+    judgement: (row: T) => ReviewItemJudgement | undefined;
+    /** Conditionally stamp a verdict — refuses on `stale`, on an answered
+     *  row, and on a row that has gone. */
+    record: (
+      judgement: ReviewItemJudgement,
+      opts: { forVersion?: number; forPendingAt?: number },
+    ) => { ok: true; row: T } | { ok: false };
+    /** Whatever the surface must do once a verdict is durable — refresh the
+     *  projection, broadcast, both. Called only on a write that landed. */
+    settled: (row: T) => void;
+  }
+
+  type GateOutcome<T> =
+    | { held: false; row: T }
+    | { held: true; row: T; reason: string; message: string };
+
+  /**
+   * Put a filed or revised review item through the quality gate — the ONE
+   * implementation, whichever surface the item was filed on.
    *
    * ONE call, no retries, and every failure is a pass: no judge configured,
    * a judge that answers `null`, a judge that throws — the item goes through
    * and the record says `unavailable` (Bryan, 2026-08-29: don't refuse; never
    * block on the judge being down). A hold records the verdict on the item,
-   * keeps it off the queue (`review-queue.ts` reads `isReviewItemHeld`), and
-   * wakes the FILER — addressed, the way `review_answered` wakes the lead —
-   * with which item, why, and what to do. The lead is not told here: an
-   * item held for five minutes reaches the lead through the stall loop.
+   * keeps it off the queue (`review-queue.ts` skips a gated row on either
+   * surface), and wakes the FILER — addressed, the way `review_answered`
+   * wakes the lead — with which item, why, and the exact call that lifts it.
+   * The lead is not told here: an item held for five minutes reaches the lead
+   * through the stall loop.
    *
-   * Returns the item as recorded, so a route hands back the verdict it just
+   * Returns the row as recorded, so a route hands back the verdict it just
    * made rather than the pre-judgement row.
    */
-  async function judgeReviewItem(
-    task: Task,
-    item: TaskReviewItem,
+  async function runReviewGate<T>(
+    target: ReviewGateTarget<T>,
+    row: T,
     author: { id: string; name: string; kind?: string },
-  ): Promise<ReviewGate> {
+  ): Promise<GateOutcome<T>> {
     const judge = opts.reviewJudge;
-    const criteria = taskStore.reviewItemCriteria(task.workspaceId);
+    const criteria = taskStore.reviewItemCriteria(target.workspaceId);
     if (!judge || !criteria) {
       // Gate off. An UNHELD item is left unjudged, as before the gate
       // existed. A held one — held by a judge that has since been turned
       // off or lost its key — is released on this revision, or it would
       // stay off the reader's queue with nothing left that could clear it
       // (codex review).
-      if (!isReviewItemHeld(item)) return { held: false, item };
-      const released = taskStore.recordReviewJudgement(
-        task.id,
-        item.id,
+      if (!target.held(row)) return { held: false, row };
+      const released = target.record(
         { at: Date.now(), verdict: 'unavailable', reason: 'the judge is off' },
-        { actor: author },
+        {},
       );
-      if (released.ok) taskProjection.ensureWorkspace(task.workspaceId);
-      return { held: false, item: released.ok ? released.item : item };
+      if (released.ok) target.settled(released.row);
+      return { held: false, row: released.ok ? released.row : row };
     }
     // The words this verdict will be about. A revision landing while the
     // judge is out gets its own call; this one's verdict must not be
     // stamped onto words it never read (codex review).
-    const forVersion = reviewItemVersion(item);
+    const forVersion = target.version(row);
     // Off the queue from THIS moment, not from the verdict: the item is
     // already in the store, and the seconds the judge takes were seconds the
     // reader could see — and answer — an item about to be held (codex
     // review). `pending` is what the queue reads meanwhile; the ticket says
     // nothing about it.
     const pendingAt = Date.now();
-    taskStore.recordReviewJudgement(
-      task.id,
-      item.id,
-      { at: pendingAt, verdict: 'pending', reason: 'being judged' },
-      { actor: author, forVersion },
-    );
+    target.record({ at: pendingAt, verdict: 'pending', reason: 'being judged' }, { forVersion });
+    const words = target.words(row);
     let verdict: ReviewJudgeVerdict | null = null;
     try {
       verdict = await judge({
         criteria: criteria.value,
         item: {
-          headline: item.review.headline,
-          ...(item.review.detail !== undefined ? { detail: item.review.detail } : {}),
-          ...(item.review.options !== undefined ? { options: item.review.options } : {}),
+          headline: words.headline,
+          ...(words.detail !== undefined ? { detail: words.detail } : {}),
+          ...(words.options !== undefined ? { options: words.options } : {}),
         },
       });
     } catch (err) {
@@ -1754,8 +1891,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       verdict === null
         ? { at, verdict: 'unavailable' as const, reason: 'the judge could not answer' }
         : { at, verdict: verdict.ok ? ('ok' as const) : ('held' as const), reason: verdict.reason };
-    const recorded = taskStore.recordReviewJudgement(task.id, item.id, judgement, {
-      actor: author,
+    const recorded = target.record(judgement, {
       forVersion,
       // Also refused if the reader overruled the gate while we were out: a
       // release does not change the item's words, so the version still
@@ -1770,42 +1906,139 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // a hold the newer call just placed (codex review): saying "passed"
     // here would announce to the reader an item the queue still omits.
     if (!recorded.ok) {
-      const current = taskStore.getTask(task.id)?.reviews?.find((r) => r.id === item.id);
-      const read = current ? readTaskReviewItem(current) : undefined;
-      if (read && isReviewItemHeld(read) && read.judge) {
+      const current = target.current();
+      if (current !== undefined && target.held(current)) {
+        const reason = target.judgement(current)?.reason ?? '';
         return {
           held: true,
-          item: read,
-          reason: read.judge.reason,
-          message: heldMessage(task.id, item.id, read.judge.reason),
+          row: current,
+          reason,
+          message: heldMessage(target.address, reason),
         };
       }
-      return { held: false, item: read ?? item };
+      return { held: false, row: current ?? row };
     }
     // The projection carries `judge`, so the card can say "Held: …".
-    taskProjection.ensureWorkspace(task.workspaceId);
-    if (judgement.verdict !== 'held') return { held: false, item: recorded.item };
+    target.settled(recorded.row);
+    if (judgement.verdict !== 'held') return { held: false, row: recorded.row };
+    const address = target.address;
     const frame: ReviewItemHeldFrame = {
       event: REVIEW_ITEM_HELD_EVENT,
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      title: task.title,
-      reviewItemId: item.id,
-      headline: item.review.headline,
+      workspaceId: target.workspaceId,
+      ...(address.kind === 'task'
+        ? { taskId: address.taskId }
+        : { docId: address.docId, threadId: address.threadId, commentId: address.commentId }),
+      revise: reviseCallFor(address),
+      title: target.title,
+      reviewItemId: address.kind === 'task' ? address.reviewItemId : address.commentId,
+      headline: words.headline,
       reason: judgement.reason,
       ts: at,
     };
-    sse.sendToAgent(`ws~${task.workspaceId}`, author.id, { ...frame });
+    sse.sendToAgent(`ws~${target.workspaceId}`, author.id, { ...frame });
     return {
       held: true,
-      item: recorded.item,
+      row: recorded.row,
       reason: judgement.reason,
-      message: heldMessage(task.id, item.id, judgement.reason),
+      message: heldMessage(address, judgement.reason),
     };
   }
 
+  /**
+   * The gate for an item filed on a TICKET — `add_review_item`, a `review`
+   * on `create_tasks`, and every `revise_review_item` that follows.
+   */
+  async function judgeReviewItem(
+    task: Task,
+    item: TaskReviewItem,
+    author: { id: string; name: string; kind?: string },
+  ): Promise<ReviewGate> {
+    const out = await runReviewGate<TaskReviewItem>(
+      {
+        workspaceId: task.workspaceId,
+        address: { kind: 'task', taskId: task.id, reviewItemId: item.id },
+        title: task.title,
+        current: () => {
+          const raw = taskStore.getTask(task.id)?.reviews?.find((r) => r.id === item.id);
+          return raw ? readTaskReviewItem(raw) : undefined;
+        },
+        words: (row) => row.review,
+        version: (row) => reviewItemVersion(row),
+        held: (row) => isReviewItemHeld(row),
+        judgement: (row) => row.judge,
+        record: (judgement, o) => {
+          const res = taskStore.recordReviewJudgement(task.id, item.id, judgement, {
+            actor: author,
+            ...(o.forVersion !== undefined ? { forVersion: o.forVersion } : {}),
+            ...(o.forPendingAt !== undefined ? { forPendingAt: o.forPendingAt } : {}),
+          });
+          return res.ok ? { ok: true, row: res.item } : { ok: false };
+        },
+        settled: () => taskProjection.ensureWorkspace(task.workspaceId),
+      },
+      item,
+      author,
+    );
+    return out.held
+      ? { held: true, item: out.row, reason: out.reason, message: out.message }
+      : { held: false, item: out.row };
+  }
+
+  /**
+   * The gate for an item filed as a `review` payload ON A COMMENT —
+   * `create_thread`, `threads/by_find`, `post_reply`, and the doc form of
+   * `revise_review_item`.
+   *
+   * Identical to the ticket form in every respect a filer can observe: the
+   * same judge, the same criteria, the same fail-open policy, the same
+   * `held` / `heldReason` / `message` on the result, and the same
+   * `workspace.review_item_held` wake. What differs is only the address the
+   * hold names — `revise_review_item(docId=…, threadId=…, commentId=…)`,
+   * which is why this could not be gated until that form existed.
+   *
+   * The item is addressed by `(docId, threadId, commentId)`, the identity the
+   * queue already keys a doc-thread row on.
+   */
+  async function judgeThreadReview(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    review: ReviewPayload,
+    author: User,
+  ): Promise<ThreadReviewGate> {
+    const workspaceId = resolveWorkspaceForDoc(docId);
+    // A doc no board claims has no criteria to judge against and no queue to
+    // be held off. Passing it through is the same answer "gate off" gives.
+    if (!workspaceId) return { held: false, review };
+    const out = await runReviewGate<ReviewPayload>(
+      {
+        workspaceId,
+        address: { kind: 'thread', docId, threadId, commentId },
+        title: reviewThreadContext(docId),
+        current: () =>
+          rooms.getThread(docId, threadId)?.comments.find((c) => c.id === commentId)?.review,
+        words: (row) => row,
+        version: (row) => reviewPayloadVersion(row),
+        held: (row) => isReviewPayloadHeld(row),
+        judgement: (row) => row.judge,
+        record: (judgement, o) => {
+          const res = rooms.judgeCommentReview(docId, threadId, commentId, judgement, o);
+          return res.ok ? { ok: true, row: res.review } : { ok: false };
+        },
+        // Nothing to project: the payload lives in the doc's own CRDT, and
+        // `setCommentReview` has already broadcast it to everyone in the room.
+        settled: () => {},
+      },
+      review,
+      author,
+    );
+    return out.held
+      ? { held: true, review: out.row, reason: out.reason, message: out.message }
+      : { held: false, review: out.row };
+  }
+
   /** The response fields a filing route adds when the gate held the item. */
-  function heldFields(gate: ReviewGate | undefined): Record<string, unknown> {
+  function heldFields(gate: ReviewGate | ThreadReviewGate | undefined): Record<string, unknown> {
     return gate?.held ? { held: true, heldReason: gate.reason, message: gate.message } : {};
   }
 
@@ -2364,7 +2597,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       for (const thread of rooms.listThreads(taskBodyDocId(row.id))) {
         if (thread.lastActivity > newest) newest = thread.lastActivity;
         const declaring = pendingDeclaration(thread);
-        if (declaring) commentAsks.push({ taskId: row.id, askedAt: declaring.ts });
+        // A HELD ask exonerates nothing. The whole point of a hold is that
+        // the reader cannot see the item, so a row sitting behind one is not
+        // legitimately waiting on a person — it is waiting on its own filer
+        // to revise, which is exactly what the loop should keep saying.
+        if (declaring?.review && !isReviewPayloadGated(declaring.review)) {
+          commentAsks.push({ taskId: row.id, askedAt: declaring.ts });
+        }
       }
       // A registered builder's worktree churn is the row moving, exactly as
       // a comment is — the builder works in a checkout the board cannot see,
@@ -2419,6 +2658,68 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     });
   };
   const heldReviewItemMs = opts.heldReviewItemMs ?? HELD_ITEM_DEFAULT_MS;
+  /**
+   * Every COMMENT-borne review item the gate is holding on a board, in the
+   * shape the stall monitor reads.
+   *
+   * The ticket-borne twin (`taskStore.heldReviewItems`) reads one array off
+   * each row; there is no such array here — a comment-borne item lives in its
+   * doc's CRDT — so this walks the same three doc families the queue itself
+   * walks: task bodies, goal bodies, and the workspace's own docs. Bounded by
+   * the board's size and run on the stall tick, the same cadence
+   * `stallVerdict` already pays for.
+   *
+   * Without it a hold on this surface would be silent to the lead: the filer
+   * gets its wake at filing time and nothing would ever complain again, which
+   * is the "held for hours, nobody told" shape the five-minute window exists
+   * to prevent.
+   */
+  function heldThreadReviewItems(workspace: HubWorkspace): HeldItemInput[] {
+    const out: HeldItemInput[] = [];
+    const scan = (docId: string, title: string, taskId?: string) => {
+      for (const thread of rooms.listThreads(docId, { status: 'open' })) {
+        for (const comment of thread.comments) {
+          const review = comment.review;
+          // `held`, not `gated`: a verdict still out is seconds old, and a
+          // complaint about it would fire on every fresh filing.
+          if (!review || !isReviewPayloadHeld(review) || review.judge === undefined) continue;
+          out.push({
+            title,
+            ...(taskId !== undefined ? { taskId } : {}),
+            docId,
+            threadId: thread.id,
+            commentId: comment.id,
+            // The comment IS the item on this surface — see `HeldItemRow`.
+            reviewItemId: comment.id,
+            headline: review.headline,
+            reason: review.judge.reason,
+            heldAt: review.judge.at,
+            filedBy: comment.author.name,
+            ...(comment.author.id ? { filerAgentId: comment.author.id } : {}),
+            revise: reviseCallFor({
+              kind: 'thread',
+              docId,
+              threadId: thread.id,
+              commentId: comment.id,
+            }),
+          });
+        }
+      }
+    };
+    for (const task of taskStore.listTasks(workspace.id)) {
+      if (task.status === 'done') continue;
+      scan(taskBodyDocId(task.id), task.title, task.id);
+    }
+    for (const goal of taskStore.listGoalRows(workspace.id)) {
+      if (goal.status === 'done') continue;
+      scan(taskBodyDocId(goal.id), goal.title);
+    }
+    for (const docId of workspace.docIds) {
+      const meta = rooms.peekMeta(docId);
+      scan(docId, meta?.title || meta?.relPath?.split('/').pop() || docId);
+    }
+    return out;
+  }
   const stallSnapshot = (workspace: HubWorkspace): StallSnapshot => {
     const verdict = stallVerdict(workspace);
     // Review items the quality gate is holding past the window — a fourth
@@ -2426,8 +2727,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // than through the classifier, because a held item is not a row's state:
     // it is an ask that exists on a ticket and on nobody's queue, and the
     // remedy (get the filer to revise) is the filer's, not the row's owner's.
+    //
+    // BOTH surfaces, one list. A hold the lead never hears about is the same
+    // silence whichever verb filed it.
     const held = overdueHeldItems(
-      taskStore.heldReviewItems(workspace.id),
+      [...taskStore.heldReviewItems(workspace.id), ...heldThreadReviewItems(workspace)],
       Date.now(),
       heldReviewItemMs,
     );
@@ -9024,13 +9328,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   ...(declared.review ? { review: declared.review } : {}),
                 });
               }
-              if (t && declared.review) announceThreadReview(docId, t.id, declared.review, user);
+              // The quality gate, on the same terms the ticket form gets: the
+              // reply that DECLARES an ask is judged before anything says the
+              // reader can see it. This is the path `.claude/rules` tells the
+              // whole fleet to file asks on, so leaving it ungated meant the
+              // gate covered the road nobody drives.
+              const replyGate =
+                t && declared.review
+                  ? await gateThreadDeclaration(docId, t, declared.review, user)
+                  : undefined;
               const handoff = threadUrl(docId, Boolean(visitor));
               return t
                 ? j(200, {
-                    thread: t,
+                    thread: rooms.getThread(docId, t.id) ?? t,
                     ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
                     ...(handoff ? { threadUrl: handoff } : {}),
+                    ...heldFields(replyGate),
                   })
                 : j(404, { error: 'thread not found' });
             }
@@ -9108,11 +9421,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   ...(res.message !== undefined ? { message: res.message } : {}),
                 });
               }
+              // Re-judged on every revision, exactly as the ticket form is:
+              // the verdict was about the old words. Without this a hold on
+              // this surface would be a dead end — the filer's one remedy
+              // would leave the item held for words the judge never read.
+              const gate = await judgeThreadReview(docId, threadId, commentId, res.review, user);
               // Watchers hear a revision the same way they hear the original
               // ask: the item changed, and anyone holding the old words is
-              // holding words the reader can no longer see.
-              announceThreadReview(docId, threadId, res.review, user);
-              return j(200, { thread: res.thread, review: res.review });
+              // holding words the reader can no longer see. Not while it is
+              // held, though — a held item is on nobody's queue, so nothing
+              // may buzz a phone claiming it is.
+              if (!gate.held) announceThreadReview(docId, threadId, gate.review, user);
+              return j(200, {
+                thread: rooms.getThread(docId, threadId) ?? res.thread,
+                review: gate.review,
+                ...heldFields(gate),
+              });
             }
             // Taking the ASK back — the asker's exit, as opposed to /answer
             // (the reader's) and /revise (a correction that keeps asking).
@@ -9157,7 +9481,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // buzz their phone with the exact ask that was just taken off
               // their queue. Reinstating does put an ask in front of them
               // again, and that is worth telling them about.
-              if (threadRest === '/withdraw/undo') {
+              // …unless the gate is still holding it. Reinstating restores an
+              // item's standing, not its verdict: the words never changed, so
+              // the hold placed on them stands and the queue still omits it.
+              if (threadRest === '/withdraw/undo' && !isReviewPayloadHeld(res.review)) {
                 announceThreadReview(docId, threadId, res.review, user);
               }
               return j(200, { thread: res.thread, review: res.review });
@@ -9424,6 +9751,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // arrive while it is in flight — the write AND the review-item
             // side effects it triggers, so a concurrent repeat never fires
             // `requestMoreInfoOnReview` a second time either.
+            let gate: ThreadReviewGate | undefined;
             const { value: t } = await threadRequestDedup.dedupe(
               docId,
               requestId,
@@ -9444,7 +9772,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   if (asked.ok) taskProjection.ensureWorkspace(asked.task.workspaceId);
                 }
                 if (created && declared.review) {
-                  announceThreadReview(docId, created.id, declared.review, user);
+                  // Judged before it is announced, and before this route
+                  // answers — see `gateThreadDeclaration`. Inside the dedupe
+                  // closure so a duplicated request cannot spend a second
+                  // judge call on one filing.
+                  gate = await gateThreadDeclaration(docId, created, declared.review, user);
                 }
                 return created;
               },
@@ -9452,9 +9784,10 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const handoff = threadUrl(docId, Boolean(visitor));
             return t
               ? j(200, {
-                  thread: t,
+                  thread: rooms.getThread(docId, t.id) ?? t,
                   ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
                   ...(handoff ? { threadUrl: handoff } : {}),
+                  ...heldFields(gate),
                 })
               : j(500, { error: 'could not create thread' });
           }
@@ -9482,15 +9815,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // Visitor-authored text becomes the entire prompt on this route.
               { generate: !visitor, ...(declared.review ? { review: declared.review } : {}) },
             );
-            if (res.ok && declared.review) {
-              announceThreadReview(docId, res.thread.id, declared.review, author);
-            }
+            const findGate =
+              res.ok && declared.review
+                ? await gateThreadDeclaration(docId, res.thread, declared.review, author)
+                : undefined;
             const findHandoff = threadUrl(docId, Boolean(visitor));
             return res.ok
               ? j(200, {
-                  thread: res.thread,
+                  thread: rooms.getThread(docId, res.thread.id) ?? res.thread,
                   ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
                   ...(findHandoff ? { threadUrl: findHandoff } : {}),
+                  ...heldFields(findGate),
                 })
               : j(409, res);
           }
