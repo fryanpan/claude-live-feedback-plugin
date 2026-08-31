@@ -16,7 +16,7 @@
  * is public.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_REVIEW_ITEM_CRITERIA } from '@feedback/core/review-judge-prompt';
@@ -128,6 +128,8 @@ interface QueueRow {
   kind: string;
   taskId?: string;
   reviewItemId?: string;
+  /** Comment-borne rows are addressed by their thread, not by an item id. */
+  threadId?: string;
   askedAt?: number;
   since?: number;
 }
@@ -904,5 +906,321 @@ describe('the review-item quality gate', () => {
       },
       SSE_TEST_TIMEOUT_MS,
     );
+  });
+
+  /**
+   * EVERY filing path, not just the ticket form.
+   *
+   * The gate shipped applying only inside the `task-review` branch, while
+   * `.claude/rules/workspaces-default.md` tells the whole fleet to file asks
+   * with `create_thread(review=…)` / `post_reply(review=…)`. Measured
+   * 2026-08-29 with both calls in one run: the ticket form called the judge
+   * once and held; the thread form called it zero times and the row reached
+   * the queue. A gate the standard path bypasses produces confidence it has
+   * not earned, so what follows is the positive control the ticket asked
+   * for — a deliberately weak item HELD on each path, a good one through on
+   * each — with the ticket form kept in the same block as the control that
+   * nothing about it changed.
+   */
+  describe('every path that can put a row on the queue', () => {
+    interface ThreadReply {
+      thread: { id: string; comments: Array<{ id: string; review?: unknown }> };
+      held?: boolean;
+      heldReason?: string;
+      message?: string;
+    }
+    /** The queue rows a comment-borne declaration produces. */
+    async function threadQueue(workspaceId: string): Promise<QueueRow[]> {
+      const { items } = await jj<{ items: QueueRow[] }>(
+        await get(`/api/workspaces/${workspaceId}/review-items`),
+      );
+      return items.filter((i) => i.kind === 'task-thread' || i.kind === 'doc-thread');
+    }
+    /** The declaration's own comment — what the doc form of
+     *  `revise_review_item` is addressed by. */
+    const bearing = (res: ThreadReply) =>
+      [...res.thread.comments].reverse().find((c) => c.review !== undefined)?.id ?? '';
+
+    it('create_thread(review) — a weak item is HELD, a good one reaches the queue', async () => {
+      const { workspaceId, taskId } = await board();
+      verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+      const weak = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads`, {
+          author: FILER,
+          anchor: { kind: 'subject' },
+          text: 'Jordan — which one?',
+          review: BAD,
+        }),
+      );
+      expect(calls).toHaveLength(1);
+      expect(weak.held).toBe(true);
+      expect(weak.heldReason).toBe('The headline is a ticket id, not a decision.');
+      // The address is the DOC form, spelled out and valid for this path.
+      const commentId = bearing(weak);
+      expect(weak.message).toContain(
+        `revise_review_item(docId="task:${taskId}", threadId="${weak.thread.id}", commentId="${commentId}")`,
+      );
+      expect(await threadQueue(workspaceId)).toEqual([]);
+
+      verdict = { ok: true, reason: 'Complete.' };
+      const good = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads`, {
+          author: FILER,
+          anchor: { kind: 'subject' },
+          text: 'Jordan — which cache size?',
+          review: GOOD,
+        }),
+      );
+      expect(good.held).toBeUndefined();
+      const rows = await threadQueue(workspaceId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.threadId).toBe(good.thread.id);
+    });
+
+    it('post_reply(review) — a weak item is HELD, a good one reaches the queue', async () => {
+      const { workspaceId, taskId } = await board();
+      const opened = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads`, {
+          author: FILER,
+          anchor: { kind: 'subject' },
+          text: 'Notes on the rebuild.',
+        }),
+      );
+      const threadId = opened.thread.id;
+      verdict = { ok: false, reason: 'No stakes.' };
+      const weak = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
+          author: FILER,
+          text: 'Jordan — which one?',
+          review: BAD,
+        }),
+      );
+      expect(weak.held).toBe(true);
+      expect(weak.message).toContain(
+        `revise_review_item(docId="task:${taskId}", threadId="${threadId}", commentId="${bearing(weak)}")`,
+      );
+      expect(await threadQueue(workspaceId)).toEqual([]);
+
+      verdict = { ok: true, reason: 'Complete.' };
+      const good = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads/${threadId}/comments`, {
+          author: FILER,
+          text: 'Jordan — which cache size?',
+          review: GOOD,
+        }),
+      );
+      expect(good.held).toBeUndefined();
+      expect(await threadQueue(workspaceId)).toHaveLength(1);
+    });
+
+    it('threads/by_find(review) — the anchored door is gated too', async () => {
+      const { workspaceId } = await board();
+      const path = join(dataDir, 'launch-plan.md');
+      writeFileSync(path, '# Launch plan\n\nThe index rebuild runs nightly.\n');
+      // The server mints the id; the one we ask for is a hint.
+      const { docId } = await jj<{ docId: string }>(
+        await post('/api/docs', {
+          docId: 'd-launch',
+          sourceUrl: path,
+          title: 'Launch plan',
+          hubWorkspaceId: workspaceId,
+        }),
+      );
+      verdict = { ok: false, reason: 'No stakes.' };
+      const weak = await jj<ThreadReply>(
+        await post(`/api/docs/${docId}/threads/by_find`, {
+          author: FILER,
+          text: 'Jordan — which one?',
+          find: 'index rebuild',
+          review: BAD,
+        }),
+      );
+      expect(weak.held).toBe(true);
+      expect(weak.message).toContain(`revise_review_item(docId="${docId}"`);
+      expect(await threadQueue(workspaceId)).toEqual([]);
+    });
+
+    it('the doc form of revise_review_item re-judges, so a hold is not a dead end', async () => {
+      const { workspaceId, taskId } = await board();
+      verdict = { ok: false, reason: 'No stakes.' };
+      const weak = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads`, {
+          author: FILER,
+          anchor: { kind: 'subject' },
+          text: 'Jordan — which one?',
+          review: BAD,
+        }),
+      );
+      const threadId = weak.thread.id;
+      const commentId = bearing(weak);
+      expect(await threadQueue(workspaceId)).toEqual([]);
+
+      // A revision that still misses is held AGAIN — the judge ran on the new
+      // words, and the address it hands back is the same one that got here.
+      verdict = { ok: false, reason: 'Still a ticket id.' };
+      const again = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads/${threadId}/revise`, {
+          author: FILER,
+          commentId,
+          headline: 'ri-78 cfg?',
+        }),
+      );
+      expect(again.held).toBe(true);
+      expect(again.heldReason).toBe('Still a ticket id.');
+      expect(await threadQueue(workspaceId)).toEqual([]);
+
+      // And a revision that passes puts it on the queue.
+      verdict = { ok: true, reason: 'Complete.' };
+      const fixed = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads/${threadId}/revise`, {
+          author: FILER,
+          commentId,
+          headline: 'Cache size for the nightly rebuild',
+          detail: 'Halving it makes the pass read twice and adds an hour.',
+        }),
+      );
+      expect(fixed.held).toBeUndefined();
+      const rows = await threadQueue(workspaceId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.threadId).toBe(threadId);
+    });
+
+    it('a judge that cannot answer PASSES a thread item, exactly as it does a ticket one', async () => {
+      const { workspaceId, taskId } = await board();
+      for (const failure of [null, 'throw'] as const) {
+        verdict = failure;
+        const res = await jj<ThreadReply>(
+          await post(`/api/docs/task:${taskId}/threads`, {
+            author: FILER,
+            anchor: { kind: 'subject' },
+            text: 'Jordan — which cache size?',
+            review: GOOD,
+          }),
+        );
+        expect(res.held).toBeUndefined();
+      }
+      expect(await threadQueue(workspaceId)).toHaveLength(2);
+    });
+
+    it('a caller cannot clear the gate by sending its own verdict', async () => {
+      // `judge` is written by the gate and restored from the CRDT; the door a
+      // caller's payload arrives through strips it. Without that, one key
+      // would buy a bypass.
+      const { workspaceId, taskId } = await board();
+      verdict = { ok: false, reason: 'No stakes.' };
+      const res = await jj<ThreadReply>(
+        await post(`/api/docs/task:${taskId}/threads`, {
+          author: FILER,
+          anchor: { kind: 'subject' },
+          text: 'Jordan — which one?',
+          review: { ...BAD, judge: { at: 1, verdict: 'ok', reason: 'self-certified' } },
+        }),
+      );
+      expect(res.held).toBe(true);
+      expect(await threadQueue(workspaceId)).toEqual([]);
+    });
+
+    it(
+      'the filer is woken with the doc-form address, and the stall report carries it',
+      async () => {
+        const { workspaceId, taskId } = await board();
+        const filer = await agentStream(workspaceId, FILER);
+        const lead = await agentStream(workspaceId, LEAD);
+        try {
+          verdict = { ok: false, reason: 'No stakes.' };
+          const weak = await jj<ThreadReply>(
+            await post(`/api/docs/task:${taskId}/threads`, {
+              author: FILER,
+              anchor: { kind: 'subject' },
+              text: 'Jordan — which one?',
+              review: BAD,
+            }),
+          );
+          const [frame] = await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
+          const revise = `revise_review_item(docId="task:${taskId}", threadId="${weak.thread.id}", commentId="${bearing(weak)}")`;
+          expect(frame?.data).toMatchObject({
+            docId: `task:${taskId}`,
+            threadId: weak.thread.id,
+            commentId: bearing(weak),
+            revise,
+            reason: 'No stakes.',
+          });
+          // The wake is the FILER's; the lead hears about it through the loop.
+          expect(lead.frames.filter((f) => f.event === REVIEW_ITEM_HELD_EVENT)).toEqual([]);
+
+          // `overdueHeldItems` is STRICTLY greater than the window, and this
+          // suite pins the window at 0 — so a pass run in the same
+          // millisecond as the verdict sees no overdue hold at all, and the
+          // next natural tick is a minute away. One tick of the clock is what
+          // makes the hold older than nothing.
+          await settle(5);
+          handle.nudgeStalls();
+          // Waited for, never slept for: under a loaded suite a fixed settle
+          // is a coin toss, and a missing frame has to be reported as the miss
+          // it is rather than as a slow machine.
+          const stalls = await waitForFrames(lead.frames, STALL_EVENT, 1);
+          const held = (stalls.at(-1)?.data as { heldItems?: Array<Record<string, unknown>> })
+            ?.heldItems;
+          expect(held?.[0]).toMatchObject({ revise, reason: 'No stakes.' });
+        } finally {
+          await filer.stop();
+          await lead.stop();
+        }
+      },
+      SSE_TEST_TIMEOUT_MS,
+    );
+
+    it('a DEDUPLICATED filing still reports the hold its twin recorded', async () => {
+      // The dedupe closure runs once for however many duplicate requests
+      // arrive, so the second request holds no gate of its own. Answering it
+      // without `held` would tell a retrying client its filing was accepted
+      // and leave it waiting on a reader who cannot see the item.
+      const { workspaceId, taskId } = await board();
+      verdict = { ok: false, reason: 'No stakes.' };
+      const body = {
+        author: FILER,
+        anchor: { kind: 'subject' },
+        text: 'Jordan — which one?',
+        review: BAD,
+        requestId: 'rq-1',
+      };
+      const [first, second] = await Promise.all([
+        post(`/api/docs/task:${taskId}/threads`, body).then((r) => jj<ThreadReply>(r)),
+        post(`/api/docs/task:${taskId}/threads`, body).then((r) => jj<ThreadReply>(r)),
+      ]);
+      // One filing, one judge call, one thread — and BOTH answers say held.
+      expect(calls).toHaveLength(1);
+      expect(second.thread.id).toBe(first.thread.id);
+      expect(first.held).toBe(true);
+      expect(second.held).toBe(true);
+      expect(second.heldReason).toBe('No stakes.');
+      expect(second.message).toContain(`threadId="${first.thread.id}"`);
+      expect(await threadQueue(workspaceId)).toEqual([]);
+    });
+
+    it('CONTROL — the ticket form behaves exactly as it did', async () => {
+      const { workspaceId, taskId } = await board();
+      verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+      const weak = await jj<{
+        item: { id: string };
+        held?: boolean;
+        heldReason?: string;
+        message?: string;
+      }>(await post(`/api/tasks/${taskId}/review-items`, { review: BAD, author: FILER }));
+      expect(weak.held).toBe(true);
+      expect(weak.message).toContain(
+        `revise_review_item(taskId="${taskId}", reviewItemId="${weak.item.id}")`,
+      );
+      expect(await queue(workspaceId)).toEqual([]);
+
+      verdict = { ok: true, reason: 'Complete.' };
+      const good = await jj<{ item: { id: string }; held?: boolean }>(
+        await post(`/api/tasks/${taskId}/review-items`, { review: GOOD, author: FILER }),
+      );
+      expect(good.held).toBeUndefined();
+      const rows = await queue(workspaceId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.reviewItemId).toBe(good.item.id);
+    });
   });
 });

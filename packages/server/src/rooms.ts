@@ -15,6 +15,7 @@ import {
   type DocMeta,
   type DocType,
   type ReviewAnswerUndone,
+  type ReviewItemJudgement,
   type ReviewPayload,
   type Thread,
   type User,
@@ -30,6 +31,7 @@ import {
   reinstateReview,
   reviewAnswered,
   reviewIdOf,
+  reviewPayloadVersion,
   postReply as schemaPostReply,
   replaceAnchor as schemaReplaceAnchor,
   setStatus as schemaSetStatus,
@@ -2050,6 +2052,67 @@ export class Rooms {
       };
     }
     const review = withRevision(applied.next, applied.previous);
+    if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
+      // The comment went between the read and the write — a race, not an
+      // error the caller did anything to cause.
+      return { ok: false, error: 'not-a-review-item' };
+    }
+    const after = this.getThread(docId, threadId);
+    return after ? { ok: true, review, thread: after } : { ok: false, error: 'not-a-review-item' };
+  }
+
+  /**
+   * Record the quality gate's verdict on a review item raised on a COMMENT.
+   *
+   * The doc-side twin of `TaskStore.recordReviewJudgement`, with the same two
+   * conditional writes and for the same reasons — a judge call is an await,
+   * and the words it was about can move underneath it:
+   *
+   *  - `forVersion` is the payload's revision count as it stood when the
+   *    judge was asked. A revision that landed meanwhile makes this verdict
+   *    stale; the revision's own call is the one that stands.
+   *  - `forPendingAt` is the `pending` stamp this caller placed before it
+   *    asked. Only its own stamp may be replaced — otherwise a slow verdict
+   *    could re-hold an item somebody had already released, which changes no
+   *    words and so slips past `forVersion` alone.
+   *
+   * An ANSWERED item is refused outright: a person has acted on those words,
+   * and a hold placed after the fact would take an answered question off a
+   * queue it has already left.
+   *
+   * Read and written in one synchronous stretch, the reason `answerReview`
+   * gives — the caller's read is an await away from being stale, and this is
+   * the layer that knows what is stored.
+   */
+  judgeCommentReview(
+    docId: string,
+    threadId: string,
+    commentId: string,
+    judgement: ReviewItemJudgement,
+    opts: { forVersion?: number; forPendingAt?: number } = {},
+  ):
+    | { ok: true; review: ReviewPayload; thread: Thread }
+    | { ok: false; error: 'no-doc' | 'not-a-review-item' | 'answered' | 'stale' } {
+    const room = this.rooms.get(docId);
+    if (!room) return { ok: false, error: 'no-doc' };
+    const thread = this.getThread(docId, threadId);
+    const target = thread?.comments.find((c) => c.id === commentId);
+    if (!target?.review) return { ok: false, error: 'not-a-review-item' };
+    const current = target.review;
+    if (reviewAnswered(current)) return { ok: false, error: 'answered' };
+    if (opts.forVersion !== undefined && reviewPayloadVersion(current) !== opts.forVersion) {
+      return { ok: false, error: 'stale' };
+    }
+    if (
+      opts.forPendingAt !== undefined &&
+      (current.judge?.verdict !== 'pending' || current.judge.at !== opts.forPendingAt)
+    ) {
+      return { ok: false, error: 'stale' };
+    }
+    const review: ReviewPayload = {
+      ...current,
+      judge: { at: judgement.at, verdict: judgement.verdict, reason: judgement.reason },
+    };
     if (!setCommentReview(room.ydoc, threadId, commentId, review)) {
       // The comment went between the read and the write — a race, not an
       // error the caller did anything to cause.

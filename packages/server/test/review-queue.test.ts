@@ -1285,3 +1285,93 @@ describe('reviewItemRows — one queue, one order', () => {
     expect(after).toEqual(before);
   });
 });
+
+describe('reviewThreadItems — the quality gate, on a comment-borne item', () => {
+  const source = (map: Record<string, Thread[]>) => ({
+    threadsOf: (docId: string) => map[docId] ?? [],
+  });
+  const declared = (over: Partial<ReviewPayload> = {}): ReviewPayload => ({
+    shape: 'decision',
+    headline: 'Cache size for the nightly rebuild',
+    detail: 'A full pass reads the index once.',
+    ...over,
+  });
+  const rowsFor = (review: ReviewPayload) =>
+    reviewThreadItems({
+      tasks: [{ id: 'tk-1', title: 'Rebuild the index', bodyDocId: 'task:tk-1' }],
+      docs: [],
+      source: source({
+        'task:tk-1': [
+          thread({
+            id: 'th-a',
+            comments: [comment({ text: 'Jordan — which cache size?', ts: T0 + 20, review })],
+          }),
+        ],
+      }),
+    });
+
+  it('a passing item is on the queue, exactly as before the gate existed', () => {
+    for (const verdict of ['ok', 'unavailable'] as const) {
+      const rows = rowsFor(declared({ judge: { at: T0, verdict, reason: 'fine' } }));
+      expect(rows.map((r) => r.threadId)).toEqual(['th-a']);
+      expect(rows[0]?.band).toBe('declared');
+    }
+    // Never judged — a board with no judge, or an item filed before the gate.
+    expect(rowsFor(declared()).map((r) => r.threadId)).toEqual(['th-a']);
+  });
+
+  it('a HELD item is off the queue, and so is one still being judged', () => {
+    for (const verdict of ['held', 'pending'] as const) {
+      expect(rowsFor(declared({ judge: { at: T0, verdict, reason: 'No stakes.' } }))).toEqual([]);
+    }
+  });
+
+  it('a held item cannot come back as an unreplied row on its own prose', () => {
+    // The regression this guards: the held comment addresses Jordan by name,
+    // so the `unreplied` heuristic would re-emit the same words under a
+    // different band and the hold would mean nothing.
+    const rows = rowsFor(declared({ judge: { at: T0, verdict: 'held', reason: 'No stakes.' } }));
+    expect(rows).toEqual([]);
+  });
+
+  it('a held ask does not silence an unrelated question on the same thread', () => {
+    const rows = reviewThreadItems({
+      tasks: [{ id: 'tk-1', title: 'Rebuild the index', bodyDocId: 'task:tk-1' }],
+      docs: [],
+      source: source({
+        'task:tk-1': [
+          thread({
+            id: 'th-a',
+            comments: [
+              comment({ kind: 'person', text: 'have a look', ts: T0 }),
+              comment({ text: 'Jordan — should we ship on Friday?', ts: T0 + 10 }),
+              comment({
+                text: 'Jordan — which cache size?',
+                ts: T0 + 20,
+                review: declared({ judge: { at: T0, verdict: 'held', reason: 'No stakes.' } }),
+              }),
+            ],
+          }),
+        ],
+      }),
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      band: 'unreplied',
+      ask: 'Jordan — should we ship on Friday?',
+    });
+  });
+
+  it('an ANSWERED item is never held off the queue by an old verdict', () => {
+    // It leaves the queue for being answered, not for being held — and
+    // `pendingDeclaration` is what takes it out, so the assertion is that a
+    // held verdict on answered words changes nothing about that.
+    const answered = declared({
+      judge: { at: T0, verdict: 'held', reason: 'No stakes.' },
+      answeredAt: T0 + 30,
+      answeredBy: 'Jordan',
+      answerText: 'Keep it',
+    });
+    expect(rowsFor(answered)).toEqual([]);
+  });
+});
