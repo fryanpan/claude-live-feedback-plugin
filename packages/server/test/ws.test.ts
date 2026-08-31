@@ -97,7 +97,7 @@ describe('ws sync', () => {
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'feedback-ws-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     wsBase = `ws://localhost:${handle.port}`;
     restBase = `http://localhost:${handle.port}`;
   });

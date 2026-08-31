@@ -98,6 +98,7 @@ describe('expired shares lose their sockets', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'share-expiry-'));
     writeFileSync(join(dataDir, 'notes.md'), '# Notes\n\nBody.\n');
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       share: { config: { publicHostname: PUBLIC_HOST } },

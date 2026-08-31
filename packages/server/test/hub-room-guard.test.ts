@@ -120,7 +120,7 @@ describe('hub rooms defend everything the server owns', () => {
   const restart = async () => {
     await settle(600); // let the debounced .ydoc + sidecar writes land
     await handle.stop();
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
   };
@@ -141,7 +141,7 @@ describe('hub rooms defend everything the server owns', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'hub-guard-'));
     secretPath = join(dataDir, 'private-notes.md');
     writeFileSync(secretPath, CANARY);
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
   });

@@ -77,7 +77,7 @@ describe('the group-bind MCP tools file the review on a board, through the real 
     repoBase = git(repo, 'rev-parse', 'HEAD');
     writeFileSync(join(repo, 'src', 'a.ts'), 'const a = 2;\n');
 
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
 
     child = spawn('node', [BUNDLE], {
       env: {

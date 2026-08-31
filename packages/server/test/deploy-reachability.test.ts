@@ -122,6 +122,7 @@ describe('POST /api/deploy over a real socket', () => {
     runs.n = 0;
     dataDir = mkdtempSync(join(tmpdir(), 'deploy-reach-'));
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       // Whatever address the probe connects FROM is a trusted local host as

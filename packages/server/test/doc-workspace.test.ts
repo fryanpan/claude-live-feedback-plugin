@@ -58,7 +58,7 @@ describe('a doc always lands in a workspace', () => {
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-workspace-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   });
 
@@ -263,7 +263,7 @@ describe('docs that predate the rule stay reachable', () => {
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'doc-legacy-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     // The gate lives in the route, so going straight at Rooms produces the
     // shape a doc persisted before this rule has: meta with no workspaceId.

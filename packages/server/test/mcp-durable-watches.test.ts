@@ -201,7 +201,7 @@ describe('watches survive an MCP child respawn (through the real bundle)', () =>
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-durable-watches-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     // Created under readable names; every assertion below speaks the ids the
     // server minted back.
@@ -524,7 +524,7 @@ describe('a declared lead comes back live after a respawn', () => {
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-declared-lead-'));
-    handle = createServer({ port: 0, dataDir, heartbeatFreshMs: 1_000 });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir, heartbeatFreshMs: 1_000 });
     base = `http://localhost:${handle.port}`;
   });
 
@@ -731,7 +731,7 @@ describe('a restore that could not reach the server fails loudly, then recovers'
     // half needs the same origin to come back, because the child reads
     // FEEDBACK_BASE_URL once at spawn and a re-spawn is not what is being
     // measured here.
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     port = handle.port;
     base = `http://localhost:${port}`;
     freshBase = `http://127.0.0.1:${port}`;
@@ -814,7 +814,7 @@ describe('a restore that could not reach the server fails loudly, then recovers'
 
     // Bring the same origin back, over the same data dir — so the set the
     // first child persisted is there to be restored.
-    handle = createServer({ port, dataDir });
+    handle = createServer({ dedicatedListener: true, port, dataDir });
     expect(handle.port).toBe(port);
     expect(handle.agentWatches.list(AGENT_ID, () => true).watches.map((x) => x.key)).toEqual([
       mintedId,

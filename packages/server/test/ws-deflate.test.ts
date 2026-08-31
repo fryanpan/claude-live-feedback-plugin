@@ -31,7 +31,7 @@ let handle: ServerHandle;
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'cw-ws-deflate-'));
-  handle = createServer({ port: 0, dataDir });
+  handle = createServer({ dedicatedListener: true, port: 0, dataDir });
 });
 
 afterEach(async () => {

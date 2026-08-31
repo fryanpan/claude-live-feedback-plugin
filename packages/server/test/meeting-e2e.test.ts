@@ -153,6 +153,7 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-e2e-'));
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       transcription: createMockTranscriptionEngine(SCRIPT),
