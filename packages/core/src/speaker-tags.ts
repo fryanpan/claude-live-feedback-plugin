@@ -29,6 +29,16 @@
  * - **Reassignment is one attribute.** Moving a turn diarization gave to the
  *   wrong voice is a change of href, in place, and the words never move.
  *
+ * THE HREF ALSO SAYS WHERE THE WORDS CAME FROM — `speaker:B?t=10,12`. A
+ * rename is a fact about a VOICE and the label answers it; the engine's own
+ * late correction is a fact about a TURN ("turn 12 was not B after all"), and
+ * a bare label cannot say which of B's sentences a mention was written from.
+ * So the tick stamps each mention it composes with that voice's turns in it,
+ * and `reattributeSpeakerTags` moves exactly the mentions whose every turn
+ * moved the same way — marking the ones it cannot place rather than guessing.
+ * A mention a PERSON reassigned carries no provenance, which is what keeps a
+ * later engine pass off an answer a human already gave.
+ *
  * A TAG IS NOT EVIDENCE, IT IS A CLAIM THE MODEL MAKES. The composer is an
  * LLM, so `normalizeSpeakerTags` is the deterministic gate every composed
  * section passes through before it reaches a doc: a tag naming a voice the
@@ -48,6 +58,90 @@ import { speakerDisplayName } from './meeting.ts';
 export const SPEAKER_TAG_SCHEME = 'speaker:';
 
 /**
+ * The href parameter carrying the TURNS a mention was composed from —
+ * `speaker:B?t=10,12`.
+ *
+ * WHY A MENTION NEEDS MORE THAN A LABEL. The engine changes its mind about
+ * who spoke: a `SpeakerRevision` arrives at the end of a session naming turns
+ * the whole-session pass relabelled. A rename ("B is Devi") is a fact about a
+ * VOICE and the label alone answers it, which is why the label was enough
+ * until now. A revision is a fact about a TURN — "turn 12 was not B after
+ * all" — and a mention tagged `speaker:B` cannot say whether it came from
+ * turn 12 or from the other thing B said in the same breath. So the tick
+ * stamps every mention it composes with the turns of that voice that were in
+ * it, and the correction becomes provable instead of guessed.
+ *
+ * Stamped by the SERVER, never by the composer. Same law as the name itself:
+ * the model's job is to say which voice, and the deterministic pass supplies
+ * everything a later correction has to trust.
+ */
+export const SPEAKER_TAG_TURNS_PARAM = 't';
+
+/**
+ * The href parameter marking a mention the engine's revision TOUCHED and
+ * could not place — `speaker:B?t=10,12&unsure=1`.
+ *
+ * It is set when the turns behind a mention stopped agreeing: turn 10 is
+ * still B and turn 12 is now C, so the mention is one of them and nothing in
+ * the notes says which. Rewriting it would be a coin flip and leaving it
+ * silent would be a claim the meeting can no longer make, so the claim stays
+ * and is marked — the reader is told the attribution is in doubt, and the
+ * transcript still says exactly who said what.
+ *
+ * A person reassigning the mention writes a bare `speaker:<label>`, which
+ * clears both parameters: their answer is not a guess and no later revision
+ * gets to revisit it.
+ */
+export const SPEAKER_TAG_UNSURE_PARAM = 'unsure';
+
+/**
+ * The most turns a single mention is stamped with.
+ *
+ * A tick's turns for one voice are a handful; the cap exists for the tick
+ * that carries a long `carry` after failed composes. Past it the mention is
+ * stamped with NOTHING, which reads as "no handle" and leaves it untouched
+ * by any later revision — the safe direction, and honest: a mention that
+ * could have come from thirty turns is not one a revision can place.
+ */
+export const MAX_SPEAKER_TAG_TURNS = 12;
+
+/** What a speaker tag's href says: which voice, and which turns behind it. */
+export interface SpeakerTagRef {
+  /** The engine label — the voice's identity, and the only required half. */
+  label: string;
+  /** Turn ids this mention could have been composed from, ascending. Empty
+   *  when nothing stamped one, which is a mention no revision can place. */
+  turns: readonly number[];
+  /** A revision moved some of `turns` and not others, so which voice this
+   *  mention belongs to is no longer known. */
+  unsure: boolean;
+}
+
+/** Turn ids as the href carries them: ascending, deduped, whole and
+ *  non-negative. A list with anything else in it is not trusted at all —
+ *  a mention with unreadable provenance is one with none. */
+function parseTurnList(raw: string): number[] {
+  const out = new Set<number>();
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim();
+    if (!/^\d+$/.test(trimmed)) return [];
+    out.add(Number(trimmed));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+function normalizeTurns(turns: readonly number[] | undefined): number[] {
+  if (!turns || turns.length === 0) return [];
+  const out = new Set<number>();
+  for (const turn of turns) {
+    if (!Number.isInteger(turn) || turn < 0) return [];
+    out.add(turn);
+  }
+  if (out.size > MAX_SPEAKER_TAG_TURNS) return [];
+  return [...out].sort((a, b) => a - b);
+}
+
+/**
  * The character that opens a tag's visible text. Not decoration: it is what
  * tells a reader of the raw markdown — and a reader of the flushed .md file,
  * where nothing renders a chip — that "Devi" here is an attribution and not
@@ -55,20 +149,60 @@ export const SPEAKER_TAG_SCHEME = 'speaker:';
  */
 export const SPEAKER_TAG_SIGIL = '@';
 
-/** `"B"` → `"speaker:B"`. */
-export function speakerTagHref(label: string): string {
-  return `${SPEAKER_TAG_SCHEME}${label}`;
+/** What to stamp beside the label. Omitted entirely by every path where a
+ *  PERSON decides the attribution — see {@link SPEAKER_TAG_UNSURE_PARAM}. */
+export interface SpeakerTagRefInit {
+  turns?: readonly number[];
+  unsure?: boolean;
+}
+
+/** `"B"` → `"speaker:B"`, and `"B"` plus turns → `"speaker:B?t=10,12"`. */
+export function speakerTagHref(label: string, ref?: SpeakerTagRefInit): string {
+  const turns = normalizeTurns(ref?.turns);
+  const params: string[] = [];
+  if (turns.length > 0) params.push(`${SPEAKER_TAG_TURNS_PARAM}=${turns.join(',')}`);
+  // Only meaningful beside a turn list — it says those turns disagree — so a
+  // flag with nothing to be unsure ABOUT is dropped rather than written.
+  if (ref?.unsure === true && turns.length > 0) params.push(`${SPEAKER_TAG_UNSURE_PARAM}=1`);
+  const base = `${SPEAKER_TAG_SCHEME}${label}`;
+  return params.length > 0 ? `${base}?${params.join('&')}` : base;
 }
 
 /**
- * `"speaker:B"` → `"B"`, and null for every other href. Null rather than a
- * throw: most links in a meeting doc are ordinary links, and asking is the
- * common case.
+ * `"speaker:B?t=10,12"` → the voice and what is known about where the
+ * mention came from; null for every href that is not a speaker tag.
+ *
+ * Null rather than a throw: most links in a meeting doc are ordinary links,
+ * and asking is the common case. An unreadable parameter costs the mention
+ * its provenance and never its voice — the label is the identity, and a tag
+ * an older build wrote with no parameters at all parses exactly as it did.
+ */
+export function parseSpeakerTagHref(href: string): SpeakerTagRef | null {
+  if (!href.startsWith(SPEAKER_TAG_SCHEME)) return null;
+  const rest = href.slice(SPEAKER_TAG_SCHEME.length).trim();
+  const q = rest.indexOf('?');
+  const label = (q < 0 ? rest : rest.slice(0, q)).trim();
+  if (label.length === 0) return null;
+  let turns: readonly number[] = [];
+  let unsure = false;
+  if (q >= 0) {
+    for (const part of rest.slice(q + 1).split('&')) {
+      const eq = part.indexOf('=');
+      const key = eq < 0 ? part : part.slice(0, eq);
+      const value = eq < 0 ? '' : part.slice(eq + 1);
+      if (key === SPEAKER_TAG_TURNS_PARAM) turns = parseTurnList(value);
+      else if (key === SPEAKER_TAG_UNSURE_PARAM) unsure = value === '1';
+    }
+  }
+  return { label, turns, unsure: unsure && turns.length > 0 };
+}
+
+/**
+ * `"speaker:B"` → `"B"`, and null for every other href — the question most
+ * callers have, asked without the provenance they do not care about.
  */
 export function speakerTagLabel(href: string): string | null {
-  if (!href.startsWith(SPEAKER_TAG_SCHEME)) return null;
-  const label = href.slice(SPEAKER_TAG_SCHEME.length).trim();
-  return label.length > 0 ? label : null;
+  return parseSpeakerTagHref(href)?.label ?? null;
 }
 
 /**
@@ -102,9 +236,14 @@ function tagSafeName(name: string): string {
     .trim();
 }
 
-/** A whole tag as markdown: `[@Devi](speaker:B)`. */
-export function renderSpeakerTag(label: string, names: Readonly<Record<string, string>>): string {
-  return `[${speakerTagText(label, names)}](${speakerTagHref(label)})`;
+/** A whole tag as markdown: `[@Devi](speaker:B)`, or with the turns it was
+ *  composed from, `[@Devi](speaker:B?t=10,12)`. */
+export function renderSpeakerTag(
+  label: string,
+  names: Readonly<Record<string, string>>,
+  ref?: SpeakerTagRefInit,
+): string {
+  return `[${speakerTagText(label, names)}](${speakerTagHref(label, ref)})`;
 }
 
 /** Undo a backslash escape, for a tag an older build wrote that way. */
@@ -120,6 +259,11 @@ export interface SpeakerTagMatch {
   end: number;
   /** The engine label the href carries. */
   label: string;
+  /** The turns this mention was composed from, or empty when the href
+   *  stamped none. See {@link SPEAKER_TAG_TURNS_PARAM}. */
+  turns: readonly number[];
+  /** A revision moved some of `turns` and not others. */
+  unsure: boolean;
   /** The tag's visible text, sigil included and UNESCAPED — what a reader
    *  sees, and what a caller compares against a display name. */
   text: string;
@@ -142,13 +286,15 @@ export function findSpeakerTags(markdown: string): SpeakerTagMatch[] {
   // one through, which is how a name containing brackets stays findable.
   const re = /\[((?:\\.|[^\][\\])*)\]\(([^\s)]+)\)/g;
   for (const m of markdown.matchAll(re)) {
-    const label = speakerTagLabel(m[2] ?? '');
-    if (label === null) continue;
+    const ref = parseSpeakerTagHref(m[2] ?? '');
+    if (ref === null) continue;
     const start = m.index;
     out.push({
       start,
       end: start + m[0].length,
-      label,
+      label: ref.label,
+      turns: ref.turns,
+      unsure: ref.unsure,
       text: unescapeTagText(m[1] ?? ''),
       raw: m[0],
     });
@@ -199,12 +345,26 @@ export interface NormalizeSpeakerTagsOptions {
    * own line into a second copy of itself in the doc.
    */
   protect?: readonly string[];
+  /**
+   * The turns THIS tick carried, per voice — the provenance stamped onto
+   * every mention of that voice the tick composed.
+   *
+   * Only a tag that arrives WITHOUT provenance is stamped. One that has some
+   * already came out of an earlier tick and is being re-emitted by a
+   * composer that returns the whole notes every time; restamping it with
+   * this tick's turns would move its provenance forward to words it was
+   * never written from, and the first revision would then correct the wrong
+   * mention. Omitted entirely by callers with no tick to speak for.
+   */
+  turnsByLabel?: Readonly<Record<string, readonly number[]>>;
 }
 
 export interface NormalizeSpeakerTagsResult {
   markdown: string;
   /** Tags whose visible name was rewritten from the name map. */
   renamed: number;
+  /** Tags that gained this tick's provenance, their visible name unchanged. */
+  stamped: number;
   /** Labels that were unwrapped because the meeting never carried them. */
   unknown: string[];
 }
@@ -227,6 +387,7 @@ export function normalizeSpeakerTags(
   const protectedLines = protectedLineSet(opts.protect);
   const unknown: string[] = [];
   let renamed = 0;
+  let stamped = 0;
   const lines = markdown.split('\n').map((line) => {
     if (isProtected(line, protectedLines)) return line;
     return rewriteTags(line, (tag) => {
@@ -234,16 +395,25 @@ export function normalizeSpeakerTags(
         unknown.push(tag.label);
         // The words stay; only the claim about who said them goes. A tag
         // whose text is bare sigil leaves nothing worth keeping.
-        const text = tag.text.startsWith(SPEAKER_TAG_SIGIL) ? tag.text.slice(1) : tag.text;
-        return text.trim().length > 0 ? text : '';
+        return unwrappedText(tag);
       }
-      const want = renderSpeakerTag(tag.label, opts.names);
+      // Provenance the tag already carries is its own and is kept; a tag the
+      // composer has just written carries none, and gets this tick's.
+      const turns = tag.turns.length > 0 ? tag.turns : (opts.turnsByLabel?.[tag.label] ?? []);
+      const want = renderSpeakerTag(tag.label, opts.names, { turns, unsure: tag.unsure });
       if (want === tag.raw) return null;
-      renamed++;
+      if (speakerTagText(tag.label, opts.names) === tag.text) stamped++;
+      else renamed++;
       return want;
     }).markdown;
   });
-  return { markdown: lines.join('\n'), renamed, unknown };
+  return { markdown: lines.join('\n'), renamed, stamped, unknown };
+}
+
+/** A tag reduced to its own words, the claim about who said them gone. */
+function unwrappedText(tag: SpeakerTagMatch): string {
+  const text = tag.text.startsWith(SPEAKER_TAG_SIGIL) ? tag.text.slice(1) : tag.text;
+  return text.trim().length > 0 ? text : '';
 }
 
 /**
@@ -259,12 +429,102 @@ export function renameSpeakerTags(
   label: string,
   names: Readonly<Record<string, string>>,
 ): { markdown: string; replaced: number } {
-  const want = renderSpeakerTag(label, names);
   const { markdown: next, changed } = rewriteTags(markdown, (tag) => {
     if (tag.label !== label) return null;
+    // A rename changes what a voice is CALLED, so the mention's own
+    // provenance rides through untouched — including an `unsure` flag, which
+    // says something about where the words came from rather than about the
+    // name and is not answered by giving the voice a new one.
+    const want = renderSpeakerTag(label, names, { turns: tag.turns, unsure: tag.unsure });
     return tag.raw === want ? null : want;
   });
   return { markdown: next, replaced: changed };
+}
+
+/**
+ * Turn id → the voice the engine now says spoke it, `null` for "nobody".
+ * Only turns whose label CHANGED are in it.
+ */
+export type SpeakerRevisions = ReadonlyMap<number, string | null>;
+
+export interface ReattributeSpeakerTagsResult {
+  markdown: string;
+  /** Mentions moved to the voice the revision named. */
+  moved: number;
+  /** Mentions whose claim came off, because every turn behind them is now
+   *  attributed to nobody. */
+  unwrapped: number;
+  /** Mentions the revision reached but could not place, now marked unsure. */
+  unsure: number;
+}
+
+/**
+ * The late half of who-said-what: the engine changed its mind AFTER these
+ * words were written, and the notes catch up.
+ *
+ * A `SpeakerRevision` names TURNS, and a mention names a VOICE, so the join
+ * is the provenance stamped in the href. For each tagged mention, every turn
+ * behind it is asked what it is attributed to now — a revised turn answers
+ * with its new label, an untouched one answers with the label it already
+ * had, which is the mention's own:
+ *
+ *  - **They all agree on a different voice** → the mention moves. Every turn
+ *    that could have produced these words belongs to that voice now, so the
+ *    attribution is not a guess.
+ *  - **They all agree on nobody** → the claim comes off and the words stay,
+ *    the same remedy `normalizeSpeakerTags` gives a voice the meeting never
+ *    carried. Saying "Speaker B" of speech the engine has withdrawn from B
+ *    is the one outcome worse than saying nothing.
+ *  - **They disagree** → the mention is marked unsure. Half its turns moved
+ *    and half did not, so it belongs to one of two voices and the notes do
+ *    not record which. A coin flip would put a name against words somebody
+ *    else said; silence would hide that the meeting no longer stands behind
+ *    the name already there.
+ *  - **No provenance, or no turn behind it was revised** → untouched. That
+ *    covers every tag written before this parameter existed and, on purpose,
+ *    every mention a PERSON has reassigned: their answer is written bare, so
+ *    no later engine pass revisits it.
+ */
+export function reattributeSpeakerTags(
+  markdown: string,
+  opts: { revisions: SpeakerRevisions; names: Readonly<Record<string, string>> },
+): ReattributeSpeakerTagsResult {
+  let moved = 0;
+  let unwrapped = 0;
+  let unsure = 0;
+  const { markdown: next } = rewriteTags(markdown, (tag) => {
+    if (tag.turns.length === 0) return null;
+    let touched = false;
+    const now = new Set<string | null>();
+    for (const turn of tag.turns) {
+      if (opts.revisions.has(turn)) {
+        touched = true;
+        now.add(opts.revisions.get(turn) ?? null);
+      } else {
+        // Not in the revision: this turn is still attributed the way the
+        // mention already says it is.
+        now.add(tag.label);
+      }
+    }
+    if (!touched) return null;
+    if (now.size === 1) {
+      const [only] = now;
+      // A revision that lands back on the label already written changes
+      // nothing a reader can see.
+      if (only === tag.label) return null;
+      if (only === null) {
+        unwrapped++;
+        return unwrappedText(tag);
+      }
+      moved++;
+      return renderSpeakerTag(only, opts.names, { turns: tag.turns });
+    }
+    // Already flagged by an earlier revision: nothing further to say.
+    if (tag.unsure) return null;
+    unsure++;
+    return renderSpeakerTag(tag.label, opts.names, { turns: tag.turns, unsure: true });
+  });
+  return { markdown: next, moved, unwrapped, unsure };
 }
 
 /**
