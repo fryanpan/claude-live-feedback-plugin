@@ -638,6 +638,11 @@ export interface TaskTransition {
  * to say "the second one". `detail` is what that choice costs, which is the
  * half that makes a list of labels decidable.
  */
+/** One refusal for every way an options array can be malformed — the caller
+ *  fixes the shape, not one field at a time. */
+const BAD_DECISION_OPTIONS_MESSAGE =
+  'options must be an array of { label, detail? } — label is required and non-empty, and an id you already hold is kept as you sent it';
+
 export interface DecisionOption {
   /** `o-<crypto-random>`, minted here — a caller-supplied label is not a
    *  stable identity, and `answer.optionId` has to survive a relabel. */
@@ -1007,6 +1012,31 @@ export interface Task {
    * in-flight scoring call does not survive one.
    */
   wordsRevision?: number;
+  /**
+   * The quality gate's verdict on the ticket's OWN decision — the derived
+   * `r-legacy` row, whose words are this task's title, body and options.
+   *
+   * On the task rather than on a review row because there is no review row:
+   * `legacyReviewItem` derives that item at read time and writes nothing, so
+   * a verdict stamped onto it would vanish the moment it was read again.
+   * `listReviewItems` hangs this on the derived item, which is what
+   * `isReviewItemGated` reads — so a held decision leaves the reader's queue
+   * through exactly the code path a held ticket item does.
+   *
+   * The version it is about is `wordsRevisionOf`, not a revision count: the
+   * decision's words ARE the row's words, so every writer of them (the title
+   * route, the body route, `revise_review_item`) already moves that counter
+   * and thereby makes an older verdict stale.
+   */
+  decisionJudge?: ReviewItemJudgement;
+  /**
+   * Who filed the words the gate judged — the same record `filedBy` keeps on
+   * a ticket item, and for the same one reason: an addressed wake needs the
+   * filer's AGENT id, and `createdBy` is a display name. Written by
+   * `recordDecisionJudgement`, so it names whoever last put these words
+   * through the gate rather than whoever opened the row.
+   */
+  decisionFiledBy?: { id: string; name: string; kind?: TaskActor['kind'] };
 }
 
 /**
@@ -4435,6 +4465,186 @@ export class TaskStore {
   }
 
   /**
+   * The same verdict write, for the ticket's OWN decision — the derived
+   * `r-legacy` row that `recordReviewJudgement` refuses by id.
+   *
+   * A separate method rather than a branch inside that one, because the two
+   * write to different places and guard on different versions: a ticket item
+   * stamps its own wrapper and counts `revisions`; the decision stamps the
+   * TASK and counts `wordsRevisionOf`, since its words are the row's words
+   * and every writer of those already moves that counter. Folding them
+   * together would mean one function whose every line asks which shape it is
+   * holding.
+   *
+   * The refusals are the same three facts, read off this shape: the ticket
+   * must still be a decision, an ANSWERED decision is closed (a verdict
+   * about words a person has already acted on changes nothing), and a
+   * verdict that outlived the words it read is dropped.
+   */
+  recordDecisionJudgement(
+    taskId: string,
+    judgement: ReviewItemJudgement,
+    opts: {
+      actor: { id: string; name: string; kind?: string };
+      /** `wordsRevisionOf` as this run read it before asking the judge. */
+      forVersion?: number;
+      /** The `pending` stamp this caller placed — see `recordReviewJudgement`. */
+      forPendingAt?: number;
+    },
+  ):
+    | { ok: true; task: Task; item: TaskReviewItem }
+    | { ok: false; error: 'not-found' | 'not-a-decision' | 'answered' | 'stale' } {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (task.needs !== 'decision') return { ok: false, error: 'not-a-decision' };
+    if (task.answer) return { ok: false, error: 'answered' };
+    if (opts.forVersion !== undefined && wordsRevisionOf(task) !== opts.forVersion) {
+      return { ok: false, error: 'stale' };
+    }
+    if (
+      opts.forPendingAt !== undefined &&
+      (task.decisionJudge?.verdict !== 'pending' || task.decisionJudge.at !== opts.forPendingAt)
+    ) {
+      return { ok: false, error: 'stale' };
+    }
+    task.decisionJudge = {
+      at: judgement.at,
+      verdict: judgement.verdict,
+      reason: judgement.reason,
+    };
+    task.decisionFiledBy = {
+      id: opts.actor.id,
+      name: opts.actor.name,
+      kind: classifyActor(opts.actor),
+    };
+    task.updatedAt = Math.max(task.updatedAt, judgement.at);
+    this.scheduleSave(task.workspaceId);
+    const item = this.legacyReviewItem(task);
+    // Unreachable: `needs === 'decision'` was checked above and is the whole
+    // condition `legacyReviewItem` derives on.
+    if (!item) return { ok: false, error: 'not-a-decision' };
+    return { ok: true, task, item };
+  }
+
+  /**
+   * Rewrite the words of a ticket's own decision — what
+   * `revise_review_item(taskId=…)` does, and the reason a hold on one is not
+   * a dead end.
+   *
+   * The decision has no stored row to patch: its headline IS the title, its
+   * detail IS the body, and its options are the task's. So this maps the
+   * patch onto those three and writes them through the SAME choke points
+   * every other words-writer uses — `applyTitle` (which stamps the rename
+   * marks and bumps `wordsRevision`) and the body stamp — rather than
+   * assigning the fields here. That is what keeps the audit trail, the
+   * preserved `quote` and the staleness counter identical whether the words
+   * moved through this door or through `rewrite_task`.
+   *
+   * Refused on an ANSWERED decision, for `reviseReviewItem`'s reason: the
+   * answer was given to the words that are there, and rewriting them under
+   * it would leave a recorded decision about text nobody can see.
+   */
+  reviseTaskDecision(
+    taskId: string,
+    patch: { headline?: unknown; detail?: unknown; options?: unknown },
+    opts: { actor: { id: string; name: string; kind?: string }; reason?: string },
+  ):
+    | { ok: true; task: Task; item: TaskReviewItem }
+    | {
+        ok: false;
+        error: 'not-found' | 'not-a-decision' | 'answered' | 'empty-patch' | 'bad-review';
+        message?: string;
+      } {
+    const task = this.getTask(taskId);
+    if (!task) return { ok: false, error: 'not-found' };
+    if (task.needs !== 'decision') {
+      return {
+        ok: false,
+        error: 'not-a-decision',
+        message: `task ${taskId} is not a decision, so it has no decision of its own to revise — pass reviewItemId to revise one of the items filed on it`,
+      };
+    }
+    if (task.answer) {
+      return {
+        ok: false,
+        error: 'answered',
+        message: `the decision on ${taskId} is already answered — the answer is to the words it has; file a new item instead of rewriting these`,
+      };
+    }
+    const { headline, detail, options } = patch;
+    if (headline === undefined && detail === undefined && options === undefined) {
+      return { ok: false, error: 'empty-patch' };
+    }
+    if (headline !== undefined && (typeof headline !== 'string' || headline.trim() === '')) {
+      return { ok: false, error: 'bad-review', message: 'headline must be a non-empty string' };
+    }
+    if (detail !== undefined && typeof detail !== 'string') {
+      return { ok: false, error: 'bad-review', message: 'detail must be a string' };
+    }
+    let nextOptions = task.options;
+    if (options !== undefined) {
+      if (!Array.isArray(options)) {
+        return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
+      }
+      const parsed: DecisionOption[] = [];
+      for (const entry of options) {
+        if (typeof entry !== 'object' || entry === null) {
+          return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
+        }
+        const o = entry as { id?: unknown; label?: unknown; detail?: unknown };
+        if (typeof o.label !== 'string' || o.label.trim() === '') {
+          return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
+        }
+        if (o.detail !== undefined && typeof o.detail !== 'string') {
+          return { ok: false, error: 'bad-review', message: BAD_DECISION_OPTIONS_MESSAGE };
+        }
+        parsed.push({
+          // An id the caller kept is kept: an answer already recorded against
+          // one names it by id, and re-minting would orphan that provenance.
+          id: typeof o.id === 'string' && o.id.trim() !== '' ? o.id : cryptoId('o'),
+          label: o.label.trim(),
+          ...(typeof o.detail === 'string' ? { detail: o.detail } : {}),
+        });
+      }
+      nextOptions = parsed;
+    }
+    const nextTitle = typeof headline === 'string' ? headline.trim() : task.title;
+    const nextBody = typeof detail === 'string' ? detail : task.body;
+    // The same shape gate `createTask` runs, on the words as they WILL be —
+    // so a revision cannot leave the ticket in a state the create door would
+    // have refused, and the filer is told in the create door's own words.
+    const check = checkDecisionShape(nextBody, nextOptions);
+    if (!check.ok) {
+      return { ok: false, error: 'bad-review', message: decisionShapeMessage(check) };
+    }
+    if (options !== undefined) task.options = nextOptions;
+    if (detail !== undefined) {
+      task.body = nextBody;
+      // The body door — it stamps `bodyWrittenAt`, bumps `wordsRevision`,
+      // applies the title in the same act, and emits ONE task.body_edited.
+      this.noteBodyEdited(taskId, {
+        actor: opts.actor,
+        ...(headline !== undefined ? { title: nextTitle } : {}),
+        ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      });
+    } else if (headline !== undefined) {
+      this.renameTask(taskId, nextTitle, {
+        actor: opts.actor,
+        ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      });
+    } else {
+      // Options alone moved. Nothing above bumped the counter, and it has to
+      // move: it is what makes the verdict about the old options stale.
+      this.bumpWordsRevision(task);
+      task.updatedAt = Date.now();
+      this.scheduleSave(task.workspaceId);
+    }
+    const item = this.legacyReviewItem(task);
+    if (!item) return { ok: false, error: 'not-a-decision' };
+    return { ok: true, task, item };
+  }
+
+  /**
    * Every HELD item on a board, with what the stall monitor needs to name
    * it and to find its filer. Read off the raw rows because `filedBy` is
    * store-only. Done tickets are skipped — a held question on finished work
@@ -4446,6 +4656,27 @@ export class TaskStore {
     const out: HeldReviewItem[] = [];
     for (const task of state.tasks.values()) {
       if (task.status === 'done' || isArchived(task)) continue;
+      // The ticket's OWN decision, when the gate is holding it. First,
+      // because it is the oldest question on the row — the same order
+      // `listReviewItems` puts it in. It is reported under the derived id,
+      // which is how its caller knows to address the nudge at the ticket
+      // (`revise_review_item(taskId=…)`) rather than at an item id that does
+      // not exist.
+      const decision = this.legacyReviewItem(task);
+      if (decision && isReviewItemHeld(decision) && decision.judge) {
+        out.push({
+          taskId: task.id,
+          title: task.title,
+          reviewItemId: decision.id,
+          headline: decision.review.headline,
+          reason: decision.judge.reason,
+          heldAt: decision.judge.at,
+          filedBy: decision.createdBy,
+          ...(task.decisionFiledBy?.id !== undefined
+            ? { filerAgentId: task.decisionFiledBy.id }
+            : {}),
+        });
+      }
       for (const raw of task.reviews ?? []) {
         const item = readTaskReviewItem(raw);
         if (!item || !isReviewItemHeld(item) || !item.judge) continue;
@@ -4629,6 +4860,11 @@ export class TaskStore {
       review,
       createdAt: task.createdAt,
       createdBy: taskAskedBy(task),
+      // The gate's verdict on these words, so a held decision is skipped by
+      // `isReviewItemGated` exactly as a held ticket item is. Derived here
+      // rather than stored on the row, for the reason `decisionJudge`
+      // carries: this item is rebuilt on every read.
+      ...(task.decisionJudge !== undefined ? { judge: task.decisionJudge } : {}),
     };
     if (task.answer) {
       item.answer = {
