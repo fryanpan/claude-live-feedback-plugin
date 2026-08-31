@@ -1,0 +1,85 @@
+{
+  "_recorded": "2026-08-31, against the live AssemblyAI API: a 3.7s macOS `say` clip uploaded, transcribed, listed, deleted, read back, deleted a second time, and listed again a few minutes later. Shapes are verbatim; the CDN upload URL is replaced with a placeholder because the real one embeds an account-scoped hash, and the spoken line was written for this recording.",
+  "listBeforeDelete": {
+    "transcripts": [
+      {
+        "id": "24327f9c-5687-4e21-b916-1721895d2845",
+        "resource_url": "https://api.assemblyai.com/v2/transcript/24327f9c-5687-4e21-b916-1721895d2845",
+        "status": "completed",
+        "created": "2026-08-31T05:49:28.787644Z",
+        "completed": "2026-08-31T05:49:30.066550Z",
+        "audio_url": "https://cdn.assemblyai.com/upload/PLACEHOLDER/PLACEHOLDER",
+        "error": "",
+        "region": null
+      }
+    ],
+    "page_details": {
+      "limit": 100,
+      "result_count": 1,
+      "current_url": "https://api.assemblyai.com/v2/transcript?limit=100",
+      "prev_url": null,
+      "next_url": null
+    }
+  },
+  "getBeforeDelete": {
+    "id": "24327f9c-5687-4e21-b916-1721895d2845",
+    "status": "completed",
+    "text": "The Retention Suite deletes this transcript as soon as it is stored.",
+    "audio_url": "https://cdn.assemblyai.com/upload/PLACEHOLDER/PLACEHOLDER",
+    "words": [{ "text": "The" }, { "text": "Retention" }]
+  },
+  "deleteResponse": {
+    "id": "24327f9c-5687-4e21-b916-1721895d2845",
+    "status": "completed",
+    "text": "Deleted by user.",
+    "audio_url": "http://deleted_by_user",
+    "words": null
+  },
+  "getAfterDelete": {
+    "id": "24327f9c-5687-4e21-b916-1721895d2845",
+    "status": "completed",
+    "text": "Deleted by user.",
+    "audio_url": "http://deleted_by_user",
+    "words": null
+  },
+  "listAfterDeleteImmediately": {
+    "transcripts": [
+      {
+        "id": "24327f9c-5687-4e21-b916-1721895d2845",
+        "resource_url": "https://api.assemblyai.com/v2/transcript/24327f9c-5687-4e21-b916-1721895d2845",
+        "status": "completed",
+        "created": "2026-08-31T05:49:28.787644Z",
+        "completed": "2026-08-31T05:49:30.066550Z",
+        "audio_url": "https://cdn.assemblyai.com/upload/PLACEHOLDER/PLACEHOLDER",
+        "error": "",
+        "region": null
+      }
+    ],
+    "page_details": { "limit": 100, "result_count": 1, "next_url": null }
+  },
+  "listAfterDeleteSettled": {
+    "transcripts": [
+      {
+        "id": "24327f9c-5687-4e21-b916-1721895d2845",
+        "resource_url": "https://api.assemblyai.com/v2/transcript/24327f9c-5687-4e21-b916-1721895d2845",
+        "status": "completed",
+        "created": "2026-08-31T05:49:28.787644Z",
+        "completed": "2026-08-31T05:49:30.066550Z",
+        "audio_url": "deleted_by_user",
+        "error": "",
+        "region": null
+      }
+    ],
+    "page_details": { "limit": 100, "result_count": 1, "next_url": null }
+  },
+  "listEmptyAccount": {
+    "transcripts": [],
+    "page_details": {
+      "limit": 100,
+      "result_count": 0,
+      "current_url": "https://api.assemblyai.com/v2/transcript?limit=100",
+      "prev_url": null,
+      "next_url": null
+    }
+  }
+}

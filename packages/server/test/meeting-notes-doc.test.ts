@@ -430,6 +430,7 @@ describe('withServerNotesSinks task capture', () => {
       docId: 'doc-a',
       meetingId: 'm-1',
       turns: [{ turn: 1, text: 'The navbar strip task again.' }],
+      priorTurns: [],
     });
     expect(links).toEqual([
       { title: 'Live navbar strip task', url: '/workspaces/w-1?task=t-live', status: 'todo' },
@@ -451,6 +452,7 @@ describe('withServerNotesSinks task capture', () => {
       docId: 'doc-unknown',
       meetingId: 'm-1',
       turns: [{ turn: 1, text: 'Anything.' }],
+      priorTurns: [],
     });
     expect(links).toEqual([]);
   });

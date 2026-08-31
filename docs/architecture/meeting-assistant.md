@@ -178,6 +178,20 @@ per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized
 `[^A-Za-z0-9._-] → _`.
 
+**What the vendor keeps: nothing, and a 3-day floor under everything else.**
+The account (owner, 2026-08-31, Workspace → Settings → Data Controls) is
+opted out of model training with a 3-day TTL on audio and transcripts. The
+opt-out is what makes Streaming — the only thing this subsystem uses — ZERO
+retention of audio and transcripts, leaving just logging/billing metadata.
+The TTL caps AssemblyAI's ASYNC side at 3 days instead of the 30-day default,
+which is belt and braces here: this repo makes no `POST /v2/transcript` call,
+and on 2026-08-31 the account listed zero stored transcripts. Both are
+ACCOUNT settings, not session parameters, so no code here can set or assert
+them — `bun run scripts/assemblyai-retention-sweep.ts` is how you re-check
+what is actually stored, and deletes anything found (`--delete`); the
+mechanics it has to get right are in
+`packages/server/src/assemblyai-retention.ts`.
+
 ## Notes composition
 
 A tick triggers the composer, which sees the transcript so far plus doc title
@@ -313,7 +327,27 @@ same speaker-prefixed transcript the composer does and may return a
 `requester` for a request — guarded on the same law, so it must be a voice
 that tick actually carried; the created row's body then says who asked,
 which is the half of "who said what" a task can still answer a week later,
-once the strip is gone. New rows are
+once the strip is gone.
+
+**Each pass also reads the tail of the one before it**, marked as already
+read — the boundary between two ticks falls where the room went quiet, which
+is nowhere near where an ask ends. Measured live, both halves: "…that is the
+real cost" / boundary / "can you file a ticket for that one?" filed a row
+titled *"file a ticket for that one, a small spike would do"*, and "we should
+file tickets for the next few things I mention" / boundary / the things
+themselves lost the ask entirely. The window is the previous tick's TAIL —
+180 characters, six turns, the newest line clipped rather than dropped — kept
+raw so a voice named since then reads under its new name. Marking is what
+stops a second filing: the prompt says those lines were read last pass and
+that every item must draw part of itself from the new ones, and the board's
+own find-or-create folds a re-file into a link to the row the previous pass
+created. Both the guards and the model see exactly the same window, or the
+reference guard would reject the very matches the overlap exists to enable.
+Cost, measured on the capture model with `count_tokens` rather than estimated
+(`scripts/capture-overlap-cost.ts`): **+92 input tokens per tick** at a full
+window — 43 for the standing instruction, 49 for the speech.
+
+New rows are
 attributed to the `Meeting Assistant` agent actor and enter triage; a request
 judged clear-and-doable goes to the chores band at `todo` and wakes the
 board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
