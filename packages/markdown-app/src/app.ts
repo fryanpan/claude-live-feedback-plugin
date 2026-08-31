@@ -8,7 +8,7 @@ import { type EditMode, initialEditMode, writeEditModePref } from './edit-mode.t
 import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
-import { applyReadingCrumb, wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
+import { wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
@@ -1075,11 +1075,8 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
    * — editable — while that was in flight.
    */
   if (!canWrite) {
-    // The chrome describes the surface, and it has stopped being an editor:
-    // the crumb said "Editing:" and the chip said "All changes saved" to
-    // somebody who could do neither.
-    applyReadingCrumb(document);
-    renderSaveState();
+    // The crumb and the save-state chip are `lockDocToReading`'s now — they
+    // were here, and the redline and code surfaces went without them.
     lockDocToReading({
       stopSuggesting: () => {
         suggesting = false;

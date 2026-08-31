@@ -120,11 +120,41 @@ export function isSignInFlowPath(pathname: string): boolean {
  */
 const READ_SHAPED_POSTS: ReadonlySet<string> = new Set(['/api/links/titles']);
 
-/** `true` for a non-GET route that only reads. Exact match, never a prefix:
- *  a prefix would hand the exemption to every future route that happens to
- *  start with the same characters. */
+/**
+ * Opening a doc the caller may already READ.
+ *
+ * `POST /api/reviews/<id>/editable-file` and `.../context-file` (and their
+ * `/api/workspaces/` aliases) answer one question: what is the docId for this
+ * file in this review? They are POSTs because a relPath does not belong in a
+ * query string. Each one materialises the doc if it is not already there, at
+ * a DETERMINISTIC id, under the review's own root, bounded by the same
+ * traversal, symlink and exclude guards a share visitor already passes — and
+ * creates no content of anybody's. Call it twice and the second call is a
+ * lookup.
+ *
+ * They are exempt because gating them refuses a READ. The redline surface
+ * opens the companion doc at mount; refused, it silently fell back to the
+ * derived read-only redline over the MEMBER doc — and the chrome then reads
+ * threads off the member instead of the companion, so a signed-out reader saw
+ * a different set of comments from everyone else. The `.md` File view fell
+ * back to raw source for the same reason. Neither said anything; boundary 1
+ * of this file says reads are never gated, and this was two of them.
+ *
+ * A separate predicate from `READ_SHAPED_POSTS` rather than an entry in it,
+ * because that set's contract is "confirmed to mutate nothing" and these
+ * materialise a derived view. Different promise, so a different list — and
+ * both stay lists of reads to EXEMPT, where a forgotten entry shows up as a
+ * refused read rather than as a silent hole.
+ */
+const OPEN_FOR_READING_POST =
+  /^\/api\/(?:reviews|workspaces)\/[^/]+\/(?:editable-file|context-file)$/;
+
+/** `true` for a non-GET route that only reads. Matched on the whole path —
+ *  exactly for the fixed ones, and on a full-string pattern for the two that
+ *  carry an id. Never a prefix: that would hand the exemption to every future
+ *  route beginning with the same characters. */
 export function isReadShapedPost(pathname: string): boolean {
-  return READ_SHAPED_POSTS.has(pathname);
+  return READ_SHAPED_POSTS.has(pathname) || OPEN_FOR_READING_POST.test(pathname);
 }
 
 /**

@@ -8,7 +8,10 @@ import { join } from 'node:path';
  * the UI swallows is not a gate, it is a comment that vanished.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetReadingCrumbForTest } from '../src/huddle-entry.ts';
+import { openCompanionDoc } from '../src/redline/redline-app.ts';
 import {
+  WRITE_ACCESS_LOOKUP_MS,
   WRITE_CONTROL_ATTR,
   asBackgroundWrite,
   fetchWriteAccess,
@@ -87,6 +90,57 @@ describe('the way back', () => {
 });
 
 describe('asking whether this browser may write', () => {
+  // The regression that fired with the FLAG OFF, i.e. for everybody.
+  //
+  // `main()` awaits this before anything renders. The three failure modes it
+  // already handled all produce a value — a throw, a !ok, junk JSON — and a
+  // route that simply never answers produces none of them, so `await` on it
+  // was forever. Measured against an origin/main control with the session
+  // route held open: main rendered the document, the branch showed
+  // permanently blank chrome at 15s and again at 25s.
+  it('gives up on a route that never answers, and reads that as MAY write', async () => {
+    vi.useFakeTimers();
+    try {
+      const never = vi.fn(() => new Promise<Response>(() => {}));
+      vi.stubGlobal('fetch', never);
+      const asked = fetchWriteAccess();
+      let settled = false;
+      void asked.then(() => {
+        settled = true;
+      });
+
+      // The control for the assertion below: BEFORE the bound elapses this
+      // really is still waiting, so the timeout is what resolves it and not
+      // some path that never waited at all.
+      await vi.advanceTimersByTimeAsync(WRITE_ACCESS_LOOKUP_MS - 1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(2);
+      await expect(asked).resolves.toEqual({ signInToWrite: false, canWrite: true });
+      expect(never).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  // And the other control: the bound must not be winning every race. A server
+  // that answers gets its answer honoured, refusal included.
+  it('still takes a real answer that arrives in time', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(200, { signInToWrite: true, canWrite: false })),
+    );
+    try {
+      await expect(fetchWriteAccess()).resolves.toEqual({
+        signInToWrite: true,
+        canWrite: false,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reads the server answer', async () => {
     vi.stubGlobal(
       'fetch',
@@ -245,6 +299,40 @@ describe('locking the doc to reading', () => {
     expect(calls).toEqual(['suggest-off', 'view']);
   });
 
+  // The chrome moved INTO the lock because it was at one call site and only
+  // one of three surfaces had it: signed out, the redline and code surfaces
+  // went on reading "Editing: notes.md" beside "All changes saved" over an
+  // editor that would take nothing.
+  it('puts the crumb back to Reading and blanks the save-state chip', () => {
+    resetReadingCrumbForTest();
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <span class="doc-crumb"><span class="doc-label">Editing:</span></span>
+      <span id="save-state" class="save-state save-state--saved">All changes saved</span>`;
+    document.body.append(root);
+    // The control: the shell really is wearing an editor's chrome first, so
+    // the assertions below have something to change.
+    expect(root.querySelector('.doc-label')?.textContent).toBe('Editing:');
+    expect(root.querySelector('#save-state')?.textContent).toBe('All changes saved');
+
+    lockDocToReading({ root });
+
+    expect(document.querySelector('.doc-label')?.textContent).toBe('Reading:');
+    const chip = root.querySelector('#save-state') as HTMLElement;
+    expect(chip.textContent).toBe('');
+    expect(chip.className).not.toContain('save-state--saved');
+    resetReadingCrumbForTest();
+  });
+
+  // The redline and code surfaces have neither mode to put back, and a
+  // surface with nothing to undo should not have to pass two empty functions
+  // to say so.
+  it('locks a surface that has no Suggesting and no view/edit mode of its own', () => {
+    const root = toggles();
+    expect(() => lockDocToReading({ root })).not.toThrow();
+    expect(root.querySelector<HTMLButtonElement>('#toggle-edit-mode')?.disabled).toBe(true);
+  });
+
   it('the shipped markup actually carries the marker on both toggles', () => {
     // The lock reads the DOM, so the lock passing its own unit test proves
     // nothing about the real page. This reads the file the server serves.
@@ -341,5 +429,25 @@ describe('the fetch wrapper', () => {
     next = jsonResponse(401, { error: 'widget_token_invalid' });
     await fetch('/api/anything', { method: 'POST' });
     expect(document.querySelector('.signin-required')).toBeNull();
+  });
+
+  it('opens a redline companion quietly — a refusal there is not a write anybody made', async () => {
+    // The real call site, not a re-creation of it. Opening the companion is
+    // the FIRST thing the redline surface does, before the reader has
+    // touched anything; unmarked, a 401 there raised the blocking modal on
+    // plain page load. The server no longer refuses this route, so this is
+    // the belt to that braces — a 401 arriving for any other reason (an
+    // older server, a share that lapsed) must still not interrupt a reader.
+    next = jsonResponse(401, { error: 'sign_in_required' });
+    const ctx = {
+      workspaceId: 'rev-1',
+      relPath: 'notes.md',
+      scope: { disposed: false },
+    } as unknown as Parameters<typeof openCompanionDoc>[0];
+
+    await expect(openCompanionDoc(ctx)).resolves.toBeNull();
+    expect(document.querySelector('.signin-required')).toBeNull();
+    expect(document.querySelector('.signin-bar')).not.toBeNull();
+    document.querySelector('.signin-bar')?.remove();
   });
 });

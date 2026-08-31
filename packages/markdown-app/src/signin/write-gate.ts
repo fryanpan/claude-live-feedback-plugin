@@ -35,6 +35,8 @@
  * runs exactly as it did.
  */
 
+import { applyReadingCrumb } from '../huddle-entry.ts';
+
 /** The server's code for "you must sign in first". Contract with
  *  server/src/middleware/write-gate.ts. */
 export const SIGN_IN_REQUIRED = 'sign_in_required';
@@ -65,22 +67,56 @@ export interface WriteAccess {
 }
 
 /**
- * Ask the server. A route that throws, 404s, or answers with junk reads as
- * "may write": an unreachable session route must never lock a person out of
- * a surface the server would have accepted them on.
+ * How long boot waits for the answer before going on without it.
+ *
+ * `identity-prompt.ts` reached this number first, against the same route and
+ * for the same reason — *"a server that never answers must fall through to
+ * the local identity, not hang boot"*. This call sits UPSTREAM of that guard
+ * (every surface awaits it before the name prompt is even considered), so
+ * without its own bound it hands the whole app the failure that one was
+ * written to prevent.
+ */
+export const WRITE_ACCESS_LOOKUP_MS = 4000;
+
+/**
+ * Ask the server. A route that throws, 404s, answers with junk, or NEVER
+ * ANSWERS AT ALL reads as "may write": an unreachable session route must
+ * never lock a person out of a surface the server would have accepted them
+ * on, and a silent one must never stop the document rendering.
+ *
+ * The timeout is the case the other three do not cover, and it is the one
+ * that cost a whole app. `!res.ok` needs a response and `catch` needs a
+ * rejection; a request left hanging produces neither, and `await` on it is
+ * forever. Measured against an origin/main control with the route held open:
+ * main rendered the document, this branch showed permanently blank chrome.
+ *
+ * Failing OPEN on a timeout is the same call the other three failure modes
+ * make. It is also the safe direction: the socket is independently read-only
+ * server-side for a browser that has proven nobody, so the worst case is a
+ * surface that looks writable and refuses, not one that writes unchecked.
  */
 export async function fetchWriteAccess(): Promise<WriteAccess> {
-  try {
-    const res = await fetch('/api/auth/session');
-    if (!res.ok) return { signInToWrite: false, canWrite: true };
-    const body = (await res.json()) as Partial<WriteAccess>;
-    return {
-      signInToWrite: body.signInToWrite === true,
-      canWrite: body.canWrite !== false,
-    };
-  } catch {
-    return { signInToWrite: false, canWrite: true };
-  }
+  const open: WriteAccess = { signInToWrite: false, canWrite: true };
+  const lookup = (async (): Promise<WriteAccess> => {
+    try {
+      const res = await fetch('/api/auth/session');
+      if (!res.ok) return open;
+      const body = (await res.json()) as Partial<WriteAccess>;
+      return {
+        signInToWrite: body.signInToWrite === true,
+        canWrite: body.canWrite !== false,
+      };
+    } catch {
+      return open;
+    }
+  })();
+  // `race`, not an AbortController: aborting would make the answer
+  // unavailable to anything else, and a late answer is simply unwanted here
+  // rather than harmful. The lookup can no longer reject, so the race cannot.
+  const timeout = new Promise<WriteAccess>((resolve) => {
+    setTimeout(() => resolve(open), WRITE_ACCESS_LOOKUP_MS);
+  });
+  return Promise.race([lookup, timeout]);
 }
 
 /**
@@ -274,23 +310,48 @@ export const WRITE_CONTROL_ATTR = 'data-write-control';
 
 /**
  * Lock a doc surface to reading: every marked control disabled and saying
- * why, and the caller's own state put back to view.
+ * why, the chrome describing a reader rather than a writer, and the caller's
+ * own state put back to view.
  *
  * Disabled, not hidden. A control that vanishes teaches nothing about why,
  * and this reader can fix it — the bar above says how.
+ *
+ * The CHROME is in here rather than at the call site because it was at the
+ * call site and only one of three surfaces got it. The markdown mount put
+ * back the crumb and blanked the save-state chip; the redline and code
+ * surfaces went on saying "Editing: notes.md" and "All changes saved" beside
+ * an editor that would take nothing — a true sentence describing a thing that
+ * is not happening, which is worse than silence. One function is what stops
+ * the fourth surface drifting the same way.
+ *
+ * Both callbacks are optional: the redline and code surfaces have neither a
+ * Suggesting mode nor a view/edit toggle of their own to put back, and a
+ * surface with nothing to undo should not have to pass two empty functions to
+ * say so.
  */
 export function lockDocToReading(opts: {
   /** Leave Suggesting, if it was on. It is not a milder form of editing —
    *  proposals ride the same socket the server is dropping. */
-  stopSuggesting: () => void;
+  stopSuggesting?: () => void;
   /** Put the editor back in view mode. */
-  toViewMode: () => void;
+  toViewMode?: () => void;
   root?: ParentNode;
 }): HTMLButtonElement[] {
   const root = opts.root ?? (typeof document === 'undefined' ? null : document);
   if (!root) return [];
-  opts.stopSuggesting();
-  opts.toViewMode();
+  opts.stopSuggesting?.();
+  opts.toViewMode?.();
+  // "Editing:" → "Reading:". The word claims the second thing, and this
+  // reader cannot do it.
+  if (typeof document !== 'undefined') applyReadingCrumb(document);
+  // Nothing to report about saving on a surface that cannot save.
+  const saveState = (
+    root as ParentNode & { querySelector: ParentNode['querySelector'] }
+  ).querySelector?.('#save-state');
+  if (saveState) {
+    saveState.classList.remove('save-state--saved', 'save-state--dirty', 'save-state--offline');
+    saveState.textContent = '';
+  }
   const locked = Array.from(root.querySelectorAll<HTMLButtonElement>(`[${WRITE_CONTROL_ATTR}]`));
   for (const btn of locked) {
     btn.disabled = true;

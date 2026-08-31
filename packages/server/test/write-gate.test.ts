@@ -109,6 +109,44 @@ describe('which requests the gate governs', () => {
     expect(isGatedWrite('POST', '/api/links/titles')).toBe(false);
   });
 
+  it('lets a reader OPEN a doc it is allowed to read', () => {
+    // The ship-blocker this closes: the redline surface opens its companion
+    // doc with `POST /api/reviews/<id>/editable-file` at mount. Gated, it got
+    // a 401, fell back to the derived redline over the MEMBER doc, and the
+    // chrome then read a different set of comment threads — so a signed-out
+    // reader saw comments nobody else saw and missed the ones everybody else
+    // did. Silently. The `.md` File view fell back to raw source for the same
+    // reason, and the refusal also raised a blocking sign-in modal on plain
+    // page load.
+    for (const p of [
+      '/api/reviews/rev-1/editable-file',
+      '/api/reviews/rev-1/context-file',
+      // Both prefixes: `/api/workspaces/<id>/…` is the live alias every open
+      // browser tab and un-restartable plugin bundle still calls.
+      '/api/workspaces/rev-1/editable-file',
+      '/api/workspaces/rev-1/context-file',
+    ]) {
+      expect(isReadShapedPost(p)).toBe(true);
+      expect(isGatedWrite('POST', p)).toBe(false);
+    }
+  });
+
+  it('exempts the OPEN and nothing else on the same review', () => {
+    // The control. These are real writes on the very same prefix, and an
+    // exemption that took them too would be a hole rather than a fix.
+    for (const p of [
+      '/api/reviews/rev-1/refresh',
+      '/api/reviews/rev-1/groups',
+      '/api/reviews/rev-1/editable-file/extra',
+      '/api/reviews/rev-1/editable-fileX',
+      '/api/reviews/editable-file',
+      '/api/reviews/rev-1/sub/context-file',
+    ]) {
+      expect(isReadShapedPost(p)).toBe(false);
+      expect(isGatedWrite('POST', p)).toBe(true);
+    }
+  });
+
   it('matches the read exemption exactly, never as a prefix', () => {
     // The control for the entry above: a route that merely starts the same
     // way is a real write and must stay gated, or the exemption grows on its
