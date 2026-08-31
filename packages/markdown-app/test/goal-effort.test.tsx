@@ -378,6 +378,32 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(l.title).toContain("the last 3 days' pace");
   });
 
+  it('prints one date when the range lands inside a single day', () => {
+    // Short projections made a same-day range the common case rather than a
+    // curiosity: a goal finishing this afternoon has its central date and
+    // its late end inside one day, and "~Sep 1–Sep 1" spends the narrow
+    // tier's scarcest resource saying one day twice.
+    const same = labelFor([closed(4 * HOUR), closed(3 * HOUR), closed(2 * HOUR), task()]);
+    expect(same.finishText).toBe('~Sep 1');
+    expect(same.title).toContain('finishing around Sep 1.');
+    expect(same.title).not.toContain('likely by');
+
+    // Positive control: a range that really does span two days still prints
+    // both ends, so the collapse above is a property of the dates and not of
+    // the renderer having stopped drawing ranges.
+    const varied = labelFor([
+      closed(3 * DAY, 2 * HOUR),
+      closed(2 * DAY, HOUR),
+      closed(DAY, 4 * HOUR),
+      task(),
+      task(),
+      task(),
+      task(),
+    ]);
+    expect(varied.finishText).toBe('~Sep 5\u2013Sep 9');
+    expect(varied.title).toContain('likely by Sep 9');
+  });
+
   it('carries the year once the date leaves this one', () => {
     // A bare "~Dec 29" was rendered for a date in 2041 — the same four
     // characters a date four months out gets.

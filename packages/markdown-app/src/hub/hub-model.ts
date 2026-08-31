@@ -850,12 +850,22 @@ export function goalEffortLabel(
   const leftTextShort = summary.complete ? 'done' : left;
   // Why there is no date is as much of an answer as a date, and it was also
   // hover-only. Three different absences, three different sentences.
+  // A range whose two ends land on the same day is not a range. Short
+  // projections made that the common case rather than a curiosity — a goal
+  // finishing this afternoon has its central date and its late end inside
+  // one day — and "~Aug 31–Aug 31" spends the narrow tier's scarcest
+  // resource saying a single day twice.
+  const finishDay =
+    summary.projectedFinishAt !== undefined ? date(summary.projectedFinishAt) : undefined;
+  const latestDay =
+    summary.projectedLatestAt !== undefined ? date(summary.projectedLatestAt) : undefined;
+  const spansTwoDays = latestDay !== undefined && latestDay !== finishDay;
   const finishText = summary.complete
     ? ''
-    : summary.projectedFinishAt !== undefined
-      ? summary.projectedLatestAt !== undefined
-        ? `~${date(summary.projectedFinishAt)}\u2013${date(summary.projectedLatestAt)}`
-        : `~${date(summary.projectedFinishAt)}`
+    : finishDay !== undefined
+      ? spansTwoDays
+        ? `~${finishDay}\u2013${latestDay}`
+        : `~${finishDay}`
       : summary.projectionOverHorizonDays !== undefined
         ? 'over a year out'
         : `date after ${EFFORT_MIN_CLOSES_FOR_PROJECTION} closes`;
@@ -875,12 +885,11 @@ export function goalEffortLabel(
   if (summary.complete) {
     // No pace sentence on a finished goal: there is nothing left for a pace
     // to be applied to.
-  } else if (summary.projectedFinishAt !== undefined) {
-    const latest = summary.projectedLatestAt;
+  } else if (finishDay !== undefined) {
     titleParts.push(
-      latest !== undefined
-        ? `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}, likely by ${date(latest)}.`
-        : `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}.`,
+      spansTwoDays
+        ? `On the last ${paceWindow} pace, finishing around ${finishDay}, likely by ${latestDay}.`
+        : `On the last ${paceWindow} pace, finishing around ${finishDay}.`,
     );
   } else if (summary.projectionOverHorizonDays !== undefined) {
     titleParts.push(
