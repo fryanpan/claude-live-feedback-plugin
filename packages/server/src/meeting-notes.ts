@@ -382,12 +382,19 @@ export interface MeetingNotesDeps {
    * The task-capture pass, run per tick BEFORE the compose so the links it
    * returns can ride the same compose input. Its failure costs the tick its
    * links, never its notes — capture is an enhancement on the same terms as
-   * context. Sees the tick's settled turns, carried words included.
+   * context. Sees the tick's settled turns, carried words included, plus the
+   * previous tick's for the sake of asks that span the boundary.
    */
   captureTasks?: (input: {
     docId: string;
     meetingId: string;
     turns: readonly NotesTurn[];
+    /**
+     * The turns the PREVIOUS tick's capture saw, so an ask that straddles the
+     * boundary between them still files the right row. Marked as already read
+     * downstream; the capture pass decides how much of it to use.
+     */
+    priorTurns: readonly NotesTurn[];
   }) => Promise<NoteTaskLink[]>;
   /**
    * Read the doc's notes section at the START of each compose, so the
@@ -495,6 +502,13 @@ export function beginNotesSession(
   /** Raw engine labels, never display names — a carried turn is re-mapped
    *  on its next attempt, and mapping a name a second time would wrap it. */
   let carry: NotesTurn[] = [];
+  /**
+   * The turns the last capture pass read, kept RAW for the same reason as
+   * `carry`: a voice named since then must reach the next pass under its new
+   * name, and a display name mapped twice would wrap ("Speaker Jordan").
+   * One tick deep — the capture pass takes the tail it can afford.
+   */
+  let priorRaw: NotesTurn[] = [];
   let lastTickNo = 0;
   let chain: Promise<void> = Promise.resolve();
   const names: Record<string, string> = {};
@@ -518,12 +532,17 @@ export function beginNotesSession(
       if (raw.length === 0) return;
       const turns = raw.map(withNames);
       let taskLinks: NoteTaskLink[] = [];
+      // Read before the pass, written after it: this tick's words are the
+      // NEXT tick's overlap, never their own.
+      const priorTurns = priorRaw.map(withNames);
+      priorRaw = raw;
       if (deps.captureTasks) {
         try {
           taskLinks = await deps.captureTasks({
             docId: ids.docId,
             meetingId: ids.meetingId,
             turns,
+            priorTurns,
           });
         } catch (err) {
           // Unlike a failed compose, nothing is carried: the words still
