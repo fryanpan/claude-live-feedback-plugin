@@ -459,9 +459,21 @@ sequenceDiagram
 
 Announcing before the mic opened would leave the sentence in a moment nothing
 recorded, which is exactly the thing an announcement cannot be: the point is to
-be able to show it afterwards, in the transcript, at the head of the meeting it
-belongs to. So the `ready` frame is the trigger — `ready` means the engine is
-receiving, and everything from there is in the transcript.
+be able to show it afterwards, in the transcript. So the `ready` frame is the
+trigger — `ready` means the engine is receiving, and everything from there is
+in the transcript.
+
+**Not at socket-open, and that is a deliberate trade.** The relay buffers audio
+that arrives while the engine handshake is out (`conn.pending`, 256 chunks), so
+speaking at socket-open would land in the recording too, and land *earlier* —
+anything said in the room during the handshake is captured ahead of the
+announcement, which is a real if small ordering cost. What it would buy in
+exchange is the risk of telling a room it is being recorded when it is not:
+before `ready`, the socket can still answer `unavailable` — no key configured,
+or another tab already holding this doc — and a false announcement to a room is
+worse than a few hundred milliseconds of ordering. So the claim here is that
+the announcement is IN the captured audio, never that it is the first thing in
+it.
 
 **Why there is a prime step.** On iOS Safari — Bryan's main device —
 `speechSynthesis.speak()` is ignored unless it is reached from inside a user
@@ -559,15 +571,29 @@ saying — including the two cases it must refuse to claim anything for, a
 solo capture and a meeting stopped mid-sentence (`meetings.test.ts`,
 `meeting-socket.test.ts`).
 
-**Two things stay unverified in a real room as of 2026-08-30.** First, nobody
-has run this with a live engine and two people. Second, and more specific:
+**Echo cancellation is the known hazard, and it is hedged rather than solved.**
 `MEETING_CONSTRAINTS` asks for `echoCancellation: true`, and echo cancellation
 exists precisely to remove the device's own speaker output from the captured
-signal. Whether it removes the announcement along with it depends on whether
-the browser's AEC reference includes speech-synthesis output, which differs by
-platform. If a real-room check finds the announcement missing from the
-transcript, that is the first place to look — and the fix is a scoped one
-(mute AEC for the length of the sentence), not a redesign.
+signal — which is the one moment that has to work the other way round. So the
+strip suspends it for the length of the sentence (`setEchoCancellation` on the
+live track) and restores it after. That is a hedge, not a proof: whether a
+given browser's canceller reaches speech-synthesis output depends on whether
+synthesis shares the render path it uses as its reference, and
+`applyConstraints` can refuse outright (Safari has refused `echoCancellation`
+on a live track). Every failure is swallowed — an announcement must never be
+blocked by a hedge.
+
+**So `device` on the record means what it says and no more:** the browser
+reported the utterance finished. It is not evidence that the sentence reached
+the transcript, and nothing in the code treats it as such.
+
+**What stays unverified as of 2026-08-30:** nobody has run this in a real room
+with a live engine. The two things to check when someone does are that the
+announcement is audible over a conversation, and that it appears in the
+transcript at all. If it does not, the constraint suspension is the first place
+to look, and the next step up is synthesizing the sentence into the audio graph
+itself rather than through the speaker — a bigger change, and not one worth
+making before the cheap hedge has been measured.
 
 ## Where things live
 

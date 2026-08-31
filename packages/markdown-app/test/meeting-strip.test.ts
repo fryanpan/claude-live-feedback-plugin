@@ -202,7 +202,13 @@ function mount(
       sockets.push(s);
       return s;
     },
-    startCapture: capture ?? (() => Promise.resolve({ ok: true, capture: { stop } })),
+    startCapture:
+      capture ??
+      (() =>
+        Promise.resolve({
+          ok: true,
+          capture: { stop, setEchoCancellation: () => Promise.resolve() },
+        })),
     ...extra,
   });
   cleanups.push(() => strip.destroy());
@@ -223,6 +229,12 @@ function mount(
     tags: () => [...root.querySelectorAll('.meeting-speaker')].map((el) => el.textContent ?? ''),
   };
 }
+
+/** A live capture, for the tests that only care that one exists. */
+const fakeCapture = (stop: () => void = vi.fn()) => ({
+  stop,
+  setEchoCancellation: () => Promise.resolve(),
+});
 
 /** Let the click's promise chain settle. */
 const settle = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -431,7 +443,7 @@ describe('the strip while a meeting runs', () => {
 
   it('stops on the second press: tells the server, releases the mic, closes the socket', async () => {
     const stop = vi.fn();
-    const h = mount(() => Promise.resolve({ ok: true, capture: { stop } }));
+    const h = mount(() => Promise.resolve({ ok: true, capture: fakeCapture(stop) }));
     h.toggle().click();
     await settle();
     h.sockets[0]?.onopen?.();
@@ -447,7 +459,7 @@ describe('the strip while a meeting runs', () => {
 describe('the strip when no words are coming', () => {
   it('says so, and stops offering a button, when transcription is not configured', async () => {
     const stop = vi.fn();
-    const h = mount(() => Promise.resolve({ ok: true, capture: { stop } }));
+    const h = mount(() => Promise.resolve({ ok: true, capture: fakeCapture(stop) }));
     h.toggle().click();
     await settle();
     h.sockets[0]?.onopen?.();
@@ -545,7 +557,7 @@ describe('the strip opened by the Board’s huddle button', () => {
   // The button's click is the person's gesture, and a full navigation does not
   // carry it into the editor — so the editor is TOLD, and starts at once.
   it('starts the meeting on mount without a press when asked to', async () => {
-    const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: { stop: vi.fn() } }));
+    const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
     const h = mount(capture, { autoStart: true });
     expect(capture).toHaveBeenCalledTimes(1);
     expect(h.root.dataset.state).toBe('requesting');
@@ -558,7 +570,7 @@ describe('the strip opened by the Board’s huddle button', () => {
   });
 
   it('stays at rest when not asked — a plain doc never opens a mic on its own', () => {
-    const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: { stop: vi.fn() } }));
+    const capture = vi.fn(() => Promise.resolve({ ok: true as const, capture: fakeCapture() }));
     const h = mount(capture);
     expect(capture).not.toHaveBeenCalled();
     expect(h.root.dataset.state).toBe('idle');
@@ -576,7 +588,7 @@ describe('the strip opened by the Board’s huddle button', () => {
             kind: 'denied' as const,
             message: 'Microphone permission refused — allow the mic.',
           })
-        : Promise.resolve({ ok: true as const, capture: { stop: vi.fn() } }),
+        : Promise.resolve({ ok: true as const, capture: fakeCapture() }),
     );
     const h = mount(capture, { autoStart: true });
     await settle();
@@ -838,7 +850,7 @@ describe('who is speaking', () => {
 describe('teardown', () => {
   it('releases the mic and the socket when the doc is navigated away from', async () => {
     const stop = vi.fn();
-    const h = mount(() => Promise.resolve({ ok: true, capture: { stop } }));
+    const h = mount(() => Promise.resolve({ ok: true, capture: fakeCapture(stop) }));
     h.toggle().click();
     await settle();
     h.sockets[0]?.onopen?.();
@@ -862,7 +874,7 @@ describe('teardown', () => {
     );
     h.toggle().click();
     h.strip.destroy();
-    prompt.answer?.({ ok: true, capture: { stop } });
+    prompt.answer?.({ ok: true, capture: fakeCapture(stop) });
     await settle();
     expect(stop).toHaveBeenCalled();
     expect(h.sockets.length).toBe(0);
@@ -929,12 +941,19 @@ class FakeAnnouncer implements Announcer {
 function pumpCapture(log: string[] = []) {
   let emit: ((pcm: Int16Array) => void) | null = null;
   const stop = vi.fn();
+  /** Every echo-cancellation flip, in order — the announcement's hedge. */
+  const aec: boolean[] = [];
+  const setEchoCancellation = vi.fn((on: boolean) => {
+    aec.push(on);
+    log.push(`aec:${on ? 'on' : 'off'}`);
+    return Promise.resolve();
+  });
   const start = vi.fn((opts: { onFrame: (pcm: Int16Array) => void }) => {
     emit = opts.onFrame;
     log.push('mic-open');
-    return Promise.resolve({ ok: true as const, capture: { stop } });
+    return Promise.resolve({ ok: true as const, capture: { stop, setEchoCancellation } });
   });
-  return { start, stop, speakInto: (n = 1) => emit?.(new Int16Array(n)) };
+  return { start, stop, aec, setEchoCancellation, speakInto: (n = 1) => emit?.(new Int16Array(n)) };
 }
 
 /** Bring a conversation capture all the way to `recording`. */
@@ -953,6 +972,9 @@ async function recordingConversation(announcer: FakeAnnouncer, log: string[] = [
     engine: 'test',
     mode: 'conversation',
   });
+  // The announcement suspends echo cancellation before it speaks, which is a
+  // promise; let that settle so callers see the sentence underway.
+  await settle();
   return { h, mic, sock };
 }
 
@@ -973,7 +995,7 @@ describe('announcing a room capture', () => {
     // The whole point: the sentence is spoken into an already-open
     // microphone. Reverse these two and the announcement stops being part of
     // the recording, which is the only thing that makes it evidence.
-    expect(log).toEqual(['prime', 'mic-open', 'start-frame', 'speak']);
+    expect(log).toEqual(['prime', 'mic-open', 'start-frame', 'aec:off', 'speak']);
     expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
   });
 
@@ -1287,6 +1309,7 @@ describe('the SERVER decides whether there is a room to announce to', () => {
     // The inverse mismatch, and the one that matters: a room is owed an
     // announcement whatever the client asked for.
     const { h, announcer } = await negotiated('solo', 'conversation');
+    await settle();
     expect(h.strip.mode()).toBe('conversation');
     expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
     expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
@@ -1324,4 +1347,81 @@ describe('nothing keeps announcing a meeting that ended', () => {
       expect(h.note()).not.toMatch(/say this out loud/i);
     });
   }
+});
+
+describe('the device speaking is not cancelled out of its own recording', () => {
+  it('suspends echo cancellation across the sentence and restores it after', async () => {
+    // Echo cancellation is asked for on every capture and its whole job is
+    // to remove what this device plays from what its microphone hears —
+    // which is the one moment that has to work the other way round.
+    const log: string[] = [];
+    const announcer = new FakeAnnouncer(true, log);
+    const mic = pumpCapture(log);
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    expect(mic.aec).toEqual([false]);
+    announcer.settle(true);
+    await settle();
+    // Restored: a whole meeting captured without echo cancellation would
+    // transcribe its own speaker output for the rest of the hour.
+    expect(mic.aec).toEqual([false, true]);
+    expect(log.indexOf('aec:off')).toBeLessThan(log.indexOf('speak'));
+    expect(log.indexOf('speak')).toBeLessThan(log.indexOf('aec:on'));
+  });
+
+  it('leaves it alone when a person is the one talking', async () => {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.announceButton().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    // Their voice reaches the mic the way every other voice in the room
+    // does; the canceller was never in the way of it.
+    expect(mic.aec).toEqual([]);
+  });
+
+  it('announces anyway when the browser REFUSES the constraint', async () => {
+    // The hedge is best-effort, and its failure must not take the sentence
+    // down with it — the one thing that must never happen here is silence.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    mic.setEchoCancellation.mockImplementation(() => Promise.reject(new Error('nope')));
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    expect(mic.setEchoCancellation).toHaveBeenCalled();
+    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
+    // …and the record still follows the sentence, not the hedge.
+    announcer.settle(true);
+    await settle();
+    expect(h.strip.announced()).toBe('device');
+  });
 });

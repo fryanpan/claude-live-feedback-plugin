@@ -703,6 +703,24 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * failed. The generation bump is what makes the pending `announce()`
    * return without touching anything.
    */
+  /**
+   * The echo-cancellation hedge, and its own failure swallowed HERE rather
+   * than trusted of the capture.
+   *
+   * `setEchoCancellation` promises never to reject, but an announcement that
+   * a room is owed must not be able to fail because a hedge did: a rejection
+   * reaching `announce` would take the whole sentence down with it, and the
+   * one thing that must never happen here is silence.
+   */
+  async function suspendEchoCancellation(suspended: boolean): Promise<void> {
+    try {
+      await capture?.setEchoCancellation(!suspended);
+    } catch {
+      // Then the capture keeps the cancellation it has, and the sentence is
+      // spoken into it anyway.
+    }
+  }
+
   function endAnnouncement(): void {
     generation += 1;
     holdAnnouncement = false;
@@ -812,7 +830,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // The device's caption is a courtesy for something the room is already
     // hearing, so it yields to the words the way any other note does.
     showNote(announcementNote('device'));
+    // Echo cancellation is asked for on every capture, and its entire job is
+    // to remove what this device is playing from what its microphone hears —
+    // which is the one moment that has to work the other way round. Suspended
+    // for the length of the sentence and restored after, best-effort: a
+    // browser that refuses the constraint leaves the capture where it was.
+    await suspendEchoCancellation(true);
     const spoke = await announcer.speak(RECORDING_ANNOUNCEMENT);
+    await suspendEchoCancellation(false);
     // A stop, or a second meeting, during the sentence: this one no longer
     // owns the strip or the socket, and — the reason nothing is claimed at
     // start — the room heard half a sentence at most, so the record is left
