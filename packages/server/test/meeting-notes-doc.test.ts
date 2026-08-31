@@ -11,11 +11,13 @@ import { type DocType, prose } from '@feedback/core';
 import * as Y from 'yjs';
 import {
   MEETING_NOTES_HEADING,
+  applyNotesRelabel,
   applyNotesUpdate,
+  relabelNotesSection,
   replaceNotesSection,
   withServerNotesSinks,
 } from '../src/meeting-notes-doc.ts';
-import type { NotesUpdate } from '../src/meeting-notes.ts';
+import type { NotesRelabel, NotesUpdate } from '../src/meeting-notes.ts';
 
 function docFrom(markdown: string): Y.Doc {
   const ydoc = new Y.Doc();
@@ -124,6 +126,123 @@ describe('applyNotesUpdate', () => {
   it('an unknown doc is a false, never a throw', () => {
     const { rooms } = roomsWith('doc-a', 'markdown');
     expect(applyNotesUpdate(rooms, update('doc-gone', '- noted'))).toBe(false);
+  });
+});
+
+describe('relabelNotesSection', () => {
+  it('renames every mention in the notes, and only inside the section', () => {
+    // The word the rename must NOT touch appears three times outside the
+    // section: above it, below it, and inside a heading. Without the scope
+    // this test reads them all as mentions.
+    const ydoc = docFrom(
+      [
+        '# Agenda',
+        '',
+        'Speaker B is who I keep meaning to ask about the roadmap.',
+        '',
+        '## Meeting notes',
+        '',
+        '- Speaker B: ships the parser Thursday.',
+        '- Rin agreed; Speaker B will send the branch.',
+        '',
+        '## Speaker B, my own heading',
+        '',
+        'Speaker B again, still my own writing.',
+        '',
+      ].join('\n'),
+    );
+    const res = relabelNotesSection(ydoc, 'Speaker B', 'Marisol');
+    expect(res.replaced).toBe(2);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- Marisol: ships the parser Thursday.');
+    expect(md).toContain('- Rin agreed; Marisol will send the branch.');
+    // Every mention outside the section survives verbatim.
+    expect(md).toContain('Speaker B is who I keep meaning to ask about the roadmap.');
+    expect(md).toContain('## Speaker B, my own heading');
+    expect(md).toContain('Speaker B again, still my own writing.');
+  });
+
+  it("leaves the human's own sentence inside the section intact apart from the name", () => {
+    // The rename must not re-compose the section: everything the person
+    // typed into it since the last tick is still there afterwards.
+    const ydoc = docFrom(
+      [
+        '## Meeting notes',
+        '',
+        '- Speaker A: wants the migration split in two.',
+        '',
+        'MY NOTE: check whether Speaker A already has the ticket. Ask before standup.',
+        '',
+      ].join('\n'),
+    );
+    expect(relabelNotesSection(ydoc, 'Speaker A', 'Priya').replaced).toBe(2);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- Priya: wants the migration split in two.');
+    expect(md).toContain(
+      'MY NOTE: check whether Priya already has the ticket. Ask before standup.',
+    );
+  });
+
+  it('carries the marks at each site, so a bold name stays bold', () => {
+    const ydoc = docFrom('## Meeting notes\n\n- **Speaker A** opened; Speaker A then closed.\n');
+    expect(relabelNotesSection(ydoc, 'Speaker A', 'Priya').replaced).toBe(2);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('**Priya**');
+    expect(md).toContain('Priya then closed');
+  });
+
+  it('matches whole tokens only — naming A does not touch a longer label', () => {
+    const ydoc = docFrom('## Meeting notes\n\n- Speaker A: hi.\n- Speaker AB: also hi.\n');
+    expect(relabelNotesSection(ydoc, 'Speaker A', 'Priya').replaced).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- Priya: hi.');
+    expect(md).toContain('- Speaker AB: also hi.');
+  });
+
+  it('a doc with no notes section yet is a zero, not a write', () => {
+    const ydoc = docFrom('# Agenda\n\nSpeaker B said something.\n');
+    expect(relabelNotesSection(ydoc, 'Speaker B', 'Marisol').replaced).toBe(0);
+    expect(markdownOf(ydoc)).toContain('Speaker B said something.');
+  });
+
+  it('renames a name again, since a correction reads the same way', () => {
+    const ydoc = docFrom('## Meeting notes\n\n- Priya: said it.\n');
+    expect(relabelNotesSection(ydoc, 'Priya', 'Priya Raman').replaced).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- Priya Raman: said it.');
+  });
+});
+
+describe('applyNotesRelabel', () => {
+  const roomsWith = (docId: string, type: DocType, markdown: string) => {
+    const ydoc = docFrom(markdown);
+    return {
+      rooms: { get: (id: string) => (id === docId ? { ydoc, meta: { type } } : undefined) },
+      ydoc,
+    };
+  };
+  const relabel = (docId: string, from: string, to: string): NotesRelabel => ({
+    docId,
+    meetingId: 'm-1',
+    from,
+    to,
+  });
+
+  it('rewrites the mentions in a prose doc and counts them', () => {
+    const { rooms, ydoc } = roomsWith(
+      'doc-a',
+      'markdown',
+      '## Meeting notes\n\n- Speaker B: yes.\n',
+    );
+    expect(applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'))).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- Marisol: yes.');
+  });
+
+  it('a gone doc and a flat doc are both zero, never a throw', () => {
+    const { rooms } = roomsWith('doc-a', 'markdown', '## Meeting notes\n\n- Speaker B: yes.\n');
+    expect(applyNotesRelabel(rooms, relabel('doc-gone', 'Speaker B', 'Marisol'))).toBe(0);
+    const flat = roomsWith('doc-b', 'diff', '## Meeting notes\n\n- Speaker B: yes.\n');
+    expect(applyNotesRelabel(flat.rooms, relabel('doc-b', 'Speaker B', 'Marisol'))).toBe(0);
+    expect(markdownOf(flat.ydoc)).toContain('- Speaker B: yes.');
   });
 });
 
