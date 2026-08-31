@@ -1,4 +1,5 @@
 import {
+  type CaptureMode,
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
@@ -151,6 +152,7 @@ interface Harness {
   tick(): void;
   clock: { at: number };
   toggle(): HTMLButtonElement;
+  modeSwitch(): HTMLButtonElement;
   status(): string;
   elapsed(): string;
   caption(): string;
@@ -167,7 +169,11 @@ afterEach(() => {
 
 function mount(
   capture?: () => Promise<MeetingCaptureStart>,
-  extra: { autoStart?: boolean; promptName?: (current: string) => string | null } = {},
+  extra: {
+    autoStart?: boolean;
+    promptName?: (current: string) => string | null;
+    mode?: CaptureMode;
+  } = {},
 ): Harness {
   const root = document.createElement('div');
   document.body.append(root);
@@ -202,6 +208,7 @@ function mount(
     clock,
     tick: () => ticker?.(),
     toggle: () => root.querySelector('.meeting-toggle') as HTMLButtonElement,
+    modeSwitch: () => root.querySelector('.meeting-mode') as HTMLButtonElement,
     status: () => q('.meeting-status'),
     elapsed: () => q('.meeting-elapsed'),
     caption: () => q('.meeting-caption-line'),
@@ -238,6 +245,106 @@ describe('the strip at rest', () => {
   });
 });
 
+describe('the strip decides who it is listening for before the mic opens', () => {
+  const startFrame = (h: Harness) => JSON.parse(String(h.sockets[0]?.sent[0]));
+
+  it('starts solo, and says so without saying it is off', () => {
+    const h = mount();
+    // The label is the same in both states — `aria-pressed` is what moves.
+    // A button whose words flip between the state and the action cannot be
+    // read either way.
+    expect(h.modeSwitch().textContent).toBe('Multiple speakers');
+    expect(h.modeSwitch().getAttribute('aria-label')).toBe('Detect multiple speakers');
+    expect(h.modeSwitch().getAttribute('aria-pressed')).toBe('false');
+    expect(h.strip.mode()).toBe('solo');
+  });
+
+  it('a press turns it on, and the next capture is opened as a conversation', async () => {
+    const h = mount();
+    h.modeSwitch().click();
+    expect(h.modeSwitch().getAttribute('aria-pressed')).toBe('true');
+    expect(h.strip.mode()).toBe('conversation');
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    expect(startFrame(h).mode).toBe('conversation');
+  });
+
+  it('the Board button arrives with it already on — that press was the choice', async () => {
+    // "Record a conversation" is the only thing that says anyone else is in
+    // the room, and it happens on a page that is gone by the time this
+    // mounts.
+    const h = mount(undefined, { mode: 'conversation' });
+    expect(h.modeSwitch().getAttribute('aria-pressed')).toBe('true');
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    expect(startFrame(h).mode).toBe('conversation');
+  });
+
+  it('cannot be moved while the mic is open, because the session cannot be', async () => {
+    const h = mount();
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'solo',
+    });
+    expect(h.root.dataset.state).toBe('recording');
+    // A streaming session's configuration IS its connect URL, so a switch
+    // mid-meeting would mean a second session and a second bill.
+    expect(h.modeSwitch().disabled).toBe(true);
+    h.modeSwitch().click();
+    expect(h.strip.mode()).toBe('solo');
+    expect(h.modeSwitch().title).toMatch(/stop and start/i);
+  });
+
+  it('adopts what the SERVER says it opened, not what was asked for', async () => {
+    const h = mount(undefined, { mode: 'conversation' });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    // A server that opened a solo session — an older build, or one that
+    // refused the surcharge — is the one being billed, and the strip must
+    // report the meeting that exists.
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'solo',
+    });
+    expect(h.strip.mode()).toBe('solo');
+    expect(h.modeSwitch().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps the choice across a stop and start — the room did not change', async () => {
+    const h = mount();
+    h.modeSwitch().click();
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    h.toggle().click();
+    expect(h.root.dataset.state).toBe('idle');
+    expect(h.modeSwitch().disabled).toBe(false);
+    h.toggle().click();
+    await settle();
+    h.sockets[1]?.onopen?.();
+    expect(JSON.parse(String(h.sockets[1]?.sent[0])).mode).toBe('conversation');
+  });
+});
+
 describe('the strip while a meeting runs', () => {
   it('asks for the mic, opens the doc socket, and announces the format it will send', async () => {
     const h = mount();
@@ -252,6 +359,9 @@ describe('the strip while a meeting runs', () => {
       type: 'start',
       sampleRate: MEETING_SAMPLE_RATE,
       encoding: MEETING_AUDIO_ENCODING,
+      // Solo unless somebody said otherwise — the mode that pays for no
+      // speaker labels.
+      mode: 'solo',
     });
   });
 
@@ -468,8 +578,15 @@ describe('the strip opened by the Board’s huddle button', () => {
     expect(h.toggle().disabled).toBe(false);
     expect(h.note()).toMatch(/tap/i);
     expect(h.note()).not.toMatch(/refused/i);
-    // No sheet, no second control: the strip's own button is the target.
-    expect(h.root.querySelectorAll('button')).toHaveLength(1);
+    // No sheet and no second way to start: the strip's own button is the
+    // target. The mode switch beside it is not one — it starts nothing.
+    expect(h.root.querySelectorAll('.meeting-toggle')).toHaveLength(1);
+    expect([...h.root.querySelectorAll('button')].map((b) => b.className)).toEqual([
+      'meeting-mode',
+      'meeting-toggle',
+    ]);
+    h.modeSwitch().click();
+    expect(capture).toHaveBeenCalledTimes(1);
 
     refuse = false;
     h.toggle().click();

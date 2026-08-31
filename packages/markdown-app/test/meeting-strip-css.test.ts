@@ -289,7 +289,7 @@ describe('at 1180x820 the strip is one 40px bar', () => {
 
   it('gives the only control the documented 36px tap-target minimum', () => {
     // design-mobile.md: interactive elements are at least 36x36px. The toggle
-    // is the strip's single control and on a phone it sits on the bottom edge.
+    // starts and stops, and on a phone it sits on the bottom edge.
     expect(rule('.meeting-toggle', SECTION)).toMatch(/min-height:\s*36px/);
   });
 
@@ -299,7 +299,15 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(rule('.meeting-strip-row', declarationsOnly(wide))).toMatch(/display:\s*contents/);
     expect(rule('.meeting-meta', declarationsOnly(wide))).toMatch(/order:\s*1/);
     expect(rule('.meeting-caption', declarationsOnly(wide))).toMatch(/order:\s*2/);
-    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*3/);
+    expect(rule('.meeting-mode', declarationsOnly(wide))).toMatch(/order:\s*3/);
+    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*4/);
+  });
+
+  it('gives the mode switch the same 36px tap target as the control beside it', () => {
+    // design-mobile.md again: it sits on the phone's bottom edge next to
+    // Start, and a switch that is harder to hit than its neighbour reads as
+    // broken rather than as secondary.
+    expect(rule('.meeting-mode', SECTION)).toMatch(/min-height:\s*36px/);
   });
 
   it('survives the 721-900px band, where the doc is single-column but the strip is not', () => {

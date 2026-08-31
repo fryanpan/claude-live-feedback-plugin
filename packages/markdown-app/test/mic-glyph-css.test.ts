@@ -82,6 +82,21 @@ describe('the mic wears the nav’s icon convention', () => {
     }
   });
 
+  /**
+   * The declarations of the rule whose selector LIST contains this selector.
+   * `rule()` above only sees a selector that is the last one before the
+   * brace, so it stopped seeing `.hub-huddle-start svg` the moment a third
+   * mic button was added to the same grouped rule — a green-to-red on a
+   * stylesheet change that was correct.
+   */
+  const groupedRule = (selector: string): string => {
+    for (const m of declarationsOnly(CSS).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sels = (m[1] ?? '').split(',').map((x) => x.trim());
+      if (sels.includes(selector)) return m[2] ?? '';
+    }
+    return '';
+  };
+
   it('sizes the glyph as a box, because a font-size no longer scales it', () => {
     // `.voice-mic` carried `font-size: 19px` and `.hub-quick-mic` carried 16px
     // to size an emoji. An SVG ignores both, so leaving them set is how the
@@ -89,11 +104,13 @@ describe('the mic wears the nav’s icon convention', () => {
     expect(rule('.voice-mic')).not.toMatch(/font-size/);
     expect(rule('.hub-huddle-start')).not.toMatch(/font-size:\s*\d+px/);
     for (const sel of ['.voice-mic svg', '.hub-huddle-start svg']) {
-      const box = rule(sel);
+      const box = groupedRule(sel);
       expect(box, `${sel} has no rule, so the glyph sizes itself`).not.toBe('');
       expect(box).toMatch(/width:\s*\d+px/);
       expect(box).toMatch(/height:\s*\d+px/);
     }
+    // Control: the finder answers nothing for a selector nobody styles.
+    expect(groupedRule('.voice-mic-nonexistent svg')).toBe('');
   });
 });
 

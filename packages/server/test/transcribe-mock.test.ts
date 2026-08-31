@@ -15,12 +15,17 @@ import {
 
 const CHUNK = new Uint8Array(320);
 
-async function drive(chunks: number, script?: Parameters<typeof createMockTranscriptionEngine>[0]) {
+async function drive(
+  chunks: number,
+  script?: Parameters<typeof createMockTranscriptionEngine>[0],
+  labels = true,
+) {
   const turns: EngineTurn[] = [];
   const errors: string[] = [];
   const engine = createMockTranscriptionEngine(script);
   const session = await engine.open({
     sampleRate: 16_000,
+    detectSpeakers: labels,
     onTurn: (t) => turns.push({ ...t }),
     onError: (m) => errors.push(m),
   });
