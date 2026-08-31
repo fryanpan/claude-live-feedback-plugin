@@ -556,3 +556,100 @@ hold advisory); a board wanting the gate to REFUSE (that is Bryan's call to
 reverse, not a knob); or the 5-minute nudge proving noisy for an agent
 mid-turn (lengthen it — the filer already heard once, in the tool result).
 
+
+## 2026-08-30 — One call per tick carries every intent; no router, no N extractors
+
+Every new voice capability (research-by-voice, correct-a-note-by-voice) would
+otherwise be another LLM call on every tick. The choice was: one cheap router
+that classifies the tick and runs only the passes it names, N always-on
+extractors, or one combined call that routes and extracts in the same reply.
+**The combined call wins, and it is cheaper at five intents than today's two
+always-on passes are at two.**
+
+**Why.** A tick's prompt is ~95% shared context — 431 tokens of notes system
+prompt, 345 of capture system prompt, 30 board titles for the composer, 40
+candidate rows for the extractor, the notes so far — against a ~50-token
+transcript window. What scales with intents is how many times that context is
+re-sent, which is precisely what separate extractors do. Measured on a
+scripted meeting driven through the real Haiku composer and extractor
+(Haiku 4.5, $1/$5 per MTok, ~200 ticks per meeting-hour):
+
+| shape | in/tick | out/tick | $/meeting-hour |
+|---|---:|---:|---:|
+| notes alone (floor) | 1424 | 278 | 0.56 |
+| today: two always-on passes | 2593 | 318 | **0.84** |
+| one combined call, 2 intents | 2047 | 322 | 0.73 |
+| five always-on extractors | 3618 | 361 | 1.08 |
+| router + gated passes, 5 intents | 2501 | 323 | 0.82 |
+| **combined call, 5 intents, with the overlap below** | 2311 | 386 | **0.85** |
+
+An intent added to the combined call costs ~58 input and ~21 output tokens —
+about three cents a meeting-hour. The same intent as its own always-on pass
+costs seven to twenty-seven. Prompt caching cannot close that gap: Haiku
+4.5's minimum cacheable prefix is 4096 tokens and every prompt here is under
+2900, so a `cache_control` marker would silently do nothing.
+
+**A tick carries several purposes at once, and the answer is never pick-one.**
+Every pass answers on every tick; the reply has a key per intent and an empty
+value is the ordinary answer. This is where the router lost on evidence
+rather than on price. Measured over 11 ticks against the shipped extractor as
+ground truth, a router written in the same house style, returning a LIST of
+passes and told to prefer over-firing, named "tasks" on 5 of the 7 ticks where
+capture actually found something — and **both misses were multi-purpose
+ticks where it named a different label**: one named "decisions" and dropped a
+task reference, the other named "research" and dropped a request. It never
+failed to fire; it ranked, and the runner-up died. One classifier over one
+window has to rank, so that bias is structural, not a prompt bug. Even gating
+everything away its floor is $0.64 — so the offer was a third of every new
+intent in exchange for at most 19 cents a meeting-hour.
+
+**A purpose can also span two ticks, so the window carries a one-tick
+overlap.** The previous tick's turns ride along, marked as already noted:
+their content is in the notes already, but an intent that begins in them and
+finishes in the new speech is the pass's to act on. This is not a routing
+question — it is live today with no routing involved, and it is a bug. With
+the shipped one-tick window, "…that is the real cost." / "Can you file a
+ticket for that one?" files a row titled *"file a ticket for that one, a small
+spike would do"*, and "we should file tickets for the next few things I
+mention" followed by the things in the next tick loses the ask entirely.
+Widening the window fixes both (*"File a ticket for tree rebuild on every
+keystroke"*; both requests, correctly titled), and recovers a split correction
+that a one-tick window returns nothing for. It costs ~90 input tokens a tick,
+under two cents a meeting-hour — the one cent between $0.84 and $0.85 above.
+
+A per-tick gate is worse than useless here: on the trigger-first pair the
+router fired on the tick with no content and declined the tick that had it.
+
+**What this obliges the implementation to do.**
+- **Notes are the first key, and keys parse independently.** Today a failed
+  capture costs its links and the notes still compose; one reply must not make
+  a refusal or a truncation lose the notes. A missing key means "found
+  nothing", `max_tokens` covers notes plus extras, and the session's
+  carry-on-failure path stays.
+- **Pin the schema.** Measured drift across three runs: `"who"` for `"by"`,
+  `"original"` for `"line"`, tasks nested as `{"items":[]}`. Sub-schemas blur
+  in a long prompt. Use structured outputs and keep parsing tolerant. The
+  deterministic guards (`tickMentionsCandidate`, `requestMatchesCandidate`,
+  `speakerOnTick`) are unchanged and still run on whatever parses — note that
+  the overlap widens the vocabulary they vouch against by one tick, which is
+  the intended effect and not a loosening of the rule.
+- **Task links need a placeholder.** Capture runs before compose today so the
+  composer can cite a created row's URL. One call cannot cite a URL for a row
+  it is proposing in the same reply: the model emits a placeholder and the
+  server substitutes it after find-or-create.
+- **Each new intent clears an eval, not a token count.** Notes quality under a
+  crowded prompt was sampled, not measured.
+
+**What would change the decision:** a model whose cacheable prefix sits under
+these prompts (then N calls stop re-paying for context and the shapes
+converge); intents that need genuinely different context rather than the same
+tick (then they are separate calls whatever the routing); or a measured drop
+in notes quality as intents accumulate, which is the failure this trades
+against and the reason each one is gated on an eval.
+
+**Measured 2026-08-30**: one 3-minute scripted meeting (11 ticks, one sample
+per tick) plus three two-tick boundary scenarios, through the real Haiku
+composer and extractor with real usage fields and `count_tokens`; notes
+plateaued at 1136 chars, board of 40 rows. Transcription is $0.27 per
+meeting-hour with speaker labels, so these passes are already three times the
+meeting's transcription bill.
