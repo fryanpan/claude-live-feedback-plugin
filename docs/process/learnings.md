@@ -3453,3 +3453,28 @@ write-once in practice, and the repair verb for a moved file cannot repair it.
   control to prove the check could fail — worth doing every time a fix
   narrows a guard somebody put in deliberately, because a green run against a
   fix you just wrote says nothing on its own.
+
+## Concurrent worktree suite runs starve each other, and the failure lands in whichever test was running
+
+- **Parallel worktrees run `bun test packages/server/test` concurrently by
+  design**, and two machine-shared resources make one run's health depend on
+  its neighbours: file descriptors (exhaustion surfaces as `EMFILE` inside
+  arbitrary fs calls — reported 2026-08-31 on a doc-eviction test) and
+  FSEvents delivery (reproduced same day: three concurrent runs, one saw
+  ZERO watch events in 20s on the darwin dispatch-registry smoke test, the
+  suite's only real recursive watcher — the other two runs were green). The
+  victim's failure names its own file, so the agent hunts a diff that is
+  fine. Related host-level errno reading: "Classify the code — never a
+  boolean" (the port-walk incident above).
+- **The suite now names it instead of wearing it.** A bunfig-preload
+  `afterEach` probe (`packages/server/test/fd-contention.ts`) tries to open
+  one fd after every test; on `EMFILE`/`ENFILE` it fails the test with a
+  message naming descriptor contention and saying to re-run alone. The
+  FSEvents smoke test's timeout now checks fd headroom and counts rival
+  test-runner processes before wording its failure — every branch still
+  fails; only the diagnosis differs.
+- **Bun raises its soft fd rlimit to the hard limit at startup**, so
+  `ulimit -Sn 64` does not constrain `bun` at all (measured: 61,436 opens —
+  kern.maxfilesperproc — under a 64 soft limit). Lower the HARD limit
+  (`ulimit -n 64`) when building an exhaustion control, and assert the
+  exhaustion actually happened, or the control passes vacuously.
