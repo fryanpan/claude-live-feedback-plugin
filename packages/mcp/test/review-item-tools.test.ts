@@ -27,6 +27,7 @@ import { type AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { threadReviewItemId } from '../../core/src/review-item-id.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '../src/mcp.ts'), 'utf8');
@@ -91,6 +92,12 @@ function replyFor(path: string): unknown {
   }
   if (path.endsWith('/settings')) {
     return { reviewItemCriteria: { value: 'Every option names a cost.', isDefault: false } };
+  }
+  // The resolve route: WHERE a bare minted id lives. (An rt-… id never gets
+  // here from the handlers under test — they decode it locally.)
+  if (/^\/api\/review-items\/[^/]+$/.test(path)) {
+    const id = decodeURIComponent(path.split('/').at(-1) ?? '');
+    return { reviewItemId: id, kind: 'task-item', taskId: 't-resolved', workspaceId: 'w-resolved' };
   }
   return { ok: true, task: { id: 't-1', links: [{ kind: 'task', taskId: 't-2' }] } };
 }
@@ -584,5 +591,167 @@ describe('the shipped guidance describes the entity, not the old model', () => {
     // control moved off `SRC` when the descriptions stopped naming skills —
     // a cross-reference between two skills is now the only live instance.
     expect(lead).toContain('claude-workspaces:working-in-a-workspace');
+  });
+});
+
+/**
+ * `reviewItemId` as a UNIVERSAL address (Bryan, 2026-08-31). Every tool that
+ * acts on a review item takes the bare id: a derived `rt-…` id decodes
+ * locally to the doc-thread triple it encodes and lands on the doc routes; a
+ * minted `r-…` id is resolved to its ticket through GET /api/review-items/:id
+ * — unless the caller already named the taskId, in which case no resolve
+ * round-trip happens at all. The legacy addresses (the doc triple, taskId +
+ * reviewItemId) are positive-controlled elsewhere in this file and below:
+ * they must keep landing on the exact doors they always did.
+ */
+describe('reviewItemId is a universal address', () => {
+  const TRIPLE = { docId: 'mockup-notes', threadId: 'th-91', commentId: 'c-17' };
+  const RT_ID = threadReviewItemId(TRIPLE.docId, TRIPLE.threadId, TRIPLE.commentId);
+
+  it('withdraw_review_item with a derived rt-… id lands on the doc withdraw route', async () => {
+    const reply = await call('withdraw_review_item', {
+      reviewItemId: RT_ID,
+      reason: 'Superseded by the item below.',
+    });
+    okReply(reply);
+    expect(last().method).toBe('POST');
+    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/withdraw');
+    expect(last().body.commentId).toBe('c-17');
+    expect(last().body.reason).toBe('Superseded by the item below.');
+    const p = payload(reply);
+    expect(p.withdrawn).toBe(true);
+    expect(p.reviewItemId).toBe(RT_ID);
+  });
+
+  it('withdraw_review_item with a minted id + taskId POSTs the ticket withdraw route, no resolve', async () => {
+    const before = seen.length;
+    const reply = await call('withdraw_review_item', {
+      taskId: 't-77',
+      reviewItemId: 'r-4b2e',
+      reason: 'Filed twice.',
+    });
+    okReply(reply);
+    expect(seen.length).toBe(before + 1);
+    expect(last().path).toBe('/api/tasks/t-77/review-items/r-4b2e/withdraw');
+    expect(last().body.reason).toBe('Filed twice.');
+  });
+
+  it('withdraw_review_item with a bare minted id resolves the ticket first', async () => {
+    const reply = await call('withdraw_review_item', { reviewItemId: 'r-4b2e' });
+    okReply(reply);
+    const resolve = seen.at(-2);
+    expect(resolve?.method).toBe('GET');
+    expect(resolve?.path).toBe('/api/review-items/r-4b2e');
+    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/withdraw');
+  });
+
+  it('withdraw_review_item undo by id lands on /withdraw/undo', async () => {
+    const reply = await call('withdraw_review_item', { reviewItemId: 'r-4b2e', undo: true });
+    okReply(reply);
+    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/withdraw/undo');
+    expect(payload(reply).withdrawn).toBe(false);
+  });
+
+  it('withdraw_review_item refuses an id AND a doc triple in one call', async () => {
+    const reply = await call('withdraw_review_item', {
+      reviewItemId: RT_ID,
+      docId: 'mockup-notes',
+      threadId: 'th-91',
+      commentId: 'c-17',
+    });
+    const result = reply.result as { isError?: boolean; content?: Array<{ text?: string }> };
+    expect(result?.isError).toBe(true);
+    expect(result?.content?.[0]?.text ?? '').toContain('two addresses');
+  });
+
+  it('withdraw_review_item by doc triple alone still lands on the doc route (positive control)', async () => {
+    const reply = await call('withdraw_review_item', {
+      ...TRIPLE,
+      reason: 'Measured it wrong.',
+    });
+    okReply(reply);
+    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/withdraw');
+    expect(last().body.commentId).toBe('c-17');
+  });
+
+  it('revise_review_item with an rt-… id lands on the doc revise route', async () => {
+    const reply = await call('revise_review_item', {
+      reviewItemId: RT_ID,
+      detail: 'The gallery scrolls the whole page sideways at 430px.',
+    });
+    okReply(reply);
+    expect(last().method).toBe('POST');
+    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/revise');
+    expect(last().body.commentId).toBe('c-17');
+    expect(last().body.detail).toBe('The gallery scrolls the whole page sideways at 430px.');
+  });
+
+  it('revise_review_item with a bare minted id resolves, then revises on the ticket', async () => {
+    const reply = await call('revise_review_item', {
+      reviewItemId: 'r-4b2e',
+      headline: 'Cache size for the rebuild',
+    });
+    okReply(reply);
+    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
+    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/revise');
+  });
+
+  it('answer_review_item with an rt-… id lands on the doc answer route', async () => {
+    const reply = await call('answer_review_item', {
+      reviewItemId: RT_ID,
+      text: 'Cap it at the viewport width.',
+    });
+    okReply(reply);
+    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/answer');
+    expect(last().body.commentId).toBe('c-17');
+    expect(last().body.text).toBe('Cap it at the viewport width.');
+    expect(payload(reply).recorded).toBe(true);
+  });
+
+  it('answer_review_item with a bare minted id resolves, then answers on the ticket', async () => {
+    const reply = await call('answer_review_item', {
+      reviewItemId: 'r-4b2e',
+      text: 'Keep it.',
+      answeredWith: 'o-7f3a',
+    });
+    okReply(reply);
+    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
+    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/answer');
+    expect(last().body.answeredWith).toBe('o-7f3a');
+  });
+
+  it('request_more_info with an rt-… id posts the question as a reply on the thread', async () => {
+    const reply = await call('request_more_info', {
+      reviewItemId: RT_ID,
+      question: 'Which breakpoint did you measure at?',
+    });
+    okReply(reply);
+    // A doc-thread item's conversation IS its thread — asking back is a
+    // comment there, exactly where the asker is already listening.
+    expect(last().path).toBe('/api/docs/mockup-notes/threads/th-91/comments');
+    expect(last().body.text).toBe('Which breakpoint did you measure at?');
+    expect(payload(reply).asked).toBe(true);
+  });
+
+  it('request_more_info with a bare minted id resolves, then asks on the ticket item', async () => {
+    const reply = await call('request_more_info', {
+      reviewItemId: 'r-4b2e',
+      question: 'What does the smaller cache cost?',
+    });
+    okReply(reply);
+    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
+    expect(last().path).toBe('/api/tasks/t-resolved/review-items/r-4b2e/more-info');
+  });
+
+  it("set_review_item_criteria accepts a reviewItemId and lands on that item's board", async () => {
+    const reply = await call('set_review_item_criteria', {
+      reviewItemId: 'r-4b2e',
+      criteria: 'Every option names a cost.',
+    });
+    okReply(reply);
+    expect(seen.at(-2)?.path).toBe('/api/review-items/r-4b2e');
+    expect(last().method).toBe('PUT');
+    expect(last().path).toBe('/api/workspaces/w-resolved/settings');
+    expect(payload(reply).workspaceId).toBe('w-resolved');
   });
 });
