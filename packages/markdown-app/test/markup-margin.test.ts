@@ -1610,3 +1610,58 @@ describe('mountMarkupMargin — a composer mounting re-measures the balloon that
     expect(slotB.style.height).toBe('80px');
   });
 });
+
+describe('mountMarkupMargin — fit-to-fold keeps the composer reachable', () => {
+  it('lifts a low-anchored comment balloon inside the viewport on the scroll restack', async () => {
+    const { parent, surface, ydoc, chrome, scope } = mountRedlineWithChrome(
+      'Alpha.\n\nBravo.\n',
+      'Alpha.\n\nBravo.\n',
+    );
+    await tick();
+    const thread = openThreadAt(
+      ydoc,
+      surface.handle.editor,
+      () => surface.getSelectionRel(),
+      { from: 1, to: 6 },
+      'A comment anchored low on the screen.',
+    );
+    const span = parent.querySelector(`[data-thread-id="${thread.id}"]`) as HTMLElement;
+    expect(span).not.toBeNull();
+    // Pin the anchor low in an 800px-tall editor viewport (happy-dom has no
+    // real layout: rects and clientHeight are mocked, scrollTop stays 0).
+    vi.spyOn(span, 'getBoundingClientRect').mockReturnValue({
+      top: 600,
+      bottom: 610,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: 10,
+      x: 0,
+      y: 600,
+      toJSON() {},
+    } as DOMRect);
+    Object.defineProperty(parent, 'clientHeight', { value: 800, configurable: true });
+
+    const margin = mountMarkupMargin({
+      editorEl: parent,
+      view: surface.handle.editor.view,
+      getDeletions: () => surface.getDeletions(),
+      threads: () => chrome.collectThreads(),
+      chrome,
+      scope,
+    });
+    margin.relayout();
+
+    const balloon = parent.querySelector('.lf-balloon-comment') as HTMLElement;
+    expect(balloon).not.toBeNull();
+    // happy-dom reports offsetHeight 0 — pin the measured card height, then
+    // drive the scroll restack (positions only, no rebuild, so the pin holds).
+    Object.defineProperty(balloon, 'offsetHeight', { value: 560, configurable: true });
+    parent.dispatchEvent(new Event('scroll'));
+    await new Promise((r) => setTimeout(r, 150));
+
+    // Viewport bottom 800 - gap 8 - height 560 = 232 — lifted off the 600
+    // anchor so the footer (composer + Answer) sits inside the fold.
+    expect(Number.parseFloat(balloon.style.top)).toBe(232);
+  });
+});
