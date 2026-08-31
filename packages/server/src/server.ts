@@ -1769,16 +1769,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    */
   type ReviewGateAddress =
     | { kind: 'task'; taskId: string; reviewItemId: string }
-    | { kind: 'thread'; docId: string; threadId: string; commentId: string };
+    | { kind: 'thread'; docId: string; threadId: string; commentId: string }
+    // The ticket's OWN decision — a row that IS the question rather than one
+    // carrying it. It has no item id to name (`legacyReviewItem` derives it
+    // at read time under the fixed `r-legacy`, which is the same string on
+    // every such ticket), so the address is the ticket, and
+    // `revise_review_item` takes it with `reviewItemId` omitted — the shape
+    // `answer_decision` has always used for the same row.
+    | { kind: 'decision'; taskId: string };
 
   /** The paste-ready call that ends a hold, per surface. One spelling, used by
    *  the tool result, the filer's wake and the stall report alike — three
    *  copies of an address is how one of them ends up naming a verb that
    *  refuses. */
   function reviseCallFor(address: ReviewGateAddress): string {
-    return address.kind === 'task'
-      ? `revise_review_item(taskId="${address.taskId}", reviewItemId="${address.reviewItemId}")`
-      : `revise_review_item(docId="${address.docId}", threadId="${address.threadId}", commentId="${address.commentId}")`;
+    switch (address.kind) {
+      case 'task':
+        return `revise_review_item(taskId="${address.taskId}", reviewItemId="${address.reviewItemId}")`;
+      case 'decision':
+        return `revise_review_item(taskId="${address.taskId}")`;
+      default:
+        return `revise_review_item(docId="${address.docId}", threadId="${address.threadId}", commentId="${address.commentId}")`;
+    }
   }
 
   /** What a filing route says when the gate held the item. Points at the
@@ -1786,7 +1798,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   function heldMessage(address: ReviewGateAddress, reason: string): string {
     return (
       `Held off the reader's queue — ${judgeReasonSentence(reason)} ` +
-      `It is on the ${address.kind === 'task' ? 'ticket' : 'thread'}; revise it with ${reviseCallFor(address)}. ` +
+      `It is on the ${address.kind === 'thread' ? 'thread' : 'ticket'}; revise it with ${reviseCallFor(address)}. ` +
       'Every revision is judged again, and the item reaches the queue when it passes.'
     );
   }
@@ -1958,12 +1970,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const frame: ReviewItemHeldFrame = {
       event: REVIEW_ITEM_HELD_EVENT,
       workspaceId: target.workspaceId,
-      ...(address.kind === 'task'
-        ? { taskId: address.taskId }
-        : { docId: address.docId, threadId: address.threadId, commentId: address.commentId }),
+      ...(address.kind === 'thread'
+        ? { docId: address.docId, threadId: address.threadId, commentId: address.commentId }
+        : { taskId: address.taskId }),
       revise: reviseCallFor(address),
       title: target.title,
-      reviewItemId: address.kind === 'task' ? address.reviewItemId : address.commentId,
+      reviewItemId:
+        address.kind === 'task'
+          ? address.reviewItemId
+          : address.kind === 'decision'
+            ? LEGACY_REVIEW_ITEM_ID
+            : address.commentId,
       headline: words.headline,
       reason: judgement.reason,
       ts: at,
@@ -2010,6 +2027,66 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         settled: () => taskProjection.ensureWorkspace(task.workspaceId),
       },
       item,
+      author,
+    );
+    return out.held
+      ? { held: true, item: out.row, reason: out.reason, message: out.message }
+      : { held: false, item: out.row };
+  }
+
+  /**
+   * The gate for a ticket that IS the decision — `needs: 'decision'` with the
+   * question in its own title and body, filed by `create_tasks` (single or
+   * batch) and rewritten by every door that moves those words.
+   *
+   * The third surface, and the one the ticket for this work was written
+   * about: a decision ticket reaches the reader's queue as the derived
+   * `r-legacy` row, so before this it was the one filing path that put a row
+   * in front of Bryan with the judge never called.
+   *
+   * Identical to the other two in everything a filer can observe — same
+   * judge, same criteria, same fail-open policy, same `held` / `heldReason` /
+   * `message`, same `workspace.review_item_held` wake. Two things differ, and
+   * both follow from the row having no item of its own:
+   *
+   *  - the address is the TICKET (`revise_review_item(taskId=…)`), because
+   *    there is no `reviewItemId` — minting one would make the ticket's own
+   *    decision a second, competing row beside itself;
+   *  - the version is `wordsRevisionOf`, not a count of revisions, because
+   *    the words being judged are the row's own and every writer of them
+   *    (the title route, the body route, this revise door) already moves it.
+   */
+  async function judgeTaskDecision(
+    task: Task,
+    author: { id: string; name: string; kind?: string },
+  ): Promise<ReviewGate | undefined> {
+    const derived = taskStore.listReviewItems(task.id).find((r) => r.id === LEGACY_REVIEW_ITEM_ID);
+    // Not a decision — no derived row, so nothing is on the queue to hold.
+    // `undefined` rather than a synthesised pass, so a caller cannot report
+    // "judged and fine" about a ticket the judge was never asked about.
+    if (!derived) return undefined;
+    const out = await runReviewGate<TaskReviewItem>(
+      {
+        workspaceId: task.workspaceId,
+        address: { kind: 'decision', taskId: task.id },
+        title: task.title,
+        current: () =>
+          taskStore.listReviewItems(task.id).find((r) => r.id === LEGACY_REVIEW_ITEM_ID),
+        words: (row) => row.review,
+        version: () => wordsRevisionOf(taskStore.getTask(task.id) ?? task),
+        held: (row) => isReviewItemHeld(row),
+        judgement: (row) => row.judge,
+        record: (judgement, o) => {
+          const res = taskStore.recordDecisionJudgement(task.id, judgement, {
+            actor: author,
+            ...(o.forVersion !== undefined ? { forVersion: o.forVersion } : {}),
+            ...(o.forPendingAt !== undefined ? { forPendingAt: o.forPendingAt } : {}),
+          });
+          return res.ok ? { ok: true, row: res.item } : { ok: false };
+        },
+        settled: () => taskProjection.ensureWorkspace(task.workspaceId),
+      },
+      derived,
       author,
     );
     return out.held
@@ -2068,6 +2145,53 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     return out.held
       ? { held: true, review: out.row, reason: out.reason, message: out.message }
       : { held: false, review: out.row };
+  }
+
+  /**
+   * One create can put TWO things through the gate: the ticket's own decision
+   * and a `review` payload filed with it. Both are judged — never one instead
+   * of the other — and this is how both are reported through a response shape
+   * that carries a single hold.
+   *
+   * The explicitly filed item leads, because it is the thing the caller wrote
+   * a payload for. A second hold is not dropped: its own paste-ready call is
+   * appended, so a caller that fixes only what the first sentence names is
+   * still told the row has not arrived.
+   */
+  function mergedHold(
+    filed: ReviewGate | undefined,
+    decision: ReviewGate | undefined,
+  ): ReviewGate | undefined {
+    if (!filed?.held) return decision?.held ? decision : (filed ?? decision);
+    if (!decision?.held) return filed;
+    return {
+      ...filed,
+      message: `${filed.message} The ticket's own decision is held as well: ${decision.message}`,
+    };
+  }
+
+  /**
+   * Re-judge a ticket's own decision after its WORDS moved.
+   *
+   * The decision's words are the row's title, body and options, so every
+   * door that rewrites those is a revision of it — `rewrite_task` most of
+   * all. Without this a filer who fixed a held decision the obvious way
+   * would leave the stale verdict standing and the row off the queue
+   * forever: the hold is keyed on the item, and nothing else would ever ask
+   * the judge again. That is the dead end the whole gate is written to avoid,
+   * arriving through a different door.
+   *
+   * A no-op on a row that is not a decision. Announces the row exactly when
+   * this edit is what released it, the same rule the revise door follows.
+   */
+  async function regateDecisionWords(taskId: string, author: User): Promise<void> {
+    const task = taskStore.getTask(taskId);
+    if (!task || task.needs !== 'decision') return;
+    const wasHeld = taskStore
+      .listReviewItems(taskId)
+      .some((r) => r.id === LEGACY_REVIEW_ITEM_ID && isReviewItemHeld(r));
+    const gate = await judgeTaskDecision(task, author);
+    if (wasHeld && gate && !gate.held) announceTaskReview(task, gate.item, author);
   }
 
   /** The response fields a filing route adds when the gate held the item. */
@@ -2764,7 +2888,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // BOTH surfaces, one list. A hold the lead never hears about is the same
     // silence whichever verb filed it.
     const held = overdueHeldItems(
-      [...taskStore.heldReviewItems(workspace.id), ...heldThreadReviewItems(workspace)],
+      [
+        // The ticket-borne holds, each carrying the call that ends it —
+        // spelled by `reviseCallFor`, the same function the filer's wake and
+        // the tool result use, so the lead's report cannot name a different
+        // verb from the one the filer was told to call. A ticket's OWN
+        // decision is reported under the derived id and addressed at the
+        // ticket alone, because that row has no item id.
+        ...taskStore.heldReviewItems(workspace.id).map((item) => ({
+          ...item,
+          revise: reviseCallFor(
+            item.reviewItemId === LEGACY_REVIEW_ITEM_ID
+              ? { kind: 'decision', taskId: item.taskId }
+              : { kind: 'task', taskId: item.taskId, reviewItemId: item.reviewItemId },
+          ),
+        })),
+        ...heldThreadReviewItems(workspace),
+      ],
       Date.now(),
       heldReviewItemMs,
     );
@@ -6763,6 +6903,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // refusal here is unreachable and the ticket cannot land holding a
           // question the caller was told was rejected.
           let gate: ReviewGate | undefined;
+          // The ticket that IS the decision. Judged here, before the response
+          // is written, for the same reason a `review` payload is: this row
+          // reaches the reader's queue as the derived `r-legacy` item, so a
+          // 200 that says nothing about a hold reads as "it is in front of
+          // them" for a row the queue omits.
+          let decisionGate: ReviewGate | undefined;
+          if (res.task.needs === 'decision') {
+            decisionGate = await judgeTaskDecision(
+              res.task,
+              authorFor(body?.author) ?? ANONYMOUS_ACTOR,
+            );
+            if (decisionGate?.held) taskProjection.ensureWorkspace(workspaceId);
+          }
           if (parsed.review !== undefined) {
             const actor = authorFor(body?.author) ?? ANONYMOUS_ACTOR;
             const added = taskStore.addReviewItem(res.task.id, parsed.review, { actor });
@@ -6799,7 +6952,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(parsed.ignoredLinks.length > 0 ? { ignoredLinks: parsed.ignoredLinks } : {}),
             ...(res.shapeGaps !== undefined ? { shapeGaps: res.shapeGaps } : {}),
             ...(parsed.reviewAdvice !== undefined ? { reviewAdvice: parsed.reviewAdvice } : {}),
-            ...heldFields(gate),
+            ...heldFields(mergedHold(gate, decisionGate)),
             // The row's ACTUAL visibility, stated plainly — `placed` above
             // answers goal placement, not whether any dispatch read returns
             // the row or where a filed ask went. See `createdVisibility`.
@@ -6884,6 +7037,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             item: TaskReviewItem;
             actor: User;
           }> = [];
+          /** The rows that ARE decisions — judged in the same bounded pass,
+           *  because a decision ticket reaches the reader's queue through its
+           *  derived `r-legacy` row and so must clear the same gate as a
+           *  question filed on a ticket. */
+          const decisionsToJudge: Array<{ task: Task; actor: User }> = [];
           /** Each row's actual visibility, stated plainly — a triage row is
            *  returned by no dispatch read, and a filed review item is on the
            *  addressee's Home queue regardless. See `createdVisibility`. */
@@ -6968,6 +7126,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               if (added.ok) toJudge.push({ task: added.task, item: added.item, actor });
               attachedReview = true;
             }
+            if (res.task.needs === 'decision') {
+              decisionsToJudge.push({ task: res.task, actor: createdBy ?? ANONYMOUS_ACTOR });
+            }
             if (parsed.reviewAdvice !== undefined) {
               reviewAdvice.push({ taskId: res.task.id, advice: parsed.reviewAdvice });
             }
@@ -7005,6 +7166,28 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 });
               } else announceTaskReview(row.task, row.item, row.actor);
             }
+          }
+          // The decision rows, the same way. Reported under the derived id,
+          // which is what tells the caller to address the fix at the TICKET
+          // — `revise_review_item(taskId=…)` — rather than at an item id no
+          // ticket carries. Nothing is announced for a decision: a decision
+          // ticket announces itself through `task.created`.
+          if (decisionsToJudge.length > 0) {
+            const gates = await mapBounded(decisionsToJudge, JUDGE_BATCH_CONCURRENCY, (row) =>
+              judgeTaskDecision(row.task, row.actor),
+            );
+            for (let i = 0; i < decisionsToJudge.length; i++) {
+              const row = decisionsToJudge[i];
+              const gate = gates[i];
+              if (!row || !gate?.held) continue;
+              heldReviews.push({
+                taskId: row.task.id,
+                reviewItemId: LEGACY_REVIEW_ITEM_ID,
+                heldReason: gate.reason,
+                message: gate.message,
+              });
+            }
+            taskProjection.ensureWorkspace(workspaceId);
           }
           // Once, after the loop rather than inside it — see the single-create
           // door for why any of it is needed. The row that actually needs it
@@ -7415,16 +7598,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!isReviewItemGated(before)) {
             return j(200, { taskId, item: before, released: false });
           }
-          const res = taskStore.recordReviewJudgement(
-            taskId,
-            reviewItemId,
-            {
-              at: Date.now(),
-              verdict: 'ok',
-              reason: `Released by ${author.name} — the gate was overruled.`,
-            },
-            { actor: author },
-          );
+          const overruled = {
+            at: Date.now(),
+            verdict: 'ok' as const,
+            reason: `Released by ${author.name} — the gate was overruled.`,
+          };
+          // The ticket's OWN decision is releasable too, and unlike a held
+          // comment it has a surface to press the button from: the row is on
+          // the board, and the held note renders on it. The verdict lands on
+          // the task rather than on an item, which is the only difference.
+          const res =
+            reviewItemId === LEGACY_REVIEW_ITEM_ID
+              ? taskStore.recordDecisionJudgement(taskId, overruled, { actor: author })
+              : taskStore.recordReviewJudgement(taskId, reviewItemId, overruled, {
+                  actor: author,
+                });
           if (!res.ok) return j(res.error === 'not-found' ? 404 : 400, res);
           taskProjection.ensureWorkspace(res.task.workspaceId);
           announceTaskReview(res.task, res.item, author);
@@ -7453,6 +7641,55 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const parsedRange = parseRevisedRange(body?.revisedRange);
           if (!parsedRange.ok) return j(400, { error: parsedRange.error });
           const revisedRange = parsedRange.range;
+          // The TICKET'S OWN decision. `reviseReviewItem` refuses the derived
+          // id — rightly: its words are the task's title, body and options,
+          // and there is no stored row to patch. So this door delegates into
+          // the store method that rewrites THOSE words through the ordinary
+          // title/body doors, exactly as `answerTaskReview` delegates the
+          // same id into `answerDecision`. Without it a held decision is a
+          // dead end: off the reader's queue, complained about at five
+          // minutes, and with no verb its filer can call.
+          if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
+            // Refused, never dropped. The ticket's own decision has no item
+            // thread of its own to answer on, and forwarding a `reply` this
+            // branch does not act on would answer 200 while discarding the
+            // one sentence the caller wrote for a person to read — the
+            // accepted-and-discarded shape this file refuses everywhere else
+            // (codex review).
+            if (reply !== undefined) {
+              return j(400, {
+                error: 'no-thread',
+                message:
+                  "a ticket's own decision has no item thread to reply on — revise it without `reply`, and point at what changed with post_reply on the task",
+              });
+            }
+            const wasHeldDecision = taskStore
+              .listReviewItems(taskId)
+              .some((r) => r.id === LEGACY_REVIEW_ITEM_ID && isReviewItemHeld(r));
+            const revised = taskStore.reviseTaskDecision(
+              taskId,
+              { headline: body?.headline, detail: body?.detail, options: body?.options },
+              {
+                actor: author,
+                ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
+              },
+            );
+            if (!revised.ok) {
+              return j(revised.error === 'not-found' ? 404 : 400, revised);
+            }
+            taskProjection.ensureWorkspace(revised.task.workspaceId);
+            // Judged again, on the new words — the promise the hold's message
+            // makes. A revision that still misses comes back held.
+            const gate = await judgeTaskDecision(revised.task, author);
+            if (wasHeldDecision && gate && !gate.held) {
+              announceTaskReview(revised.task, gate.item, author);
+            }
+            return j(200, {
+              task: revised.task,
+              item: gate?.item ?? revised.item,
+              ...heldFields(gate),
+            });
+          }
           if (reply !== undefined) {
             const item = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
             if (item && !latestThreadedQuestion(item)?.threadId) {
@@ -7549,6 +7786,8 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           });
           if (!res.ok) return j(404, res);
           taskProjection.ensureWorkspace(res.task.workspaceId);
+          // A decision ticket's headline just moved — see `regateDecisionWords`.
+          if (res.changed) await regateDecisionWords(taskId, author);
           return j(200, res);
         }
         // update_task_body: replace a task's description after creation.
@@ -7585,6 +7824,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // No hand-refresh of the projection: unlike `/title` (which emits
           // nothing by design), this act DOES emit, and the projection's own
           // subscriber re-runs ensureWorkspace off the event.
+          // Same, for the words the body carries — this is the door
+          // `rewrite_task` uses to fix a held decision.
+          await regateDecisionWords(taskId, author);
           const rewritten = taskStore.getTask(taskId);
           return j(200, {
             ok: true,

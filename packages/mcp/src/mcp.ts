@@ -108,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.133';
+const PLUGIN_VERSION = '0.1.134';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -1333,7 +1333,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_tasks',
       description:
-        "File work on a board. Always takes a list; one task is a one-row list, so this is the only create verb. Per row: omit assignee and you own it, omit goal and it lands unplaced at the bottom of Backlog. Rows you file land in triage — on the board, but not in anyone's queue until somebody moves them out with task_transition. A bad row never rejects the batch; it comes back in failures by index.",
+        "File work on a board. Always takes a list; one task is a one-row list, so this is the only create verb. Per row: omit assignee and you own it, omit goal and it lands unplaced at the bottom of Backlog. Rows you file land in triage — on the board, but not in anyone's queue until somebody moves them out with task_transition. A bad row never rejects the batch; it comes back in failures by index. Anything on a row that will reach the reader's queue passes the board's quality gate — a `review` payload, and the row's own question when it is `needs: 'decision'`. A row that comes back `held: true` is filed but OFF that queue until you close the gap in `heldReason`; the result carries the exact revise_review_item(…) call that lifts it, and every revision is judged again.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1821,17 +1821,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'revise_review_item',
       description:
-        "Rewrite one of your review items in place — the answer to a question somebody asked ON it, or the fix for an item the quality gate HELD (`held: true` from add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Address the item wherever you raised it: on a TICKET, `taskId` + `reviewItemId` (the id rides with the question on the task's thread); on a DOC THREAD, `docId` + `threadId` + `commentId` — the review is a payload on one comment, and `commentId` is the `thread.comments[].id` that create_thread / post_reply already handed you when you raised it. Half an address is refused, not guessed. BOTH forms re-judge every revision — a held item reaches the reader's queue when it passes, and a revision that still misses the mark comes back `held: true` with the gap named. The ticket form additionally returns an already-queued item marked Revised, with their question quoted and the changed span highlighted, and `reply` posts on the asking thread in the same call. The doc form has no `reply`; it rewrites the item, judges it, and tells the thread's watchers.",
+        "Rewrite one of your review items in place — the answer to a question somebody asked ON it, or the fix for an item the quality gate HELD (`held: true` from add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Address the item wherever you raised it: on a TICKET, `taskId` + `reviewItemId` (the id rides with the question on the task's thread); for the TICKET'S OWN decision — a `needs: 'decision'` row, which has no item id because its words ARE the title, body and options — `taskId` alone, the shape answer_decision takes for the same row; on a DOC THREAD, `docId` + `threadId` + `commentId` — the review is a payload on one comment, and `commentId` is the `thread.comments[].id` that create_thread / post_reply already handed you when you raised it. Half a doc address is refused, not guessed. EVERY form re-judges every revision — a held item reaches the reader's queue when it passes, and a revision that still misses the mark comes back `held: true` with the gap named. The ticket form additionally returns an already-queued item marked Revised, with their question quoted and the changed span highlighted, and `reply` posts on the asking thread in the same call. Revising a ticket's own decision rewrites the row's words, so rewrite_task does the same job and is judged the same way. The doc form has no `reply`; it rewrites the item, judges it, and tells the thread's watchers.",
       inputSchema: {
         type: 'object',
         properties: {
           taskId: {
             type: 'string',
-            description: 'Ticket form: the ticket the item hangs on. Pass with reviewItemId.',
+            description:
+              "Ticket form: the ticket. With reviewItemId, one of the items filed on it; alone, the ticket's OWN decision.",
           },
           reviewItemId: {
             type: 'string',
-            description: 'Ticket form: which item on the ticket to revise.',
+            description:
+              "Ticket form: which item on the ticket to revise. Omit for the ticket's own decision — the question a `needs: 'decision'` row asks in its title and body, which carries no item id.",
           },
           docId: {
             type: 'string',
@@ -3708,23 +3710,37 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
               '`reply` is ticket-only — a doc-thread item already lives in its thread, so point at the change there with post_reply',
             );
           }
-          await http(
+          const docRes = (await http(
             'POST',
             `/api/docs/${encodeURIComponent(docId)}/threads/${encodeURIComponent(threadId)}/revise`,
             { ...patch, commentId },
-          );
-          // No held/reviewAdvice: the doc route runs no quality gate, and
-          // reporting a verdict nobody reached would read as a pass.
-          return ok({ docId, threadId, commentId, revised: true });
+          )) as { held?: boolean; heldReason?: string; message?: string };
+          // The hold, forwarded. This used to be dropped with a comment
+          // saying the doc route runs no gate — true when it was written and
+          // false since the gate reached this surface, which left a filer
+          // reading `revised: true` for an item the queue still omits.
+          return ok({ docId, threadId, commentId, revised: true, ...heldResult(docRes) });
         }
-        if (taskId === undefined || reviewItemId === undefined) {
+        if (taskId === undefined) {
           return err(
-            'which item? taskId + reviewItemId for an item on a ticket, or docId + threadId + commentId for one raised on a doc thread',
+            'which item? taskId (+ reviewItemId for one of the items filed on the ticket), or docId + threadId + commentId for one raised on a doc thread',
           );
         }
+        // `reviewItemId` omitted means the TICKET'S OWN decision — the row
+        // whose words are the ticket's title, body and options, and which has
+        // no item id of its own. The same shape `answer_decision` has always
+        // taken for the same row, and the address a hold on it hands back.
+        // `reply` is refused there for the doc form's reason inverted: the
+        // ticket's decision has no item thread of its own to answer on.
+        if (reviewItemId === undefined && reply !== undefined) {
+          return err(
+            "`reply` needs an item thread to land on, and a ticket's own decision has none — revise without `reply`, then point at the change with post_reply on the task",
+          );
+        }
+        const targetItemId = reviewItemId ?? 'r-legacy';
         const res = (await http(
           'POST',
-          `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(reviewItemId)}/revise`,
+          `/api/tasks/${encodeURIComponent(taskId)}/review-items/${encodeURIComponent(targetItemId)}/revise`,
           { ...patch, ...(reply !== undefined ? { reply } : {}) },
         )) as {
           threadId?: string;
@@ -3735,7 +3751,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
         return ok({
           taskId,
-          reviewItemId,
+          ...(reviewItemId !== undefined ? { reviewItemId } : { decision: true }),
           revised: true,
           ...(res.threadId !== undefined ? { threadId: res.threadId } : {}),
           ...(reply !== undefined && res.threadId !== undefined ? { replied: true } : {}),
