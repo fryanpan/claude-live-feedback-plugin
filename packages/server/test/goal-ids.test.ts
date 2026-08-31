@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { type ServerHandle, createServer } from '../src/server.ts';
+import { summarizeGoals } from '../src/task-queue.ts';
 import {
   CHORES_GOAL_ID,
   RESERVED_GOAL_IDS,
@@ -470,5 +471,128 @@ describe('the goal route refuses a caller-chosen id and names the way out', () =
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('goals must be');
     expect((await (await fetch(`${base}/api/workspaces/${wsId}`)).json()) as unknown).toBeDefined();
+  });
+});
+
+/**
+ * A board on disk that still holds SUBGOALS.
+ *
+ * Subgoals were removed from the product (Bryan, 2026-08-30), and that
+ * decision does not rewrite anything already written. Every reader in the
+ * store now looks at `workspace.goals` alone, so a nested band that survived
+ * the load would exist nowhere: its tasks would read as unknown-goal work,
+ * and the next goal-list edit would strand them for real. The load path
+ * flattens instead — each child becoming a band directly after its old
+ * parent, which is the position the board has drawn it in all along.
+ *
+ * On disk, not through the API: this shape can no longer be submitted, which
+ * is exactly why the fixture has to be written straight to the sidecar.
+ */
+describe('a board written before subgoals were removed loads flat', () => {
+  let dataDir: string;
+  let store: TaskStore;
+  const wsId = 'w-nestedboard1';
+
+  const nested = () => ({
+    workspace: {
+      id: wsId,
+      name: 'live board',
+      goal: 'Make feedback as fast as pointing.',
+      goals: [
+        {
+          id: 'g-launch',
+          title: '1. Ship the launch post',
+          dueAt: 1_766_000_000_000,
+          subgoals: [
+            { id: 'g-launch-qa', title: '1.1 QA pass' },
+            { id: 'g-launch-copy', title: '1.2 Copy edit', dueAt: 1_767_000_000_000 },
+          ],
+        },
+        { id: 'g-perf', title: '2. Cut page weight' },
+      ],
+      docIds: [],
+      createdAt: 1_700_000_000_000,
+    },
+    tasks: [
+      {
+        id: 't-nested-1',
+        workspaceId: wsId,
+        title: 'proof the headline',
+        status: 'todo',
+        goal: 'g-launch-qa',
+        order: 1,
+        assignee: 'Jordan',
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+        transitions: [],
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'goal-nested-'));
+    mkdirSync(join(dataDir, 'workspaces'), { recursive: true });
+    writeFileSync(tasksSidecarPath(dataDir, wsId), `${JSON.stringify(nested(), null, 2)}\n`);
+    store = new TaskStore({ dataDir, debounceMs: 5 });
+  });
+
+  afterEach(() => {
+    store.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('splices every subgoal in after its parent, keeping titles and dueAt', () => {
+    const goals = store.getWorkspace(wsId)?.goals ?? [];
+    expect(goals.map((g) => [g.id, g.title])).toEqual([
+      ['g-launch', '1. Ship the launch post'],
+      ['g-launch-qa', '1.1 QA pass'],
+      ['g-launch-copy', '1.2 Copy edit'],
+      ['g-perf', '2. Cut page weight'],
+    ]);
+    expect(goals[0]?.dueAt).toBe(1_766_000_000_000);
+    expect(goals[2]?.dueAt).toBe(1_767_000_000_000);
+    // Nothing nested survives the load, so nothing downstream can find one.
+    expect(goals.every((g) => !('subgoals' in g))).toBe(true);
+  });
+
+  it('gives the flattened band a goal ROW, so it is a band in every sense', () => {
+    // Without this the row exists in the list and nowhere else: no status, no
+    // description, no archive — the half a reader would notice first.
+    expect(store.getGoalRow('g-launch-qa')?.title).toBe('1.1 QA pass');
+    expect(store.getGoalRow('g-launch-qa')?.kind).toBe('goal');
+  });
+
+  it('leaves the task in a real band rather than orphaning it', () => {
+    // The failure this guards: a load that dropped the nested band would
+    // leave this task pointing at an id the list no longer has. Asserted
+    // through `summarizeGoals` rather than through `task.goal`, which is a
+    // stored string and reads the same either way — the question is whether
+    // the id still names a band the board ORDERS, and an orphan comes back
+    // as a bare `reorderable: false` row instead.
+    const goals = store.getWorkspace(wsId)?.goals ?? [];
+    const row = summarizeGoals(store.listTasks(wsId), goals).find((r) => r.id === 'g-launch-qa');
+    expect(row?.reorderable).toBe(true);
+    expect(row?.todo).toBe(1);
+    // Positive control for the field: an id that really is gone reads false.
+    const orphaned = summarizeGoals(
+      store.listTasks(wsId),
+      goals.filter((g) => g.id !== 'g-launch-qa'),
+    ).find((r) => r.id === 'g-launch-qa');
+    expect(orphaned?.reorderable).toBe(false);
+  });
+
+  it('accepts the flattened list back as a reorder, which the nested one could not be', () => {
+    const res = store.reorderGoals(wsId, ['g-perf', 'g-launch', 'g-launch-qa', 'g-launch-copy'], {
+      actor: PERSON,
+    });
+    expect(res.ok).toBe(true);
+    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([
+      'g-perf',
+      'g-launch',
+      'g-launch-qa',
+      'g-launch-copy',
+    ]);
+    // And the task did not move with the band's position.
+    expect(store.getTask('t-nested-1')?.goal).toBe('g-launch-qa');
   });
 });

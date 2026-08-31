@@ -7522,6 +7522,13 @@ export class TaskStore {
           console.error(`[tasks] sidecar ${entry} has no workspace — skipped`);
           continue;
         }
+        // Boards written before subgoals were removed still hold them, and
+        // every reader below this line looks at `goals` alone. Without this
+        // the nested bands would simply not exist after the deploy — their
+        // tasks reading as unknown-goal work, and the next goal-list edit
+        // stranding them for real. Flattened HERE, at the one door a stored
+        // list comes through, rather than in each reader.
+        workspace.goals = flattenNestedGoals((workspace.goals ?? []) as readonly NestedGoalInput[]);
         const tasks = new Map<string, Task>();
         for (const task of parsed.tasks ?? []) {
           if (typeof task?.id !== 'string') continue;
