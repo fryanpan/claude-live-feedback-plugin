@@ -5022,13 +5022,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // one bind that took a path on faith: an unreachable one bound
           // happily, and the 404 arrived weeks later in front of whoever
           // opened the link. Markdown and code already fail their attach
-          // loudly; this is the same courtesy, and it runs BEFORE the room is
-          // created so a failed bind leaves nothing behind.
-          // The read happens HERE too, not after the room exists: it is the
-          // content the capture below stores, and holding it means a source
-          // that goes away between the check and the read is still a refusal
-          // with nothing created rather than a doc bound to a copy nobody
-          // took.
+          // loudly; this is the same courtesy.
+          //
+          // Both the check AND the read happen here, before the room exists,
+          // for two reasons: a failed bind leaves nothing behind, and the
+          // content held from this read is what the capture below stores — so
+          // a source that goes away between the two steps is still a refusal
+          // rather than a doc bound to a copy nobody took.
           let mockupHtml: string | null = null;
           if (type === 'mockup' && sourceUrl) {
             const unreadable = (reason: string) =>
