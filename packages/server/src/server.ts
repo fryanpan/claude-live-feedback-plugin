@@ -255,7 +255,6 @@ import {
   type TaskStatus,
   TaskStore,
   eventsLogPath,
-  flattenGoals,
   isAttachmentRuntime,
   isRetired,
   isValidRef,
@@ -311,8 +310,10 @@ async function mapBounded<T, R>(
  * Structural validation for PUT /api/workspaces/:id/goals. Returns the
  * sanitized list, or null if any entry is malformed. Unknown keys are
  * dropped rather than persisted — the sidecar shape is a contract, not a
- * junk drawer. ONE subgoal level max (§3.2); a subgoal with subgoals is
- * malformed, not silently flattened.
+ * A stored or in-flight `subgoals` array is still ACCEPTED and validated one
+ * level deep — the REST route has callers this build cannot restart, and a
+ * board written before subgoals were removed still has them on disk. The
+ * store FLATTENS what comes through; nothing here nests any more.
  *
  * `id` is OPTIONAL and that is the create/keep switch (see `GoalListEntry`):
  * omitted means "create this band, mint me an id", present means "the band
@@ -1728,9 +1729,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const goals = taskStore.getWorkspace(workspaceId)?.goals ?? [];
     for (const g of goals) {
       if (g.id === goalId) return g.title;
-      for (const s of g.subgoals ?? []) {
-        if (s.id === goalId) return s.title;
-      }
     }
     return goalId;
   }
@@ -2059,7 +2057,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const stallVerdict = (workspace: HubWorkspace): StallVerdict => {
     const tasks = taskStore.listTasks(workspace.id);
     const ownerKindOf = taskProjection.ownerKindReader(workspace.id);
-    const goals = flattenGoals(workspace.goals);
+    const goals = workspace.goals;
     // Matching on the owner's NAME would be wrong — it appears in ordinary
     // goal titles. Only the decisions band is his queue.
     const ownerBand = new Set(
@@ -6555,7 +6553,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, { ok: true, changed: res.changed, task: res.task });
         }
-        // set_task_goal (§3.10): goal/subgoal + exact position — the write
+        // set_task_goal (§3.10): goal + exact position — the write
         // half of triage and the board's regroup gesture. Every field here is
         // hand-copied; each has an HTTP-level test in task-tool-routes.test.ts.
         //
@@ -7162,8 +7160,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // a goal id squeezed through `/api/tasks/:id/archive`. The transition
         // route accepts either kind because a status change is literally the
         // same write on both; an archive is not — this one cascades to the
-        // band's subgoals and tasks, and its response carries the ids it
-        // moved. A caller that cannot tell which of those two things it just
+        // band's tasks, and its response carries the ids it moved. A caller that cannot tell which of those two things it just
         // did is a caller that cannot report the count to the person who
         // asked for it.
         //

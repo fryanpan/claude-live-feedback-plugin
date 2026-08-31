@@ -1598,10 +1598,7 @@ export class VoiceRouter {
         if (title) docTitles[d] = title;
       }
       const index = {
-        goals: workspace.goals.flatMap((g) => [
-          { id: g.id, title: g.title },
-          ...(g.subgoals ?? []).map((sg) => ({ id: sg.id, title: sg.title })),
-        ]),
+        goals: workspace.goals.map((g) => ({ id: g.id, title: g.title })),
         tasks: this.tasks
           .listTasks(workspaceId)
           .filter((t) => !keep || keep.has(t.id))
@@ -1770,8 +1767,7 @@ export class VoiceRouter {
   }
 
   /** Every task, doc and goal on the board with the words a person would
-   *  say. Top-level goals only: the goal panel opens a band, and a subgoal
-   *  has no panel of its own to land on. */
+   *  say. */
   private titleIndex(workspaceId: string): TitleCandidate[] {
     const workspace = this.tasks.getWorkspace(workspaceId);
     const goals: TitleCandidate[] = (workspace?.goals ?? []).map((g) => ({

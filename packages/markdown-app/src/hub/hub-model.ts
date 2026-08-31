@@ -176,7 +176,7 @@ export function heldReviewItems(task: HubTask): HubReviewItem[] {
   return (task.reviews ?? []).filter((r) => r.answer === undefined && r.judge?.verdict === 'held');
 }
 
-export interface HubSubgoal {
+export interface HubGoal {
   id: string;
   title: string;
   dueAt?: number;
@@ -224,15 +224,6 @@ export interface HubSubgoal {
   archivedAt?: number;
   archivedBy?: string;
   archiveReason?: string;
-  /** Set when this band went as part of ANOTHER band's archive, naming that
-   *  band. Its tasks carry the same marker, so only the named band's restore
-   *  brings them back — which is why `archivedGoals` does not offer this row
-   *  a restore of its own. */
-  archivedWithGoal?: string;
-}
-
-export interface HubGoal extends HubSubgoal {
-  subgoals?: HubSubgoal[];
 }
 
 export interface HubWorkspaceInfo {
@@ -400,69 +391,31 @@ export function archivedTasks(tasks: HubTask[]): HubTask[] {
 /** The band's half of `isTaskArchived`, and the one reader of a goal's
  *  `archivedAt`. Separate from the task's only because the two carry
  *  different types, never different rules. */
-export function isGoalArchived(goal: HubSubgoal): boolean {
+export function isGoalArchived(goal: HubGoal): boolean {
   return goal.archivedAt !== undefined;
 }
 
 /**
- * Archived BANDS, newest removal first — the goals half of the restore list.
- *
- * Flattened, so a subgoal archived ON ITS OWN is a row of its own here — but
- * a subgoal that went only because its parent did is NOT listed. Its tasks
- * were stamped with the parent's id, so restoring it alone would put an empty
- * band back and leave its tasks archived, under a control that had just
- * promised to bring them. The parent's row is in this list and restores the
- * whole cascade, which is what the archive confirmation said would happen.
- */
-/**
- * "1 subgoal and 5 tasks" — the blast radius, as words.
+ * "5 tasks" — the blast radius of a band's archive, as words.
  *
  * ONE builder, because the confirmation, the toast that follows it and the
  * Activity line are three statements about the SAME archive, and a reader who
- * is told "1 subgoal and 5 tasks" before and "5 tasks" after is being told the
- * subgoal did not go. It did. Returns '' when nothing rode along, so a caller
- * can ask "is there anything to name" without counting again.
+ * is told one number before and a different one after has been told the
+ * difference went somewhere. Returns '' when the band held nothing, so a
+ * caller can ask "is there anything to name" without counting again.
  */
-export function cascadePhrase(subgoals: number, tasks: number): string {
-  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
-  const parts: string[] = [];
-  if (subgoals > 0) parts.push(plural(subgoals, 'subgoal'));
-  if (tasks > 0) parts.push(plural(tasks, 'task'));
-  return parts.join(' and ');
+export function cascadePhrase(tasks: number): string {
+  return tasks > 0 ? `${tasks} task${tasks === 1 ? '' : 's'}` : '';
 }
 
-/** Every archived band, cascade members included — what the COUNTS are of.
- *  `archivedGoals` is the shorter list of rows that can be restored on their
- *  own; a count taken from that one would report a subgoal back onto the
- *  board while it was still off it. */
-export function archivedGoalTotal(goals: HubGoal[]): number {
-  let n = 0;
-  for (const g of goals) {
-    if (isGoalArchived(g)) n += 1;
-    for (const s of g.subgoals ?? []) if (isGoalArchived(s)) n += 1;
-  }
-  return n;
-}
-
-/** How many subgoals went with this band, and so come back with it. The
- *  restore list says this on the band's row, which is what keeps its heading's
- *  count and its rows from looking like they disagree. */
-export function cascadedSubgoals(goals: HubGoal[], goalId: string): number {
-  for (const g of goals) {
-    if (g.id !== goalId) continue;
-    return (g.subgoals ?? []).filter((s) => s.archivedWithGoal === goalId).length;
-  }
-  return 0;
-}
-
-export function archivedGoals(goals: HubGoal[]): HubSubgoal[] {
-  const out: HubSubgoal[] = [];
-  const own = (g: HubSubgoal) => isGoalArchived(g) && g.archivedWithGoal === undefined;
-  for (const g of goals) {
-    if (own(g)) out.push(g);
-    for (const s of g.subgoals ?? []) if (own(s)) out.push(s);
-  }
-  return out.sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+/**
+ * Archived BANDS, newest removal first — the goals half of the restore list,
+ * and what the archived counts are of.
+ */
+export function archivedGoals(goals: HubGoal[]): HubGoal[] {
+  return goals
+    .filter(isGoalArchived)
+    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
 }
 
 export function taskVisible(task: HubTask, f: BoardFilters): boolean {
@@ -488,19 +441,17 @@ export function taskVisible(task: HubTask, f: BoardFilters): boolean {
 export interface BoardSection {
   id: string;
   title: string;
-  /** 0 = goal, 1 = subgoal (one level max — §3.2). */
-  depth: 0 | 1;
   dueAt?: number;
-  /** The band's own status, carried from the goal row (see `HubSubgoal`).
+  /** The band's own status, carried from the goal row (see `HubGoal`).
    *  Absent on Backlog — a bucket, not a goal — and on undecorated bands. */
   status?: TaskStatus;
   doneAt?: number;
   doneBy?: HubActor;
-  /** The goal row's owner, carried the same way (see `HubSubgoal`). */
+  /** The goal row's owner, carried the same way (see `HubGoal`). */
   assignee?: string;
   ownerKind?: HubOwnerKind;
   /** The goal's description and its discussion, carried the same way again —
-   *  see `HubSubgoal` for what each one is and why the address rides even
+   *  see `HubGoal` for what each one is and why the address rides even
    *  when the text does not. Absent on Backlog: a bucket has no body. */
   bodyDocId?: string;
   body?: string;
@@ -511,10 +462,6 @@ export interface BoardSection {
   archivedAt?: number;
   archivedBy?: string;
   archiveReason?: string;
-  archivedWithGoal?: string;
-  /** The title of the band named by `archivedWithGoal`, when this section is
-   *  one. Set by `goalSection`, which is the only lookup holding the tree. */
-  archivedWithGoalTitle?: string;
   isChores: boolean;
   tasks: HubTask[];
 }
@@ -526,7 +473,7 @@ function byBoardOrder(a: HubTask, b: HubTask): number {
 // The status trio and the owner ride from the decorated goal onto its section
 // verbatim — conditionally, so an undecorated band's section claims nothing
 // rather than carrying a fistful of undefined keys.
-function carriedOf(g: HubSubgoal) {
+function carriedOf(g: HubGoal) {
   return {
     ...(g.status !== undefined ? { status: g.status } : {}),
     ...(g.doneAt !== undefined ? { doneAt: g.doneAt } : {}),
@@ -540,7 +487,6 @@ function carriedOf(g: HubSubgoal) {
     ...(g.archivedAt !== undefined ? { archivedAt: g.archivedAt } : {}),
     ...(g.archivedBy !== undefined ? { archivedBy: g.archivedBy } : {}),
     ...(g.archiveReason !== undefined ? { archiveReason: g.archiveReason } : {}),
-    ...(g.archivedWithGoal !== undefined ? { archivedWithGoal: g.archivedWithGoal } : {}),
   };
 }
 
@@ -561,40 +507,21 @@ function carriedOf(g: HubSubgoal) {
  * nobody could explain.
  */
 export function goalSection(goals: HubGoal[], goalId: string): BoardSection | null {
-  for (const g of goals) {
-    if (g.id === goalId)
-      return {
-        id: g.id,
-        title: g.title,
-        depth: 0,
-        dueAt: g.dueAt,
-        ...carriedOf(g),
-        isChores: false,
-        tasks: [],
-      };
-    for (const sg of g.subgoals ?? []) {
-      if (sg.id !== goalId) continue;
-      return {
-        id: sg.id,
-        title: sg.title,
-        depth: 1,
-        dueAt: sg.dueAt,
-        ...carriedOf(sg),
-        // The band that took it, BY NAME. The panel has to tell a reader why
-        // this row has no Restore of its own, and "archived with g-vBRG…" is
-        // not something anybody can act on.
-        ...(sg.archivedWithGoal === g.id ? { archivedWithGoalTitle: g.title } : {}),
-        isChores: false,
-        tasks: [],
-      };
-    }
-  }
-  return null;
+  const g = goals.find((goal) => goal.id === goalId);
+  if (!g) return null;
+  return {
+    id: g.id,
+    title: g.title,
+    dueAt: g.dueAt,
+    ...carriedOf(g),
+    isChores: false,
+    tasks: [],
+  };
 }
 
 /**
- * Goal order IS priority order (§3.2): sections follow goals[], each goal's
- * subgoals nested directly after it, Backlog always last. A task whose goal id
+ * Goal order IS priority order (§3.2): sections follow goals[], Backlog
+ * always last. A task whose goal id
  * matches no section (transient state while a goal-list edit lands) renders
  * under Backlog — dropping it would be the store-has-it/surface-can't-show-it
  * bug all over again.
@@ -613,29 +540,15 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
     sections.push({
       id: g.id,
       title: g.title,
-      depth: 0,
       dueAt: g.dueAt,
       ...carriedOf(g),
       isChores: false,
       tasks: [],
     });
-    for (const sg of g.subgoals ?? []) {
-      if (isGoalArchived(sg)) continue;
-      sections.push({
-        id: sg.id,
-        title: sg.title,
-        depth: 1,
-        dueAt: sg.dueAt,
-        ...carriedOf(sg),
-        isChores: false,
-        tasks: [],
-      });
-    }
   }
   const chores: BoardSection = {
     id: CHORES_ID,
     title: CHORES_TITLE,
-    depth: 0,
     isChores: true,
     tasks: [],
   };
@@ -665,10 +578,6 @@ export function goalRank(goals: HubGoal[]): (goalId: string) => number {
   for (const g of goals) {
     rank.set(g.id, next);
     next += 1;
-    for (const sg of g.subgoals ?? []) {
-      rank.set(sg.id, next);
-      next += 1;
-    }
   }
   const last = next;
   return (goalId) => rank.get(goalId) ?? last;
@@ -687,7 +596,6 @@ export function goalRank(goals: HubGoal[]): (goalId: string) => number {
 export function goalLabel(goals: HubGoal[], goalId: string): string {
   for (const g of goals) {
     if (g.id === goalId) return g.title;
-    for (const sub of g.subgoals ?? []) if (sub.id === goalId) return sub.title;
   }
   return CHORES_TITLE;
 }

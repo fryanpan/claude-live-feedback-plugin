@@ -1035,10 +1035,6 @@ function Board(props: { handlers: BoardHandlers; wrapper: Box<HTMLElement> }) {
   return (
     <Fragment>
       {sections.map((section) => (
-        // FLAT. `section.depth` is still an honest fact about the goal list,
-        // and the stored shape is untouched — but the list renders one level,
-        // because a subgoal indented under a parent reads as a smaller thing
-        // rather than as work with the same claim on the day.
         <section
           key={section.id}
           class={`hub-section${section.isChores ? ' hub-chores' : ''}`}

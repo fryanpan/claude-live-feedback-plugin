@@ -70,12 +70,10 @@ import {
   type WalkSources,
   advanceWalk,
   applyRefresh,
-  archivedGoalTotal,
   archivedGoals,
   archivedTasks,
   boardSections,
   cascadePhrase,
-  cascadedSubgoals,
   clientDriftNotice,
   goalLabel,
   goalSection,
@@ -1040,10 +1038,6 @@ async function main(): Promise<void> {
           },
         },
         archivedBands,
-        {
-          total: archivedGoalTotal(state.info?.goals ?? []),
-          cascaded: (goalId) => cascadedSubgoals(state.info?.goals ?? [], goalId),
-        },
       );
     }
     // The island's one input. `pane` rides along rather than gating the write:
@@ -1061,9 +1055,8 @@ async function main(): Promise<void> {
       knownAgentIds: knownAgentIds(),
       // Bands count too: the chip is the way back to the restore list, and a
       // board whose only archived thing is a goal must not read "0 archived"
-      // and hide the door. Cascade members are counted — they are archived —
-      // even though the list gives them no row of their own.
-      archivedCount: archived.length + archivedGoalTotal(state.info?.goals ?? []),
+      // and hide the door.
+      archivedCount: archived.length + archivedBands.length,
     };
     // No "N tasks have no goal yet" strip above the board any more (Bryan,
     // 2026-08-29, by voice: it "is taking out space and all of it's not
@@ -2114,12 +2107,12 @@ async function main(): Promise<void> {
    *  the panel then refuses to offer Archive at all. */
   async function goalCascadeCount(
     goalId: string,
-  ): Promise<{ tasks: number; subgoals: number } | null> {
-    const res = await fetchJson<{ taskIds?: string[]; subgoalIds?: string[] }>(
+  ): Promise<{ tasks: number } | null> {
+    const res = await fetchJson<{ taskIds?: string[] }>(
       `/api/goals/${encodeURIComponent(goalId)}/cascade`,
     );
     if (!res) return null;
-    return { tasks: res.taskIds?.length ?? 0, subgoals: res.subgoalIds?.length ?? 0 };
+    return { tasks: res.taskIds?.length ?? 0 };
   }
 
   /** How many rows a goal archive or restore actually moved, off the response.
@@ -2157,9 +2150,9 @@ async function main(): Promise<void> {
       renderDetail();
     }
     // The same phrase the confirmation used, from the same builder: a reader
-    // told "and its 1 subgoal and 5 tasks" and then "and 5 tasks" would have
-    // to conclude the subgoal stayed.
-    const rode = cascadePhrase(movedCount(res.data, 'subgoalIds'), movedCount(res.data, 'taskIds'));
+    // told "and its 5 tasks" and then "and 3 tasks" would have to conclude
+    // two of them stayed.
+    const rode = cascadePhrase(movedCount(res.data, 'taskIds'));
     showToast(`Archived “${section.title}”${rode ? ` and its ${rode}` : ''}`, {
       label: 'Undo',
       run: () => void restoreGoal(section),
@@ -3207,12 +3200,9 @@ async function main(): Promise<void> {
         bootLoc.task !== null &&
         state.detailTaskId === bootLoc.task &&
         !state.tasks.has(bootLoc.task);
-      // `goalSection` rather than a scan of the top level, because a goal is
-      // not always a BAND: a subgoal is one level down, and an archived one is
-      // on no board at all. The top-level `some()` this replaces called both
-      // of those "gone" and closed the panel four seconds after it opened —
-      // a live subgoal deep link included, which is the link the panel's own
-      // Copy hands out.
+      // `goalSection` rather than a scan of the board's own sections, because
+      // an archived goal is on no board at all. The scan this replaces called
+      // that "gone" and closed the panel four seconds after it opened.
       const goneGoal =
         bootLoc.goal !== null &&
         state.detailGoalId === bootLoc.goal &&
