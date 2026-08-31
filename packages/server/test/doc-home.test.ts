@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  canonicalRepoRoot,
   checkoutBranch,
   findWorktreeRoot,
   gitCommonDir,
@@ -69,6 +70,15 @@ describe('doc-home git plumbing readers', () => {
     const b = gitCommonDir(wt);
     expect(a).not.toBeNull();
     expect(a).toBe(b as string);
+  });
+
+  it('canonicalRepoRoot names the main checkout from ANY worktree of the repo', () => {
+    // A home stored with a linked worktree's path dies with that worktree —
+    // the resolvers start at the stored path. The canonical spelling is the
+    // main checkout, which outlives worktree churn.
+    expect(canonicalRepoRoot(main)).toBe(main);
+    expect(canonicalRepoRoot(wt)).toBe(main);
+    expect(canonicalRepoRoot(tmp)).toBeNull();
   });
 
   it('findWorktreeRoot walks up from a (possibly missing) file path', () => {

@@ -74,7 +74,7 @@ import {
   setWorkspaceGroups as setWorkspaceGroupsImpl,
 } from './binds.ts';
 import {
-  gitCommonDir,
+  canonicalRepoRoot,
   normalizeDocHome,
   resolveHomeCheckout,
   verifyPathInHome,
@@ -618,6 +618,9 @@ export function maintainAwareness(aw: awarenessProtocol.Awareness, now = Date.no
 export class Rooms {
   private rooms = new Map<string, DocRoom>();
   private fileBindings = new Map<string, FileBinding>();
+  /** Last attempt to re-resolve an UNBOUND home-pinned doc on an edit
+   *  (`maybeRebindHome`) — the probe is cheap, but not per-keystroke. */
+  private homeRebindAttemptAt = new Map<string, number>();
   /**
    * docId → reader key → last time that reader fetched the doc's content
    * (GET /api/docs/:id/content?reader=…). Pairs with `lastHumanEditAt` in
@@ -3937,16 +3940,19 @@ export class Rooms {
     }
     const norm = normalizeDocHome(input);
     if (!norm.ok) return { ok: false, error: 'invalid-home', detail: norm.error };
-    const home = norm.home;
     // The repo must at least exist as a repo — a typo'd repoRoot pinned
     // as-is would park the doc forever with a message blaming the branch.
-    if (gitCommonDir(home.repoRoot) === null) {
+    // Store the MAIN checkout's root, not the caller's spelling: a home
+    // declared from a linked worktree must survive that worktree's removal.
+    const canonRoot = canonicalRepoRoot(norm.home.repoRoot);
+    if (canonRoot === null) {
       return {
         ok: false,
         error: 'invalid-home',
-        detail: `${home.repoRoot} is not a git checkout`,
+        detail: `${norm.home.repoRoot} is not a git checkout`,
       };
     }
+    const home: DocHome = { ...norm.home, repoRoot: canonRoot };
     room.meta.docHome = home;
     const placement = resolveHomeCheckout(home);
     if (placement.placed) {
@@ -4039,6 +4045,35 @@ export class Rooms {
     this.attachFile(docId, absPath);
     this.saveToDisk(room);
     console.log(`[rooms] ${docId}: home binding now at ${absPath}`);
+  }
+
+  /**
+   * A home-pinned doc with NO binding tries to re-place its home. The state
+   * exists when hydration found no checkout on the home branch: parking
+   * there leaves nothing in `fileBindings`, and every recovery path below
+   * this one — homeGuard, the poll sweep — hangs off a binding. Without this
+   * hook the park message's promise ("check the branch out and the next
+   * edit or reparse resumes syncing") held only for docs parked while LIVE;
+   * a doc parked at hydrate stayed parked until a re-pin or restart. Called
+   * from the room's update hook (throttled) and from reparseFromDisk
+   * (forced). Bound docs return immediately — homeGuard owns them.
+   */
+  private maybeRebindHome(room: DocRoom, opts?: { force?: boolean }): void {
+    const home = room.meta.docHome;
+    if (!home || this.fileBindings.has(room.docId)) return;
+    if (isHubOwnedRoom(room.docId) || contentKind(room.meta.type) !== 'prose') return;
+    const now = Date.now();
+    if (!opts?.force && now - (this.homeRebindAttemptAt.get(room.docId) ?? 0) < 1000) return;
+    this.homeRebindAttemptAt.set(room.docId, now);
+    const placement = resolveHomeCheckout(home);
+    if (!placement.placed) return;
+    // Persist BEFORE attaching: the attach's at-rest arbitration compares
+    // the home's file against the persisted .ydoc (diskNewerThanState), and
+    // when the trigger is the edit itself the .ydoc still holds the
+    // pre-edit state — a freshly checked-out copy would win and revert the
+    // very edit that resumed syncing.
+    this.persistRoomNow(room);
+    this.retargetHomeBinding(room, placement.absPath);
   }
 
   /**
@@ -4315,6 +4350,21 @@ export class Rooms {
         content.insert(0, text);
       }, 'file-watch');
       return { ok: true };
+    }
+    // A pinned doc re-resolves its home before the reparse reads anything.
+    // The old path's checkout may have switched branches since the binding
+    // was made — an unguarded read here would pull that branch's copy
+    // straight into the live doc, the exact incident homeGuard closes on
+    // the poll path — and a doc parked at hydrate has no binding at all,
+    // with reparse documented as one of its two recovery verbs.
+    if (
+      room.meta.docHome &&
+      !isHubOwnedRoom(room.docId) &&
+      contentKind(room.meta.type) === 'prose'
+    ) {
+      const bound = this.fileBindings.get(docId);
+      if (!bound) this.maybeRebindHome(room, { force: true });
+      else if (this.homeGuard(room, bound) === 'parked') return { ok: false, error: 'missing' };
     }
     const binding = this.fileBindings.get(docId);
     if (!binding) return { ok: false, error: 'no-binding' };
@@ -5805,6 +5855,10 @@ export class Rooms {
       if (isAuthoringOrigin(room, origin)) {
         room.lastContentChangeAt = Date.now();
         this.scheduleRevisionBump(room);
+        // "The next edit resumes syncing" — see maybeRebindHome. No-op for
+        // every doc that has a binding (or no pin), which is all of them
+        // outside the hydration-parked state.
+        this.maybeRebindHome(room);
       }
       this.saveToDisk(room);
     });

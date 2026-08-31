@@ -95,7 +95,7 @@ import { clientReleaseStatus } from './client-release.ts';
 import { maybeCompress, maybeNotModified } from './compress.ts';
 import type { Deployer } from './deploy.ts';
 import { DispatchRegistry, type WatchFactory, isValidDispatchTaskId } from './dispatch-registry.ts';
-import { normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
+import { canonicalRepoRoot, normalizeDocHome, resolveHomeCheckout } from './doc-home.ts';
 import { RESERVED_DOC_PREFIXES } from './doc-ids.ts';
 import {
   EFFORT_ESTIMATE_MODEL,
@@ -6715,14 +6715,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                     error: `notesHome must be { repoRoot, branch, dir } or null to clear: ${norm.error.replace('relPath', 'dir')}`,
                   });
                 }
-                const placed = resolveHomeCheckout(norm.home);
-                if (!placed.placed && placed.reason === 'repo-missing') {
+                // Store the MAIN checkout's root, not the caller's spelling:
+                // a notes home declared from a linked worktree must survive
+                // that worktree's removal (canonicalRepoRoot in doc-home.ts).
+                const canonRoot = canonicalRepoRoot(norm.home.repoRoot);
+                if (canonRoot === null) {
                   return j(400, {
                     error: `notesHome.repoRoot ${norm.home.repoRoot} is not a git checkout`,
                   });
                 }
                 notesHomeValue = {
-                  repoRoot: norm.home.repoRoot,
+                  repoRoot: canonRoot,
                   branch: norm.home.branch,
                   dir: norm.home.relPath,
                 };

@@ -213,6 +213,85 @@ describe('doc homes through the binding', () => {
     expect(readFileSync(join(wt, REL), 'utf8')).toContain('live edit wins');
   });
 
+  it('a doc parked AT HYDRATE resumes on the next edit once the branch has a checkout', async () => {
+    rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    await sleep(1100);
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-m', 'plan v1');
+    await rooms.flush();
+
+    // While "down": the branch loses its only checkout entirely.
+    git(main, 'worktree', 'remove', '--force', wt);
+
+    // Hydration parks — no checkout on the branch, so no binding at all.
+    const rooms2 = makeRooms(dataDir);
+    expect(docText(rooms2, 'd1')).toContain('first pass');
+    expect(rooms2.docHomeStatus('d1')?.placement).toEqual({
+      placed: false,
+      reason: 'no-checkout-on-branch',
+    });
+
+    // The branch gets a checkout again; the next EDIT must re-place the
+    // home — the recovery homeGuard provides for live parks hangs off a
+    // binding this doc doesn't have.
+    const wt2 = join(tmp, 'wt-plans-back');
+    git(main, 'worktree', 'add', wt2, 'plans');
+    setProse(rooms2, 'd1', '# Triage\n\nback from the dead\n');
+    await sleep(1400);
+    expect(readFileSync(join(wt2, REL), 'utf8')).toContain('back from the dead');
+    expect(rooms2.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
+    await rooms2.flush();
+  });
+
+  it('a forced reparse must not pull a switched checkout’s branch copy into the doc', async () => {
+    rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
+    await sleep(1100);
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-m', 'plan v1');
+    // The checkout moves off the home branch and its copy of the file now
+    // belongs to somebody else's feature work; the home branch has no
+    // checkout anywhere.
+    git(wt, 'checkout', '-b', 'feature-detour');
+    writeExternal(join(wt, REL), '# Somebody else\n\nfeature-branch copy\n');
+
+    const res = rooms.reparseFromDisk('d1');
+    expect(res.ok).toBe(false);
+    expect(docText(rooms, 'd1')).toContain('first pass');
+    expect(docText(rooms, 'd1')).not.toContain('feature-branch copy');
+
+    // With the branch checked out again, reparse recovers instead of
+    // parking — it follows the home, not the stale path.
+    const wt2 = join(tmp, 'wt-plans-again');
+    git(main, 'worktree', 'add', wt2, 'plans');
+    expect(rooms.reparseFromDisk('d1').ok).toBe(true);
+    expect(rooms.docHomeStatus('d1')?.boundPath).toBe(join(wt2, REL));
+    expect(docText(rooms, 'd1')).toContain('first pass');
+  });
+
+  it('a home declared from a linked worktree survives that worktree’s removal', async () => {
+    // Declared via the LINKED checkout's path — the stored root must be the
+    // repo's durable identity, not the spelling the caller happened to use.
+    const res = rooms.setDocHome('d1', { repoRoot: wt, branch: 'plans', relPath: REL });
+    if (!res.ok) throw new Error(JSON.stringify(res));
+    expect(rooms.docHomeStatus('d1')?.home.repoRoot).toBe(main);
+    await sleep(1100);
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-m', 'plan v1');
+
+    // The declaring worktree dies; the branch moves to a fresh one.
+    git(main, 'worktree', 'remove', '--force', wt);
+    const wt2 = join(tmp, 'wt-plans-relocated');
+    git(main, 'worktree', 'add', wt2, 'plans');
+
+    setProse(rooms, 'd1', '# Triage\n\noutlived the checkout\n');
+    await sleep(2400);
+    expect(readFileSync(join(wt2, REL), 'utf8')).toContain('outlived the checkout');
+    expect(rooms.docHomeStatus('d1')?.placement).toEqual({
+      placed: true,
+      path: join(wt2, REL),
+    });
+  });
+
   it('a restart re-resolves the home, including a worktree that moved while the server was down', async () => {
     rooms.setDocHome('d1', { repoRoot: main, branch: 'plans', relPath: REL });
     await sleep(1100);

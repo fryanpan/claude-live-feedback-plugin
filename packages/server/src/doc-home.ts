@@ -71,6 +71,21 @@ export function gitCommonDir(worktreeRoot: string): string | null {
   }
 }
 
+/**
+ * The durable spelling of a repoRoot: the MAIN checkout's root. A home (or
+ * notes home) declared from a linked worktree would otherwise die with that
+ * worktree — every resolver starts at `gitCommonDir(repoRoot)`, which needs
+ * the declared path to still exist — even though the repo and the pinned
+ * branch live on in other checkouts. The main checkout is the common dir's
+ * parent; a layout where that doesn't hold (bare repo) keeps the caller's
+ * path, which is then genuinely the repo's most durable known address.
+ */
+export function canonicalRepoRoot(worktreeRoot: string): string | null {
+  const common = gitCommonDir(worktreeRoot);
+  if (!common) return null;
+  return basename(common) === '.git' ? dirname(common) : resolvePath(worktreeRoot);
+}
+
 /** The branch a gitdir's HEAD is on, or null for detached / unreadable. */
 function branchOfGitDir(gd: string): string | null {
   try {
