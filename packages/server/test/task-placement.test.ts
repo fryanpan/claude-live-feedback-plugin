@@ -134,8 +134,9 @@ describe('the create ROUTES carry placement to the caller', () => {
       base,
       workspace.id,
       [
-        { key: 'ship', title: '1. Ship', subgoals: [{ key: 'index', title: '1.1 Index' }] },
-        { key: 'trust', title: '2. Trust' },
+        { key: 'ship', title: '1. Ship' },
+        { key: 'index', title: '2. Index' },
+        { key: 'trust', title: '3. Trust' },
       ],
       AGENT,
     );
@@ -158,10 +159,8 @@ describe('the create ROUTES carry placement to the caller', () => {
       await post(`/api/workspaces/${wsId}/tasks`, { author: AGENT, title: 'Unplaced' }),
     );
     expect(res.placement.placed).toBe(false);
-    // Ordered, flat, parent then subgoal — the same order the board reads.
+    // Ordered — the same order the board reads.
     expect(res.placement.goals?.map((g) => g.id)).toEqual([G.ship, G.index, G.trust]);
-    expect(res.placement.goals?.map((g) => g.depth)).toEqual([0, 1, 0]);
-    expect(res.placement.goals?.find((g) => g.id === G.index)?.parent).toBe(G.ship);
     // `chores` is where it just landed, not a band it could have been ranked
     // into — offering it back as a choice would be the tool suggesting the
     // outcome it is reporting.

@@ -61,15 +61,9 @@ const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' 
  *  hard-coded ids (`launch` was `g-launch`); the ids themselves are minted by
  *  the store and read back out of `seedGoals`. */
 const GOAL_SPEC: SeedGoalSpec[] = [
-  {
-    key: 'launch',
-    title: '1. Ship the launch post',
-    dueAt: 1766000000000,
-    subgoals: [
-      { key: 'launchQa', title: '1.1 QA pass' },
-      { key: 'launchCopy', title: '1.2 Copy edit', dueAt: 1767000000000 },
-    ],
-  },
+  { key: 'launch', title: '1. Ship the launch post', dueAt: 1766000000000 },
+  { key: 'launchQa', title: '1.1 QA pass' },
+  { key: 'launchCopy', title: '1.2 Copy edit', dueAt: 1767000000000 },
   { key: 'perf', title: '2. Cut page weight' },
 ];
 
@@ -95,15 +89,9 @@ function bands(ids: GoalIds): Bands {
  *  full replace, so "leave the list as it is" means naming every band by the
  *  id the seed minted — and it doubles as the expected stored shape. */
 const boardFor = (G: Bands): WorkspaceGoal[] => [
-  {
-    id: G.launch,
-    title: '1. Ship the launch post',
-    dueAt: 1766000000000,
-    subgoals: [
-      { id: G.launchQa, title: '1.1 QA pass' },
-      { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
-    ],
-  },
+  { id: G.launch, title: '1. Ship the launch post', dueAt: 1766000000000 },
+  { id: G.launchQa, title: '1.1 QA pass' },
+  { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
   { id: G.perf, title: '2. Cut page weight' },
 ];
 
@@ -124,8 +112,9 @@ describe('TaskStore.renameGoal', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  /** A board with work under the band being renamed, at both statuses and
-   *  both depths. Without tasks on it "nothing moved" is vacuously true. */
+  /** A board with work under the band being renamed, at both statuses, plus
+   *  a task on a neighbouring band. Without tasks on it "nothing moved" is
+   *  vacuously true. */
   function seed(): { wsId: string; G: Bands; open: string; done: string; sub: string } {
     const ws = store.createWorkspace('search-revamp');
     const G = bands(seedGoals(store, ws.id, GOAL_SPEC, PERSON));
@@ -164,7 +153,7 @@ describe('TaskStore.renameGoal', () => {
     expect(res.goal.title).toBe('1. Ship the relaunch post');
 
     const goals = store.getWorkspace(wsId)?.goals ?? [];
-    expect(goals.map((g) => g.id)).toEqual([G.launch, G.perf]);
+    expect(goals.map((g) => g.id)).toEqual([G.launch, G.launchQa, G.launchCopy, G.perf]);
     expect(goals[0]?.title).toBe('1. Ship the relaunch post');
     // The id is untouched, so every task keeps its band — including the done
     // one, which is the half the replace path leaves orphaned.
@@ -174,7 +163,7 @@ describe('TaskStore.renameGoal', () => {
     expect(rows.filter((r) => !r.reorderable && r.id !== CHORES_GOAL_ID)).toEqual([]);
   });
 
-  it('retitles a SUBGOAL, leaving the parent and its sibling untouched', () => {
+  it('retitles a band in the middle of the list, leaving its neighbours untouched', () => {
     const { wsId, G, sub } = seed();
     const res = store.renameGoal(
       wsId,
@@ -187,13 +176,14 @@ describe('TaskStore.renameGoal', () => {
     expect(res.ok).toBe(true);
 
     const goals = store.getWorkspace(wsId)?.goals ?? [];
-    expect(goals[0]?.title).toBe('1. Ship the launch post');
-    expect(goals[0]?.subgoals?.map((s) => [s.id, s.title])).toEqual([
+    expect(goals.map((g) => [g.id, g.title])).toEqual([
+      [G.launch, '1. Ship the launch post'],
       [G.launchQa, '1.1 Editorial pass'],
       [G.launchCopy, '1.2 Copy edit'],
+      [G.perf, '2. Cut page weight'],
     ]);
-    // dueAt on the untouched sibling rides along.
-    expect(goals[0]?.subgoals?.[1]?.dueAt).toBe(1767000000000);
+    // dueAt on an untouched neighbour rides along.
+    expect(goals[2]?.dueAt).toBe(1767000000000);
     expect(goalOf(sub)).toBe(G.launchQa);
   });
 
@@ -207,7 +197,7 @@ describe('TaskStore.renameGoal', () => {
         actor: PERSON,
       },
     );
-    expect(store.getWorkspace(wsId)?.goals[1]?.dueAt).toBe(1768000000000);
+    expect(store.getWorkspace(wsId)?.goals[3]?.dueAt).toBe(1768000000000);
     store.renameGoal(
       wsId,
       G.perf,
@@ -216,7 +206,7 @@ describe('TaskStore.renameGoal', () => {
         actor: PERSON,
       },
     );
-    expect(store.getWorkspace(wsId)?.goals[1]?.dueAt).toBeUndefined();
+    expect(store.getWorkspace(wsId)?.goals[3]?.dueAt).toBeUndefined();
     // The band that was never named keeps its own dueAt.
     expect(store.getWorkspace(wsId)?.goals[0]?.dueAt).toBe(1766000000000);
   });
@@ -300,20 +290,16 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
   /** The gesture reproduced against the live server — "same band, new title,
    *  new identity" — as it can still be spelled now that a caller cannot
    *  invent an id: the replacement band is submitted with NO id (a create),
-   *  its subgoals ride across by their real ids, and the old band is simply
+   *  every other band rides across by its real id, and the old band is simply
    *  left out. Before the guard this succeeded and emptied the band. */
   it('refuses a rename-by-new-id, naming the old id and what it holds', () => {
     const { wsId, G, open, done } = seed();
     const res = store.setGoalList(
       wsId,
       [
-        {
-          title: '1. Ship the relaunch post',
-          subgoals: [
-            { id: G.launchQa, title: '1.1 QA pass' },
-            { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
-          ],
-        },
+        { title: '1. Ship the relaunch post' },
+        { id: G.launchQa, title: '1.1 QA pass' },
+        { id: G.launchCopy, title: '1.2 Copy edit', dueAt: 1767000000000 },
         { id: G.perf, title: '2. Cut page weight' },
       ],
       { actor: PERSON },
@@ -340,14 +326,14 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     store.setTaskGoal(open, G.perf, { actor: AGENT });
     events.length = 0;
 
-    const res = store.setGoalList(wsId, [boardFor(G)[1] as WorkspaceGoal], { actor: PERSON });
+    const res = store.setGoalList(wsId, [boardFor(G)[3] as WorkspaceGoal], { actor: PERSON });
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('would-strand-tasks');
     if (res.error !== 'would-strand-tasks') return;
     expect(res.stranding.map((row) => [row.id, row.openTasks, row.doneTasks])).toEqual([
       [G.launch, 0, 1],
-      // The subgoal disappears with its parent and it holds an open task.
+      // The band next to it goes in the same replace, and it holds an open task.
       [G.launchQa, 1, 0],
     ]);
     expect(store.getTask(done)?.goal).toBe(G.launch);
@@ -360,12 +346,8 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     const res = store.setGoalList(
       wsId,
       [
-        {
-          id: G.launch,
-          title: '1. Ship the launch post',
-          dueAt: 1766000000000,
-          subgoals: [{ id: G.launchQa, title: '1.1 QA pass' }],
-        },
+        { id: G.launch, title: '1. Ship the launch post', dueAt: 1766000000000 },
+        { id: G.launchQa, title: '1.1 QA pass' },
       ],
       { actor: PERSON },
     );
@@ -374,12 +356,12 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     expect(res.changed).toBe(true);
     expect(res.movedToChores).toEqual([]);
     expect(res.strandedDone).toEqual([]);
-    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([G.launch]);
+    expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([G.launch, G.launchQa]);
   });
 
   it('proceeds when the caller NAMES the id in `drop`, and reports both halves', () => {
     const { wsId, G, open, done, sub } = seed();
-    const res = store.setGoalList(wsId, [boardFor(G)[1] as WorkspaceGoal], {
+    const res = store.setGoalList(wsId, [boardFor(G)[3] as WorkspaceGoal], {
       actor: PERSON,
       drop: [G.launch, G.launchQa, G.launchCopy],
     });
@@ -410,6 +392,8 @@ describe('TaskStore.setGoalList — the stranding guard', () => {
     expect(res.created.map((c) => c.title)).toEqual(['3. Docs']);
     expect(store.getWorkspace(wsId)?.goals.map((g) => g.id)).toEqual([
       G.launch,
+      G.launchQa,
+      G.launchCopy,
       G.perf,
       res.created[0]?.id,
     ]);
@@ -513,13 +497,13 @@ describe('the goal routes', () => {
     const goals = await readGoals(wsId);
     expect(goals[0]?.title).toBe('1. Ship the relaunch post');
     expect(goals[0]?.dueAt).toBe(1769000000000);
-    // The subgoals rode along untouched, and no task moved.
-    expect(goals[0]?.subgoals?.map((s) => s.id)).toEqual([G.launchQa, G.launchCopy]);
+    // Every other band rode along untouched, and no task moved.
+    expect(goals.map((g) => g.id)).toEqual([G.launch, G.launchQa, G.launchCopy, G.perf]);
     const byId = new Map((await readTasks(wsId)).map((t) => [t.id, t.goal]));
     expect([byId.get(open), byId.get(done)]).toEqual([G.launch, G.launch]);
   });
 
-  it('renames a SUBGOAL through the same route', async () => {
+  it('renames a band further down the list through the same route', async () => {
     const { wsId, G } = await seedWorkspace();
     await jj(
       await post(`/api/workspaces/${wsId}/goals/rename`, {
@@ -529,7 +513,12 @@ describe('the goal routes', () => {
       }),
     );
     const goals = await readGoals(wsId);
-    expect(goals[0]?.subgoals?.map((s) => s.title)).toEqual(['1.1 QA pass', '1.2 Line edit']);
+    expect(goals.map((g) => g.title)).toEqual([
+      '1. Ship the launch post',
+      '1.1 QA pass',
+      '1.2 Line edit',
+      '2. Cut page weight',
+    ]);
   });
 
   it('404s an unknown goal and 400s `chores`, without writing anything', async () => {
@@ -552,6 +541,8 @@ describe('the goal routes', () => {
     expect(((await reserved.json()) as { error: string }).error).toBe('reserved-goal-id');
     expect((await readGoals(wsId)).map((g) => g.title)).toEqual([
       '1. Ship the launch post',
+      '1.1 QA pass',
+      '1.2 Copy edit',
       '2. Cut page weight',
     ]);
   });
@@ -574,15 +565,20 @@ describe('the goal routes', () => {
       message: string;
     };
     expect(body.error).toBe('would-strand-tasks');
-    // Only the ids that actually hold work — the empty subgoals vanishing
-    // with their parent need no acknowledgement, because losing track of
-    // nothing is not a loss.
+    // Only the ids that actually hold work — the empty bands vanishing in the
+    // same replace need no acknowledgement, because losing track of nothing
+    // is not a loss.
     expect(body.stranding.map((s) => [s.id, s.openTasks, s.doneTasks])).toEqual([[G.launch, 1, 1]]);
     // The refusal has to name the way out, or it is just a wall.
     expect(body.message).toContain('rename_goal');
     expect(body.message).toContain('drop');
     // Presence control: the board is untouched by the refusal.
-    expect((await readGoals(wsId)).map((g) => g.id)).toEqual([G.launch, G.perf]);
+    expect((await readGoals(wsId)).map((g) => g.id)).toEqual([
+      G.launch,
+      G.launchQa,
+      G.launchCopy,
+      G.perf,
+    ]);
 
     const okRes = await jj<{
       movedToChores: string[];

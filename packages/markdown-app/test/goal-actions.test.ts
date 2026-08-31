@@ -4,11 +4,9 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
-  archivedGoalTotal,
   archivedGoals,
   boardSections,
   cascadePhrase,
-  cascadedSubgoals,
   describeEvent,
   goalSection,
   isGoalArchived,
@@ -28,10 +26,10 @@ import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
  * short.
  *
  * Archive is the one that is not simply the task panel's control moved across.
- * It takes the band's subgoals and tasks with it (Bryan, 2026-08-30), so it
- * asks first — and the ask has to carry the COUNT, because the blast radius is
- * exactly the part a reader cannot see from a band header. Most of this file
- * is about that sentence and about the panel refusing to commit without it.
+ * It takes the band's tasks with it (Bryan, 2026-08-30), so it asks first —
+ * and the ask has to carry the COUNT, because the blast radius is exactly the
+ * part a reader cannot see from a band header. Most of this file is about that
+ * sentence and about the panel refusing to commit without it.
  *
  * All fixtures are synthetic. The repo is public.
  */
@@ -82,25 +80,17 @@ function sectionOf(goal: Partial<HubGoal> & { id: string; title: string }) {
 
 describe('the sentence a goal archive asks before it commits', () => {
   it('names the number of tasks going with the band', () => {
-    expect(archiveConfirmLine('Ship W3', { tasks: 14, subgoals: 0 })).toBe(
+    expect(archiveConfirmLine('Ship W3', { tasks: 14 })).toBe(
       'Archive “Ship W3” and its 14 tasks?',
     );
   });
 
   it('counts one task as one, not as “1 tasks”', () => {
-    expect(archiveConfirmLine('Ship W3', { tasks: 1, subgoals: 0 })).toBe(
-      'Archive “Ship W3” and its 1 task?',
-    );
-  });
-
-  it('names subgoals too, because they go as well', () => {
-    expect(archiveConfirmLine('Ship W3', { tasks: 14, subgoals: 2 })).toBe(
-      'Archive “Ship W3” and its 2 subgoals and 14 tasks?',
-    );
+    expect(archiveConfirmLine('Ship W3', { tasks: 1 })).toBe('Archive “Ship W3” and its 1 task?');
   });
 
   it('says plainly when nothing else goes with it', () => {
-    expect(archiveConfirmLine('Ship W3', { tasks: 0, subgoals: 0 })).toBe(
+    expect(archiveConfirmLine('Ship W3', { tasks: 0 })).toBe(
       'Archive “Ship W3”? Nothing else is under it.',
     );
   });
@@ -206,7 +196,7 @@ describe('archiving a goal from the panel', () => {
 
   it('asks before it writes, and does not write on the icon alone', async () => {
     const onArchive = vi.fn();
-    const count = deferred<{ tasks: number; subgoals: number } | null>();
+    const count = deferred<{ tasks: number } | null>();
     renderGoalDetail(
       host,
       sectionOf({ id: 'g-pr', title: 'Ship W3' }),
@@ -220,9 +210,9 @@ describe('archiving a goal from the panel', () => {
     expect(ask()).toBe('Archive “Ship W3” and everything under it?');
     expect(button('.hub-goal-archive-go')).toBeNull();
 
-    count.settle({ tasks: 14, subgoals: 1 });
+    count.settle({ tasks: 14 });
     await count.promise;
-    expect(ask()).toBe('Archive “Ship W3” and its 1 subgoal and 14 tasks?');
+    expect(ask()).toBe('Archive “Ship W3” and its 14 tasks?');
     button('.hub-goal-archive-go')?.click();
     expect(onArchive).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
   });
@@ -232,7 +222,7 @@ describe('archiving a goal from the panel', () => {
     renderGoalDetail(
       host,
       sectionOf({ id: 'g-pr', title: 'Ship W3' }),
-      handlers({ onArchive, onCascadeCount: async () => ({ tasks: 3, subgoals: 0 }) }),
+      handlers({ onArchive, onCascadeCount: async () => ({ tasks: 3 }) }),
     );
     button('.hub-detail-archive')?.click();
     await Promise.resolve();
@@ -243,7 +233,7 @@ describe('archiving a goal from the panel', () => {
   });
 
   it('a count that arrives after Cancel does not reopen the ask', async () => {
-    const count = deferred<{ tasks: number; subgoals: number } | null>();
+    const count = deferred<{ tasks: number } | null>();
     renderGoalDetail(
       host,
       sectionOf({ id: 'g-pr', title: 'Ship W3' }),
@@ -251,7 +241,7 @@ describe('archiving a goal from the panel', () => {
     );
     button('.hub-detail-archive')?.click();
     button('.hub-goal-archive-cancel')?.click();
-    count.settle({ tasks: 14, subgoals: 0 });
+    count.settle({ tasks: 14 });
     await count.promise;
     await Promise.resolve();
     expect(panel().querySelector('.hub-goal-archive-confirm')).toBeNull();
@@ -299,47 +289,17 @@ describe('archiving a goal from the panel', () => {
     expect(panel().querySelector('.hub-goal-archive-confirm')).toBeNull();
   });
 
-  it('offers NO restore on a row that went with its parent, and says which one brings it back', () => {
-    // The rule the restore list already enforces: this row's tasks carry the
-    // BAND's id, so restoring it alone returns an empty subgoal and leaves
-    // its work archived. Both surfaces have to agree, or the panel becomes a
-    // way round the list's refusal.
+  // Every archived band restores on its own now — bands are a flat list, so
+  // no goal is ever archived as somebody else's member.
+  it('offers restore on any archived band, wherever it sits in the list', () => {
     const onRestore = vi.fn();
     const goals: HubGoal[] = [
-      {
-        id: 'g-pr',
-        title: 'Ship the widget',
-        archivedAt: NOW,
-        subgoals: [
-          { id: 'g-sub', title: 'Land the diff', archivedAt: NOW, archivedWithGoal: 'g-pr' },
-        ],
-      },
+      { id: 'g-pr', title: 'Ship the widget' },
+      { id: 'g-sub', title: 'Land the diff', archivedAt: NOW },
     ];
     const section = goalSection(goals, 'g-sub');
-    if (!section) throw new Error('goalSection lost the cascaded subgoal');
+    if (!section) throw new Error('goalSection lost the archived band');
     renderGoalDetail(host, section, handlers({ onRestore, onCascadeCount: vi.fn() }));
-    expect(button('.hub-detail-archive')).toBeNull();
-    expect(panel().querySelector('.hub-archived-restore')).toBeNull();
-    // Named, not hinted: "archived with g-sub…" is not something anybody can act on.
-    expect(panel().querySelector('.hub-archived-with-note')?.textContent).toContain(
-      'Archived with “Ship the widget”',
-    );
-    expect(onRestore).not.toHaveBeenCalled();
-  });
-
-  it('still offers restore on a band archived on its own — the control for the rule above', () => {
-    const onRestore = vi.fn();
-    const goals: HubGoal[] = [
-      {
-        id: 'g-pr',
-        title: 'Ship the widget',
-        subgoals: [{ id: 'g-sub', title: 'Land the diff', archivedAt: NOW }],
-      },
-    ];
-    const section = goalSection(goals, 'g-sub');
-    if (!section) throw new Error('goalSection lost the subgoal');
-    renderGoalDetail(host, section, handlers({ onRestore, onCascadeCount: vi.fn() }));
-    expect(panel().querySelector('.hub-archived-with-note')).toBeNull();
     panel().querySelector<HTMLButtonElement>('.hub-archived-restore')?.click();
     expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-sub' }));
   });
@@ -352,12 +312,10 @@ describe('an archived band on the board', () => {
     ...over,
   });
 
-  it('leaves the lanes, and its subgoal with it', () => {
+  it('leaves the lanes, and every other archived band with it', () => {
     const goals = [
-      band({
-        archivedAt: NOW,
-        subgoals: [{ id: 'g-sub', title: 'Land the diff', archivedAt: NOW }],
-      }),
+      band({ archivedAt: NOW }),
+      band({ id: 'g-sub', title: 'Land the diff', archivedAt: NOW }),
       band({ id: 'g-live', title: '2. Keep it live' }),
     ];
     const ids = boardSections(goals, [], filters).map((s) => s.id);
@@ -388,67 +346,29 @@ describe('an archived band on the board', () => {
     expect(isGoalArchived(found)).toBe(true);
   });
 
-  it('lists newest removal first, subgoals flattened in beside their parents', () => {
+  it('lists newest removal first, and lists only the archived ones', () => {
     const goals = [
-      band({ archivedAt: NOW, subgoals: [{ id: 'g-sub', title: 'Land the diff' }] }),
+      band({ archivedAt: NOW }),
       band({ id: 'g-old', title: '0. Older', archivedAt: NOW - 1000 }),
       band({ id: 'g-live', title: '2. Keep it live' }),
-      band({
-        id: 'g-parent',
-        title: '3. Parent',
-        subgoals: [{ id: 'g-subarch', title: 'Archived sub', archivedAt: NOW + 1000 }],
-      }),
+      band({ id: 'g-newest', title: '3. Newest removal', archivedAt: NOW + 1000 }),
     ];
-    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-subarch', 'g-pr', 'g-old']);
+    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-newest', 'g-pr', 'g-old']);
   });
 
-  it('leaves out a subgoal that only went because its parent did', () => {
-    // Its tasks were stamped with the PARENT's id, so a restore aimed at the
-    // subgoal alone would find none of them: an empty band back on the board
-    // under a control that had just promised to bring its tasks. The parent
-    // is listed and restores both.
-    const goals = [
-      band({
-        archivedAt: NOW,
-        subgoals: [
-          { id: 'g-sub', title: 'Land the diff', archivedAt: NOW, archivedWithGoal: 'g-pr' },
-        ],
-      }),
-    ];
-    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-pr']);
-  });
-
-  it('keeps a subgoal that was archived on its own, which restores its own tasks', () => {
-    // The positive control for the rule above: same shape, no cascade marker,
-    // so this row is exactly as restorable as a band.
-    const goals = [
-      band({
-        subgoals: [{ id: 'g-sub', title: 'Land the diff', archivedAt: NOW }],
-      }),
-    ];
-    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-sub']);
-  });
-
-  it('is findable by the lookup a deep link is judged against, at either level', () => {
+  it('is findable by the lookup a deep link is judged against, archived or not', () => {
     // The boot deadline asks "is this goal still here?" four seconds after
-    // the panel opens, and answers with THIS lookup. It used to scan only the
-    // top level, so every subgoal link — archived or live, including the one
-    // the panel's own Copy button hands out — was called gone and the panel
-    // closed itself with a "nothing matches that link" toast.
-    const goals = [
-      band({
-        subgoals: [
-          { id: 'g-live-sub', title: 'Land the diff' },
-          { id: 'g-gone-sub', title: 'Archived sub', archivedAt: NOW, archivedWithGoal: 'g-pr' },
-        ],
-      }),
-    ];
-    for (const id of ['g-pr', 'g-live-sub', 'g-gone-sub']) {
+    // the panel opens, and answers with THIS lookup. An ARCHIVED band is on
+    // no board at all, so a check written against `boardSections` calls it
+    // gone and the panel closes itself with a "nothing matches that link"
+    // toast — including for the link the panel's own Copy button hands out.
+    const goals = [band({}), band({ id: 'g-gone', title: 'Archived band', archivedAt: NOW })];
+    for (const id of ['g-pr', 'g-gone']) {
       expect(goalSection(goals, id)?.id).toBe(id);
-      // What the old predicate saw: only the band. Kept as the contrast,
-      // because "goalSection finds it" means nothing without it.
-      expect(goals.some((g) => g.id === id)).toBe(id === 'g-pr');
     }
+    // What a board-shaped check sees: only the live band. Kept as the
+    // contrast, because "goalSection finds it" means nothing without it.
+    expect(boardSections(goals, [], filters).map((s) => s.id)).not.toContain('g-gone');
     // And it still says no to an id that really is not here — or the fix
     // would just be a lookup that never closes anything.
     expect(goalSection(goals, 'g-never')).toBeNull();
@@ -512,39 +432,21 @@ describe('the restore list, with bands in it', () => {
     expect(container.querySelector('.hub-section-title')?.textContent).toBe('2 archived tasks');
   });
 
-  it('counts the goal that has no row of its own, and says on the band where it went', () => {
-    // The cascade member is archived and is NOT restorable alone, so it is
-    // counted but not listed. Without the "with 1 subgoal" line the heading
-    // would look like an off-by-one against the rows under it.
+  it('counts every archived band in the heading, one row each', () => {
     renderArchivedList(
       container,
       [task({ archivedAt: NOW })],
       { ...base, onRestoreGoal: vi.fn(), onOpenGoal: vi.fn() },
-      [{ id: 'g-pr', title: 'Ship the widget', archivedAt: NOW }],
-      { total: 2, cascaded: (id) => (id === 'g-pr' ? 1 : 0) },
+      [
+        { id: 'g-pr', title: 'Ship the widget', archivedAt: NOW },
+        { id: 'g-sub', title: 'Land the diff', archivedAt: NOW },
+      ],
     );
     expect(container.querySelector('.hub-section-title')?.textContent).toBe(
       '2 archived goals and 1 archived task',
     );
-    expect(container.querySelector('.hub-archived-row--goal .hub-archived-with')?.textContent).toBe(
-      'with 1 subgoal',
-    );
-    // Still exactly one goal ROW: the count went up, the list did not.
-    expect(container.querySelectorAll('.hub-archived-row--goal')).toHaveLength(1);
-  });
-
-  it('says nothing about subgoals on a band that took none', () => {
-    // The control for the line above — a band archived on its own must not
-    // grow a "with 0 subgoals" note.
-    renderArchivedList(
-      container,
-      [],
-      { ...base, onRestoreGoal: vi.fn(), onOpenGoal: vi.fn() },
-      [{ id: 'g-pr', title: 'Ship the widget', archivedAt: NOW }],
-      { total: 1, cascaded: () => 0 },
-    );
-    expect(container.querySelector('.hub-archived-with')).toBeNull();
-    expect(container.querySelector('.hub-section-title')?.textContent).toBe('1 archived goal');
+    // The heading and the list cannot disagree: every counted band is listed.
+    expect(container.querySelectorAll('.hub-archived-row--goal')).toHaveLength(2);
   });
 
   it('draws no band when the caller wired no way to restore one', () => {
@@ -556,38 +458,27 @@ describe('the restore list, with bands in it', () => {
 
 describe('one phrase for one archive, wherever it is described', () => {
   it('builds the same words the confirmation and the toast both use', () => {
-    expect(cascadePhrase(1, 5)).toBe('1 subgoal and 5 tasks');
-    expect(cascadePhrase(0, 5)).toBe('5 tasks');
-    expect(cascadePhrase(2, 1)).toBe('2 subgoals and 1 task');
+    expect(cascadePhrase(5)).toBe('5 tasks');
+    expect(cascadePhrase(1)).toBe('1 task');
     // Empty rather than a stray "and": the caller asks "is there anything to
     // name" by testing the string.
-    expect(cascadePhrase(0, 0)).toBe('');
+    expect(cascadePhrase(0)).toBe('');
   });
 
   it('is the phrase the confirmation asks with, so the toast cannot drift from it', () => {
-    expect(archiveConfirmLine('Ship the widget', { subgoals: 1, tasks: 5 })).toBe(
-      `Archive “Ship the widget” and its ${cascadePhrase(1, 5)}?`,
+    expect(archiveConfirmLine('Ship the widget', { tasks: 5 })).toBe(
+      `Archive “Ship the widget” and its ${cascadePhrase(5)}?`,
     );
   });
 
-  it('counts every archived band, including one with no row of its own', () => {
+  it('counts every archived band, and only the archived ones', () => {
     const goals: HubGoal[] = [
-      {
-        id: 'g-pr',
-        title: '1. Get the PR out',
-        archivedAt: NOW,
-        subgoals: [
-          { id: 'g-sub', title: 'Land the diff', archivedAt: NOW, archivedWithGoal: 'g-pr' },
-        ],
-      },
+      { id: 'g-pr', title: '1. Get the PR out', archivedAt: NOW },
+      { id: 'g-sub', title: 'Land the diff', archivedAt: NOW },
       { id: 'g-live', title: '2. Keep it live' },
     ];
-    // Two are off the board; only one of them can be restored on its own.
-    expect(archivedGoalTotal(goals)).toBe(2);
-    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-pr']);
-    expect(cascadedSubgoals(goals, 'g-pr')).toBe(1);
-    // A band that took nothing reports nothing — the control for the above.
-    expect(cascadedSubgoals(goals, 'g-live')).toBe(0);
+    // Both are off the board, and both are restorable on their own.
+    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-pr', 'g-sub']);
   });
 });
 
