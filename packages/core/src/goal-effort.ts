@@ -152,6 +152,30 @@ export const EFFORT_MIN_CLOSES_FOR_PROJECTION = 3;
 export const EFFORT_MIN_SAMPLES_FOR_RANGE = 3;
 
 /**
+ * Below this many closed tickets a level does not get a factor of its own.
+ *
+ * Shrinkage was supposed to be the whole answer here and it is not, because
+ * `shrink(r, r, 1) = r` exactly. A goal's own median is pulled toward the
+ * BOARD's — and on a board whose only closed ticket is that goal's, the
+ * board median IS that ticket. The pull is toward itself, the weight never
+ * matters, and one close moved every forecast on the board at full strength.
+ * The second close could move it back just as far.
+ *
+ * So there is a floor, and it applies at both levels the same way: below
+ * three closes a level inherits the level above it — a goal takes the
+ * board's factor, and the board takes the prior — rather than claiming a
+ * correction of its own. Above three, shrinkage does the job it was always
+ * good at: blending a small sample into a larger one.
+ *
+ * Three, and the same three as `EFFORT_MIN_CLOSES_FOR_PROJECTION` and
+ * `EFFORT_MIN_SAMPLES_FOR_RANGE`, because it is the same judgement in all
+ * three places: below three there is a data point, not a distribution. A
+ * board that has closed two tickets is not a board that knows how fast it
+ * is; it is a board with an anecdote.
+ */
+export const EFFORT_MIN_SAMPLES_FOR_CALIBRATION = 3;
+
+/**
  * Past this many days out, a projection stops being a forecast.
  *
  * The pace window is fourteen days and the remainder is unbounded, so an
@@ -487,12 +511,31 @@ export function symmetricRatioError(actual: number, estimate: number): number {
 export interface EffortRatio {
   /** The factor a raw estimate is multiplied by. Already shrunk and clamped. */
   ratio: number;
-  /** How many closed tickets it was learned from. `0` means this goal is
-   *  simply inheriting the board-wide ratio. */
+  /** How many closed tickets this level's factor was LEARNED FROM. `0` means
+   *  the level is inheriting — the board from the prior, or a goal from the
+   *  board — and it is the field every "×N from M closed tickets" sentence
+   *  keys on, so it must never be a count of closes that did not move the
+   *  number. */
   samples: number;
+  /** How many closed tickets this level actually has, whether or not they
+   *  were enough to move the factor. The difference between this and
+   *  `samples` is the honest wording for a goal with one or two closes:
+   *  something HAS closed, and saying "nothing has closed yet" about it
+   *  would be false. */
+  observedSamples: number;
   /** Spread of the samples, as p75 over median. `1` when there are too few
    *  to say — which is what suppresses the "likely by" date. */
   spread: number;
+  /** Does this factor rest on measured closes anywhere — this level, or the
+   *  level it inherited from?
+   *
+   *  Distinct from `samples > 0`, and the distinction is the whole reason
+   *  the flag exists. A goal with one close inherits a board factor learned
+   *  from forty, and its projection is calibrated even though the goal
+   *  taught it nothing; a goal on a board that has closed twice inherits a
+   *  prior, and its projection is a guess. Both have `samples: 0`. The
+   *  board's "estimate only" marker is this field, negated. */
+  calibrated: boolean;
 }
 
 /**
@@ -508,8 +551,14 @@ export interface EffortRatio {
  * two quantities' own priors are named above and applied by
  * `neutralCalibration`.
  */
-export function neutralRatio(prior = 1): EffortRatio {
-  return { ratio: clampEffortRatio(prior), samples: 0, spread: 1 };
+export function neutralRatio(prior = 1, observedSamples = 0): EffortRatio {
+  return {
+    ratio: clampEffortRatio(prior),
+    samples: 0,
+    observedSamples,
+    spread: 1,
+    calibrated: false,
+  };
 }
 
 /** One quantity's ratios: the board's, and each goal's. */
@@ -581,6 +630,21 @@ export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortR
   );
   if (usable.length === 0) return neutralRatioSet(prior);
   const allRatios = usable.map((s) => s.actualSeconds / s.estimateSeconds);
+  if (usable.length < EFFORT_MIN_SAMPLES_FOR_CALIBRATION) {
+    // One or two closes on the whole board. Every goal keeps the prior, and
+    // says so — `observedSamples` carries what did close, so a panel can
+    // report "two so far" instead of the false "nothing has closed yet".
+    // Shrinking here instead would not hold: with a single sample the board
+    // median is that sample and a goal's shrink target is itself, which is
+    // the bug this floor exists to close.
+    const board = neutralRatio(prior, usable.length);
+    const byGoal: Record<string, EffortRatio> = {};
+    for (const s of usable) {
+      const seen = (byGoal[s.goal]?.observedSamples ?? 0) + 1;
+      byGoal[s.goal] = neutralRatio(prior, seen);
+    }
+    return { board, byGoal };
+  }
   const boardMedian = median(allRatios);
   // The BOARD is shrunk toward the prior, on the same weight a goal is
   // shrunk toward the board. Without this the prior is not a prior at all —
@@ -594,11 +658,13 @@ export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortR
   const board: EffortRatio = {
     ratio: boardRatio,
     samples: usable.length,
+    observedSamples: usable.length,
     // Spread is measured against the board's OWN median, not the shrunk
     // ratio: it answers "how scattered were these closes", which is a fact
     // about the samples and has nothing to do with how much of the prior is
     // still in the answer.
     spread: spreadOf(allRatios, boardMedian),
+    calibrated: true,
   };
   const grouped = new Map<string, number[]>();
   for (const s of usable) {
@@ -609,6 +675,21 @@ export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortR
   }
   const byGoal: Record<string, EffortRatio> = {};
   for (const [goal, ratios] of grouped) {
+    if (ratios.length < EFFORT_MIN_SAMPLES_FOR_CALIBRATION) {
+      // One or two closes under this goal: it takes the board's factor
+      // whole, rather than a version of it bent by an anecdote. The board is
+      // calibrated (we are past the floor above), so the goal's projection
+      // is calibrated too — it simply learned the correction from the board
+      // rather than from itself, which `samples: 0` says and `calibrated`
+      // qualifies.
+      //
+      // The board's SPREAD comes with it, deliberately. A goal with no
+      // closes at all already inherits it — `ratioForGoal` falls through to
+      // `set.board` — and a goal with one close knowing less about its own
+      // scatter than a goal with none would be a strange thing to build.
+      byGoal[goal] = { ...board, samples: 0, observedSamples: ratios.length };
+      continue;
+    }
     const own = median(ratios);
     // Shrink toward the board BEFORE clamping. Clamping a wild sample first
     // and then pulling it toward the board would launder an outlier into a
@@ -621,7 +702,9 @@ export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortR
     byGoal[goal] = {
       ratio: clampEffortRatio(shrinkEffortRatio(own, boardRatio, ratios.length)),
       samples: ratios.length,
+      observedSamples: ratios.length,
       spread: spreadOf(ratios, own),
+      calibrated: true,
     };
   }
   return { board, byGoal };
@@ -668,9 +751,23 @@ export function computeEffortCalibration(tasks: EffortCalibrationTask[]): Effort
   };
 }
 
-/** The factor in force for one goal, in one ratio set. */
+/**
+ * The factor in force for one goal, in one ratio set.
+ *
+ * A goal with no entry has closed nothing, and inherits the board's FACTOR —
+ * that is the whole design. What it must not inherit is the board's
+ * EVIDENCE. Handing back `set.board` whole gave such a goal the board's
+ * counts, and every sentence on the surfaces below says "on this goal": a
+ * board holding two closes under some other band reported them as two closes
+ * under this one, and a board holding forty reported forty. Both counts are
+ * zeroed here, at the one place the inheritance happens, so no caller has to
+ * remember to.
+ *
+ * `calibrated` is deliberately NOT zeroed: whether the factor rests on
+ * measurement is a fact about the factor, and it travels with it.
+ */
 export function ratioForGoal(set: EffortRatioSet, goal: string): EffortRatio {
-  return set.byGoal[goal] ?? set.board;
+  return set.byGoal[goal] ?? { ...set.board, samples: 0, observedSamples: 0 };
 }
 
 /**

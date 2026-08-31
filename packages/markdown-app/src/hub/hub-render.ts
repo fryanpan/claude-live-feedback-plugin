@@ -7,6 +7,7 @@
 import { type ReviewPayload, reviewAnswered, reviewWithdrawn } from '@feedback/core';
 import type { ReviewShape, Thread, User } from '@feedback/core';
 import {
+  EFFORT_MIN_SAMPLES_FOR_CALIBRATION,
   type EffortCalibration,
   type EffortRatio,
   applyEffortRatio,
@@ -1782,8 +1783,18 @@ export function effortComputationLines(
   // because it changed nothing. A silent \u00d70.07 would leave a reader
   // looking at a figure fifteen times smaller than the scorer's own with
   // nothing on the panel accounting for it.
+  //
+  // "Nothing has closed" is only true when nothing has. A goal below the
+  // calibration floor (`EFFORT_MIN_SAMPLES_FOR_CALIBRATION`) has closed one
+  // or two tickets and is still on the assumption \u2014 saying nothing closed
+  // would be false about rows the reader can see on the same board, so the
+  // count it HAS is what the sentence names.
+  const notYet = (r: EffortRatio): string =>
+    r.observedSamples > 0
+      ? `${r.observedSamples} closed ticket${r.observedSamples === 1 ? '' : 's'} so far, below the ${EFFORT_MIN_SAMPLES_FOR_CALIBRATION} needed to correct it`
+      : 'nothing has closed under this goal to measure yet';
   const assumed = (r: EffortRatio): string =>
-    `\u00d7${r.ratio.toFixed(2)} from the board's starting assumption that agents do the work \u2014 nothing has closed under this goal to measure yet`;
+    `\u00d7${r.ratio.toFixed(2)} from the board's starting assumption that agents do the work \u2014 ${notYet(r)}`;
   // Agreeing on the FACTOR is what makes it one correction to a reader; the
   // sample counts behind it can differ and the sentence is still about one
   // number. Keying "is this one correction?" on the counts as well printed
@@ -1804,14 +1815,51 @@ export function effortComputationLines(
     if (handsRatio && handsRatio.samples > 0) lines.push(`Hands-on scaled ${said(handsRatio)}.`);
     if (wallRatio && wallRatio.samples > 0) lines.push(`Calendar time scaled ${said(wallRatio)}.`);
   }
+  // A factor learned somewhere ELSE on the board. `samples: 0` with
+  // `calibrated` true is a goal that has closed too little (or nothing) to
+  // teach a correction and is using the board's, and until this branch
+  // existed the panel said nothing at all about it: the two `said` lines
+  // need samples of their own and the two `assumed` lines are about a prior.
+  // A figure fifteen times smaller than the scorer's own with no sentence
+  // accounting for it is exactly the hole the priors' own wording was added
+  // to close.
+  const boardLearned = (r: EffortRatio | undefined): boolean =>
+    r?.calibrated === true && r.samples === 0;
+  const fromBoard = (r: EffortRatio): string =>
+    `\u00d7${r.ratio.toFixed(2)} from closed tickets elsewhere on the board \u2014 ${
+      r.observedSamples > 0
+        ? `${r.observedSamples} closed ticket${r.observedSamples === 1 ? '' : 's'} under this goal so far, below the ${EFFORT_MIN_SAMPLES_FOR_CALIBRATION} it needs for a factor of its own`
+        : 'nothing has closed under this goal yet'
+    }`;
+  if (boardLearned(handsRatio) && handsRatio)
+    lines.push(`Hands-on scaled ${fromBoard(handsRatio)}.`);
+  if (boardLearned(wallRatio) && wallRatio)
+    lines.push(`Calendar time scaled ${fromBoard(wallRatio)}.`);
   // Said once for both quantities when neither has evidence, which is the
   // shape a board wears right after a prompt bump — two sentences saying
   // "nothing has closed yet" is the same sentence twice.
+  //
+  // Keyed on `calibrated`, not on `samples === 0`. Since the calibration
+  // floor landed, a goal that has closed nothing of its own but sits on a
+  // board that HAS learned also reports `samples: 0` \u2014 and its factor is a
+  // measured board-wide correction, not an assumption. Calling that "the
+  // board's starting assumption" would be false about the one number the
+  // panel exists to explain.
   const priorOnly = (r: EffortRatio | undefined): boolean =>
-    r !== undefined && r.samples === 0 && r.ratio.toFixed(2) !== '1.00';
-  if (priorOnly(handsRatio) && priorOnly(wallRatio) && handsRatio && wallRatio) {
+    r !== undefined && !r.calibrated && r.ratio.toFixed(2) !== '1.00';
+  // The combined sentence needs ONE count to name, so it fires only when
+  // both axes have seen the same number of closes. Different counts get a
+  // sentence each rather than one sentence that is right about half the
+  // panel.
+  if (
+    priorOnly(handsRatio) &&
+    priorOnly(wallRatio) &&
+    handsRatio &&
+    wallRatio &&
+    handsRatio.observedSamples === wallRatio.observedSamples
+  ) {
     lines.push(
-      `Hands-on scaled \u00d7${handsRatio.ratio.toFixed(2)} and calendar time \u00d7${wallRatio.ratio.toFixed(2)}, from the board's starting assumption that agents do the work \u2014 nothing has closed under this goal to measure yet.`,
+      `Hands-on scaled \u00d7${handsRatio.ratio.toFixed(2)} and calendar time \u00d7${wallRatio.ratio.toFixed(2)}, from the board's starting assumption that agents do the work \u2014 ${notYet(wallRatio)}.`,
     );
   } else {
     if (priorOnly(handsRatio) && handsRatio) lines.push(`Hands-on scaled ${assumed(handsRatio)}.`);

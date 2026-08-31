@@ -2897,6 +2897,27 @@ body.hub-body {
   text-align: right;
   white-space: normal;
 }
+/* The date and its caveat are one column so the caveat wraps UNDER the date
+   rather than beside it — the pair still has exactly two children, which is
+   what keeps `space-between` putting the label at one edge and the date at
+   the other. */
+.hub-goal-effort-fin-v {
+  min-width: 0;
+  text-align: right;
+}
+/* "Estimate only": this date's factor has no closed ticket behind it. At the
+   label's 12px and muted, like the coverage note — it is a caveat in words,
+   not a third number — but on its own line, and NOT dropped at the narrow
+   tier. A coverage caveat lost on a phone costs a reader some context; a
+   date silently presented as measured when nothing measured it is the
+   readout being wrong. */
+.hub-goal-effort-est {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.3;
+  color: var(--fg-muted);
+}
 /* How many of the band's tickets the bar does NOT cover. It rides the
    flexible column with the hands-on figure — never a pinned one. Muted, and
    at the label's 12px rather than the value's 16px, because it is a caveat

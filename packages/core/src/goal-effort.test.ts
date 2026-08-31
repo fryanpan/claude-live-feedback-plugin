@@ -10,6 +10,7 @@ import {
   EFFORT_RATIO_MIN,
   type EffortCalibration,
   type EffortCalibrationTask,
+  type EffortSample,
   type EffortTaskInput,
   type GoalEffortReady,
   applyEffortRatio,
@@ -241,20 +242,47 @@ describe('computeEffortRatios', () => {
     expect(shrinkEffortRatio((2 + 2 + 10) / 3, 1, 3)).toBeCloseTo(2.375);
   });
 
-  it('pulls a two-sample goal most of the way back to the board', () => {
+  /** Ten closes that ran exactly to estimate, so the board factor is 1. */
+  const boardOfTen = (): EffortSample[] =>
+    Array.from({ length: 10 }, () => ({ goal: 'g1', estimateSeconds: 100, actualSeconds: 100 }));
+
+  it('gives a two-sample goal the board factor whole, not a bent version of it', () => {
+    // Below EFFORT_MIN_SAMPLES_FOR_CALIBRATION a goal inherits rather than
+    // shrinks. This used to read 1.2857 — the board pulled 2/7 of the way
+    // toward an anecdote — and on a board whose only closes are that goal's,
+    // the same arithmetic moved the factor the whole way, because the shrink
+    // target was the anecdote itself.
     const set = computeEffortRatios([
-      ...Array.from({ length: 10 }, () => ({
-        goal: 'g1',
-        estimateSeconds: 100,
-        actualSeconds: 100,
-      })),
+      ...boardOfTen(),
       { goal: 'g2', estimateSeconds: 100, actualSeconds: 200 },
       { goal: 'g2', estimateSeconds: 100, actualSeconds: 200 },
     ]);
     expect(set.board.ratio).toBe(1);
-    // 1 + (2 - 1) * 2/(2+5) = 1.2857…
-    expect(ratioForGoal(set, 'g2').ratio).toBeCloseTo(1 + 2 / 7, 5);
-    expect(ratioForGoal(set, 'g2').samples).toBe(2);
+    const g2 = ratioForGoal(set, 'g2');
+    expect(g2.ratio).toBe(set.board.ratio);
+    // Learned from none of its own, but two DID close, and the goal's
+    // projection is calibrated — from the board.
+    expect(g2.samples).toBe(0);
+    expect(g2.observedSamples).toBe(2);
+    expect(g2.calibrated).toBe(true);
+  });
+
+  it('pulls a three-sample goal most of the way back to the board', () => {
+    // At the floor, shrinkage takes over and does the job it was always good
+    // at. Positive control on the test above: the inheritance there is the
+    // sample count, not calibration having been switched off.
+    const set = computeEffortRatios([
+      ...boardOfTen(),
+      ...Array.from({ length: 3 }, () => ({
+        goal: 'g2',
+        estimateSeconds: 100,
+        actualSeconds: 200,
+      })),
+    ]);
+    expect(set.board.ratio).toBe(1);
+    // 1 + (2 - 1) * 3/(3+5) = 1.375
+    expect(ratioForGoal(set, 'g2').ratio).toBeCloseTo(1.375, 5);
+    expect(ratioForGoal(set, 'g2').samples).toBe(3);
   });
 
   it('never lets a wild goal ratio out past the clamp', () => {
@@ -768,6 +796,129 @@ describe("summarizeGoalEffort — pace over the goal's active window", () => {
     if (s.kind !== 'ready') throw new Error('expected ready');
     expect(s.paceWindowDays).toBeCloseTo(3, 6);
     expect(s.closesInWindow).toBe(2);
+  });
+});
+
+describe('a factor is learned from three closes, not one', () => {
+  // The ticket this covers: "projections stop swinging on a single closed
+  // ticket". shrink(r, r, 1) = r exactly, and on a board whose only sample
+  // is one goal's close, that goal's shrink target IS the close — so the
+  // first ticket to close moved every estimate at full strength.
+  const overrun = (goal: string, times: number): EffortSample => ({
+    goal,
+    estimateSeconds: 100,
+    actualSeconds: 100 * times,
+  });
+
+  it('leaves the board on its prior after one close', () => {
+    const set = computeEffortRatios([overrun('g1', 3)], EFFORT_PRIOR_WALL_CLOCK_RATIO);
+    expect(set.board.ratio).toBeCloseTo(EFFORT_PRIOR_WALL_CLOCK_RATIO, 10);
+    expect(set.board.samples).toBe(0);
+    expect(set.board.calibrated).toBe(false);
+    // What DID close is still reported, so nothing has to claim that nothing
+    // closed in order to say it has not calibrated.
+    expect(set.board.observedSamples).toBe(1);
+    expect(ratioForGoal(set, 'g1').observedSamples).toBe(1);
+  });
+
+  it('calibrates at the third close, and not before', () => {
+    const two = computeEffortRatios([overrun('g1', 3), overrun('g1', 3)], 1);
+    expect(two.board.calibrated).toBe(false);
+    expect(two.board.ratio).toBe(1);
+    // Positive control: one more identical close and the same code path DOES
+    // learn — so the two-sample answer above is the floor and not a
+    // calibrator that never fires.
+    const three = computeEffortRatios([overrun('g1', 3), overrun('g1', 3), overrun('g1', 3)], 1);
+    expect(three.board.calibrated).toBe(true);
+    expect(three.board.samples).toBe(3);
+    expect(three.board.ratio).toBeGreaterThan(1);
+  });
+
+  it("does not triple a goal's projection on one ticket that ran 3x its estimate", () => {
+    // The acceptance criterion, stated as its arithmetic. One close at 3x on
+    // an otherwise fresh board: the remainder must come out at the PRIOR,
+    // not at three times the raw estimate.
+    const born = NOW - 10 * DAY;
+    const rows: EffortCalibrationTask[] = [
+      { goal: 'g1', ...closed(DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...task({ createdAt: born }) },
+    ];
+    const cal = computeEffortCalibration(rows);
+    const s = summarizeGoalEffort(rows, 'g1', cal, NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    // The close really did run 3x: a 3600s estimate worked for three hours.
+    expect(effortActualWallClockSeconds(rows[0] as EffortTaskInput)).toBe(3 * 3600);
+    expect(s.wallClockRatio.calibrated).toBe(false);
+    expect(s.wallClockRatio.ratio).toBeCloseTo(EFFORT_PRIOR_WALL_CLOCK_RATIO, 10);
+    // One open ticket at 3600s. Tripled it would be 10,800s.
+    expect(s.wallClockRemainingSeconds).toBe(Math.round(3600 * EFFORT_PRIOR_WALL_CLOCK_RATIO));
+    expect(s.wallClockRemainingSeconds).toBeLessThan(3600);
+  });
+
+  it('lets three closes at 3x move the forecast', () => {
+    // The other half of the same claim, and the reason the assertion above
+    // is not just "calibration is off": with enough evidence the correction
+    // lands, and it lands upward.
+    const born = NOW - 10 * DAY;
+    const rows: EffortCalibrationTask[] = [
+      { goal: 'g1', ...closed(DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...closed(2 * DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...closed(3 * DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...task({ createdAt: born }) },
+    ];
+    const cal = computeEffortCalibration(rows);
+    const s = summarizeGoalEffort(rows, 'g1', cal, NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.wallClockRatio.calibrated).toBe(true);
+    expect(s.wallClockRatio.samples).toBe(3);
+    expect(s.wallClockRatio.ratio).toBeGreaterThan(EFFORT_PRIOR_WALL_CLOCK_RATIO);
+  });
+
+  it("never reports another goal's closes as this goal's", () => {
+    // Below the floor, the board holds two closes and both belong to g1. A
+    // goal with no entry falls back to the board row, and before the
+    // fallback zeroed the counts it inherited "2 closed tickets so far" —
+    // two closes reported under a goal that has none, on a surface whose
+    // every sentence says "on this goal".
+    const set = computeEffortRatios(
+      [overrun('g1', 3), overrun('g1', 3)],
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    expect(set.board.observedSamples).toBe(2);
+    const other = ratioForGoal(set, 'g2');
+    expect(other.observedSamples).toBe(0);
+    expect(other.samples).toBe(0);
+    // Positive control: the goal those closes DID happen under still counts
+    // them, so the zero above is the fallback and not a counter that never
+    // increments.
+    expect(ratioForGoal(set, 'g1').observedSamples).toBe(2);
+  });
+
+  it('keeps a calibrated goal calibrated when it has closed nothing of its own', () => {
+    // A goal inheriting a board that HAS learned is not an uncalibrated
+    // goal, and must not wear the "estimate only" marker. `samples: 0` is
+    // true of both cases and cannot tell them apart; `calibrated` is what
+    // does.
+    const learned = computeEffortRatios(
+      Array.from({ length: 5 }, () => overrun('g1', 2)),
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    const fresh = ratioForGoal(learned, 'g-never-closed-anything');
+    expect(fresh.calibrated).toBe(true);
+    expect(fresh.ratio).toBe(learned.board.ratio);
+    // It inherits the FACTOR and none of the evidence. Handing back the
+    // board's row whole reported the board's five closes as five closes
+    // under a goal that has none, on every surface that says "on this goal".
+    expect(fresh.samples).toBe(0);
+    expect(fresh.observedSamples).toBe(0);
+    expect(learned.board.observedSamples).toBe(5);
+    const oneClose = computeEffortRatios(
+      [...Array.from({ length: 5 }, () => overrun('g1', 2)), overrun('g2', 2)],
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    expect(ratioForGoal(oneClose, 'g2').calibrated).toBe(true);
+    expect(ratioForGoal(oneClose, 'g2').samples).toBe(0);
+    expect(ratioForGoal(oneClose, 'g2').observedSamples).toBe(1);
   });
 });
 
