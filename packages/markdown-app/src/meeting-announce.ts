@@ -153,7 +153,19 @@ export function createAnnouncer(deps: AnnouncerDeps = {}): Announcer {
           // meeting that is actually starting.
           synth.cancel();
           synth.speak(utterance);
-          cancelTimer = timer(() => settle(false), SPEECH_TIMEOUT_MS);
+          cancelTimer = timer(() => {
+            // Take it out of the queue before answering. The timeout means
+            // the engine never said what happened — not that it did nothing,
+            // and an utterance still sitting in the queue can start speaking
+            // after the strip has already put the sentence on screen for a
+            // person. Two announcements over each other is worse than either.
+            try {
+              synth.cancel();
+            } catch {
+              // Then it was never going to speak anyway.
+            }
+            settle(false);
+          }, SPEECH_TIMEOUT_MS);
         } catch {
           settle(false);
         }

@@ -135,6 +135,20 @@ describe('a browser that cannot', () => {
     expect(await said).toBe(false);
   });
 
+  it('takes the silent utterance OUT of the queue before falling back', async () => {
+    // A timeout means the engine never reported what happened, not that it
+    // did nothing. Left queued, the device can start speaking after the
+    // strip has already asked a person to say the sentence — and then the
+    // room hears it twice, over itself.
+    const synth = new FakeSynth();
+    const { announcer, timer } = make(synth);
+    const before = synth.cancels;
+    const said = announcer.speak('anything');
+    timer.fire();
+    expect(synth.cancels).toBeGreaterThan(before + 1);
+    expect(await said).toBe(false);
+  });
+
   it('does not let a late end event from a timed-out utterance answer true', async () => {
     const synth = new FakeSynth();
     const { announcer, timer } = make(synth);
