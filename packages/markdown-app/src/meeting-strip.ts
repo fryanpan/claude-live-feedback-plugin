@@ -712,9 +712,22 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * reaching `announce` would take the whole sentence down with it, and the
    * one thing that must never happen here is silence.
    */
-  async function suspendEchoCancellation(suspended: boolean): Promise<void> {
+  /**
+   * The capture is passed in rather than read from the closure, and that is
+   * the whole point of the parameter. An utterance that was cancelled can
+   * stay pending for its full timeout, so the restore half of this pair can
+   * run long after its meeting ended — by which time `capture` is the NEXT
+   * meeting's microphone, in the middle of the NEXT announcement. Restoring
+   * cancellation there is exactly the bug this suspension exists to prevent.
+   * Bound to the instance, a stale restore lands on a track that is already
+   * stopped, which is nothing.
+   */
+  async function suspendEchoCancellation(
+    mic: MeetingCapture | null,
+    suspended: boolean,
+  ): Promise<void> {
     try {
-      await capture?.setEchoCancellation(!suspended);
+      await mic?.setEchoCancellation(!suspended);
     } catch {
       // Then the capture keeps the cancellation it has, and the sentence is
       // spoken into it anyway.
@@ -835,9 +848,12 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // which is the one moment that has to work the other way round. Suspended
     // for the length of the sentence and restored after, best-effort: a
     // browser that refuses the constraint leaves the capture where it was.
-    await suspendEchoCancellation(true);
+    // Whichever microphone is open NOW is the one this sentence is spoken
+    // into, and the only one this call may touch again.
+    const mic = capture;
+    await suspendEchoCancellation(mic, true);
     const spoke = await announcer.speak(RECORDING_ANNOUNCEMENT);
-    await suspendEchoCancellation(false);
+    await suspendEchoCancellation(mic, false);
     // A stop, or a second meeting, during the sentence: this one no longer
     // owns the strip or the socket, and — the reason nothing is claimed at
     // start — the room heard half a sentence at most, so the record is left

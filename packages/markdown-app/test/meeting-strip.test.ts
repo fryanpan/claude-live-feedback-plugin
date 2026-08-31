@@ -932,6 +932,14 @@ class FakeAnnouncer implements Announcer {
   settle(ok: boolean): void {
     for (const resolve of this.pending.splice(0)) resolve(ok);
   }
+  /**
+   * Only the OLDEST pending utterance answers. A cancelled sentence can stay
+   * unsettled for its whole timeout while a second meeting starts and speaks,
+   * and the tests that care about that need the two to land separately.
+   */
+  settleOldest(ok: boolean): void {
+    this.pending.shift()?.(ok);
+  }
   get speaking(): boolean {
     return this.pending.length > 0;
   }
@@ -1397,6 +1405,62 @@ describe('the device speaking is not cancelled out of its own recording', () => 
     // Their voice reaches the mic the way every other voice in the room
     // does; the canceller was never in the way of it.
     expect(mic.aec).toEqual([]);
+  });
+
+  it("a cancelled sentence never un-suspends the NEXT meeting's microphone", async () => {
+    // The hazard: cancelling speech does not settle its promise, so the
+    // restore half of a dead announcement can run minutes later — by which
+    // time the strip holds a different microphone, mid-announcement. Undoing
+    // the suspension there is precisely the bug the suspension exists to
+    // prevent, and it would be silent.
+    const announcer = new FakeAnnouncer();
+    const mics: Array<{ aec: boolean[] }> = [];
+    const startCapture = () => {
+      const aec: boolean[] = [];
+      mics.push({ aec });
+      return Promise.resolve({
+        ok: true as const,
+        capture: {
+          stop: vi.fn(),
+          setEchoCancellation: (on: boolean) => {
+            aec.push(on);
+            return Promise.resolve();
+          },
+        },
+      });
+    };
+    const h = mount(startCapture, { mode: 'conversation', announcer });
+    const ready = async (i: number) => {
+      h.sockets[i]?.onopen?.();
+      h.sockets[i]?.serve({
+        type: 'ready',
+        meetingId: `m${i}`,
+        startedAt: 1_000,
+        engine: 'test',
+        mode: 'conversation',
+      });
+      await settle();
+    };
+
+    h.toggle().click();
+    await settle();
+    await ready(0);
+    // Stopped mid-sentence: the utterance is abandoned, not answered.
+    h.toggle().click();
+    await settle();
+    h.toggle().click();
+    await settle();
+    await ready(1);
+    expect(mics).toHaveLength(2);
+    expect(mics[1]?.aec).toEqual([false]);
+
+    // Now the abandoned utterance finally comes back.
+    announcer.settleOldest(true);
+    await settle();
+    expect(mics[0]?.aec).toEqual([false, true]);
+    // The live meeting is still speaking, so its canceller is still down.
+    // Bound to the closure instead of the instance, this reads [false, true].
+    expect(mics[1]?.aec).toEqual([false]);
   });
 
   it('announces anyway when the browser REFUSES the constraint', async () => {

@@ -583,6 +583,14 @@ synthesis shares the render path it uses as its reference, and
 on a live track). Every failure is swallowed — an announcement must never be
 blocked by a hedge.
 
+The suspension is bound to the **microphone instance** it was taken out on,
+not to whichever capture the strip currently holds. Cancelling speech does not
+settle its promise — the utterance can hang until its timeout — so the restore
+half of an abandoned announcement can run after a second meeting has started
+and is mid-sentence itself. Restoring cancellation there would silently defeat
+the suspension in exactly the case it exists for. Bound to the instance, a
+stale restore lands on a stopped track and does nothing.
+
 **So `device` on the record means what it says and no more:** the browser
 reported the utterance finished. It is not evidence that the sentence reached
 the transcript, and nothing in the code treats it as such.
