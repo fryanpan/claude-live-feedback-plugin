@@ -57,6 +57,14 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
     '  points. Never a transcript restated.',
     '- REVISE rather than append: fold the new speech into the existing',
     '  structure, and correct earlier notes the new speech overturns.',
+    '- SOME LINES OF THE CURRENT NOTES WERE WRITTEN BY A PERSON IN THE',
+    '  MEETING, and are listed under "Written by a person". They are theirs:',
+    '  reproduce each one character for character, in the place it sits, and',
+    '  keep the wording, the formatting and the structure they chose. If you',
+    '  think one should read differently, return your version of that line in',
+    '  its place and nothing else will change: it reaches them as a suggestion',
+    '  they can accept or reject, never as a replacement. Never delete one,',
+    '  and never merge one into a note of your own.',
     '- Only what was said: never invent names, numbers, or decisions the',
     '  transcript does not contain. Transcription is imperfect — where a word',
     '  is garbled, prefer the reading that fits the project context.',
@@ -95,6 +103,13 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
   parts.push(
     `Current notes:\n${input.previous ?? '(none yet — this is the first update of the meeting)'}`,
   );
+  if (input.humanNotes?.length) {
+    parts.push(
+      ['Written by a person — reproduce verbatim:', ...input.humanNotes.map((n) => `- ${n}`)].join(
+        '\n',
+      ),
+    );
+  }
   parts.push(
     `New transcript since the last update:\n${input.tick.turns
       .map((t) => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`)
