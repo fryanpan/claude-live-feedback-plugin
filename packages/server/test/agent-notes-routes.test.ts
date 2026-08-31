@@ -31,7 +31,7 @@ const LEAD = { id: 'agent-cartographer', name: 'Cartographer', kind: 'agent' };
 
 type ProjectedNote = { at: number; kind: string; text: string; agent: string };
 type ProjectedTask = { id: string; notes?: ProjectedNote[] };
-type RingNote = ProjectedNote & { taskId?: string; sessionId?: string };
+type RingNote = ProjectedNote & { taskId?: string; sessionId?: string; needsFiling?: boolean };
 
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
@@ -189,21 +189,58 @@ describe('agent notes routes', () => {
     expect(log).toContain('Read the scout digest');
   });
 
-  it('follows the LATEST claim when the agent holds two in-progress rows, folding the name', async () => {
+  it('refuses to guess between two in-progress rows: the note goes to the ring, marked needs-filing', async () => {
+    // A 2-week replay of prod notes (2026-08-31) found 93% of automatic notes
+    // faced 2+ candidate rows, and a judged sample put the newest-claim guess
+    // wrong ~3 times in 4. Ambiguity now files nowhere rather than wrongly.
     const wsId = await boardWithLead();
     const older = await inProgressRow(wsId, 'Older claim');
     await settle(5);
     const newer = await inProgressRow(wsId, 'Newer claim');
 
-    // A lowercase spelling resolves through the claim transition's actor id,
-    // not the verbatim assignee string.
+    // A lowercase spelling still resolves through the claim transition's
+    // actor id, not the verbatim assignee string.
     const r = await note('cartographer', 'Pushed the branch');
     expect(r.status).toBe(202);
-    expect(await r.json()).toMatchObject({ taskId: newer });
+    const body = (await r.json()) as { taskId?: string; needsFiling?: boolean };
+    expect(body.taskId).toBeUndefined();
+    expect(body.needsFiling).toBe(true);
     await settle();
-    expect(projected(wsId, newer).notes?.map((n) => n.text)).toEqual(['Pushed the branch']);
-    expect(projected(wsId, older).notes).toBeUndefined();
+    expect(handle.tasks.getTask(newer)?.notes ?? []).toHaveLength(0);
     expect(handle.tasks.getTask(older)?.notes ?? []).toHaveLength(0);
+    const { notes } = await ring(LEAD.name);
+    expect(notes.map((n) => [n.text, n.taskId, n.needsFiling])).toEqual([
+      ['Pushed the branch', undefined, true],
+    ]);
+  });
+
+  it('one candidate row is not a guess: the note still lands there, folding the name', async () => {
+    const wsId = await boardWithLead();
+    const only = await inProgressRow(wsId, 'Only claim');
+    const r = await note('cartographer', 'Pushed the branch');
+    expect(r.status).toBe(202);
+    expect(await r.json()).toMatchObject({ taskId: only });
+    await settle();
+    expect(projected(wsId, only).notes?.map((n) => n.text)).toEqual(['Pushed the branch']);
+    const { notes } = await ring(LEAD.name);
+    expect(notes[0]?.needsFiling).toBeUndefined();
+  });
+
+  it('an explicit taskId on the hook route addresses the row, beating ambiguity', async () => {
+    const wsId = await boardWithLead();
+    const older = await inProgressRow(wsId, 'Older claim');
+    await settle(5);
+    const newer = await inProgressRow(wsId, 'Newer claim');
+    const r = await note(LEAD.name, 'About the older row', { taskId: older });
+    expect(r.status).toBe(202);
+    expect(await r.json()).toMatchObject({ taskId: older, workspaceId: wsId });
+    await settle();
+    expect(handle.tasks.getTask(older)?.notes?.map((n) => n.text)).toEqual(['About the older row']);
+    expect(handle.tasks.getTask(newer)?.notes ?? []).toHaveLength(0);
+    // An address that names nothing is a caller error, not a silent ring drop.
+    // Shaped unlike a real row id on purpose — the leak gate flags those.
+    const bad = await note(LEAD.name, 'Lost letter', { taskId: 't-nope' });
+    expect(bad.status).toBe(404);
   });
 
   it('the latest claimant wins over the stored assignee on a handed-over row', async () => {
