@@ -38,20 +38,35 @@
  *     mid-rename;
  *   - the description slot — the live Tiptap editor mounts INTO it.
  *
- * What this panel deliberately does NOT have, and the task panel does: tabs, a
- * review queue, a transition history, a share or full-screen control. A goal
- * has no transitions worth a second tab, so its conversation sits directly
- * under the description where a reader on a short screen reaches it by
- * scrolling rather than by finding a control.
+ * The HEAD carries the task panel's action set — copy link, full screen,
+ * archive/restore, close — because a goal is a row like any other and being
+ * the one row whose menu is short is not a design, it is an omission (Bryan,
+ * 2026-08-29: *"goals should have the same additional extra actions that tasks
+ * do like being able to Archive get a link and so on"*). The share and
+ * full-screen controls used to be listed here as deliberate absences; they
+ * were not, and the goal panel has the same long description and the same
+ * discussion the task panel expands for.
+ *
+ * Archive is the one that is not simply the task panel's, one row over: it
+ * takes the band's subgoals and tasks with it, so it asks first and says how
+ * many. See `archiveConfirmLine`.
+ *
+ * What this panel still deliberately does NOT have, and the task panel does:
+ * tabs, a review queue, a transition history. A goal has no transitions worth
+ * a second tab, so its conversation sits directly under the description where
+ * a reader on a short screen reaches it by scrolling rather than by finding a
+ * control.
  */
 import { signal } from '@preact/signals';
 import { type RefObject, render } from 'preact';
-import { useLayoutEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Discussion, useFill } from './detail-parts.tsx';
 import {
   type BoardSection,
   GOAL_STATUS_ORDER,
   type TaskStatus,
+  cascadePhrase,
+  isGoalArchived,
   statusLabel,
   statusOptions,
 } from './hub-model.ts';
@@ -81,6 +96,37 @@ export const goalDetailData = signal<GoalDetailView>({
   handlers: IDLE_HANDLERS,
 });
 
+/** What a band's archive would take with it, as the server counted it. */
+export interface GoalCascade {
+  tasks: number;
+  subgoals: number;
+}
+
+/**
+ * The sentence the confirmation asks, with the count in it.
+ *
+ * This is the feature, not decoration around it: a band header shows a title
+ * and a progress bar, so the fourteen tickets an archive is about to take are
+ * invisible at the moment somebody reaches for it (Bryan, 2026-08-30: *"say
+ * what is about to happen, with the count, before the action commits"*). The
+ * task panel's archive deliberately has no dialog at all — it is three fields
+ * on one row and a ten-second Undo pays for it — and this one does, because
+ * the two acts are not the same size.
+ *
+ * `null` is the answer not yet in: the bar still says what is about to happen
+ * in the vaguest honest terms, and the panel withholds the button until a
+ * number arrives.
+ */
+export function archiveConfirmLine(title: string, cascade: GoalCascade | null): string {
+  const name = `“${title}”`;
+  if (cascade === null) return `Archive ${name} and everything under it?`;
+  const { tasks, subgoals } = cascade;
+  if (tasks === 0 && subgoals === 0) return `Archive ${name}? Nothing else is under it.`;
+  // Shared with the toast that follows this confirmation, so the two cannot
+  // describe the same archive differently.
+  return `Archive ${name} and its ${cascadePhrase(subgoals, tasks)}?`;
+}
+
 /** One `<dt>/<dd>` pair. Built here rather than as JSX so the fields row can go
  *  through `useFill` — it holds no state, so it is cheapest rebuilt. */
 function fieldCell(key: string, value: string): HTMLElement {
@@ -102,8 +148,27 @@ function GoalDetailPanel(props: {
   discussion?: TaskDiscussion;
   handlers: GoalDetailHandlers;
 }) {
-  const { section, discussion, handlers } = props;
+  const { host, section, discussion, handlers } = props;
   const now = handlers.now ?? Date.now();
+  const archived = isGoalArchived(section);
+  // Archived AS PART OF a band's cascade, rather than on its own. The one
+  // rule both restore surfaces enforce: this row comes back with its parent
+  // or not at all.
+  const withParent = archived && section.archivedWithGoal !== undefined;
+  // The reader's full-screen choice, seeded from the host so a panel that
+  // opens while the last one was expanded does not silently un-expand it.
+  const [full, setFull] = useState(host.classList.contains('hub-detail--full'));
+  // The archive confirmation: null = not asking. `cascade` fills in when the
+  // count arrives, and `failed` is the answer that never came — a state of its
+  // own rather than a zero, because "nothing is under it" and "I could not
+  // find out" must not read the same.
+  const [asking, setAsking] = useState(false);
+  const [cascade, setCascade] = useState<GoalCascade | null>(null);
+  const [countFailed, setCountFailed] = useState(false);
+  // Which question is outstanding. A cancel or a re-open invalidates the one
+  // in flight, so a slow answer cannot paint a count under a bar that has
+  // since been dismissed or re-asked.
+  const askToken = useRef(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const fieldsRef = useRef<HTMLDListElement | null>(null);
@@ -198,6 +263,25 @@ function GoalDetailPanel(props: {
     el.replaceChildren(...bodySlot(section).childNodes);
   });
 
+  // The reader's full-screen choice, on the container and on `<body>`: at full
+  // screen the panel covers the board, so the board must stop reserving room
+  // for it. Same two classes the task panel writes, because it is the same
+  // overlay geometry — a second set would need a second copy of the CSS.
+  //
+  // Deliberately WITHOUT an unmount cleanup, which reads like a leak and is
+  // not one (raised in review, measured before answering). The board rule is
+  // `body.hub-detail-open.hub-detail-full`, and `hub-detail-open` comes off
+  // when the last panel closes — so the class left behind matches nothing: a
+  // board measured after closing a full-screen panel is 1472px wide, exactly
+  // the width of one that has never been full screen. What the class DOES do
+  // is carry the reader's choice to the next row they open — `full` is seeded
+  // from it above — and reopening restores the wide panel (1905px against
+  // 1100px) because it survived. A cleanup here would delete that.
+  useLayoutEffect(() => {
+    host.classList.toggle('hub-detail--full', full);
+    document.body.classList.toggle('hub-detail-full', full);
+  }, [host, full]);
+
   // Take the focus on OPEN only — this effect runs once per mount, and a mount
   // is a new goal. A repaint that focused the panel would pull the caret out of
   // the composer every time a peer's comment landed.
@@ -205,6 +289,36 @@ function GoalDetailPanel(props: {
     const panel = panelRef.current;
     if (panel && typeof panel.focus === 'function') panel.focus({ preventScroll: true });
   }, []);
+
+  /** Open the confirmation, and go and ask what it will cost. */
+  function askToArchive(): void {
+    const token = ++askToken.current;
+    setAsking(true);
+    setCascade(null);
+    setCountFailed(false);
+    const count = handlers.onCascadeCount;
+    if (!count) {
+      setCountFailed(true);
+      return;
+    }
+    void count(section.id).then(
+      (res) => {
+        if (askToken.current !== token) return;
+        if (res === null) setCountFailed(true);
+        else setCascade(res);
+      },
+      () => {
+        if (askToken.current === token) setCountFailed(true);
+      },
+    );
+  }
+
+  function cancelArchive(): void {
+    askToken.current++;
+    setAsking(false);
+    setCascade(null);
+    setCountFailed(false);
+  }
 
   // The slot this render decided on, handed to whatever mounts the live editor.
   // Idempotent for an unchanged pair, so the repaints that arrive while
@@ -267,7 +381,45 @@ function GoalDetailPanel(props: {
             title="Click or press Enter to rename"
           />
         </div>
+        {/* The task panel's action set, on the band: share first (the one
+            action about the goal AS A LINK, wanted before anything has been
+            read), then the reader's own preference, then the one that changes
+            the goal, then the way out. Icons with BOTH an `aria-label` and a
+            `title`, the way the task panel's carry them. */}
         <div class="hub-detail-head-actions">
+          {handlers.onCopyLink && (
+            <button
+              type="button"
+              class="hub-btn hub-icon-btn hub-detail-share"
+              title="Copy a link to this goal"
+              aria-label="Copy a link to this goal"
+              onClick={() => handlers.onCopyLink?.(section)}
+            >
+              🔗
+            </button>
+          )}
+          <button
+            type="button"
+            class="hub-btn hub-icon-btn hub-detail-expand"
+            title={full ? 'Exit full screen' : 'Full screen'}
+            aria-label={full ? 'Exit full screen' : 'Full screen'}
+            aria-pressed={full ? 'true' : 'false'}
+            onClick={() => setFull((on) => !on)}
+          >
+            {full ? '⤡' : '⤢'}
+          </button>
+          {(archived ? handlers.onRestore && !withParent : handlers.onArchive) && (
+            <button
+              type="button"
+              class="hub-btn hub-icon-btn hub-detail-archive"
+              title={archived ? 'Restore this goal to the board' : 'Archive this goal'}
+              aria-label={archived ? 'Restore this goal to the board' : 'Archive this goal'}
+              aria-expanded={archived ? undefined : asking ? 'true' : 'false'}
+              onClick={() => (archived ? handlers.onRestore?.(section) : askToArchive())}
+            >
+              {archived ? '↩︎' : '🗄'}
+            </button>
+          )}
           <button
             type="button"
             class="hub-btn hub-icon-btn hub-detail-close"
@@ -279,6 +431,79 @@ function GoalDetailPanel(props: {
           </button>
         </div>
       </div>
+
+      {/* The confirmation, in the panel rather than in a modal: it belongs to
+          the band it is about, and a `confirm()` on a tablet covers the very
+          header the reader is checking. It states the blast radius and then
+          asks — and it withholds Archive until it can state it, because a
+          confirmation that cannot say what it is about to do is a dialog
+          pretending to be one. */}
+      {asking && !archived && (
+        <div class="hub-goal-archive-confirm" role="alertdialog" aria-live="polite">
+          <p class="hub-goal-archive-ask">
+            {countFailed
+              ? `Could not work out what is under “${section.title}”. Nothing has been archived — try again in a moment.`
+              : archiveConfirmLine(section.title, cascade)}
+          </p>
+          <p class="hub-goal-archive-note">
+            Everything goes together and comes back together — restoring the goal brings its tasks
+            with it.
+          </p>
+          <div class="hub-goal-archive-buttons">
+            {!countFailed && cascade !== null && (
+              <button
+                type="button"
+                class="hub-btn hub-goal-archive-go"
+                onClick={() => {
+                  cancelArchive();
+                  handlers.onArchive?.(section);
+                }}
+              >
+                Archive
+              </button>
+            )}
+            <button type="button" class="hub-btn hub-goal-archive-cancel" onClick={cancelArchive}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Archived, and the panel has to SAY so: a link or the restore list can
+          both open a band that is on no board, and without this its absence
+          from the lanes reads as a rendering bug rather than as something
+          somebody decided. */}
+      {archived && (
+        <div class="hub-archived-note">
+          <span class="hub-decide-k hub-archived-k">Archived</span>
+          <p>
+            {`${section.archivedAt ? new Date(section.archivedAt).toLocaleDateString() : ''}${
+              section.archivedBy ? ` by ${section.archivedBy}` : ''
+            }${section.archiveReason ? ` — ${section.archiveReason}` : ''}`}
+          </p>
+          {/* A row that went as part of a band's cascade has no restore of
+              its own — its tasks were stamped with the BAND's id, so putting
+              it back alone would return an empty subgoal and leave its work
+              archived. The restore list withholds the control for the same
+              reason; saying which band brings it back is what turns that
+              absence from a missing button into an answer. */}
+          {withParent ? (
+            <p class="hub-archived-with-note">
+              {`Archived with “${section.archivedWithGoalTitle ?? 'its goal'}” — restoring that goal brings this one back, with its tasks.`}
+            </p>
+          ) : (
+            handlers.onRestore && (
+              <button
+                type="button"
+                class="hub-btn hub-archived-restore"
+                onClick={() => handlers.onRestore?.(section)}
+              >
+                Restore to the board
+              </button>
+            )
+          )}
+        </div>
+      )}
 
       <div class="hub-detail-body">
         <dl ref={fieldsRef} class="hub-detail-fields" />

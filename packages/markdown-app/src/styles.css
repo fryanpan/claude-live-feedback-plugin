@@ -2988,6 +2988,33 @@ body.hub-body {
   flex: 0 0 auto;
   margin-left: auto;
 }
+/* A band in the restore list wears its kind, because restoring one is not the
+   same act as restoring a ticket: its tasks come back with it. The chip reads
+   before the title on purpose — it is what changes the meaning of the button
+   at the other end of the row. */
+.hub-archived-kind {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg-muted) 8%, transparent);
+}
+.hub-archived-row--goal .hub-archived-title {
+  font-weight: 600;
+}
+/* "with 1 subgoal" — where the heading's other archived goal went. A subgoal
+   swept up by its parent has no row of its own (restoring it alone would
+   return an empty band), so without this line the count above the list looks
+   like it disagrees with the rows in it. */
+.hub-archived-with {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
 /* --- row anatomy: drag handle · status · title · badges · open caret · assignee --- */
 /* The handle is invisible until you go looking for it: a permanent column of
    ⠿ is noise on a list whose job is to be skimmed. Revealed by hovering the
@@ -3607,8 +3634,16 @@ body.hub-body {
 }
 /* Only meaningful where the panel is not already the whole viewport — a phone
    sheet is full screen by definition, so the toggle would promise a change it
-   cannot make. Unhidden by the ≥1024px block below. */
-.hub-detail-expand {
+   cannot make. Unhidden by the ≥1660px block below, which is also where the
+   only `.hub-detail--full` rules live — so below that width the toggle changes
+   nothing at all, which is the other half of why it should not be offered.
+
+   Scoped through `.hub-detail-head-actions` so it can actually win: the rule
+   above it sets `display: inline-flex` on every `.hub-btn` in the head at two
+   classes, and a bare `.hub-detail-expand` is one — so this said `none` and
+   the button rendered anyway, on every phone, in both detail panels. Measured
+   at 430px while verifying the goal panel's new head. */
+.hub-detail-head-actions .hub-detail-expand {
   display: none;
 }
 /* --- key fields: status, who, when, what for — one row under the title --- */
@@ -3693,6 +3728,56 @@ body.hub-body {
 }
 .hub-archived-note .hub-archived-restore {
   margin: 10px 0 0;
+}
+/* Stands where that button would be, on a row that cannot be restored on its
+   own — it names the band that brings it back, so the missing control reads
+   as an answer rather than as something that failed to render. */
+.hub-archived-with-note {
+  margin: 10px 0 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+/* The goal panel's archive confirmation. It sits in the panel rather than in a
+   modal — a dialog on a tablet covers the very header the reader is checking —
+   and it is deliberately quiet: this is a reversible act, so the bar states
+   the blast radius and asks, rather than shouting. Full width and wrapping,
+   because the sentence carries a count and a title of any length and the
+   phone is 430px. */
+.hub-goal-archive-confirm {
+  margin: 12px 0 0;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.hub-goal-archive-ask {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.hub-goal-archive-note {
+  margin: 4px 0 0;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
+.hub-goal-archive-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+/* 36px is design-mobile.md's thumb floor. Both buttons get it: a Cancel that
+   is harder to hit than the commit is the wrong way round on a confirmation. */
+.hub-goal-archive-go,
+.hub-goal-archive-cancel {
+  min-height: 36px;
+  padding: 0 14px;
+}
+.hub-goal-archive-go {
+  font-weight: 600;
 }
 /* All four values are controls, so they get one box shape and one height and
    the row scans as a row. 36px is the thumb floor; `max-width: 100%` and
@@ -4958,7 +5043,8 @@ a.hub-link-chip:hover {
     width: 100%;
     max-width: none;
   }
-  .hub-detail-expand {
+  /* Matching the base rule's specificity — see the note on it. */
+  .hub-detail-head-actions .hub-detail-expand {
     display: inline-flex;
   }
 }

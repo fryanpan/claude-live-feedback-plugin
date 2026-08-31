@@ -30,6 +30,10 @@ import { BODY_LIVE_CLASS } from './hub-render.ts';
 export interface TaskBodyTarget {
   id: string;
   bodyDocId: string;
+  /** What the empty box asks for. A GOAL is not a task, and the panel that
+   *  the goal-parity work made worth opening was inviting people to
+   *  "describe the task". Defaults to the task wording. */
+  placeholder?: string;
 }
 
 /** What the lazily-loaded chunk hands back. Types only — the real module is
@@ -69,9 +73,23 @@ interface Mount {
   slot: HTMLElement;
   client: FeedbackClient;
   handle: EditorHandle | null;
+  /** Captured at claim time: the chunk lands a tick later, and by then the
+   *  target that asked for this wording may be gone. */
+  placeholder?: string;
 }
 
 export const PLACEHOLDER_TEXT = 'Describe the task — what someone can do once it is done, and why.';
+/**
+ * The goal's own invitation, and deliberately SHORTER than the task's.
+ *
+ * Tiptap floats the placeholder with `height: 0`, so it paints outside the
+ * slot rather than growing it: at 430px the task wording wraps to a second
+ * line and strikes straight through "Open in the full editor" beneath it
+ * (measured: the slot clips at 41px while its content runs to 58px). One
+ * line at the narrow tier is therefore a layout requirement here, not a
+ * style preference — check it with a measurement, not by eye.
+ */
+export const GOAL_PLACEHOLDER_TEXT = 'Describe this goal — what changes when it is met.';
 
 export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEditorHost {
   let mount: Mount | null = null;
@@ -105,7 +123,7 @@ export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEdit
     // the moment the editor paints the room, which is the same text or newer.
     slot.classList.add(BODY_LIVE_CLASS);
     const client = deps.connect(task.bodyDocId);
-    const m: Mount = { taskId: task.id, slot, client, handle: null };
+    const m: Mount = { taskId: task.id, slot, client, handle: null, placeholder: task.placeholder };
     mount = m;
     void deps
       .loadEditor()
@@ -115,7 +133,7 @@ export function createTaskBodyEditorHost(deps: TaskBodyEditorDeps): TaskBodyEdit
         // wrong task into a slot that no longer shows it.
         if (mount !== m) return;
         slot.replaceChildren();
-        const extra = mod.placeholder ? [mod.placeholder(PLACEHOLDER_TEXT)] : [];
+        const extra = mod.placeholder ? [mod.placeholder(m.placeholder ?? PLACEHOLDER_TEXT)] : [];
         m.handle = mod.createEditor({
           parent: slot,
           ydoc: client.ydoc,

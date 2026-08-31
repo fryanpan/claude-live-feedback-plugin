@@ -7158,6 +7158,50 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.changed) taskProjection.ensureWorkspace(res.task.workspaceId);
           return j(200, res);
         }
+        // The same pair for a BAND, and deliberately its own path rather than
+        // a goal id squeezed through `/api/tasks/:id/archive`. The transition
+        // route accepts either kind because a status change is literally the
+        // same write on both; an archive is not — this one cascades to the
+        // band's subgoals and tasks, and its response carries the ids it
+        // moved. A caller that cannot tell which of those two things it just
+        // did is a caller that cannot report the count to the person who
+        // asked for it.
+        //
+        // What the count is FOR: the confirmation the board shows before the
+        // write ("Archive this goal and its 14 tasks?"). `GET .../cascade`
+        // answers it from the same walk the archive runs, so the sentence and
+        // the act cannot disagree.
+        const goalCascadeMatch = pathname.match(/^\/api\/goals\/([^/]+)\/cascade$/);
+        if (goalCascadeMatch && req.method === 'GET') {
+          const goalId = decodeURIComponent(goalCascadeMatch[1] ?? '');
+          if (!taskStore.getGoalRow(goalId)) return j(404, { error: 'not-found' });
+          return j(200, taskStore.goalCascade(goalId));
+        }
+        const goalArchiveMatch = pathname.match(/^\/api\/goals\/([^/]+)\/archive$/);
+        if (goalArchiveMatch && req.method === 'POST') {
+          const goalId = decodeURIComponent(goalArchiveMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.archiveGoal(goalId, {
+            actor: author,
+            ...(typeof body?.reason === 'string' ? { reason: body.reason } : {}),
+          });
+          if (!res.ok) return j(404, res);
+          if (!res.changed) taskProjection.ensureWorkspace(res.goal.workspaceId);
+          return j(200, res);
+        }
+        const goalRestoreMatch = pathname.match(/^\/api\/goals\/([^/]+)\/restore$/);
+        if (goalRestoreMatch && req.method === 'POST') {
+          const goalId = decodeURIComponent(goalRestoreMatch[1] ?? '');
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          const res = taskStore.unarchiveGoal(goalId, { actor: author });
+          if (!res.ok) return j(404, res);
+          if (!res.changed) taskProjection.ensureWorkspace(res.goal.workspaceId);
+          return j(200, res);
+        }
         // set_goal_list (§3.2 edit contract): replace the ordered board
         // sections. Structural validation happens HERE because the store
         // trusts its callers with shapes — a junk entry that reached the
