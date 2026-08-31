@@ -13,6 +13,7 @@ import {
   agentIdCandidates,
   agentIdForName,
   anchors,
+  answerAsksBack,
   answerFromReply,
   checkReviewPayload,
   contentKind,
@@ -7534,6 +7535,21 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (optionId !== undefined && typeof optionId !== 'string') {
             return j(400, { error: 'optionId must be a string' });
           }
+          // A person's question typed where the answer goes converts to the
+          // "Tell me more" this task already carries — the decision stays open
+          // instead of closing under a question it cannot answer. Same rule as
+          // the review-item answer route below; a tapped option still answers,
+          // and an agent's words never convert. Old payloads are accepted
+          // unchanged — nothing new is refused, one reading is rerouted.
+          if (
+            optionId === undefined &&
+            classifyActor(author) === 'person' &&
+            answerAsksBack(text)
+          ) {
+            const asked = taskStore.requestMoreInfo(taskId, text, { actor: author });
+            if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
+            return j(200, { asked: true, task: asked.task });
+          }
           const res = taskStore.answerDecision(taskId, text, {
             actor: author,
             ...(optionId !== undefined ? { optionId } : {}),
@@ -7637,6 +7653,93 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           const answeredWith = body?.answeredWith;
           if (answeredWith !== undefined && typeof answeredWith !== 'string') {
             return j(400, { error: 'answeredWith must be a string' });
+          }
+          // A question typed where the answer goes is an ASK BACK, not a
+          // decision. Recording it as the answer closed the item and left
+          // `revise` refusing it ("the answer is to the words it has"), so the
+          // only way to keep asking was a duplicate row (Bryan, 2026-08-30:
+          // "Why is this important?" stamped as a decision's answer). A
+          // person's un-tapped answer that ends asking is routed through the
+          // EXISTING more-info shape instead: the question lands as a thread
+          // on the item, the item waits on its owner, and the owner's revision
+          // re-presents it with the question quoted. A tapped option is an
+          // answer whatever its label ends in, and an agent's words never
+          // convert — agents answer, people ask.
+          if (
+            answeredWith === undefined &&
+            classifyActor(author) === 'person' &&
+            answerAsksBack(text)
+          ) {
+            const task = taskStore.getTask(taskId);
+            if (!task) return j(404, { error: 'not-found' });
+            if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
+              // The ticket's own decision has no item thread (its words are
+              // the task body), so the question is recorded through the
+              // shipped task-level "Tell me more" — the row stays open and
+              // counted rather than closing under a question.
+              const asked = taskStore.requestMoreInfoOnReview(taskId, reviewItemId, text, {
+                actor: author,
+              });
+              if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
+              taskProjection.ensureWorkspace(asked.task.workspaceId);
+              return j(200, { asked: true, task: asked.task, item: asked.item });
+            }
+            const item = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
+            // An unknown item and an already-answered one both fall through to
+            // the ordinary answer path below, which owns those refusals — an
+            // answered item's exchange is closed, and a question recorded on
+            // it would reach nobody (`reviewItemState` reads `answer` first).
+            if (item && item.answer === undefined) {
+              // One open question at a time, the anchored ask's own rule: a
+              // second would orphan the first, because revise only answers the
+              // newest threaded question (`latestThreadedQuestion`).
+              if (reviewItemState(item) === 'waiting') {
+                const openThreadId = latestThreadedQuestion(item)?.threadId;
+                const owner = item.createdBy.trim() || 'the owner';
+                return j(409, {
+                  error: 'waiting',
+                  message: `Already waiting on ${owner} — add to the open thread instead`,
+                  ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
+                });
+              }
+              // The question becomes a real thread on the item, exactly as a
+              // phrase-anchored ask does — the thread is where the owner
+              // replies, and what the card opens onto. It is about the WHOLE
+              // item, so the anchor quotes the headline (offsets only if those
+              // words happen to sit uniquely in the detail) and the recorded
+              // question carries no range: there is no phrase to mark.
+              const headlineRange = locateReviewItemRange(item.review.detail, {
+                text: item.review.headline,
+              });
+              const created = await rooms.postComment(
+                taskProjection.ensureBodyRoom(task),
+                null,
+                author,
+                text,
+                {
+                  kind: 'review-item',
+                  reviewItemId: item.id,
+                  snippet: { text: item.review.headline },
+                  ...(headlineRange?.start !== undefined && headlineRange?.end !== undefined
+                    ? { start: headlineRange.start, end: headlineRange.end }
+                    : {}),
+                },
+                { generate: !visitor },
+              );
+              if (!created) return j(500, { error: 'could not create thread' });
+              const asked = taskStore.requestMoreInfoOnReview(taskId, reviewItemId, text, {
+                actor: author,
+                threadId: created.id,
+              });
+              if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
+              taskProjection.ensureWorkspace(asked.task.workspaceId);
+              return j(200, {
+                asked: true,
+                task: asked.task,
+                item: asked.item,
+                threadId: created.id,
+              });
+            }
           }
           const res = taskStore.answerTaskReview(taskId, reviewItemId, text, {
             actor: author,
@@ -9727,6 +9830,24 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               const commentId = body?.commentId as string | undefined;
               if (!user || !text || !commentId) {
                 return j(400, { error: 'author + text + commentId required' });
+              }
+              // A person's question is not the answer, here either — same
+              // conversion as the task review-item route. It posts as an
+              // ordinary reply on the declaring thread: no answer stamp, so
+              // the item stays open, and the owner hears the question the way
+              // it hears every comment. `answerFromReply` refuses the same
+              // reading on the plain-comment door, so the two doors agree. A
+              // tapped option answers whatever its label reads.
+              if (
+                typeof body?.optionId !== 'string' &&
+                classifyActor(user) === 'person' &&
+                answerAsksBack(text)
+              ) {
+                const asked = await rooms.postComment(docId, threadId, user, text, undefined, {
+                  generate: !visitor,
+                });
+                if (!asked) return j(404, { error: 'thread not found' });
+                return j(200, { asked: true, thread: rooms.getThread(docId, asked.id) ?? asked });
               }
               const res = await rooms.answerReviewItem(
                 docId,
