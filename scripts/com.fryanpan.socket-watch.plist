@@ -20,6 +20,10 @@
     <string>__REPO__/scripts/socket-watch.sh</string>
     <string>--watch</string>
   </array>
+  <!-- 15s, not the script's 60s default: a measured burst (2,261 TIME_WAIT,
+       5,371 mbufs, no suite running) rose and collapsed inside 40 seconds. -->
+  <key>EnvironmentVariables</key>
+  <dict><key>SOCKET_WATCH_INTERVAL</key><string>15</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
