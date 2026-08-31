@@ -751,8 +751,20 @@ function GoalEffort(props: { section: BoardSection }): ComponentChildren {
           <span class="hub-goal-effort-k">
             <span class="hub-goal-effort-k-long">Projected </span>finish
           </span>
-          <span class={`hub-goal-effort-v${late ? ' hub-goal-effort-late' : ''}`}>
-            {label.finishText}
+          {/* The date and the caveat that qualifies it are one column, so
+              "estimate only" wraps UNDER the date instead of beside it —
+              height is the axis this board can spend and width is not. It
+              rides the date's own track and never the title's, and unlike
+              the coverage note it survives the narrow tier: a date whose
+              factor no close has corrected is exactly the thing a reader on
+              a phone would otherwise take at face value. */}
+          <span class="hub-goal-effort-fin-v">
+            <span class={`hub-goal-effort-v${late ? ' hub-goal-effort-late' : ''}`}>
+              {label.finishText}
+            </span>
+            {label.uncalibratedText ? (
+              <span class="hub-goal-effort-est">{label.uncalibratedText}</span>
+            ) : null}
           </span>
         </span>
       ) : null}
