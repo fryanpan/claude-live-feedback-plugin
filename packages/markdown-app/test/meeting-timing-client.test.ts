@@ -249,7 +249,11 @@ async function mountStrip(timing: boolean): Promise<{ root: HTMLElement; socket:
       socket = new FakeSocket();
       return socket;
     },
-    startCapture: () => Promise.resolve({ ok: true, capture: { stop: vi.fn() } }),
+    startCapture: () =>
+      Promise.resolve({
+        ok: true,
+        capture: { stop: vi.fn(), setEchoCancellation: () => Promise.resolve() },
+      }),
     timing,
   });
   cleanups.push(() => strip.destroy());

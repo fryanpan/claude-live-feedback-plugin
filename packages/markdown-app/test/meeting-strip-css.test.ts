@@ -293,14 +293,55 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(rule('.meeting-toggle', SECTION)).toMatch(/min-height:\s*36px/);
   });
 
-  it('flattens the micro-row so the line reads clock, words, control', () => {
+  it('flattens the micro-row so the line reads clock, words, controls', () => {
     const wide = block('@media (min-width: 721px)', SECTION);
     expect(wide, 'no wide-mode block for the strip').not.toBe('');
     expect(rule('.meeting-strip-row', declarationsOnly(wide))).toMatch(/display:\s*contents/);
     expect(rule('.meeting-meta', declarationsOnly(wide))).toMatch(/order:\s*1/);
     expect(rule('.meeting-caption', declarationsOnly(wide))).toMatch(/order:\s*2/);
     expect(rule('.meeting-mode', declarationsOnly(wide))).toMatch(/order:\s*3/);
-    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*4/);
+    // "I'll say it" is a start button, so it belongs with the controls at the
+    // end of the line — and it is the secondary one, so it sits BEFORE Start
+    // rather than past it.
+    expect(rule('.meeting-announce', declarationsOnly(wide))).toMatch(/order:\s*4/);
+    expect(rule('.meeting-toggle', declarationsOnly(wide))).toMatch(/order:\s*5/);
+  });
+
+  it('gives the announce button the same 36px tap target as the two beside it', () => {
+    // design-mobile.md: it sits on the phone's bottom edge in the same row as
+    // Start, and a control that is harder to hit than its neighbour reads as
+    // broken rather than as secondary.
+    expect(rule('.meeting-announce', SECTION)).toMatch(/min-height:\s*36px/);
+    // Two short words and an apostrophe, which must not stack — the same
+    // reason the mode switch beside it is nowrap.
+    expect(rule('.meeting-announce', SECTION)).toMatch(/white-space:\s*nowrap/);
+  });
+
+  it('makes the readable announcement look like the note it replaces', () => {
+    // It is a <button> because it is dismissible and a dismissible thing has
+    // to be reachable by more than a pointer — but the affordance is the
+    // whole line, not a control someone has to go and find.
+    const note = rule('.meeting-note-dismiss', SECTION);
+    expect(note, 'no rule for the dismissible announcement').not.toBe('');
+    expect(note).toMatch(/background:\s*none/);
+    expect(note).toMatch(/border:\s*0/);
+    expect(note).toMatch(/font:\s*inherit/);
+    expect(note).toMatch(/color:\s*inherit/);
+    expect(note).toMatch(/cursor:\s*pointer/);
+  });
+
+  it('says REC at every width while the mic is live, not only on the phone', () => {
+    // A dot was enough while the strip only reported to the person holding
+    // the device. It announces itself to a ROOM now, and somebody who was
+    // told they are being recorded has to be able to look over and see that
+    // they still are.
+    expect(rule('.meeting-strip.is-live .meeting-status')).toMatch(/display:\s*inline/);
+    // 11px text, so the 4.5:1 floor applies, not the 3:1 the dot gets:
+    // --red measures 4.26:1 on --bg-panel and fails it; --red-strong is 5.0:1.
+    expect(rule('.meeting-strip.is-live .meeting-status')).toMatch(/color:\s*var\(--red-strong\)/);
+    // …and "Paused" still is not: the bar has no room for a word that says
+    // nothing is happening.
+    expect(rule('.meeting-status')).toMatch(/display:\s*none/);
   });
 
   it('gives the mode switch the same 36px tap target as the control beside it', () => {
