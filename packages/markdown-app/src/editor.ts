@@ -1,4 +1,5 @@
 import { anchors } from '@feedback/core';
+import { SPEAKER_TAG_SCHEME } from '@feedback/core';
 import { type AnyExtension, Editor } from '@tiptap/core';
 import Collaboration from '@tiptap/extension-collaboration';
 import { Image } from '@tiptap/extension-image';
@@ -116,6 +117,13 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
         link: {
           openOnClick: false,
           autolink: true,
+          // A speaker tag is a link whose href names a VOICE, not a
+          // destination (`speaker:B`, see core/speaker-tags.ts). Tiptap
+          // renders an href outside its allow-list as `href=""`, which would
+          // erase the label the tag exists to carry — so the scheme is
+          // declared here. Clicking one still goes nowhere: `safeLinkHref`
+          // refuses it, which is the half that decides what may be opened.
+          protocols: [SPEAKER_TAG_SCHEME.replace(':', '')],
           HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
         },
       }),

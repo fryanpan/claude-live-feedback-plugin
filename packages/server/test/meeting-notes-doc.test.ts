@@ -16,6 +16,7 @@ import {
   createNotesLedger,
   relabelNotesSection,
   replaceNotesSection,
+  retagSpeakerInNotes,
   withServerNotesSinks,
 } from '../src/meeting-notes-doc.ts';
 import type { NotesRelabel, NotesUpdate } from '../src/meeting-notes.ts';
@@ -28,6 +29,11 @@ function docFrom(markdown: string): Y.Doc {
 
 function markdownOf(ydoc: Y.Doc): string {
   return prose.serializeFragmentToMarkdown(prose.getProseFragment(ydoc));
+}
+
+/** The doc's words with no markup at all — what a reader actually sees. */
+function plainTextOf(ydoc: Y.Doc): string {
+  return prose.locateMatches(prose.getProseFragment(ydoc), { find: '\u0000' }).plainText;
 }
 
 describe('replaceNotesSection', () => {
@@ -213,6 +219,107 @@ describe('relabelNotesSection', () => {
   });
 });
 
+describe('retagSpeakerInNotes — renaming by label rather than by spelling', () => {
+  it('renames every tag for that voice and leaves every other tag alone', () => {
+    const ydoc = docFrom(
+      '## Meeting notes\n\n' +
+        '- [@Speaker B](speaker:B) asked for the gate.\n' +
+        '- [@Speaker A](speaker:A) pushed back.\n' +
+        '- [@Speaker B](speaker:B) agreed to file it.\n',
+    );
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(2);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Devi](speaker:B) asked for the gate.');
+    expect(md).toContain('- [@Devi](speaker:B) agreed to file it.');
+    expect(md).toContain('- [@Speaker A](speaker:A) pushed back.');
+  });
+
+  it('two touching tags for one voice were never two tags', () => {
+    // Raised in review as a rename silently deleting one of two adjacent
+    // mentions. It cannot: two links with the same href and nothing between
+    // them are already ONE link by the time the markdown is parsed, so the
+    // doc reads "[@Speaker B@Speaker B](speaker:B)" before any rename runs.
+    // The rename then canonicalises that single tag, which repairs the
+    // doubled text rather than losing an attribution. Splitting the run at
+    // each sigil to "recover" two tags would invent a mention the document
+    // never had, and would break any name containing an @.
+    const ydoc = docFrom(
+      '## Meeting notes\n\n- [@Speaker B](speaker:B)[@Speaker B](speaker:B) asked.\n',
+    );
+    expect(markdownOf(ydoc)).toContain('- [@Speaker B@Speaker B](speaker:B) asked.');
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- [@Devi](speaker:B) asked.');
+  });
+
+  it('renames a tag once when its text is split across marks', () => {
+    // A person bolds half of a tag's name. Yjs then carries that tag as two
+    // delta ops with the same link href, and a loop that treats each op as a
+    // whole tag writes the new name once per op.
+    const ydoc = docFrom('## Meeting notes\n\n- [@**Speaker** B](speaker:B) asked.\n');
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('speaker:B');
+    expect(md).not.toContain('DeviDevi');
+    expect(md).not.toContain('Devi](speaker:B)[@Devi');
+    expect(plainTextOf(ydoc)).toContain('@Devi asked.');
+  });
+
+  it('separates two voices a person has given the same name', () => {
+    // The thing `relabelNotesSection` cannot do, and the reason tags exist:
+    // the text says "Alex" twice and the label says which Alex is which.
+    const ydoc = docFrom(
+      '## Meeting notes\n\n- [@Alex](speaker:A) proposed it.\n- [@Alex](speaker:B) objected.\n',
+    );
+    expect(retagSpeakerInNotes(ydoc, 'A', 'Alex Chen').replaced).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Alex Chen](speaker:A) proposed it.');
+    expect(md).toContain('- [@Alex](speaker:B) objected.');
+  });
+
+  it('leaves the tag a tag — the link mark survives, so the next rename finds it', () => {
+    const ydoc = docFrom('## Meeting notes\n\n- [@Speaker B](speaker:B) asked.\n');
+    retagSpeakerInNotes(ydoc, 'B', 'Devi');
+    // The second rename can only work if the first left the href in place.
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi Raman').replaced).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- [@Devi Raman](speaker:B) asked.');
+  });
+
+  it('keeps the words around the tag exactly, marks included', () => {
+    const ydoc = docFrom(
+      '## Meeting notes\n\n- [@Speaker B](speaker:B) wants **the gate** moved [before merge](/w/w-1/t/t-1).\n',
+    );
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(1);
+    expect(markdownOf(ydoc)).toContain(
+      '- [@Devi](speaker:B) wants **the gate** moved [before merge](/w/w-1/t/t-1).',
+    );
+  });
+
+  it('cannot reach a tag outside the notes section, or prose that merely says the name', () => {
+    const ydoc = docFrom(
+      '# Agenda\n\n[@Speaker B](speaker:B) is joining.\n\n' +
+        '## Meeting notes\n\n- Speaker B is the one on the call, says [@Speaker B](speaker:B).\n\n' +
+        '## Next steps\n\n- [@Speaker B](speaker:B) to file it.\n',
+    );
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('[@Speaker B](speaker:B) is joining.');
+    expect(md).toContain('- [@Speaker B](speaker:B) to file it.');
+    // Inside the section, only the TAG moved — the words did not.
+    expect(md).toContain('- Speaker B is the one on the call, says [@Devi](speaker:B).');
+  });
+
+  it('a doc with no notes section is a zero, not a write', () => {
+    const ydoc = docFrom('# Agenda\n\n[@Speaker B](speaker:B) is joining.\n');
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(0);
+    expect(markdownOf(ydoc)).toContain('[@Speaker B](speaker:B) is joining.');
+  });
+
+  it('is a no-op when the tag already reads that way', () => {
+    const ydoc = docFrom('## Meeting notes\n\n- [@Devi](speaker:B) asked.\n');
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(0);
+  });
+});
+
 describe('applyNotesRelabel', () => {
   const roomsWith = (docId: string, type: DocType, markdown: string) => {
     const ydoc = docFrom(markdown);
@@ -221,11 +328,70 @@ describe('applyNotesRelabel', () => {
       ydoc,
     };
   };
-  const relabel = (docId: string, from: string, to: string): NotesRelabel => ({
+  const relabel = (
+    docId: string,
+    from: string,
+    to: string,
+    over: Partial<NotesRelabel> = {},
+  ): NotesRelabel => ({
     docId,
     meetingId: 'm-1',
+    label: 'B',
     from,
     to,
+    rewriteUntagged: true,
+    ...over,
+  });
+
+  it('renames tags AND untagged prose when the name is unambiguous', () => {
+    const { rooms, ydoc } = roomsWith(
+      'doc-a',
+      'markdown',
+      '## Meeting notes\n\n- [@Speaker B](speaker:B) asked.\n- Speaker B also agreed.\n',
+    );
+    expect(
+      applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Devi'), createNotesLedger()),
+    ).toBe(2);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Devi](speaker:B) asked.');
+    expect(md).toContain('- Devi also agreed.');
+  });
+
+  it('extends a name without saying it twice', () => {
+    // The sweep looks for the OLD display name on word boundaries, and after
+    // a retag the tag's own text still contains it: "Devi" lives inside
+    // "@Devi Raman". Run the retag first and the sweep corrupts what it just
+    // wrote. Raised by review before merge, not in the field.
+    const { rooms, ydoc } = roomsWith(
+      'doc-a',
+      'markdown',
+      '## Meeting notes\n\n- [@Devi](speaker:B) asked.\n- Devi also agreed.\n',
+    );
+    applyNotesRelabel(rooms, relabel('doc-a', 'Devi', 'Devi Raman'), createNotesLedger());
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Devi Raman](speaker:B) asked.');
+    expect(md).toContain('- Devi Raman also agreed.');
+    expect(md).not.toContain('Raman Raman');
+  });
+
+  it('renames only the tags when the display name belongs to more than one voice', () => {
+    // Two Alexes: the tag knows which one it is and renames; the sentence
+    // that merely SAYS "Alex" does not, and is left as the person wrote it.
+    const { rooms, ydoc } = roomsWith(
+      'doc-a',
+      'markdown',
+      '## Meeting notes\n\n- [@Alex](speaker:A) proposed it.\n- Alex and Alex disagreed.\n',
+    );
+    expect(
+      applyNotesRelabel(
+        rooms,
+        relabel('doc-a', 'Alex', 'Sam', { label: 'A', rewriteUntagged: false }),
+        createNotesLedger(),
+      ),
+    ).toBe(1);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Sam](speaker:A) proposed it.');
+    expect(md).toContain('- Alex and Alex disagreed.');
   });
 
   it('rewrites the mentions in a prose doc and counts them', () => {
@@ -266,6 +432,39 @@ describe('applyNotesRelabel', () => {
     const md = markdownOf(ydoc);
     expect(md).toContain('- Marisol: yes, on Friday.');
     expect(md).not.toContain('- Marisol: yes.\n');
+  });
+
+  it('leaves the agent still owning the lines whose TAG it renamed', () => {
+    // Same freeze as above, reached through the tag path: the retag rewrites
+    // characters inside the agent's own bullet, so the ledger has to learn
+    // the new wording or the next tick can only propose on it.
+    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const ledger = createNotesLedger();
+    let n = 0;
+    const tick = (notes: string) =>
+      applyNotesUpdate(
+        rooms,
+        {
+          docId: 'doc-a',
+          meetingId: 'm-1',
+          tick: { tick: ++n, reason: 'pause', turns: [] },
+          notes,
+        },
+        ledger,
+      );
+    tick('## Meeting notes\n\n- [@Speaker B](speaker:B) said yes.\n');
+    expect(
+      applyNotesRelabel(
+        rooms,
+        relabel('doc-a', 'Speaker B', 'Marisol', { rewriteUntagged: false }),
+        ledger,
+      ),
+    ).toBe(1);
+
+    tick('## Meeting notes\n\n- [@Marisol](speaker:B) said yes, on Friday.\n');
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- [@Marisol](speaker:B) said yes, on Friday.');
+    expect(md).not.toContain('said yes.\n');
   });
 
   it('a rename does not let the agent reclaim a line Bryan made his', () => {
