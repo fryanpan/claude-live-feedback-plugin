@@ -51,6 +51,10 @@ re-reads the file on every request and attaches the embed on the way out, so
 regenerating the report keeps working and `docId` keeps the threads. Nothing
 about the repo changed, and nothing has to be reverted before you commit.
 
+It also captures what it read, so the link survives the file. Bind a path
+that is already unreachable and the call fails, naming the path — rather than
+succeeding and serving a 404 to the reviewer weeks later.
+
 If the page already carries its own embed, the server leaves it alone.
 
 ## Untracked → embed by hand
@@ -178,7 +182,9 @@ a regeneration and hand-editing the output does not.
 
 ### Mockup you are writing from scratch
 Write the HTML outside the working tree and `bind_mock` it. Mockups do not
-enter the repo, so this needs no widget markup at all.
+enter the repo, so this needs no widget markup at all — and the bind captures
+the content, so cleaning up your scratch directory does not take the mock
+down with it.
 
 ### Multi-page demo in a scratch directory
 Each file ends with the hand embed, one shared `docId`. Nothing else needed.
