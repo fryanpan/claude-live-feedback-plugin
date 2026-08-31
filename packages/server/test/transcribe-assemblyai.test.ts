@@ -53,9 +53,25 @@ class FakeSocket implements EngineSocket {
   }
 }
 
+/**
+ * The measurement fields, kept out of the shape assertions.
+ *
+ * `engineMs` is a wall clock and `audioEndMs` is about latency rather than
+ * about words, so asserting them inside every `toEqual` would make each of
+ * these tests about two things and one of them untestable. `raw` below keeps
+ * the whole turn for the one test that IS about them.
+ */
+function words(turn: EngineTurn): EngineTurn {
+  const { engineMs, audioEndMs, ...rest } = turn;
+  void engineMs;
+  void audioEndMs;
+  return rest;
+}
+
 function harness(opts: { flushTimeoutMs?: number; connectTimeoutMs?: number } = {}) {
   let socket: FakeSocket | null = null;
   const turns: EngineTurn[] = [];
+  const raw: EngineTurn[] = [];
   const errors: string[] = [];
   const engine = createAssemblyAiEngine({
     apiKey: 'test-key-not-a-real-credential',
@@ -68,14 +84,17 @@ function harness(opts: { flushTimeoutMs?: number; connectTimeoutMs?: number } = 
   if (!engine) throw new Error('engine should exist when a key is supplied');
   const opening = engine.open({
     sampleRate: 16_000,
-    onTurn: (t) => turns.push({ ...t }),
+    onTurn: (t) => {
+      raw.push({ ...t });
+      turns.push(words(t));
+    },
     onError: (m) => errors.push(m),
   });
   const fake = (): FakeSocket => {
     if (!socket) throw new Error('socket was never created');
     return socket;
   };
-  return { engine, opening, fake, turns, errors };
+  return { engine, opening, fake, turns, raw, errors };
 }
 
 describe('assemblyai key resolution', () => {
@@ -369,6 +388,7 @@ describe('assemblyai speaker labels', () => {
     );
     h.fake().deliver(turn({ turn_order: 1, transcript: 'Sure.', speaker_label: 'A' }));
     h.turns.length = 0;
+    h.raw.length = 0;
     h.fake().deliver({
       type: 'SpeakerRevision',
       revisions: [
@@ -378,5 +398,56 @@ describe('assemblyai speaker labels', () => {
       ],
     });
     expect(h.turns).toEqual([{ turn: 1, text: 'Sure.', final: true, speaker: 'B' }]);
+  });
+});
+
+/**
+ * The two fields the latency measurement reads off a Turn. They ride the same
+ * seam as the words so the relay needs no second channel, and they are
+ * separated from the word assertions above because one of them is a clock.
+ */
+describe('the marks a Turn carries for measurement', () => {
+  it('reports when the frame arrived and where in the audio its last word ends', async () => {
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    const before = Date.now();
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: false,
+      end_of_turn: false,
+      transcript: 'so the sync',
+      end_of_turn_confidence: 0.2,
+      words: [
+        { text: 'so', start: 100, end: 240, confidence: 0.9, word_is_final: true },
+        { text: 'the', start: 250, end: 380, confidence: 0.9, word_is_final: true },
+        { text: 'sync', start: 390, end: 610, confidence: 0.8, word_is_final: false },
+      ],
+    });
+    const after = Date.now();
+    const [turn] = h.raw;
+    expect(turn?.audioEndMs).toBe(610);
+    expect(turn?.engineMs).toBeGreaterThanOrEqual(before);
+    expect(turn?.engineMs).toBeLessThanOrEqual(after);
+  });
+
+  it('leaves the offset off a frame that carries no word timings', async () => {
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    // Real frames arrive like this; a made-up offset would name the wrong
+    // audio frame and land in the percentiles looking like a measurement.
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: true,
+      end_of_turn: true,
+      transcript: 'So the sync.',
+      end_of_turn_confidence: 0.9,
+      words: [],
+    });
+    expect(h.raw[0]?.audioEndMs).toBeUndefined();
+    expect(typeof h.raw[0]?.engineMs).toBe('number');
   });
 });

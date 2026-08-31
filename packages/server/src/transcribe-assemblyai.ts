@@ -147,6 +147,27 @@ export function streamingUrl(sampleRate: number): string {
   return `${STREAM_URL}?${params.toString()}`;
 }
 
+/**
+ * Audio offset of the END of the last word in a `Turn`, in milliseconds of
+ * the engine's stream — or undefined when the frame carries no word timings.
+ *
+ * The `words` array is documented on every Turn (each entry `text`, `start`,
+ * `end`, `confidence`, `word_is_final`, and `speaker` once diarization has
+ * decided; api-reference/streaming-api, re-read 2026-08-30), but this is the
+ * one field in the protocol we read for measurement rather than for words on
+ * a screen, so it is guarded like anything else that could be absent: a
+ * missing or malformed array costs the frame its latency sample and nothing
+ * else. Partials are included deliberately — a partial IS the newest word
+ * reaching the screen, which is the experience being measured.
+ */
+export function audioEndMsFromTurn(msg: Record<string, unknown>): number | undefined {
+  const words = msg.words;
+  if (!Array.isArray(words) || words.length === 0) return undefined;
+  const last = words[words.length - 1] as Record<string, unknown> | undefined;
+  const end = last?.end;
+  return typeof end === 'number' && Number.isFinite(end) ? end : undefined;
+}
+
 /** Labels the engine uses to mean "not decided yet" — never a speaker. */
 const PLACEHOLDER_LABELS = new Set(['PENDING', 'UNKNOWN']);
 
@@ -245,6 +266,9 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
           headers: { Authorization: key },
           onOpen: () => {},
           onMessage: (text) => {
+            // Taken before the parse: the vendor leg ends when the bytes
+            // arrive, not when we have finished reading them.
+            const engineMs = Date.now();
             let msg: Record<string, unknown>;
             try {
               msg = JSON.parse(text) as Record<string, unknown>;
@@ -269,7 +293,15 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
               const final = msg.end_of_turn === true && msg.turn_is_formatted === true;
               const speaker = speakerFromLabel(msg.speaker_label);
               if (final) settled.set(order, { text: transcript, ...speaker });
-              sessionOpts.onTurn({ turn: order, text: transcript, final, ...speaker });
+              const audioEndMs = audioEndMsFromTurn(msg);
+              sessionOpts.onTurn({
+                turn: order,
+                text: transcript,
+                final,
+                ...speaker,
+                ...(audioEndMs !== undefined ? { audioEndMs } : {}),
+                engineMs,
+              });
               return;
             }
             if (msg.type === 'SpeakerRevision') {
