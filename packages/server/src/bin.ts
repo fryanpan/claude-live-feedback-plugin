@@ -551,16 +551,13 @@ if (recallCallbackHost) {
       ' — paste this into the Recall dashboard',
   );
   console.log('[meetings]   every other path on that hostname answers 404.');
-} else if (meetingBot?.config.publicWsBase) {
-  // No dedicated hostname: bots dial the operator's own address, which the
-  // host guard gates with Cloudflare Access and no longer exempts anything
-  // from. Worth saying out loud, because the symptom is a bot that joins,
-  // records, bills and delivers nothing.
-  console.log(
-    '[meetings] no CW_RECALL_CALLBACK_HOST; bots will dial CW_PUBLIC_BASE_URL, which is ' +
-      'Access-gated with NO exemptions — set the callback host, or Recall cannot reach us.',
-  );
 }
+// No `else` warning here on purpose. Whether the CW_PUBLIC_BASE_URL fallback
+// is actually dialable depends on the effective host lists, which live in
+// createServer — so the honest line ("bots are OFF: Recall would dial …") is
+// printed there, by the same check that disarms the invite. A warning here
+// would either duplicate it or cry wolf at every deployment whose public
+// hostname is not Access-gated at all.
 
 const notesComposer = createHaikuNotesComposer();
 if (transcription && !notesComposer) {

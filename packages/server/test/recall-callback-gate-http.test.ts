@@ -81,11 +81,11 @@ const TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
  * invites a bot, so the methods exist only to satisfy the interface. A real
  * one would bill the vendor per meeting-hour.
  */
-const configuredClient = (): RecallClient =>
+const configuredClient = (wsBase = `wss://${CALLBACK_HOST}`): RecallClient =>
   ({
     config: {
       region: 'us-east-1',
-      publicWsBase: `wss://${CALLBACK_HOST}`,
+      publicWsBase: wsBase,
       retentionHours: 24,
       separateStreams: true,
       botName: 'Meeting Assistant',
@@ -465,5 +465,78 @@ describe('with no callback hostname configured, the class does not exist', () =>
     const r = await on(h, CALLBACK_HOST, `/recall/${TOKEN}`);
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'unknown_host' });
+  });
+});
+
+describe('a bot that could not call back is not offered at all', () => {
+  /**
+   * The other half of removing the exemptions, and the one that costs money
+   * if it is missed. A deployment with a Recall key and a `CW_PUBLIC_BASE_URL`
+   * naming its Access-gated operator hostname still looks configured: the
+   * invite renders, a bot is created, it joins the call and bills per
+   * meeting-hour — and every callback it makes is refused before any route
+   * runs. `configured` is what the doc's strip reads to decide whether to
+   * offer the button, so it has to be the thing that goes false.
+   */
+  const meetingBotState = async (h: ServerHandle) => {
+    // Asked as the OPERATOR, with a token, on the operator's hostname: this
+    // is the product's own UI reading the doc strip, not a callback. (Not
+    // over loopback — with `cfAccess` configured and no shares wired, this
+    // server is in legacy whole-server mode, where even localhost presents a
+    // token.)
+    const r = await fetch(`http://localhost:${h.port}/api/docs/any-doc/meeting-bot`, {
+      headers: { host: PROXIED_HOST, ...CF_RAY, 'cf-access-jwt-assertion': operatorJwt },
+    });
+    expect(r.status).toBe(200);
+    return (await r.json()) as { configured: boolean };
+  };
+
+  const spinUpDialing = (wsBase: string, callbackHost: string | null): ServerHandle => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'recall-reach-'));
+    dirs.push(dataDir);
+    const h = createServer({
+      port: 0,
+      dataDir,
+      cfAccess: { teamDomain: TEAM_DOMAIN, audience: OPERATOR_AUD, jwks },
+      proxiedTrustedHosts: [PROXIED_HOST],
+      proxiedTrustedEmails: [OPERATOR_EMAIL],
+      ...(callbackHost ? { recallCallbackHost: callbackHost } : {}),
+      meetingBot: configuredClient(wsBase),
+      meetingBotWebhookSecret: WEBHOOK_SECRET,
+    });
+    handles.push(h);
+    return h;
+  };
+
+  it('reports NOT configured when the callback URL is the Access-gated host', async () => {
+    const h = spinUpDialing(`wss://${PROXIED_HOST}`, null);
+    expect((await meetingBotState(h)).configured).toBe(false);
+  });
+
+  it('POSITIVE CONTROL: the same server with a callback host is configured', async () => {
+    // Without this, the assertion above is satisfied by a server that reports
+    // `configured: false` for some entirely unrelated reason.
+    const h = spinUpDialing(`wss://${CALLBACK_HOST}`, CALLBACK_HOST);
+    expect((await meetingBotState(h)).configured).toBe(true);
+  });
+
+  it('POSITIVE CONTROL: a public hostname this server does not gate still works', async () => {
+    // The fallback the change had to preserve: no dedicated callback host,
+    // and a public base URL that is not Access-fronted, behaves as before.
+    const h = spinUpDialing('wss://open.example.com', null);
+    expect((await meetingBotState(h)).configured).toBe(true);
+  });
+
+  it('the websocket route stays armed by the SAME answer, not a second one', async () => {
+    // `configured()` is what arms `/recall/<token>`, and it is the flag this
+    // reason disarms — so "the invite is not offered" and "the socket is
+    // closed" cannot drift apart. Asserted on the reachable server, because
+    // an unreachable one has no callback hostname configured (the two states
+    // that would produce it are contradictory: the ws origin is DERIVED from
+    // the callback host) and its hostname is refused a step earlier.
+    const h = spinUpDialing(`wss://${CALLBACK_HOST}`, CALLBACK_HOST);
+    const r = await on(h, CALLBACK_HOST, `/recall/${TOKEN}`);
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: 'unknown endpoint' });
   });
 });
