@@ -1402,6 +1402,58 @@ describe('an auto-started meeting whose device never begins the sentence', () =>
     expect(h.note()).not.toMatch(/tap to announce/i);
   });
 
+  it('a second tap on a sentence already in flight is not a second announcement', async () => {
+    // The double tap, which is the ordinary way a person answers a control
+    // that does not visibly change: a second `speak()` cancels the first
+    // mid-sentence, and the FIRST call's continuation then restores echo
+    // cancellation and puts the read-it-yourself line up while the second is
+    // still talking — the announcement taken back out of the recording by the
+    // tap that asked for it.
+    const { h, mic, announcer } = await muted();
+    const offer = noteButton(h);
+    offer.click();
+    offer.click();
+    await settle();
+    expect(announcer.said).toHaveLength(2);
+    expect(announcer.primes).toBe(1);
+    // Echo cancellation went down once for the sentence, and is still down
+    // while it is spoken.
+    expect(mic.aec.filter((on) => !on)).toHaveLength(2);
+    expect(mic.aec.at(-1)).toBe(false);
+    announcer.settle('spoke');
+    await settle();
+    expect(h.strip.announced()).toBe('device');
+    expect(mic.aec.at(-1)).toBe(true);
+  });
+
+  it('a later meeting can still be tapped after one that ended mid-sentence', async () => {
+    // The in-flight guard is held by attempt, not as a flag: an utterance
+    // cancelled by a stop can stay unresolved for its whole timeout, and the
+    // next meeting's offer must not be locked out by it.
+    const { h, announcer } = await muted();
+    noteButton(h).click();
+    await settle();
+    h.toggle().click();
+    h.toggle().click();
+    await settle();
+    h.sockets[1]?.onopen?.();
+    h.sockets[1]?.serve({
+      type: 'ready',
+      meetingId: 'm2',
+      startedAt: 2_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    await settle();
+    // The second meeting's own press primed it, so this one gets the plain
+    // line rather than the offer — but the guard is what is under test: its
+    // sentence was spoken at all. Settled together with the cancelled one it
+    // inherited, which answers for nothing.
+    announcer.settle('spoke');
+    await settle();
+    expect(h.strip.announced()).toBe('device');
+  });
+
   it('a meeting stopped before the tap says nothing into the room it left', async () => {
     const { h, announcer } = await muted();
     const offer = noteButton(h);

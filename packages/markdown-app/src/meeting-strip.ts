@@ -534,6 +534,18 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * the sentence has been said — or on a tap, whichever comes first.
    */
   let holdAnnouncement = false;
+  /**
+   * Which tap is currently being spoken, or 0 for none.
+   *
+   * One at a time, and it is the double-tap that makes it necessary rather
+   * than tidiness: a second `speak()` cancels the first mid-sentence, and the
+   * FIRST call's own continuation then restores echo cancellation and puts the
+   * read-it-yourself line up while the second utterance is still going — the
+   * announcement taken back out of the recording by the tap that asked for it.
+   * Held by attempt rather than as a flag so a stale announcement resolving
+   * late cannot unlock the next meeting's offer.
+   */
+  let sayingAttempt = 0;
 
   /** Live word spans per turn, so a correction rewrites the span that is
    *  already on screen instead of redrawing the line under the reader. */
@@ -870,6 +882,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   function endAnnouncement(): void {
     generation += 1;
     holdAnnouncement = false;
+    // A cancelled utterance can stay unresolved for its whole timeout, and
+    // the next meeting's offer must not be locked out by one.
+    sayingAttempt = 0;
     announcer.cancel();
   }
 
@@ -990,26 +1005,36 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // A meeting that has ended is not owed an announcement, and speaking into
     // the NEXT one would announce a recording that this line was never about.
     if (disposed || attempt !== generation) return;
+    // A second tap on a sentence already in flight is not a second
+    // announcement; see `sayingAttempt`.
+    if (sayingAttempt !== 0) return;
+    sayingAttempt = attempt;
     announcer.prime();
     const mic = capture;
-    await suspendEchoCancellation(mic, true);
-    if (disposed || attempt !== generation) {
+    try {
+      await suspendEchoCancellation(mic, true);
+      if (disposed || attempt !== generation) {
+        await suspendEchoCancellation(mic, false);
+        return;
+      }
+      const outcome = await announcer.speak(RECORDING_ANNOUNCEMENT);
       await suspendEchoCancellation(mic, false);
-      return;
+      if (disposed || attempt !== generation) return;
+      if (outcome === 'spoke') {
+        claim('device');
+        // The room has heard it; the line has no reader left to wait for.
+        releaseAnnouncement();
+        return;
+      }
+      // The tap was the last thing that could have made the device speak.
+      // What is left is the sentence and a person, which is where every other
+      // failure ends too.
+      showAnnouncement(announcementNote('spoken'));
+    } finally {
+      // Only if this attempt still owns it: a meeting that ended has already
+      // released the offer, and may have handed it to a newer one.
+      if (sayingAttempt === attempt) sayingAttempt = 0;
     }
-    const outcome = await announcer.speak(RECORDING_ANNOUNCEMENT);
-    await suspendEchoCancellation(mic, false);
-    if (disposed || attempt !== generation) return;
-    if (outcome === 'spoke') {
-      claim('device');
-      // The room has heard it; the line has no reader left to wait for.
-      releaseAnnouncement();
-      return;
-    }
-    // The tap was the last thing that could have made the device speak. What
-    // is left is the sentence and a person, which is where every other
-    // failure ends too.
-    showAnnouncement(announcementNote('spoken'));
   }
 
   async function announce(by: AnnouncedBy, attempt: number): Promise<void> {
