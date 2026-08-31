@@ -93,6 +93,17 @@ describe('scoreDiarization — the controls', () => {
     expect(score.turnsCorrect).toBe(3);
   });
 
+  it('does not score a boundary across an unattributed turn', () => {
+    // Rowan, then a turn the engine would not attribute, then Rowan again.
+    // Bridging the gap would count "A then A" as an agreement between two
+    // turns that were never next to each other — a boundary the engine never
+    // expressed. Only the pairs that are genuinely adjacent are scored, and
+    // here neither is: both touch the silent turn.
+    const score = scoreDiarization(turns(['A', undefined, 'A', 'B']), TRUTH);
+    expect(score.boundaryPairs).toBe(1);
+    expect(score.boundaryAgreements).toBe(1);
+  });
+
   it('swapping both labels is still a perfect run — the mapping is optimal', () => {
     const score = scoreDiarization(turns(['B', 'A', 'B', 'A']), TRUTH);
     expect(score.turnsCorrect).toBe(4);

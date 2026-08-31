@@ -247,11 +247,15 @@ export function scoreDiarization(
 
   let boundaryPairs = 0;
   let boundaryAgreements = 0;
-  const labelled = pairs.filter((p) => p.label !== undefined);
-  for (let i = 1; i < labelled.length; i++) {
-    const prev = labelled[i - 1];
-    const cur = labelled[i];
-    if (!prev || !cur) continue;
+  for (let i = 1; i < pairs.length; i++) {
+    const prev = pairs[i - 1];
+    const cur = pairs[i];
+    // ADJACENT turns only, and both must carry a label. Dropping the
+    // unattributed ones and then walking the remainder would make the turns
+    // either side of a silent one look consecutive, and score a boundary the
+    // engine never expressed: A / unattributed / A would count as an
+    // agreement between two turns that were never next to each other.
+    if (!prev || !cur || prev.label === undefined || cur.label === undefined) continue;
     boundaryPairs++;
     if ((prev.label === cur.label) === (prev.person === cur.person)) boundaryAgreements++;
   }
