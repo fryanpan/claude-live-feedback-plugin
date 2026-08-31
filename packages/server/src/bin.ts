@@ -13,7 +13,11 @@ import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
-import { createRecallClient } from './recall.ts';
+import {
+  createRecallClient,
+  normalizeRecallCallbackHost,
+  recallStatusWebhookUrl,
+} from './recall.ts';
 import { haikuReviewJudge, reviewGateEnabled } from './review-judge.ts';
 import { captureServerError, flushServerSentry, initServerSentry } from './sentry.ts';
 import { createServer } from './server.ts';
@@ -306,6 +310,35 @@ if (proxiedTrustedHosts.length && !accessTunnelReady) {
   );
 }
 /**
+ * The DEDICATED hostname Recall.ai's backend dials this deployment on — a
+ * first-level name (`recall.<domain>`) pointed at the same tunnel, with NO
+ * Cloudflare Access application in front of it.
+ *
+ * Bryan's call, 2026-08-31, and the trade it makes is the point. The bot
+ * callbacks used to be two exemptions punched through the OPERATOR hostname,
+ * because that was the only public address this deployment had; every
+ * argument for them was about a caller that is not a person, and the hole was
+ * in the door people use. A second name costs a DNS record and a tunnel
+ * ingress rule, and in exchange the operator hostname goes back to having no
+ * exemptions at all while the unauthenticated surface is two routes that each
+ * carry their own credential.
+ *
+ * Unlike every other host list here this one takes NO Access readiness check,
+ * because Access is a browser flow and this caller has no browser. What arms
+ * each route is the credential it carries — a Recall key (so a per-bot token
+ * can exist) and `RECALL_WEBHOOK_SECRET` — reported on the boot line below.
+ */
+const recallCallbackHostRaw = process.env.CW_RECALL_CALLBACK_HOST?.trim() || '';
+const recallCallbackHost = normalizeRecallCallbackHost(recallCallbackHostRaw);
+if (recallCallbackHostRaw && !recallCallbackHost) {
+  console.error(
+    `[meetings] IGNORING CW_RECALL_CALLBACK_HOST (${recallCallbackHostRaw}): it must be a ` +
+      'plain dotted hostname such as recall.example.com — no port, no path, no IP literal. ' +
+      'Bot callbacks fall back to CW_PUBLIC_BASE_URL.',
+  );
+}
+
+/**
  * WHO the operator is, by verified Access email — the check that makes the
  * list above the operator's door rather than a door for everyone the Access
  * application admits.
@@ -494,22 +527,38 @@ if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
       'accepted unsigned. Set it to the signing secret from the Recall dashboard.',
   );
 }
-// Recall dials in on the OPERATOR's public hostname, which the host guard
-// classifies `proxied-local` — Access token required before any route runs.
-// Two callbacks are exempted there, each only while the credential it carries
-// is configured (middleware/recall-callback-gate.ts). Printed whenever that
-// hostname is actually live, because "did the exemption take effect?" is
-// otherwise only answerable by making a bot join a real call.
-if (proxiedTrustedHosts.length && proxiedTrustedReady) {
+// Where Recall dials in, and whether each of the two routes there is actually
+// armed. Printed whenever a callback hostname is configured, because "did this
+// take effect?" is otherwise only answerable by making a bot join a real call
+// — and the status webhook URL in particular is a value a human must paste
+// into the Recall dashboard, which nothing else in this process ever says.
+//
+// NOT gated on the operator hostname any more: the callback host stands on its
+// own now, and a deployment can have one without publishing the product at all.
+if (recallCallbackHost) {
   console.log(
-    '[meetings] bot callbacks on the operator hostname: websocket ' +
-      (meetingBot?.config.publicWsBase
-        ? 'exempt from Access (relay configured)'
-        : 'still gated (no Recall key or no CW_PUBLIC_BASE_URL)') +
-      '; status webhook ' +
-      (meetingBotWebhookSecret
-        ? 'exempt from Access (Svix signature is the credential)'
-        : 'gated until RECALL_WEBHOOK_SECRET is set'),
+    `[meetings] bot callback host: ${recallCallbackHost} (no Cloudflare Access; ` +
+      'each route carries its own credential)',
+  );
+  console.log(
+    '[meetings]   websocket  wss://' +
+      `${recallCallbackHost}/recall/<per-bot-token>  ` +
+      (meetingBot?.config.publicWsBase ? 'ARMED' : 'closed (no Recall key)'),
+  );
+  console.log(
+    `[meetings]   webhook    ${recallStatusWebhookUrl({ callbackHost: recallCallbackHost })}  ` +
+      (meetingBotWebhookSecret ? 'ARMED' : 'closed (set RECALL_WEBHOOK_SECRET)') +
+      ' — paste this into the Recall dashboard',
+  );
+  console.log('[meetings]   every other path on that hostname answers 404.');
+} else if (meetingBot?.config.publicWsBase) {
+  // No dedicated hostname: bots dial the operator's own address, which the
+  // host guard gates with Cloudflare Access and no longer exempts anything
+  // from. Worth saying out loud, because the symptom is a bot that joins,
+  // records, bills and delivers nothing.
+  console.log(
+    '[meetings] no CW_RECALL_CALLBACK_HOST; bots will dial CW_PUBLIC_BASE_URL, which is ' +
+      'Access-gated with NO exemptions — set the callback host, or Recall cannot reach us.',
   );
 }
 
@@ -645,6 +694,7 @@ while (!handle) {
       trustedHosts,
       accessTunnelHosts: accessTunnelReady ? accessTunnelHosts : [],
       proxiedTrustedHosts: proxiedTrustedReady ? proxiedTrustedHosts : [],
+      ...(recallCallbackHost ? { recallCallbackHost } : {}),
       proxiedTrustedEmails,
       allowedOrigins,
       publicBaseUrl: publicBaseUrlOverride,
@@ -722,6 +772,12 @@ if (ts) console.log(`[feedback]   tailscale:  http://${ts}:${port}`);
 if (publicBaseUrlOverride) console.log(`[feedback]   links use:  ${publicBaseUrlOverride}`);
 for (const h of lan) console.log(`[feedback]   lan:        http://${h}:${port}`);
 if (trustedHosts.length) console.log(`[feedback]   trusted:    ${trustedHosts.join(', ')}`);
+// The bot callback hostname is security-relevant in the opposite direction to
+// the lines below it — it is the one name here that is NOT Access-gated — so
+// it says what it serves rather than only that it exists.
+if (recallCallbackHost) {
+  console.log(`[feedback]   recall:     ${recallCallbackHost} (bot callbacks only, 404 otherwise)`);
+}
 // Named at boot because the alternative is a security-relevant setting nobody
 // can see. "collab" is the whole claim: Access-gated, share-scoped, and not
 // the privileged surface the tailnet names get.
