@@ -192,6 +192,7 @@ import { RecallMeetingRelay } from './recall-meeting.ts';
 import { parseBotStatusWebhook } from './recall-status.ts';
 import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
 import { type RecallClient, unreachableCallbackReason } from './recall.ts';
+import { runRefsBackfill, scanSettledDocRefs } from './refs-backfill.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
@@ -2445,7 +2446,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // (§3.6's table is exhaustive), so the projection refresh happens here,
   // the same pattern as the links route.
   rooms.onContentRevision = (docIds, revision) => {
-    for (const workspaceId of taskStore.flagStaleFromDocEdit(docIds, revision)) {
+    const touched = new Set(taskStore.flagStaleFromDocEdit(docIds, revision));
+    // The settled doc's prose is the linkage record: any task/goal link the
+    // edit wrote (or that was never mined) becomes a structured ref now, so
+    // the Docs field on the row side stays true without a second call. Ids
+    // arrive as canonical + alias; scanning the first that resolves scans
+    // the one doc they both name.
+    const scanned = new Set<string>();
+    for (const docId of docIds) {
+      const canonical = rooms.resolveDocId(docId);
+      if (scanned.has(canonical)) continue;
+      scanned.add(canonical);
+      for (const wsId of scanSettledDocRefs(rooms, taskStore, canonical)) touched.add(wsId);
+    }
+    for (const workspaceId of touched) {
       taskProjection.ensureWorkspace(workspaceId);
     }
   };
@@ -7505,6 +7519,23 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!isValidRef(ref)) return j(400, { error: BAD_REF_ERROR });
           return j(200, { ref, tasks: taskStore.backlinksFor(ref).map(taskChip) });
         }
+        // Mine the links people already wrote into structured refs — every
+        // doc body, task body, goal body, and stored url ref, both
+        // directions. Idempotent (a second run creates nothing), and
+        // `dryRun: true` counts what WOULD land without writing, so the
+        // sweep can be sized before it runs. One-shot per deployment in
+        // practice; the settle-time scan keeps it from going stale.
+        if (pathname === '/api/refs/backfill' && req.method === 'POST') {
+          const body = await safeJson(req);
+          const dryRun = body?.dryRun === true;
+          const stats = runRefsBackfill({ rooms, tasks: taskStore, dryRun });
+          // Link writes emit no store event (§3.6's exhaustive table), so
+          // the projection refresh happens here — same as the links route.
+          if (!dryRun) {
+            for (const wsId of stats.workspacesTouched) taskProjection.ensureWorkspace(wsId);
+          }
+          return j(200, { dryRun, ...stats });
+        }
         // Titles for pasted workspace URLs — the comment renderer's lookup.
         // Batched (one call per render burst, not one per link) and read-only.
         // Members only: the share-scope middleware above never whitelists this
@@ -7538,9 +7569,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                   // the status machine, and a pasted goal link should read
                   // as its title + status like any other row.
                   const t = taskStore.getTask(taskId) ?? taskStore.getGoalRow(taskId);
-                  return t
-                    ? { title: t.title, workspaceId: t.workspaceId, status: t.status }
-                    : undefined;
+                  if (!t) return undefined;
+                  return {
+                    title: t.title,
+                    workspaceId: t.workspaceId,
+                    status: t.status,
+                    // Only a Task can be a held draft; a GoalRow never
+                    // carries the field.
+                    ...('planHold' in t && t.planHold !== undefined ? { planHeld: true } : {}),
+                  };
                 },
                 workspaceName: (workspaceId) => taskStore.getWorkspace(workspaceId)?.name,
               },

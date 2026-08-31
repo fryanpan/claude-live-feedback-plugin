@@ -29,7 +29,7 @@ import { mountMeetingStrip } from './meeting-strip.ts';
 import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
-import { mountPlanTasks } from './plan-tasks.ts';
+import { mountPlanGate } from './plan-gate.ts';
 import { startReadingTracker } from './reading-tracker.ts';
 import { mountMarkupMargin } from './redline/markup-margin.ts';
 import { mountRedline } from './redline/redline-app.ts';
@@ -385,13 +385,14 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     scope.onCleanup(() => botRow.destroy());
   }
 
-  // Work derived from THIS doc, as live chips above the prose — and the
-  // Approve control when the doc is a plan whose drafts are held. Ordinary
-  // markdown docs only, same rule (and reason) as the meeting strip.
-  const planTasksEl = document.getElementById('plan-tasks');
-  if (planTasksEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
-    const planTasks = mountPlanTasks({ docId, root: planTasksEl, user, canWrite });
-    scope.onCleanup(() => planTasks.destroy());
+  // The plan gate's Approve line — rendered only while this doc is a plan
+  // whose drafts are held; nothing at all on ordinary docs (the tasks a doc
+  // produced read through the links in its prose). Ordinary markdown docs
+  // only, same rule (and reason) as the meeting strip.
+  const planGateEl = document.getElementById('plan-gate');
+  if (planGateEl && ctx.docType === 'markdown' && ctx.navDocId === undefined) {
+    const planGate = mountPlanGate({ docId, root: planGateEl, user, canWrite });
+    scope.onCleanup(() => planGate.destroy());
   }
 
   // Tapping a speaker tag in the notes offers the voices this doc's meetings

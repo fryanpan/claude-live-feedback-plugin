@@ -68,6 +68,19 @@ describe('the chip decoration', () => {
     editor.destroy();
   });
 
+  it('a plan-held draft wears "Draft", and approval swaps it for the status', () => {
+    // The strip that used to show a doc's held drafts is gone — the prose
+    // link's own chip is the surface now, so it must say what the row IS.
+    primeLinkTitle(TASK_URL, 'Draft the slice', 'triage', true);
+    const editor = mount(`<p><a href="${TASK_URL}">the draft</a></p>`);
+    expect(chipSpecs(editor)).toEqual([`${TASK_URL}|triage|draft`]);
+    // Approval releases the hold: re-prime as an ordinary row and refresh.
+    primeLinkTitle(TASK_URL, 'Draft the slice', 'todo');
+    refreshTaskLinkChips(editor.view);
+    expect(chipSpecs(editor)).toEqual([`${TASK_URL}|todo`]);
+    editor.destroy();
+  });
+
   it('renders no chip for a link the server said is not a task', () => {
     primeLinkTitle(TASK_URL, 'Some doc', null);
     const editor = mount(`<p><a href="${TASK_URL}">a doc link</a></p>`);

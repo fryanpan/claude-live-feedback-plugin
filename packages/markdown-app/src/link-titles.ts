@@ -20,10 +20,13 @@
  */
 
 /** What one URL resolved to. `status` is null when the target is not a
- *  task/goal — the "no chip" answer, distinct from "never asked". */
+ *  task/goal — the "no chip" answer, distinct from "never asked". `held`
+ *  marks a draft row held behind an unapproved plan: the chip reads "Draft"
+ *  instead of the hold's technical status. */
 interface LinkInfo {
   title: string | null;
   status: string | null;
+  held: boolean;
 }
 
 const cache = new Map<string, LinkInfo>();
@@ -39,13 +42,20 @@ export function cachedLinkStatus(url: string): string | null | undefined {
   return cache.has(url) ? (cache.get(url)?.status ?? null) : undefined;
 }
 
+/** Whether the URL's row is a plan-held draft. False covers both "not held"
+ *  and "never asked" — the chip build keys off `cachedLinkStatus` first. */
+export function cachedLinkHeld(url: string): boolean {
+  return cache.get(url)?.held === true;
+}
+
 /** Seed the cache (tests, or a caller that already holds the answer). */
 export function primeLinkTitle(
   url: string,
   title: string | null,
   status: string | null = null,
+  held = false,
 ): void {
-  cache.set(url, { title, status });
+  cache.set(url, { title, status, held });
 }
 
 export function _resetLinkTitlesForTest(): void {
@@ -66,10 +76,13 @@ export function statusChipLabel(status: string): string {
   return STATUS_CHIP_LABEL[status] ?? status;
 }
 
-function statusChipEl(status: string): HTMLSpanElement {
+/** The chip element, shared by DOM hydration and the editor decoration. A
+ *  held draft's chip says what the row IS — "Draft" — not the technical
+ *  status the hold happens to park it in. */
+export function statusChipEl(status: string, held = false): HTMLSpanElement {
   const chip = document.createElement('span');
-  chip.className = `ws-status-chip ws-chip-${status}`;
-  chip.textContent = statusChipLabel(status);
+  chip.className = held ? 'ws-status-chip ws-chip-draft' : `ws-status-chip ws-chip-${status}`;
+  chip.textContent = held ? 'Draft' : statusChipLabel(status);
   return chip;
 }
 
@@ -110,9 +123,14 @@ export async function fetchLinkInfos(
       const data = (await res.json()) as {
         titles?: Record<string, string | null>;
         statuses?: Record<string, string>;
+        planHeld?: Record<string, boolean>;
       };
       for (const u of chunk)
-        cache.set(u, { title: data.titles?.[u] ?? null, status: data.statuses?.[u] ?? null });
+        cache.set(u, {
+          title: data.titles?.[u] ?? null,
+          status: data.statuses?.[u] ?? null,
+          held: data.planHeld?.[u] === true,
+        });
       landed = true;
     } catch {
       break; // network failure: raw URLs stay visible, retry later
@@ -139,7 +157,7 @@ export async function hydrateLinkTitles(
     // A custom label (`data-ws-custom`) is the author's text and stays.
     if (info.title && !a.hasAttribute('data-ws-custom')) a.textContent = info.title;
     a.querySelector('.ws-status-chip')?.remove();
-    if (info.status) a.append(statusChipEl(info.status));
+    if (info.status) a.append(statusChipEl(info.status, info.held));
     a.removeAttribute('data-ws-pending');
   }
 }

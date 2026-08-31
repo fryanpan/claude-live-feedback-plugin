@@ -41,12 +41,14 @@ describe('POST /api/links/titles', () => {
   ): Promise<{
     titles: Record<string, string | null>;
     statuses: Record<string, string>;
+    planHeld: Record<string, boolean>;
   }> => {
     const r = await post('/api/links/titles', { urls });
     expect(r.status).toBe(200);
     return (await r.json()) as {
       titles: Record<string, string | null>;
       statuses: Record<string, string>;
+      planHeld: Record<string, boolean>;
     };
   };
 
@@ -197,6 +199,43 @@ describe('POST /api/links/titles', () => {
       const { statuses } = await lookup([docUrl, wsUrl]);
       expect(statuses[docUrl]).toBeUndefined();
       expect(statuses[wsUrl]).toBeUndefined();
+    });
+
+    it('marks a plan-held draft planHeld, and approval clears it', async () => {
+      // A plan doc whose derived rows are drafts: the doc's own prose links
+      // are the one surface that shows the hold now, so the lookup must say
+      // "draft" — and stop saying it the moment the plan is approved.
+      const mdPath = join(dataDir, 'held-plan.md');
+      writeFileSync(mdPath, '# Held plan\n\nThe plan.\n');
+      const doc = await post('/api/docs', {
+        docId: 'lt-held-plan',
+        type: 'markdown',
+        sourceUrl: mdPath,
+      });
+      expect(doc.status).toBe(200);
+      const batch = await post(`/api/workspaces/${wsId}/tasks/batch`, {
+        tasks: [{ title: 'Draft the slice', assignee: 'human' }],
+        sourceDoc: { docId: 'lt-held-plan' },
+      });
+      expect(batch.status).toBe(200);
+      const heldId = ((await batch.json()) as { tasks: Array<{ id: string }> }).tasks[0]?.id ?? '';
+
+      const heldUrl = `${base}/workspaces/${wsId}?task=${heldId}`;
+      const plainUrl = `${base}/workspaces/${wsId}?task=${taskId}`;
+      const before = await lookup([heldUrl, plainUrl]);
+      expect(before.planHeld[heldUrl]).toBe(true);
+      expect(before.statuses[heldUrl]).toBe('triage');
+      // Control: an ordinary task never appears in planHeld.
+      expect(before.planHeld[plainUrl]).toBeUndefined();
+
+      const approve = await post('/api/docs/lt-held-plan/plan', {
+        state: 'approved',
+        author: { id: 'known-jordan', name: 'Jordan', kind: 'person' },
+      });
+      expect(approve.status).toBe(200);
+      const after = await lookup([heldUrl]);
+      expect(after.planHeld[heldUrl]).toBeUndefined();
+      expect(after.statuses[heldUrl]).toBe('todo');
     });
   });
 
