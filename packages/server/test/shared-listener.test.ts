@@ -97,6 +97,52 @@ describe('shouldShareListener', () => {
   });
 });
 
+/**
+ * The shim goes on at IMPORT, not at the first `createServer`.
+ *
+ * That timing is the whole of the fix for a real hazard: two test files mock
+ * `globalThis.fetch` by saving what is there and putting it back afterwards,
+ * and if either had captured a pre-shim fetch its teardown would uninstall
+ * the shim for the rest of the process. Installing lazily made that a
+ * question about which file bun evaluated first. A subprocess is the only
+ * honest way to assert it — by the time this file runs, servers exist and the
+ * shim has long since gone on.
+ */
+describe('the shim is installed when the module loads', () => {
+  const probe = async (env: Record<string, string>): Promise<string> => {
+    const proc = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        [
+          'const before = globalThis.fetch;',
+          "await import('./packages/server/src/shared-listener.ts');",
+          'console.log(globalThis.fetch === before ? "untouched" : "shimmed");',
+        ].join('\n'),
+      ],
+      {
+        cwd: join(import.meta.dir, '..', '..', '..'),
+        env: { ...process.env, ...env },
+        stdout: 'pipe',
+      },
+    );
+    return (await new Response(proc.stdout).text()).trim();
+  };
+
+  it('wraps fetch under a test runner, before any server is created', async () => {
+    expect(await probe({ NODE_ENV: 'test', CW_DEDICATED_TEST_LISTENERS: '0' })).toBe('shimmed');
+  });
+
+  it('leaves fetch alone outside one — the negative control', async () => {
+    // Both halves matter: a probe that reported "untouched" for every env
+    // would pass the assertion above by never being able to see anything.
+    expect(await probe({ NODE_ENV: 'production', CW_DEDICATED_TEST_LISTENERS: '0' })).toBe(
+      'untouched',
+    );
+    expect(await probe({ NODE_ENV: 'test', CW_DEDICATED_TEST_LISTENERS: '1' })).toBe('untouched');
+  });
+});
+
 describe.skipIf(!sharingLive)('two servers behind one real socket', () => {
   let dirA: string;
   let dirB: string;
@@ -168,6 +214,51 @@ describe.skipIf(!sharingLive)('two servers behind one real socket', () => {
     expect(namesOf(b)).toContain('only-in-b');
     expect(namesOf(b)).not.toContain('only-in-a');
     expect(inA).not.toBe(inB);
+  });
+
+  /**
+   * The suite mocks `globalThis.fetch` in places and restores it afterwards.
+   * A shim installed by plain assignment would be uninstalled by that
+   * restore — silently, for the rest of the process, leaving every later
+   * shared server reachable only at a port nothing is bound to. This walks
+   * the whole cycle: capture, mock, restore, and reach the server on the
+   * other side of it.
+   */
+  it('survives a test mocking globalThis.fetch and putting it back', async () => {
+    const captured = globalThis.fetch;
+    let sawMock = 0;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      sawMock += 1;
+      return captured(input as RequestInfo, init);
+    }) as typeof globalThis.fetch;
+    try {
+      await makeBoard(a, 'through-the-mock');
+      // Control: the mock really was in the path. Without this the assertion
+      // below would pass just as happily on a mock that never ran.
+      expect(sawMock).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = captured;
+    }
+    await makeBoard(a, 'after-the-restore');
+    const names = a.tasks.listWorkspaces().map((w) => w.name);
+    expect(names).toContain('through-the-mock');
+    expect(names).toContain('after-the-restore');
+  });
+
+  /**
+   * `fetch(request, init)` must keep what the Request carried. Rebuilding the
+   * options out of `init` alone turns a POST into a bodyless GET, and the
+   * failure reads as a route bug rather than a transport one.
+   */
+  it("keeps a Request's method and body when init only adds a header", async () => {
+    const request = new Request(`http://localhost:${b.port}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'carried-on-a-request', goal: 'Ship the index.' }),
+    });
+    const res = await fetch(request, { headers: { 'content-type': 'application/json' } });
+    expect(res.status).toBe(200);
+    expect(b.tasks.listWorkspaces().map((w) => w.name)).toContain('carried-on-a-request');
   });
 
   it('reaches an opted-out server over its own socket, unshimmed', async () => {
