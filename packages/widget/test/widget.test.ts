@@ -50,17 +50,133 @@ describe('widget', () => {
     expect(document.querySelector('claude-feedback-widget')).toBeTruthy();
   });
 
-  it('opens and closes the panel via the FAB', async () => {
+  it('FAB toggles feedback mode — no popover, cursor class on the body', async () => {
     const mod = await importWidget();
     const el = mod.FeedbackWidget.init({ docId: 'w-test-2', user: 'bryan' });
     const root = el.shadowRoot!;
     const fab = root.querySelector('.fab') as HTMLButtonElement;
     const panel = root.querySelector('.panel') as HTMLElement;
-    expect(panel.classList.contains('open')).toBe(false);
     fab.click();
+    // Mode on: the body carries the cursor class, and NO panel popped up.
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(true);
+    expect(panel.classList.contains('open')).toBe(false);
+    expect(fab.getAttribute('aria-pressed')).toBe('true');
+    fab.click();
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(false);
+    expect(fab.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('Escape exits feedback mode', async () => {
+    const mod = await importWidget();
+    const el = mod.FeedbackWidget.init({ docId: 'w-test-esc', user: 'bryan' });
+    const fab = el.shadowRoot!.querySelector('.fab') as HTMLButtonElement;
+    fab.click();
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(true);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(false);
+  });
+
+  it('opens and closes the panel via the threads button', async () => {
+    const mod = await importWidget();
+    const el = mod.FeedbackWidget.init({ docId: 't-panel', user: 'bryan' });
+    const root = el.shadowRoot!;
+    const listBtn = root.querySelector('.fab-list') as HTMLButtonElement;
+    const panel = root.querySelector('.panel') as HTMLElement;
+    expect(panel.classList.contains('open')).toBe(false);
+    listBtn.click();
     expect(panel.classList.contains('open')).toBe(true);
-    fab.click();
+    listBtn.click();
     expect(panel.classList.contains('open')).toBe(false);
+    // Opening the panel never enters feedback mode.
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(false);
+  });
+
+  /**
+   * The point of a MODE over a one-shot picker: several comments in a row
+   * without re-arming. A tap opens the composer immediately; cancelling (or
+   * posting) leaves the mode armed for the next tap.
+   */
+  it('a click in feedback mode opens the composer and the mode survives it', async () => {
+    const mod = await importWidget();
+    const el = mod.FeedbackWidget.init({ docId: 't-multi', user: 'bryan' });
+    const root = el.shadowRoot!;
+    const target = document.getElementById('hello') as HTMLElement;
+    // happy-dom has no layout, so hit-testing by coordinates needs a stub.
+    document.elementFromPoint = () => target;
+    (root.querySelector('.fab') as HTMLButtonElement).click();
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+    const composer = root.querySelector('.composer') as HTMLElement;
+    expect(composer).toBeTruthy();
+    expect(composer.querySelector('.composer-snippet')?.textContent).toContain('Hello');
+    // Cancel the comment — the mode stays armed for the next click.
+    (composer.querySelector('.cancel') as HTMLButtonElement).click();
+    expect(root.querySelector('.composer')).toBeNull();
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(true);
+    // A second tap composes again without touching the FAB.
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+    expect(root.querySelector('.composer')).toBeTruthy();
+    // Escape with a composer open dismisses the composer, not the mode …
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(root.querySelector('.composer')).toBeNull();
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(true);
+    // … and the next Escape exits the mode.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(document.body.classList.contains('cfw-feedback-mode')).toBe(false);
+  });
+
+  it('a refused post keeps the composer, the text, and says what happened', async () => {
+    const mod = await importWidget();
+    (globalThis as unknown as { fetch: unknown }).fetch = async () =>
+      new Response('{}', { status: 500 });
+    const el = mod.FeedbackWidget.init({ docId: 't-fail', user: 'bryan' });
+    const root = el.shadowRoot!;
+    document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
+    (root.querySelector('.fab') as HTMLButtonElement).click();
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+    const composer = root.querySelector('.composer') as HTMLElement;
+    (composer.querySelector('textarea') as HTMLTextAreaElement).value = 'needs work';
+    (composer.querySelector('.submit') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 20));
+    // The typed comment is not the failure's to discard.
+    expect(root.querySelector('.composer')).toBeTruthy();
+    expect((root.querySelector('.composer textarea') as HTMLTextAreaElement).value).toBe(
+      'needs work',
+    );
+    expect(root.querySelector('.composer-err')?.textContent).toContain('try again');
+    expect((root.querySelector('.composer .submit') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('an unreachable server does not strand the button at Posting…', async () => {
+    const mod = await importWidget();
+    (globalThis as unknown as { fetch: unknown }).fetch = async () => {
+      throw new Error('net down');
+    };
+    const el = mod.FeedbackWidget.init({ docId: 't-net', user: 'bryan' });
+    const root = el.shadowRoot!;
+    document.elementFromPoint = () => document.getElementById('hello') as HTMLElement;
+    (root.querySelector('.fab') as HTMLButtonElement).click();
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+    const composer = root.querySelector('.composer') as HTMLElement;
+    (composer.querySelector('textarea') as HTMLTextAreaElement).value = 'hello?';
+    (composer.querySelector('.submit') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 20));
+    const submit = root.querySelector('.composer .submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    expect(submit.textContent).toBe('Post');
+    expect(root.querySelector('.composer-err')).toBeTruthy();
+  });
+
+  it('a click on the widget host in feedback mode is left alone', async () => {
+    const mod = await importWidget();
+    const el = mod.FeedbackWidget.init({ docId: 't-chrome', user: 'bryan' });
+    const root = el.shadowRoot!;
+    // Shadow-DOM chrome (composer, FAB) resolves to the host element.
+    document.elementFromPoint = () => el as unknown as HTMLElement;
+    (root.querySelector('.fab') as HTMLButtonElement).click();
+    const ev = new PointerEvent('pointerup', { clientX: 10, clientY: 10, cancelable: true });
+    window.dispatchEvent(ev);
+    expect(root.querySelector('.composer')).toBeNull();
+    expect(ev.defaultPrevented).toBe(false);
   });
 
   it('init is idempotent — repeat calls return the same element', async () => {
@@ -97,7 +213,7 @@ describe('widget', () => {
   it('lists a thread that is about the page itself', async () => {
     const mod = await importWidget();
     const core = await import('@feedback/core');
-    const el = mod.FeedbackWidget.init({ docId: 'w-test-subject', user: 'bryan' });
+    const el = mod.FeedbackWidget.init({ docId: 't-subject', user: 'bryan' });
     const inner = el as unknown as {
       client: { ydoc: import('yjs').Doc } | null;
       renderThreads: () => void;
@@ -159,14 +275,14 @@ describe('widget', () => {
 
       // Default scope: the guest namespace is empty, so the widget is anonymous.
       const guest = document.createElement('claude-feedback-widget');
-      guest.setAttribute('doc-id', 'w-scope-default');
+      guest.setAttribute('doc-id', 'scope-default');
       document.body.appendChild(guest);
       const guestName = (guest as unknown as { user: { name: string } }).user.name;
       expect(guestName).toMatch(/^Anonymous /);
 
       // scope=host: the SAME stored name is now the widget's identity.
       const hosted = document.createElement('claude-feedback-widget');
-      hosted.setAttribute('doc-id', 'w-scope-host');
+      hosted.setAttribute('doc-id', 'scope-host');
       hosted.setAttribute('identity-scope', 'host');
       document.body.appendChild(hosted);
       expect((hosted as unknown as { user: { name: string } }).user.name).toBe('Dana Reviewer');
@@ -184,7 +300,7 @@ describe('widget', () => {
     it('via FeedbackWidget.init as well as the attribute', async () => {
       const mod = await importWidget();
       localStorage.setItem('feedback-user-name', 'Reviewer');
-      const el = mod.FeedbackWidget.init({ docId: 'w-scope-init', identityScope: 'host' });
+      const el = mod.FeedbackWidget.init({ docId: 'scope-init', identityScope: 'host' });
       expect((el as unknown as { user: { name: string } }).user.name).toBe('Reviewer');
     });
   });
