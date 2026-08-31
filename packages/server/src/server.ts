@@ -9794,6 +9794,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // which only the session on the socket can do.
         const lateNameMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)\/speakers$/);
         if (lateNameMatch && req.method === 'POST') {
+          // A durable write to the meeting record plus a rewrite of the doc's
+          // notes: owner-side only, like every other mutating route here.
+          if (visitor) return j(403, { error: 'not available to share visitors' });
           const addressed = decodeURIComponent(lateNameMatch[1] ?? '');
           const meetingId = decodeURIComponent(lateNameMatch[2] ?? '');
           if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
