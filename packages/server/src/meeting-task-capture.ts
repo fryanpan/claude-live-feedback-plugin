@@ -65,6 +65,12 @@ export type CapturedItem = CapturedRequest | CapturedReference;
 
 export interface TaskCaptureInput {
   turns: readonly NotesTurn[];
+  /**
+   * The previous tick's speech, already read on that pass. Only its tail is
+   * used, and it is marked in the prompt as already read — see
+   * {@link overlapWindow} for why an ask straddling a tick boundary needs it.
+   */
+  priorTurns?: readonly NotesTurn[];
   candidates: readonly TaskCaptureCandidate[];
   docTitle?: string;
 }
@@ -187,10 +193,112 @@ function sharedWordCount(a: Set<string>, b: Set<string>): number {
 }
 
 /**
- * Did this pause's speech mention the candidate at all? One significant word
- * in common is the floor a model-claimed reference must clear — the model
- * matches, this proves the match came from the words rather than from the
- * candidate list itself.
+ * WHY EACH PASS ALSO SEES THE END OF THE ONE BEFORE IT.
+ *
+ * A tick boundary falls wherever the room went quiet for four seconds, which
+ * is nowhere near where an ask ends. Measured live, both halves of it: "…and
+ * that is the real cost" / boundary / "can you file a ticket for that one?"
+ * filed a row titled *"file a ticket for that one, a small spike would do"* —
+ * the pass saw a pointer with nothing to point at; and "we should file
+ * tickets for the next few things I mention" / boundary / the things
+ * themselves lost the ask entirely, because the pass that heard the subjects
+ * never heard the request.
+ *
+ * So the window reaches back, and the overlap is MARKED: the prompt says
+ * those lines were already read, and that every item must draw part of itself
+ * from the new ones. Marking is what keeps the same request from being filed
+ * twice, and it is belt and braces with the board's own find-or-create — a
+ * re-file matches the row the previous pass created and becomes a link to it
+ * (`requestMatchesCandidate`).
+ *
+ * The TAIL, not the whole tick. What "that one" refers to is the speech
+ * adjacent to the boundary, and carrying a whole tick would grow every
+ * prompt by a whole tick's transcript for the sake of one sentence.
+ */
+export const OVERLAP_MAX_CHARS = 180;
+
+/** …and a turn ceiling, so a burst of two-word turns cannot spend the budget
+ *  on line prefixes. */
+export const OVERLAP_MAX_TURNS = 6;
+
+/**
+ * Keep the END of an over-long line: the referent of a pointer is what was
+ * said last, so the tail is the half worth paying for.
+ *
+ * The leading ellipsis is part of what the line costs, so the tail is one
+ * character shorter than the budget — a turn with no spaces in it at all (a
+ * URL, an unbroken ASR token) would otherwise return `max + 1` and quietly
+ * break the bound the prompt cost is measured against. Raised by review.
+ */
+function clipToBudget(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const tail = text.slice(text.length - (max - 1));
+  const space = tail.indexOf(' ');
+  return `…${space >= 0 ? tail.slice(space + 1) : tail}`;
+}
+
+/**
+ * The slice of the previous tick this pass may see: its last turns, within
+ * {@link OVERLAP_MAX_CHARS}, in spoken order.
+ *
+ * A turn the current tick already carries is never overlap — a tick whose
+ * compose failed hands its turns to the next one, where they are new speech
+ * again, and showing them in both halves would ask the model to read one
+ * sentence as both already-noted and new.
+ *
+ * The last turn is always carried, clipped if it has to be: it is the one the
+ * next sentence points at, and a window that drops it for being long is the
+ * bug this exists to fix.
+ */
+export function overlapWindow(
+  priorTurns: readonly NotesTurn[] | undefined,
+  turns: readonly NotesTurn[],
+): NotesTurn[] {
+  if (!priorTurns || priorTurns.length === 0) return [];
+  const inTick = new Set(turns.map((t) => t.turn));
+  const usable = priorTurns.filter((t) => !inTick.has(t.turn));
+  const out: NotesTurn[] = [];
+  let budget = OVERLAP_MAX_CHARS;
+  for (let i = usable.length - 1; i >= 0 && out.length < OVERLAP_MAX_TURNS; i--) {
+    const turn = usable[i];
+    if (!turn) continue;
+    // The speaker prefix is part of what the line costs the prompt.
+    const prefix = turn.speaker ? turn.speaker.length + 2 : 0;
+    if (turn.text.length + prefix > budget) {
+      // Only the newest line is worth clipping into what is left; anything
+      // older simply does not fit.
+      if (out.length === 0 && budget - prefix > 0) {
+        out.push({ ...turn, text: clipToBudget(turn.text, budget - prefix) });
+      }
+      break;
+    }
+    const cost = turn.text.length + prefix;
+    budget -= cost;
+    out.push(turn);
+  }
+  return out.reverse();
+}
+
+/**
+ * The speech a guard may be vouched for by: this tick's, plus the marked
+ * overlap. The overlap is transcript the meeting really carried, so a
+ * reference to something said just before the boundary is as real as one said
+ * after it — and the guard must ask about exactly the lines the model saw, or
+ * it would reject the very matches the overlap exists to enable.
+ */
+export function captureWindow(
+  turns: readonly NotesTurn[],
+  priorTurns?: readonly NotesTurn[],
+): NotesTurn[] {
+  return [...overlapWindow(priorTurns, turns), ...turns];
+}
+
+/**
+ * Did the speech mention the candidate at all? One significant word in common
+ * is the floor a model-claimed reference must clear — the model matches, this
+ * proves the match came from the words rather than from the candidate list
+ * itself. Callers hand it the whole {@link captureWindow}, marked overlap
+ * included: those words were spoken, just one tick earlier.
  */
 export function tickMentionsCandidate(turns: readonly NotesTurn[], title: string): boolean {
   const spoken = significantWords(turns.map((t) => t.text).join(' '));
@@ -210,7 +318,9 @@ export function requestMatchesCandidate(title: string, candidateTitle: string): 
 
 /**
  * The transcript must vouch for a requester the same way it vouches for a
- * reference: the model may only name a voice this tick actually carried.
+ * reference: the model may only name a voice the window actually carried —
+ * this tick's speech or the marked overlap, since a request that begins
+ * before the boundary is asked for by whoever spoke there.
  * Compared case-insensitively and answered with the transcript's own
  * spelling, so a model that lowercases a name still attributes it, and one
  * that invents a person attributes nobody.
@@ -229,6 +339,19 @@ export function speakerOnTick(turns: readonly NotesTurn[], claimed: string): str
 export function taskCaptureUrl(workspaceId: string, taskId: string): string {
   return `/workspaces/${encodeURIComponent(workspaceId)}?task=${encodeURIComponent(taskId)}`;
 }
+
+/**
+ * The overlap's whole contract, in the fewest tokens that carry it: what the
+ * earlier lines are for, in both directions, and the rule that stops last
+ * pass's items being filed a second time. Standing text — it costs its tokens
+ * on every tick, overlap or not, which is why it is this short and why
+ * `scripts/capture-overlap-cost.ts` measures it separately.
+ */
+export const OVERLAP_PROMPT_RULE = [
+  '"Earlier speech" was read last pass: use it to resolve what a new line',
+  'points at, or to finish a request it began. Every item must draw part of',
+  'itself from the new lines.',
+] as const;
 
 /**
  * Prompt building is pure and exported, same reason as the notes composer's:
@@ -262,6 +385,8 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     'candidate list; "match" is that number. Never guess: no confident match',
     'means no item.',
     '',
+    ...OVERLAP_PROMPT_RULE,
+    '',
     'An empty items array is the normal answer for most speech.',
   ].join('\n');
 
@@ -274,11 +399,12 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
         .join('\n')}`,
     );
   }
-  parts.push(
-    `Speech since the last update:\n${input.turns
-      .map((t) => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`)
-      .join('\n')}`,
-  );
+  const line = (t: NotesTurn): string => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`;
+  const earlier = overlapWindow(input.priorTurns, input.turns);
+  if (earlier.length > 0) {
+    parts.push(`Earlier speech (already read):\n${earlier.map(line).join('\n')}`);
+  }
+  parts.push(`New speech since the last update:\n${input.turns.map(line).join('\n')}`);
   return { system, user: parts.join('\n\n') };
 }
 
@@ -291,7 +417,10 @@ export function parseTaskCaptureReply(
   raw: string,
   candidates: readonly TaskCaptureCandidate[],
   turns: readonly NotesTurn[],
+  priorTurns?: readonly NotesTurn[],
 ): CapturedItem[] {
+  // Vouch against exactly the lines the model was shown — see captureWindow.
+  const window = captureWindow(turns, priorTurns);
   let text = raw.trim();
   const fenced = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n?```$/);
   if (fenced?.[1] !== undefined) text = fenced[1].trim();
@@ -315,7 +444,7 @@ export function parseTaskCaptureReply(
       const candidate = row.match >= 0 ? candidates[row.match] : undefined;
       if (!candidate) continue;
       // The transcript must vouch for the match — see tickMentionsCandidate.
-      if (!tickMentionsCandidate(turns, candidate.title)) continue;
+      if (!tickMentionsCandidate(window, candidate.title)) continue;
       if (seenTasks.has(candidate.id)) continue;
       seenTasks.add(candidate.id);
       out.push({ kind: 'reference', taskId: candidate.id });
@@ -326,7 +455,7 @@ export function parseTaskCaptureReply(
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
       const requester =
-        typeof row.requester === 'string' ? speakerOnTick(turns, row.requester) : undefined;
+        typeof row.requester === 'string' ? speakerOnTick(window, row.requester) : undefined;
       out.push({
         kind: 'request',
         title,
@@ -372,6 +501,8 @@ export interface RunTaskCaptureInput {
   docId: string;
   docTitle?: string;
   turns: readonly NotesTurn[];
+  /** The previous tick's speech, for the boundary — see {@link overlapWindow}. */
+  priorTurns?: readonly NotesTurn[];
 }
 
 /**
@@ -402,6 +533,7 @@ export async function runTaskCapture(
     items = await deps.extractor.extract({
       turns: input.turns,
       candidates,
+      ...(input.priorTurns !== undefined ? { priorTurns: input.priorTurns } : {}),
       ...(input.docTitle !== undefined ? { docTitle: input.docTitle } : {}),
     });
   } catch (err) {
@@ -546,7 +678,7 @@ export function createHaikuTaskCaptureExtractor(
         if (!res.ok) throw new Error(`task capture HTTP ${res.status}`);
         const body = (await res.json()) as { content?: Array<{ text?: string }> };
         const text = body.content?.map((b) => b.text ?? '').join('') ?? '';
-        return parseTaskCaptureReply(text, input.candidates, input.turns);
+        return parseTaskCaptureReply(text, input.candidates, input.turns, input.priorTurns);
       } finally {
         clearTimeout(timeout);
       }
