@@ -5,6 +5,7 @@ import {
   type ReviewJudgeVerdictKind,
   type ReviewPayload,
   type TaskReviewItem,
+  answerAsksBack,
   answerFromReply,
   checkReviewPayload,
   isReviewItemGated,
@@ -1111,6 +1112,32 @@ describe('why / lookFor are gone from the payload, and their words are not', () 
  * decision, and they stay unanswered on purpose: a rule that guessed which
  * option prose meant is the one that once let small talk retire a decision.
  */
+describe('answerAsksBack — a question typed where an answer goes', () => {
+  it('reads a text that ends asking as a question', () => {
+    expect(answerAsksBack('Why is this important?')).toBe(true);
+    expect(answerAsksBack('  Which boards, exactly?  ')).toBe(true);
+  });
+
+  it('skips closing markdown and quotes after the "?"', () => {
+    expect(answerAsksBack('**Ship now?**')).toBe(true);
+    expect(answerAsksBack('“Is this the one?”')).toBe(true);
+    expect(answerAsksBack('(or later?)')).toBe(true);
+  });
+
+  it('reads a text that ends in a statement as an answer, wherever a "?" sits inside it', () => {
+    // The safe failure: the words are recorded verbatim either way, and an
+    // answer that muses mid-sentence is still an answer.
+    expect(answerAsksBack('Option A? No — B.')).toBe(false);
+    expect(answerAsksBack('Keep it. Disk is cheap.')).toBe(false);
+    expect(answerAsksBack('See /workspaces/board?tab=open')).toBe(false);
+  });
+
+  it('reads nothing into empty words', () => {
+    expect(answerAsksBack('')).toBe(false);
+    expect(answerAsksBack('   ')).toBe(false);
+  });
+});
+
 describe('answerFromReply', () => {
   const question: ReviewPayload = { shape: 'review', headline: 'Does the copy read right?' };
   const decisionWithOptions: ReviewPayload = {
@@ -1124,6 +1151,15 @@ describe('answerFromReply', () => {
 
   it('reads prose as the answer when nothing was offered', () => {
     expect(answerFromReply(question, 'Cut the second sentence.')).toEqual({});
+  });
+
+  it('never reads a QUESTION as the answer — asking back is not answering', () => {
+    // The incident (2026-08-30): "Why is this important?" under an open
+    // question folded as its answer and closed the exchange. A reply that
+    // ends asking stays a comment; the item stays open behind it.
+    expect(answerFromReply(question, 'Why is this important?')).toBeNull();
+    // Closing markdown after the "?" does not hide the asking.
+    expect(answerFromReply(question, '**Why is this important?**')).toBeNull();
   });
 
   it('picks the option whose label was typed, trimmed and case-folded', () => {

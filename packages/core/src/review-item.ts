@@ -331,6 +331,39 @@ export function pendingDeclaration<C extends { ts: number; review?: ReviewPayloa
 }
 
 /**
+ * Does this reply ASK BACK rather than answer — a question typed where an
+ * answer goes?
+ *
+ * The incident this exists for (2026-08-30): a reviewer answered the decision
+ * "How should boards share work?" with "Why is this important?", and the board
+ * recorded that as the decision's answer. The item closed, `revise` refused it
+ * ("the answer is to the words it has"), and the only way to keep asking was a
+ * duplicate row. A question typed into an answer box is the most natural way
+ * to ask for more information, and nothing distinguished it from a decision.
+ *
+ * The rule is the ENDING alone: the text's last sentence ends in "?" (closing
+ * markdown/quote marks skipped, the way `review-queue.ts`'s sentence rule
+ * skips them). Deliberately narrower than `findAsk` — that matcher judges
+ * agent PROSE, where a bare "?" fires on URLs and code and needs a direct
+ * address to mean anything; here the text is what a person typed into an
+ * answer composer, where ending on a question mark is the asking. A "?" mid-
+ * text with a statement after it ("Option A? No — B.") reads as an answer,
+ * which is the safe failure: the words are recorded verbatim either way.
+ *
+ * Callers gate on WHO typed it (a person, not an agent relaying words) and on
+ * whether an option was tapped — a tapped option is an answer whatever its
+ * label ends in. Those are the caller's facts; this judges only the text.
+ */
+const TRAILING_CLOSERS = new Set(['*', '`', '"', "'", '_', ')', ']', '}', '”', '’']);
+export function answerAsksBack(text: string): boolean {
+  let s = text.trim();
+  while (s.length > 0 && TRAILING_CLOSERS.has(s[s.length - 1] as string)) {
+    s = s.slice(0, -1).trimEnd();
+  }
+  return s.endsWith('?');
+}
+
+/**
  * Is this person's plain reply the ASK's answer, and which option did it come
  * from?
  *
@@ -371,6 +404,12 @@ export function pendingDeclaration<C extends { ts: number; review?: ReviewPayloa
 export function answerFromReply(review: ReviewPayload, text: string): { optionId?: string } | null {
   const words = text.trim();
   if (words === '') return null;
+  // A question is never an answer. Without this, "Why is this important?"
+  // under an open question folded as its answer and closed it — the same
+  // wrong reading the explicit answer routes now refuse (`answerAsksBack`).
+  // Vacuous for decisions in practice (no option label ends in "?" on any
+  // stored board), load-bearing for the no-options case below.
+  if (answerAsksBack(words)) return null;
   // Keyed on what was OFFERED rather than on `shape`, because the options are
   // what a reader saw and could have typed back. A `decision` that carries
   // none offers no vocabulary, so prose is the only answer it could ever get.
@@ -407,7 +446,9 @@ export interface ReviewInfoRequest {
    */
   threadId?: string;
   /** The phrase the question was about, with its offsets into `detail` as
-   *  it read at the time. Present exactly when `threadId` is. */
+   *  it read at the time. Present when the question was asked about a phrase;
+   *  a question typed into the answer composer carries the thread alone —
+   *  it is about the whole item, and there are no words to mark. */
   range?: ReviewItemRange;
 }
 
