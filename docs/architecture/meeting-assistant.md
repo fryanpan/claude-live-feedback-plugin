@@ -666,6 +666,24 @@ still reports through `onError`, now saying the rename reached only tagged
 mentions. The forward mapping always held: that voice's later turns compose
 under the new name.
 
+**A rename works after the meeting too, and the strip keeps a surface for
+it** (2026-08-31; from a real two-voice test: labels arrived, and Bryan found
+"no ability to edit the speaker names"). The socket is the live rename
+channel and it dies with the capture — which is exactly when a person on the
+recording device gets around to the names. So: every pill carries a pencil
+(hover cues are nothing on an iPad); when the strip goes idle its caption
+line becomes the CAST — "Tap a voice to name it:", every label the meeting
+showed, not just the three turns still on the window — seeded from the
+meeting record on a doc opened after its meeting ended; and a tap with the
+socket gone posts to `POST /api/docs/:docId/meetings/:meetingId/speakers`,
+which validates the label against what the meeting carried
+(`MeetingStore.nameSpeakerLater`), appends the same index line a live rename
+writes, and routes the same `NotesRelabel` through the same sink. A LIVE
+meeting is refused there (409): its rename must also rewrite the composer's
+memory of what it wrote, which only the session on the socket can do. The
+strip reverts a name the server refused — a name that only ever landed on
+screen reads as saved.
+
 ### Speaker tags: attribution the notes can carry
 
 A tag is a markdown link whose href names the voice —
