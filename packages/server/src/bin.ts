@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { positiveEnvDuration, readRenamedEnv } from '@feedback/core/env-names';
 import { resolvePostmarkCodeSender } from './auth/postmark-code-sender.ts';
 import { clientReleaseStatus, resolveClientDists } from './client-release.ts';
-import { createDeployer } from './deploy.ts';
+import { confirmDeployBoot, createDeployer, deployLogPath } from './deploy.ts';
 import { effortEstimateEnabled, haikuEffortEstimator } from './effort-estimator.ts';
 import { installLogSquelch } from './log-squelch.ts';
 import { createHaikuNotesComposer } from './meeting-notes-composer.ts';
@@ -755,6 +755,19 @@ while (!handle) {
   }
 }
 port = handle.port;
+
+// The other half of the deploy's boot verification. A deploy records its
+// restart as `pending` and then dies; the only process that can honestly say
+// the restart WORKED is this one, standing here — port bound, documents
+// hydrated, about to serve. A boot that never reaches this line leaves the
+// record pending, and the detached watchdog the deploy spawned expires it
+// into `boot-failed` (deploy.ts, "Dependencies are part of the delivery").
+if (deployer) {
+  const confirmed = confirmDeployBoot(deployLogPath(dataDir ?? join(repoRoot, 'data')));
+  if (confirmed) {
+    console.log(`[deploy] boot confirmed healthy for the deploy recorded at ${confirmed.ranAt}`);
+  }
+}
 
 const ts = tailscaleHost();
 const lan = lanHostnames();
