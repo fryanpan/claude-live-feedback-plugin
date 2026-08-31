@@ -112,6 +112,7 @@ describe('the sync channel leaks no host metadata', () => {
     docPath = join(dataDir, 'secret-project-notes.md');
     writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       share: { config: { publicHostname: PUBLIC_HOST } },
@@ -252,6 +253,7 @@ describe('legacy docs are migrated, not grandfathered', () => {
     expect(existsSync(join(dataDir, 'legacy.private.json'))).toBe(false);
 
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       share: { config: { publicHostname: PUBLIC_HOST } },

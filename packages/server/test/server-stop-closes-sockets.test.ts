@@ -25,7 +25,7 @@ const dataDirs: string[] = [];
 function boot(): ServerHandle {
   const dataDir = mkdtempSync(join(tmpdir(), 'cw-stop-sockets-'));
   dataDirs.push(dataDir);
-  return createServer({ port: 0, dataDir });
+  return createServer({ dedicatedListener: true, port: 0, dataDir });
 }
 
 afterEach(() => {

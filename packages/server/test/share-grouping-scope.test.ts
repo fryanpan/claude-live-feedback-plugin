@@ -198,6 +198,7 @@ describe('a shared board reaches the reviews filed on it — and no others', () 
     writeFileSync(join(repo, 'src', 'b.ts'), 'const b = 2;\n');
 
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       share: { config: { publicHostname: PUBLIC_HOST } },

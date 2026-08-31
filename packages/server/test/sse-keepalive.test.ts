@@ -85,7 +85,7 @@ describe('an idle SSE stream survives past the old death window', () => {
 
   async function open() {
     dataDir = mkdtempSync(join(tmpdir(), 'sse-keepalive-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     const base = `http://localhost:${handle.port}`;
     const host = `localhost:${handle.port}`;
     const made = await fetch(`${base}/api/workspaces`, {

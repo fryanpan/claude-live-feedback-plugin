@@ -50,7 +50,7 @@ describe('the MCP tools file a doc in a workspace, through the real bundle', () 
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-doc-ws-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
 
     child = spawn('node', [BUNDLE], {
       env: {

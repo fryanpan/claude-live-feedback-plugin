@@ -127,7 +127,7 @@ describe('stale-write guard on POST /api/docs/:id/content', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-stale-write-'));
     path = join(dataDir, 'doc.md');
     writeFileSync(path, DOC);
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
     const create = await fetch(`${base}/api/docs`, {

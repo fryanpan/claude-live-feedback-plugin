@@ -737,6 +737,7 @@ describe('notes through the audio socket', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-notes-'));
     const stub = createStubNotesComposer();
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       transcription: createMockTranscriptionEngine(),

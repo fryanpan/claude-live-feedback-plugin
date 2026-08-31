@@ -44,6 +44,7 @@ describe('cross-origin access to the trusted host', () => {
     docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       // trustedHosts feeds BOTH the host gate and the origin policy's notion
@@ -274,6 +275,7 @@ describe('the public share host is same-origin only', () => {
     const docPath = join(dataDir, 'notes.md');
     writeFileSync(docPath, `# Notes\n\n${CANARY}.\n`);
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       allowedOrigins: ['https://mockups.example.com'],

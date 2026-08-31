@@ -204,6 +204,7 @@ import { SharingGate } from './share/sharing-gate.ts';
 import { resolveTtl } from './share/ttl.ts';
 import type { Share, ShareConfig } from './share/types.ts';
 import { sanitizeVisitorAuthor } from './share/visitor-identity.ts';
+import { sharedServe, shouldShareListener } from './shared-listener.ts';
 import { claimReplayMarks, saveReplayMarks } from './sse-marks.ts';
 import { HTTP_IDLE_TIMEOUT_SEC, SseHub, openSseStream } from './sse.ts';
 import {
@@ -486,6 +487,18 @@ export interface ServerOptions {
    */
   sharingEnvLocked?: boolean;
   port?: number;
+  /**
+   * Bind a listener of this server's own, even under `bun test`.
+   *
+   * A test process normally shares ONE listener across every server it
+   * creates (shared-listener.ts): the suite was opening 626 of them per run
+   * and the resulting TIME_WAIT depth took the machine's network down on
+   * 2026-08-30. Sharing works by rewriting `globalThis.fetch`, so it reaches
+   * exactly as far as fetch does. A test that speaks to the server any other
+   * way — a `WebSocket`, an `EventSource`, a raw socket, or anything
+   * asserting on the bound port itself — sets this and gets a real port.
+   */
+  dedicatedListener?: boolean;
   dataDir?: string;
   /**
    * Email-keyed identity is IN EFFECT (`CW_REQUIRE_EMAIL_AUTH`). Default off,
@@ -3825,7 +3838,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // socket and the editing socket are told apart by what the upgrade
   // attached. Absent means the editing socket, which is every upgrade that
   // predates meetings.
-  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' }>({
+  // Bind a port of our own, or register behind the process-wide test front
+  // door. Under `bun test` the suite stands up hundreds of servers and every
+  // one of them used to be its own listener, its own fetch origin, and its
+  // own thirty-second pile of TIME_WAIT sockets — see shared-listener.ts for
+  // the outage that bought. Prod and staging name a real port, so neither can
+  // reach the shared branch.
+  const serve = shouldShareListener(opts.port, opts.dedicatedListener) ? sharedServe : Bun.serve;
+  const server = serve<{ docId: string; kind?: 'yjs' | 'audio' }>({
     port,
     // Explicit because the DEFAULT is what broke the event streams: Bun's is
     // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
