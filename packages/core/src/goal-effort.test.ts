@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { EFFORT_ESTIMATE_PROMPT_VERSION } from './effort-estimate-prompt.ts';
 import {
   EFFORT_MAX_PROJECTION_DAYS,
   EFFORT_MIN_CLOSES_FOR_PROJECTION,
   EFFORT_PACE_WINDOW_DAYS,
+  EFFORT_PRIOR_HANDS_ON_RATIO,
+  EFFORT_PRIOR_WALL_CLOCK_RATIO,
+  EFFORT_RATIO_MIN,
+  type EffortCalibration,
   type EffortCalibrationTask,
   type EffortTaskInput,
   type GoalEffortReady,
@@ -17,7 +22,9 @@ import {
   estimateNumbers,
   formatEffortSeconds,
   formatGoalEffortSeconds,
+  isCurrentGenerationEstimate,
   neutralCalibration,
+  neutralRatioSet,
   ratioForGoal,
   shrinkEffortRatio,
   summarizeGoalEffort,
@@ -29,7 +36,31 @@ const HOUR = 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 8, 1, 12, 0, 0);
 
 function ok(wallClockSeconds: number, handsOnSeconds: number): EffortTaskInput['effortEstimate'] {
-  return { status: 'ok', wallClockSeconds, handsOnSeconds };
+  // Stamped with the CURRENT generation, because that is what a fixture
+  // standing in for a stored run is: the server writes the version on every
+  // record. A fixture without one is a row scored under an older ask, and
+  // the calibrator refuses to learn from those — which is its own test
+  // ("a stale-generation estimate teaches nothing"), not an accident every
+  // other test in this file should inherit.
+  return {
+    status: 'ok',
+    wallClockSeconds,
+    handsOnSeconds,
+    promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION,
+  };
+}
+
+/**
+ * Both ratios at 1: the rollup arithmetic with the correction taken out.
+ *
+ * `neutralCalibration()` is no longer the identity — it starts at the
+ * board's priors (`EFFORT_PRIOR_*`), which is the right default for a real
+ * caller and the wrong one for a test asserting that 3600 estimate-seconds
+ * come out as 3600. Those tests are about the fraction and the pace; the
+ * prior has its own block below.
+ */
+function identity(): EffortCalibration {
+  return { wallClock: neutralRatioSet(), handsOn: neutralRatioSet() };
 }
 
 function task(over: Partial<EffortTaskInput> = {}): EffortTaskInput {
@@ -138,7 +169,10 @@ describe('actuals are derived, never stored', () => {
 
 describe('ratio arithmetic', () => {
   it('clamps into the trusted band', () => {
-    expect(clampEffortRatio(0.1)).toBe(0.5);
+    // 0.1 is INSIDE the band now, and that is the point of widening it: a
+    // measured ten-fold speed-up used to be reported as half.
+    expect(clampEffortRatio(0.1)).toBeCloseTo(0.1);
+    expect(clampEffortRatio(0.001)).toBe(EFFORT_RATIO_MIN);
     expect(clampEffortRatio(9)).toBe(2);
     expect(clampEffortRatio(1.3)).toBeCloseTo(1.3);
     expect(clampEffortRatio(Number.NaN)).toBe(1);
@@ -177,8 +211,14 @@ describe('computeEffortRatios', () => {
       { goal: 'g1', estimateSeconds: 100, actualSeconds: 200 },
       { goal: 'g1', estimateSeconds: 100, actualSeconds: 1000 },
     ]);
-    // A mean would be dragged to ~4.7x; the median holds at 2x.
-    expect(set.board.ratio).toBe(2);
+    // A mean would be dragged to ~4.7x; the median holds at 2x — and then
+    // the board is shrunk toward its prior (1 here, the default), three
+    // samples carrying 3/8 of the answer: 1 + (2 - 1) * 3/8.
+    expect(set.board.ratio).toBe(1.375);
+    // The property this test is for, stated as a comparison rather than a
+    // constant: the same three closes read as a MEAN would land higher, and
+    // the outlier is what puts it there.
+    expect(shrinkEffortRatio((2 + 2 + 10) / 3, 1, 3)).toBeCloseTo(2.375);
   });
 
   it('pulls a two-sample goal most of the way back to the board', () => {
@@ -206,6 +246,9 @@ describe('computeEffortRatios', () => {
       })),
     );
     expect(set.byGoal.g1?.ratio).toBe(2);
+    // The board is clamped too, on the far side of its own shrinkage: a
+    // thousand-fold miss shrunk toward a prior of 1 is still 900x.
+    expect(set.board.ratio).toBe(2);
   });
 
   it('claims no spread below three samples', () => {
@@ -214,6 +257,163 @@ describe('computeEffortRatios', () => {
       { goal: 'g1', estimateSeconds: 100, actualSeconds: 400 },
     ]);
     expect(set.byGoal.g1?.spread).toBe(1);
+  });
+});
+
+describe('the priors: what a board forecasts with before it has closed anything', () => {
+  it('starts at the priors, not at 1 — and the two quantities differ', () => {
+    const c = neutralCalibration();
+    expect(c.wallClock.board.ratio).toBeCloseTo(EFFORT_PRIOR_WALL_CLOCK_RATIO);
+    expect(c.handsOn.board.ratio).toBeCloseTo(EFFORT_PRIOR_HANDS_ON_RATIO);
+    // Hands-on corrects harder: an agent working alone leaves the owner's
+    // column entirely, where the calendar still waits on reviews.
+    expect(c.handsOn.board.ratio).toBeLessThan(c.wallClock.board.ratio);
+    // A prior is not evidence, and the surfaces that explain a factor key on
+    // this count. It must never read as "learned from 0 closed tickets… and
+    // also here is a correction we measured".
+    expect(c.wallClock.board.samples).toBe(0);
+    expect(c.handsOn.board.samples).toBe(0);
+  });
+
+  it('applies to a goal with no samples, and scales the forecast down', () => {
+    const s = summarizeGoalEffort([task(), task()], 'g-new', neutralCalibration(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    // Two open tickets at 600s hands-on each, and the ratio is applied — and
+    // rounded — PER TICKET, before the sum. 600/15 = 40, twice.
+    expect(s.handsOnRemainingSeconds).toBe(Math.round(600 * EFFORT_PRIOR_HANDS_ON_RATIO) * 2);
+    expect(s.handsOnRatio.ratio).toBeCloseTo(EFFORT_PRIOR_HANDS_ON_RATIO);
+    expect(s.wallClockRatio.ratio).toBeCloseTo(EFFORT_PRIOR_WALL_CLOCK_RATIO);
+    // Positive control: the identity calibration on the same rows reports
+    // the raw sums, so the assertion above cannot be met by a rollup that
+    // simply returns small numbers.
+    const raw = summarizeGoalEffort([task(), task()], 'g-new', identity(), NOW);
+    if (raw.kind !== 'ready') throw new Error('expected ready');
+    expect(raw.handsOnRemainingSeconds).toBe(1200);
+    expect(s.handsOnRemainingSeconds).toBeLessThan(raw.handsOnRemainingSeconds);
+  });
+
+  it('is displaced by measurement — one goal on evidence, another still on the prior', () => {
+    // g1 closes ten tickets that each ran at exactly their estimate; g2 has
+    // closed nothing. g1 must forecast from its own experience, g2 from the
+    // prior — the whole reason the prior is a starting point and not a knob.
+    const closes: EffortCalibrationTask[] = Array.from({ length: 10 }, () => ({
+      goal: 'g1',
+      ...closed(2 * DAY, HOUR, { readingTime: { totalSeconds: 600 } }),
+    }));
+    const c = computeEffortCalibration(closes);
+    // Not 1.0: ten closes is real evidence and not yet overwhelming
+    // evidence, so the answer sits between the prior and the measurement —
+    // nearer the measurement on the goal that owns the samples, because g1
+    // is shrunk toward the board a second time from its own median of 1.
+    const g1 = ratioForGoal(c.wallClock, 'g1').ratio;
+    const g2 = ratioForGoal(c.wallClock, 'g2').ratio;
+    expect(g1).toBeGreaterThan(c.wallClock.board.ratio);
+    expect(g1).toBeLessThan(1);
+    expect(c.wallClock.board.ratio).toBeGreaterThan(EFFORT_PRIOR_WALL_CLOCK_RATIO);
+    // g2 has no bucket, so it falls back to the BOARD — which g1's closes
+    // have now moved off the prior. That is correct and worth stating: a
+    // prior is what a BOARD starts at, and a board with evidence has left it.
+    expect(g2).toBe(c.wallClock.board.ratio);
+    expect(g2).toBeGreaterThan(EFFORT_PRIOR_WALL_CLOCK_RATIO);
+  });
+
+  it('lets a measured 0.1 through, where the old floor reported it as 0.5', () => {
+    // Nine closed tickets running at a tenth of their estimated calendar
+    // time is what this board actually measured. The old floor of 0.5 threw
+    // the finding away and forecast at half.
+    const set = computeEffortRatios(
+      Array.from({ length: 9 }, () => ({
+        goal: 'g1',
+        estimateSeconds: 10_000,
+        actualSeconds: 1_000,
+      })),
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    // 0.1 measured, shrunk toward the 1/7 prior on nine samples — so the
+    // answer is 0.115 rather than 0.099, and nowhere near the 0.5 the old
+    // floor reported. The prior is CLOSE to the measurement here, which is
+    // what a well-chosen prior looks like: it barely moves the answer.
+    expect(set.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_WALL_CLOCK_RATIO + (0.1 - EFFORT_PRIOR_WALL_CLOCK_RATIO) * (9 / 14),
+    );
+    expect(set.board.ratio).toBeGreaterThan(EFFORT_RATIO_MIN);
+    expect(set.board.ratio).toBeLessThan(0.5);
+    // The floor still refuses a correction orders of magnitude out, once
+    // enough samples have pulled it clear of the prior.
+    const wild = computeEffortRatios(
+      Array.from({ length: 200 }, () => ({
+        goal: 'g1',
+        estimateSeconds: 10_000,
+        actualSeconds: 1,
+      })),
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    expect(wild.board.ratio).toBe(EFFORT_RATIO_MIN);
+  });
+});
+
+describe('a stale-generation estimate teaches nothing', () => {
+  const old = (over: Partial<EffortTaskInput> = {}): EffortCalibrationTask => ({
+    goal: 'g1',
+    ...closed(2 * DAY, 2 * HOUR, {
+      readingTime: { totalSeconds: 6 },
+      effortEstimate: {
+        status: 'ok',
+        wallClockSeconds: 3600,
+        handsOnSeconds: 600,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION - 1,
+      },
+      ...over,
+    }),
+  });
+
+  it('reads the generation off the row', () => {
+    expect(isCurrentGenerationEstimate(task())).toBe(true);
+    expect(isCurrentGenerationEstimate(old())).toBe(false);
+    // A row written before the field existed is an older generation too —
+    // the safe direction, and the same one recordEffortEstimate takes.
+    expect(
+      isCurrentGenerationEstimate(
+        task({ effortEstimate: { status: 'ok', wallClockSeconds: 1, handsOnSeconds: 1 } }),
+      ),
+    ).toBe(false);
+    expect(isCurrentGenerationEstimate(task({ effortEstimate: undefined }))).toBe(false);
+  });
+
+  it('keeps old-generation closes out of the sample set, so the board sits at its priors', () => {
+    // Ten closed tickets, every one of them scored under the previous ask.
+    // Their ratios are real — 2x on the calendar, 0.01 on hands-on — and
+    // they describe the OLD prompt's bias. Applying them to estimates the
+    // new prompt produced would discount the same speed-up twice.
+    const c = computeEffortCalibration(Array.from({ length: 10 }, () => old()));
+    expect(c.wallClock.board.samples).toBe(0);
+    expect(c.handsOn.board.samples).toBe(0);
+    expect(c.wallClock.board.ratio).toBeCloseTo(EFFORT_PRIOR_WALL_CLOCK_RATIO);
+    expect(c.handsOn.board.ratio).toBeCloseTo(EFFORT_PRIOR_HANDS_ON_RATIO);
+    // Positive control: the SAME ten closes, stamped with the current
+    // generation, do calibrate — so the assertion above cannot be met by a
+    // calibrator that has stopped learning from anything.
+    const fresh = computeEffortCalibration(
+      Array.from({ length: 10 }, () => ({
+        goal: 'g1',
+        ...closed(2 * DAY, 2 * HOUR, { readingTime: { totalSeconds: 6 } }),
+      })),
+    );
+    expect(fresh.wallClock.board.samples).toBe(10);
+    expect(fresh.wallClock.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_WALL_CLOCK_RATIO + (2 - EFFORT_PRIOR_WALL_CLOCK_RATIO) * (10 / 15),
+    );
+    expect(fresh.wallClock.board.ratio).toBeGreaterThan(1);
+  });
+
+  it('still FORECASTS from an old-generation estimate — it is the best number the row has', () => {
+    // The line the calibration gate must not cross. A goal whose tickets are
+    // queued for re-scoring would otherwise read "not scored yet" — the
+    // never-ran sentence — for as long as the re-score takes.
+    const s = summarizeGoalEffort([old(), task({ status: 'todo' })], 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.estimatedCount).toBe(2);
+    expect(s.unestimatedCount).toBe(0);
   });
 });
 
@@ -227,9 +427,18 @@ describe('computeEffortCalibration — the two quantities stay apart', () => {
       ...closed(2 * DAY, 2 * HOUR, { readingTime: { totalSeconds: 300 } }),
     }));
     const c = cal(tasks);
-    expect(c.wallClock.board.ratio).toBe(2);
-    // Estimated 600s hands-on, measured 300 → 0.5.
-    expect(c.handsOn.board.ratio).toBe(0.5);
+    // 2.0 measured, shrunk toward the wall-clock prior on 20 samples:
+    // 1/7 + (2 - 1/7) * 20/25.
+    expect(c.wallClock.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_WALL_CLOCK_RATIO + (2 - EFFORT_PRIOR_WALL_CLOCK_RATIO) * (20 / 25),
+    );
+    // Estimated 600s hands-on, measured 300 → 0.5, shrunk toward the
+    // hands-on prior. The point of the test is that the two quantities land
+    // on DIFFERENT numbers from different evidence, and they still do.
+    expect(c.handsOn.board.ratio).toBeCloseTo(
+      EFFORT_PRIOR_HANDS_ON_RATIO + (0.5 - EFFORT_PRIOR_HANDS_ON_RATIO) * (20 / 25),
+    );
+    expect(c.handsOn.board.ratio).toBeLessThan(c.wallClock.board.ratio);
   });
 
   it('a closed ticket nobody read calibrates wall-clock and stays OUT of hands-on', () => {
@@ -240,9 +449,11 @@ describe('computeEffortCalibration — the two quantities stay apart', () => {
     const c = cal(tasks);
     expect(c.wallClock.board.samples).toBe(6);
     // The bug this guards: entering an unmeasured ticket as 0 hands-on would
-    // drive every future hands-on estimate to the 0.5 floor.
+    // drive every future hands-on estimate to the floor.
     expect(c.handsOn.board.samples).toBe(0);
-    expect(c.handsOn.board.ratio).toBe(1);
+    // No samples, so hands-on sits at its prior — not at 1, and not at
+    // wall-clock's answer.
+    expect(c.handsOn.board.ratio).toBeCloseTo(EFFORT_PRIOR_HANDS_ON_RATIO);
   });
 
   it('ignores open tickets, archived tickets and unscored tickets', () => {
@@ -276,7 +487,7 @@ describe('summarizeGoalEffort — absent is never zero', () => {
     const s = summarizeGoalEffort(
       [task({ effortEstimate: undefined }), task({ effortEstimate: undefined })],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (s.kind !== 'unestimated') throw new Error('expected unestimated');
@@ -286,7 +497,7 @@ describe('summarizeGoalEffort — absent is never zero', () => {
   });
 
   it('distinguishes an empty goal from an unscored one', () => {
-    const s = summarizeGoalEffort([], 'g1', neutralCalibration(), NOW);
+    const s = summarizeGoalEffort([], 'g1', identity(), NOW);
     if (s.kind !== 'unestimated') throw new Error('expected unestimated');
     expect(s.reason).toBe('no-tasks');
   });
@@ -295,7 +506,7 @@ describe('summarizeGoalEffort — absent is never zero', () => {
     const s = summarizeGoalEffort(
       [task({ effortEstimate: { status: 'failed' } }), task({ effortEstimate: undefined })],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (s.kind !== 'unestimated') throw new Error('expected unestimated');
@@ -304,7 +515,7 @@ describe('summarizeGoalEffort — absent is never zero', () => {
   });
 
   it('reports a real 0% — every ticket scored, none done — as ready, not absent', () => {
-    const s = summarizeGoalEffort([task(), task()], 'g1', neutralCalibration(), NOW);
+    const s = summarizeGoalEffort([task(), task()], 'g1', identity(), NOW);
     if (s.kind !== 'ready') throw new Error('expected ready');
     expect(s.percentComplete).toBe(0);
     expect(s.estimatedCount).toBe(2);
@@ -315,7 +526,7 @@ describe('summarizeGoalEffort — absent is never zero', () => {
     const s = summarizeGoalEffort(
       [task(), task({ effortEstimate: undefined }), task({ effortEstimate: { status: 'failed' } })],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
@@ -330,7 +541,7 @@ describe('summarizeGoalEffort — the fraction', () => {
     const before = summarizeGoalEffort(
       [closed(DAY), task(), task(), task()],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     const after = summarizeGoalEffort(
@@ -342,7 +553,7 @@ describe('summarizeGoalEffort — the fraction', () => {
         task(),
       ],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (before.kind !== 'ready' || after.kind !== 'ready') throw new Error('expected ready');
@@ -355,7 +566,7 @@ describe('summarizeGoalEffort — the fraction', () => {
     const s = summarizeGoalEffort(
       [closed(DAY), task(), task({ archivedAt: NOW - DAY }), task({ archivedAt: NOW - DAY })],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
@@ -369,10 +580,16 @@ describe('summarizeGoalEffort — the fraction', () => {
       ...closed(2 * DAY, HOUR, { readingTime: { totalSeconds: 900 } }),
     }));
     const c = computeEffortCalibration(calTasks);
-    // 900 measured against a 600 estimate → 1.5.
-    expect(c.handsOn.board.ratio).toBeCloseTo(1.5, 5);
-    // Wall-clock was estimated at 3600 and measured at 3600 → 1.0.
-    expect(c.wallClock.board.ratio).toBeCloseTo(1, 5);
+    // 900 measured against a 600 estimate → 1.5 measured, then shrunk toward
+    // the hands-on prior and toward the board in turn. Fifty samples is
+    // enough to be most of the way there without being all of it.
+    const hands = ratioForGoal(c.handsOn, 'g1').ratio;
+    const wall = ratioForGoal(c.wallClock, 'g1').ratio;
+    expect(hands).toBeGreaterThan(1.4);
+    expect(hands).toBeLessThan(1.5);
+    // Wall-clock was estimated at 3600 and measured at 3600 → 1.0 measured.
+    expect(wall).toBeGreaterThan(0.99);
+    expect(wall).toBeLessThan(1);
     const s = summarizeGoalEffort(
       [closed(DAY), task(), task({ status: 'in-progress' })],
       'g1',
@@ -380,21 +597,18 @@ describe('summarizeGoalEffort — the fraction', () => {
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
-    // Two open tickets at 600s hands-on each, corrected by 1.5.
-    expect(s.handsOnRemainingSeconds).toBe(1800);
-    // …and the wall-clock remainder is untouched by the hands-on ratio.
-    expect(s.wallClockRemainingSeconds).toBe(7200);
+    // Two open tickets at 600s hands-on each, at the hands-on factor — and
+    // the point of the test is the SEPARATION: the hands-on remainder moves
+    // with the hands-on ratio and the calendar remainder does not.
+    expect(s.handsOnRemainingSeconds).toBe(Math.round(600 * hands) * 2);
+    expect(s.handsOnRemainingSeconds).not.toBe(Math.round(600 * wall) * 2);
+    expect(s.wallClockRemainingSeconds).toBe(Math.round(3600 * wall) * 2);
   });
 });
 
 describe('summarizeGoalEffort — projection', () => {
   it('shows no date below three closes in the window', () => {
-    const s = summarizeGoalEffort(
-      [closed(DAY), closed(2 * DAY), task()],
-      'g1',
-      neutralCalibration(),
-      NOW,
-    );
+    const s = summarizeGoalEffort([closed(DAY), closed(2 * DAY), task()], 'g1', identity(), NOW);
     if (s.kind !== 'ready') throw new Error('expected ready');
     expect(s.closesInWindow).toBe(2);
     expect(s.projectedFinishAt).toBeUndefined();
@@ -404,7 +618,7 @@ describe('summarizeGoalEffort — projection', () => {
     const s = summarizeGoalEffort(
       [closed(DAY), closed(2 * DAY), closed((EFFORT_PACE_WINDOW_DAYS + 1) * DAY), task()],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
@@ -420,7 +634,7 @@ describe('summarizeGoalEffort — projection', () => {
     const s = summarizeGoalEffort(
       [closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
@@ -437,7 +651,7 @@ describe('summarizeGoalEffort — projection', () => {
     const s = summarizeGoalEffort(
       [closed(DAY), closed(2 * DAY), closed(3 * DAY)],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
@@ -461,18 +675,13 @@ describe('summarizeGoalEffort — projection', () => {
       closed(3 * DAY, HOUR, tiny),
     ];
     const big = [task(huge), task(huge), task(huge), task(huge), task(huge)];
-    const s = summarizeGoalEffort([...small, ...big], 'g1', neutralCalibration(), NOW);
+    const s = summarizeGoalEffort([...small, ...big], 'g1', identity(), NOW);
     if (s.kind !== 'ready') throw new Error('expected ready');
     expect(s.projectedFinishAt).toBeUndefined();
     expect(s.projectionOverHorizonDays).toBeGreaterThan(EFFORT_MAX_PROJECTION_DAYS);
     // Positive control: the same shape inside the horizon still gets a date,
     // so the assertion above cannot be met by a projection that never fires.
-    const near = summarizeGoalEffort(
-      [...small, task(tiny), task(tiny)],
-      'g1',
-      neutralCalibration(),
-      NOW,
-    );
+    const near = summarizeGoalEffort([...small, task(tiny), task(tiny)], 'g1', identity(), NOW);
     if (near.kind !== 'ready') throw new Error('expected ready');
     expect(near.projectedFinishAt).toBeDefined();
     expect(near.projectionOverHorizonDays).toBeUndefined();
@@ -482,7 +691,7 @@ describe('summarizeGoalEffort — projection', () => {
     const noSpread = summarizeGoalEffort(
       [closed(DAY), closed(2 * DAY), closed(3 * DAY), task()],
       'g1',
-      neutralCalibration(),
+      identity(),
       NOW,
     );
     if (noSpread.kind !== 'ready') throw new Error('expected ready');
