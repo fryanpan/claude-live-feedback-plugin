@@ -641,8 +641,9 @@ not only board rows:
    filed on the board like any other) and its task rows, in ONE pool through
    `resolveByTitle`, the matcher voice navigation already uses. One pool so
    its spoken kind word ("the DOC about x") can narrow.
-2. **By when** — "last week", "yesterday", "Tuesday", "the last meeting",
-   against the docs that carry a past meeting, newest inside the window.
+2. **By when** — "last week", "yesterday", "Tuesday", "this morning", "the
+   last meeting", against the docs that carry a past meeting, newest inside
+   the window.
 
 **Recency is its own path because a past meeting has no title.** A
 `MeetingRecord` carries times and no subject; the readable name of one is the
@@ -651,6 +652,16 @@ doc it was held on. So "last week's notes" has nothing to match against —
 the only thing spoken that identifies it. An ambiguous title match falls
 THROUGH to recency rather than failing, because two docs that score alike are
 exactly what a spoken "yesterday" was there to separate.
+
+**Two things about the windows themselves**, both found in review rather than
+in writing. Each part of a day is its own window — morning, afternoon and
+evening do not collapse into "today" — because the resolver answers with the
+NEWEST meeting inside a window, so a single all-day window would answer "what
+did we say this morning", asked after lunch, with the lunch meeting. And every
+boundary is a calendar operation (`setDate`, `setHours`), never a multiple of
+86,400,000 ms: a local day is 23 or 25 hours twice a year, and on those two
+days fixed arithmetic lands "yesterday" at 01:00 or 23:00 of the wrong date,
+putting a meeting held near midnight into the day next door.
 
 **What the link may say about *when*** is not free either. A doc found by
 recency may be labelled in the speaker's own frame ("last week") — the window

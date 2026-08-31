@@ -10,7 +10,7 @@
  *
  * All fixtures are synthetic. The repo is public.
  */
-import { describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import {
   type LookupDoc,
   MAX_LOOKUP_DOCS,
@@ -97,6 +97,107 @@ describe('parseRecency', () => {
 
   it('finds no window in speech that names no time', () => {
     expect(parseRecency('pull in the rollout plan', NOW)).toBeNull();
+  });
+});
+
+describe('parts of the day are separate windows', () => {
+  // Wednesday 2026-08-26. A morning meeting and an afternoon one, which is
+  // the case that makes the difference visible at all.
+  const twoToday = {
+    docs: [
+      { docId: 'd-am', title: 'Notes', meetingAt: at(2026, 8, 26, 9) },
+      { docId: 'd-pm', title: 'Notes', meetingAt: at(2026, 8, 26, 14) },
+    ],
+    tasks: [],
+  };
+
+  it('bounds the morning at noon', () => {
+    const w = parseRecency('what did we say this morning', NOW);
+    expect(w).toEqual({ from: at(2026, 8, 26, 0), to: at(2026, 8, 26, 12), label: 'this morning' });
+  });
+
+  it('bounds the afternoon between noon and five', () => {
+    const w = parseRecency('the notes from this afternoon', NOW);
+    expect(w?.from).toBe(at(2026, 8, 26, 12));
+    expect(w?.to).toBe(at(2026, 8, 26, 17));
+  });
+
+  it('runs the evening to midnight', () => {
+    const w = parseRecency('what we agreed this evening', NOW);
+    expect(w?.from).toBe(at(2026, 8, 26, 17));
+    expect(w?.to).toBe(at(2026, 8, 27, 0));
+  });
+
+  it('answers "this morning" with the morning meeting, not the day\'s last', () => {
+    // The resolver takes the NEWEST meeting in the window, so a single
+    // all-of-today window would hand back the 14:00 one for either phrase.
+    const hit = resolveLookup('pull up what we said this morning', twoToday, NOW);
+    expect(hit?.kind === 'doc' && hit.docId).toBe('d-am');
+  });
+
+  it('still answers "today" with the latest of the day', () => {
+    const hit = resolveLookup('what did we cover today', twoToday, NOW);
+    expect(hit?.kind === 'doc' && hit.docId).toBe('d-pm');
+  });
+});
+
+describe('calendar boundaries survive daylight saving', () => {
+  // A zone that observes it, so the assertions below can fail. Under a zone
+  // that does not (CI often runs UTC) every one of them passes for free —
+  // which is the whole reason this block pins the zone rather than trusting
+  // the host's.
+  // Restored to the RESOLVED host zone, never by deleting the variable:
+  // deleting it leaves the runtime on the zone last set, which silently
+  // shifted every fixture in the tests that ran after this block.
+  const hostTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  beforeAll(() => {
+    process.env.TZ = 'America/Los_Angeles';
+  });
+  afterAll(() => {
+    process.env.TZ = hostTz;
+  });
+
+  // 2026-03-08 springs forward, so Sunday the 8th is 23 hours long.
+  const wedAfterSpring = new Date(2026, 2, 11, 15, 0, 0).getTime();
+  const monAfterSpring = new Date(2026, 2, 9, 12, 0, 0).getTime();
+
+  it('is a zone where the naive arithmetic really is wrong', () => {
+    // The positive control. Midnight Monday minus 86,400,000 ms is 01:00 on
+    // Sunday, not midnight — this is the bug the rest of the block guards.
+    const mondayMidnight = new Date(2026, 2, 9, 0, 0, 0).getTime();
+    const sundayMidnight = new Date(2026, 2, 8, 0, 0, 0).getTime();
+    expect(mondayMidnight - 86_400_000).not.toBe(sundayMidnight);
+  });
+
+  it('lands yesterday on local midnight across the transition', () => {
+    const w = parseRecency("yesterday's notes", monAfterSpring);
+    expect(w?.from).toBe(new Date(2026, 2, 8, 0, 0, 0).getTime());
+    expect(w?.to).toBe(new Date(2026, 2, 9, 0, 0, 0).getTime());
+  });
+
+  it('starts the week on Monday midnight, not Sunday 23:00', () => {
+    expect(parseRecency('what did we say this week', wedAfterSpring)?.from).toBe(
+      new Date(2026, 2, 9, 0, 0, 0).getTime(),
+    );
+  });
+
+  it('spans last week as seven calendar days, not seven times 24 hours', () => {
+    const w = parseRecency("last week's notes", wedAfterSpring);
+    expect(w?.from).toBe(new Date(2026, 2, 2, 0, 0, 0).getTime());
+    expect(w?.to).toBe(new Date(2026, 2, 9, 0, 0, 0).getTime());
+  });
+
+  it('lands a weekday on its own local midnight', () => {
+    // Sunday, spoken on the Wednesday after the transition.
+    const w = parseRecency('what we agreed Sunday', wedAfterSpring);
+    expect(w?.from).toBe(new Date(2026, 2, 8, 0, 0, 0).getTime());
+    expect(w?.to).toBe(new Date(2026, 2, 9, 0, 0, 0).getTime());
+  });
+
+  it('reads last month as calendar months, not a day subtracted', () => {
+    const w = parseRecency('the plan from last month', wedAfterSpring);
+    expect(w?.from).toBe(new Date(2026, 1, 1, 0, 0, 0).getTime());
+    expect(w?.to).toBe(new Date(2026, 2, 1, 0, 0, 0).getTime());
   });
 });
 

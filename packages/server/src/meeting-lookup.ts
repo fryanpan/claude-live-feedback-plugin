@@ -57,8 +57,6 @@ export interface RecencyWindow {
   label: string;
 }
 
-const DAY_MS = 86_400_000;
-
 const WEEKDAYS = [
   'sunday',
   'monday',
@@ -69,6 +67,16 @@ const WEEKDAYS = [
   'saturday',
 ] as const;
 
+/**
+ * EVERY BOUNDARY HERE IS A CALENDAR OPERATION, NEVER A FIXED 86,400,000 ms.
+ *
+ * A local day is not always 86,400,000 ms long. On the two daylight-saving
+ * days a year it is 23 or 25 hours, so "midnight minus a day" lands at 23:00
+ * or 01:00 of the wrong date, and a meeting held near midnight resolves into
+ * the day next door. `setDate` rolls the calendar and `setHours` re-floors
+ * it, which is right on all 365.
+ */
+
 /** Midnight at the start of the local day `ts` falls in. */
 function startOfDay(ts: number): number {
   const d = new Date(ts);
@@ -76,18 +84,39 @@ function startOfDay(ts: number): number {
   return d.getTime();
 }
 
+/** Local midnight `days` calendar days from the day `ts` falls in. */
+function addDays(ts: number, days: number): number {
+  const d = new Date(ts);
+  d.setDate(d.getDate() + days);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** The local clock striking `hour` on the day `ts` falls in. */
+function atHour(ts: number, hour: number): number {
+  const d = new Date(ts);
+  d.setHours(hour, 0, 0, 0);
+  return d.getTime();
+}
+
 /** Midnight at the start of the local week (Monday) `ts` falls in. */
 function startOfWeek(ts: number): number {
-  const day = startOfDay(ts);
   // getDay(): 0 = Sunday. Monday-based, so Sunday is six days into its week.
-  const dow = (new Date(day).getDay() + 6) % 7;
-  return day - dow * DAY_MS;
+  const dow = (new Date(startOfDay(ts)).getDay() + 6) % 7;
+  return addDays(ts, -dow);
 }
 
 function startOfMonth(ts: number): number {
   const d = new Date(ts);
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Local midnight `months` calendar months from the month `ts` falls in. */
+function addMonths(ts: number, months: number): number {
+  const d = new Date(startOfMonth(ts));
+  d.setMonth(d.getMonth() + months);
   return d.getTime();
 }
 
@@ -117,28 +146,37 @@ export function parseRecency(query: string, now: number): RecencyWindow | null {
 
   if (has(/\blast week\b/)) {
     const thisWeek = startOfWeek(now);
-    return { from: thisWeek - 7 * DAY_MS, to: thisWeek, label: 'last week' };
+    return { from: addDays(thisWeek, -7), to: thisWeek, label: 'last week' };
   }
   if (has(/\bthis week\b/)) return { from: startOfWeek(now), to: now, label: 'this week' };
   if (has(/\blast month\b/)) {
     const thisMonth = startOfMonth(now);
-    return { from: startOfMonth(thisMonth - DAY_MS), to: thisMonth, label: 'last month' };
+    return { from: addMonths(thisMonth, -1), to: thisMonth, label: 'last month' };
   }
   if (has(/\byesterday\b/)) {
-    const today = startOfDay(now);
-    return { from: today - DAY_MS, to: today, label: 'yesterday' };
+    return { from: addDays(now, -1), to: startOfDay(now), label: 'yesterday' };
   }
-  if (has(/\bthis (?:morning|afternoon|evening)\b/) || has(/\btoday\b/)) {
-    return { from: startOfDay(now), to: now, label: 'today' };
+  // Each part of the day is its OWN window, because the resolver takes the
+  // newest meeting inside one. Folded into a single "today" they would all
+  // answer with the latest meeting of the day, so "what did we say this
+  // morning", asked after lunch, would hand back the lunch meeting.
+  if (has(/\bthis morning\b/)) {
+    return { from: startOfDay(now), to: atHour(now, 12), label: 'this morning' };
   }
+  if (has(/\bthis afternoon\b/)) {
+    return { from: atHour(now, 12), to: atHour(now, 17), label: 'this afternoon' };
+  }
+  if (has(/\bthis evening\b/) || has(/\btonight\b/)) {
+    return { from: atHour(now, 17), to: addDays(now, 1), label: 'this evening' };
+  }
+  if (has(/\btoday\b/)) return { from: startOfDay(now), to: now, label: 'today' };
 
   for (let i = 0; i < WEEKDAYS.length; i++) {
     const name = WEEKDAYS[i];
     if (name === undefined || !has(new RegExp(`\\b${name}\\b`))) continue;
-    const today = startOfDay(now);
-    const back = (new Date(today).getDay() - i + 7) % 7;
-    const day = today - back * DAY_MS;
-    return { from: day, to: day + DAY_MS, label: name[0]?.toUpperCase() + name.slice(1) };
+    const back = (new Date(startOfDay(now)).getDay() - i + 7) % 7;
+    const day = addDays(now, -back);
+    return { from: day, to: addDays(day, 1), label: name[0]?.toUpperCase() + name.slice(1) };
   }
   return null;
 }
