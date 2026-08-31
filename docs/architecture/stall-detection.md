@@ -44,8 +44,8 @@ row-stalling) and gets its own design if it proves needed. The one kind of
 review item the loop DOES age is the held one, below — an ask the reader
 cannot see is not waiting on the reader.
 
-**A held review item is a finding of its own.** Every `add_review_item` /
-`revise_review_item` passes a quality gate: a Haiku judge reads the board's
+**A held review item is a finding of its own.** Every filing path that can
+put a row on the reader's queue passes a quality gate: a Haiku judge reads the board's
 `reviewItemCriteria` (a natural-language prompt; `set_review_item_criteria`,
 or `PUT /api/workspaces/:id/settings`) and the item, and answers
 `{ok, reason}`. Not ok → the item is HELD: it stays on the ticket with the
@@ -67,6 +67,42 @@ one complaint per item, not per pass. Revising re-judges; a pass clears
 the hold, keeps the original filing time, and forgets the filer stamp, so
 a fresh hold on the same item is nudged afresh.
 
+**Every filing path, not one of them.** The gate shipped applying only inside
+`taskReviewItems`' branch, while `.claude/rules/workspaces-default.md` tells
+the fleet to file asks with `create_thread(review=…)` / `post_reply(review=…)`
+— so the documented path reached the queue with the judge called zero times
+(measured 2026-08-29, both calls in one run). A gate the standard path
+bypasses is worse than no gate, because it produces confidence it has not
+earned. One implementation now serves both surfaces (`runReviewGate` in
+`server.ts`, with one adapter per store), so the order of operations, the
+failure policy and the shape of a hold cannot drift apart:
+
+| Filing path | Where the row lands | Judged? | How a hold is lifted |
+|---|---|---|---|
+| `add_review_item` → `POST /api/tasks/:id/review-items` | `task-review` | yes | `revise_review_item(taskId, reviewItemId)` |
+| `create_tasks` / `POST …/tasks` with `review` | `task-review` | yes (batched, bounded concurrency) | same |
+| `revise_review_item` ticket form | `task-review` | yes, on every revision | same |
+| `create_thread(review)` → `POST /api/docs/:id/threads` | `task-thread` / `doc-thread` | yes | `revise_review_item(docId, threadId, commentId)` |
+| `POST /api/docs/:id/threads/by_find` with `review` | `doc-thread` | yes | same |
+| `post_reply(review)` → `…/threads/:id/comments` | `task-thread` / `doc-thread` | yes | same |
+| `revise_review_item` doc form → `…/threads/:id/revise` | as above | yes, on every revision | same |
+| `…/threads/:id/withdraw/undo` (reinstate) | as above | **exempt** — no new words | the hold placed on those words still stands, so a reinstated held item stays off the queue and is not announced |
+| `…/review-items/:id/release` (the reader overruling) | `task-review` | **exempt by design** — see below | n/a |
+| A legacy `needs: 'decision'` task (`r-legacy`) | `task-review` | **exempt** — a derived row with no stored item to stamp; `recordReviewJudgement` refuses it | n/a |
+| The allow-rule filer (`allow-rules.ts`, `store.addReviewItem` direct) | `task-review` | **exempt** — the words are the PRODUCT's, built by `buildAllowRuleReview` from a fixed template, and no agent authored them. Holding one would be the dead end this design forbids: the "filer" is the server, which cannot revise, and a held finding is a finding silently dropped | n/a |
+| Meeting research capture (`meeting-task-capture.ts`, same door) | `task-review` | **exempt**, same reason — template text the assistant fills in, with no author to send it back to | n/a |
+| An `unreplied` row (prose the server INFERRED asks a person) | thread rows | **exempt** — nobody declared it, so there are no authored words to judge; a held declaration's own comment is excluded from this band so a hold cannot leak back through it | n/a |
+
+The item's verdict lives on `TaskReviewItem.judge` for a ticket item and on
+`ReviewPayload.judge` for a comment-borne one — the payload IS the item there,
+the same reason `revisions` lives on it. `reviewFromBody` strips `judge` from
+anything a caller sends: it is written by the gate and restored from the CRDT,
+and accepting it at the door would be a one-key bypass. Both surfaces' holds
+are enumerated for the stall loop (`taskStore.heldReviewItems` +
+`heldThreadReviewItems`), and the row, the filer's wake and the filing route's
+result all carry the same paste-ready `revise_review_item(…)` call — three
+copies of an address is how one of them ends up naming a verb that refuses.
+
 **The reader can overrule the judge.** The held note on the ticket names
 who filed the item and how long the hold has stood, and carries "Ask me
 anyway" — `POST /api/tasks/:taskId/review-items/:itemId/release`, which
@@ -75,6 +111,13 @@ the way any passed item reaches it. The gate is not disarmed by it: the
 next revision goes past the judge like any other. Added after a UX review
 found the note had no interactive element at all, so a reader looking at a
 question they could answer in ten seconds could only wait for an agent.
+
+Known limit: the release door exists for the TICKET form only. A held
+comment-borne item can be lifted by its filer revising it (and by the gate
+being turned off, which releases it on the next revision), but there is no
+"ask me anyway" for the reader — a held comment is not on the queue, so the
+reader has no surface to press it from. Giving one means rendering held
+declarations in the doc, which is a UI decision rather than a gate one.
 
 A release can be issued while the judge is still out, and it wins. The
 verdict a judge comes back with is refused unless the `pending` stamp it

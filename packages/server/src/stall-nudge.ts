@@ -145,9 +145,26 @@ export interface StallSnapshot {
 export interface ReviewItemHeldFrame {
   event: typeof REVIEW_ITEM_HELD_EVENT;
   workspaceId: string;
-  taskId: string;
+  /** The ticket the item hangs on. Absent for an item filed as a `review`
+   *  payload on a plain doc thread, which hangs on a comment instead. */
+  taskId?: string;
   title: string;
+  /** The item's id on whichever surface holds it — the review item's id on a
+   *  ticket, the COMMENT's id on a doc thread. */
   reviewItemId: string;
+  /** The doc-thread address, when that is where the item lives. */
+  docId?: string;
+  threadId?: string;
+  commentId?: string;
+  /**
+   * The paste-ready `revise_review_item(…)` call that ends this hold.
+   *
+   * Sent rather than left for the reader to assemble, because the two
+   * surfaces take different arguments and a filer who guesses gets a
+   * refusal. A hold whose wake cannot say how to lift it is the dead end
+   * that kept the thread path ungated in the first place.
+   */
+  revise?: string;
   headline: string;
   reason: string;
   /** Present, and true, only on the loop's complaint — the filing-time wake
@@ -671,7 +688,21 @@ export class StallNudger {
         delivered = send(workspaceId, item.filerAgentId, {
           event: REVIEW_ITEM_HELD_EVENT,
           workspaceId,
-          taskId: item.id,
+          // The ROW's own address, not `item.id` alone: on a doc thread `id`
+          // is the DOC, and a filer handed a docId under the name `taskId`
+          // would spend a call finding out it is not one. A row with no doc
+          // address is a ticket row by construction (`overdueHeldItems`), so
+          // there `id` IS the ticket — and reading it that way keeps every
+          // caller that predates the doc surface sending what it always did.
+          ...(item.docId === undefined
+            ? { taskId: item.taskId ?? item.id }
+            : item.taskId !== undefined
+              ? { taskId: item.taskId }
+              : {}),
+          ...(item.docId !== undefined ? { docId: item.docId } : {}),
+          ...(item.threadId !== undefined ? { threadId: item.threadId } : {}),
+          ...(item.commentId !== undefined ? { commentId: item.commentId } : {}),
+          ...(item.revise !== undefined ? { revise: item.revise } : {}),
           title: item.title,
           reviewItemId: item.reviewItemId,
           headline: item.headline,

@@ -30,6 +30,7 @@ import type {
 import {
   decodeEntities,
   isReviewItemGated,
+  isReviewPayloadGated,
   latestThreadedQuestion,
   pendingDeclaration,
   reviewItemState,
@@ -594,7 +595,15 @@ export function reviewThreadItems(args: {
       const declaring = pendingDeclaration(thread);
       if (run.length === 0 && declaring === null) continue;
 
-      if (declaring?.review) {
+      // HELD by the quality gate — filed, on the thread, and not yet fit to
+      // put in front of the reader — or still being judged. The exact rule
+      // the ticket-borne branch below applies, applied here for the same
+      // reason: a gate one filing path bypasses produces confidence it has
+      // not earned, and this is the path the fleet rule recommends. Falling
+      // THROUGH rather than `continue`-ing is deliberate: the run underneath
+      // may still hold an ordinary unanswered question, and a held
+      // declaration is not a reason to stop reading the thread.
+      if (declaring?.review && !isReviewPayloadGated(declaring.review)) {
         // A correction to the words, if there has been one. `since` is
         // deliberately NOT reset by it: the reader has been waiting on this
         // question since it was asked, and a revision is the asker getting
@@ -636,7 +645,16 @@ export function reviewThreadItems(args: {
       // still standing. No ask, no row: a run of status prose used to fall
       // back to quoting its newest comment, which is exactly "replying
       // creates a row", and it filled 60 of the queue's 61 rows.
-      const asked = [...run].reverse().find((c) => asksPerson(c.text, people));
+      // A comment whose OWN declaration the gate is holding is skipped here
+      // too. Without this the hold leaks: the held comment's prose usually
+      // addresses the reader by name, so the `unreplied` heuristic would put
+      // the very same words back on the queue under a different band, and
+      // the item would read as live while its filer was being told it was
+      // not. The rest of the run is still read — an unrelated question on
+      // the same thread is nobody's hold.
+      const asked = [...run]
+        .reverse()
+        .find((c) => !(c.review && isReviewPayloadGated(c.review)) && asksPerson(c.text, people));
       if (asked === undefined) continue;
       items.push({
         kind,

@@ -108,7 +108,7 @@ function suggestionAuthor(): { id: string; name: string; color: string } {
  * bundle than the deploy source would install. A second literal would be a
  * fourth version site, and this file's history is that version sites drift.
  */
-const PLUGIN_VERSION = '0.1.132';
+const PLUGIN_VERSION = '0.1.133';
 
 /**
  * One nonce per PROCESS, minted at module load and sent on every attach.
@@ -263,7 +263,7 @@ const server = new Server(
 const REVIEW_ITEM_SCHEMA = {
   type: 'object',
   description:
-    "Declares this a Review Item, putting it on the reviewer's Home queue. Omit it for ordinary comments — status notes and closing remarks are not review items. headline is the row title; missing or multi-line is refused, over-long files anyway with advice. Everything else goes in detail, in whatever shape the ask wants to read.",
+    "Declares this a Review Item, putting it on the reviewer's Home queue once it passes the board's quality gate. Omit it for ordinary comments — status notes and closing remarks are not review items. headline is the row title; missing or multi-line is refused, over-long files anyway with advice. Everything else goes in detail, in whatever shape the ask wants to read.",
   properties: {
     review_type: {
       type: 'string',
@@ -388,7 +388,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'post_reply',
       description:
-        'Reply to an existing thread. Pass review when the reply is asking a person to decide or look; without it, it is an ordinary comment and does not enter the queue. A comment is an ask, a decision, or a reply to a person — where the work stands goes through post_status instead. Returns threadUrl, the link to hand a peer.',
+        'Reply to an existing thread. Pass review when the reply is asking a person to decide or look; without it, it is an ordinary comment and does not enter the queue. A review payload is judged by the same quality gate a ticket item passes: `held: true` means the item is off the queue until you revise it, and the result names the gap plus the revise_review_item(docId=…, threadId=…, commentId=…) call that ends the hold. A comment is an ask, a decision, or a reply to a person — where the work stands goes through post_status instead. Returns threadUrl, the link to hand a peer.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -420,7 +420,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'create_thread',
       description:
-        'Open a comment thread on a doc. Pass find to anchor it to a phrase; omit find entirely for a thread about the doc as a whole — that is how you comment on a task, whose body doc is task:<taskId> and is often empty. Pass review when you are asking a person to decide or look; leave it off for notes you are recording. Returns threadUrl — hand that to a peer instead of pasting the report into chat.',
+        "Open a comment thread on a doc. Pass find to anchor it to a phrase; omit find entirely for a thread about the doc as a whole — that is how you comment on a task, whose body doc is task:<taskId> and is often empty. Pass review when you are asking a person to decide or look; leave it off for notes you are recording. A review payload goes through the same quality gate a ticket item does: `held: true` in the result means it is off the reader's queue until you revise it, and the result carries the reason plus the exact revise_review_item(docId=…, threadId=…, commentId=…) call that lifts it. Returns threadUrl — hand that to a peer instead of pasting the report into chat.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1821,7 +1821,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'revise_review_item',
       description:
-        "Rewrite one of your review items in place — the answer to a question somebody asked ON it, or the fix for an item the quality gate HELD (`held: true` from add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Address the item wherever you raised it: on a TICKET, `taskId` + `reviewItemId` (the id rides with the question on the task's thread); on a DOC THREAD, `docId` + `threadId` + `commentId` — the review is a payload on one comment, and `commentId` is the `thread.comments[].id` that create_thread / post_reply already handed you when you raised it. Half an address is refused, not guessed. The ticket form re-judges every revision: a held item reaches the reader's queue when it passes, an already-queued one returns marked Revised with their question quoted and the changed span highlighted, and `reply` posts on the asking thread in the same call. The doc form has no quality gate and no `reply`; it rewrites the item and tells the thread's watchers.",
+        "Rewrite one of your review items in place — the answer to a question somebody asked ON it, or the fix for an item the quality gate HELD (`held: true` from add_review_item, or a workspace.review_item_held wake). Pass only the fields that change; the previous words are kept as history. Address the item wherever you raised it: on a TICKET, `taskId` + `reviewItemId` (the id rides with the question on the task's thread); on a DOC THREAD, `docId` + `threadId` + `commentId` — the review is a payload on one comment, and `commentId` is the `thread.comments[].id` that create_thread / post_reply already handed you when you raised it. Half an address is refused, not guessed. BOTH forms re-judge every revision — a held item reaches the reader's queue when it passes, and a revision that still misses the mark comes back `held: true` with the gap named. The ticket form additionally returns an already-queued item marked Revised, with their question quoted and the changed span highlighted, and `reply` posts on the asking thread in the same call. The doc form has no `reply`; it rewrites the item, judges it, and tells the thread's watchers.",
       inputSchema: {
         type: 'object',
         properties: {
