@@ -1170,6 +1170,34 @@ describe('the review-item quality gate', () => {
       SSE_TEST_TIMEOUT_MS,
     );
 
+    it('a DEDUPLICATED filing still reports the hold its twin recorded', async () => {
+      // The dedupe closure runs once for however many duplicate requests
+      // arrive, so the second request holds no gate of its own. Answering it
+      // without `held` would tell a retrying client its filing was accepted
+      // and leave it waiting on a reader who cannot see the item.
+      const { workspaceId, taskId } = await board();
+      verdict = { ok: false, reason: 'No stakes.' };
+      const body = {
+        author: FILER,
+        anchor: { kind: 'subject' },
+        text: 'Jordan — which one?',
+        review: BAD,
+        requestId: 'rq-1',
+      };
+      const [first, second] = await Promise.all([
+        post(`/api/docs/task:${taskId}/threads`, body).then((r) => jj<ThreadReply>(r)),
+        post(`/api/docs/task:${taskId}/threads`, body).then((r) => jj<ThreadReply>(r)),
+      ]);
+      // One filing, one judge call, one thread — and BOTH answers say held.
+      expect(calls).toHaveLength(1);
+      expect(second.thread.id).toBe(first.thread.id);
+      expect(first.held).toBe(true);
+      expect(second.held).toBe(true);
+      expect(second.heldReason).toBe('No stakes.');
+      expect(second.message).toContain(`threadId="${first.thread.id}"`);
+      expect(await threadQueue(workspaceId)).toEqual([]);
+    });
+
     it('CONTROL — the ticket form behaves exactly as it did', async () => {
       const { workspaceId, taskId } = await board();
       verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };

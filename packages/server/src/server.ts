@@ -1683,6 +1683,38 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   }
 
   /**
+   * The hold on a declaration, read back off what is STORED.
+   *
+   * For the deduplicated request, which never ran the filing closure and so
+   * holds no gate of its own while the first request's verdict is already on
+   * the comment. Answering that request without `held` would tell a retrying
+   * client its filing was accepted and leave it waiting on a reader who
+   * cannot see the item (codex review). Both callers await the same closure,
+   * so by the time this runs the verdict is recorded.
+   *
+   * `undefined` for anything that is not a live hold — no declaration, no
+   * recoverable comment, a verdict that passed.
+   */
+  function recordedThreadHold(
+    docId: string,
+    thread: Thread,
+    review: ReviewPayload | undefined,
+  ): ThreadReviewGate | undefined {
+    if (!review) return undefined;
+    const commentId = commentBearing(thread, review);
+    if (commentId === undefined) return undefined;
+    const stored = thread.comments.find((c) => c.id === commentId)?.review;
+    if (!stored || !isReviewPayloadHeld(stored) || stored.judge === undefined) return undefined;
+    const reason = stored.judge.reason;
+    return {
+      held: true,
+      review: stored,
+      reason,
+      message: heldMessage({ kind: 'thread', docId, threadId: thread.id, commentId }, reason),
+    };
+  }
+
+  /**
    * File a comment-borne declaration through the gate, then announce it only
    * if it passed.
    *
@@ -9668,11 +9700,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             if (priorThreadCreate) {
               const t = await priorThreadCreate;
               const handoff = threadUrl(docId, Boolean(visitor));
-              return t
+              // Re-read, because the FIRST request's judge wrote to the
+              // comment after the thread this promise resolved to was built.
+              // A retry told nothing about the hold would treat its filing as
+              // accepted and wait on a reader who cannot see the item (codex
+              // review) — so the verdict is read back off the stored payload.
+              const settledPrior = t ? (rooms.getThread(docId, t.id) ?? t) : null;
+              return t && settledPrior
                 ? j(200, {
-                    thread: t,
+                    thread: settledPrior,
                     ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
                     ...(handoff ? { threadUrl: handoff } : {}),
+                    ...heldFields(recordedThreadHold(docId, settledPrior, declared.review)),
                   })
                 : j(500, { error: 'could not create thread' });
             }
@@ -9782,12 +9821,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               },
             );
             const handoff = threadUrl(docId, Boolean(visitor));
-            return t
+            const settled = t ? (rooms.getThread(docId, t.id) ?? t) : null;
+            return t && settled
               ? j(200, {
-                  thread: rooms.getThread(docId, t.id) ?? t,
+                  thread: settled,
                   ...(declared.advice ? { reviewAdvice: declared.advice } : {}),
                   ...(handoff ? { threadUrl: handoff } : {}),
-                  ...heldFields(gate),
+                  // `gate` is undefined on a DEDUPLICATED request — it never
+                  // ran the closure — so the hold is read back off the stored
+                  // payload rather than dropped. See `recordedThreadHold`.
+                  ...heldFields(gate ?? recordedThreadHold(docId, settled, declared.review)),
                 })
               : j(500, { error: 'could not create thread' });
           }
