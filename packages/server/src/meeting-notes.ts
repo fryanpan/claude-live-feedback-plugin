@@ -45,7 +45,7 @@
  * writes them into the doc decides delivery (the CRDT, not the event hub).
  */
 
-import { speakerDisplayName } from '@feedback/core';
+import { normalizeSpeakerTags, renameSpeakerTags, speakerDisplayName } from '@feedback/core';
 import type { EngineTurn } from './transcribe.ts';
 
 /** One settled turn as a tick's delta carries it. */
@@ -58,6 +58,18 @@ export interface NotesTurn {
    * person calls that voice — their name, or "Speaker A" until named.
    */
   speaker?: string;
+  /**
+   * The engine's own label for that voice, kept beside the display name from
+   * the moment the session maps one to the other.
+   *
+   * The name is what a reader recognises and the label is what survives
+   * being renamed, so the notes need both: the tag the composer writes shows
+   * the name and CARRIES the label (`[@Devi](speaker:B)`), which is what
+   * lets a later rename find every mention of that voice without searching
+   * for a string that two voices might share. Absent on the way out of the
+   * ticker, where `speaker` IS the label.
+   */
+  speakerLabel?: string;
 }
 
 /**
@@ -353,10 +365,26 @@ export interface NotesSectionState {
 export interface NotesRelabel {
   docId: string;
   meetingId: string;
+  /**
+   * The engine label being renamed. This is the precise half: every inline
+   * speaker tag in the notes carries it in its href, so a rename keyed on it
+   * reaches exactly that voice's mentions and no others.
+   */
+  label: string;
   /** The display name as already written — "Speaker B". */
   from: string;
   /** What that voice is called now. */
   to: string;
+  /**
+   * Whether prose that merely READS as `from` may be rewritten too.
+   *
+   * False when another voice answers to the same display name. A tagged
+   * mention is unaffected either way — the label says which voice it is —
+   * but the words "Alex" in a sentence do not, and rewriting them would
+   * silently reattribute the other Alex. Notes composed before tags existed
+   * are all untagged, which is why this path survives at all.
+   */
+  rewriteUntagged: boolean;
 }
 
 export interface MeetingNotesDeps {
@@ -522,7 +550,14 @@ export function beginNotesSession(
   const withNames = (turn: NotesTurn): NotesTurn =>
     turn.speaker === undefined
       ? turn
-      : { ...turn, speaker: speakerDisplayName(turn.speaker, names) };
+      : {
+          ...turn,
+          speaker: speakerDisplayName(turn.speaker, names),
+          // The raw label rides along so the composer can TAG the mention
+          // with it. Set here and nowhere else: this is the one place that
+          // knows both halves of a voice's identity at once.
+          speakerLabel: turn.speaker,
+        };
 
   const composeTick = (tick: NotesTick): void => {
     lastTickNo = Math.max(lastTickNo, tick.tick);
@@ -581,7 +616,24 @@ export function beginNotesSession(
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
       };
       try {
-        const notes = await deps.composer.compose(input);
+        const composed = await deps.composer.compose(input);
+        // The deterministic gate on a model-made claim: a tag naming a voice
+        // this meeting never carried is unwrapped to plain words, and a tag
+        // naming a real one is re-rendered from the name map rather than
+        // trusted to spell it. Same law the capture pass holds `requester`
+        // to — an attribution must name something the transcript contained.
+        const checked = normalizeSpeakerTags(composed, {
+          names,
+          known: seen,
+          ...(input.humanNotes ? { protect: input.humanNotes } : {}),
+        });
+        if (checked.unknown.length > 0) {
+          deps.onError?.(
+            `notes: dropped speaker tag${checked.unknown.length > 1 ? 's' : ''} for ` +
+              `${[...new Set(checked.unknown)].join(', ')} — no such voice in this meeting`,
+          );
+        }
+        const notes = checked.markdown;
         previous = notes;
         deps.onNotes({
           docId: ids.docId,
@@ -618,19 +670,20 @@ export function beginNotesSession(
       const to = speakerDisplayName(speaker, names);
       if (from === to) return;
       // Two voices can be called the same thing — two people named Alex, or
-      // a slip. Then "Alex" in the notes does not say WHICH of them, and
-      // renaming one would silently reattribute the other's words. The
-      // forward mapping still holds (this voice's later turns compose under
-      // the new name); only the retroactive rewrite is refused, because the
-      // text it would have to match is not evidence of who said it.
+      // a slip. Then the WORDS "Alex" in the notes do not say which of them,
+      // and rewriting them would silently reattribute the other's speech.
+      // A TAGGED mention is not in that position: it carries the label, so
+      // it renames whatever the display names collide to. So ambiguity no
+      // longer refuses the retroactive rewrite — it narrows it to the
+      // mentions that can prove which voice they are.
       const ambiguous = [...seen, ...Object.keys(names)].some(
         (label) => label !== speaker && speakerDisplayName(label, names) === from,
       );
       if (ambiguous) {
         deps.onError?.(
-          `notes: "${from}" is more than one voice, so notes already written were left as they are`,
+          `notes: "${from}" is more than one voice, so only tagged mentions of ` +
+            `${speaker} were renamed`,
         );
-        return;
       }
       // On the chain, behind any compose in flight: that compose is still
       // going to return notes written with the old name (it read `previous`
@@ -638,8 +691,22 @@ export function beginNotesSession(
       // it. Every later tick then sees a `previous` that already reads
       // correctly, so the name never comes back.
       chain = chain.then(() => {
-        if (previous !== null) previous = replaceWholeToken(previous, from, to);
-        deps.onRelabel?.({ docId: ids.docId, meetingId: ids.meetingId, from, to });
+        if (previous !== null) {
+          // Sweep, then retag — the same order the doc side uses, and for the
+          // same reason: "Devi" → "Devi Raman" leaves the old name inside the
+          // new one, so a sweep run after the retag would find it in the tag
+          // it had just written and say the surname twice.
+          if (!ambiguous) previous = replaceWholeToken(previous, from, to);
+          previous = renameSpeakerTags(previous, speaker, names).markdown;
+        }
+        deps.onRelabel?.({
+          docId: ids.docId,
+          meetingId: ids.meetingId,
+          label: speaker,
+          from,
+          to,
+          rewriteUntagged: !ambiguous,
+        });
       });
     },
     async end(): Promise<void> {

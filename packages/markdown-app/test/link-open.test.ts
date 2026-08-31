@@ -17,6 +17,13 @@ describe('safeLinkHref', () => {
     expect(safeLinkHref('  https://example.com  ')).toBe('https://example.com');
   });
 
+  it('refuses a speaker tag — its href names a voice, not a destination', () => {
+    expect(safeLinkHref('speaker:B')).toBeNull();
+    expect(safeLinkHref('SPEAKER:B')).toBeNull();
+    // The positive control: an ordinary link on the same page still opens.
+    expect(safeLinkHref('/w/w-1/t/t-1')).toBe('/w/w-1/t/t-1');
+  });
+
   it('allows mailto and tel', () => {
     expect(safeLinkHref('mailto:a@b.com')).toBe('mailto:a@b.com');
     expect(safeLinkHref('tel:+15551234')).toBe('tel:+15551234');

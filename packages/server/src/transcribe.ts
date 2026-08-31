@@ -42,6 +42,21 @@ export interface EngineTurn {
    * names a label once per meeting, and that map lives with the meeting.
    */
   speaker?: string;
+  /**
+   * Audio offset, in milliseconds of the engine's own stream, of the END of
+   * the last word in `text`. The instant being measured when this frame's
+   * latency is priced — see `meeting-timing.ts` for why an offset rather
+   * than the word itself is the correlation key. Absent on an engine that
+   * reports no word timings (the mock).
+   */
+  audioEndMs?: number;
+  /**
+   * Server clock when this frame arrived from the engine. Recorded by the
+   * adapter rather than by the relay because the relay sees it only after
+   * whatever the adapter did with it, and the vendor leg is the biggest
+   * number in the budget — it must not absorb our own mapping cost.
+   */
+  engineMs?: number;
 }
 
 export interface TranscriptionOpenOpts {

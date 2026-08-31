@@ -6194,6 +6194,165 @@ body.is-reading-width #editor > .ProseMirror {
 #editor > .ProseMirror a:hover {
   text-decoration-color: currentColor;
 }
+/* Speaker tags: who said the note, rendered as a quiet chip rather than as
+   the link it is made of. The href names a VOICE (`speaker:B`), so it is not
+   somewhere to go — no underline, no accent colour, nothing that invites the
+   click that `safeLinkHref` then refuses. Attribution is context for the
+   sentence it opens; it must not out-shout the words.
+
+   Selected on the href, so it needs no decoration plugin and costs the
+   editor bundle nothing. The whole tag is one run, so it wraps as one. */
+#editor > .ProseMirror a[href^="speaker:"] {
+  color: var(--fg-muted, #6b7280);
+  text-decoration: none;
+  font-size: 0.88em;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  padding: 0.05em 0.4em;
+  margin-right: 0.15em;
+  border-radius: 999px;
+  background: var(--chip-bg, rgba(127, 127, 127, 0.12));
+  white-space: nowrap;
+  /* A pointer, because the tag IS the control: tapping it opens the menu
+     that corrects the attribution. It went nowhere before that gesture
+     existed, and said so with a default cursor. */
+  cursor: pointer;
+}
+#editor > .ProseMirror a[href^="speaker:"]:hover {
+  text-decoration: none;
+  background: var(--chip-bg-hover, rgba(127, 127, 127, 0.2));
+  color: var(--fg, #111827);
+}
+#editor > .ProseMirror a[href^="speaker:"][aria-expanded="true"] {
+  background: var(--accent-soft, rgba(46, 125, 215, 0.14));
+  color: var(--accent, #2e7dd7);
+}
+/* An inline chip is only as tall as the text around it — around 23px, which
+   is under a fingertip. On a touch pointer the hit box grows past the ink
+   without moving a character of layout; on a mouse the same overlay would
+   reach into the lines above and below and steal their tags' clicks. */
+@media (pointer: coarse) {
+  #editor > .ProseMirror a[href^="speaker:"] {
+    position: relative;
+  }
+  #editor > .ProseMirror a[href^="speaker:"]::after {
+    content: "";
+    position: absolute;
+    /* Measured at 430px: 18.4px of ink, 38px of hit box with this rule —
+       clear of the 36px design-mobile asks for, and well inside the ~50px
+       between prose lines, so no tag reaches into its neighbour's row.
+       Horizontal stays small: neighbouring WORDS sit closer than
+       neighbouring lines do. */
+    inset: -10px -3px;
+  }
+}
+
+/* ===== The reassign menu =====
+   Raised by tapping a tag, and the answer to "who said this?" is always one
+   of a short known list, so it is a menu rather than a field. Each row
+   carries the last thing that voice said, because "Speaker A" identifies
+   nobody and "Move the gate." identifies the person you remember.
+
+   Attached to the BODY, not the editor: an ancestor with `overflow: hidden`
+   would otherwise clip the menu of a tag near the edge of the prose. */
+.speaker-menu {
+  position: absolute;
+  z-index: 960;
+  min-width: 15rem;
+  max-width: min(22rem, calc(100vw - 1rem));
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+/* Transparent on a pointer: it exists to catch the click that dismisses the
+   menu, not to dim anything. The sheet below gives it a colour. */
+.speaker-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 955;
+}
+.speaker-menu-head {
+  padding: 0.5rem 0.75rem 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted, #6b7280);
+}
+.speaker-menu-voice,
+.speaker-menu-nobody {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--fg, #111827);
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+.speaker-menu-voice:hover,
+.speaker-menu-nobody:hover,
+.speaker-menu-voice:focus-visible,
+.speaker-menu-nobody:focus-visible {
+  background: var(--chip-bg, rgba(127, 127, 127, 0.12));
+}
+.speaker-menu-who {
+  display: block;
+  font-weight: 600;
+}
+/* One line, clipped. The words are here to tell two voices apart at a
+   glance; a row that grows to three lines turns a menu into a transcript. */
+.speaker-menu-said {
+  display: block;
+  font-size: 0.85em;
+  color: var(--fg-muted, #6b7280);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.speaker-menu-voice[aria-checked="true"] .speaker-menu-who::after {
+  content: " ✓";
+  color: var(--accent, #2e7dd7);
+}
+.speaker-menu-empty {
+  padding: 0.35rem 0.75rem 0.5rem;
+  font-size: 0.85em;
+  color: var(--fg-muted, #6b7280);
+}
+/* Its own thing, not another voice: it removes a claim rather than moving
+   one, so it sits below a rule instead of at the end of the list. */
+.speaker-menu-nobody {
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  color: var(--fg-muted, #6b7280);
+}
+/* A menu anchored to a word works next to a cursor. Under a thumb it lands
+   half off-screen, on top of the sentence being read — so at phone width it
+   becomes a sheet at the bottom of the screen, where the thumb already is,
+   riding above the keyboard by the same --kb-bottom the threads pane uses. */
+@media (max-width: 560px) {
+  .speaker-menu {
+    position: fixed;
+    top: auto !important;
+    left: 0 !important;
+    right: 0;
+    bottom: var(--kb-bottom, 0px);
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+    max-height: 70vh;
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .speaker-menu-scrim {
+    background: rgba(0, 0, 0, 0.35);
+  }
+  .speaker-menu-voice,
+  .speaker-menu-nobody {
+    padding: 0.75rem;
+  }
+}
 /* Mobile prose tuning. Trim horizontal padding (40px → 16px) so a
    ~390px viewport doesn't have content squeezed into the middle 300px,
    and scale headings down — 2rem h1 at desktop is gigantic on mobile.
@@ -6733,6 +6892,78 @@ body.is-reading-width #editor > .ProseMirror {
   color: var(--fg-muted);
   cursor: default;
 }
+/* ---- Latency readout (?timing=1) ----
+   Present ONLY on a measured meeting: `has-timing` is set from the same flag
+   that builds the timing session, so none of this can reach an ordinary load.
+
+   A LINE OF ITS OWN, never a fourth item on the bar. Above 721px the strip is
+   a 40px row whose middle is already the rolling transcript, and at 430px it
+   is a stacked panel of about two wrapped lines sitting on the home
+   indicator; there is no spare horizontal room at either width. So the strip
+   is allowed to grow for this one mode and the readout goes under it. The
+   numbers are tabular so a p95 that gains a digit does not shuffle the row.
+
+   THE ROW ITSELF WRAPS, and that is load-bearing rather than cosmetic. The
+   phone-width strip is a COLUMN whose width comes from its content, so a row
+   of `white-space: nowrap` cells contributes its whole max-content width to
+   the panel — measured at 430px, the first attempt (nowrap plus overflow-x)
+   made the strip 447px inside a 430px window, because `overflow-x` does not
+   shrink an element's max-content contribution and `min-width: 0` only
+   governs the MAIN axis, which in a column is the vertical one. Letting the
+   cells wrap drops the row's minimum to its widest single cell, and the panel
+   fits again. Each cell keeps its own label and number together. */
+.meeting-timing-row {
+  flex: none;
+  min-width: 0;
+  /* LAST, at every width and whatever the DOM order is. The readout is
+     appended when the strip mounts, so a control added to the strip later —
+     the bot row is one — lands after it in the DOM and would sit UNDER the
+     dashed rule, reading as part of the diagnostics rather than as a control.
+     A large order costs nothing and does not have to be revisited the next
+     time the strip grows. */
+  order: 99;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-height: 34px;
+  padding-block: 2px;
+  border-top: 1px dashed var(--border);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+}
+.meeting-timing-stat {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  /* A label and its number are one thing; only the gaps BETWEEN cells break. */
+  white-space: nowrap;
+}
+.meeting-timing-label {
+  opacity: 0.75;
+}
+.meeting-timing-value {
+  color: var(--fg);
+  font-weight: 600;
+}
+.meeting-timing-save {
+  flex: none;
+  margin-left: auto;
+  font: inherit;
+  font-weight: 600;
+  padding: 2px 10px;
+  /* design-mobile.md tap-target floor; it is a real control on a phone. */
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
 /* "Detect multiple speakers" — a switch, not a second Start. Unpressed it is
    the quiet default (one voice, no diarization bill); pressed it fills, the
    way the strip's own live state does. The label never changes with the
@@ -6783,6 +7014,22 @@ body.is-reading-width #editor > .ProseMirror {
   }
   .meeting-toggle {
     order: 4;
+  }
+  /* The strip runs as a ROW here, so wrapping puts the readout on the next
+     LINE and the bar's fixed 40px has to give. Both of these are scoped to
+     this media query on purpose: at 720px and below the strip is a COLUMN,
+     where `flex-wrap: wrap` wraps into a new COLUMN instead — measured at
+     430px it made the stacked panel 447px wide inside a 430px window — and
+     `flex-basis: 100%` would ask for the container's whole HEIGHT. The column
+     layout needs neither: it is already `height: auto` and one item per row. */
+  .meeting-strip.has-timing {
+    height: auto;
+    flex-wrap: wrap;
+  }
+  .meeting-timing-row {
+    /* A line of its own on the flattened row; `order` comes from the base
+       rule, which already puts it last. */
+    flex: 0 0 100%;
   }
 }
 @media (max-width: 720px) {
@@ -6852,9 +7099,11 @@ body.is-reading-width #editor > .ProseMirror {
     display: none;
   }
   /* A live strip keeps the dot, the clock and Stop. The mode switch is
-     disabled for the length of a meeting anyway, and this row has no room to
-     spare while a keyboard is up. */
-  body[data-edit-viewport="compact"] .meeting-mode {
+     disabled for the length of a meeting anyway, and neither it nor the
+     readout has room to spare while a keyboard is up — the caption's rule,
+     applied to everything that is not the recording state. */
+  body[data-edit-viewport="compact"] .meeting-mode,
+  body[data-edit-viewport="compact"] .meeting-timing-row {
     display: none;
   }
 }

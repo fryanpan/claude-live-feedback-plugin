@@ -141,7 +141,8 @@ with retained text, so the relay needs no second channel. A turn still
 waiting on the pause tick takes the new label; notes ALREADY composed keep
 the label they were composed with — those words are in the doc and the
 revision has nowhere to land — but a person RENAMING a voice does reach
-them, retroactively; see "A rename reaches backwards" below. The revision
+them, retroactively, through both the tag rewrite and the text sweep; see
+"A rename reaches backwards" below. The revision
 can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
@@ -481,15 +482,88 @@ Renaming an already-given name works the same way, because the rewrite reads
 the OLD DISPLAY NAME (what the composer actually wrote), not the raw label —
 "Devi" → "Devi Raman" replaces "Devi".
 
-**Two voices with the same name refuse the rewrite.** Display text is the
-only handle the notes give — composed prose carries no per-mention
-attribution — so if both A and B are called "Alex", "Alex" in the notes does
-not say which, and correcting A to "Sam" would silently reattribute B's
-words. The session detects that (across every label SEEN, not just the named
-ones — an unnamed B still reads as "Speaker B") and skips the retroactive
-part, reporting it through `onError`. The forward mapping still holds: that
-voice's later turns compose under the new name. Raised by review before
-merge, not in the field.
+**Two voices with the same name narrow the rewrite, they no longer refuse
+it.** Display text used to be the only handle the notes gave, so if both A
+and B were called "Alex", "Alex" in the notes did not say which and
+correcting A to "Sam" would have silently reattributed B's words; the session
+detected that and skipped the retroactive part entirely. Tagged mentions have
+their own handle — the label in the href — so the tag rewrite runs
+unconditionally and only the UNTAGGED text sweep is skipped when the display
+name is ambiguous (`rewriteUntagged: false` on the relabel). The session
+still reports through `onError`, now saying the rename reached only tagged
+mentions. The forward mapping always held: that voice's later turns compose
+under the new name.
+
+### Speaker tags: attribution the notes can carry
+
+A tag is a markdown link whose href names the voice —
+`[@Devi](speaker:B)` — so the visible half is the name and the durable half
+is the LABEL (`packages/core/src/speaker-tags.ts`). The shape was chosen
+because a meeting doc is a live Yjs doc that flushes to a `.md` on disk: a
+link is ordinary markdown and an ordinary Yjs `link` mark, so attribution
+survives the round trip and rides through an edit the way bold does. A mark
+invented for this would have been lost on the first flush.
+
+- **The composer proposes, the server disposes.** Tags come back from an LLM,
+  so every composed section passes `normalizeSpeakerTags` before it reaches a
+  doc: a tag naming a label the meeting never carried is unwrapped to plain
+  words (and reported), and a tag naming a real one is re-rendered from the
+  name map rather than trusted to spell it. Same law the task capture's
+  `requester` is held to — a model-claimed attribution must name something
+  the tick's own transcript contained. Lines a PERSON wrote are passed
+  through byte for byte, because the merge recognises them by exact text.
+- **A rename is keyed on the label, never the spelling.**
+  `retagSpeakerInNotes` walks the notes section's `Y.XmlText` nodes and
+  rewrites the text of every run whose link href is `speaker:<label>`,
+  in place, marks preserved — which is what makes two voices called Alex
+  separable where the display-text sweep could not tell them apart. It runs
+  AFTER the untagged sweep, and that order is load-bearing: an extension
+  rename ("Devi" → "Devi Raman") leaves the old name inside the new one, so a
+  sweep running second would find "Devi" inside the "@Devi Raman" the retag
+  had just written and make it "@Devi Raman Raman". Sweeping first, the retag
+  that follows canonicalises every tag for the voice and finds most of them
+  already right. Contiguous delta ops sharing the tag's href are coalesced
+  into one run before replacement, because a tag with an inner mark — half
+  its name bolded — reaches Yjs as several ops and would otherwise be
+  rewritten once per op.
+- **A name loses its brackets on the way into a tag.** A display name is free
+  text somebody typed, and a tag is a link: "Sam [PM]" written between the
+  brackets produces `[@Sam [PM]](speaker:C)`, which no longer parses as a tag
+  at all — the finder cannot see it, so every later rename silently reaches
+  nothing and the attribution is frozen on that spelling. `speakerTagText`
+  removes `[`, `]` and `\` for the tag only; the roster and the strip still
+  show the name as typed. Removed rather than backslash-escaped because
+  escaping is only safe if every writer escapes, and one of the writers is
+  the doc serializer, which wraps EVERY link's text in brackets and escapes
+  none of it — a pre-existing bug worth fixing on its own, but not one this
+  feature should depend on. A name that cannot break the syntax is safe
+  whichever path writes it. Found in the browser, reassigning a mention to a
+  seeded "Sam [PM]"; the unit tests had only ever used plain names.
+- **A suggestion may not re-attribute a person's note.** `canSuggestOn`
+  refuses a rewrite that introduces a speaker label the target did not
+  already carry, so the composer cannot attach a line someone typed to a
+  voice in the room.
+- **The editor renders a tag as a quiet chip, not a link.** Tiptap blanks an
+  href whose scheme is not in `protocols`, so the Link extension is
+  configured with `speaker`; `safeLinkHref` refuses the scheme, so a tag
+  never navigates. Clicking one opens the reassign menu instead.
+- **Correcting a tag is one mention, always** (owner's call, 2026-08-31:
+  *"reassigning should just affect the one item being reassigned"*).
+  `speaker-reassign.ts` rewrites the link mark under the finger and nothing
+  else — not the turn, not that voice's other notes. The larger gestures
+  ("…and every other note from this turn", reaching back into the
+  transcript) are each a different promise about scope, and the narrow one is
+  the promise nobody has to think about before tapping. The menu offers the
+  voices from `speakerRoster` — the meeting's cast, each with the last thing
+  it said, because "Speaker A" identifies nobody — plus *Nobody — this is not
+  a quote*, which takes the claim off and leaves the words. It is a popover
+  on a pointer and a bottom sheet under 560px.
+- **The correction is an ordinary document edit**, dispatched through the
+  editor the person is already in: same Yjs sync, same undo, same ~1s flush
+  to the `.md`. Nothing about it reaches the server as a special verb, and a
+  correction made a week after the meeting works exactly like one made
+  during it — which is why the menu is mounted whatever the doc, rather than
+  alongside the strip.
 
 ## Task capture ("file a ticket for that")
 
@@ -533,6 +607,65 @@ plain markdown links into the notes; the doc editor's `TaskLinkChips`
 decoration (markdown-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
+
+## Measuring the latency (`?timing=1`)
+
+**How long a spoken word takes to become a word on the screen, and which hop
+spent it.** Off by default and costing nothing when off: without the flag the
+server allocates no ledger, reads no clock per audio chunk, and the wire is
+what it always was. Add `?timing=1` to a doc's address, start a meeting, and
+talk; a readout appears under the strip with the running p50/p95 and a CSV
+button. Nothing is sent anywhere — the samples live in the tab until someone
+downloads them, and no transcript text, doc id or path enters a sample, a
+column, or Sentry.
+
+The eight legs, in the order the time is spent: **capture** (waiting for the
+100ms frame carrying the word to close, uniform 0–100 by construction) ·
+**uplink** · **queue** (held on the server before the engine had a session —
+zero except at the very start of a meeting) · **vendor** · **serverOut** ·
+**downlink** · **render** · **paint**. They sum to **total**, spoken to
+painted.
+
+- **The correlation key is the AUDIO OFFSET, never the text.** Audio goes up
+  as raw PCM with no sequence number in it, so there is nothing in a frame to
+  echo back — but every `Turn` reports its words with `start`/`end` in
+  milliseconds of the engine's stream, and the server knows how many bytes it
+  had forwarded when it forwarded each chunk. A word's offset therefore names
+  the chunk that carried it arithmetically, with nothing added to the wire.
+  Correlating on text would break on the one thing this pipeline exists to do:
+  revise a word after it is already on screen.
+- **The ledger is written BEFORE the chunk is forwarded.** An engine may
+  answer inside the very `send` that fed it, and a turn arriving then would
+  resolve to the PREVIOUS chunk — understating the vendor by a whole frame.
+  The server suite drives a synchronous engine precisely to hold that line.
+- **Two clocks, and what survives them.** The browser and the server are
+  synced by an NTP-style `timing_ping`/`timing_pong` exchange (a burst at the
+  start, then a drip; lowest round trip wins). An error in the estimate moves
+  time BETWEEN uplink and downlink and cancels in their sum, so `total`, the
+  vendor leg and every server-internal leg are exact regardless — only the
+  up/down SPLIT is indicative. Read it that way.
+- **The headline is PARTIALS.** A partial is the newest word reaching the
+  screen, which is the experience being measured; a final arrives after the
+  engine has decided the turn ended and re-punctuated it, so it is slower by
+  construction and is counted separately.
+- **Paint is a frame after rAF, not rAF.** `requestAnimationFrame` runs
+  BEFORE style, layout and paint, so marking inside it would time the work up
+  to the frame and call it painted.
+- **A handshake long enough to drop audio turns the measurement OFF.** The
+  relay's opening buffer is bounded, and the two sides count frames
+  independently — the browser numbers what it sent, the ledger what we
+  forwarded. One dropped frame and every later ordinal names different audio,
+  so from that point the relay attaches no blocks at all. The readout going
+  quiet on a pathological start is the design; a plausible wrong number would
+  not be.
+- **What it does NOT separate.** The vendor leg is one number: the network
+  round trip to AssemblyAI is inside it, and nothing the vendor sends carries
+  a wall clock to subtract. Microphone and device input latency are before the
+  first mark and are not in `total` at all.
+
+Code: `packages/core/src/meeting-timing.ts` (the arithmetic, shared) ·
+`packages/markdown-app/src/meeting-timing-client.ts` (the browser marks, the
+readout, the CSV).
 
 ## Load-bearing gotchas (each cost real debugging)
 
@@ -607,4 +740,7 @@ keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
 `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
 `recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
 bot lifecycle) · `packages/core/src/meeting-bot.ts` (wire contract) ·
-`packages/markdown-app/src/meeting-bot-row.ts` (UI).
+`packages/markdown-app/src/meeting-bot-row.ts` (UI) ·
+`packages/core/src/meeting-timing.ts` +
+`packages/markdown-app/src/meeting-timing-client.ts` (the `?timing=1`
+latency measurement).
