@@ -111,6 +111,9 @@ async function main(): Promise<number> {
   const settled = new Map<number, { text: string; speaker?: string }>();
   const session = await engine.open({
     sampleRate: MEETING_SAMPLE_RATE,
+    // The point of this script. A solo session would come back with no
+    // labels at all and the check would fail for the wrong reason.
+    detectSpeakers: true,
     onTurn: (t) => {
       if (t.final)
         settled.set(t.turn, { text: t.text, ...(t.speaker ? { speaker: t.speaker } : {}) });
