@@ -6754,6 +6754,23 @@ body.is-reading-width #editor > .ProseMirror {
 .meeting-note {
   color: var(--fg-muted);
 }
+/* The announcement a person is meant to READ. It holds the caption line until
+   a settled turn arrives or it is tapped away, so it is a button — a
+   dismissible thing has to be reachable by more than a pointer. Stripped back
+   to look exactly like the note it replaces: the affordance is the whole line,
+   not a control someone has to find. The 36px floor does not apply, because
+   the caption already carries its own hit area (see the tag's lesson above)
+   and this button fills it. */
+.meeting-note-dismiss {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+}
 .meeting-toggle {
   flex: none;
   font: inherit;

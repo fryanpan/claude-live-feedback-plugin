@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path';
 import {
   type AnnouncedBy,
   type CaptureMode,
+  announcesRecording,
   parseAnnouncedBy,
   parseCaptureMode,
 } from '@feedback/core';
@@ -234,7 +235,8 @@ export interface ActiveMeeting {
   nameSpeaker(speaker: string, name: string): void;
   /**
    * "The room HAS been told, this way." Appended to the index, last word
-   * wins. The only writer of `announced` — nothing claims one at start.
+   * wins. The only writer of `announced` — nothing claims one at start — and
+   * a no-op on a `solo` meeting, which by definition told nobody.
    */
   setAnnounced(by: AnnouncedBy): void;
   /** End the meeting. Idempotent; returns the folded record either way. */
@@ -345,6 +347,12 @@ export class MeetingStore {
       },
       setAnnounced(by: AnnouncedBy): void {
         if (stopped) return;
+        // A solo capture has nobody to announce to, so it cannot have made
+        // an announcement — and the frame that says otherwise is
+        // client-controlled. Enforced HERE rather than trusted of the strip:
+        // this record is the evidence, and the invariant belongs with the
+        // thing that writes it.
+        if (!announcesRecording(mode)) return;
         if (announced === by) return;
         announced = by;
         appendLine(meetingIndexPath(dataDir, docId), { meetingId, announced: by });

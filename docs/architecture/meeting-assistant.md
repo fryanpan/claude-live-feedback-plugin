@@ -479,6 +479,28 @@ when the device said nothing is worse than one that claims less. The index
 folds `announced` last-word-wins, the same rule the speaker names fold under,
 so a `device` that is later corrected to `spoken` reads as `spoken`.
 
+**The sentence a person has to READ holds the caption line.** The strip has
+one line, and a partial transcript normally takes it — which for the `spoken`
+path means any noise in the room can wipe the sentence out from under somebody
+mid-read, a moment after it appeared. So the `I'll say it` prompt is a
+*dismissible button* that holds the line: transcript turns accumulate but are
+not drawn until a SETTLED turn arrives (a whole utterance finished — the
+earliest evidence the sentence has been said) or the prompt is tapped away.
+Nothing is lost while it holds; the rolling window draws as soon as the line
+comes back. The device's own caption does NOT hold, because it is a courtesy
+for something the room is already hearing.
+
+**The SERVER's mode decides whether there is a room.** `ready` echoes the mode
+that was actually opened, and the announcement is reconciled against that
+echo rather than against the request — otherwise an old server answering
+`solo` would announce a session the strip has just relabelled solo, and the
+inverse mismatch would skip an announcement a room is owed.
+
+**The store refuses a claim a solo meeting cannot have made.** `setAnnounced`
+is a no-op when the meeting's mode is `solo`. The frame is client-controlled
+and this record is the evidence, so the invariant lives where the record is
+written rather than being trusted of whatever opened the socket.
+
 **The strip says REC at every width while live**, not only on the phone. A
 pulsing dot was enough while the strip reported only to the person holding the
 device; it announces itself to a room now, and somebody who was told they are

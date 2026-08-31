@@ -589,14 +589,18 @@ describe('the meeting record says how the room was told', () => {
     expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('spoken');
   });
 
-  it('claims nothing for a solo capture', async () => {
+  it('claims nothing for a solo capture, even when a client sends one', async () => {
+    // Websocket frames are client-controlled; a solo capture had nobody to
+    // announce to, and the record refuses to say otherwise.
     const canonical = await createDoc('nobody-to-tell');
     const client = await AudioClient.open(wsBase, 'nobody-to-tell');
     client.start();
     await client.waitFor('ready');
+    client.announced('device');
     client.stop();
     await client.waitFor('stopped');
     const record = listMeetings(dataDir, canonical)[0];
+    expect(record?.mode).toBe('solo');
     expect(record && 'announced' in record).toBe(false);
   });
 

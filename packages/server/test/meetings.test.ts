@@ -419,6 +419,19 @@ describe('meeting store: how the room was told', () => {
     expect(listMeetings(dataDir, 'doc-garbage')[0]?.announced).toBe('device');
   });
 
+  it('REFUSES a claim on a solo meeting, however the frame got here', () => {
+    // The frame is client-controlled and a solo capture had nobody to
+    // announce to, so the invariant is enforced where the record is written
+    // rather than trusted of whatever opened the socket.
+    const meeting = start('doc-solo-claim', 'solo');
+    meeting?.setAnnounced('device');
+    const record = meeting?.stop();
+    expect(record && 'announced' in record).toBe(false);
+    expect(indexLines('doc-solo-claim').some((l) => 'announced' in l)).toBe(false);
+    const read = listMeetings(dataDir, 'doc-solo-claim')[0];
+    expect(read && 'announced' in read).toBe(false);
+  });
+
   it('a solo meeting nobody claimed anything for reads back with no field', () => {
     const meeting = start('doc-solo', 'solo');
     meeting?.stop();

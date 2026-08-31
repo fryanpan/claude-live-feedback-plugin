@@ -1181,3 +1181,114 @@ describe('a meeting stopped mid-announcement', () => {
     expect(h.note()).not.toMatch(/say this out loud/i);
   });
 });
+
+describe('the sentence a person has to READ stays on screen', () => {
+  /** Bring up the "I'll say it" prompt on a live capture. */
+  async function prompting() {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.announceButton().click();
+    await settle();
+    const sock = h.sockets[0];
+    sock?.onopen?.();
+    sock?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    return { h, sock, announcer };
+  }
+
+  it('survives partials — an air conditioner must not wipe it mid-read', async () => {
+    const { h, sock } = await prompting();
+    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
+    sock?.serve({ type: 'transcript', turn: 0, text: 'mmm', final: false });
+    sock?.serve({ type: 'transcript', turn: 0, text: 'mmm hh', final: false });
+    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
+    expect(h.caption()).not.toContain('mmm hh');
+  });
+
+  it('gives the line back once a whole utterance has SETTLED', async () => {
+    const { h, sock } = await prompting();
+    sock?.serve({ type: 'transcript', turn: 0, text: 'partial', final: false });
+    sock?.serve({
+      type: 'transcript',
+      turn: 0,
+      text: 'Just so everyone knows, this conversation is being recorded.',
+      final: true,
+    });
+    expect(h.note()).toBe('');
+    // Nothing said while it held was lost — it draws as soon as the line
+    // comes back.
+    expect(h.caption()).toContain('this conversation is being recorded');
+  });
+
+  it('can be tapped away by someone who has already said it', async () => {
+    const { h, sock } = await prompting();
+    const note = h.root.querySelector('.meeting-note') as HTMLButtonElement;
+    expect(note.tagName).toBe('BUTTON');
+    note.click();
+    expect(h.note()).toBe('');
+    sock?.serve({ type: 'transcript', turn: 1, text: 'right, so', final: false });
+    expect(h.caption()).toContain('right, so');
+  });
+
+  it('does NOT hold the line when the device is the one talking', async () => {
+    // That caption is a courtesy for something the room is already hearing.
+    const announcer = new FakeAnnouncer();
+    const { h, sock } = await recordingConversation(announcer);
+    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
+    sock?.serve({ type: 'transcript', turn: 0, text: 'so the sync', final: false });
+    expect(h.note()).toBe('');
+    expect(h.caption()).toContain('so the sync');
+  });
+
+  it('lets go when the meeting ends, whatever it was holding', async () => {
+    const { h, sock } = await prompting();
+    sock?.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 });
+    expect(h.root.dataset.state).toBe('idle');
+    expect(h.note()).toBe('');
+  });
+});
+
+describe('the SERVER decides whether there is a room to announce to', () => {
+  /** Start a capture in `asked`, and have the server answer `opened`. */
+  async function negotiated(asked: CaptureMode, opened: CaptureMode) {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: asked, announcer });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: opened,
+    });
+    return { h, announcer };
+  }
+
+  it('says nothing when the server opened a SOLO session we asked to be a room', async () => {
+    // An old server answering `solo`: the strip has just relabelled this
+    // capture solo, and a solo capture announces nothing.
+    const { h, announcer } = await negotiated('conversation', 'solo');
+    expect(h.strip.mode()).toBe('solo');
+    expect(announcer.said).toEqual([]);
+    expect(h.note()).not.toContain(RECORDING_ANNOUNCEMENT);
+    expect(h.strip.announced()).toBeUndefined();
+  });
+
+  it('announces when the server opened a ROOM we asked to be solo', async () => {
+    // The inverse mismatch, and the one that matters: a room is owed an
+    // announcement whatever the client asked for.
+    const { h, announcer } = await negotiated('solo', 'conversation');
+    expect(h.strip.mode()).toBe('conversation');
+    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
+    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
+  });
+});

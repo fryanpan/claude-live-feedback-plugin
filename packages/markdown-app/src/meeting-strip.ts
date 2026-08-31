@@ -37,6 +37,7 @@
 import {
   type AnnouncedBy,
   type CaptureMode,
+  DEFAULT_ANNOUNCED_BY,
   DEFAULT_CAPTURE_MODE,
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
@@ -434,6 +435,19 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * a consent record must never claim more than happened.
    */
   let announced: AnnouncedBy | undefined;
+  /**
+   * The announcement prompt owns the caption line and will not be pushed off
+   * it by words.
+   *
+   * A person reading the sentence aloud needs it to STAY there, and the
+   * caption is one line: a partial from an air conditioner, or from whoever
+   * was already mid-thought, would otherwise wipe the sentence out from
+   * under them a moment after it appeared. So while this holds, transcript
+   * turns accumulate in `turns` but are not drawn. It lifts on a SETTLED
+   * turn — a whole utterance has finished, which is the earliest evidence
+   * the sentence has been said — or on a tap, whichever comes first.
+   */
+  let holdAnnouncement = false;
 
   /** Live word spans per turn, so a correction rewrites the span that is
    *  already on screen instead of redrawing the line under the reader. */
@@ -476,6 +490,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   function renderCaption(): void {
     if (state.kind !== 'idle' && state.kind !== 'recording') return;
+    // The announcement holds the line against the words; see `holdAnnouncement`.
+    if (holdAnnouncement) return;
     // A note and a transcript share the line, so the reason the last attempt
     // gave has to go when words start arriving.
     line.querySelector('.meeting-note')?.remove();
@@ -557,6 +573,32 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     note.className = 'meeting-note';
     note.textContent = text;
     line.append(note);
+  }
+
+  /**
+   * The sentence, held on the line until it has been said. A button because
+   * it is dismissible, and a dismissible thing has to be reachable by more
+   * than a pointer.
+   */
+  function showAnnouncement(text: string): void {
+    holdAnnouncement = true;
+    clearCaption();
+    const note = document.createElement('button');
+    note.type = 'button';
+    note.className = 'meeting-note meeting-note-dismiss';
+    note.textContent = text;
+    note.title = 'Dismiss';
+    note.setAttribute('aria-label', `${text} (tap to dismiss)`);
+    note.addEventListener('click', releaseAnnouncement);
+    line.append(note);
+  }
+
+  /** Give the line back to the transcript, and draw whatever arrived. */
+  function releaseAnnouncement(): void {
+    if (!holdAnnouncement) return;
+    holdAnnouncement = false;
+    clearCaption();
+    renderCaption();
   }
 
   function tickClock(): void {
@@ -672,6 +714,13 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // diarizes; showing its answer is still better than showing a claim
         // nothing checked.
         mode = msg.mode;
+        // And the announcement follows the mode the SERVER opened, not the
+        // one that was asked for. An old server answering `solo` to a
+        // conversation request would otherwise announce a session the strip
+        // has just relabelled solo; the inverse would skip an announcement
+        // a room is owed.
+        if (!announcesRecording(mode)) announceBy = undefined;
+        else announceBy ??= DEFAULT_ANNOUNCED_BY;
         setState({ kind: 'recording', startedAt: now() });
         // AFTER the state change, and that ordering is the feature: `ready`
         // means the engine is receiving, so everything from here is in the
@@ -680,6 +729,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         if (announceBy) void announce(announceBy, generation);
         break;
       case 'transcript':
+        // A SETTLED turn is a whole utterance finished — the earliest
+        // evidence the sentence has actually been said, and so the moment
+        // the announcement stops owning the line. Partials are not: one
+        // arrives from any noise in the room.
+        if (msg.final) releaseAnnouncement();
         turns = rollTranscript(turns, {
           turn: msg.turn,
           text: msg.text,
@@ -690,17 +744,21 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         break;
       case 'unavailable':
         // The words are never coming, so the mic goes back rather than sitting
-        // open behind a settled state.
+        // open behind a settled state — and the announcement stops holding a
+        // line that is about to say why there is no meeting.
+        holdAnnouncement = false;
         releaseAudio();
         closeSocket();
         setState({ kind: 'unavailable', reason: msg.reason, message: msg.message });
         break;
       case 'stopped':
+        holdAnnouncement = false;
         releaseAudio();
         closeSocket();
         setState({ kind: 'idle' });
         break;
       case 'error':
+        holdAnnouncement = false;
         releaseAudio();
         closeSocket();
         setState({ kind: 'error', message: msg.message || 'The meeting ended unexpectedly.' });
@@ -724,13 +782,18 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       announced = path;
       if (socketOpen) socket?.send(JSON.stringify({ type: 'announced', by: path }));
     };
-    showNote(announcementNote(by));
     if (by === 'spoken') {
+      // Held, not merely shown: this one is a line to READ, and a partial
+      // from anywhere in the room would otherwise take it away mid-read.
+      showAnnouncement(announcementNote('spoken'));
       // The sentence is on screen, which is the whole of what `spoken`
       // claims — the strip cannot know whether anybody read it aloud.
       claim('spoken');
       return;
     }
+    // The device's caption is a courtesy for something the room is already
+    // hearing, so it yields to the words the way any other note does.
+    showNote(announcementNote('device'));
     const spoke = await announcer.speak(RECORDING_ANNOUNCEMENT);
     // A stop, or a second meeting, during the sentence: this one no longer
     // owns the strip or the socket, and — the reason nothing is claimed at
@@ -741,7 +804,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       claim('device');
       return;
     }
-    showNote(announcementNote('spoken'));
+    showAnnouncement(announcementNote('spoken'));
     claim('spoken');
   }
 
@@ -757,6 +820,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     // says there was no room.
     announceBy = announcesRecording(mode) ? by : undefined;
     announced = undefined;
+    holdAnnouncement = false;
     setState({ kind: 'requesting' });
     const started = await startCapture({
       onFrame: (pcm) => {
@@ -793,6 +857,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     sock.onmessage = (ev) => handle(parseMeetingServerMessage(ev.data));
     sock.onclose = () => {
       socketOpen = false;
+      holdAnnouncement = false;
       releaseAudio();
       setState({ kind: 'error', message: 'The connection to the meeting was lost.' });
     };
@@ -803,6 +868,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   function stop(): void {
     generation += 1;
+    holdAnnouncement = false;
     // A meeting stopped during the announcement stops announcing: the room
     // does not need to be told about a recording that is over.
     announcer.cancel();

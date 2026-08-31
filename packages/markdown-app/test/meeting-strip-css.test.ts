@@ -317,6 +317,19 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(rule('.meeting-announce', SECTION)).toMatch(/white-space:\s*nowrap/);
   });
 
+  it('makes the readable announcement look like the note it replaces', () => {
+    // It is a <button> because it is dismissible and a dismissible thing has
+    // to be reachable by more than a pointer — but the affordance is the
+    // whole line, not a control someone has to go and find.
+    const note = rule('.meeting-note-dismiss', SECTION);
+    expect(note, 'no rule for the dismissible announcement').not.toBe('');
+    expect(note).toMatch(/background:\s*none/);
+    expect(note).toMatch(/border:\s*0/);
+    expect(note).toMatch(/font:\s*inherit/);
+    expect(note).toMatch(/color:\s*inherit/);
+    expect(note).toMatch(/cursor:\s*pointer/);
+  });
+
   it('says REC at every width while the mic is live, not only on the phone', () => {
     // A dot was enough while the strip only reported to the person holding
     // the device. It announces itself to a ROOM now, and somebody who was
