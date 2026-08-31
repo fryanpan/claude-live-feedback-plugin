@@ -56,6 +56,15 @@ export interface BotStatusEvent {
   state: MeetingBotState;
   /** Vendor sub-code or message, for a state a person cannot act on. */
   detail?: string;
+  /**
+   * The vendor's own `updated_at` for this change, in epoch ms.
+   *
+   * Carried because webhook delivery is neither ordered nor exactly-once: a
+   * retried `joining_call` arriving after `in_call_recording` would otherwise
+   * walk the bot backwards on screen. Absent when the vendor did not send a
+   * readable one, in which case the receiver has only its own ordering.
+   */
+  at?: number;
 }
 
 /**
@@ -87,7 +96,14 @@ export function parseBotStatusWebhook(raw: unknown): BotStatusEvent | null {
   const state = botStateFromCode(code);
   if (!state) return null;
   const sub = inner && typeof inner.sub_code === 'string' ? inner.sub_code : '';
-  return { botId, state, ...(sub ? { detail: sub } : {}) };
+  const at =
+    inner && typeof inner.updated_at === 'string' ? Date.parse(inner.updated_at) : Number.NaN;
+  return {
+    botId,
+    state,
+    ...(sub ? { detail: sub } : {}),
+    ...(Number.isFinite(at) ? { at } : {}),
+  };
 }
 
 /**

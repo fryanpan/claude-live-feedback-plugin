@@ -30,13 +30,20 @@
  * turn numbers would put the sentence in the transcript twice, once without
  * punctuation.
  *
- * The clause is deliberately narrow — normalised text equality, not a
- * heuristic about timing — because the failure it must NOT cause is the
- * opposite one: two genuinely different sentences by the same speaker,
- * back to back with no partial between them, merging into one turn and losing
- * the first. Words that differ are always a new turn. Words that are letter-
- * for-letter the same, differing only in case and punctuation, are the
- * formatter's second pass and nothing else.
+ * The clause is narrow in two ways, because the failure it must NOT cause is
+ * the opposite one — a genuine utterance merging into the previous turn and
+ * vanishing, since `recordTurn` ignores a repeat of a turn already written.
+ * Words that differ are always a new turn. And words that ARE the same only
+ * count as a re-emission inside {@link REEMISSION_WINDOW_MS} of the final they
+ * repeat: the formatter's second pass follows the first immediately, whereas a
+ * person saying "Yes." twice does not. Without the window, two identical
+ * one-word answers become one and the second is lost — raised by review.
+ *
+ * The window is the honest discriminator available, not a certainty. Recall
+ * normalises its providers and may well emit only the formatted final, in
+ * which case this clause never fires — but if both do arrive they are
+ * otherwise indistinguishable, and a transcript with every sentence in it
+ * twice, once unpunctuated, is the worse of the two failures to ship blind.
  */
 
 import type { EngineTurn } from './transcribe.ts';
@@ -189,28 +196,50 @@ export class SpeakerNamer {
  * collide on one. They interleave freely — the downstream contract treats a
  * turn number as an identity to revise, never as a position in a sequence.
  */
+/**
+ * How long after a final an identical final still counts as the formatter's
+ * second pass rather than as something said again.
+ *
+ * Both events of a double-final are emitted by the same engine at the end of
+ * the same turn and arrive together; two seconds is generous for that and far
+ * short of the gap between one "Yes." and the next.
+ */
+export const REEMISSION_WINDOW_MS = 2_000;
+
 export class TurnAllocator {
   private next = 0;
-  /** The participant's turn, and — once settled — its normalised words. */
-  private readonly open = new Map<string, { turn: number; settledText: string | null }>();
+  /** The participant's turn and, once settled, its words and when they landed. */
+  private readonly open = new Map<
+    string,
+    { turn: number; settledText: string | null; settledAt: number }
+  >();
+
+  /** `now` is a parameter so a test drives the window instead of waiting it out. */
+  constructor(private readonly now: () => number = Date.now) {}
 
   /** The `EngineTurn` this frame produces. See the rule at the top. */
   allocate(frame: { participant: RecallParticipant; text: string; final: boolean }): EngineTurn {
     const label = labelForParticipant(frame.participant.id);
     const slot = this.open.get(label);
     const settled = slot?.settledText ?? null;
-    // A re-emission of the words that just settled revises them; anything
-    // else on a settled turn is the next thing this person said.
-    const reemission = settled !== null && frame.final && settled === normalizeWords(frame.text);
+    const at = this.now();
+    // A re-emission of the words that JUST settled revises them. Anything else
+    // on a settled turn — different words, or the same words said again later
+    // — is the next thing this person said and gets its own number.
+    const reemission =
+      settled !== null &&
+      frame.final &&
+      settled === normalizeWords(frame.text) &&
+      at - (slot?.settledAt ?? 0) <= REEMISSION_WINDOW_MS;
     let turn: number;
     if (!slot || (settled !== null && !reemission)) {
       turn = this.next++;
-      this.open.set(label, { turn, settledText: null });
+      this.open.set(label, { turn, settledText: null, settledAt: 0 });
     } else {
       turn = slot.turn;
     }
     if (frame.final) {
-      this.open.set(label, { turn, settledText: normalizeWords(frame.text) });
+      this.open.set(label, { turn, settledText: normalizeWords(frame.text), settledAt: at });
     }
     return { turn, text: frame.text, final: frame.final, speaker: label };
   }

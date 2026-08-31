@@ -94,7 +94,10 @@ export function mountMeetingBotRow(opts: MeetingBotRowOpts): MeetingBotRowHandle
   const input = document.createElement('input');
   input.type = 'url';
   input.className = 'meeting-bot-url';
-  input.placeholder = 'Paste a Zoom or Meet link';
+  // Short because the row shares a line with the microphone strip's own
+  // controls at 1180px, where a longer placeholder is clipped mid-word.
+  // Which platforms are supported is on the aria-label and in the error.
+  input.placeholder = 'Paste a meeting link';
   input.setAttribute('aria-label', 'Meeting link for the bot to join');
   const invite = document.createElement('button');
   invite.type = 'submit';

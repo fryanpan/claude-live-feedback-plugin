@@ -47,11 +47,14 @@ class FakeRecall implements RecallClient {
   readonly permissionAsked: string[] = [];
   permissionAnswer = true;
   createFails: string | null = null;
+  /** Held open to keep a create in flight, so a second invite can race it. */
+  gate: Promise<void> | null = null;
   constructor(readonly config: RecallConfig) {}
   createBot(args: CreateBotArgs): Promise<RecallBot> {
     if (this.createFails) return Promise.reject(new Error(this.createFails));
     this.created.push(args);
-    return Promise.resolve({ id: `bot_${this.created.length}` });
+    const id = `bot_${this.created.length}`;
+    return this.gate ? this.gate.then(() => ({ id })) : Promise.resolve({ id });
   }
   getBot(botId: string): Promise<RecallBot> {
     return Promise.resolve({ id: botId });
@@ -384,5 +387,70 @@ describe('the bot meeting', () => {
     const record = store.list('doc-1')[0];
     expect(readTranscript(dataDir, 'doc-1', record?.meetingId ?? '')).toHaveLength(1);
     expect(notesSeen).toHaveLength(0);
+  });
+  it('creates ONE bot when two invites for a doc overlap', async () => {
+    // Every guard in `invite` is synchronous, so before the doc was claimed
+    // up front both of these passed while the first was still waiting on the
+    // vendor — and both got a real bot. The loser overwrote the record and
+    // the winner stayed in the call, billing, with nothing able to name it
+    // or make it leave.
+    const vendor = new FakeRecall(config());
+    let release = (): void => {};
+    vendor.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const relay = relayWith(vendor);
+    const first = relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL });
+    const second = await relay.invite({ docId: 'doc-1', meetingUrl: MEET_URL });
+    expect(second).toMatchObject({ ok: false, reason: 'already_recording' });
+    expect(vendor.created).toHaveLength(1);
+    release();
+    expect((await first).ok).toBe(true);
+    expect(relay.status('doc-1')?.meetingUrl).toBe(ZOOM_URL);
+  });
+
+  it('releases the doc when the vendor refuses the bot', async () => {
+    // The reservation is not a lock a failed invite gets to keep.
+    const vendor = new FakeRecall(config());
+    vendor.createFails = 'no capacity in this region';
+    const relay = relayWith(vendor);
+    expect(await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL })).toMatchObject({
+      ok: false,
+      reason: 'vendor_error',
+    });
+    expect(relay.status('doc-1')).toBeNull();
+    expect(relay.acceptsToken(TOKEN)).toBe(false);
+    vendor.createFails = null;
+    expect((await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL })).ok).toBe(true);
+  });
+
+  it('ignores a status change older than the one already applied', async () => {
+    // Webhooks are retried and unordered. A re-delivered `joining_call` after
+    // `in_call_recording` would walk the strip backwards and, on Zoom, put
+    // the consent banner in front of a room already being recorded.
+    const vendor = new FakeRecall(config());
+    const relay = relayWith(vendor);
+    await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL });
+    relay.onStatus({ botId: 'bot_1', state: 'recording', at: 2000 });
+    await new Promise((r) => setTimeout(r, 5));
+    relay.onStatus({ botId: 'bot_1', state: 'joining', at: 1000 });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(relay.status('doc-1')?.state).toBe('recording');
+    // The positive control: a NEWER event still lands.
+    relay.onStatus({ botId: 'bot_1', state: 'left', at: 3000 });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(relay.status('doc-1')?.state).toBe('left');
+  });
+
+  it('asks Zoom for recording permission exactly once', async () => {
+    const vendor = new FakeRecall(config());
+    const relay = relayWith(vendor);
+    await relay.invite({ docId: 'doc-1', meetingUrl: ZOOM_URL });
+    relay.onStatus({ botId: 'bot_1', state: 'in_call', at: 1000 });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(vendor.permissionAsked).toEqual(['bot_1']);
+    relay.onStatus({ botId: 'bot_1', state: 'in_call', at: 2000 });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(vendor.permissionAsked).toEqual(['bot_1']);
   });
 });

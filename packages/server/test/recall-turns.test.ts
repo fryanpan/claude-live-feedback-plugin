@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import {
+  REEMISSION_WINDOW_MS,
   SpeakerNamer,
   TurnAllocator,
   labelForParticipant,
@@ -127,6 +128,22 @@ describe('allocating turn numbers', () => {
     const formatted = speak(alloc, 1, 'So the sync is the bottleneck.', true);
     expect(unformatted.turn).toBe(0);
     expect(formatted.turn).toBe(0);
+  });
+
+  it('gives the same words said again LATER their own turn', () => {
+    // The other half of the same-words clause, and the one a review caught:
+    // "Yes." twice in a conversation is two answers, and the durable record
+    // ignores a repeat write to a turn it already holds — so merging them
+    // deletes speech outright. Only a re-emission, which arrives in the same
+    // breath, gets to fold; the window is what separates the two.
+    let now = 1_000;
+    const alloc = new TurnAllocator(() => now);
+    expect(speak(alloc, 1, 'Yes.', true).turn).toBe(0);
+    now += REEMISSION_WINDOW_MS + 1;
+    expect(speak(alloc, 1, 'Yes.', true).turn).toBe(1);
+    // The positive control: inside the window it still folds.
+    now += 1;
+    expect(speak(alloc, 1, 'Yes.', true).turn).toBe(1);
   });
 
   it('gives two DIFFERENT back-to-back finals two turns, partial or no partial', () => {

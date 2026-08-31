@@ -50,7 +50,21 @@ describe('status codes', () => {
       botId: 'bot_abc',
       state: 'permission_denied',
       detail: 'denied_by_host',
+      at: Date.parse('2026-08-30T12:00:00Z'),
     });
+  });
+
+  it('carries the vendor timestamp, and omits it when there is none to read', () => {
+    // The only ordering the two ends agree on: webhook delivery is retried
+    // and unordered, so the relay drops a status change older than the one it
+    // has already applied. An unreadable timestamp must be ABSENT rather than
+    // NaN or zero — zero would make every later event look newer, which is
+    // the bug the field exists to prevent, in reverse.
+    const noStamp = {
+      event: 'bot.done',
+      data: { data: { code: 'done', updated_at: 'yesterday-ish' }, bot: { id: 'bot_abc' } },
+    };
+    expect(parseBotStatusWebhook(noStamp)).toEqual({ botId: 'bot_abc', state: 'left' });
   });
 
   it('refuses a webhook with no bot id', () => {

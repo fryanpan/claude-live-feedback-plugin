@@ -102,6 +102,15 @@ interface BotRecord {
   turns: TurnAllocator;
   /** Zoom's consent prompt is asked for exactly once per bot. */
   permissionAsked: boolean;
+  /**
+   * The vendor timestamp of the newest status change applied.
+   *
+   * Webhook delivery is neither ordered nor exactly-once, so without this a
+   * retried `joining_call` landing after `in_call_recording` walks the bot
+   * backwards on screen — and a re-delivered `in_call_not_recording` asks
+   * Zoom for recording permission a second time, mid-recording.
+   */
+  lastStatusAt: number;
   /** Guards the end path against a webhook and a socket close racing. */
   ending: boolean;
 }
@@ -158,7 +167,9 @@ export class RecallMeetingRelay {
       };
     }
     const existing = this.byDoc.get(args.docId);
-    if (existing && !isTerminalBotState(existing.state)) {
+    // A reservation with no bot id yet is an invite still out at the vendor;
+    // it holds the doc exactly as a live bot does.
+    if (existing && (!existing.botId || !isTerminalBotState(existing.state))) {
       return {
         ok: false,
         reason: 'already_recording',
@@ -177,26 +188,17 @@ export class RecallMeetingRelay {
       };
     }
 
-    const token = (this.deps.mintToken ?? mintToken)();
-    let botId: string;
-    try {
-      const bot = await client.createBot({
-        meetingUrl,
-        realtimeUrl: `${wsBase}/recall/${token}`,
-        permissionDeniedTimeoutSec: PERMISSION_DENIED_TIMEOUT_SEC,
-      });
-      botId = bot.id;
-    } catch (err) {
-      return {
-        ok: false,
-        reason: 'vendor_error',
-        message: err instanceof Error ? err.message : 'the vendor refused the bot',
-      };
-    }
-
+    // CLAIM THE DOC BEFORE CALLING THE VENDOR. Every check above is
+    // synchronous, so two invites that arrive together both pass them while
+    // the first is still awaiting `createBot` — and both get a real bot. The
+    // second would then overwrite `byDoc` and leave the first sitting in the
+    // call, billing, with nothing on this side able to name it or make it
+    // leave. The reservation goes in first and carries no bot id until the
+    // vendor answers; every path that talks to the vendor checks for one.
     if (existing) this.forget(existing);
+    const token = (this.deps.mintToken ?? mintToken)();
     const rec: BotRecord = {
-      botId,
+      botId: '',
       docId: args.docId,
       meetingUrl,
       platform,
@@ -208,11 +210,30 @@ export class RecallMeetingRelay {
       namer: new SpeakerNamer(),
       turns: new TurnAllocator(),
       permissionAsked: false,
+      lastStatusAt: 0,
       ending: false,
     };
     this.byDoc.set(rec.docId, rec);
     this.byToken.set(token, rec);
-    this.byBotId.set(botId, rec);
+
+    try {
+      const bot = await client.createBot({
+        meetingUrl,
+        realtimeUrl: `${wsBase}/recall/${token}`,
+        permissionDeniedTimeoutSec: PERMISSION_DENIED_TIMEOUT_SEC,
+      });
+      rec.botId = bot.id;
+    } catch (err) {
+      this.forget(rec);
+      return {
+        ok: false,
+        reason: 'vendor_error',
+        message: err instanceof Error ? err.message : 'the vendor refused the bot',
+      };
+    }
+
+    this.byBotId.set(rec.botId, rec);
+    rec.updatedAt = this.now();
     this.broadcastBot(rec);
     return { ok: true, status: toStatus(rec) };
   }
@@ -221,7 +242,7 @@ export class RecallMeetingRelay {
   async leave(docId: string): Promise<boolean> {
     const rec = this.byDoc.get(docId);
     if (!rec) return false;
-    if (this.deps.client) {
+    if (this.deps.client && rec.botId) {
       try {
         await this.deps.client.leaveCall(rec.botId);
       } catch (err) {
@@ -240,7 +261,7 @@ export class RecallMeetingRelay {
   onStatus(event: BotStatusEvent): void {
     const rec = this.byBotId.get(event.botId);
     if (!rec) return;
-    this.track(this.applyState(rec, event.state, event.detail));
+    this.track(this.applyState(rec, event.state, event.detail, event.at));
   }
 
   /** Is this the token of a bot we are expecting? */
@@ -301,7 +322,7 @@ export class RecallMeetingRelay {
     // both vendors and delivering nothing. Kicking it out is visible; the
     // alternative is silent.
     const leaves = records
-      .filter((rec) => !isTerminalBotState(rec.state) && this.deps.client)
+      .filter((rec) => rec.botId && !isTerminalBotState(rec.state) && this.deps.client)
       .map((rec) =>
         this.deps.client?.leaveCall(rec.botId).catch((err: unknown) => {
           console.error('[recall] leave_call on shutdown failed:', err);
@@ -363,11 +384,24 @@ export class RecallMeetingRelay {
     return meeting;
   }
 
-  private async applyState(rec: BotRecord, state: MeetingBotState, detail?: string): Promise<void> {
+  private async applyState(
+    rec: BotRecord,
+    state: MeetingBotState,
+    detail?: string,
+    at?: number,
+  ): Promise<void> {
     // A terminal state is final. A late `in_call` arriving after `call_ended`
     // — the two channels are independent and the webhook order is the
     // vendor's, not ours — must not resurrect a meeting that has flushed.
     if (isTerminalBotState(rec.state)) return;
+    // Neither may a NON-terminal event go backwards. Webhooks are retried and
+    // unordered, so a re-delivered `joining_call` can land after
+    // `in_call_recording`; applying it would walk the state backwards on
+    // screen and, on Zoom, put the consent banner back in front of a room
+    // that is already being recorded. The vendor's own timestamp is the only
+    // ordering the two ends agree on.
+    if (at !== undefined && at < rec.lastStatusAt) return;
+    if (at !== undefined) rec.lastStatusAt = at;
     const changed = rec.state !== state || rec.detail !== detail;
     rec.state = state;
     if (detail !== undefined) rec.detail = detail;
@@ -380,6 +414,10 @@ export class RecallMeetingRelay {
       state === 'in_call' &&
       rec.platform === 'zoom' &&
       !rec.permissionAsked &&
+      // Belt to the timestamp check above: once words are arriving the host
+      // has already allowed it, and asking again would put Zoom's banner back
+      // in front of a room that is mid-meeting.
+      !rec.meeting &&
       this.deps.client
     ) {
       rec.permissionAsked = true;
@@ -428,7 +466,7 @@ export class RecallMeetingRelay {
 
   private forget(rec: BotRecord): void {
     this.byToken.delete(rec.token);
-    this.byBotId.delete(rec.botId);
+    if (rec.botId) this.byBotId.delete(rec.botId);
     if (this.byDoc.get(rec.docId) === rec) this.byDoc.delete(rec.docId);
   }
 
