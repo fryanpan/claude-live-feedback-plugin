@@ -3625,8 +3625,16 @@ body.hub-body {
 }
 /* Only meaningful where the panel is not already the whole viewport — a phone
    sheet is full screen by definition, so the toggle would promise a change it
-   cannot make. Unhidden by the ≥1024px block below. */
-.hub-detail-expand {
+   cannot make. Unhidden by the ≥1660px block below, which is also where the
+   only `.hub-detail--full` rules live — so below that width the toggle changes
+   nothing at all, which is the other half of why it should not be offered.
+
+   Scoped through `.hub-detail-head-actions` so it can actually win: the rule
+   above it sets `display: inline-flex` on every `.hub-btn` in the head at two
+   classes, and a bare `.hub-detail-expand` is one — so this said `none` and
+   the button rendered anyway, on every phone, in both detail panels. Measured
+   at 430px while verifying the goal panel's new head. */
+.hub-detail-head-actions .hub-detail-expand {
   display: none;
 }
 /* --- key fields: status, who, when, what for — one row under the title --- */
@@ -5017,7 +5025,8 @@ a.hub-link-chip:hover {
     width: 100%;
     max-width: none;
   }
-  .hub-detail-expand {
+  /* Matching the base rule's specificity — see the note on it. */
+  .hub-detail-head-actions .hub-detail-expand {
     display: inline-flex;
   }
 }
