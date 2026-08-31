@@ -7738,6 +7738,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
                 { generate: !visitor },
               );
               if (!created) return j(500, { error: 'could not create thread' });
+              // Re-checked in the same synchronous stretch as the record — the
+              // `onlyIfUnanswered` discipline the fold path uses. The waiting
+              // check above is a claim about a moment before the thread write's
+              // await, and two readers can both pass it; recording both would
+              // bury the first question where revise can never answer it
+              // (`latestThreadedQuestion` reads only the newest). The loser is
+              // refused like any late asker; its thread stays on the item as an
+              // ordinary comment — the reader's words are user content, and
+              // this project does not delete those to tidy a race (codex
+              // review).
+              const now = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
+              if (now && reviewItemState(now) === 'waiting') {
+                const openThreadId = latestThreadedQuestion(now)?.threadId;
+                const owner = now.createdBy.trim() || 'the owner';
+                return j(409, {
+                  error: 'waiting',
+                  message: `Already waiting on ${owner} — your question was posted as a comment on the item; add to the open thread instead`,
+                  ...(openThreadId !== undefined ? { threadId: openThreadId } : {}),
+                });
+              }
               const asked = taskStore.requestMoreInfoOnReview(taskId, reviewItemId, text, {
                 actor: author,
                 threadId: created.id,

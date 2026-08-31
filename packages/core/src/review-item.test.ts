@@ -1162,6 +1162,22 @@ describe('answerFromReply', () => {
     expect(answerFromReply(question, '**Why is this important?**')).toBeNull();
   });
 
+  it('still picks an option whose LABEL ends in "?" — a typed label is a pick, not an ask', () => {
+    // The label match runs before the ask-back guard: the options are the
+    // answer's vocabulary, question marks and all (codex review).
+    const questioningLabels: ReviewPayload = {
+      shape: 'decision',
+      headline: 'Cache plan',
+      options: [
+        { id: 'keep', label: 'Keep it?' },
+        { id: 'halve', label: 'Halve it' },
+      ],
+    };
+    expect(answerFromReply(questioningLabels, 'keep it?')).toEqual({ optionId: 'keep' });
+    // A question matching no label stays a comment, as before.
+    expect(answerFromReply(questioningLabels, 'Why is this important?')).toBeNull();
+  });
+
   it('picks the option whose label was typed, trimmed and case-folded', () => {
     expect(answerFromReply(decisionWithOptions, '  move below ')).toEqual({ optionId: 'below' });
   });

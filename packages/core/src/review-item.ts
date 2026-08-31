@@ -404,17 +404,18 @@ export function answerAsksBack(text: string): boolean {
 export function answerFromReply(review: ReviewPayload, text: string): { optionId?: string } | null {
   const words = text.trim();
   if (words === '') return null;
-  // A question is never an answer. Without this, "Why is this important?"
-  // under an open question folded as its answer and closed it — the same
-  // wrong reading the explicit answer routes now refuse (`answerAsksBack`).
-  // Vacuous for decisions in practice (no option label ends in "?" on any
-  // stored board), load-bearing for the no-options case below.
-  if (answerAsksBack(words)) return null;
   // Keyed on what was OFFERED rather than on `shape`, because the options are
   // what a reader saw and could have typed back. A `decision` that carries
-  // none offers no vocabulary, so prose is the only answer it could ever get.
+  // none offers no vocabulary, so prose is the only answer it could ever get —
+  // unless the prose is a QUESTION. Without that guard, "Why is this
+  // important?" under an open question folded as its answer and closed it —
+  // the same wrong reading the explicit answer routes refuse
+  // (`answerAsksBack`). The guard sits in THIS branch only: with options
+  // offered, typing a label back is a pick even when the label itself ends in
+  // "?" ("Ship now?"), so the label match below must run first — and its
+  // no-match case already leaves prose, questions included, as a comment.
   const options = review.options ?? [];
-  if (options.length === 0) return {};
+  if (options.length === 0) return answerAsksBack(words) ? null : {};
   // EXACTLY one, never the first of several. Trimming and case-folding is what
   // lets a person type a label back, and it is also what can make two DIFFERENT
   // options ("Yes" and " yes ") indistinguishable from the words typed. Taking
