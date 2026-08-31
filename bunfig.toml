@@ -1,0 +1,7 @@
+# Read by `bun test` from the repo root (the documented gate invocation).
+# The preload makes descriptor exhaustion from concurrent worktree suite
+# runs fail with a message that names contention, instead of surfacing as a
+# bare EMFILE inside whichever test was running. See
+# packages/server/test/fd-contention.ts.
+[test]
+preload = ["./packages/server/test/fd-contention.preload.ts"]
