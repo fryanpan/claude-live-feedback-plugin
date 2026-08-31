@@ -78,6 +78,9 @@ export interface HeldRowPayload {
   reason?: string;
   heldMs?: number;
   filedBy?: string;
+  /** The paste-ready `revise_review_item(…)` call for whichever surface the
+   *  item is on. See `ReviewItemHeldPayload.revise`. */
+  revise?: string;
 }
 
 /** What `workspace.stalled` carries. Four lists, because the lead's next act
@@ -104,6 +107,16 @@ export interface ReviewItemHeldPayload {
   taskId?: string;
   title?: string;
   reviewItemId?: string;
+  /** The doc-thread address, when the item was filed as a `review` payload
+   *  on a comment rather than on a ticket. */
+  docId?: string;
+  threadId?: string;
+  commentId?: string;
+  /** The paste-ready `revise_review_item(…)` call, spelled by the server for
+   *  whichever surface the item is on. Preferred over anything assembled
+   *  here: the two forms take different arguments, and a filer that guesses
+   *  spends a call finding out. */
+  revise?: string;
   headline?: string;
   reason?: string;
   overdue?: boolean;
@@ -376,11 +389,15 @@ function heldRowClause(row: HeldRowPayload): string {
   const id = row.id ? ` (${row.id})` : '';
   const by = row.filedBy ? ` filed by ${row.filedBy}` : '';
   const age = row.heldMs === undefined ? '' : ` held ${humanDuration(row.heldMs)}`;
+  // The lead's remedy is to get the FILER to revise, and the two surfaces
+  // take different arguments — so the call rides along rather than being
+  // guessed from the row id.
+  const how = row.revise ? `, revise with ${row.revise}` : '';
   // Trailing full stop off for the same reason as `reviewItemHeldLine` below:
   // these clauses are joined with "; ", so a reason that ends in one reads
   // "…see below.; and 2 more".
   const why = row.reason ? ` — ${truncate(judgeReasonClauseLocal(row.reason), 120)}` : '';
-  return `${ask}${on}${id}${by}${age}${why}`;
+  return `${ask}${on}${id}${by}${age}${why}${how}`;
 }
 
 function heldRowsClause(rows: readonly HeldRowPayload[]): string {
@@ -402,12 +419,23 @@ function heldRowsClause(rows: readonly HeldRowPayload[]): string {
 export function reviewItemHeldLine(p: ReviewItemHeldPayload): string {
   const ask = p.headline ? `"${truncate(p.headline, 60)}"` : 'a review item you filed';
   const on = p.title ? ` on "${truncate(p.title, 40)}"` : '';
-  const ids =
-    p.taskId && p.reviewItemId ? ` (taskId ${p.taskId}, reviewItemId ${p.reviewItemId})` : '';
+  const ids = p.taskId
+    ? p.reviewItemId
+      ? ` (taskId ${p.taskId}, reviewItemId ${p.reviewItemId})`
+      : ''
+    : p.docId && p.threadId && p.commentId
+      ? ` (docId ${p.docId}, threadId ${p.threadId}, commentId ${p.commentId})`
+      : '';
   const why = p.reason ? ` — ${judgeReasonClauseLocal(p.reason)}` : '';
   const stood =
     p.overdue === true
       ? ` It has been held${p.heldMs === undefined ? '' : ` for ${humanDuration(p.heldMs)}`} and the reader still cannot see it.`
       : '';
-  return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} Fix the gap named and call revise_review_item now; it is judged again on every revision.`;
+  // The exact call, when the server spelled one. A comment-borne item and a
+  // ticket item take different arguments, so "call revise_review_item" alone
+  // is an instruction the filer can carry out wrongly.
+  const fix = p.revise
+    ? `Fix the gap named and call ${p.revise} now; it is judged again on every revision.`
+    : 'Fix the gap named and call revise_review_item now; it is judged again on every revision.';
+  return `[workspace.review_item_held] your review item ${ask}${on}${ids} was held off the queue by the quality gate${why}.${stood} ${fix}`;
 }

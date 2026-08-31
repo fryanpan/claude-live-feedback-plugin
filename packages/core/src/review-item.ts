@@ -178,6 +178,25 @@ export interface ReviewPayload {
    * disappearance and a correction.
    */
   withdrawnReason?: string;
+  /**
+   * The quality gate's verdict on the CURRENT words of a review item raised
+   * on a COMMENT — see `ReviewItemJudgement`, which is the same record a
+   * ticket item keeps on its wrapper.
+   *
+   * It lives on the payload for the reason `revisions` does: a comment-borne
+   * declaration has no wrapper to hang anything on, the payload IS the item.
+   * Before this field the gate could only judge the ticket form, so the
+   * filing path the fleet rule actually recommends — a `review` payload on
+   * `create_thread` / `post_reply` — reached the reader's queue with the
+   * judge called zero times. A gate the standard path bypasses is worse than
+   * no gate: it produces confidence it has not earned.
+   *
+   * NEVER read off a caller's own body. `readReviewPayload` restores it from
+   * the CRDT, and `reviewFromBody` — the door an agent's payload arrives
+   * through — strips it, or filing with `judge: {verdict: 'ok'}` would be a
+   * one-key bypass of the gate.
+   */
+  judge?: ReviewItemJudgement;
 }
 
 /** One undone answer: the stamps as they stood, plus who took them back and
@@ -886,6 +905,39 @@ export function isReviewItemGated(item: TaskReviewItem): boolean {
 }
 
 /**
+ * The two above, for an item that lives on a COMMENT rather than a ticket.
+ *
+ * Same rule, one difference: what "answered" is. A ticket item carries an
+ * `answer` object on its wrapper; a comment-borne one carries the answer
+ * STAMPS on the payload (`reviewAnswered`). Both say "a person has acted on
+ * these words, so a second opinion about them changes nothing".
+ *
+ * Separate functions rather than one over a union, because the two inputs are
+ * genuinely different shapes and a caller holding a `TaskReviewItem` must not
+ * be able to pass its `.review` by accident: the wrapper's `answer` would be
+ * invisible here and an answered item would read as held.
+ */
+export function isReviewPayloadHeld(review: ReviewPayload): boolean {
+  return !reviewAnswered(review) && review.judge?.verdict === 'held';
+}
+
+export function isReviewPayloadGated(review: ReviewPayload): boolean {
+  if (reviewAnswered(review)) return false;
+  const verdict = review.judge?.verdict;
+  return verdict === 'held' || verdict === 'pending';
+}
+
+/**
+ * Which WORDS a comment-borne item currently has — the payload twin of
+ * `reviewItemVersion`, and the same guard against a verdict outliving the
+ * words it judged. A revision appends to `revisions`, so the count moves on
+ * exactly the edits a verdict is about.
+ */
+export function reviewPayloadVersion(review: ReviewPayload): number {
+  return review.revisions?.length ?? 0;
+}
+
+/**
  * Is this item still waiting on a person?
  *
  * Deliberately `answer === undefined` and nothing else. An info request is a
@@ -1465,6 +1517,18 @@ export function readReviewPayload(value: unknown): ReviewPayload | undefined {
 
   const payloadRevisions = readRevisions(value.revisions);
   if (payloadRevisions) out.revisions = payloadRevisions;
+
+  // The gate's verdict, restored from storage. Read defensively like every
+  // stamp above — an unreadable verdict reads as "never judged", which is a
+  // PASS, matching the rule that a judge failure never blocks (`judge` is
+  // absent on every item filed before the gate existed).
+  //
+  // This reader is also the CRDT's, so it accepts a verdict from disk. The
+  // door an agent's own payload arrives through is `reviewFromBody` in the
+  // server, and that one deletes `judge` before it gets here: without that,
+  // filing with `judge: {verdict: 'ok'}` would clear the gate in one key.
+  const payloadJudge = readJudgement(value.judge);
+  if (payloadJudge) out.judge = payloadJudge;
 
   if (Array.isArray(value.answerHistory)) {
     const history: ReviewAnswerUndone[] = [];
