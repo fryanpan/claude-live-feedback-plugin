@@ -609,12 +609,16 @@ rather than let through on an empty match.
 What lands is **a row in triage plus a decision review item**, and the
 confirmation is enforced rather than promised:
 
-- **Triage is not a band.** Dispatch runs goal bands in priority order and
-  never reaches triage, so nothing can pick the row up even before anybody
-  answers. The row is deliberately filed with no `goal` — a band would make
-  it dispatchable the moment the item was answered *either way*.
+- **The row is never set moving.** Dispatch works `todo` rows; this one stays
+  at `triage`, unvetted until a person places it, the way every other
+  agent-filed row is. It is filed asking for no band — but note that the
+  store fills `chores` in anyway (`opts.goal ?? CHORES_GOAL_ID`), so the
+  absent band is *not* what protects it. An earlier draft of this section
+  claimed it was, and the integration test against the real store said
+  otherwise.
 - **An open review item holds the row.** `ready-gate.ts` reports
-  `awaiting-answer` for a row carrying an unanswered item.
+  `awaiting-answer` for a row carrying an unanswered item, so it stays held
+  even once somebody triages it.
 
 Answering it needs no new machinery: `decision.answered` already wakes the
 board's lead through `ReadyWorkNudger.reviewAnswered`. A second ask for the

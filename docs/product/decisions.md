@@ -667,18 +667,24 @@ pending line in the meeting notes, and over a terminal question. Two reasons,
 both of them about enforcement rather than politeness:
 
 - **The gate already exists and is not a promise.** An open review item makes
-  `ready-gate.ts` report `awaiting-answer`, and triage is not a band dispatch
-  runs. So nothing can pick the row up until it is answered, whatever any
-  prompt says. A pending line in the notes has no such property: it asks the
-  next agent to be careful.
+  `ready-gate.ts` report `awaiting-answer`, and the row is filed at `triage`,
+  which dispatch does not work. So nothing picks it up until it is answered,
+  whatever any prompt says. A pending line in the notes has no such property:
+  it asks the next agent to be careful.
 - **The answer path already exists.** `decision.answered` wakes the board's
   lead through `ReadyWorkNudger.reviewAnswered`; a notes-only pending state
   would need a new watcher, and a terminal question only exists while somebody
   is watching a terminal.
 
-The row is filed with NO goal on purpose. A band would make it dispatchable
-the moment the item was answered either way, which is the one thing the
-confirmation is for.
+**One thing this originally got wrong, kept here because it is the useful
+part.** The first version of this entry said the row was filed with no goal
+*on purpose*, because a band would make it dispatchable. `createTask` reads
+`opts.goal ?? CHORES_GOAL_ID`, so an omitted goal becomes the chores band
+regardless — the claim was false, and only an integration test against a real
+`TaskStore` (rather than the recorder the rest of the suite uses) found it.
+The row not being banded is not a safety property; the `triage` status and
+the open item are. Worth remembering the next time a design leans on what a
+caller *omits*.
 
 **Measured cost** (`scripts/intent-prompt-cost.ts`, `count_tokens` on the
 capture model): the capture system prompt goes 482 → 630 → 716 input tokens —

@@ -838,8 +838,11 @@ describe('runTaskCapture — a research ask confirms before it spends', () => {
       researchInput,
     );
 
-    // The row exists, in triage, banded nowhere — so dispatch cannot reach
-    // it even before anybody answers.
+    // The row exists and asks for no band — the same as an unactionable
+    // request, because placing it is a person's call at triage. (The STORE
+    // fills one in regardless; what keeps the row from being worked is the
+    // triage status and the open item, asserted below and in
+    // `meeting-research-store.test.ts` against the real store.)
     expect(created).toHaveLength(1);
     expect(created[0]?.title).toBe('Research: offline queue replay');
     expect(created[0]?.goal).toBeUndefined();
@@ -1061,6 +1064,28 @@ describe('runTaskCapture — a lookup reaches docs and past meetings', () => {
       lookupInput,
     );
     expect(links.docs).toHaveLength(1);
+  });
+
+  it('a row filed earlier in the same tick is found, not twinned', async () => {
+    // A tick can carry the ask twice in two shapes — "go look into the queue
+    // replay", then a plain "somebody should fix the queue replay". The
+    // candidate list was read before either existed, so without carrying the
+    // new row forward the second item files a second card for one ask.
+    const { board, created, reviews } = boardStub();
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'research', topic: 'offline queue replay' },
+          { kind: 'request', title: 'Offline queue replay' },
+        ]),
+      },
+      researchInput,
+    );
+    expect(created).toHaveLength(1);
+    expect(reviews).toHaveLength(1);
+    expect(links.tasks).toHaveLength(1);
+    expect(links.tasks[0]?.title).toBe('Research: offline queue replay');
   });
 
   it('resolves nothing with no lookup source wired, and does not throw', async () => {

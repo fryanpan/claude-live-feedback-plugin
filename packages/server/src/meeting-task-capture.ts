@@ -39,7 +39,7 @@
  * A LOOKUP only reads — a wrong one is a link nobody wanted, dropped by the
  * same guards the reference path uses. A RESEARCH ask SPENDS: an agent goes
  * away and burns tokens on a report. So a research ask never acts on speech
- * alone. It files a row into triage carrying a decision review item, and an
+ * alone. It files a row at `triage` carrying a decision review item, and an
  * open review item already holds a row off dispatch (`ready-gate.ts`,
  * `awaiting-answer`) — the confirmation is enforced by the board rather than
  * promised by a prompt.
@@ -847,20 +847,24 @@ export async function runTaskCapture(
 }
 
 /**
- * A research ask becomes a row in TRIAGE plus a decision item asking whether
- * to spend the pass. Two things gate it, and neither is a promise:
+ * A research ask becomes a row at `triage` plus a decision item asking
+ * whether to spend the pass. Two things gate it, and neither is a promise a
+ * prompt makes:
  *
- * - **Triage is not a band.** Dispatch runs goal bands in priority order and
- *   never reaches triage, so the row cannot be picked up even before anybody
- *   answers.
- * - **An open review item holds the row.** `ready-gate.ts` reports
- *   `awaiting-answer` for a row with an unanswered item, so the row stays
- *   held after triage too, until it is answered.
+ * - **The row is never set moving.** It stays at `triage` — no transition to
+ *   `todo`, which is the status dispatch works — so it goes through triage
+ *   like every other unvetted agent-filed row. (It still lands in the chores
+ *   band: `createTask` defaults `goal` when a caller names none. The band is
+ *   not what holds it; the status is. An earlier version of this comment
+ *   claimed otherwise and the store disagreed.)
+ * - **An open review item holds it further.** `ready-gate.ts` reports
+ *   `awaiting-answer` for a row carrying an unanswered item, so even after
+ *   somebody triages it, it is held until the ask is answered.
  *
  * The item filing can fail — a board that refuses the payload, a store
- * error. That costs the row its card, not its safety: the row is still in
- * triage with no band, which is where an unconfirmed research ask belongs.
- * The failure is reported, never swallowed.
+ * error. That costs the row its card, not its safety: the row is still at
+ * `triage` and still unmoved, which is where an unconfirmed research ask
+ * belongs. The failure is reported, never swallowed.
  */
 function fileResearchAsk(
   deps: RunTaskCaptureDeps,
@@ -880,8 +884,8 @@ function fileResearchAsk(
     ].join(' '),
     assignee: MEETING_CAPTURE_ACTOR.name,
     assigneeKind: 'agent',
-    // No goal, so the row lands in triage: a band would make it dispatchable
-    // the moment the item is answered EITHER way.
+    // No band asked for, the same as an unactionable request: placing it is
+    // a person's call at triage. The store fills in `chores` regardless.
     origin: { kind: 'doc', docId: input.docId },
     actor: MEETING_CAPTURE_ACTOR,
   });
@@ -903,14 +907,14 @@ function fileResearchAsk(
         'Nobody said the word "research" — this is the meeting assistant reading an ask',
         'out of the conversation, which is exactly the kind of reading worth a glance',
         'before an agent spends a pass on it.',
-        `The row is [${title}](${url}), parked in triage until you answer.`,
+        `The row is [${title}](${url}), sitting in triage and going nowhere until you answer.`,
       ].join(' '),
       options: [
         {
           id: 'go-ahead',
           label: 'Go ahead',
           detail:
-            'Releases the row so it can be banded and dispatched; an agent does the reading and reports back on the ticket.',
+            'Releases the row for triage; an agent then does the reading and reports back on the ticket.',
         },
         {
           id: 'not-now',

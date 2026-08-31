@@ -1,4 +1,3 @@
-import type { NotesTurn } from '../packages/server/src/meeting-notes.ts';
 /**
  * What the research and lookup intents cost the capture prompt, per tick.
  *
@@ -23,6 +22,7 @@ import type { NotesTurn } from '../packages/server/src/meeting-notes.ts';
  *
  * The transcript below is invented. The repo is public.
  */
+import type { NotesTurn } from '../packages/server/src/meeting-notes.ts';
 import {
   LOOKUP_PROMPT_RULE,
   RESEARCH_PROMPT_RULE,
