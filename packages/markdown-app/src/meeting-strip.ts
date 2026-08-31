@@ -24,12 +24,15 @@
  */
 
 import {
+  type CaptureMode,
+  DEFAULT_CAPTURE_MODE,
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   type MeetingServerMessage,
   type MeetingUnavailableReason,
   meetingSocketPath,
+  parseCaptureMode,
   speakerDisplayName,
 } from '@feedback/core';
 import {
@@ -129,6 +132,10 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
         meetingId: str(m.meetingId),
         startedAt: typeof m.startedAt === 'number' ? m.startedAt : 0,
         engine: str(m.engine),
+        // The server's word on what it opened, not the client's on what it
+        // asked for — those differ if a server built before modes existed
+        // answers, and the one that is billed is this one.
+        mode: parseCaptureMode(m.mode),
       };
     case 'unavailable': {
       const reason = m.reason;
@@ -210,6 +217,12 @@ export interface MeetingStripOpts {
    * that is reported as what it is.
    */
   autoStart?: boolean;
+  /**
+   * What this capture expects to hear. `solo` (the default) opens a cheap
+   * session with no diarization; `conversation` pays for speaker labels. The
+   * Board's "Record a conversation" button carries it in on the address.
+   */
+  mode?: CaptureMode;
   /**
    * Ask the person what to call a speaker; `current` is what the tag says
    * now. Null or blank means leave it. Defaults to `window.prompt` — the
@@ -321,6 +334,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * Paused.
    */
   let generation = 0;
+  /**
+   * Solo unless this capture was asked to listen for a room. Held across
+   * start/stop within one mount: the person who turned it on is still in the
+   * same conversation after a pause. Never persisted beyond the mount —
+   * a mode remembered from yesterday spends money on a session nobody chose
+   * it for.
+   */
+  const mode: CaptureMode = opts.mode ?? DEFAULT_CAPTURE_MODE;
   /** The auto-start was refused in the way a missing gesture is: the button
    *  is the tap that supplies one, and says so. Cleared by any press. */
   let tapToStart = false;
@@ -602,6 +623,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           type: 'start',
           sampleRate: MEETING_SAMPLE_RATE,
           encoding: MEETING_AUDIO_ENCODING,
+          mode,
         }),
       );
     };

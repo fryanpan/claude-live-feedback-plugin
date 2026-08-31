@@ -30,7 +30,8 @@
  * SPEAKER LABELS (https://www.assemblyai.com/docs/streaming/label-speakers-and-separate-channels
  * and the streaming API reference, read 2026-08-29): `speaker_labels=true`
  * on the same URL, supported on every streaming model, +$0.12/hr on top of
- * the session rate. Each `Turn` then carries `speaker_label` — `"A"`, `"B"`,
+ * the session rate — SENT ONLY WHEN THE CAPTURE SAID IT WAS A CONVERSATION,
+ * because a session's config is its URL and cannot be changed once open. Each `Turn` then carries `speaker_label` — `"A"`, `"B"`,
  * or a placeholder (`"PENDING"` / `"UNKNOWN"`) for a turn under about a
  * second of audio — and a `SpeakerRevision` arrives before `Termination`
  * listing the turns whose label the full-session pass changed. The
@@ -131,8 +132,16 @@ export function resolveAssemblyAiKey(
   return null;
 }
 
-/** The connect URL, exported so a test reads the real one rather than a copy. */
-export function streamingUrl(sampleRate: number): string {
+/**
+ * The connect URL, exported so a test reads the real one rather than a copy.
+ *
+ * `detectSpeakers` is the whole diarization decision and it is a PARAMETER,
+ * not a constant: the parameter is priced per session-hour on top of the base
+ * rate, so a session that nobody said was a conversation must not carry it.
+ * There is no way to add it to a session already open — the URL IS the
+ * configuration — which is why the mode is chosen before the mic starts.
+ */
+export function streamingUrl(sampleRate: number, detectSpeakers: boolean): string {
   const params = new URLSearchParams({
     sample_rate: String(sampleRate),
     encoding: ENCODING,
@@ -140,10 +149,11 @@ export function streamingUrl(sampleRate: number): string {
     // unpunctuated text, and the transcript a notes agent reads later is the
     // rough draft rather than the sentence.
     format_turns: 'true',
-    // Who said it. Priced per session hour on top of the base rate (see the
-    // header); without it every turn reads as one voice.
-    speaker_labels: 'true',
   });
+  // Who said it. Priced per session hour on top of the base rate (see the
+  // header); without it every turn reads as one voice, which is the right
+  // answer when there IS one voice.
+  if (detectSpeakers) params.set('speaker_labels', 'true');
   return `${STREAM_URL}?${params.toString()}`;
 }
 
@@ -240,7 +250,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
         };
 
         const socket = makeSocket({
-          url: streamingUrl(sessionOpts.sampleRate),
+          url: streamingUrl(sessionOpts.sampleRate, sessionOpts.detectSpeakers),
           // No `Bearer` prefix — the key is the whole header value.
           headers: { Authorization: key },
           onOpen: () => {},

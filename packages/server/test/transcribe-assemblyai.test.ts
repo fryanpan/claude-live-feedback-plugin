@@ -53,7 +53,9 @@ class FakeSocket implements EngineSocket {
   }
 }
 
-function harness(opts: { flushTimeoutMs?: number; connectTimeoutMs?: number } = {}) {
+function harness(
+  opts: { flushTimeoutMs?: number; connectTimeoutMs?: number; detectSpeakers?: boolean } = {},
+) {
   let socket: FakeSocket | null = null;
   const turns: EngineTurn[] = [];
   const errors: string[] = [];
@@ -68,6 +70,10 @@ function harness(opts: { flushTimeoutMs?: number; connectTimeoutMs?: number } = 
   if (!engine) throw new Error('engine should exist when a key is supplied');
   const opening = engine.open({
     sampleRate: 16_000,
+    // Labels on by default here because most of this file is about mapping
+    // them; the solo case has its own test on the URL, which is the only
+    // place the decision is expressed.
+    detectSpeakers: opts.detectSpeakers ?? true,
     onTurn: (t) => turns.push({ ...t }),
     onError: (m) => errors.push(m),
   });
@@ -114,7 +120,7 @@ describe('assemblyai key resolution', () => {
 
 describe('assemblyai connect url', () => {
   it('carries the sample rate, the PCM encoding and formatted turns', () => {
-    const url = new URL(streamingUrl(16_000));
+    const url = new URL(streamingUrl(16_000, false));
     expect(url.origin + url.pathname).toBe('wss://streaming.assemblyai.com/v3/ws');
     expect(url.searchParams.get('sample_rate')).toBe('16000');
     expect(url.searchParams.get('encoding')).toBe('pcm_s16le');
@@ -127,7 +133,7 @@ describe('assemblyai session', () => {
     const h = harness();
     // The header goes out at construction, before anything is awaited.
     expect(h.fake().args.headers).toEqual({ Authorization: 'test-key-not-a-real-credential' });
-    expect(h.fake().args.url).toBe(streamingUrl(16_000));
+    expect(h.fake().args.url).toBe(streamingUrl(16_000, true));
     h.fake().begin();
     const session = await h.opening;
     expect(session).toBeDefined();
@@ -333,8 +339,13 @@ describe('assemblyai speaker labels', () => {
     ...over,
   });
 
-  it('asks for speaker labels on the connect URL', () => {
-    expect(new URL(streamingUrl(16_000)).searchParams.get('speaker_labels')).toBe('true');
+  it('asks for speaker labels only when the capture is a conversation', () => {
+    expect(new URL(streamingUrl(16_000, true)).searchParams.get('speaker_labels')).toBe('true');
+    // The solo case is the one that costs money to get wrong: the parameter
+    // must be ABSENT, not `false` — an unpriced session is one that never
+    // asked. Both directions asserted, because a URL builder that always
+    // said 'true' and a URL builder that always said 'false' each pass one.
+    expect(new URL(streamingUrl(16_000, false)).searchParams.get('speaker_labels')).toBeNull();
   });
 
   it('carries the turn-level speaker label through the seam', async () => {
