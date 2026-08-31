@@ -20,6 +20,8 @@
  * thinks ended. There is one fact here and one owner of it.
  */
 
+import type { MeetingTimingMark } from './meeting-timing.ts';
+
 /** The audio the capture promises to send: mono, little-endian signed 16-bit. */
 export const MEETING_AUDIO_ENCODING = 'pcm_s16le' as const;
 
@@ -72,8 +74,20 @@ export type MeetingClientMessage =
        * session.
        */
       mode: CaptureMode;
+      /**
+       * Measure this meeting's stage latencies (`?timing=1` on the address).
+       * Absent on every ordinary meeting, and a server that is not asked
+       * allocates nothing and attaches nothing — see `meeting-timing.ts`.
+       */
+      timing?: boolean;
     }
   | { type: 'stop' }
+  /**
+   * One half of an NTP-style exchange, so the two network legs can be priced
+   * across two clocks. Answered with `timing_pong` and nothing else; it never
+   * touches the meeting's state.
+   */
+  | { type: 'timing_ping'; id: number; clientMs: number }
   /**
    * "Speaker A is Jordan." The engine labels voices within one session; the
    * person names a label once and every turn with it — on the strip, in the
@@ -125,7 +139,23 @@ export type MeetingServerMessage =
    * the engine's label for the voice (`"A"`, `"B"`), absent until it has
    * decided; display goes through `speakerDisplayName`.
    */
-  | { type: 'transcript'; turn: number; text: string; final: boolean; speaker?: string }
+  | {
+      type: 'transcript';
+      turn: number;
+      text: string;
+      final: boolean;
+      speaker?: string;
+      /** Stage marks for this frame, present only on a timing meeting. */
+      timing?: MeetingTimingMark;
+    }
+  /** The answer to a `timing_ping`, carrying both server-side timestamps. */
+  | {
+      type: 'timing_pong';
+      id: number;
+      clientMs: number;
+      serverRecvMs: number;
+      serverSendMs: number;
+    }
   /** The meeting ended; its transcript is durable. */
   | { type: 'stopped'; meetingId: string; endedAt: number }
   /** Something went wrong mid-meeting. Distinct from `unavailable`. */
@@ -143,6 +173,11 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
   if (typeof parsed !== 'object' || parsed === null) return null;
   const m = parsed as Record<string, unknown>;
   if (m.type === 'stop') return { type: 'stop' };
+  if (m.type === 'timing_ping') {
+    if (typeof m.id !== 'number' || !Number.isFinite(m.id)) return null;
+    if (typeof m.clientMs !== 'number' || !Number.isFinite(m.clientMs)) return null;
+    return { type: 'timing_ping', id: m.id, clientMs: m.clientMs };
+  }
   if (m.type === 'name_speaker') {
     const speaker = typeof m.speaker === 'string' ? m.speaker.trim() : '';
     const name = typeof m.name === 'string' ? m.name.trim() : '';
@@ -165,6 +200,10 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       // the field arrived after the meeting did, and the fallback is the one
       // that spends nothing.
       mode: parseCaptureMode(m.mode),
+      // Only the literal `true` opts in: a stray truthy value on this frame
+      // should read as a client that does not know about timing, not as one
+      // asking for it.
+      ...(m.timing === true ? { timing: true } : {}),
     };
   }
   return null;

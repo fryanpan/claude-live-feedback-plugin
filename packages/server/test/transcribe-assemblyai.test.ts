@@ -66,7 +66,15 @@ function harness(
   } = {},
 ) {
   const sockets: FakeSocket[] = [];
+  /**
+   * Turns as the shape assertions in this file read them: without the two
+   * latency marks. `engineMs` is a wall clock, so a whole-object `toEqual`
+   * could never name it, and every test here is about what the adapter makes
+   * of a frame's WORDS. The marks themselves are asserted from `raw`.
+   */
   const turns: EngineTurn[] = [];
+  /** The same turns with nothing stripped. */
+  const raw: EngineTurn[] = [];
   const errors: string[] = [];
   /** Every rollover the engine armed, newest last. */
   const scheduled: Array<{ ms: number; fire: () => void; cancelled: boolean }> = [];
@@ -98,7 +106,11 @@ function harness(
     // them; the solo case has its own test on the URL, which is the only
     // place the decision is expressed.
     detectSpeakers: opts.detectSpeakers ?? true,
-    onTurn: (t) => turns.push({ ...t }),
+    onTurn: (t) => {
+      raw.push({ ...t });
+      const { engineMs: _engineMs, audioEndMs: _audioEndMs, ...rest } = t;
+      turns.push(rest);
+    },
     onError: (m) => errors.push(m),
   });
   const fake = (index = sockets.length - 1): FakeSocket => {
@@ -113,7 +125,7 @@ function harness(
     if (!last) throw new Error(`no rollover armed (${scheduled.length} armed and cancelled)`);
     return last;
   };
-  return { engine, opening, fake, sockets, turns, errors, scheduled, pending };
+  return { engine, opening, fake, sockets, turns, raw, errors, scheduled, pending };
 }
 
 describe('assemblyai key resolution', () => {
@@ -242,6 +254,51 @@ describe('assemblyai session', () => {
       { turn: 0, text: 'The sync is the bottleneck.', final: true },
     ]);
     expect(h.errors).toEqual([]);
+  });
+
+  it('carries where the words END, so a turn can be priced against its audio', async () => {
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    const before = Date.now();
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: true,
+      end_of_turn: true,
+      transcript: 'The sync is the bottleneck.',
+      words: [
+        { text: 'The', start: 900, end: 1_060, word_is_final: true },
+        { text: 'sync', start: 1_070, end: 1_310, word_is_final: true },
+      ],
+    });
+    const after = Date.now();
+    const first = h.raw[0] as EngineTurn;
+    // The END of the LAST word: that instant is what names the audio chunk
+    // that carried it, and the chunk is what the latency legs hang off.
+    expect(first.audioEndMs).toBe(1_310);
+    // Stamped when the frame ARRIVED, so the vendor's leg is not charged for
+    // our own JSON work.
+    expect(first.engineMs as number).toBeGreaterThanOrEqual(before);
+    expect(first.engineMs as number).toBeLessThanOrEqual(after);
+  });
+
+  it('invents no offset for a frame that carried no words', async () => {
+    // The frames above with `words: []` are the common shape here, and a
+    // made-up offset would name the wrong chunk and land in the percentiles
+    // looking like a measurement.
+    const h = harness();
+    h.fake().begin();
+    await h.opening;
+    h.fake().deliver({
+      type: 'Turn',
+      turn_order: 0,
+      turn_is_formatted: true,
+      end_of_turn: true,
+      transcript: 'Morning, Jordan.',
+      words: [],
+    });
+    expect((h.raw[0] as EngineTurn).audioEndMs).toBeUndefined();
   });
 
   it('keeps turn numbers as the engine numbers them across turns', async () => {
