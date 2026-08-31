@@ -292,9 +292,10 @@ describe('summarizeRuns', () => {
   });
 
   it('says the runs cannot rank settings when one setting spreads by 10 points', () => {
-    // This is the finding the AMI matrix ran into: the same audio under the
-    // same settings scored 35.1% and 50.2%, which is wider than any gap
-    // between settings. Without this line the matrix reads as a result.
+    // The guard the AMI matrix needs: a spread within one setting wider than
+    // the gaps between settings means the runs cannot be ranked. This engine
+    // turned out to be deterministic, so the line never fired on it — which
+    // is exactly why it is asserted here rather than trusted in the field.
     const text = summarizeRuns([perfect, allOne]);
     expect(text).toContain('SPREAD');
     expect(text).toContain('Do not');

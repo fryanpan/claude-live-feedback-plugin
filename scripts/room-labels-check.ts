@@ -247,6 +247,19 @@ const EMULATIONS: Record<string, string> = {
 
 /** Apply an emulation chain to a file, returning the new file. */
 export function emulate(input: string, keys: readonly string[], dir: string): string {
+  // An unknown key used to be dropped, leaving the audio untouched while the
+  // report still printed "EMULATED: …". A shell that passed `ns agc` as ONE
+  // argument (zsh does not split unquoted parameters) therefore produced a
+  // clean measurement of the raw file labelled as the processed one, and the
+  // difference between two settings was read as run-to-run noise. A check
+  // that cannot do what it was asked must say so, not report success.
+  const unknown = keys.filter((k) => !(k in EMULATIONS));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown --emulate ${unknown.map((k) => JSON.stringify(k)).join(', ')}; ` +
+        `known: ${Object.keys(EMULATIONS).join(', ')}. Pass each as its own argument.`,
+    );
+  }
   const chain = keys.map((k) => EMULATIONS[k]).filter(Boolean);
   if (chain.length === 0) return input;
   const out = join(dir, `emulated-${keys.join('-')}.wav`);
@@ -634,9 +647,11 @@ async function main(argv: readonly string[]): Promise<number> {
         : `Speaking ${seconds.toFixed(1)}s through the real engine with max_speakers=${maxSpeakers}…`,
     );
     const mocked = args.has('mock') ? truth : undefined;
-    // One run per setting cannot rank settings: the same AMI excerpt under
-    // identical settings scored 35.1% and 50.2% on two runs. Repeats are how
-    // the report distinguishes a difference from a draw.
+    // Repeats are how the report distinguishes a real difference from a draw.
+    // Measured here: the engine IS deterministic on identical bytes — three
+    // runs of one AMI excerpt agreed to the word — which is worth being able
+    // to demonstrate, because the first reading of this matrix explained a
+    // between-settings difference away as run-to-run noise.
     const repeats = Math.max(1, Number(args.get('repeat')?.[0] ?? '1'));
     const scores: DiarizationScore[] = [];
     for (let run = 1; run <= repeats; run++) {

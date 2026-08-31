@@ -380,13 +380,17 @@ export function median(values: readonly number[]): number {
 /**
  * Several runs of ONE recording, reported as a spread rather than a number.
  *
- * The engine is not deterministic: the same 120 seconds of AMI audio scored
- * 35.1% and 50.2% on two runs under identical settings. A single run per
- * setting therefore cannot rank settings, and the matrix that does it anyway
- * reads as a finding. So the summary prints every run, and says so out loud
- * when the spread within one setting is wide enough to swallow the difference
- * between settings — the reader needs to know the measurement is too coarse
- * before they believe its ordering.
+ * Measured on this engine, the same bytes give the same answer: three runs of
+ * one AMI excerpt agreed to the word. That is worth being able to show rather
+ * than assume, because the first reading of the microphone matrix explained a
+ * real between-settings difference away as run-to-run noise, and only repeats
+ * could tell those two stories apart.
+ *
+ * So the summary prints every run rather than a single number, and says out
+ * loud when the spread WITHIN one setting is wide enough to swallow the gaps
+ * BETWEEN settings — on a longer excerpt, a different engine, or a build with
+ * a non-greedy decoder, that line is what stops the matrix being read as an
+ * ordering it cannot support.
  */
 export function summarizeRuns(scores: readonly DiarizationScore[]): string {
   if (scores.length === 0) return '  no runs';
