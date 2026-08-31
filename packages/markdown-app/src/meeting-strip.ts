@@ -16,6 +16,17 @@
  * STRIP and are asserted in `meeting-strip-css.test.ts`, because no DOM test
  * resolves layout.
  *
+ * IT ANNOUNCES A ROOM CAPTURE, AND THE ANNOUNCEMENT IS PART OF THE RECORDING.
+ * A `conversation` capture is the one with other people in it, so it says so
+ * out loud before anything else is said. The order is the point and it is the
+ * opposite of the obvious one: the microphone opens FIRST and the sentence is
+ * spoken into it, so the announcement is in the captured audio and in the
+ * transcript rather than in a moment before the recording that nothing can be
+ * shown afterwards. `I'll say it` starts the same capture and puts the
+ * sentence on screen instead, for a person who would rather say it themselves
+ * — and it is also where a device that cannot speak ends up. A `solo` capture
+ * announces nothing; there is nobody to tell.
+ *
  * CORRECTIONS LAND ON THE WORD ALREADY ON SCREEN. A `transcript` frame carries
  * the WHOLE turn as currently understood, so a later frame for the same turn
  * is the engine revising itself. `diffTurnWords` finds which words actually
@@ -24,7 +35,9 @@
  */
 
 import {
+  type AnnouncedBy,
   type CaptureMode,
+  DEFAULT_ANNOUNCED_BY,
   DEFAULT_CAPTURE_MODE,
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
@@ -32,10 +45,13 @@ import {
   type MeetingServerMessage,
   type MeetingTimingMark,
   type MeetingUnavailableReason,
+  RECORDING_ANNOUNCEMENT,
+  announcesRecording,
   meetingSocketPath,
   parseCaptureMode,
   speakerDisplayName,
 } from '@feedback/core';
+import { type Announcer, createAnnouncer } from './meeting-announce.ts';
 import {
   type MeetingCapture,
   type MeetingCaptureStart,
@@ -276,6 +292,12 @@ export interface MeetingStripOpts {
    */
   promptName?: (current: string) => string | null;
   /**
+   * Says the announcement out loud. Injectable because no test environment
+   * has speech synthesis, and because the interesting cases here are the ones
+   * where it does not work.
+   */
+  announcer?: Announcer;
+  /**
    * Measure this meeting and show the running numbers (`?timing=1`). Off on
    * every ordinary load: nothing is constructed, no clock is read per audio
    * frame, and the `start` frame is byte-for-byte what it was. See
@@ -308,6 +330,12 @@ export interface MeetingStripHandle {
   state(): StripState;
   /** What the next (or current) capture listens for. */
   mode(): CaptureMode;
+  /**
+   * How this capture told the room, as far as it has actually happened.
+   * Undefined for a solo capture, before the first start, and while the
+   * device is still mid-sentence.
+   */
+  announced(): AnnouncedBy | undefined;
 }
 
 /** What to say when the server sends an `unavailable` with no message. */
@@ -337,6 +365,17 @@ function defaultPromptName(current: string): string | null {
   return window.prompt('Who is this?', current);
 }
 
+/**
+ * The announcement as the strip shows it, which is not the same job in the two
+ * paths: the device's is a caption for something the room is already hearing,
+ * and the person's is a line to READ, so it has to carry the instruction.
+ * Both quote the sentence itself, because the sentence is the record.
+ */
+export function announcementNote(by: AnnouncedBy): string {
+  const said = `\u201c${RECORDING_ANNOUNCEMENT}\u201d`;
+  return by === 'device' ? `Announcing: ${said}` : `Say this out loud: ${said}`;
+}
+
 export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const { docId, root } = opts;
   const now = opts.now ?? Date.now;
@@ -344,6 +383,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const openSocket = opts.openSocket ?? defaultOpenSocket;
   const startCapture = opts.startCapture ?? startMeetingCapture;
   const promptName = opts.promptName ?? defaultPromptName;
+  const announcer = opts.announcer ?? createAnnouncer();
 
   const strip = document.createElement('div');
   strip.className = 'meeting-strip-row';
@@ -372,10 +412,28 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   modeToggle.className = 'meeting-mode';
   modeToggle.textContent = 'Multiple speakers';
   modeToggle.setAttribute('aria-label', 'Detect multiple speakers');
+  /**
+   * "I'll say it" — the second half of the hybrid, and a START button rather
+   * than a preference.
+   *
+   * It has to start the capture itself, not merely change who speaks: the
+   * announcement only counts if it is IN the recording, so a person saying it
+   * needs the microphone already open exactly as much as the device does.
+   * Pressing it opens the mic, puts the sentence on screen, and keeps quiet.
+   * It appears only where it means something — a `conversation` capture that
+   * has not started yet — because on a solo capture there is nobody to tell.
+   */
+  const announceToggle = document.createElement('button');
+  announceToggle.type = 'button';
+  announceToggle.className = 'meeting-announce';
+  announceToggle.textContent = "I'll say it";
+  announceToggle.title =
+    'Start recording and read the announcement out yourself, instead of the device saying it.';
+  announceToggle.setAttribute('aria-label', 'Start recording and announce it yourself');
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'meeting-toggle';
-  strip.append(meta, modeToggle, toggle);
+  strip.append(meta, modeToggle, announceToggle, toggle);
 
   const caption = document.createElement('div');
   caption.className = 'meeting-caption';
@@ -426,6 +484,34 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   /** The auto-start was refused in the way a missing gesture is: the button
    *  is the tap that supplies one, and says so. Cleared by any press. */
   let tapToStart = false;
+  /**
+   * Which button started this capture, and so who is meant to say the
+   * sentence. Undefined when there is nobody to tell. This is an INTENTION —
+   * it is not what the record is told.
+   */
+  let announceBy: AnnouncedBy | undefined;
+  /**
+   * What has actually been claimed, which is a strictly later and smaller
+   * thing. `device` is set only once the browser reports the utterance
+   * finished, `spoken` the moment the sentence is on screen for a person.
+   * A meeting stopped mid-sentence leaves this undefined and the record
+   * saying nothing — which is correct: nobody heard the whole sentence, and
+   * a consent record must never claim more than happened.
+   */
+  let announced: AnnouncedBy | undefined;
+  /**
+   * The announcement prompt owns the caption line and will not be pushed off
+   * it by words.
+   *
+   * A person reading the sentence aloud needs it to STAY there, and the
+   * caption is one line: a partial from an air conditioner, or from whoever
+   * was already mid-thought, would otherwise wipe the sentence out from
+   * under them a moment after it appeared. So while this holds, transcript
+   * turns accumulate in `turns` but are not drawn. It lifts on a SETTLED
+   * turn — a whole utterance has finished, which is the earliest evidence
+   * the sentence has been said — or on a tap, whichever comes first.
+   */
+  let holdAnnouncement = false;
 
   /** Live word spans per turn, so a correction rewrites the span that is
    *  already on screen instead of redrawing the line under the reader. */
@@ -468,6 +554,8 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
 
   function renderCaption(): void {
     if (state.kind !== 'idle' && state.kind !== 'recording') return;
+    // The announcement holds the line against the words; see `holdAnnouncement`.
+    if (holdAnnouncement) return;
     // A note and a transcript share the line, so the reason the last attempt
     // gave has to go when words start arriving.
     line.querySelector('.meeting-note')?.remove();
@@ -551,6 +639,32 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     line.append(note);
   }
 
+  /**
+   * The sentence, held on the line until it has been said. A button because
+   * it is dismissible, and a dismissible thing has to be reachable by more
+   * than a pointer.
+   */
+  function showAnnouncement(text: string): void {
+    holdAnnouncement = true;
+    clearCaption();
+    const note = document.createElement('button');
+    note.type = 'button';
+    note.className = 'meeting-note meeting-note-dismiss';
+    note.textContent = text;
+    note.title = 'Dismiss';
+    note.setAttribute('aria-label', `${text} (tap to dismiss)`);
+    note.addEventListener('click', releaseAnnouncement);
+    line.append(note);
+  }
+
+  /** Give the line back to the transcript, and draw whatever arrived. */
+  function releaseAnnouncement(): void {
+    if (!holdAnnouncement) return;
+    holdAnnouncement = false;
+    clearCaption();
+    renderCaption();
+  }
+
   function tickClock(): void {
     elapsed.textContent =
       state.kind === 'recording' ? formatElapsed(now() - state.startedAt) : formatElapsed(0);
@@ -569,6 +683,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     modeToggle.title = live
       ? 'Set before the mic starts — stop and start again to change it.'
       : 'Label who is talking. Leave it off when you are the only voice: it costs more.';
+    // Only where it means something: a room capture that has not begun. While
+    // one runs, the announcement has already happened; on a solo capture
+    // there was never anyone to announce it to; and where Start itself cannot
+    // be pressed, neither can this.
+    announceToggle.hidden = !announcesRecording(mode) || live || toggle.disabled;
   }
 
   function render(): void {
@@ -636,6 +755,55 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     capture = null;
   }
 
+  /**
+   * The meeting is over, however it ended: nothing may still be announcing
+   * it.
+   *
+   * Called from EVERY terminal path, not only from Stop, and that is the
+   * point — a relay error or a dropped socket ends a recording just as
+   * finally as the button does. Without this the device carries on saying
+   * "this conversation is being recorded" into a room where it is not, and
+   * the sentence's late resolution can write a claim onto a meeting that
+   * failed. The generation bump is what makes the pending `announce()`
+   * return without touching anything.
+   */
+  /**
+   * The echo-cancellation hedge, and its own failure swallowed HERE rather
+   * than trusted of the capture.
+   *
+   * `setEchoCancellation` promises never to reject, but an announcement that
+   * a room is owed must not be able to fail because a hedge did: a rejection
+   * reaching `announce` would take the whole sentence down with it, and the
+   * one thing that must never happen here is silence.
+   */
+  /**
+   * The capture is passed in rather than read from the closure, and that is
+   * the whole point of the parameter. An utterance that was cancelled can
+   * stay pending for its full timeout, so the restore half of this pair can
+   * run long after its meeting ended — by which time `capture` is the NEXT
+   * meeting's microphone, in the middle of the NEXT announcement. Restoring
+   * cancellation there is exactly the bug this suspension exists to prevent.
+   * Bound to the instance, a stale restore lands on a track that is already
+   * stopped, which is nothing.
+   */
+  async function suspendEchoCancellation(
+    mic: MeetingCapture | null,
+    suspended: boolean,
+  ): Promise<void> {
+    try {
+      await mic?.setEchoCancellation(!suspended);
+    } catch {
+      // Then the capture keeps the cancellation it has, and the sentence is
+      // spoken into it anyway.
+    }
+  }
+
+  function endAnnouncement(): void {
+    generation += 1;
+    holdAnnouncement = false;
+    announcer.cancel();
+  }
+
   function closeSocket(): void {
     const sock = socket;
     socket = null;
@@ -659,12 +827,29 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // diarizes; showing its answer is still better than showing a claim
         // nothing checked.
         mode = msg.mode;
+        // And the announcement follows the mode the SERVER opened, not the
+        // one that was asked for. An old server answering `solo` to a
+        // conversation request would otherwise announce a session the strip
+        // has just relabelled solo; the inverse would skip an announcement
+        // a room is owed.
+        if (!announcesRecording(mode)) announceBy = undefined;
+        else announceBy ??= DEFAULT_ANNOUNCED_BY;
         setState({ kind: 'recording', startedAt: now() });
+        // AFTER the state change, and that ordering is the feature: `ready`
+        // means the engine is receiving, so everything from here is in the
+        // transcript — including this. Announcing before the mic was open
+        // would leave the sentence in a moment nothing recorded.
+        if (announceBy) void announce(announceBy, generation);
         break;
       case 'transcript':
         // Noted before the render and closed after it, so the DOM leg is the
         // strip's own work and nothing else.
         timing?.frameReceived(msg, recvMs);
+        // A SETTLED turn is a whole utterance finished — the earliest
+        // evidence the sentence has actually been said, and so the moment
+        // the announcement stops owning the line. Partials are not: one
+        // arrives from any noise in the room.
+        if (msg.final) releaseAnnouncement();
         turns = rollTranscript(turns, {
           turn: msg.turn,
           text: msg.text,
@@ -679,17 +864,21 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         break;
       case 'unavailable':
         // The words are never coming, so the mic goes back rather than sitting
-        // open behind a settled state.
+        // open behind a settled state — and nothing is left announcing a
+        // meeting that is not happening.
+        endAnnouncement();
         releaseAudio();
         closeSocket();
         setState({ kind: 'unavailable', reason: msg.reason, message: msg.message });
         break;
       case 'stopped':
+        endAnnouncement();
         releaseAudio();
         closeSocket();
         setState({ kind: 'idle' });
         break;
       case 'error':
+        endAnnouncement();
         releaseAudio();
         closeSocket();
         setState({ kind: 'error', message: msg.message || 'The meeting ended unexpectedly.' });
@@ -697,12 +886,81 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     }
   }
 
-  async function start(auto = false): Promise<void> {
+  /**
+   * Tell the room, now that the microphone is live.
+   *
+   * The device path can fail in three indistinguishable ways — no synthesis,
+   * a refused gesture, an utterance that never comes back — and all three end
+   * in the same place: the sentence goes on screen for a person, and the
+   * server is told the record should say `spoken`. That correction matters
+   * more than the announcement's own convenience, because the record is the
+   * thing anybody would later be asked to show.
+   */
+  async function announce(by: AnnouncedBy, attempt: number): Promise<void> {
+    /** Tell the server the room HAS been told — never before it has. */
+    const claim = (path: AnnouncedBy): void => {
+      announced = path;
+      if (socketOpen) socket?.send(JSON.stringify({ type: 'announced', by: path }));
+    };
+    if (by === 'spoken') {
+      // Held, not merely shown: this one is a line to READ, and a partial
+      // from anywhere in the room would otherwise take it away mid-read.
+      showAnnouncement(announcementNote('spoken'));
+      // The sentence is on screen, which is the whole of what `spoken`
+      // claims — the strip cannot know whether anybody read it aloud.
+      claim('spoken');
+      return;
+    }
+    // The device's caption is a courtesy for something the room is already
+    // hearing, so it yields to the words the way any other note does.
+    showNote(announcementNote('device'));
+    // Echo cancellation is asked for on every capture, and its entire job is
+    // to remove what this device is playing from what its microphone hears —
+    // which is the one moment that has to work the other way round. Suspended
+    // for the length of the sentence and restored after, best-effort: a
+    // browser that refuses the constraint leaves the capture where it was.
+    // Whichever microphone is open NOW is the one this sentence is spoken
+    // into, and the only one this call may touch again.
+    const mic = capture;
+    await suspendEchoCancellation(mic, true);
+    // Suspending is a promise, and a meeting can end inside it. `cancel()`
+    // silences an utterance that is already underway — it cannot silence one
+    // that has not been started yet, and speaking here would announce a
+    // recording to a room that is no longer being recorded. This is the one
+    // window where the terminal paths cannot reach the announcement, so the
+    // announcement has to check for them.
+    if (disposed || attempt !== generation) {
+      await suspendEchoCancellation(mic, false);
+      return;
+    }
+    const spoke = await announcer.speak(RECORDING_ANNOUNCEMENT);
+    await suspendEchoCancellation(mic, false);
+    // A stop, or a second meeting, during the sentence: this one no longer
+    // owns the strip or the socket, and — the reason nothing is claimed at
+    // start — the room heard half a sentence at most, so the record is left
+    // saying nothing rather than saying the device announced it.
+    if (disposed || attempt !== generation) return;
+    if (spoke) {
+      claim('device');
+      return;
+    }
+    showAnnouncement(announcementNote('spoken'));
+    claim('spoken');
+  }
+
+  async function start(auto = false, by: AnnouncedBy = 'device'): Promise<void> {
     if (state.kind === 'requesting' || state.kind === 'recording') return;
     const attempt = ++generation;
     turns = [];
     names = {};
     tapToStart = false;
+    // A solo capture announces nothing, whichever button was pressed — the
+    // announce button is hidden there, but the mode can also come in off the
+    // address, and the record must not claim a room was told when the mode
+    // says there was no room.
+    announceBy = announcesRecording(mode) ? by : undefined;
+    announced = undefined;
+    holdAnnouncement = false;
     setState({ kind: 'requesting' });
     const started = await startCapture({
       onFrame: (pcm) => {
@@ -752,6 +1010,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     };
     sock.onclose = () => {
       socketOpen = false;
+      endAnnouncement();
       releaseAudio();
       setState({ kind: 'error', message: 'The connection to the meeting was lost.' });
     };
@@ -761,7 +1020,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   }
 
   function stop(): void {
-    generation += 1;
+    // A meeting stopped during the announcement stops announcing: the room
+    // does not need to be told about a recording that is over.
+    endAnnouncement();
     if (socketOpen) socket?.send(JSON.stringify({ type: 'stop' }));
     releaseAudio();
     closeSocket();
@@ -769,10 +1030,26 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   }
 
   const onToggle = (): void => {
-    if (state.kind === 'recording' || state.kind === 'requesting') stop();
-    else void start();
+    if (state.kind === 'recording' || state.kind === 'requesting') {
+      stop();
+      return;
+    }
+    // PRIMED HERE, SYNCHRONOUSLY, AND NOWHERE ELSE. iOS Safari only unlocks
+    // speech from inside the gesture's own task, and the announcement itself
+    // cannot be spoken here — it has to wait for the microphone. So the tap
+    // spends its gesture on a silent utterance, and the real sentence rides
+    // the unlock later. See meeting-announce.ts.
+    if (announcesRecording(mode)) announcer.prime();
+    void start(false, 'device');
   };
   toggle.addEventListener('click', onToggle);
+  const onAnnounceToggle = (): void => {
+    if (state.kind === 'recording' || state.kind === 'requesting') return;
+    // No priming: the whole point of this button is that the device stays
+    // quiet and a person says it.
+    void start(false, 'spoken');
+  };
+  announceToggle.addEventListener('click', onAnnounceToggle);
   const onModeToggle = (): void => {
     if (state.kind === 'recording' || state.kind === 'requesting') return;
     mode = mode === 'conversation' ? 'solo' : 'conversation';
@@ -786,10 +1063,13 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   return {
     state: () => state,
     mode: () => mode,
+    announced: () => announced,
     destroy: () => {
       disposed = true;
       generation += 1;
+      announcer.cancel();
       toggle.removeEventListener('click', onToggle);
+      announceToggle.removeEventListener('click', onAnnounceToggle);
       modeToggle.removeEventListener('click', onModeToggle);
       timing?.destroy();
       releaseAudio();
