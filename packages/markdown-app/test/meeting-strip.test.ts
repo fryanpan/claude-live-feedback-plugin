@@ -7,7 +7,7 @@ import {
   parseMeetingClientMessage,
 } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MeetingCaptureStart } from '../src/meeting-audio.ts';
+import type { MeetingCaptureStart, RoomAudioProcessing } from '../src/meeting-audio.ts';
 import {
   type MeetingSocket,
   type MeetingStripHandle,
@@ -161,6 +161,13 @@ interface Harness {
   tags(): string[];
 }
 
+/** What the strip hands the capture: the frames sink plus the room's facts. */
+type CaptureCall = {
+  onFrame: (pcm: Int16Array) => void;
+  mode: CaptureMode;
+  room?: RoomAudioProcessing;
+};
+
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const f of cleanups.splice(0)) f();
@@ -168,11 +175,13 @@ afterEach(() => {
 });
 
 function mount(
-  capture?: () => Promise<MeetingCaptureStart>,
+  capture?: (opts: CaptureCall) => Promise<MeetingCaptureStart>,
   extra: {
     autoStart?: boolean;
     promptName?: (current: string) => string | null;
     mode?: CaptureMode;
+    speakers?: number;
+    room?: RoomAudioProcessing;
   } = {},
 ): Harness {
   const root = document.createElement('div');
@@ -861,5 +870,58 @@ describe('teardown', () => {
 describe('the socket address', () => {
   it('is the doc audio path on this host', () => {
     expect(meetingSocketPath('doc-1')).toBe('/audio/doc-1');
+  });
+});
+
+describe('what the strip tells the microphone and the server about the room', () => {
+  /** Mount, press Start, and hand back what the capture and the socket saw. */
+  async function press(extra: Parameters<typeof mount>[1]): Promise<{
+    call: CaptureCall | undefined;
+    start: Record<string, unknown> | undefined;
+  }> {
+    const calls: CaptureCall[] = [];
+    const h = mount((opts) => {
+      calls.push(opts);
+      return Promise.resolve({ ok: true, capture: { stop: vi.fn() } });
+    }, extra);
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    const sent = h.sockets[0]?.sent
+      .filter((raw): raw is string => typeof raw === 'string')
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    return { call: calls[0], start: sent?.find((m) => m.type === 'start') };
+  }
+
+  it('hands the capture the mode it is about to record in', async () => {
+    expect((await press({ mode: 'conversation' })).call?.mode).toBe('conversation');
+    expect((await press({})).call?.mode).toBe('solo');
+  });
+
+  it('passes the room processing through, and passes nothing when nobody set it', async () => {
+    const room = { echoCancellation: false, noiseSuppression: false, autoGainControl: true };
+    expect((await press({ mode: 'conversation', room })).call?.room).toEqual(room);
+    // Absent rather than a copy of the default: the default belongs to
+    // `captureConstraints`, and two places holding it is two places to change.
+    expect((await press({ mode: 'conversation' })).call).not.toHaveProperty('room');
+  });
+
+  it('tells the server how many people are in the room, when it was told', async () => {
+    expect((await press({ mode: 'conversation', speakers: 3 })).start?.speakers).toBe(3);
+    expect((await press({ mode: 'conversation' })).start).not.toHaveProperty('speakers');
+  });
+
+  it('records under the mode the switch is showing, not the one it was mounted with', async () => {
+    // The switch can be flipped between meetings; the constraints belong to
+    // the press, not to the mount.
+    const calls: CaptureCall[] = [];
+    const h = mount((opts) => {
+      calls.push(opts);
+      return Promise.resolve({ ok: true, capture: { stop: vi.fn() } });
+    });
+    h.modeSwitch().click();
+    h.toggle().click();
+    await settle();
+    expect(calls[0]?.mode).toBe('conversation');
   });
 });

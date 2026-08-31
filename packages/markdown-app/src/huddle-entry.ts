@@ -12,7 +12,8 @@
  * applies it beside the back arrow, as shell chrome that outlives each mount.
  */
 
-import { type CaptureMode, parseCaptureMode } from '@feedback/core';
+import { type CaptureMode, parseCaptureMode, parseRoomSpeakers } from '@feedback/core';
+import { type RoomAudioProcessing, parseRoomAudio } from './meeting-audio.ts';
 
 /** `?huddle=1` — set by the Board, consumed by the markdown mount. */
 export const HUDDLE_START_PARAM = 'huddle';
@@ -23,6 +24,37 @@ export const HUDDLE_START_PARAM = 'huddle';
  * anyone else is in the room: nothing announces an in-person conversation.
  */
 export const HUDDLE_MODE_PARAM = 'mode';
+
+/**
+ * `?speakers=3` — how many people are in the room, when somebody says.
+ *
+ * Read on EVERY visit rather than only on a huddle start, and left on the
+ * address when the one-shot flags are taken off, because it is not a gesture:
+ * it is a fact about the room that stays true across a reload and across the
+ * strip's own switch being flipped by hand.
+ */
+export const ROOM_SPEAKERS_PARAM = 'speakers';
+
+/**
+ * `?mic=ec1-ns0-agc0` — which of the browser's microphone processors this
+ * capture asks for. Same rule as `speakers`: a property of the room's
+ * hardware, not of the press, so it survives the reload.
+ *
+ * It exists because the measurement in `scripts/room-labels-check.ts` needs
+ * the SAME room recorded under different settings, and the only place those
+ * settings can be applied is the browser that opens the microphone.
+ */
+export const ROOM_MIC_PARAM = 'mic';
+
+/** How many voices this address expects, if it says. */
+export function huddleRoomSpeakers(search: string): number | undefined {
+  return parseRoomSpeakers(new URLSearchParams(search).get(ROOM_SPEAKERS_PARAM));
+}
+
+/** The microphone processing this address asks for, if it says. */
+export function huddleRoomAudio(search: string): RoomAudioProcessing | undefined {
+  return parseRoomAudio(new URLSearchParams(search).get(ROOM_MIC_PARAM));
+}
 
 /** Whether this address asks the editor to start the meeting on load. */
 export function wantsHuddleStart(search: string): boolean {

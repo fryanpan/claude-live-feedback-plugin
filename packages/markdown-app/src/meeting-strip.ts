@@ -38,6 +38,7 @@ import {
 import {
   type MeetingCapture,
   type MeetingCaptureStart,
+  type RoomAudioProcessing,
   startMeetingCapture,
 } from './meeting-audio.ts';
 
@@ -206,7 +207,11 @@ export interface MeetingStripOpts {
    *  deterministic in tests. */
   interval?: (fn: () => void, ms: number) => () => void;
   openSocket?: (url: string) => MeetingSocket;
-  startCapture?: (opts: { onFrame: (pcm: Int16Array) => void }) => Promise<MeetingCaptureStart>;
+  startCapture?: (opts: {
+    onFrame: (pcm: Int16Array) => void;
+    mode: CaptureMode;
+    room?: RoomAudioProcessing;
+  }) => Promise<MeetingCaptureStart>;
   /**
    * Ask for the mic on mount, without a press — the Board's "Start a planning
    * huddle" button was the press, on a page that is gone by the time this
@@ -223,6 +228,15 @@ export interface MeetingStripOpts {
    * Board's "Record a conversation" button carries it in on the address.
    */
   mode?: CaptureMode;
+  /**
+   * How many people the room holds, and which microphone processors to ask
+   * for. Both ride the address (`?speakers=3&mic=ec1-ns0-agc0`) and both are
+   * about the ROOM, so neither means anything to a solo capture: the count
+   * only reaches the engine when the mode pays for labels, and the processing
+   * only replaces the defaults for a `conversation`.
+   */
+  speakers?: number;
+  room?: RoomAudioProcessing;
   /**
    * Ask the person what to call a speaker; `current` is what the tag says
    * now. Null or blank means leave it. Defaults to `window.prompt` — the
@@ -637,6 +651,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       onFrame: (pcm) => {
         if (socketOpen) socket?.send(pcm);
       },
+      // Read HERE rather than at mount: the switch can be flipped between
+      // meetings, and the constraints belong to the microphone this press is
+      // about to open.
+      mode,
+      ...(opts.room ? { room: opts.room } : {}),
     });
     if (disposed || attempt !== generation) {
       if (started.ok) started.capture.stop();
@@ -662,6 +681,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           sampleRate: MEETING_SAMPLE_RATE,
           encoding: MEETING_AUDIO_ENCODING,
           mode,
+          // Absent unless somebody said, so the server's default stays the
+          // one place the room size is guessed.
+          ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
         }),
       );
     };

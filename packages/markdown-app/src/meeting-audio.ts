@@ -19,7 +19,7 @@
  * "the mic needs https or localhost" would be a second thing to keep true.
  */
 
-import { MEETING_SAMPLE_RATE } from '@feedback/core';
+import { type CaptureMode, DEFAULT_CAPTURE_MODE, MEETING_SAMPLE_RATE } from '@feedback/core';
 import {
   type OriginFacts,
   defaultOriginFacts,
@@ -34,15 +34,87 @@ import {
  */
 export const MEETING_FRAME_SAMPLES = MEETING_SAMPLE_RATE / 10;
 
+/**
+ * The browser's three microphone processors, as one config.
+ *
+ * They are a config rather than three literals because a ROOM is not the
+ * situation any of them was tuned for. Echo cancellation, noise suppression
+ * and automatic gain control are built for one near-field talker on a laptop:
+ * AGC renormalises level continuously, noise suppression gates the quieter
+ * part of the spectrum, and both act on exactly the cues — relative loudness,
+ * timbre, the difference between the person at the mic and the person across
+ * the table — that a diarizer uses to tell two voices apart. Whether they
+ * help or hurt a shared microphone is a MEASUREMENT, not an opinion, and
+ * `scripts/room-labels-check.ts` is the instrument; this shape is what lets
+ * one recording session vary them.
+ */
+export interface RoomAudioProcessing {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+}
+
+/**
+ * What a room capture asks for until the measurement says otherwise.
+ *
+ * Deliberately the SAME three answers a solo capture has always given. The
+ * argument above says the processors are suspect in a room; it does not say
+ * which way, and changing a default on an argument rather than on a number is
+ * how a subsystem acquires settings nobody can explain. Move this when
+ * `room-labels-check.ts` has run against a real two-person recording — the
+ * whole point of naming it here is that moving it is one line.
+ */
+export const ROOM_AUDIO_DEFAULT: RoomAudioProcessing = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+/** The short spelling the address knob and the measurement report share. */
+export function formatRoomAudio(cfg: RoomAudioProcessing): string {
+  const bit = (on: boolean) => (on ? '1' : '0');
+  return `ec${bit(cfg.echoCancellation)}-ns${bit(cfg.noiseSuppression)}-agc${bit(cfg.autoGainControl)}`;
+}
+
+/**
+ * A config out of `ec1-ns0-agc0`, or nothing.
+ *
+ * Nothing for anything unreadable, so a typo in an address bar falls back to
+ * the default instead of silently recording under half a setting. Each flag
+ * is independent: `ns0` alone leaves the other two at their defaults.
+ */
+export function parseRoomAudio(raw: string | null | undefined): RoomAudioProcessing | undefined {
+  if (!raw) return undefined;
+  const flags = /^(?:ec([01])-?)?(?:ns([01])-?)?(?:agc([01]))?$/.exec(raw.trim().toLowerCase());
+  if (!flags || flags.slice(1).every((f) => f === undefined)) return undefined;
+  const read = (v: string | undefined, fallback: boolean) =>
+    v === undefined ? fallback : v === '1';
+  return {
+    echoCancellation: read(flags[1], ROOM_AUDIO_DEFAULT.echoCancellation),
+    noiseSuppression: read(flags[2], ROOM_AUDIO_DEFAULT.noiseSuppression),
+    autoGainControl: read(flags[3], ROOM_AUDIO_DEFAULT.autoGainControl),
+  };
+}
+
 /** What the browser is asked for: one channel of cleaned-up speech. */
 export const MEETING_CONSTRAINTS: MediaStreamConstraints = {
-  audio: {
-    channelCount: 1,
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  },
+  audio: { channelCount: 1, ...ROOM_AUDIO_DEFAULT },
 };
+
+/**
+ * The constraints for a capture, given what its room is doing.
+ *
+ * A `solo` capture is not a room and takes no config: it is one person at
+ * arm's length, which is the case every one of these processors was designed
+ * for, and it keeps `MEETING_CONSTRAINTS` exactly as it was.
+ */
+export function captureConstraints(
+  mode: CaptureMode,
+  room?: RoomAudioProcessing,
+): MediaStreamConstraints {
+  if (mode !== 'conversation') return MEETING_CONSTRAINTS;
+  return { audio: { channelCount: 1, ...(room ?? ROOM_AUDIO_DEFAULT) } };
+}
 
 /**
  * Float samples to signed 16-bit, clamped.
@@ -273,6 +345,10 @@ export type MeetingCaptureStart =
 export interface MeetingCaptureOpts {
   /** One frame of `MEETING_FRAME_SAMPLES` at `MEETING_SAMPLE_RATE`. */
   onFrame: (pcm: Int16Array) => void;
+  /** What the microphone is about to hear. Defaults to `solo`. */
+  mode?: CaptureMode;
+  /** Room processing for a `conversation`; ignored by a solo capture. */
+  room?: RoomAudioProcessing;
   deps?: MeetingCaptureDeps;
 }
 
@@ -299,7 +375,9 @@ export async function startMeetingCapture(opts: MeetingCaptureOpts): Promise<Mee
 
   let stream: MediaStream;
   try {
-    stream = await (deps.getMedia ?? defaultGetMedia)(MEETING_CONSTRAINTS);
+    stream = await (deps.getMedia ?? defaultGetMedia)(
+      captureConstraints(opts.mode ?? DEFAULT_CAPTURE_MODE, opts.room),
+    );
   } catch (err) {
     return { ok: false, kind: 'denied', message: recognitionErrorMessage(mediaErrorCode(err)) };
   }
