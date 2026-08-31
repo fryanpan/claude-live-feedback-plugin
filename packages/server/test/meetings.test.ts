@@ -288,6 +288,38 @@ describe('meeting store: who said it', () => {
     ]);
   });
 
+  it('a turn settled twice keeps the LAST words, in the place it first settled', () => {
+    // The bot path's provider ends a turn twice — rough, then punctuated by
+    // format_turns — and the two are indistinguishable by the time they
+    // reach here. Keeping the first would leave the durable record
+    // permanently worse than the notes composed from the same meeting.
+    const store = new MeetingStore(dataDir);
+    const meeting = store.start({
+      docId: 'revise',
+      engine: 'mock',
+      sampleRate: 16_000,
+      mode: 'conversation',
+    });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.recordTurn(0, 'so the sync is the bottleneck', 'pA');
+    meeting.recordTurn(1, 'agreed', 'pB');
+    meeting.recordTurn(0, 'So the sync is the bottleneck.', 'pA');
+    // Settling it a third time with the same words is still not news.
+    meeting.recordTurn(0, 'So the sync is the bottleneck.', 'pA');
+    const record = meeting.stop();
+    expect(record.turns).toBe(2);
+    const lines = readFileSync(meetingTranscriptPath(dataDir, 'revise', meeting.meetingId), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    // Append-only: the revision is a third line, not a rewrite of the first.
+    expect(lines).toHaveLength(3);
+    expect(readTranscript(dataDir, 'revise', meeting.meetingId)).toEqual([
+      expect.objectContaining({ turn: 0, text: 'So the sync is the bottleneck.', speaker: 'pA' }),
+      expect.objectContaining({ turn: 1, text: 'agreed', speaker: 'pB' }),
+    ]);
+  });
+
   it('a revision that takes the label away clears it, rather than leaving a stale one', () => {
     const store = new MeetingStore(dataDir);
     const meeting = store.start({

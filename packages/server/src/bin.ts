@@ -13,6 +13,7 @@ import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
+import { createRecallClient } from './recall.ts';
 import { haikuReviewJudge, reviewGateEnabled } from './review-judge.ts';
 import { captureServerError, flushServerSentry, initServerSentry } from './sentry.ts';
 import { createServer } from './server.ts';
@@ -465,6 +466,30 @@ if (!transcription) {
 // SAME dedicated-key consent as the summarizer, because what it sends off-
 // machine is the meeting transcript itself. Absent key → null → meetings
 // still record transcripts; the notes section simply never appears.
+// The ONLY place a real Recall client is constructed — the same seam again,
+// and the most expensive one to get wrong: a bot bills the vendor per
+// meeting-hour AND opens an AssemblyAI session behind it, so a client built
+// by anything that merely spins a server up would be a meter attached to a
+// test suite. No key → null → the invite route answers `not_configured` and
+// the doc says meeting bots are not set up.
+const meetingBot = createRecallClient();
+if (meetingBot && !meetingBot.config.publicWsBase) {
+  // Worth saying out loud rather than discovering at invite time: this is the
+  // one piece of configuration that cannot be inferred, because the server
+  // binds to localhost and Recall dials in from the public internet.
+  console.log(
+    '[meetings] Recall key found but RECALL_PUBLIC_WS_BASE is unset; ' +
+      'bots stay disabled until it names a publicly reachable wss:// origin.',
+  );
+}
+const meetingBotWebhookSecret = process.env.RECALL_WEBHOOK_SECRET?.trim() || undefined;
+if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
+  console.log(
+    '[meetings] RECALL_WEBHOOK_SECRET is unset; bot status webhooks are ' +
+      'accepted unsigned. Set it to the signing secret from the Recall dashboard.',
+  );
+}
+
 const notesComposer = createHaikuNotesComposer();
 if (transcription && !notesComposer) {
   console.log(
@@ -626,6 +651,8 @@ while (!handle) {
       ...(effortEstimator ? { effortEstimator } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
+      ...(meetingBot ? { meetingBot } : {}),
+      ...(meetingBotWebhookSecret ? { meetingBotWebhookSecret } : {}),
       ...(notesComposer ? { meetingNotes: { composer: notesComposer, taskExtractor } } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),
