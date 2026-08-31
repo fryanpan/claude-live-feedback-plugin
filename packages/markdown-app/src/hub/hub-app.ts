@@ -73,10 +73,14 @@ import {
   archivedGoalTotal,
   archivedGoals,
   archivedTasks,
+  bandOfGoal,
+  boardCalibration,
   boardSections,
+  boardSectionsWithEffort,
   cascadePhrase,
   cascadedSubgoals,
   clientDriftNotice,
+  goalBandIds,
   goalLabel,
   goalSection,
   holdWaitingItem,
@@ -1055,7 +1059,7 @@ async function main(): Promise<void> {
     // the board is open, and a picker built from a stale list offers agents
     // who have left.
     boardData.value = {
-      sections: boardSections(state.info?.goals ?? [], taskList(), filters),
+      sections: boardSectionsWithEffort(state.info?.goals ?? [], taskList(), filters, filters.now),
       pane: state.pane,
       showArchived,
       knownAgentIds: knownAgentIds(),
@@ -1507,6 +1511,18 @@ async function main(): Promise<void> {
       task,
       discussion: task ? discussion : undefined,
       tab: state.detailTab,
+      // Learned from the WHOLE board, not from this ticket's band: the panel
+      // reports what the estimate was scaled by, and the scaling is a property
+      // of everything that has closed. Unfiltered for the same reason the goal
+      // rollup is — a correction that moved when the reader changed tabs would
+      // be a correction about the reader.
+      calibration: task ? boardCalibration(state.info?.goals ?? [], taskList()) : undefined,
+      // The band the row renders under, which is the key its correction was
+      // filed under. A ticket whose goal id matches no band shows Backlog's
+      // arithmetic, exactly as it shows under Backlog on the board.
+      calibrationGoal: task
+        ? bandOfGoal(goalBandIds(state.info?.goals ?? []), task.goal)
+        : undefined,
       handlers: {
         onClose: () => {
           state.detailTaskId = null;
