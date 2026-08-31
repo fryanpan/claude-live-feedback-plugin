@@ -655,14 +655,9 @@ export interface BoardEffort {
  * most of the way back to the board's own experience instead of claiming a
  * factor of its own.
  */
-/** Every id a band can have on this board — goals and their subgoals. */
+/** Every id a band can have on this board. */
 export function goalBandIds(goals: HubGoal[]): Set<string> {
-  const known = new Set<string>();
-  for (const g of goals) {
-    known.add(g.id);
-    for (const sg of g.subgoals ?? []) known.add(sg.id);
-  }
-  return known;
+  return new Set(goals.map((g) => g.id));
 }
 
 /**
