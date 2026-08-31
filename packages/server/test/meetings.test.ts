@@ -472,3 +472,125 @@ describe('meeting store: how the room was told', () => {
     expect(read && 'announced' in read).toBe(false);
   });
 });
+
+describe('meeting store: naming a voice after the meeting', () => {
+  let dataDir: string;
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-late-name-'));
+  });
+  afterAll(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  /** A stopped two-voice conversation, the shape the rename surface outlives. */
+  const stoppedMeeting = (store: MeetingStore, docId: string): string => {
+    const meeting = store.start({ docId, engine: 'mock', sampleRate: 16_000, mode: 'conversation' });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.recordTurn(0, 'So the sync is the bottleneck.', 'A');
+    meeting.recordTurn(1, "Let's measure it first.", 'B');
+    meeting.stop();
+    return meeting.meetingId;
+  };
+
+  it('names a voice on a stopped meeting, and the record folds it like a live rename', () => {
+    const store = new MeetingStore(dataDir);
+    const meetingId = stoppedMeeting(store, 'late');
+    const result = store.nameSpeakerLater({ docId: 'late', meetingId, speaker: 'B', name: 'Priya' });
+    if (!result.ok) throw new Error(`refused: ${result.reason}`);
+    expect(result.speakers).toEqual({ B: 'Priya' });
+    // Read back off disk, same as a live rename would be.
+    expect(listMeetings(dataDir, 'late')[0]?.speakers).toEqual({ B: 'Priya' });
+    // The transcript keeps the raw label — the engine's word is not rewritten.
+    expect(readTranscript(dataDir, 'late', meetingId).map((t) => t.speaker)).toEqual(['A', 'B']);
+  });
+
+  it('renaming an already-named voice replaces it, and reports the names it started from', () => {
+    const store = new MeetingStore(dataDir);
+    const meetingId = stoppedMeeting(store, 'late-again');
+    store.nameSpeakerLater({ docId: 'late-again', meetingId, speaker: 'B', name: 'Priya' });
+    const result = store.nameSpeakerLater({
+      docId: 'late-again',
+      meetingId,
+      speaker: 'B',
+      name: 'Priya N',
+    });
+    if (!result.ok) throw new Error(`refused: ${result.reason}`);
+    // The prior map is what the notes were written with — the rewrite's "from".
+    expect(result.priorNames).toEqual({ B: 'Priya' });
+    expect(listMeetings(dataDir, 'late-again')[0]?.speakers).toEqual({ B: 'Priya N' });
+  });
+
+  it('refuses a meeting the index never heard of', () => {
+    const store = new MeetingStore(dataDir);
+    stoppedMeeting(store, 'late-missing');
+    const result = store.nameSpeakerLater({
+      docId: 'late-missing',
+      meetingId: 'not-a-meeting',
+      speaker: 'A',
+      name: 'Jordan',
+    });
+    expect(result).toEqual({ ok: false, reason: 'unknown_meeting' });
+  });
+
+  it('refuses a voice the meeting never carried — a name must attach to somebody', () => {
+    const store = new MeetingStore(dataDir);
+    const meetingId = stoppedMeeting(store, 'late-nobody');
+    const result = store.nameSpeakerLater({
+      docId: 'late-nobody',
+      meetingId,
+      speaker: 'C',
+      name: 'Jordan',
+    });
+    expect(result).toEqual({ ok: false, reason: 'unknown_speaker' });
+  });
+
+  it('a voice that was NAMED live but never spoke is still renameable', () => {
+    // Naming can land before a voice's first turn settles; the meeting can
+    // then stop before it ever speaks. The name map is as real a claim on the
+    // label as a turn is.
+    const store = new MeetingStore(dataDir);
+    const meeting = store.start({
+      docId: 'late-quiet',
+      engine: 'mock',
+      sampleRate: 16_000,
+      mode: 'conversation',
+    });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.recordTurn(0, 'Only voice.', 'A');
+    meeting.nameSpeaker('B', 'Sam');
+    meeting.stop();
+    const result = store.nameSpeakerLater({
+      docId: 'late-quiet',
+      meetingId: meeting.meetingId,
+      speaker: 'B',
+      name: 'Sam T',
+    });
+    if (!result.ok) throw new Error(`refused: ${result.reason}`);
+    expect(listMeetings(dataDir, 'late-quiet')[0]?.speakers).toEqual({ B: 'Sam T' });
+  });
+
+  it('refuses while the meeting is LIVE — the socket owns a running rename', () => {
+    // A live rename must also rewrite the composer's memory of what it wrote,
+    // which only the session reached over the audio socket can do. Accepting
+    // it here would record the name and then watch the next tick reintroduce
+    // the placeholder.
+    const store = new MeetingStore(dataDir);
+    const meeting = store.start({
+      docId: 'late-live',
+      engine: 'mock',
+      sampleRate: 16_000,
+      mode: 'conversation',
+    });
+    if (!meeting) throw new Error('expected a meeting');
+    meeting.recordTurn(0, 'Still going.', 'A');
+    const result = store.nameSpeakerLater({
+      docId: 'late-live',
+      meetingId: meeting.meetingId,
+      speaker: 'A',
+      name: 'Jordan',
+    });
+    expect(result).toEqual({ ok: false, reason: 'recording' });
+    meeting.stop();
+  });
+});

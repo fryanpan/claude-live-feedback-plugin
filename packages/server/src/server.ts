@@ -26,6 +26,7 @@ import {
   judgeReasonSentence,
   latestThreadedQuestion,
   locateReviewItemRange,
+  MAX_SPEAKER_NAME,
   normalizeEmail,
   pendingDeclaration,
   readReviewPayload,
@@ -35,6 +36,7 @@ import {
   reviewItemState,
   reviewPayloadMessage,
   reviewPayloadVersion,
+  speakerDisplayName,
   suggestOps,
   summaryHash,
 } from '@feedback/core';
@@ -9780,6 +9782,74 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // their own field, so a caller reading one is never reading the
           // other by accident.
           return j(200, { ...record, transcript: meetingStore.transcript(docId, meetingId) });
+        }
+        // --- Naming a voice AFTER the meeting ---
+        //
+        // During a meeting the audio socket carries `name_speaker`; this is
+        // the same verb for a meeting whose socket is gone — which is exactly
+        // when a person on the recording device gets around to the names. It
+        // writes the same index line and routes the same backwards rewrite
+        // into notes already written. A LIVE meeting is refused (409): its
+        // rename must also rewrite the composer's memory of what it wrote,
+        // which only the session on the socket can do.
+        const lateNameMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meetings\/([^/]+)\/speakers$/);
+        if (lateNameMatch && req.method === 'POST') {
+          const addressed = decodeURIComponent(lateNameMatch[1] ?? '');
+          const meetingId = decodeURIComponent(lateNameMatch[2] ?? '');
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const docId = rooms.get(addressed)?.docId ?? addressed;
+          const body = (await req.json().catch(() => null)) as {
+            speaker?: unknown;
+            name?: unknown;
+          } | null;
+          const speaker = typeof body?.speaker === 'string' ? body.speaker : '';
+          const name = typeof body?.name === 'string' ? body.name.trim() : '';
+          // The caps the socket's parser enforces by dropping the frame;
+          // refused out loud here, because HTTP can.
+          if (!speaker || speaker.length > 16 || !name || name.length > MAX_SPEAKER_NAME) {
+            return j(400, {
+              error: `speaker and name required; name at most ${MAX_SPEAKER_NAME} chars`,
+            });
+          }
+          const result = meetingStore.nameSpeakerLater({ docId, meetingId, speaker, name });
+          if (!result.ok) {
+            if (result.reason === 'unknown_meeting') return j(404, { error: 'meeting not found' });
+            if (result.reason === 'recording') {
+              return j(409, { error: 'meeting is live — rename it over the audio socket' });
+            }
+            return j(400, { error: 'that speaker is not in this meeting' });
+          }
+          // The rename reaches backwards, exactly as a live one does — same
+          // relabel, same sink. `from` is what the composer actually wrote
+          // (the prior name, or the placeholder), read BEFORE the map moved.
+          const names = result.speakers;
+          const from = speakerDisplayName(speaker, result.priorNames);
+          const to = speakerDisplayName(speaker, names);
+          const notes = meetingRelay.notesDeps;
+          if (from !== to && notes?.onRelabel) {
+            // Two voices can collide on one name; then the words in the notes
+            // do not say which voice they were, and only tagged mentions —
+            // which carry the label — are rewritten. Same narrowing, same
+            // reason as the live session's.
+            const labels = new Set([
+              ...meetingStore
+                .transcript(docId, meetingId)
+                .flatMap((t) => (t.speaker ? [t.speaker] : [])),
+              ...Object.keys(names),
+            ]);
+            const ambiguous = [...labels].some(
+              (label) => label !== speaker && speakerDisplayName(label, names) === from,
+            );
+            notes.onRelabel({
+              docId,
+              meetingId,
+              label: speaker,
+              from,
+              to,
+              rewriteUntagged: !ambiguous,
+            });
+          }
+          return j(200, { docId, meetingId, speakers: names });
         }
 
         // --- A doc's meeting bot: invite one, read its state, send it home ---
