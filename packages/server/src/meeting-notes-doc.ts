@@ -42,8 +42,8 @@
  * to the person and the notes would freeze there.
  */
 
-import { type DocType, contentKind, prose } from '@feedback/core';
-import type * as Y from 'yjs';
+import { type DocType, contentKind, prose, speakerTagHref, speakerTagText } from '@feedback/core';
+import * as Y from 'yjs';
 import {
   type NotesOwnership,
   createNotesOwnership,
@@ -159,6 +159,88 @@ function findNotesSectionSpan(
     }
   }
   return { start, endExclusive };
+}
+
+/**
+ * Rename a voice at every INLINE SPEAKER TAG in the notes section — the
+ * precise half of a rename, and the half that cannot be wrong.
+ *
+ * A tag is a markdown link whose href carries the engine label
+ * (`[@Speaker B](speaker:B)`), so this asks the doc a structural question —
+ * "which runs are marked as voice B?" — where `relabelNotesSection` below
+ * can only ask a textual one — "which runs say the words 'Speaker B'?". The
+ * difference is the whole reason tags exist: two voices a person has given
+ * the same name are still two labels, so each renames alone, and a person
+ * who writes "Speaker B" in a sentence of their own is writing words, not an
+ * attribution, and is left alone.
+ *
+ * Written IN PLACE, run by run, carrying each site's own marks — the link
+ * mark included, which is what keeps the tag a tag. Nothing is re-parsed and
+ * no item is replaced, so a sentence a person edited around the tag keeps
+ * every other word of theirs.
+ */
+export function retagSpeakerInNotes(
+  ydoc: Y.Doc,
+  label: string,
+  displayName: string,
+  heading: string = MEETING_NOTES_HEADING,
+): { replaced: number } {
+  const fragment = prose.getProseFragment(ydoc);
+  const span = findNotesSectionSpan(fragment, heading);
+  if (!span) return { replaced: 0 };
+  const top = fragment.toArray() as Y.XmlElement[];
+  const nodes: Y.XmlText[] = [];
+  // From start + 1: the heading is the section's own anchor, never a tag.
+  for (let i = span.start + 1; i < span.endExclusive; i++) collectTextNodes(top[i]!, nodes);
+  const href = speakerTagHref(label);
+  const want = speakerTagText(label, { [label]: displayName });
+
+  let replaced = 0;
+  ydoc.transact(() => {
+    for (const node of nodes) {
+      const edits: Array<{ offset: number; length: number; attributes: Record<string, unknown> }> =
+        [];
+      let offset = 0;
+      for (const op of node.toDelta() as YTextOp[]) {
+        // A non-string insert is an embed: one position wide, and never a
+        // speaker tag. Counted so later offsets stay true.
+        if (typeof op.insert !== 'string') {
+          offset += 1;
+          continue;
+        }
+        const length = op.insert.length;
+        const attributes = op.attributes;
+        const linked = attributes?.link as { href?: unknown } | undefined;
+        if (linked?.href === href && op.insert !== want) {
+          edits.push({ offset, length, attributes: attributes ?? {} });
+        }
+        offset += length;
+      }
+      // Descending, so every offset not yet used is still valid: an edit
+      // only ever changes text at or after the site it lands on.
+      for (let i = edits.length - 1; i >= 0; i--) {
+        const edit = edits[i]!;
+        node.delete(edit.offset, edit.length);
+        prose.insertTextWithMarks(node, edit.offset, want, { attributes: edit.attributes });
+        replaced++;
+      }
+    }
+  }, 'agent');
+  return { replaced };
+}
+
+/** One op of a `Y.XmlText` delta, as much of it as this module reads. */
+interface YTextOp {
+  insert: unknown;
+  attributes?: Record<string, unknown>;
+}
+
+/** Every `Y.XmlText` under `el`, itself included, in reading order. */
+function collectTextNodes(el: Y.XmlElement, into: Y.XmlText[]): void {
+  for (const child of el.toArray()) {
+    if (child instanceof Y.XmlText) into.push(child);
+    else if (child instanceof Y.XmlElement) collectTextNodes(child, into);
+  }
 }
 
 export interface RelabelNotesResult {
@@ -354,6 +436,15 @@ export function readNotesState(
  * never prose is not an error, it is a meeting whose notes are elsewhere.
  * Returns how many mentions moved — zero when the voice was never written
  * about, which is ordinary.
+ *
+ * TWO PASSES, AND THE ORDER IS NOT ARBITRARY. The tags go first and always:
+ * they name the voice by label, so they are right whatever anybody is
+ * called. The plain-text sweep runs second and only when the relabel says it
+ * may — it is what reaches notes composed before tags existed, and it is
+ * also the pass that cannot tell two voices with one name apart. Running it
+ * second means a mention that was already retagged is no longer spelled the
+ * old way, so the sweep has nothing left to find there and cannot touch it
+ * twice.
  */
 export function applyNotesRelabel(
   rooms: NotesDocRooms,
@@ -370,7 +461,11 @@ export function applyNotesRelabel(
     room.ydoc,
     MEETING_NOTES_HEADING,
     ledger.forDoc(relabel.docId),
-    () => relabelNotesSection(room.ydoc, relabel.from, relabel.to).replaced,
+    () => {
+      const tagged = retagSpeakerInNotes(room.ydoc, relabel.label, relabel.to).replaced;
+      if (!relabel.rewriteUntagged) return tagged;
+      return tagged + relabelNotesSection(room.ydoc, relabel.from, relabel.to).replaced;
+    },
   );
 }
 
