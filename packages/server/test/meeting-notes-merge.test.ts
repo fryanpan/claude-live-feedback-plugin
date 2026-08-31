@@ -13,6 +13,7 @@ import { prose, suggestOps } from '@feedback/core';
 import * as Y from 'yjs';
 import {
   type IncomingItem,
+  NOTES_REWRITE_SIMILARITY,
   type NoteItem,
   type NotesOwnership,
   classifyOwnership,
@@ -377,6 +378,33 @@ describe('mergeNotesSection — the stale-compose race', () => {
     const md = markdownOf(ydoc);
     expect(md).toContain('- Ship on Friday.');
     expect(md.match(/Ship on Friday\./g)?.length).toBe(1);
+  });
+
+  it('a line scoring EXACTLY the cutoff is still a rewrite, not a new note', () => {
+    // 3 shared words of 5 and 5 — Dice 0.6 on the nose. The constant says
+    // 0.6 counts; a strict > here would insert the composer's version as a
+    // second note and leave him holding both.
+    const ydoc = docFrom('# Huddle\n');
+    const own = createNotesOwnership();
+    mergeNotesSection(ydoc, '## Meeting notes\n\n- placeholder\n', HEADING, {
+      ownership: own,
+    });
+    typeBullet(ydoc, 1, 'ship the migration on friday');
+    const read = readNotesSection(ydoc, HEADING, own)!;
+    expect(similarity('ship the migration on friday', 'ship the migration next tuesday')).toBe(
+      NOTES_REWRITE_SIMILARITY,
+    );
+
+    const merged = mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\n- placeholder\n- ship the migration next tuesday\n',
+      HEADING,
+      { ownership: own, basedOn: read.items },
+    );
+    expect(merged.inserted).toBe(0);
+    expect(merged.suggested).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- ship the migration on friday');
+    expect(markdownOf(ydoc)).not.toContain('next tuesday');
   });
 
   it('with no race, the same shape of revision lands normally', () => {

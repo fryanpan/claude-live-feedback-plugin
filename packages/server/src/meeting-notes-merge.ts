@@ -411,11 +411,15 @@ export function planNotesMerge(
     for (let h = 0; h < gapCur.length; h++) {
       if (gapAgent[h]) continue;
       let best = -1;
-      let bestScore = NOTES_REWRITE_SIMILARITY;
+      // Starts below every real score, and the threshold is checked
+      // separately — a line scoring EXACTLY the cutoff is a rewrite, which
+      // is what the constant's own comment says. Ties go to the first, so
+      // the composer's order breaks them.
+      let bestScore = -1;
       for (let k = 0; k < gapInc.length; k++) {
         if (claimed.has(k)) continue;
         const s = similarity(gapCur[h]!.md, gapInc[k]!.md);
-        if (s > bestScore) {
+        if (s >= NOTES_REWRITE_SIMILARITY && s > bestScore) {
           bestScore = s;
           best = k;
         }
@@ -487,10 +491,10 @@ function missingFrom(basedOn: readonly string[], current: readonly NoteItem[]): 
  *  enough. Mutates `pool` — one vanished line explains one incoming line. */
 function takeSimilar(pool: string[], md: string): string | null {
   let best = -1;
-  let bestScore = NOTES_REWRITE_SIMILARITY;
+  let bestScore = -1;
   for (let i = 0; i < pool.length; i++) {
     const s = similarity(pool[i]!, md);
-    if (s > bestScore) {
+    if (s >= NOTES_REWRITE_SIMILARITY && s > bestScore) {
       bestScore = s;
       best = i;
     }
