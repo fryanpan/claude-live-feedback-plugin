@@ -524,6 +524,13 @@ Nothing is lost while it holds; the rolling window draws as soon as the line
 comes back. The device's own caption does NOT hold, because it is a courtesy
 for something the room is already hearing.
 
+**Every terminal path silences the announcement, not just Stop.** A relay
+error, an `unavailable`, a server-side stop and a dropped socket all end a
+recording as finally as the button does, and each one cancels the announcer
+and bumps the generation. Without that the device carries on saying "this
+conversation is being recorded" into a room where it is not, and the
+sentence's late resolution writes a claim onto a meeting that failed.
+
 **The SERVER's mode decides whether there is a room.** `ready` echoes the mode
 that was actually opened, and the announcement is reconciled against that
 echo rather than against the request — otherwise an old server answering

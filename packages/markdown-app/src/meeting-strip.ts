@@ -691,6 +691,24 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     capture = null;
   }
 
+  /**
+   * The meeting is over, however it ended: nothing may still be announcing
+   * it.
+   *
+   * Called from EVERY terminal path, not only from Stop, and that is the
+   * point — a relay error or a dropped socket ends a recording just as
+   * finally as the button does. Without this the device carries on saying
+   * "this conversation is being recorded" into a room where it is not, and
+   * the sentence's late resolution can write a claim onto a meeting that
+   * failed. The generation bump is what makes the pending `announce()`
+   * return without touching anything.
+   */
+  function endAnnouncement(): void {
+    generation += 1;
+    holdAnnouncement = false;
+    announcer.cancel();
+  }
+
   function closeSocket(): void {
     const sock = socket;
     socket = null;
@@ -744,21 +762,21 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         break;
       case 'unavailable':
         // The words are never coming, so the mic goes back rather than sitting
-        // open behind a settled state — and the announcement stops holding a
-        // line that is about to say why there is no meeting.
-        holdAnnouncement = false;
+        // open behind a settled state — and nothing is left announcing a
+        // meeting that is not happening.
+        endAnnouncement();
         releaseAudio();
         closeSocket();
         setState({ kind: 'unavailable', reason: msg.reason, message: msg.message });
         break;
       case 'stopped':
-        holdAnnouncement = false;
+        endAnnouncement();
         releaseAudio();
         closeSocket();
         setState({ kind: 'idle' });
         break;
       case 'error':
-        holdAnnouncement = false;
+        endAnnouncement();
         releaseAudio();
         closeSocket();
         setState({ kind: 'error', message: msg.message || 'The meeting ended unexpectedly.' });
@@ -857,7 +875,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     sock.onmessage = (ev) => handle(parseMeetingServerMessage(ev.data));
     sock.onclose = () => {
       socketOpen = false;
-      holdAnnouncement = false;
+      endAnnouncement();
       releaseAudio();
       setState({ kind: 'error', message: 'The connection to the meeting was lost.' });
     };
@@ -867,11 +885,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   }
 
   function stop(): void {
-    generation += 1;
-    holdAnnouncement = false;
     // A meeting stopped during the announcement stops announcing: the room
     // does not need to be told about a recording that is over.
-    announcer.cancel();
+    endAnnouncement();
     if (socketOpen) socket?.send(JSON.stringify({ type: 'stop' }));
     releaseAudio();
     closeSocket();

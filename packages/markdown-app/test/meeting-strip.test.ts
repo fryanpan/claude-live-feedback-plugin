@@ -1292,3 +1292,36 @@ describe('the SERVER decides whether there is a room to announce to', () => {
     expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
   });
 });
+
+describe('nothing keeps announcing a meeting that ended', () => {
+  /** Every way a meeting can end that is not the Stop button. */
+  const endings: Array<[string, (sock: FakeSocket) => void]> = [
+    ['the relay reports an error', (s) => s.serve({ type: 'error', message: 'engine died' })],
+    ['the server stops it', (s) => s.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 })],
+    [
+      'the engine turns out to be unavailable',
+      (s) => s.serve({ type: 'unavailable', reason: 'engine_unavailable', message: 'no' }),
+    ],
+    ['the socket drops', (s) => s.onclose?.()],
+  ];
+
+  for (const [name, end] of endings) {
+    it(`silences the device when ${name}`, async () => {
+      const announcer = new FakeAnnouncer();
+      const { h, sock } = await recordingConversation(announcer);
+      expect(announcer.speaking).toBe(true);
+      if (sock) end(sock);
+      // The device must not carry on telling a room it is being recorded
+      // into a room where it is not.
+      expect(announcer.cancels).toBeGreaterThanOrEqual(1);
+      // And the sentence resolving afterwards writes nothing: no claim on a
+      // meeting that failed, and no prompt on a strip that has moved on.
+      const before = h.root.dataset.state;
+      announcer.settle(true);
+      await settle();
+      expect(h.root.dataset.state).toBe(before);
+      expect(h.strip.announced()).toBeUndefined();
+      expect(h.note()).not.toMatch(/say this out loud/i);
+    });
+  }
+});
