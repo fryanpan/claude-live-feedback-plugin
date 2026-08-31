@@ -12,12 +12,26 @@
  * applies it beside the back arrow, as shell chrome that outlives each mount.
  */
 
+import { type CaptureMode, parseCaptureMode } from '@feedback/core';
+
 /** `?huddle=1` — set by the Board, consumed by the markdown mount. */
 export const HUDDLE_START_PARAM = 'huddle';
+
+/**
+ * `?mode=conversation` — the Board's "Record a conversation" button. The
+ * choice is made on the Board because that press is the only thing that says
+ * anyone else is in the room: nothing announces an in-person conversation.
+ */
+export const HUDDLE_MODE_PARAM = 'mode';
 
 /** Whether this address asks the editor to start the meeting on load. */
 export function wantsHuddleStart(search: string): boolean {
   return new URLSearchParams(search).get(HUDDLE_START_PARAM) === '1';
+}
+
+/** What the huddle on this address listens for. Solo unless it says so. */
+export function huddleCaptureMode(search: string): CaptureMode {
+  return parseCaptureMode(new URLSearchParams(search).get(HUDDLE_MODE_PARAM));
 }
 
 /** The same address with the flag taken out; everything else stays. */
@@ -30,18 +44,52 @@ export function withoutHuddleStart(href: string): string {
   const hash = hashAt < 0 ? '' : href.slice(hashAt);
   const params = new URLSearchParams(search);
   params.delete(HUDDLE_START_PARAM);
+  // Both halves of the same one-shot gesture: leaving the mode behind would
+  // make a reload of this address a conversation nobody asked for.
+  params.delete(HUDDLE_MODE_PARAM);
   const rest = params.toString();
   return `${path}${rest ? `?${rest}` : ''}${hash}`;
 }
 
 /**
+ * Whether this browser has been told it may only read.
+ *
+ * A latch, and the reason it is one: the crumb is written on EVERY
+ * navigation, unconditionally, because a word left over from the last doc is
+ * a wrong label on this one. So a caller that sets "Reading:" once has it
+ * overwritten by the next in-place navigation, and the surface goes back to
+ * announcing "Editing:" to somebody who cannot edit. The fact belongs to the
+ * browser, not to the visit, so it is remembered here and re-applied by the
+ * same function that would otherwise undo it.
+ */
+let readingOnly = false;
+/** The last thing the crumb was told, so the latch can re-render it. */
+let lastHuddle = false;
+
+/** Say this browser may only read, and repaint the crumb now. */
+export function applyReadingCrumb(doc: Document): void {
+  readingOnly = true;
+  applyHuddleCrumb(doc, lastHuddle);
+}
+
+/** Test seam — the latch is module state and outlives a single test. */
+export function resetReadingCrumbForTest(): void {
+  readingOnly = false;
+  lastHuddle = false;
+}
+
+/**
  * Name a huddle doc in the crumb, or put "Editing:" back for the next doc.
- * Always writes both branches — navigation is in place, and a word left over
+ * Always writes every branch — navigation is in place, and a word left over
  * from the last doc is a wrong label on this one.
+ *
+ * "Huddle" survives the reading latch: it names WHAT the doc is, not what
+ * you may do to it. "Editing:" does not, because it claims the second thing.
  */
 export function applyHuddleCrumb(doc: Document, huddle: boolean): void {
+  lastHuddle = huddle;
   const label = doc.querySelector('.doc-crumb .doc-label');
   if (!label) return;
-  label.textContent = huddle ? 'Huddle' : 'Editing:';
+  label.textContent = huddle ? 'Huddle' : readingOnly ? 'Reading:' : 'Editing:';
   label.classList.toggle('doc-label-huddle', huddle);
 }

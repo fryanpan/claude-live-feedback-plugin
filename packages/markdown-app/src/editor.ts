@@ -77,6 +77,16 @@ export interface CreateEditorOpts {
    *  their color (edit-wash.ts). `whenSynced` gates attribution on the first
    *  sync so hydration is nobody's edit. Absent = no wash, no plugin. */
   recentEdits?: { whenSynced: (cb: () => void) => void };
+  /**
+   * Whether the surface accepts typing AT ALL, from its first paint. Defaults
+   * to `true` — the markdown surface owns its own view/edit toggle and calls
+   * `setEditable` itself.
+   *
+   * Passed at CONSTRUCTION rather than corrected afterwards on purpose: a
+   * surface built editable and locked a moment later is editable for that
+   * moment, which is the whole failure the write gate exists to prevent.
+   */
+  editable?: boolean;
 }
 
 export function createEditor(opts: CreateEditorOpts): EditorHandle {
@@ -99,6 +109,7 @@ export function createEditor(opts: CreateEditorOpts): EditorHandle {
 
   const editor = new Editor({
     element: opts.parent,
+    editable: opts.editable ?? true,
     extensions: [
       StarterKit.configure({
         undoRedo: false, // Yjs Collaboration plugin owns undo/redo

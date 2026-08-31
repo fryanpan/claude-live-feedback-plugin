@@ -252,7 +252,17 @@ describe('GET /api/auth/session', () => {
   it('answers plainly with no cookie at all', async () => {
     const res = await fetch(`${base}/api/auth/session`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ required: false, authenticated: false });
+    // Exact, not a subset: this route's whole job is to say plainly what it
+    // knows, and a field appearing here silently is how a client starts
+    // acting on something nobody meant to publish. `signInToWrite`/`canWrite`
+    // joined it with the sign-in write gate (middleware/write-gate.ts) — both
+    // report the gate's default-off state.
+    expect(await res.json()).toEqual({
+      required: false,
+      authenticated: false,
+      signInToWrite: false,
+      canWrite: true,
+    });
   });
 });
 

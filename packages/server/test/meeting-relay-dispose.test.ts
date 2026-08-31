@@ -171,7 +171,7 @@ describe('meeting relay dispose', () => {
     expect(waited).toBeLessThan(15_000);
     // The doc is claimable again even though the meeting never finished.
     expect(
-      store.start({ docId: 'wedged-doc', engine: 'wedged', sampleRate: 16000 }),
+      store.start({ docId: 'wedged-doc', engine: 'wedged', sampleRate: 16000, mode: 'solo' }),
     ).not.toBeNull();
   }, 20_000);
 
@@ -187,12 +187,16 @@ describe('meeting relay dispose', () => {
     relay.onOpen(ws);
     relay.onText(ws, JSON.stringify({ type: 'start', sampleRate: 16000, encoding: 'pcm_s16le' }));
     await settle();
-    expect(store.start({ docId: 'orphan-doc', engine: 'plain', sampleRate: 16000 })).toBeNull();
+    expect(
+      store.start({ docId: 'orphan-doc', engine: 'plain', sampleRate: 16000, mode: 'solo' }),
+    ).toBeNull();
 
     await relay.dispose();
 
     // The doc is claimable again: nothing is left marked as recording by a
     // connection that is gone.
-    expect(store.start({ docId: 'orphan-doc', engine: 'plain', sampleRate: 16000 })).not.toBeNull();
+    expect(
+      store.start({ docId: 'orphan-doc', engine: 'plain', sampleRate: 16000, mode: 'solo' }),
+    ).not.toBeNull();
   });
 });

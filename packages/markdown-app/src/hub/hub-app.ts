@@ -8,19 +8,33 @@
  * mutation goes through the REST gate — never by writing into the maps,
  * which the server would revert.
  */
-import { type ReviewPayload, type Thread, type User, connect, escapeHtml } from '@feedback/core';
+import {
+  type CaptureMode,
+  type ReviewPayload,
+  type Thread,
+  type User,
+  connect,
+  escapeHtml,
+} from '@feedback/core';
 import {
   renderConnectionBanner,
   renderLiveStaleNotice,
   watchConnection,
   watchLiveSync,
 } from '../connection-state.ts';
+import { HUDDLE_MODE_PARAM } from '../huddle-entry.ts';
 import { MIC_ICON, SVG, SVG_ENDS } from '../icons.ts';
 import { ensureUserIdentity } from '../identity-prompt.ts';
 import { wireKeyboardInset } from '../keyboard-inset.ts';
 import { staleTaskLinkStatuses } from '../link-titles.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { pageSentry } from '../sentry-page.ts';
+import {
+  asBackgroundWrite,
+  fetchWriteAccess,
+  installWriteGateNotice,
+  showSignInBar,
+} from '../signin/write-gate.ts';
 import { installStaleClientNotice } from '../stale-client.ts';
 import { type VoiceAck, createVoiceCapture } from '../voice-capture.ts';
 import { activityCommentRequest, asksOf } from './activity-model.ts';
@@ -73,10 +87,14 @@ import {
   archivedGoalTotal,
   archivedGoals,
   archivedTasks,
+  bandOfGoal,
+  boardCalibration,
   boardSections,
+  boardSectionsWithEffort,
   cascadePhrase,
   cascadedSubgoals,
   clientDriftNotice,
+  goalBandIds,
   goalLabel,
   goalSection,
   holdWaitingItem,
@@ -482,6 +500,10 @@ function buildShell(root: HTMLElement, name: string): void {
 }
 
 async function main(): Promise<void> {
+  // A refused write raises a sign-in prompt wherever it happened. The board's
+  // `send()` reports every failure as a toast, and "Couldn't save" is not
+  // something a signed-out person can act on. See signin/write-gate.ts.
+  installWriteGateNotice();
   const root = document.getElementById('hub-root');
   const workspaceId = workspaceIdFromPath();
   if (!root || !workspaceId) return;
@@ -493,10 +515,21 @@ async function main(): Promise<void> {
   // its accessory bar with no scroll left to reach it.
   wireKeyboardInset();
 
-  const user: User = await ensureUserIdentity(new URLSearchParams(location.search).get('as'), {
-    get: (k) => localStorage.getItem(k),
-    set: (k, v) => localStorage.setItem(k, v),
-  });
+  // Same order as the doc surface: the write answer decides whether the name
+  // prompt is worth showing. See signin/write-gate.ts.
+  const writeAccess = await fetchWriteAccess();
+  // The bar is raised after `buildShell` below, not here: it mounts as a row
+  // under `.hub-topbar`, and at this point `#hub-root` is still the empty div
+  // the server sent. Raised here it would be wiped by the very next
+  // `root.innerHTML`.
+  const user: User = await ensureUserIdentity(
+    new URLSearchParams(location.search).get('as'),
+    {
+      get: (k) => localStorage.getItem(k),
+      set: (k, v) => localStorage.setItem(k, v),
+    },
+    writeAccess.canWrite ? {} : { suppressNamePrompt: true },
+  );
   const author = { id: user.id, name: user.name, kind: user.kind, color: user.color };
 
   // Everything the address names, read once: nav destination, an open task
@@ -565,6 +598,8 @@ async function main(): Promise<void> {
   );
   if (initial) state.info = initial.workspace;
   buildShell(root, state.info?.name ?? workspaceId);
+  // Now that there is a header to sit under. See signin/write-gate.ts.
+  if (!writeAccess.canWrite) showSignInBar();
   // The Preact proving island (hidden; owns its own wrapper under root).
   // buildShell wrote root.innerHTML just above, so this mounts AFTER the last
   // vanilla wipe of root — the contract is that no vanilla code wipes a
@@ -669,6 +704,9 @@ async function main(): Promise<void> {
     connect: (docId) => connect(wsUrl(docId, 'markdown')),
     loadEditor: () => import('./task-body-editor-chunk.ts'),
     user: { name: user.name, color: user.color },
+    // Already awaited above — the description box is never live before the
+    // answer, and never live after a "no".
+    canWrite: writeAccess.canWrite,
   });
 
   // ── Realtime: the ws:<id> board room ────────────────────────────────────
@@ -1055,7 +1093,7 @@ async function main(): Promise<void> {
     // the board is open, and a picker built from a stale list offers agents
     // who have left.
     boardData.value = {
-      sections: boardSections(state.info?.goals ?? [], taskList(), filters),
+      sections: boardSectionsWithEffort(state.info?.goals ?? [], taskList(), filters, filters.now),
       pane: state.pane,
       showArchived,
       knownAgentIds: knownAgentIds(),
@@ -1507,6 +1545,18 @@ async function main(): Promise<void> {
       task,
       discussion: task ? discussion : undefined,
       tab: state.detailTab,
+      // Learned from the WHOLE board, not from this ticket's band: the panel
+      // reports what the estimate was scaled by, and the scaling is a property
+      // of everything that has closed. Unfiltered for the same reason the goal
+      // rollup is — a correction that moved when the reader changed tabs would
+      // be a correction about the reader.
+      calibration: task ? boardCalibration(state.info?.goals ?? [], taskList()) : undefined,
+      // The band the row renders under, which is the key its correction was
+      // filed under. A ticket whose goal id matches no band shows Backlog's
+      // arithmetic, exactly as it shows under Backlog on the board.
+      calibrationGoal: task
+        ? bandOfGoal(goalBandIds(state.info?.goals ?? []), task.goal)
+        : undefined,
       handlers: {
         onClose: () => {
           state.detailTaskId = null;
@@ -2006,7 +2056,13 @@ async function main(): Promise<void> {
     // call, so a board repaint cannot rebuild a button mid-request.
     renderQuickActions(el('hub-quick'), {
       onNewTask: () => newTask(),
-      onStartHuddle: () => startHuddle(),
+      onStartHuddle: () => startHuddle('solo'),
+      onStartConversation: () => startHuddle('conversation'),
+      // The board's create buttons are the doc surface's edit toggle: a
+      // control that cannot work should say so before it is pressed, not
+      // after. The rest of the board's writes still fail loudly through
+      // `send()`'s toast and the sign-in prompt — see the PR note.
+      canWrite: writeAccess.canWrite,
     });
     renderLead();
     renderMe();
@@ -2019,6 +2075,28 @@ async function main(): Promise<void> {
   }
 
   // ── Mutations (all through the REST gate) ───────────────────────────────
+
+  /**
+   * Put the controls back to what the SERVER says, after a write it refused.
+   *
+   * A select and a rename are the two places on this board where the reader's
+   * gesture changes the DOM before the server has agreed. When the write is
+   * refused they were left showing the rejected value — a select reading
+   * "Done" over a task the server still has in triage, a row wearing a title
+   * nobody saved — and only a reload put it right. A board that displays a
+   * status nobody set is worse than the refusal it just reported.
+   *
+   * "+ New goal" never had the problem, because it changes nothing locally
+   * and waits for the projection to paint the row. This is that same rule
+   * applied to the controls that cannot wait: repaint from `state`, which is
+   * the projection and nothing else. `useSelectValue` and the title's
+   * every-render text write (board-island.tsx, task-detail-island.tsx) then
+   * put each control back on their next pass.
+   */
+  function revertToServerTruth(): void {
+    renderAll();
+  }
+
   async function transitionTask(task: HubTask, to: HubTask['status']): Promise<void> {
     const res = await send(`/api/tasks/${encodeURIComponent(task.id)}/transition`, 'POST', {
       to,
@@ -2028,8 +2106,10 @@ async function main(): Promise<void> {
       const blockers = (res.data?.blockers as Array<{ taskId: string; title?: string }>) ?? [];
       const names = blockers.map((b) => b.title ?? b.taskId).join(', ');
       showToast(`Blocked by open dependency: ${names || 'an enforced dependency'}`);
+      revertToServerTruth();
     } else if (!res.ok) {
       showToast('Status change failed');
+      revertToServerTruth();
     }
   }
 
@@ -2038,7 +2118,10 @@ async function main(): Promise<void> {
       assignee,
       author,
     });
-    if (!res.ok) showToast('Assignment failed');
+    if (!res.ok) {
+      showToast('Assignment failed');
+      revertToServerTruth();
+    }
   }
 
   /**
@@ -2201,7 +2284,10 @@ async function main(): Promise<void> {
       after: target.after,
       author,
     });
-    if (!res.ok) showToast('Move failed');
+    if (!res.ok) {
+      showToast('Move failed');
+      revertToServerTruth();
+    }
   }
 
   async function renameTask(task: HubTask, title: string): Promise<void> {
@@ -2209,7 +2295,10 @@ async function main(): Promise<void> {
       title,
       author,
     });
-    if (!res.ok) showToast('Rename failed');
+    if (!res.ok) {
+      showToast('Rename failed');
+      revertToServerTruth();
+    }
   }
 
   /**
@@ -2227,7 +2316,10 @@ async function main(): Promise<void> {
       'POST',
       { goal: sectionId, title, author },
     );
-    if (!res.ok) showToast('Goal rename failed');
+    if (!res.ok) {
+      showToast('Goal rename failed');
+      revertToServerTruth();
+    }
   }
 
   /**
@@ -2242,7 +2334,10 @@ async function main(): Promise<void> {
       to,
       author,
     });
-    if (!res.ok) showToast('Goal status change failed');
+    if (!res.ok) {
+      showToast('Goal status change failed');
+      revertToServerTruth();
+    }
   }
 
   /** Add one band, for the same reason the rename above is its own route: a
@@ -2598,12 +2693,16 @@ async function main(): Promise<void> {
   }
 
   /**
-   * The Board's "Start a planning huddle": ONE call makes the huddle doc on
-   * this board, and the page leaves for it at once with the flag the editor
-   * reads to start the meeting assistant without a press. The click here is
-   * the person's gesture; `huddle-entry.ts` is the other half.
+   * The Board's two mic buttons: ONE call makes the huddle doc on this
+   * board, and the page leaves for it at once with the flag the editor reads
+   * to start the meeting assistant without a press. The click here is the
+   * person's gesture; `huddle-entry.ts` is the other half.
+   *
+   * `mode` is the only difference between "Start a planning huddle" and
+   * "Record a conversation" — the doc, the route and the file are the same.
+   * Solo asks for no speaker labels and pays for none.
    */
-  async function startHuddle(): Promise<boolean> {
+  async function startHuddle(mode: CaptureMode): Promise<boolean> {
     const res = await send(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/huddles`,
       'POST',
@@ -2616,7 +2715,10 @@ async function main(): Promise<void> {
       showToast(why);
       return false;
     }
-    location.assign(`${url}?huddle=1`);
+    // The mode rides the address beside the start flag: this press is the
+    // only thing that knows whether anyone else is in the room, and the
+    // editor that opens the mic is a different page.
+    location.assign(`${url}?huddle=1&${HUDDLE_MODE_PARAM}=${mode}`);
     return true;
   }
 
@@ -2770,17 +2872,24 @@ async function main(): Promise<void> {
     // What the network actually moved: "slow because big" and "slow because
     // far" need different fixes, and the report should tell them apart.
     const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
-    void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        msToBoot,
-        ...(msToFirstProjection !== null ? { msToFirstProjection } : {}),
-        resourceCount: resources.length,
-        transferBytes: resources.reduce((sum, r) => sum + (r.transferSize || 0), 0),
-        decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
-      }),
-    }).catch(() => {});
+    // Nobody asked for this POST — it is telemetry about the load that just
+    // happened. Marked, so that a signed-out reader gets the standing bar
+    // rather than a modal demanding they sign in to do something they never
+    // did. Measured: unmarked, it raised the modal over the board within
+    // four seconds of opening it.
+    asBackgroundWrite(() => {
+      void fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/load-reports`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          msToBoot,
+          ...(msToFirstProjection !== null ? { msToFirstProjection } : {}),
+          resourceCount: resources.length,
+          transferBytes: resources.reduce((sum, r) => sum + (r.transferSize || 0), 0),
+          decodedBytes: resources.reduce((sum, r) => sum + (r.decodedBodySize || 0), 0),
+        }),
+      }).catch(() => {});
+    });
     // Same numbers onto the pageload trace, best-effort: if the SDK loaded
     // and the transaction is still open they land as measurements; if not,
     // the posted report above is still the durable record.

@@ -1920,3 +1920,54 @@ describe('keyboard reordering', () => {
     expect(h.onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'k-b' }));
   });
 });
+
+// ── A refused write must leave no ghost ────────────────────────────────────
+//
+// Two controls on this board change the DOM before the server has agreed: a
+// status <select> and an in-place rename. When the write came back refused
+// they were left showing the rejected value — a select reading "Done" over a
+// task the server still had in triage, a row wearing a title nobody saved —
+// and only a reload put it right. A board that displays a status nobody set
+// is worse than the refusal it just reported.
+//
+// The repair is `revertToServerTruth()` in hub-app: repaint from `state`,
+// which is the projection and nothing else. What is under test HERE is that
+// the repaint actually undoes a local change — because if it does not, the
+// call in hub-app is a no-op and the ghost survives it.
+describe('a repaint puts a locally-changed control back to server truth', () => {
+  it('undoes a status the reader picked and the server refused', async () => {
+    const t = task({ id: 'k-a', title: 'Alpha', goal: 'g-pr', status: 'triage' });
+    const h = handlers();
+    renderBoard(root, boardOf([t]), h);
+    const select = root.querySelector('.hub-status-select') as HTMLSelectElement;
+    expect(select.value).toBe('triage');
+
+    // The reader picks Done. The board sends the transition; the server says
+    // no. Nothing about the projection changes.
+    select.value = 'done';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(h.onStatusSet).toHaveBeenCalled();
+    // The control for the assertion below: the select really is showing the
+    // rejected value at this point, so the repaint has something to undo.
+    expect(select.value).toBe('done');
+
+    await repaint({ sections: boardOf([t]) });
+
+    expect(select.value).toBe('triage');
+  });
+
+  it('undoes a title the reader typed and the server refused', async () => {
+    const t = task({ id: 'k-a', title: 'Alpha', goal: 'g-pr' });
+    renderBoard(root, boardOf([t]), handlers());
+    const words = rowFor('k-a')?.querySelector('.hub-task-title-text') as HTMLElement;
+    expect(words.textContent).toBe('Alpha');
+
+    // What `wireWordsInPlace` leaves behind when a rename commits: the typed
+    // words are already in the element by the time the request goes out.
+    words.textContent = 'A name the server will not take';
+
+    await repaint({ sections: boardOf([t]) });
+
+    expect(words.textContent).toBe('Alpha');
+  });
+});

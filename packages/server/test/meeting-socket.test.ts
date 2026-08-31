@@ -14,7 +14,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MEETING_AUDIO_ENCODING, MEETING_SAMPLE_RATE, meetingSocketPath } from '@feedback/core';
+import {
+  type CaptureMode,
+  MEETING_AUDIO_ENCODING,
+  MEETING_SAMPLE_RATE,
+  meetingSocketPath,
+} from '@feedback/core';
 import { meetingTranscriptPath } from '../src/meetings.ts';
 import { type ShareTarget, shareScopeAllows } from '../src/middleware/host-guard.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
@@ -44,8 +49,11 @@ class AudioClient {
     return client;
   }
 
-  start(sampleRate = MEETING_SAMPLE_RATE): void {
-    this.ws.send(JSON.stringify({ type: 'start', sampleRate, encoding: MEETING_AUDIO_ENCODING }));
+  /** Solo by default — the mode a client that never heard of modes gets. */
+  start(sampleRate = MEETING_SAMPLE_RATE, mode: CaptureMode = 'solo'): void {
+    this.ws.send(
+      JSON.stringify({ type: 'start', sampleRate, encoding: MEETING_AUDIO_ENCODING, mode }),
+    );
   }
 
   /** One 20ms frame of silence — the relay only counts chunks, not samples. */
@@ -457,7 +465,9 @@ describe('meeting audio socket with two voices', () => {
 
   it('labels each turn on the wire, and a name given once lands on the record', async () => {
     const client = await AudioClient.open(wsBase, 'pairing');
-    client.start();
+    // A conversation — labels are what this mode pays for, and the mock
+    // diarizes only when the engine was opened for one.
+    client.start(MEETING_SAMPLE_RATE, 'conversation');
     const ready = await client.waitFor('ready');
     // Four chunks reveal turn 0, the fifth settles it; one more reveals turn
     // 1 and a seventh settles it.

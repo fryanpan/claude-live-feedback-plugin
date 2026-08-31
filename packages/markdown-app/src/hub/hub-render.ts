@@ -6,9 +6,20 @@
  */
 import { type ReviewPayload, reviewAnswered, reviewWithdrawn } from '@feedback/core';
 import type { ReviewShape, Thread, User } from '@feedback/core';
+import {
+  type EffortCalibration,
+  type EffortRatio,
+  applyEffortRatio,
+  effortActualHandsOnSeconds,
+  effortActualWallClockSeconds,
+  effortEstimateState,
+  estimateNumbers,
+  formatEffortSeconds,
+  ratioForGoal,
+} from '@feedback/core/goal-effort';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
-import { MIC_ICON, PLUS_ICON } from '../icons.ts';
+import { MIC_ICON, PEOPLE_ICON, PLUS_ICON } from '../icons.ts';
 import {
   type ComposerSelection,
   composerSelection,
@@ -586,7 +597,8 @@ export function renderArchivedList(
 // ── Quick actions: the two ways work starts ───────────────────────────────
 
 /**
- * "New task" and "Start a planning huddle", in the slot the quick-add box had.
+ * "New task", "Start a planning huddle" and "Record a conversation", in the
+ * slot the quick-add box had.
  *
  * Bryan, 2026-08-29: *"From board, have a quick flow to create a new task
  * (replace current text box) that creates an empty item in the usual task
@@ -594,6 +606,11 @@ export function renderArchivedList(
  * asks anything first: the task is an empty row the panel opens on with the
  * title ready to type, and the huddle is a doc the editor opens with the mic
  * already asked for.
+ *
+ * The third is the same huddle for a room rather than for one person, and it
+ * is what an in-person conversation has instead of a platform to join: the
+ * press IS the announcement, and it is the only thing that turns on the
+ * diarization a solo session does not pay for.
  *
  * A mount, not a render, like the box it replaced: the board repaints on
  * every ydoc change, and a button rebuilt while its request is out would come
@@ -607,6 +624,19 @@ export interface QuickActionHandlers {
   /** Resolves when the huddle doc exists and the page is leaving, or when the
    *  start was refused — which gives the button back as the retry. */
   onStartHuddle: () => Promise<boolean>;
+  /**
+   * The same huddle, listening for a room instead of for one person.
+   *
+   * It is a SECOND BUTTON rather than a setting on the first because
+   * nothing announces an in-person conversation — there is no meeting
+   * platform to notice, no invite, no join — so the press has to be the
+   * thing that says it. One action, from the Board, with the mic already
+   * asked for and diarization already on.
+   */
+  onStartConversation: () => Promise<boolean>;
+  /** Whether the server will accept writes from this browser. Absent means
+   *  yes, so every caller that predates the sign-in gate is unchanged. */
+  canWrite?: boolean;
 }
 
 export function renderQuickActions(container: HTMLElement, handlers: QuickActionHandlers): void {
@@ -635,7 +665,24 @@ export function renderQuickActions(container: HTMLElement, handlers: QuickAction
   huddle.className = 'hub-btn hub-huddle-start';
   huddle.innerHTML = `${MIC_ICON}<span>Start a planning huddle</span>`;
   hold(huddle, handlers.onStartHuddle);
-  row.append(newTask, huddle);
+  const conversation = document.createElement('button');
+  conversation.type = 'button';
+  conversation.className = 'hub-btn hub-conversation-start';
+  conversation.innerHTML = `${PEOPLE_ICON}<span>Record a conversation</span>`;
+  hold(conversation, handlers.onStartConversation);
+  row.append(newTask, huddle, conversation);
+  // Error prevention rather than error recovery, matching the doc surface's
+  // edit toggle: a signed-out reader is told these are unavailable instead of
+  // pressing one and receiving a refusal. Disabled, not hidden — a control
+  // that vanishes teaches nothing about why. The conversation button creates
+  // a doc exactly as the huddle does, so it is gated with them.
+  if (handlers.canWrite === false) {
+    for (const button of [newTask, huddle, conversation]) {
+      button.disabled = true;
+      button.title = 'Sign in to add to this board';
+      button.setAttribute('aria-label', 'Sign in to add to this board');
+    }
+  }
   container.append(row);
 }
 
@@ -1493,7 +1540,17 @@ export const BODY_LIVE_CLASS = 'hub-detail-body-live';
  * were pills, so the state you were IN read as a stray label rather than as
  * the selected one.
  */
-export function detailFields(task: HubTask, handlers: DetailHandlers): HTMLElement {
+export function detailFields(
+  task: HubTask,
+  handlers: DetailHandlers,
+  /** The board's learned correction, so the panel can show what the raw
+   *  estimate becomes and what it was scaled by. Absent on a panel opened
+   *  without a board behind it, and the effort cell then shows the raw
+   *  numbers alone rather than inventing a factor of 1. */
+  calibration?: EffortCalibration,
+  /** The band the ticket renders under — see `effortCellText`. */
+  calibrationGoal?: string,
+): HTMLElement {
   const dl = document.createElement('dl');
   dl.className = 'hub-detail-fields';
   // Each field is a `<div>` WRAPPING its `dt` + `dd`, which HTML has allowed
@@ -1608,7 +1665,177 @@ export function detailFields(task: HubTask, handlers: DetailHandlers): HTMLEleme
     if (goal.value && goal.value !== task.goal) handlers.onGoalSet?.(task, goal.value);
   });
   cell('Goal', goal);
+
+  // Effort, last, and only when there is something to say.
+  //
+  // This is where the numbers live. Bryan struck them from the board rows —
+  // "No need to show hands on or wall clock hours in the board" — on the
+  // understanding that the ticket still carries them, so this cell is the
+  // other half of that trade. It is also the one non-hover surface that
+  // states the calibration factor, which matters because the goal header
+  // says it in a `title` and an iPad has no hover.
+  //
+  // Three states, three sentences, and an unscored ticket gets NO cell at
+  // all rather than a zero — the same line `Task.effortEstimate` draws in
+  // its own type doc.
+  // Two ordinary top-level fields, and the computation only when it is asked
+  // for. *"On task details, the estimate is a secondary function. Don't use
+  // so much space for it. Just show the hands on and wall clock estimates
+  // with other top level fields. And if I click on one show the detailed
+  // estimation computation."* (Bryan, 2026-08-30.) It replaced one prose
+  // field that spent a whole row on the calibration sentence.
+  const effort = effortFields(task, calibration, calibrationGoal);
+  if (effort) {
+    cell('Hands-on', effort.handsOn);
+    cell('Wall clock', effort.wallClock);
+    dl.append(effort.detail);
+  }
   return dl;
+}
+
+/** What the two estimate fields and their shared drawer hold, or `null` for a
+ *  ticket nobody has scored — which gets no fields at all rather than fields
+ *  reading "0m". */
+export interface EffortFields {
+  handsOn: HTMLElement;
+  wallClock: HTMLElement;
+  detail: HTMLElement;
+}
+
+/**
+ * The panel's two estimate fields plus the drawer behind them.
+ *
+ * Each value is a button rather than text: tapping either opens the same
+ * drawer, which is where the arithmetic lives — what was estimated, what the
+ * board scaled it by and on what evidence, and what the ticket actually took
+ * once it closed. A button because the reveal has to work by TAP; a `title`
+ * would have put the whole explanation behind a hover the primary device
+ * does not have.
+ *
+ * The three estimate states stay three: never scored returns `null` and draws
+ * nothing, a failed run draws both fields reading "not estimated" with the
+ * drawer saying the scorer ran, and a real estimate draws numbers.
+ */
+export function effortFields(
+  task: HubTask,
+  calibration?: EffortCalibration,
+  calibrationGoal?: string,
+): EffortFields | null {
+  const state = effortEstimateState(task);
+  if (state === 'none') return null;
+  const est = state === 'ok' ? estimateNumbers(task) : null;
+  const band = calibrationGoal ?? task.goal;
+  const wallRatio = calibration ? ratioForGoal(calibration.wallClock, band) : undefined;
+  const handsRatio = calibration ? ratioForGoal(calibration.handsOn, band) : undefined;
+  const hands =
+    est && handsRatio
+      ? applyEffortRatio(est.handsOnSeconds, handsRatio.ratio)
+      : est?.handsOnSeconds;
+  const wall =
+    est && wallRatio
+      ? applyEffortRatio(est.wallClockSeconds, wallRatio.ratio)
+      : est?.wallClockSeconds;
+
+  const detail = document.createElement('div');
+  detail.className = 'hub-detail-field hub-detail-effort-detail';
+  detail.hidden = true;
+  const detailBody = document.createElement('dd');
+  detailBody.className = 'hub-detail-field-v hub-detail-effort-why';
+  detail.append(detailBody);
+  for (const line of effortComputationLines(task, est, wallRatio, handsRatio)) {
+    const p = document.createElement('p');
+    p.textContent = line;
+    detailBody.append(p);
+  }
+
+  const value = (text: string): HTMLElement => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hub-detail-effort-value';
+    btn.textContent = text;
+    btn.setAttribute('aria-expanded', 'false');
+    btn.title = 'How this estimate was worked out';
+    btn.addEventListener('click', () => {
+      const open = detail.hidden;
+      detail.hidden = !open;
+      for (const other of [
+        ...(btn.closest('dl')?.querySelectorAll('.hub-detail-effort-value') ?? []),
+      ]) {
+        other.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+    });
+    return btn;
+  };
+  const notEstimated = 'not estimated';
+  return {
+    handsOn: value(hands === undefined ? notEstimated : formatEffortSeconds(hands)),
+    wallClock: value(wall === undefined ? notEstimated : formatEffortSeconds(wall)),
+    detail,
+  };
+}
+
+/**
+ * The drawer's sentences: the guess, the correction, and what happened.
+ *
+ * Split out from the fields so the wording is testable without a DOM — which
+ * of the three states says what is the thing worth an assertion, not that a
+ * `<p>` got appended.
+ */
+export function effortComputationLines(
+  task: HubTask,
+  est: { handsOnSeconds: number; wallClockSeconds: number } | null,
+  wallRatio?: EffortRatio,
+  handsRatio?: EffortRatio,
+): string[] {
+  if (!est) {
+    // Said out loud, because the alternative is a ticket that reads exactly
+    // like one nobody has scored. This is the visible half of the positive
+    // control: a scorer that produces nothing must be legible as producing
+    // nothing.
+    return ['The scorer ran on this ticket and could not produce an estimate.'];
+  }
+  const lines = [
+    `Scored at ${formatEffortSeconds(est.handsOnSeconds)} hands-on over ${formatEffortSeconds(est.wallClockSeconds)} of calendar time.`,
+  ];
+  const said = (r: EffortRatio): string =>
+    `\u00d7${r.ratio.toFixed(2)} from ${r.samples} closed ticket${r.samples === 1 ? '' : 's'}`;
+  // Agreeing on the FACTOR is what makes it one correction to a reader; the
+  // sample counts behind it can differ and the sentence is still about one
+  // number. Keying "is this one correction?" on the counts as well printed
+  // the same figure twice in a hundred characters.
+  const same =
+    handsRatio !== undefined &&
+    wallRatio !== undefined &&
+    handsRatio.samples > 0 &&
+    wallRatio.samples > 0 &&
+    handsRatio.ratio.toFixed(2) === wallRatio.ratio.toFixed(2);
+  if (same && handsRatio !== undefined && wallRatio !== undefined) {
+    const lo = Math.min(handsRatio.samples, wallRatio.samples);
+    const hi = Math.max(handsRatio.samples, wallRatio.samples);
+    lines.push(
+      `Scaled \u00d7${wallRatio.ratio.toFixed(2)} from ${lo === hi ? hi : `${lo}\u2013${hi}`} closed ticket${hi === 1 ? '' : 's'} on this goal.`,
+    );
+  } else {
+    if (handsRatio && handsRatio.samples > 0) lines.push(`Hands-on scaled ${said(handsRatio)}.`);
+    if (wallRatio && wallRatio.samples > 0) lines.push(`Calendar time scaled ${said(wallRatio)}.`);
+  }
+  // What it actually took, once it is closed. Measured numbers are never
+  // multiplied — these are reported exactly as they happened, beside the
+  // corrected guess rather than folded into it.
+  // Only for a ticket that is closed RIGHT NOW. A reopened one still carries
+  // the `done` transition from its first life, so both helpers keep answering
+  // — and the drawer would report how long the ticket took as a finished fact
+  // about a ticket somebody is working on again.
+  const closedNow = task.status === 'done';
+  const actualWall = closedNow ? effortActualWallClockSeconds(task) : null;
+  const actualHands = closedNow ? effortActualHandsOnSeconds(task) : null;
+  if (actualWall !== null || actualHands !== null) {
+    const took: string[] = [];
+    if (actualHands !== null) took.push(`${formatEffortSeconds(actualHands)} of reading`);
+    if (actualWall !== null) took.push(`${formatEffortSeconds(actualWall)} of calendar time`);
+    lines.push(`Actually took ${took.join(' over ')}.`);
+  }
+  return lines;
 }
 
 /** An epoch-ms instant as the `YYYY-MM-DD` a `<input type="date">` wants, in

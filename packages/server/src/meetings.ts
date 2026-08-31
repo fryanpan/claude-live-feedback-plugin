@@ -22,6 +22,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { type CaptureMode, parseCaptureMode } from '@feedback/core';
 
 /** One settled turn, as stored. */
 export interface TranscriptTurn {
@@ -42,6 +43,15 @@ export interface MeetingRecord {
   endedAt: number | null;
   engine: string;
   sampleRate: number;
+  /**
+   * Whether this meeting was opened as a conversation (diarizing) or solo.
+   * It is on the record because it is what the meeting COST — the surcharge
+   * is per session-hour — and because a transcript with no speaker on any
+   * turn otherwise cannot say whether nobody was labelled or nobody spoke.
+   * A record written before modes existed reads as `solo`, which is what
+   * those sessions were not; see the note in `listMeetings`.
+   */
+  mode: CaptureMode;
   /** Settled turns at stop. Absent for a meeting that never stopped. */
   turns?: number;
   /** Engine label → the name a person gave it, for THIS meeting only. */
@@ -118,6 +128,12 @@ export function listMeetings(dataDir: string, docId: string): MeetingRecord[] {
         endedAt: null,
         engine: typeof row.engine === 'string' ? row.engine : 'unknown',
         sampleRate: typeof row.sampleRate === 'number' ? row.sampleRate : 0,
+        // Absent is `solo` because that is what the field means now, not
+        // what an old line meant: meetings recorded before this field
+        // existed all diarized. They are readable as such by their turns
+        // carrying labels, and nothing downstream reads this to decide
+        // whether to trust one.
+        mode: parseCaptureMode(row.mode),
       });
       continue;
     }
@@ -222,9 +238,10 @@ export class MeetingStore {
     docId: string;
     engine: string;
     sampleRate: number;
+    mode: CaptureMode;
     now?: number;
   }): ActiveMeeting | null {
-    const { docId, engine, sampleRate } = args;
+    const { docId, engine, sampleRate, mode } = args;
     if (this.live.has(docId)) return null;
     const startedAt = args.now ?? Date.now();
     const dataDir = this.dataDir;
@@ -245,6 +262,7 @@ export class MeetingStore {
       startedAt,
       engine,
       sampleRate,
+      mode,
     });
     // Create the file at start so a meeting nobody spoke in still reads back
     // as an empty transcript rather than a missing one.
@@ -295,6 +313,7 @@ export class MeetingStore {
           endedAt: Date.now(),
           engine,
           sampleRate,
+          mode,
           turns: written.size,
           ...(Object.keys(speakers).length > 0 ? { speakers: { ...speakers } } : {}),
         };

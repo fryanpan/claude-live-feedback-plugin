@@ -6,14 +6,23 @@
  * immutable, `.md` members edit through the markdown surface instead of raw
  * source, and a DELETED member has no file binding at all (bindDiff skips
  * the attach for status='deleted' — there is no file to write to).
+ *
+ * `canWrite` is the same question asked of the other end: the server drops
+ * every update frame from an unsigned browser (`WsCtx.readOnly`), which is
+ * "an unbound doc" by another name and loses the typing exactly as silently.
+ * It is a required field so that a caller cannot answer this question without
+ * having asked the server first.
  */
 export function isEditableFileMember(opts: {
   isDiff: boolean;
   diffTarget: string;
   relPath: string;
   diffStatus?: string;
+  /** Whether the server accepts writes from this browser. */
+  canWrite: boolean;
 }): boolean {
   return (
+    opts.canWrite &&
     opts.isDiff &&
     !opts.diffTarget &&
     !opts.relPath.toLowerCase().endsWith('.md') &&

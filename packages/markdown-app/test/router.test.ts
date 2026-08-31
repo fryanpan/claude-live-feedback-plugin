@@ -42,12 +42,61 @@ beforeEach(() => {
 });
 
 describe('router', () => {
+  /**
+   * The session answer reaches every mount as a VALUE.
+   *
+   * `main()` awaits `/api/auth/session` before starting the router, and the
+   * surfaces used to throw that away and re-ask for themselves — which left
+   * each one editable for the length of its own round trip. The answer riding
+   * on the MountContext, exactly like `user`, is what closes that: a mount
+   * cannot be constructed without it, and by the time one runs the question
+   * has already been answered.
+   */
+  it('hands the awaited session answer to every mount, including one reached by navigating', async () => {
+    sidebar('<li><a href="/review/a">a</a></li><li><a href="/review/b">b</a></li>');
+    const seen: Array<{ docId: string; canWrite: boolean }> = [];
+    stop = startRouter({
+      user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      canWrite: false,
+      fetchMeta: async () => meta,
+      connectFor: () => stubClient(),
+      mountFor: (ctx: MountContext) => {
+        seen.push({ docId: ctx.docId, canWrite: ctx.canWrite });
+      },
+    });
+    await flush();
+    document
+      .querySelector('a[href="/review/b"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(seen).toEqual([
+      { docId: 'a', canWrite: false },
+      { docId: 'b', canWrite: false },
+    ]);
+  });
+
+  it('carries a yes the same way', async () => {
+    sidebar('<li><a href="/review/a">a</a></li>');
+    const seen: boolean[] = [];
+    stop = startRouter({
+      user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      canWrite: true,
+      fetchMeta: async () => meta,
+      connectFor: () => stubClient(),
+      mountFor: (ctx: MountContext) => void seen.push(ctx.canWrite),
+    });
+    await flush();
+    expect(seen).toEqual([true]);
+  });
+
   it('intercepts a sidebar file click, pushes state, and swaps without reload', async () => {
     sidebar('<li><a href="/review/a">a</a></li><li><a href="/review/b">b</a></li>');
     const mounted: string[] = [];
     const disposed: string[] = [];
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      canWrite: true,
       fetchMeta: async () => meta,
       connectFor: () => stubClient(),
       mountFor: (ctx: MountContext) => {
@@ -71,6 +120,7 @@ describe('router', () => {
     sidebar('<li><a href="/review/b">b</a></li>');
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      canWrite: true,
       fetchMeta: async () => meta,
       connectFor: () => stubClient(),
       mountFor: () => {},
@@ -92,6 +142,7 @@ describe('router', () => {
     const mounted: string[] = [];
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      canWrite: true,
       fetchMeta: async () => meta,
       connectFor: () => stubClient(),
       mountFor: (ctx) => void mounted.push(ctx.docId),
@@ -110,6 +161,7 @@ describe('router', () => {
     const mounted: string[] = [];
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      canWrite: true,
       fetchMeta: async () => meta,
       connectFor: () => stubClient(),
       mountFor: (ctx) => void mounted.push(ctx.docId),
@@ -134,6 +186,7 @@ describe('router', () => {
     let delay = 0;
     stop = startRouter({
       user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+      canWrite: true,
       // Stagger the meta fetch so the first click's swap is still awaiting when
       // the second fires — the token guard must make the last one win.
       fetchMeta: async () => {
@@ -179,6 +232,7 @@ describe('router', () => {
       expect(backHref()).toBe('/');
       stop = startRouter({
         user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+        canWrite: true,
         fetchMeta: async () => ({
           ...meta,
           backTo: { workspaceId: 'w-abc', name: 'search-revamp' },
@@ -198,6 +252,7 @@ describe('router', () => {
       };
       stop = startRouter({
         user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+        canWrite: true,
         fetchMeta: async () => ({ ...meta, ...(backTo ? { backTo } : {}) }),
         connectFor: () => stubClient(),
         mountFor: () => {},
@@ -228,6 +283,7 @@ describe('router', () => {
       let huddle = true;
       stop = startRouter({
         user: { id: 'u', name: 'U', kind: 'known', color: '#000' },
+        canWrite: true,
         fetchMeta: async () => ({ ...meta, ...(huddle ? { huddle: true } : {}) }),
         connectFor: () => stubClient(),
         mountFor: () => {},
