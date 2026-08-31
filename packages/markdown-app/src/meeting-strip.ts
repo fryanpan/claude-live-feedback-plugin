@@ -24,12 +24,15 @@
  */
 
 import {
+  type CaptureMode,
+  DEFAULT_CAPTURE_MODE,
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   type MeetingServerMessage,
   type MeetingUnavailableReason,
   meetingSocketPath,
+  parseCaptureMode,
   speakerDisplayName,
 } from '@feedback/core';
 import {
@@ -129,6 +132,10 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
         meetingId: str(m.meetingId),
         startedAt: typeof m.startedAt === 'number' ? m.startedAt : 0,
         engine: str(m.engine),
+        // The server's word on what it opened, not the client's on what it
+        // asked for — those differ if a server built before modes existed
+        // answers, and the one that is billed is this one.
+        mode: parseCaptureMode(m.mode),
       };
     case 'unavailable': {
       const reason = m.reason;
@@ -211,6 +218,12 @@ export interface MeetingStripOpts {
    */
   autoStart?: boolean;
   /**
+   * What this capture expects to hear. `solo` (the default) opens a cheap
+   * session with no diarization; `conversation` pays for speaker labels. The
+   * Board's "Record a conversation" button carries it in on the address.
+   */
+  mode?: CaptureMode;
+  /**
    * Ask the person what to call a speaker; `current` is what the tag says
    * now. Null or blank means leave it. Defaults to `window.prompt` — the
    * strip is a 40px bar with no room for an inline field, and a name is
@@ -241,6 +254,8 @@ export function clipSpeakerName(name: string): string {
 export interface MeetingStripHandle {
   destroy(): void;
   state(): StripState;
+  /** What the next (or current) capture listens for. */
+  mode(): CaptureMode;
 }
 
 /** What to say when the server sends an `unavailable` with no message. */
@@ -290,10 +305,25 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   const elapsed = document.createElement('span');
   elapsed.className = 'meeting-elapsed';
   meta.append(dot, status, elapsed);
+  /**
+   * "Detect multiple speakers" — the one thing that buys diarization.
+   *
+   * It is a switch rather than two Start buttons because it is a fact about
+   * the room, not a second way to record, and it reads the same on the board
+   * (where "Record a conversation" sets it) and on a doc Bryan is talking to
+   * himself over. The label never changes with the state — `aria-pressed`
+   * carries that — because a button whose text flips between the state and
+   * the action cannot be read either way.
+   */
+  const modeToggle = document.createElement('button');
+  modeToggle.type = 'button';
+  modeToggle.className = 'meeting-mode';
+  modeToggle.textContent = 'Multiple speakers';
+  modeToggle.setAttribute('aria-label', 'Detect multiple speakers');
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'meeting-toggle';
-  strip.append(meta, toggle);
+  strip.append(meta, modeToggle, toggle);
 
   const caption = document.createElement('div');
   caption.className = 'meeting-caption';
@@ -321,6 +351,14 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * Paused.
    */
   let generation = 0;
+  /**
+   * Solo unless this capture was asked to listen for a room. Held across
+   * start/stop within one mount: the person who turned it on is still in the
+   * same conversation after a pause. Never persisted beyond the mount —
+   * a mode remembered from yesterday spends money on a session nobody chose
+   * it for.
+   */
+  let mode: CaptureMode = opts.mode ?? DEFAULT_CAPTURE_MODE;
   /** The auto-start was refused in the way a missing gesture is: the button
    *  is the tap that supplies one, and says so. Cleared by any press. */
   let tapToStart = false;
@@ -454,6 +492,21 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       state.kind === 'recording' ? formatElapsed(now() - state.startedAt) : formatElapsed(0);
   }
 
+  /**
+   * The mode is settled when the mic starts and cannot move while it runs:
+   * a streaming session's configuration IS its connect URL, so switching
+   * mid-meeting would mean a second session and a second bill for the same
+   * conversation. Stop and start says that plainly.
+   */
+  function renderMode(): void {
+    const live = state.kind === 'recording' || state.kind === 'requesting';
+    modeToggle.setAttribute('aria-pressed', String(mode === 'conversation'));
+    modeToggle.disabled = live;
+    modeToggle.title = live
+      ? 'Set before the mic starts — stop and start again to change it.'
+      : 'Label who is talking. Leave it off when you are the only voice: it costs more.';
+  }
+
   function render(): void {
     root.dataset.state = state.kind;
     root.classList.toggle('is-live', state.kind === 'recording');
@@ -498,6 +551,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         showNote(tapToStart ? 'The huddle is on — the mic needs one tap to start.' : state.message);
         break;
     }
+    renderMode();
     tickClock();
     renderCaption();
   }
@@ -536,6 +590,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     if (!msg) return;
     switch (msg.type) {
       case 'ready':
+        // What the server opened, which is what is being billed. A server
+        // built before modes existed says `solo` for a session that
+        // diarizes; showing its answer is still better than showing a claim
+        // nothing checked.
+        mode = msg.mode;
         setState({ kind: 'recording', startedAt: now() });
         break;
       case 'transcript':
@@ -602,6 +661,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           type: 'start',
           sampleRate: MEETING_SAMPLE_RATE,
           encoding: MEETING_AUDIO_ENCODING,
+          mode,
         }),
       );
     };
@@ -629,16 +689,24 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     else void start();
   };
   toggle.addEventListener('click', onToggle);
+  const onModeToggle = (): void => {
+    if (state.kind === 'recording' || state.kind === 'requesting') return;
+    mode = mode === 'conversation' ? 'solo' : 'conversation';
+    renderMode();
+  };
+  modeToggle.addEventListener('click', onModeToggle);
 
   render();
   if (opts.autoStart) void start(true);
 
   return {
     state: () => state,
+    mode: () => mode,
     destroy: () => {
       disposed = true;
       generation += 1;
       toggle.removeEventListener('click', onToggle);
+      modeToggle.removeEventListener('click', onModeToggle);
       releaseAudio();
       closeSocket();
       stopClock?.();

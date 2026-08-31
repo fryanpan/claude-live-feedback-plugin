@@ -17,6 +17,7 @@ import {
   type EngineSocketArgs,
   KEYCHAIN_SERVICE,
   createAssemblyAiEngine,
+  expiryFrom,
   resolveAssemblyAiKey,
   streamingUrl,
 } from '../src/transcribe-assemblyai.ts';
@@ -37,11 +38,12 @@ class FakeSocket implements EngineSocket {
   deliver(msg: unknown): void {
     this.args.onMessage(JSON.stringify(msg));
   }
-  begin(): void {
+  /** `expiresAt` is the engine's own field: a Unix timestamp in SECONDS. */
+  begin(expiresAt = 1_756_000_000): void {
     this.deliver({
       type: 'Begin',
       id: 'b1e5b0f8-0000-4000-8000-000000000001',
-      expires_at: 1_756_000_000,
+      expires_at: expiresAt,
     });
   }
   /** Only the JSON control frames; audio is binary and never echoed. */
@@ -53,29 +55,65 @@ class FakeSocket implements EngineSocket {
   }
 }
 
-function harness(opts: { flushTimeoutMs?: number; connectTimeoutMs?: number } = {}) {
-  let socket: FakeSocket | null = null;
+function harness(
+  opts: {
+    flushTimeoutMs?: number;
+    connectTimeoutMs?: number;
+    detectSpeakers?: boolean;
+    rolloverMarginMs?: number;
+    /** Capture the rollover timer instead of letting a real clock run it. */
+    manualSchedule?: boolean;
+  } = {},
+) {
+  const sockets: FakeSocket[] = [];
   const turns: EngineTurn[] = [];
   const errors: string[] = [];
+  /** Every rollover the engine armed, newest last. */
+  const scheduled: Array<{ ms: number; fire: () => void; cancelled: boolean }> = [];
+  const { manualSchedule, ...engineOpts } = opts;
   const engine = createAssemblyAiEngine({
     apiKey: 'test-key-not-a-real-credential',
     socketFactory: (args) => {
-      socket = new FakeSocket(args);
+      const socket = new FakeSocket(args);
+      sockets.push(socket);
       return socket;
     },
-    ...opts,
+    ...(manualSchedule
+      ? {
+          schedule: (ms: number, fn: () => void) => {
+            const entry = { ms, fire: fn, cancelled: false };
+            scheduled.push(entry);
+            return () => {
+              entry.cancelled = true;
+            };
+          },
+        }
+      : {}),
+    ...engineOpts,
   });
   if (!engine) throw new Error('engine should exist when a key is supplied');
   const opening = engine.open({
     sampleRate: 16_000,
+    // Labels on by default here because most of this file is about mapping
+    // them; the solo case has its own test on the URL, which is the only
+    // place the decision is expressed.
+    detectSpeakers: opts.detectSpeakers ?? true,
     onTurn: (t) => turns.push({ ...t }),
     onError: (m) => errors.push(m),
   });
-  const fake = (): FakeSocket => {
-    if (!socket) throw new Error('socket was never created');
+  const fake = (index = sockets.length - 1): FakeSocket => {
+    const socket = sockets[index];
+    if (!socket) throw new Error(`socket ${index} was never created`);
     return socket;
   };
-  return { engine, opening, fake, turns, errors };
+  /** The rollover timer still armed, or a failure naming what was there. */
+  const pending = () => {
+    const live = scheduled.filter((s) => !s.cancelled);
+    const last = live[live.length - 1];
+    if (!last) throw new Error(`no rollover armed (${scheduled.length} armed and cancelled)`);
+    return last;
+  };
+  return { engine, opening, fake, sockets, turns, errors, scheduled, pending };
 }
 
 describe('assemblyai key resolution', () => {
@@ -114,7 +152,7 @@ describe('assemblyai key resolution', () => {
 
 describe('assemblyai connect url', () => {
   it('carries the sample rate, the PCM encoding and formatted turns', () => {
-    const url = new URL(streamingUrl(16_000));
+    const url = new URL(streamingUrl(16_000, false));
     expect(url.origin + url.pathname).toBe('wss://streaming.assemblyai.com/v3/ws');
     expect(url.searchParams.get('sample_rate')).toBe('16000');
     expect(url.searchParams.get('encoding')).toBe('pcm_s16le');
@@ -127,7 +165,7 @@ describe('assemblyai session', () => {
     const h = harness();
     // The header goes out at construction, before anything is awaited.
     expect(h.fake().args.headers).toEqual({ Authorization: 'test-key-not-a-real-credential' });
-    expect(h.fake().args.url).toBe(streamingUrl(16_000));
+    expect(h.fake().args.url).toBe(streamingUrl(16_000, true));
     h.fake().begin();
     const session = await h.opening;
     expect(session).toBeDefined();
@@ -258,7 +296,7 @@ describe('assemblyai session', () => {
     // The flush: the last turn arrives AFTER Terminate and before Termination.
     h.fake().deliver({
       type: 'Turn',
-      turn_order: 3,
+      turn_order: 0,
       turn_is_formatted: true,
       end_of_turn: true,
       transcript: "Let's pick it up tomorrow.",
@@ -270,7 +308,7 @@ describe('assemblyai session', () => {
       session_duration_seconds: 14,
     });
     await closing;
-    expect(h.turns.at(-1)).toEqual({ turn: 3, text: "Let's pick it up tomorrow.", final: true });
+    expect(h.turns.at(-1)).toEqual({ turn: 0, text: "Let's pick it up tomorrow.", final: true });
     expect(h.fake().closed).toBe(true);
     expect(h.errors).toEqual([]);
   });
@@ -323,6 +361,185 @@ describe('assemblyai session', () => {
   });
 });
 
+describe('assemblyai session rollover — the three-hour cap', () => {
+  const turn = (over: Record<string, unknown>) => ({
+    type: 'Turn',
+    turn_is_formatted: true,
+    end_of_turn: true,
+    end_of_turn_confidence: 0.9,
+    words: [],
+    ...over,
+  });
+  /** Two minutes of session left, so a one-minute margin arms a minute out. */
+  const soon = (): number => Math.floor(Date.now() / 1000) + 120;
+
+  it('arms the rollover a margin before the expiry the engine gave', async () => {
+    const h = harness({ manualSchedule: true, rolloverMarginMs: 60_000 });
+    h.fake().begin(soon());
+    await h.opening;
+    // Around a minute: 120s of session, minus the 60s margin.
+    expect(h.pending().ms).toBeGreaterThan(50_000);
+    expect(h.pending().ms).toBeLessThanOrEqual(60_000);
+  });
+
+  it('opens the next session before retiring the old one, and never drops it', async () => {
+    const h = harness({ manualSchedule: true, rolloverMarginMs: 60_000 });
+    h.fake(0).begin(soon());
+    const session = await h.opening;
+
+    h.pending().fire();
+    // The new socket exists, but the audio has NOT moved yet: nothing is
+    // spoken into a session that has not said Begin.
+    expect(h.sockets.length).toBe(2);
+    session.send(new Uint8Array([1, 2]));
+    expect(h.fake(0).audioFrames().length).toBe(1);
+    expect(h.fake(1).audioFrames().length).toBe(0);
+    // The old socket is still carrying the meeting, so it has not been told
+    // anything yet.
+    expect(h.fake(0).textFrames()).toEqual([]);
+
+    h.fake(1).begin(soon());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Audio has moved across.
+    session.send(new Uint8Array([3, 4]));
+    expect(h.fake(1).audioFrames().length).toBe(1);
+    expect(h.fake(0).audioFrames().length).toBe(1);
+    // And the old session was TERMINATED, not merely dropped — an
+    // unterminated session stays open on AssemblyAI's side and is billed for
+    // the full three hours.
+    expect(
+      h
+        .fake(0)
+        .textFrames()
+        .map((f) => JSON.parse(f).type),
+    ).toEqual(['Terminate']);
+    // The meeting is intact: no error reached the caller.
+    expect(h.errors).toEqual([]);
+  });
+
+  it('continues turn numbering across the join, in both directions', async () => {
+    const h = harness({ manualSchedule: true, rolloverMarginMs: 60_000 });
+    h.fake(0).begin(soon());
+    await h.opening;
+    h.fake(0).deliver(turn({ turn_order: 0, transcript: 'First thing.' }));
+    h.fake(0).deliver(turn({ turn_order: 1, transcript: 'Second thing.' }));
+
+    h.pending().fire();
+    h.fake(1).begin(soon());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // A fresh AssemblyAI session counts from zero again. Downstream, a turn
+    // id is the identity a transcript revises in place and the key the
+    // record is written under, so turn 0 of the new session must not land on
+    // top of turn 0 of the old one.
+    h.fake(1).deliver(turn({ turn_order: 0, transcript: 'After the handover.' }));
+    // The old session's flush still arrives, and still means its own turn 1.
+    h.fake(0).deliver(turn({ turn_order: 1, transcript: 'Second thing, finished.' }));
+
+    expect(h.turns.map((t) => [t.turn, t.text])).toEqual([
+      [0, 'First thing.'],
+      [1, 'Second thing.'],
+      [2, 'After the handover.'],
+      [1, 'Second thing, finished.'],
+    ]);
+  });
+
+  it('gives the two legs distinct ids when the old one speaks again', async () => {
+    const h = harness({ manualSchedule: true, rolloverMarginMs: 60_000 });
+    h.fake(0).begin(soon());
+    await h.opening;
+    h.fake(0).deliver(turn({ turn_order: 0, transcript: 'Before the handover.' }));
+
+    h.pending().fire();
+    h.fake(1).begin(soon());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The new leg speaks first, and then the old one delivers a turn it had
+    // opened while the handshake was out. Both are turn 1 as far as arithmetic
+    // on the old session's numbering goes, and they are different sentences by
+    // (possibly) different people, so they cannot share an id: downstream a
+    // turn id is an identity, and one would overwrite the other.
+    h.fake(1).deliver(turn({ turn_order: 0, transcript: 'Said on the new session.' }));
+    h.fake(0).deliver(turn({ turn_order: 1, transcript: 'Said on the old session.' }));
+
+    expect(h.turns.map((t) => [t.turn, t.text])).toEqual([
+      [0, 'Before the handover.'],
+      [1, 'Said on the new session.'],
+      [2, 'Said on the old session.'],
+    ]);
+  });
+
+  it('keeps the meeting on the old session when the new one refuses', async () => {
+    const h = harness({ manualSchedule: true, rolloverMarginMs: 60_000 });
+    h.fake(0).begin(soon());
+    const session = await h.opening;
+
+    h.pending().fire();
+    // The replacement never begins — the engine hangs up on it.
+    h.fake(1).args.onClose();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Audio still flows to the session that is actually open, the caller is
+    // told nothing (the meeting has not ended), and another attempt is armed
+    // inside the margin that is left.
+    session.send(new Uint8Array([1, 2]));
+    expect(h.fake(0).audioFrames().length).toBe(1);
+    expect(h.errors).toEqual([]);
+    expect(h.pending().ms).toBeGreaterThan(0);
+  });
+
+  it('terminates a session that opened while the meeting was ending', async () => {
+    const h = harness({ manualSchedule: true, rolloverMarginMs: 60_000 });
+    h.fake(0).begin(soon());
+    const session = await h.opening;
+
+    h.pending().fire();
+    // Stop pressed with the handshake still out.
+    const closing = session.close();
+    h.fake(0).deliver({
+      type: 'Termination',
+      audio_duration_seconds: 1,
+      session_duration_seconds: 1,
+    });
+    await closing;
+
+    // The replacement answers after the meeting is over. It is a real open,
+    // billed session, so it is terminated rather than abandoned.
+    h.fake(1).begin(soon());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      h
+        .fake(1)
+        .textFrames()
+        .map((f) => JSON.parse(f).type),
+    ).toEqual(['Terminate']);
+  });
+});
+
+describe('assemblyai expiry parsing', () => {
+  it('reads seconds and milliseconds, and falls back for anything else', () => {
+    const now = 1_800_000_000_000;
+    const threeHours = 3 * 60 * 60 * 1_000;
+    // Seconds — the shape the engine documents.
+    expect(expiryFrom(1_800_000_600, now)).toBe(1_800_000_600_000);
+    // Milliseconds, should they ever be sent.
+    expect(expiryFrom(1_800_000_600_000, now)).toBe(1_800_000_600_000);
+    // Missing, malformed, or already past: a deadline three hours out, which
+    // is the engine's own cap. Reading a past timestamp literally would arm
+    // the rollover immediately and then again, forever.
+    expect(expiryFrom(undefined, now)).toBe(now + threeHours);
+    expect(expiryFrom('soon', now)).toBe(now + threeHours);
+    expect(expiryFrom(1_700_000_000, now)).toBe(now + threeHours);
+  });
+});
+
 describe('assemblyai speaker labels', () => {
   const turn = (over: Record<string, unknown>) => ({
     type: 'Turn',
@@ -333,8 +550,13 @@ describe('assemblyai speaker labels', () => {
     ...over,
   });
 
-  it('asks for speaker labels on the connect URL', () => {
-    expect(new URL(streamingUrl(16_000)).searchParams.get('speaker_labels')).toBe('true');
+  it('asks for speaker labels only when the capture is a conversation', () => {
+    expect(new URL(streamingUrl(16_000, true)).searchParams.get('speaker_labels')).toBe('true');
+    // The solo case is the one that costs money to get wrong: the parameter
+    // must be ABSENT, not `false` — an unpriced session is one that never
+    // asked. Both directions asserted, because a URL builder that always
+    // said 'true' and a URL builder that always said 'false' each pass one.
+    expect(new URL(streamingUrl(16_000, false)).searchParams.get('speaker_labels')).toBeNull();
   });
 
   it('carries the turn-level speaker label through the seam', async () => {

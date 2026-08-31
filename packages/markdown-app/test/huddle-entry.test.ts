@@ -2,9 +2,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  HUDDLE_MODE_PARAM,
   HUDDLE_START_PARAM,
   applyHuddleCrumb,
   applyReadingCrumb,
+  huddleCaptureMode,
   resetReadingCrumbForTest,
   wantsHuddleStart,
   withoutHuddleStart,
@@ -30,11 +32,28 @@ describe('wantsHuddleStart', () => {
   });
 });
 
+describe('huddleCaptureMode', () => {
+  it('is solo unless the Board said this one is a conversation', () => {
+    expect(huddleCaptureMode(`?huddle=1&${HUDDLE_MODE_PARAM}=conversation`)).toBe('conversation');
+    expect(huddleCaptureMode('?huddle=1&mode=solo')).toBe('solo');
+    // Anything unreadable is solo, not a guess that spends: the mode buys
+    // diarization, and the fallback should be the one that buys nothing.
+    expect(huddleCaptureMode('?huddle=1&mode=room')).toBe('solo');
+    expect(huddleCaptureMode('?huddle=1')).toBe('solo');
+    expect(huddleCaptureMode('')).toBe('solo');
+  });
+});
+
 describe('withoutHuddleStart', () => {
   it('drops the flag and keeps everything else in the address', () => {
     expect(withoutHuddleStart('/workspaces/w-abc1/docs/d-abc1?huddle=1&thread=t-abc1#x')).toBe(
       '/workspaces/w-abc1/docs/d-abc1?thread=t-abc1#x',
     );
+    // The mode is the other half of the same one-shot gesture: left behind,
+    // a reload would be a conversation nobody asked for.
+    expect(
+      withoutHuddleStart('/workspaces/w-abc1/docs/d-abc1?huddle=1&mode=conversation&thread=t-abc1'),
+    ).toBe('/workspaces/w-abc1/docs/d-abc1?thread=t-abc1');
     expect(withoutHuddleStart('/workspaces/w-abc1/docs/d-abc1?huddle=1')).toBe(
       '/workspaces/w-abc1/docs/d-abc1',
     );
@@ -117,7 +136,10 @@ describe('the markdown mount honours the flag once', () => {
     expect(at, 'the strip mount went missing').toBeGreaterThan(0);
     const call = APP.slice(at, APP.indexOf('})', at));
     expect(call).toContain('autoStart:');
+    // And what it listens for, from the same address.
+    expect(call).toContain('mode:');
     expect(APP).toContain('wantsHuddleStart(location.search)');
+    expect(APP).toContain('huddleCaptureMode(location.search)');
     // A reload, or Back into this entry later, must not restart the mic.
     expect(APP).toContain('withoutHuddleStart(');
     expect(APP).toMatch(/history\.replaceState\([^)]*withoutHuddleStart/);

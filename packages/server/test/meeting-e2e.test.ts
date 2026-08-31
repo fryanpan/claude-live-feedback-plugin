@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  type CaptureMode,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   meetingSocketPath,
@@ -94,12 +95,14 @@ class AudioClient {
     return client;
   }
 
-  start(): void {
+  /** Solo by default, exactly like a client that never heard of modes. */
+  start(mode: CaptureMode = 'solo'): void {
     this.ws.send(
       JSON.stringify({
         type: 'start',
         sampleRate: MEETING_SAMPLE_RATE,
         encoding: MEETING_AUDIO_ENCODING,
+        mode,
       }),
     );
   }
@@ -309,15 +312,52 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     }
     expect(second?.startedAt ?? 0).toBeGreaterThanOrEqual(first?.startedAt ?? Number.MAX_VALUE);
   });
+  it('a solo capture asks for no labels, and none arrive anywhere', async () => {
+    // The mock diarizes only when the open said to (`transcribe.ts`), which
+    // is what makes this a test of the FLAG rather than of the fixture: the
+    // script below is the same two-voice script the next test uses, and the
+    // labels are absent because nobody paid for them.
+    const client = await AudioClient.open(wsBase, docId);
+    client.start();
+    await waitFor(() => client.frames.some((f) => f.type === 'ready'), 'ready');
+    const ready = client.frames.filter((f) => f.type === 'ready').at(-1);
+    const meetingId = String(ready?.meetingId);
+    // The server says what it opened, and it is the cheap one.
+    expect(ready?.mode).toBe('solo');
+
+    client.speak(7);
+    await waitFor(() => client.finals().length === 1, 'the first settled turn');
+    client.speak(4);
+    await waitFor(() => client.finals().length === 2, 'the second settled turn');
+
+    // Words, yes. Voices, no — on the wire and in the durable record.
+    expect(client.finals().map((f) => f.text)).toEqual([
+      'So the sync is the bottleneck.',
+      "Let's measure it first.",
+    ]);
+    expect(client.finals().every((f) => f.speaker === undefined)).toBe(true);
+    expect(readTranscript(dataDir, docId, meetingId).every((t) => !t.speaker)).toBe(true);
+
+    client.stop();
+    await waitFor(() => client.frames.some((f) => f.type === 'stopped'), 'stopped');
+    // What it cost is on the record: this meeting never bought labels.
+    expect(listMeetings(dataDir, docId).find((m) => m.meetingId === meetingId)?.mode).toBe('solo');
+    client.ws.close();
+  });
+
   it("carries each turn's speaker through the socket, the record and the notes", async () => {
     // The gap this closes: diarization was tested at every layer and through
     // none of them. `MockScriptTurn.speaker` exists precisely so the mock can
     // diarize, and this script did not set it — so the one test that walks
     // socket -> store -> notes -> doc walked it unlabelled.
     const client = await AudioClient.open(wsBase, docId);
-    client.start();
+    // A conversation: the mode is what buys the labels every assertion below
+    // is about.
+    client.start('conversation');
     await waitFor(() => client.frames.some((f) => f.type === 'ready'), 'ready');
-    const meetingId = String(client.frames.filter((f) => f.type === 'ready').at(-1)?.meetingId);
+    const ready = client.frames.filter((f) => f.type === 'ready').at(-1);
+    const meetingId = String(ready?.meetingId);
+    expect(ready?.mode).toBe('conversation');
 
     // Two turns from two different voices settle.
     client.speak(7);

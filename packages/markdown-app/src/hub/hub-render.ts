@@ -19,7 +19,7 @@ import {
 } from '@feedback/core/goal-effort';
 import {} from '@feedback/core/goal-summary';
 import { renderCommentMarkdown } from '../comment-markdown.ts';
-import { MIC_ICON, PLUS_ICON } from '../icons.ts';
+import { MIC_ICON, PEOPLE_ICON, PLUS_ICON } from '../icons.ts';
 import {
   type ComposerSelection,
   composerSelection,
@@ -597,7 +597,8 @@ export function renderArchivedList(
 // ── Quick actions: the two ways work starts ───────────────────────────────
 
 /**
- * "New task" and "Start a planning huddle", in the slot the quick-add box had.
+ * "New task", "Start a planning huddle" and "Record a conversation", in the
+ * slot the quick-add box had.
  *
  * Bryan, 2026-08-29: *"From board, have a quick flow to create a new task
  * (replace current text box) that creates an empty item in the usual task
@@ -605,6 +606,11 @@ export function renderArchivedList(
  * asks anything first: the task is an empty row the panel opens on with the
  * title ready to type, and the huddle is a doc the editor opens with the mic
  * already asked for.
+ *
+ * The third is the same huddle for a room rather than for one person, and it
+ * is what an in-person conversation has instead of a platform to join: the
+ * press IS the announcement, and it is the only thing that turns on the
+ * diarization a solo session does not pay for.
  *
  * A mount, not a render, like the box it replaced: the board repaints on
  * every ydoc change, and a button rebuilt while its request is out would come
@@ -618,6 +624,16 @@ export interface QuickActionHandlers {
   /** Resolves when the huddle doc exists and the page is leaving, or when the
    *  start was refused — which gives the button back as the retry. */
   onStartHuddle: () => Promise<boolean>;
+  /**
+   * The same huddle, listening for a room instead of for one person.
+   *
+   * It is a SECOND BUTTON rather than a setting on the first because
+   * nothing announces an in-person conversation — there is no meeting
+   * platform to notice, no invite, no join — so the press has to be the
+   * thing that says it. One action, from the Board, with the mic already
+   * asked for and diarization already on.
+   */
+  onStartConversation: () => Promise<boolean>;
   /** Whether the server will accept writes from this browser. Absent means
    *  yes, so every caller that predates the sign-in gate is unchanged. */
   canWrite?: boolean;
@@ -649,13 +665,19 @@ export function renderQuickActions(container: HTMLElement, handlers: QuickAction
   huddle.className = 'hub-btn hub-huddle-start';
   huddle.innerHTML = `${MIC_ICON}<span>Start a planning huddle</span>`;
   hold(huddle, handlers.onStartHuddle);
-  row.append(newTask, huddle);
+  const conversation = document.createElement('button');
+  conversation.type = 'button';
+  conversation.className = 'hub-btn hub-conversation-start';
+  conversation.innerHTML = `${PEOPLE_ICON}<span>Record a conversation</span>`;
+  hold(conversation, handlers.onStartConversation);
+  row.append(newTask, huddle, conversation);
   // Error prevention rather than error recovery, matching the doc surface's
   // edit toggle: a signed-out reader is told these are unavailable instead of
   // pressing one and receiving a refusal. Disabled, not hidden — a control
-  // that vanishes teaches nothing about why.
+  // that vanishes teaches nothing about why. The conversation button creates
+  // a doc exactly as the huddle does, so it is gated with them.
   if (handlers.canWrite === false) {
-    for (const button of [newTask, huddle]) {
+    for (const button of [newTask, huddle, conversation]) {
       button.disabled = true;
       button.title = 'Sign in to add to this board';
       button.setAttribute('aria-label', 'Sign in to add to this board');
