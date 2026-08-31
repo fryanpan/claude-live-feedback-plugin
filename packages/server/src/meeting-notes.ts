@@ -312,6 +312,22 @@ export interface NoteDocLink {
   when?: string;
 }
 
+/**
+ * "No, I said Thursday" — a correction of a note ALREADY WRITTEN, heard in
+ * the speech rather than typed into the doc.
+ *
+ * Two phrases and nothing else, deliberately: the mistaken words as the notes
+ * carry them, and what they should say instead. Which note it lands on is not
+ * decided here — it is resolved against the doc, where the notes actually
+ * are, by `meeting-notes-correction.ts`.
+ */
+export interface SpokenCorrection {
+  /** The mistaken words, as a note would spell them. */
+  wrong: string;
+  /** What they should say, in the words just spoken. */
+  right: string;
+}
+
 export interface NotesComposeInput {
   docId: string;
   meetingId: string;
@@ -426,6 +442,33 @@ export interface NotesRelabel {
 }
 
 /**
+ * A spoken correction on its way to the doc that holds the note it fixes.
+ *
+ * A SEPARATE SINK FROM `onNotes`, for the reason {@link NotesRelabel} is one:
+ * an update carries whole notes and merges them; a correction carries two
+ * phrases and asks for two phrases. Routed through the update path it would
+ * have to re-send a section, which is exactly the cost this intent exists to
+ * avoid.
+ *
+ * It answers, where a relabel does not: the session cannot tell whether the
+ * phrase resolved to one note, to somebody's note, or to nothing at all —
+ * only the doc knows — and the answer is what the session reports.
+ */
+export interface NotesCorrection extends SpokenCorrection {
+  docId: string;
+  meetingId: string;
+}
+
+/**
+ * What the doc did with a correction. `revised` means an agent note now reads
+ * differently; `suggested` means a person's note carries the phrase and the
+ * change was proposed on it rather than made; `none` means the correction
+ * resolved to nothing it could act on, which is the ordinary answer for a
+ * phrase the notes do not carry.
+ */
+export type NotesCorrectionResult = 'revised' | 'suggested' | 'none';
+
+/**
  * "The engine now says turn 12 was someone else" — a correction reaching
  * notes that were already written.
  *
@@ -495,7 +538,16 @@ export interface MeetingNotesDeps {
      * downstream; the capture pass decides how much of it to use.
      */
     priorTurns: readonly NotesTurn[];
-  }) => Promise<{ tasks: readonly NoteTaskLink[]; docs: readonly NoteDocLink[] }>;
+  }) => Promise<{
+    tasks: readonly NoteTaskLink[];
+    docs: readonly NoteDocLink[];
+    /**
+     * Corrections of notes already written, heard on this tick. Optional so
+     * a caller wiring its own capture seam need not answer a question it
+     * does not extract; absent reads as none.
+     */
+    corrections?: readonly SpokenCorrection[];
+  }>;
   /**
    * Read the doc's notes section at the START of each compose, so the
    * composer sees what the person has written rather than only what it last
@@ -512,6 +564,13 @@ export interface MeetingNotesDeps {
    * strip; only the words already in the doc go unrevised.
    */
   onRelabel?: (relabel: NotesRelabel) => void;
+  /**
+   * Where a spoken correction of a note already written goes. Optional: a
+   * session with no sink for it extracts corrections and drops them, which
+   * is the same state as a session with no doc — there is nothing written to
+   * correct.
+   */
+  onCorrection?: (correction: NotesCorrection) => NotesCorrectionResult;
   /**
    * Where the engine's late correction of who spoke goes. Optional on the
    * same terms as `onRelabel`: a session with no sink still corrects its own
@@ -677,6 +736,27 @@ export function beginNotesSession(
           });
           taskLinks = captured.tasks;
           docLinks = captured.docs;
+          // BEFORE the section is read and BEFORE the compose, not after.
+          // The note a correction fixes was written on an earlier tick and is
+          // already in the doc, so correcting it first means this tick's
+          // compose reads the corrected words as `previous` — and the merge
+          // that follows never has to reconcile a note the composer echoed
+          // back in its old wording.
+          for (const correction of captured.corrections ?? []) {
+            try {
+              deps.onCorrection?.({
+                docId: ids.docId,
+                meetingId: ids.meetingId,
+                wrong: correction.wrong,
+                right: correction.right,
+              });
+            } catch (err) {
+              // A correction that cannot reach the doc leaves a stale note,
+              // which is a blemish; letting it reach the compose chain as a
+              // rejection would cost the meeting its notes, which is not.
+              deps.onError?.(err instanceof Error ? err.message : 'notes correction failed');
+            }
+          }
         } catch (err) {
           // Unlike a failed compose, nothing is carried: the words still
           // compose below, and the transcript remains the durable record a
