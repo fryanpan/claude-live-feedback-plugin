@@ -6582,10 +6582,22 @@ body.is-reading-width #editor > .ProseMirror {
     transform: scale(0.8);
   }
 }
-/* The word ("REC" / "Paused") is the phone's; the bar has the clock, and a
-   pulsing red dot beside a running clock already says recording. */
+/* "Paused" is the phone's — the bar has the clock and no room for a word that
+   says nothing is happening. "REC" is every width's. The pulsing dot beside a
+   running clock did read as recording to whoever built the bar, but this strip
+   now announces itself to a ROOM, and the person who was told they are being
+   recorded has to be able to look over and see that they still are. A dot is
+   the weakest form that claim can take. */
 .meeting-status {
   display: none;
+}
+.meeting-strip.is-live .meeting-status {
+  display: inline;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--red);
 }
 .meeting-elapsed {
   font-weight: 600;
@@ -6786,6 +6798,29 @@ body.is-reading-width #editor > .ProseMirror {
   cursor: default;
   opacity: 0.65;
 }
+/* "I'll say it" — the hybrid's other Start, and it reads as the quieter of the
+   two: no fill, muted text, the same pill. It is an alternative to a default
+   that is already correct, not a thing anyone has to notice, so it must never
+   compete with Start for the eye. Same 36px floor as its two neighbours
+   (design-mobile.md) and `white-space: nowrap` for the same reason the mode
+   switch has it — the apostrophe and the two short words must not stack. */
+.meeting-announce {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-announce[hidden] {
+  display: none;
+}
 @media (min-width: 721px) {
   /* The strip is one row here, so the micro-row stops being a box and its
      children join the strip's own flex line. That flattens them in SOURCE
@@ -6803,8 +6838,14 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-mode {
     order: 3;
   }
-  .meeting-toggle {
+  /* Between the mode switch and Start: it is a start button, so it belongs to
+     the controls at the end of the line, and it is the secondary one, so it
+     sits before the primary rather than past it. */
+  .meeting-announce {
     order: 4;
+  }
+  .meeting-toggle {
+    order: 5;
   }
 }
 @media (max-width: 720px) {
@@ -6838,6 +6879,9 @@ body.is-reading-width #editor > .ProseMirror {
      one line, so the row wraps rather than squeezing the tap targets. */
   .meeting-mode {
     margin-left: auto;
+  }
+  .meeting-announce {
+    margin-left: 8px;
   }
   .meeting-toggle {
     margin-left: 8px;
@@ -6876,7 +6920,8 @@ body.is-reading-width #editor > .ProseMirror {
   /* A live strip keeps the dot, the clock and Stop. The mode switch is
      disabled for the length of a meeting anyway, and this row has no room to
      spare while a keyboard is up. */
-  body[data-edit-viewport="compact"] .meeting-mode {
+  body[data-edit-viewport="compact"] .meeting-mode,
+  body[data-edit-viewport="compact"] .meeting-announce {
     display: none;
   }
 }

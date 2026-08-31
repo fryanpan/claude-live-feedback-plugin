@@ -17,6 +17,7 @@
  */
 
 import {
+  type AnnouncedBy,
   type CaptureMode,
   type MeetingServerMessage,
   detectsSpeakers,
@@ -124,7 +125,14 @@ export class MeetingRelay {
       return;
     }
     if (msg.type === 'start') {
-      this.track(this.start(ws, conn, msg.sampleRate, msg.mode));
+      this.track(this.start(ws, conn, msg.sampleRate, msg.mode, msg.announced));
+      return;
+    }
+    if (msg.type === 'announced') {
+      // The strip revising what it managed to do — the device could not
+      // speak, so a person was asked to. Nothing to answer: the record is
+      // the only reader, and it takes the last word.
+      conn.meeting?.setAnnounced(msg.by);
       return;
     }
     if (msg.type === 'name_speaker') {
@@ -208,6 +216,7 @@ export class MeetingRelay {
     conn: Conn,
     sampleRate: number,
     mode: CaptureMode,
+    announced?: AnnouncedBy,
   ): Promise<void> {
     if (conn.state !== 'idle') return;
     const docId = ws.data.docId;
@@ -222,7 +231,15 @@ export class MeetingRelay {
     }
     // Claim the doc BEFORE the handshake: two sockets starting at once would
     // otherwise both pass the check and both open a billed session.
-    const meeting = this.deps.store.start({ docId, engine: engine.name, sampleRate, mode });
+    const meeting = this.deps.store.start({
+      docId,
+      engine: engine.name,
+      sampleRate,
+      mode,
+      // Carried straight through: the relay has no opinion about how a room
+      // was told, only about writing down what the strip says happened.
+      ...(announced ? { announced } : {}),
+    });
     if (!meeting) {
       this.send(ws, {
         type: 'unavailable',

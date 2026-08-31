@@ -1,12 +1,15 @@
 import {
+  type AnnouncedBy,
   type CaptureMode,
   MAX_SPEAKER_NAME,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
+  RECORDING_ANNOUNCEMENT,
   meetingSocketPath,
   parseMeetingClientMessage,
 } from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Announcer } from '../src/meeting-announce.ts';
 import type { MeetingCaptureStart } from '../src/meeting-audio.ts';
 import {
   type MeetingSocket,
@@ -153,6 +156,8 @@ interface Harness {
   clock: { at: number };
   toggle(): HTMLButtonElement;
   modeSwitch(): HTMLButtonElement;
+  /** "I'll say it" — the hybrid's other Start. */
+  announceButton(): HTMLButtonElement;
   status(): string;
   elapsed(): string;
   caption(): string;
@@ -168,11 +173,12 @@ afterEach(() => {
 });
 
 function mount(
-  capture?: () => Promise<MeetingCaptureStart>,
+  capture?: (opts: { onFrame: (pcm: Int16Array) => void }) => Promise<MeetingCaptureStart>,
   extra: {
     autoStart?: boolean;
     promptName?: (current: string) => string | null;
     mode?: CaptureMode;
+    announcer?: Announcer;
   } = {},
 ): Harness {
   const root = document.createElement('div');
@@ -209,6 +215,7 @@ function mount(
     tick: () => ticker?.(),
     toggle: () => root.querySelector('.meeting-toggle') as HTMLButtonElement,
     modeSwitch: () => root.querySelector('.meeting-mode') as HTMLButtonElement,
+    announceButton: () => root.querySelector('.meeting-announce') as HTMLButtonElement,
     status: () => q('.meeting-status'),
     elapsed: () => q('.meeting-elapsed'),
     caption: () => q('.meeting-caption-line'),
@@ -581,10 +588,14 @@ describe('the strip opened by the Board’s huddle button', () => {
     // No sheet and no second way to start: the strip's own button is the
     // target. The mode switch beside it is not one — it starts nothing.
     expect(h.root.querySelectorAll('.meeting-toggle')).toHaveLength(1);
-    expect([...h.root.querySelectorAll('button')].map((b) => b.className)).toEqual([
-      'meeting-mode',
-      'meeting-toggle',
-    ]);
+    // Visible buttons only: this capture is solo, so "I'll say it" is in the
+    // DOM but hidden — there is nobody in the room to announce anything to,
+    // and a hidden button is not a second way to start.
+    expect(
+      [...h.root.querySelectorAll('button')]
+        .filter((b) => !(b as HTMLButtonElement).hidden)
+        .map((b) => b.className),
+    ).toEqual(['meeting-mode', 'meeting-toggle']);
     h.modeSwitch().click();
     expect(capture).toHaveBeenCalledTimes(1);
 
@@ -861,5 +872,279 @@ describe('teardown', () => {
 describe('the socket address', () => {
   it('is the doc audio path on this host', () => {
     expect(meetingSocketPath('doc-1')).toBe('/audio/doc-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The recording announcement.
+ *
+ * The claim worth testing is an ORDERING one, and it is the opposite of the
+ * intuitive order: the microphone opens first and the sentence is spoken into
+ * it, so the announcement is part of the captured audio rather than a moment
+ * before the recording that nothing can show afterwards. What no test here
+ * can show is that a real room hears it, or that a real engine transcribes a
+ * device speaking through its own microphone — see the note in
+ * docs/architecture/meeting-assistant.md.
+ */
+
+/** An announcer whose speech ends only when the test says it does. */
+class FakeAnnouncer implements Announcer {
+  primes = 0;
+  cancels = 0;
+  said: string[] = [];
+  /** Resolvers for each pending `speak`, in call order. */
+  private pending: Array<(ok: boolean) => void> = [];
+  constructor(
+    private readonly can = true,
+    private readonly log: string[] = [],
+  ) {}
+  supported(): boolean {
+    return this.can;
+  }
+  prime(): void {
+    this.primes += 1;
+    this.log.push('prime');
+  }
+  speak(text: string): Promise<boolean> {
+    this.said.push(text);
+    this.log.push('speak');
+    if (!this.can) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => this.pending.push(resolve));
+  }
+  cancel(): void {
+    this.cancels += 1;
+  }
+  /** The engine finishing (or failing) the sentence. */
+  settle(ok: boolean): void {
+    for (const resolve of this.pending.splice(0)) resolve(ok);
+  }
+  get speaking(): boolean {
+    return this.pending.length > 0;
+  }
+}
+
+/** A capture that hands the test its own microphone. */
+function pumpCapture(log: string[] = []) {
+  let emit: ((pcm: Int16Array) => void) | null = null;
+  const stop = vi.fn();
+  const start = vi.fn((opts: { onFrame: (pcm: Int16Array) => void }) => {
+    emit = opts.onFrame;
+    log.push('mic-open');
+    return Promise.resolve({ ok: true as const, capture: { stop } });
+  });
+  return { start, stop, speakInto: (n = 1) => emit?.(new Int16Array(n)) };
+}
+
+/** Bring a conversation capture all the way to `recording`. */
+async function recordingConversation(announcer: FakeAnnouncer, log: string[] = []) {
+  const mic = pumpCapture(log);
+  const h = mount(mic.start, { mode: 'conversation', announcer });
+  h.toggle().click();
+  await settle();
+  const sock = h.sockets[0];
+  sock?.onopen?.();
+  log.push('start-frame');
+  sock?.serve({
+    type: 'ready',
+    meetingId: 'm1',
+    startedAt: 1_000,
+    engine: 'test',
+    mode: 'conversation',
+  });
+  return { h, mic, sock };
+}
+
+const startFrame = (sock: { sent: Array<string | ArrayBufferView> } | undefined) =>
+  parseMeetingClientMessage(sock?.sent.find((x) => typeof x === 'string') ?? '');
+
+describe('announcing a room capture', () => {
+  it('speaks only AFTER the mic is open and the audio path is live', async () => {
+    const log: string[] = [];
+    const announcer = new FakeAnnouncer(true, log);
+    await recordingConversation(announcer, log);
+    // The whole point: the sentence is spoken into an already-open
+    // microphone. Reverse these two and the announcement stops being part of
+    // the recording, which is the only thing that makes it evidence.
+    expect(log).toEqual(['prime', 'mic-open', 'start-frame', 'speak']);
+    expect(announcer.said).toEqual([RECORDING_ANNOUNCEMENT]);
+  });
+
+  it('carries audio to the socket THROUGHOUT the announcement', async () => {
+    const announcer = new FakeAnnouncer();
+    const { mic, sock } = await recordingConversation(announcer);
+    // Mid-sentence — the device is still talking.
+    expect(announcer.speaking).toBe(true);
+    mic.speakInto(160);
+    expect(sock?.sent.filter((x) => typeof x !== 'string')).toHaveLength(1);
+    announcer.settle(true);
+    await settle();
+    // …and after it, with nothing torn down in between.
+    mic.speakInto(160);
+    expect(sock?.sent.filter((x) => typeof x !== 'string')).toHaveLength(2);
+  });
+
+  it('primes speech inside the click, before anything is awaited', async () => {
+    // iOS Safari unlocks synthesis only from the gesture's own task, and the
+    // announcement itself cannot be spoken there — it has to wait for the
+    // mic. The tap is spent on the unlock instead.
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.toggle().click();
+    expect(announcer.primes).toBe(1);
+    expect(announcer.said).toEqual([]);
+    await settle();
+  });
+
+  it('tells the server the room was told, and by what', async () => {
+    const announcer = new FakeAnnouncer();
+    const { sock, h } = await recordingConversation(announcer);
+    expect(startFrame(sock)).toMatchObject({ mode: 'conversation', announced: 'device' });
+    expect(h.strip.announced()).toBe('device');
+  });
+
+  it('shows the sentence on the strip while the device says it', async () => {
+    const announcer = new FakeAnnouncer();
+    const { h } = await recordingConversation(announcer);
+    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
+  });
+
+  it('gives the announcement back to the transcript once words arrive', async () => {
+    const announcer = new FakeAnnouncer();
+    const { h, sock } = await recordingConversation(announcer);
+    sock?.serve({ type: 'transcript', turn: 0, text: 'so the sync is', final: false });
+    expect(h.note()).toBe('');
+    expect(h.caption()).toContain('so the sync is');
+  });
+});
+
+describe('a solo capture announces nothing', () => {
+  it('says no words and claims nothing on the wire', async () => {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { announcer });
+    h.toggle().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
+    expect(announcer.said).toEqual([]);
+    expect(announcer.primes).toBe(0);
+    const frame = startFrame(h.sockets[0]);
+    expect(frame).toMatchObject({ mode: 'solo' });
+    expect(frame && 'announced' in frame).toBe(false);
+    expect(h.strip.announced()).toBeUndefined();
+  });
+
+  it('hides "I\'ll say it" until there is a room to say it to', () => {
+    const h = mount();
+    expect(h.announceButton().hidden).toBe(true);
+    h.modeSwitch().click();
+    expect(h.announceButton().hidden).toBe(false);
+  });
+
+  it('hides it again once the meeting is running — the announcement has happened', async () => {
+    const announcer = new FakeAnnouncer();
+    const { h } = await recordingConversation(announcer);
+    expect(h.announceButton().hidden).toBe(true);
+  });
+});
+
+describe('"I\'ll say it" — the person takes the sentence', () => {
+  it('starts the capture itself and keeps the device quiet', async () => {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.announceButton().click();
+    await settle();
+    // It IS a Start: a person saying it needs the mic open exactly as much
+    // as the device does, or their words are not in the recording either.
+    expect(mic.start).toHaveBeenCalledTimes(1);
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    expect(h.root.dataset.state).toBe('recording');
+    expect(announcer.said).toEqual([]);
+    expect(announcer.primes).toBe(0);
+  });
+
+  it('puts the sentence on screen to read, and records that path', async () => {
+    const announcer = new FakeAnnouncer();
+    const mic = pumpCapture();
+    const h = mount(mic.start, { mode: 'conversation', announcer });
+    h.announceButton().click();
+    await settle();
+    h.sockets[0]?.onopen?.();
+    h.sockets[0]?.serve({
+      type: 'ready',
+      meetingId: 'm1',
+      startedAt: 1_000,
+      engine: 'test',
+      mode: 'conversation',
+    });
+    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
+    expect(h.note()).toMatch(/say this out loud/i);
+    expect(startFrame(h.sockets[0])).toMatchObject({ announced: 'spoken' });
+  });
+});
+
+describe('a device that turns out not to be able to speak', () => {
+  const failing = async (announcer: FakeAnnouncer) => {
+    const got = await recordingConversation(announcer);
+    announcer.settle(false);
+    await settle();
+    return got;
+  };
+
+  it('falls back to the person and CORRECTS the record', async () => {
+    const announcer = new FakeAnnouncer();
+    const { h, sock } = await failing(announcer);
+    expect(h.note()).toMatch(/say this out loud/i);
+    expect(h.note()).toContain(RECORDING_ANNOUNCEMENT);
+    // The correction is the point. A record saying the device announced it
+    // when the device said nothing is worse than one that claims less.
+    const frames = (sock?.sent ?? [])
+      .filter((x): x is string => typeof x === 'string')
+      .map((x) => JSON.parse(x) as { type: string; by?: AnnouncedBy });
+    expect(frames.at(-1)).toEqual({ type: 'announced', by: 'spoken' });
+    expect(h.strip.announced()).toBe('spoken');
+  });
+
+  it('keeps recording — a mute announcement is not a failed meeting', async () => {
+    const announcer = new FakeAnnouncer();
+    const { h, mic, sock } = await failing(announcer);
+    expect(h.root.dataset.state).toBe('recording');
+    mic.speakInto(160);
+    expect(sock?.sent.filter((x) => typeof x !== 'string')).toHaveLength(1);
+  });
+
+  it('a browser with no synthesis at all takes the same path', async () => {
+    const announcer = new FakeAnnouncer(false);
+    const { h } = await recordingConversation(announcer);
+    await settle();
+    expect(h.note()).toMatch(/say this out loud/i);
+    expect(h.strip.announced()).toBe('spoken');
+  });
+});
+
+describe('a meeting stopped mid-announcement', () => {
+  it('silences the device and does not rewrite the strip afterwards', async () => {
+    const announcer = new FakeAnnouncer();
+    const { h } = await recordingConversation(announcer);
+    h.toggle().click();
+    expect(announcer.cancels).toBeGreaterThanOrEqual(1);
+    expect(h.root.dataset.state).toBe('idle');
+    // The sentence resolving late belongs to a meeting that is over; it must
+    // not put a "say this out loud" prompt on an idle strip.
+    announcer.settle(false);
+    await settle();
+    expect(h.root.dataset.state).toBe('idle');
+    expect(h.note()).not.toMatch(/say this out loud/i);
   });
 });

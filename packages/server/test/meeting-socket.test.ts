@@ -15,12 +15,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  type AnnouncedBy,
   type CaptureMode,
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   meetingSocketPath,
 } from '@feedback/core';
-import { meetingTranscriptPath } from '../src/meetings.ts';
+import { listMeetings, meetingTranscriptPath } from '../src/meetings.ts';
 import { type ShareTarget, shareScopeAllows } from '../src/middleware/host-guard.ts';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { createMockTranscriptionEngine } from '../src/transcribe.ts';
@@ -50,10 +51,25 @@ class AudioClient {
   }
 
   /** Solo by default — the mode a client that never heard of modes gets. */
-  start(sampleRate = MEETING_SAMPLE_RATE, mode: CaptureMode = 'solo'): void {
+  start(
+    sampleRate = MEETING_SAMPLE_RATE,
+    mode: CaptureMode = 'solo',
+    announced?: AnnouncedBy,
+  ): void {
     this.ws.send(
-      JSON.stringify({ type: 'start', sampleRate, encoding: MEETING_AUDIO_ENCODING, mode }),
+      JSON.stringify({
+        type: 'start',
+        sampleRate,
+        encoding: MEETING_AUDIO_ENCODING,
+        mode,
+        ...(announced ? { announced } : {}),
+      }),
     );
+  }
+
+  /** The strip revising how the room ended up being told. */
+  announced(by: AnnouncedBy): void {
+    this.ws.send(JSON.stringify({ type: 'announced', by }));
   }
 
   /** One 20ms frame of silence — the relay only counts chunks, not samples. */
@@ -505,5 +521,89 @@ describe('meeting audio socket with two voices', () => {
     ).json()) as { transcript: Array<{ text: string; speaker?: string }> };
     expect(one.transcript.map((t) => t.speaker)).toEqual(['A', 'B']);
     client.ws.close();
+  });
+});
+
+/**
+ * The announcement, as far as the SERVER is concerned: it writes down what
+ * the strip says happened and never guesses. What no test here can show is
+ * that a room heard anything — see the ordering tests in
+ * `packages/markdown-app/test/meeting-strip.test.ts` for the mechanism, and
+ * docs/architecture/meeting-assistant.md for what is still unverified.
+ */
+describe('the meeting record says how the room was told', () => {
+  let handle: ServerHandle;
+  let dataDir: string;
+  let base: string;
+  let wsBase: string;
+
+  const createDoc = async (docId: string): Promise<string> => {
+    const path = join(dataDir, `${docId}.md`);
+    writeFileSync(path, `# ${docId}\n\nNotes.\n`);
+    const res = await fetch(`${base}/api/docs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ docId, sourceUrl: path, title: docId }),
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    return ((await res.json()) as { docId: string }).docId;
+  };
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-announced-'));
+    handle = createServer({ port: 0, dataDir, transcription: createMockTranscriptionEngine() });
+    base = `http://localhost:${handle.port}`;
+    wsBase = `ws://localhost:${handle.port}`;
+  });
+
+  afterAll(async () => {
+    await handle.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps the path the start frame carried', async () => {
+    const canonical = await createDoc('device-said-it');
+    const client = await AudioClient.open(wsBase, 'device-said-it');
+    client.start(MEETING_SAMPLE_RATE, 'conversation', 'device');
+    await client.waitFor('ready');
+    client.stop();
+    await client.waitFor('stopped');
+    expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('device');
+  });
+
+  it('takes the correction a mute device sends afterwards', async () => {
+    const canonical = await createDoc('device-could-not');
+    const client = await AudioClient.open(wsBase, 'device-could-not');
+    client.start(MEETING_SAMPLE_RATE, 'conversation', 'device');
+    await client.waitFor('ready');
+    client.announced('spoken');
+    client.stop();
+    await client.waitFor('stopped');
+    expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('spoken');
+  });
+
+  it('claims nothing for a solo capture', async () => {
+    const canonical = await createDoc('nobody-to-tell');
+    const client = await AudioClient.open(wsBase, 'nobody-to-tell');
+    client.start();
+    await client.waitFor('ready');
+    client.stop();
+    await client.waitFor('stopped');
+    const record = listMeetings(dataDir, canonical)[0];
+    expect(record && 'announced' in record).toBe(false);
+  });
+
+  it('does not let an unreadable announcement frame close the meeting', async () => {
+    // A frame naming no path says nothing; the socket carries on, and the
+    // record keeps what the start frame claimed.
+    const canonical = await createDoc('garbled-announcement');
+    const client = await AudioClient.open(wsBase, 'garbled-announcement');
+    client.start(MEETING_SAMPLE_RATE, 'conversation', 'device');
+    await client.waitFor('ready');
+    client.ws.send(JSON.stringify({ type: 'announced', by: 'shouted' }));
+    await client.waitFor('error');
+    client.stop();
+    await client.waitFor('stopped');
+    expect(listMeetings(dataDir, canonical)[0]?.announced).toBe('device');
   });
 });

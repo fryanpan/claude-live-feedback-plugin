@@ -56,6 +56,13 @@ flowchart LR
   opened, so the strip reports the session being billed rather than the one
   it asked for, and the meeting record keeps it because it is what the
   meeting cost.
+- **A room capture announces itself, into its own microphone.** A
+  `conversation` start speaks a fixed sentence out loud once the mic is open
+  and the engine is receiving — so the announcement is in the captured audio
+  rather than in a moment before the recording that nothing can show
+  afterwards. One tap (`I'll say it`) hands the sentence to the person
+  instead, and a device that cannot speak falls back to the same place. Solo
+  announces nothing. See "The room is told" below.
 - **Who said it rides the same frame.** The engine's speaker label (`"A"`,
   `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
   a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
@@ -383,13 +390,116 @@ stored content.
 - **The `/audio/` upgrade checks Origin and refuses unknown docs** — CORS
   does not apply to websockets, and this socket spends money while open.
 
+## The room is told, and the telling is in the recording
+
+Shipped 2026-08-30. **In-person captures only** — a Zoom or Meet bot gets its
+consent from the platform's own recording banner, and a second announcement
+over the top of that one would be noise.
+
+A `conversation` capture is by definition the one with other people in it, so
+it says so out loud. Bryan's decision was the **hybrid**: the device speaks by
+default, and one tap hands the sentence to the person instead. Both are on the
+strip as start buttons — `Start` and `I'll say it` — and the second appears
+only while a `conversation` capture is idle, because a solo capture has nobody
+to tell and a running one has already told them.
+
+**The order is the whole feature, and it is the opposite of the intuitive
+one.** The microphone opens FIRST and the sentence is spoken into it:
+
+```mermaid
+sequenceDiagram
+  participant P as Person
+  participant S as Strip
+  participant M as Mic
+  participant R as Relay
+  P->>S: tap Start (conversation)
+  S->>S: announcer.prime() — SYNCHRONOUS, spends the gesture
+  S->>M: getUserMedia + AudioWorklet
+  M-->>S: frames
+  S->>R: start {mode, announced: "device"}
+  R-->>S: ready (engine is receiving)
+  S->>S: speechSynthesis.speak(RECORDING_ANNOUNCEMENT)
+  Note over M,R: the sentence is spoken INTO an open mic —<br/>it rides the same frames as everything else
+```
+
+Announcing before the mic opened would leave the sentence in a moment nothing
+recorded, which is exactly the thing an announcement cannot be: the point is to
+be able to show it afterwards, in the transcript, at the head of the meeting it
+belongs to. So the `ready` frame is the trigger — `ready` means the engine is
+receiving, and everything from there is in the transcript.
+
+**Why there is a prime step.** On iOS Safari — Bryan's main device —
+`speechSynthesis.speak()` is ignored unless it is reached from inside a user
+gesture's own task. The announcement cannot be spoken there, because it has to
+wait for `getUserMedia`, by which point the gesture is spent. So the tap spends
+its gesture on one silent utterance, which unlocks the queue, and the real
+sentence rides that unlock later. Same trick an `AudioContext` needs, same
+reason.
+
+**The sentence is a constant and is not localized.** `RECORDING_ANNOUNCEMENT`
+in `packages/core/src/meeting.ts`. Fixed because it is the thing anyone would
+later be asked to show, and deliberately passive about who is recording — the
+same words are correct in the device's mouth and in a person's, and a sentence
+that only worked in one would need a second sentence for the other.
+
+**What the record claims, and what it does not.** `announced` on the meeting
+record is `'device'`, `'spoken'`, or ABSENT.
+
+| value | what it means |
+|---|---|
+| `device` | the browser reported the utterance finished |
+| `spoken` | the sentence was PUT ON SCREEN for a person to read |
+| absent | no announcement was made — a solo capture, or a client too old to say |
+
+`spoken` is the weaker claim and the code never treats it as more: the client
+knows it displayed the sentence and cannot know anybody read it. Absent is
+never a quiet default either — `parseAnnouncedBy` answers `undefined` for
+anything it does not recognise, because the permissive direction would write a
+consent record out of a typo.
+
+**A device that cannot speak falls back and CORRECTS the record.** No synthesis
+engine, a refused gesture, and an utterance that is accepted and then never
+fires `end` or `error` (a real browser bug, hence the 12s timeout in
+`meeting-announce.ts`) are indistinguishable from the strip and all end the
+same way: the sentence goes on screen for a person, and an `announced` frame
+goes up the socket so the record says `spoken`. A record claiming the device
+announced it when the device said nothing is worse than one that claims less.
+The index folds it last-word-wins, the same rule the speaker names fold under.
+
+**The strip says REC at every width while live**, not only on the phone. A
+pulsing dot was enough while the strip reported only to the person holding the
+device; it announces itself to a room now, and somebody who was told they are
+being recorded has to be able to look over and see that they still are.
+
+### What this is NOT proven by
+
+The mock engine returns a fixture's words, so no automated test can show that
+a real room hears the announcement or that AssemblyAI transcribes a device
+speaking through its own microphone. What the suites prove is the mechanism:
+the ordering (`meeting-strip.test.ts` — speech happens only after the mic is
+open and the `start` frame is away, and audio keeps reaching the socket
+throughout the sentence), every fallback path, and what the record ends up
+saying (`meetings.test.ts`, `meeting-socket.test.ts`).
+
+**Two things stay unverified in a real room as of 2026-08-30.** First, nobody
+has run this with a live engine and two people. Second, and more specific:
+`MEETING_CONSTRAINTS` asks for `echoCancellation: true`, and echo cancellation
+exists precisely to remove the device's own speaker output from the captured
+signal. Whether it removes the announcement along with it depends on whether
+the browser's AEC reference includes speech-synthesis output, which differs by
+platform. If a real-room check finds the announcement missing from the
+transcript, that is the first place to look — and the fix is a scoped one
+(mute AEC for the length of the sentence), not a redesign.
+
 ## Where things live
 
-`packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode`) ·
+`packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode` and
+`RECORDING_ANNOUNCEMENT`) ·
 `packages/server/src/meeting-protocol.ts` (lifecycle) ·
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
-(UI).
+(UI) · `packages/markdown-app/src/meeting-announce.ts` (speech synthesis and
+every way it fails).

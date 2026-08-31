@@ -22,7 +22,12 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { type CaptureMode, parseCaptureMode } from '@feedback/core';
+import {
+  type AnnouncedBy,
+  type CaptureMode,
+  parseAnnouncedBy,
+  parseCaptureMode,
+} from '@feedback/core';
 
 /** One settled turn, as stored. */
 export interface TranscriptTurn {
@@ -52,6 +57,18 @@ export interface MeetingRecord {
    * those sessions were not; see the note in `listMeetings`.
    */
   mode: CaptureMode;
+  /**
+   * How the room was told this was being recorded, when it was told at all.
+   *
+   * This is the defensibility record and the reason the whole announcement
+   * exists, so it is written as it happened and never inferred: `device` is
+   * the browser having spoken the sentence, `spoken` is the sentence having
+   * been put on screen for a person to read out, and ABSENT is no claim at
+   * all — a solo capture with nobody to tell, or a client too old to say.
+   * Nothing here proves a human actually read the words out; `spoken` is a
+   * record of what was asked, not of what was said.
+   */
+  announced?: AnnouncedBy;
   /** Settled turns at stop. Absent for a meeting that never stopped. */
   turns?: number;
   /** Engine label → the name a person gave it, for THIS meeting only. */
@@ -134,11 +151,19 @@ export function listMeetings(dataDir: string, docId: string): MeetingRecord[] {
         // carrying labels, and nothing downstream reads this to decide
         // whether to trust one.
         mode: parseCaptureMode(row.mode),
+        // Absent stays absent: see the field's note. An unreadable value is
+        // not a quiet `device`.
+        ...(parseAnnouncedBy(row.announced) ? { announced: parseAnnouncedBy(row.announced) } : {}),
       });
       continue;
     }
     if (typeof row.endedAt === 'number') existing.endedAt = row.endedAt;
     if (typeof row.turns === 'number') existing.turns = row.turns;
+    // A later announcement line REPLACES the one the start line claimed: the
+    // device was asked to speak, could not, and the strip fell back to a
+    // person. Last word wins, the same rule the speaker names fold under.
+    const announced = parseAnnouncedBy(row.announced);
+    if (announced) existing.announced = announced;
     // One line per naming, merged in order: a rename is a later line for
     // the same label, and the last one is what the person meant.
     if (typeof row.speakers === 'object' && row.speakers !== null) {
@@ -206,6 +231,12 @@ export interface ActiveMeeting {
   recordTurn(turn: number, text: string, speaker?: string): void;
   /** "Label `speaker` is `name`" — appended to the index, last word wins. */
   nameSpeaker(speaker: string, name: string): void;
+  /**
+   * "The room was told this way after all." Appended to the index, last word
+   * wins — the start line carried the path the strip CHOSE, and this is the
+   * one it managed to carry out.
+   */
+  setAnnounced(by: AnnouncedBy): void;
   /** End the meeting. Idempotent; returns the folded record either way. */
   stop(): MeetingRecord;
 }
@@ -239,6 +270,8 @@ export class MeetingStore {
     engine: string;
     sampleRate: number;
     mode: CaptureMode;
+    /** How the room was told, if it was. See `MeetingRecord.announced`. */
+    announced?: AnnouncedBy;
     now?: number;
   }): ActiveMeeting | null {
     const { docId, engine, sampleRate, mode } = args;
@@ -256,6 +289,7 @@ export class MeetingStore {
       meetingId = `${meetingIdFor(docId, startedAt)}-${n}`;
       transcriptPath = meetingTranscriptPath(dataDir, docId, meetingId);
     }
+    let announced = args.announced;
     appendLine(meetingIndexPath(dataDir, docId), {
       meetingId,
       docId,
@@ -263,6 +297,9 @@ export class MeetingStore {
       engine,
       sampleRate,
       mode,
+      // Absent when nothing was announced. Writing `undefined` here would
+      // land as a missing key anyway; the spread says so on purpose.
+      ...(announced ? { announced } : {}),
     });
     // Create the file at start so a meeting nobody spoke in still reads back
     // as an empty transcript rather than a missing one.
@@ -305,6 +342,12 @@ export class MeetingStore {
         speakers[speaker] = name;
         appendLine(meetingIndexPath(dataDir, docId), { meetingId, speakers: { [speaker]: name } });
       },
+      setAnnounced(by: AnnouncedBy): void {
+        if (stopped) return;
+        if (announced === by) return;
+        announced = by;
+        appendLine(meetingIndexPath(dataDir, docId), { meetingId, announced: by });
+      },
       stop(): MeetingRecord {
         const record: MeetingRecord = {
           meetingId,
@@ -314,6 +357,7 @@ export class MeetingStore {
           engine,
           sampleRate,
           mode,
+          ...(announced ? { announced } : {}),
           turns: written.size,
           ...(Object.keys(speakers).length > 0 ? { speakers: { ...speakers } } : {}),
         };

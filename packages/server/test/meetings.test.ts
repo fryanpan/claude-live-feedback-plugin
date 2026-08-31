@@ -6,7 +6,7 @@
  * register. The repo is public.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import {
@@ -336,5 +336,88 @@ describe('meeting store: who said it', () => {
     // After stop the map is closed, like the transcript.
     meeting.nameSpeaker('C', 'Late');
     expect(listMeetings(dataDir, 'named')[0]?.speakers).toEqual({ A: 'Jordan Lee', B: 'Sam' });
+  });
+});
+
+describe('meeting store: how the room was told', () => {
+  let dataDir: string;
+
+  beforeAll(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cw-announced-'));
+  });
+  afterAll(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const start = (docId: string, args: Partial<Parameters<MeetingStore['start']>[0]> = {}) =>
+    new MeetingStore(dataDir).start({
+      docId,
+      engine: 'mock',
+      sampleRate: 16_000,
+      mode: 'conversation',
+      ...args,
+    });
+
+  it('writes the announcement path on the start line and reads it back off disk', () => {
+    const meeting = start('doc-device', { announced: 'device' });
+    expect(meeting).not.toBeNull();
+    meeting?.stop();
+    expect(listMeetings(dataDir, 'doc-device')[0]?.announced).toBe('device');
+  });
+
+  it('leaves it ABSENT when nothing was announced — a solo capture claims nothing', () => {
+    const meeting = start('doc-solo', { mode: 'solo' });
+    const record = meeting?.stop();
+    expect(record && 'announced' in record).toBe(false);
+    const read = listMeetings(dataDir, 'doc-solo')[0];
+    expect(read && 'announced' in read).toBe(false);
+  });
+
+  it('takes a LATER correction over the start line', () => {
+    // The device was asked to speak, could not, and a person was asked to
+    // read the sentence instead. The record has to end up saying what
+    // actually happened, not what the strip set out to do.
+    const meeting = start('doc-fallback', { announced: 'device' });
+    meeting?.setAnnounced('spoken');
+    const record = meeting?.stop();
+    expect(record?.announced).toBe('spoken');
+    expect(listMeetings(dataDir, 'doc-fallback')[0]?.announced).toBe('spoken');
+    // Append-only: the start line still says what was intended.
+    const lines = readFileSync(meetingIndexPath(dataDir, 'doc-fallback'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines[0]?.announced).toBe('device');
+    expect(lines[1]?.announced).toBe('spoken');
+  });
+
+  it('writes no line when the correction says what the record already says', () => {
+    const meeting = start('doc-noop', { announced: 'spoken' });
+    meeting?.setAnnounced('spoken');
+    meeting?.stop();
+    const lines = readFileSync(meetingIndexPath(dataDir, 'doc-noop'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim());
+    // Start and stop, and nothing in between.
+    expect(lines).toHaveLength(2);
+  });
+
+  it('ignores a correction after the meeting stopped', () => {
+    const meeting = start('doc-late', { announced: 'device' });
+    meeting?.stop();
+    meeting?.setAnnounced('spoken');
+    expect(listMeetings(dataDir, 'doc-late')[0]?.announced).toBe('device');
+  });
+
+  it('does not invent a path from an unreadable index line', () => {
+    // The permissive direction here would write a consent record out of a
+    // typo, so an unknown value has to fold to "nothing is claimed".
+    const meeting = start('doc-garbage', { announced: 'device' });
+    meeting?.stop();
+    appendFileSync(
+      meetingIndexPath(dataDir, 'doc-garbage'),
+      `${JSON.stringify({ meetingId: meeting?.meetingId, announced: 'shouted' })}\n`,
+    );
+    expect(listMeetings(dataDir, 'doc-garbage')[0]?.announced).toBe('device');
   });
 });
