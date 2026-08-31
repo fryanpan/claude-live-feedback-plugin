@@ -1312,7 +1312,7 @@ describe('a tagged meeting through the audio socket', () => {
 
     const ws = new WebSocket(`ws://localhost:${handle.port}${meetingSocketPath('huddle')}`);
     ws.binaryType = 'arraybuffer';
-    const frames: { type: string; final?: boolean }[] = [];
+    const frames: { type: string; final?: boolean; mode?: string }[] = [];
     ws.addEventListener('message', (ev) => {
       frames.push(JSON.parse(ev.data as string) as (typeof frames)[number]);
     });
@@ -1330,14 +1330,21 @@ describe('a tagged meeting through the audio socket', () => {
     const docMarkdown = (): string =>
       prose.serializeFragmentToMarkdown(prose.getProseFragment(handle.rooms.get('huddle')!.ydoc));
 
+    // A conversation, explicitly. Since #501 diarization is opt-in per
+    // capture and solo is the default, so a capture that does not ask gets
+    // no speaker labels — and a note with no voice has nothing to tag.
     ws.send(
       JSON.stringify({
         type: 'start',
         sampleRate: MEETING_SAMPLE_RATE,
         encoding: MEETING_AUDIO_ENCODING,
+        mode: 'conversation',
       }),
     );
     await waitFor(() => frames.some((f) => f.type === 'ready'), 'ready');
+    // The mode the SERVER opened, not the one asked for: every tag below is
+    // only meaningful if diarization actually reached the engine.
+    expect(frames.find((f) => f.type === 'ready')?.mode).toBe('conversation');
     // Both turns settle: four chunks each (three words, then the settle).
     for (let i = 0; i < 8; i++) ws.send(new Uint8Array(640));
     await waitFor(
