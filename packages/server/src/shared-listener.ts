@@ -72,10 +72,11 @@ import { HTTP_IDLE_TIMEOUT_SEC } from './sse.ts';
 export const TEST_LISTENER_HEADER = 'x-cw-test-listener';
 
 /**
- * Virtual ports start above the privileged range and far below macOS's
- * ephemeral range (49152–65535), so a number handed out here can never
- * collide with a port the kernel assigns to a dedicated listener in the same
- * process. The shim rewrites only ports it has actually registered, so an
+ * Virtual ports start above the privileged range and far below the lowest
+ * ephemeral range this runs against — Linux's `ip_local_port_range` opens at
+ * 32768 and macOS's at 49152 — so a number handed out here can never collide
+ * with a port the kernel assigns to a dedicated listener in the same process.
+ * CI is Linux and the box is macOS, so it has to clear both. The shim rewrites only ports it has actually registered, so an
  * unregistered one — a webhook receiver a test stood up with its own
  * `Bun.serve`, say — passes straight through to the real fetch.
  */
