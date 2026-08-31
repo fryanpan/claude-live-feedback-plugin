@@ -25,7 +25,7 @@
  * itself. The chip in the notes shows live status, so it flips only when the
  * lead's dispatch actually happens, and it stays honest if that never does.
  *
- * THE FILE IS NAMED FOR ITS FIRST TWO INTENTS AND NOW CARRIES FOUR. Requests
+ * THE FILE IS NAMED FOR ITS FIRST TWO INTENTS AND NOW CARRIES FIVE. Requests
  * and references were the whole of it; research and lookup asks arrived in
  * the same reply rather than in calls of their own, because a tick's prompt
  * is ~95% shared context and what scales with intents is how many times that
@@ -43,6 +43,16 @@
  * open review item already holds a row off dispatch (`ready-gate.ts`,
  * `awaiting-answer`) — the confirmation is enforced by the board rather than
  * promised by a prompt.
+ *
+ * THE FIFTH INTENT DOES NOT BELONG TO THIS FILE'S SUBJECT AT ALL, AND RIDES
+ * HERE ANYWAY. A CORRECTION — "no, I said Thursday" — touches no board row;
+ * it fixes a note. It is extracted here for the one reason the decision gives:
+ * what a tick pays for is re-sending its context, so an intent that shares the
+ * transcript already in the prompt is nearly free, and the same intent as its
+ * own pass would pay for the whole prompt again to answer "nothing" on most
+ * ticks. So the pass extracts it, checks the half a transcript can vouch for,
+ * and hands it on untouched (`CaptureLinks.corrections`) to the module that
+ * can finish the job: the notes are in the doc, not here.
  */
 
 import type { TaskReviewItem } from '@feedback/core';
@@ -54,7 +64,12 @@ import {
   parseRecency,
   resolveLookup,
 } from './meeting-lookup.ts';
-import type { NoteDocLink, NoteTaskLink, NotesTurn } from './meeting-notes.ts';
+import {
+  CORRECTION_PHRASE_MAX,
+  correctionPhraseUsable,
+  correctionSpokenOnTick,
+} from './meeting-notes-correction.ts';
+import type { NoteDocLink, NoteTaskLink, NotesTurn, SpokenCorrection } from './meeting-notes.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
 import { clipToWordBoundary } from './task-title.ts';
@@ -125,7 +140,33 @@ export interface CapturedLookup {
   query: string;
 }
 
-export type CapturedItem = CapturedRequest | CapturedReference | CapturedResearch | CapturedLookup;
+/**
+ * Speech that FIXES a note already written — "no, I said Thursday", "that
+ * was sixty, not sixteen".
+ *
+ * The odd one out among the intents: every other one adds something to the
+ * board or the notes, and this one changes something that is already there.
+ * So it is the only intent whose guard cannot be finished here — the mistaken
+ * words are vouched by the DOC, not by the transcript, and that resolution
+ * happens in `meeting-notes-correction.ts` where the notes actually are. What
+ * this module owes it is the other half: the corrected words must have been
+ * SAID (`correctionSpokenOnTick`), so a model that invents a correction
+ * nobody spoke never reaches the doc at all.
+ */
+export interface CapturedCorrection {
+  kind: 'correction';
+  /** The mistaken words, as the notes would spell them. */
+  wrong: string;
+  /** What they should say instead, in the words just spoken. */
+  right: string;
+}
+
+export type CapturedItem =
+  | CapturedRequest
+  | CapturedReference
+  | CapturedResearch
+  | CapturedLookup
+  | CapturedCorrection;
 
 export interface TaskCaptureInput {
   turns: readonly NotesTurn[];
@@ -469,6 +510,27 @@ export const LOOKUP_PROMPT_RULE = [
   'their own words, KEEPING any "when" they said ("last week", "Tuesday").',
 ] as const;
 
+/**
+ * What a correction sounds like, and — the load-bearing half — what
+ * separates it from somebody simply saying something new.
+ *
+ * "Changing their mind is not a correction" earns its tokens: a meeting is
+ * full of "actually, let's do Thursday", which OVERTURNS a note rather than
+ * fixing it, and the composer already handles that by revising the notes it
+ * writes. A correction is narrower: the note is WRONG, and two words of it
+ * are wrong. Asking for the mistaken words verbatim is what makes it
+ * resolvable — a paraphrase matches no note and is dropped.
+ */
+export const CORRECTION_PROMPT_RULE = [
+  'A CORRECTION when a speaker fixes something the notes ALREADY SAY, rather',
+  'than saying anything new — "no, I said Thursday", "that was Priya, not',
+  'me", "sixty, not sixteen". "wrong": the mistaken words as the notes would',
+  'have them, quoted, not paraphrased; "right": what they should say, in the',
+  'words just spoken. Both short — a few words, never a sentence. Somebody',
+  'CHANGING THEIR MIND ("actually, let\'s do Thursday") is new speech, not a',
+  'correction. Omit the item unless both halves are clear.',
+] as const;
+
 export const OVERLAP_PROMPT_RULE = [
   '"Earlier speech" was read last pass: use it to resolve what a new line',
   'points at, or to finish a request it began. Every item must draw part of',
@@ -482,15 +544,16 @@ export const OVERLAP_PROMPT_RULE = [
  */
 export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: string; user: string } {
   const system = [
-    'You listen to a live working meeting and extract four things: task',
-    'REQUESTS, task REFERENCES, RESEARCH asks and LOOKUP asks. Answer with',
-    'JSON only, this shape:',
+    'You listen to a live working meeting and extract five things: task',
+    'REQUESTS, task REFERENCES, RESEARCH asks, LOOKUP asks and CORRECTIONS.',
+    'Answer with JSON only, this shape:',
     '{"items":[{"kind":"request","title":"...","actionable":true|false,',
     '           "requester":"who asked, omitted if unclear"}',
     '         |{"kind":"reference","match":<candidate number>}',
     '         |{"kind":"research","topic":"...","question":"...",',
     '           "requester":"who asked, omitted if unclear"}',
-    '         |{"kind":"lookup","query":"..."}]}',
+    '         |{"kind":"lookup","query":"..."}',
+    '         |{"kind":"correction","wrong":"...","right":"..."}]}',
     '',
     'A REQUEST only when a speaker explicitly asks for work to be tracked or',
     'filed — "file a ticket", "let\'s track that", "add it to the board",',
@@ -514,6 +577,8 @@ export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: strin
     ...RESEARCH_PROMPT_RULE,
     '',
     ...LOOKUP_PROMPT_RULE,
+    '',
+    ...CORRECTION_PROMPT_RULE,
     '',
     ...OVERLAP_PROMPT_RULE,
     '',
@@ -625,6 +690,26 @@ export function parseTaskCaptureReply(
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
       out.push({ kind: 'lookup', query });
+    } else if (row.kind === 'correction') {
+      if (typeof row.wrong !== 'string' || typeof row.right !== 'string') continue;
+      const wrong = row.wrong.trim();
+      const right = row.right.trim();
+      // Long enough to identify a note, short enough to be a correction
+      // rather than a rewrite of one. Same floor the doc side applies, asked
+      // here so a hopeless pair never reaches it.
+      if (!correctionPhraseUsable(wrong)) continue;
+      if (right.length === 0 || right.length > CORRECTION_PHRASE_MAX) continue;
+      if (wrong.toLowerCase() === right.toLowerCase()) continue;
+      // The corrected words must have been SAID. The MISTAKEN words are
+      // deliberately not checked against the transcript: the tick that
+      // carried the mishearing is usually outside this window by the time
+      // anybody corrects it, and the notes vouch for them far better than a
+      // transcript could — see `correctNotesSection`.
+      if (!correctionSpokenOnTick(window, right)) continue;
+      const key = `correction:${wrong.toLowerCase()}=>${right.toLowerCase()}`;
+      if (seenTitles.has(key)) continue;
+      seenTitles.add(key);
+      out.push({ kind: 'correction', wrong, right });
     }
   }
   return out;
@@ -674,11 +759,15 @@ export interface TaskCaptureLookup {
   docs(workspaceId: string, exceptDocId: string): LookupDoc[];
 }
 
-/** What one tick's pass hands the composer: rows it touched, and material it
- *  was asked to bring in. Both empty is the ordinary answer. */
+/** What one tick's pass hands back: rows it touched, material it was asked to
+ *  bring in, and fixes to notes already written. All three empty is the
+ *  ordinary answer. The first two are links the composer may weave in; the
+ *  third goes to the doc directly, because the note it changes is there and
+ *  not in anything the composer is about to write. */
 export interface CaptureLinks {
   tasks: NoteTaskLink[];
   docs: NoteDocLink[];
+  corrections: SpokenCorrection[];
 }
 
 export interface RunTaskCaptureDeps {
@@ -720,7 +809,7 @@ export async function runTaskCapture(
   deps: RunTaskCaptureDeps,
   input: RunTaskCaptureInput,
 ): Promise<CaptureLinks> {
-  const none: CaptureLinks = { tasks: [], docs: [] };
+  const none: CaptureLinks = { tasks: [], docs: [], corrections: [] };
   let candidates: TaskCaptureCandidate[];
   try {
     // Done rows stay in: "the tunnel fix from last week is done" is a
@@ -751,6 +840,7 @@ export async function runTaskCapture(
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const links: NoteTaskLink[] = [];
   const docLinks: NoteDocLink[] = [];
+  const corrections: SpokenCorrection[] = [];
   const linked = new Set<string>();
   const linkedDocs = new Set<string>();
   const pushCandidate = (c: TaskCaptureCandidate): void => {
@@ -770,6 +860,14 @@ export async function runTaskCapture(
     if (item.kind === 'reference') {
       const candidate = byId.get(item.taskId);
       if (candidate) pushCandidate(candidate);
+      continue;
+    }
+    if (item.kind === 'correction') {
+      // Nothing to find or create: a correction touches no board row. It is
+      // carried out of here untouched, and resolves against the notes doc —
+      // the only place that can say which note it is about, or whether it is
+      // about anybody's note at all.
+      corrections.push({ wrong: item.wrong, right: item.right });
       continue;
     }
     if (item.kind === 'lookup') {
@@ -843,7 +941,7 @@ export async function runTaskCapture(
     }
     pushMade(created.task.id, item.title, status);
   }
-  return { tasks: links, docs: docLinks };
+  return { tasks: links, docs: docLinks, corrections };
 }
 
 /**
