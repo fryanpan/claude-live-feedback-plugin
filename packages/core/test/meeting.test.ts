@@ -4,8 +4,11 @@ import {
   MAX_ROOM_SPEAKERS,
   MEETING_AUDIO_ENCODING,
   MIN_ROOM_SPEAKERS,
+  RECORDING_ANNOUNCEMENT,
+  announcesRecording,
   detectsSpeakers,
   maxSpeakersFor,
+  parseAnnouncedBy,
   parseCaptureMode,
   parseMeetingClientMessage,
   parseRoomSpeakers,
@@ -139,5 +142,83 @@ describe('room speaker cap', () => {
     // not a refused one — it just says nothing about the room.
     expect(start({})).not.toHaveProperty('speakers');
     expect(start({ speakers: 'lots' })).not.toHaveProperty('speakers');
+  });
+});
+
+describe('the recording announcement', () => {
+  it('is one fixed sentence, short enough to be said over a conversation', () => {
+    // Fixed because it is the thing anyone would be asked to show afterwards:
+    // a sentence composed per meeting is one nobody can quote back.
+    expect(RECORDING_ANNOUNCEMENT).toMatch(/recorded/i);
+    expect(RECORDING_ANNOUNCEMENT.split(/[.!?]/).filter((s) => s.trim()).length).toBe(1);
+    expect(RECORDING_ANNOUNCEMENT.length).toBeLessThan(120);
+  });
+
+  it('says nothing about WHO is recording, so either mouth can say it', () => {
+    // The device says these words and so does a person reading them off the
+    // strip. A first-person sentence would need a second sentence.
+    expect(RECORDING_ANNOUNCEMENT).not.toMatch(/\bI\b|\bmy\b/);
+  });
+
+  it('is made only where there is a room to make it to', () => {
+    expect(announcesRecording('conversation')).toBe(true);
+    expect(announcesRecording('solo')).toBe(false);
+  });
+});
+
+describe('parseAnnouncedBy', () => {
+  it('reads the two paths', () => {
+    expect(parseAnnouncedBy('device')).toBe('device');
+    expect(parseAnnouncedBy('spoken')).toBe('spoken');
+  });
+
+  it('answers UNDEFINED for anything else rather than defaulting', () => {
+    // The direction matters: this field is the evidence a room was told, so
+    // an unreadable value has to mean "no claim", never a claim nobody made.
+    expect(parseAnnouncedBy(undefined)).toBeUndefined();
+    expect(parseAnnouncedBy(null)).toBeUndefined();
+    expect(parseAnnouncedBy('')).toBeUndefined();
+    expect(parseAnnouncedBy('DEVICE')).toBeUndefined();
+    expect(parseAnnouncedBy(true)).toBeUndefined();
+  });
+});
+
+describe('the announcement on the wire', () => {
+  const startFrame = (extra: Record<string, unknown>) =>
+    parseMeetingClientMessage(
+      JSON.stringify({
+        type: 'start',
+        sampleRate: 16_000,
+        encoding: MEETING_AUDIO_ENCODING,
+        mode: 'conversation',
+        ...extra,
+      }),
+    );
+
+  it('is NEVER carried by the start frame', () => {
+    // A claim made when the microphone opened is a claim about something
+    // that has not happened yet, and a meeting stopped mid-sentence would
+    // leave it standing. The parser drops the field outright.
+    const frame = startFrame({ announced: 'device' });
+    expect(frame).toMatchObject({ mode: 'conversation' });
+    expect(frame && 'announced' in frame).toBe(false);
+  });
+
+  it('is its own frame, sent after the room has actually been told', () => {
+    expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'spoken' }))).toEqual({
+      type: 'announced',
+      by: 'spoken',
+    });
+    expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'device' }))).toEqual({
+      type: 'announced',
+      by: 'device',
+    });
+  });
+
+  it('drops a frame that names no path rather than defaulting one', () => {
+    expect(parseMeetingClientMessage(JSON.stringify({ type: 'announced' }))).toBeNull();
+    expect(
+      parseMeetingClientMessage(JSON.stringify({ type: 'announced', by: 'shouted' })),
+    ).toBeNull();
   });
 });

@@ -22,7 +22,13 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { type CaptureMode, parseCaptureMode } from '@feedback/core';
+import {
+  type AnnouncedBy,
+  type CaptureMode,
+  announcesRecording,
+  parseAnnouncedBy,
+  parseCaptureMode,
+} from '@feedback/core';
 
 /** One settled turn, as stored. */
 export interface TranscriptTurn {
@@ -52,6 +58,18 @@ export interface MeetingRecord {
    * those sessions were not; see the note in `listMeetings`.
    */
   mode: CaptureMode;
+  /**
+   * How the room was told this was being recorded, when it was told at all.
+   *
+   * This is the defensibility record and the reason the whole announcement
+   * exists, so it is written as it happened and never inferred: `device` is
+   * the browser having spoken the sentence, `spoken` is the sentence having
+   * been put on screen for a person to read out, and ABSENT is no claim at
+   * all — a solo capture with nobody to tell, or a client too old to say.
+   * Nothing here proves a human actually read the words out; `spoken` is a
+   * record of what was asked, not of what was said.
+   */
+  announced?: AnnouncedBy;
   /** Settled turns at stop. Absent for a meeting that never stopped. */
   turns?: number;
   /** Engine label → the name a person gave it, for THIS meeting only. */
@@ -134,11 +152,20 @@ export function listMeetings(dataDir: string, docId: string): MeetingRecord[] {
         // carrying labels, and nothing downstream reads this to decide
         // whether to trust one.
         mode: parseCaptureMode(row.mode),
+        // Absent stays absent: see the field's note. An unreadable value is
+        // not a quiet `device`.
+        ...(parseAnnouncedBy(row.announced) ? { announced: parseAnnouncedBy(row.announced) } : {}),
       });
       continue;
     }
     if (typeof row.endedAt === 'number') existing.endedAt = row.endedAt;
     if (typeof row.turns === 'number') existing.turns = row.turns;
+    // The room was told. There is no announcement on the start line to
+    // replace — a later line can only ever be the first, or a correction
+    // from `device` to `spoken`. Last word wins, the same rule the speaker
+    // names fold under.
+    const announced = parseAnnouncedBy(row.announced);
+    if (announced) existing.announced = announced;
     // One line per naming, merged in order: a rename is a later line for
     // the same label, and the last one is what the person meant.
     if (typeof row.speakers === 'object' && row.speakers !== null) {
@@ -169,7 +196,15 @@ export function readTranscript(
         ts: typeof row.ts === 'number' ? row.ts : 0,
         ...(speaker !== undefined ? { speaker } : {}),
       };
-      turns.push(turn);
+      // A second line WITH words for a turn already written is a REVISION of
+      // the words, not a second turn — the bot path's providers settle a turn
+      // twice, rough then punctuated, and only the last one should be read.
+      // Replaced in place rather than appended, because a turn settled where
+      // it settled; correcting the words does not move it in the meeting.
+      const priorText = byTurn.get(row.turn);
+      const at = priorText ? turns.indexOf(priorText) : -1;
+      if (at >= 0) turns[at] = turn;
+      else turns.push(turn);
       byTurn.set(row.turn, turn);
       continue;
     }
@@ -206,6 +241,12 @@ export interface ActiveMeeting {
   recordTurn(turn: number, text: string, speaker?: string): void;
   /** "Label `speaker` is `name`" — appended to the index, last word wins. */
   nameSpeaker(speaker: string, name: string): void;
+  /**
+   * "The room HAS been told, this way." Appended to the index, last word
+   * wins. The only writer of `announced` — nothing claims one at start — and
+   * a no-op on a `solo` meeting, which by definition told nobody.
+   */
+  setAnnounced(by: AnnouncedBy): void;
   /** End the meeting. Idempotent; returns the folded record either way. */
   stop(): MeetingRecord;
 }
@@ -256,6 +297,13 @@ export class MeetingStore {
       meetingId = `${meetingIdFor(docId, startedAt)}-${n}`;
       transcriptPath = meetingTranscriptPath(dataDir, docId, meetingId);
     }
+    /**
+     * Set only by `setAnnounced`, and never at start: an announcement is a
+     * thing that HAS happened, so the record cannot carry one from the
+     * moment the microphone opened. A meeting stopped mid-sentence leaves
+     * this undefined, which is the honest answer.
+     */
+    let announced: AnnouncedBy | undefined;
     appendLine(meetingIndexPath(dataDir, docId), {
       meetingId,
       docId,
@@ -268,8 +316,8 @@ export class MeetingStore {
     // as an empty transcript rather than a missing one.
     mkdirSync(dirname(transcriptPath), { recursive: true });
     appendFileSync(transcriptPath, '');
-    /** Turn → the label it was written with (undefined for none). */
-    const written = new Map<number, string | undefined>();
+    /** Turn → the words and label it was last written with. */
+    const written = new Map<number, { text: string; speaker: string | undefined }>();
     const speakers: Record<string, string> = {};
     let stopped = false;
     const live = this.live;
@@ -280,11 +328,13 @@ export class MeetingStore {
       startedAt,
       recordTurn(turn: number, text: string, speaker?: string): void {
         if (stopped) return;
-        // An engine that settles the same turn twice would otherwise double
-        // it in the record, and appending is not something we can take back.
-        if (written.has(turn)) {
-          if (written.get(turn) === speaker) return;
-          written.set(turn, speaker);
+        const prior = written.get(turn);
+        // An engine that settles the same turn twice with the same words and
+        // the same label would otherwise double it in the record, and
+        // appending is not something we can take back.
+        if (prior && prior.text === text && prior.speaker === speaker) return;
+        written.set(turn, { text, speaker });
+        if (prior && prior.text === text) {
           // Explicit `null`, never an absent field: a relabel line says what
           // the label IS now, and the revision pass can take one away as
           // well as change it. Absent would read as "this line says nothing
@@ -292,7 +342,11 @@ export class MeetingStore {
           appendLine(transcriptPath, { turn, speaker: speaker ?? null, ts: Date.now() });
           return;
         }
-        written.set(turn, speaker);
+        // Either the turn is new, or its WORDS were revised. The bot path
+        // settles a turn twice — rough, then punctuated by `format_turns` —
+        // and without this the durable record would keep the rough one
+        // forever while the notes composer worked from the good one. A line
+        // with words for a turn already written replaces it on read.
         appendLine(transcriptPath, {
           turn,
           text,
@@ -305,6 +359,18 @@ export class MeetingStore {
         speakers[speaker] = name;
         appendLine(meetingIndexPath(dataDir, docId), { meetingId, speakers: { [speaker]: name } });
       },
+      setAnnounced(by: AnnouncedBy): void {
+        if (stopped) return;
+        // A solo capture has nobody to announce to, so it cannot have made
+        // an announcement — and the frame that says otherwise is
+        // client-controlled. Enforced HERE rather than trusted of the strip:
+        // this record is the evidence, and the invariant belongs with the
+        // thing that writes it.
+        if (!announcesRecording(mode)) return;
+        if (announced === by) return;
+        announced = by;
+        appendLine(meetingIndexPath(dataDir, docId), { meetingId, announced: by });
+      },
       stop(): MeetingRecord {
         const record: MeetingRecord = {
           meetingId,
@@ -314,6 +380,7 @@ export class MeetingStore {
           engine,
           sampleRate,
           mode,
+          ...(announced ? { announced } : {}),
           turns: written.size,
           ...(Object.keys(speakers).length > 0 ? { speakers: { ...speakers } } : {}),
         };

@@ -363,6 +363,25 @@ export interface MeetingCaptureDeps {
 
 export interface MeetingCapture {
   stop(): void;
+  /**
+   * Turn echo cancellation off for a moment, and back on.
+   *
+   * WHY THIS EXISTS. `MEETING_CONSTRAINTS` asks for echo cancellation because
+   * a meeting on a laptop speaker otherwise transcribes its own output. But
+   * echo cancellation exists precisely to remove what the DEVICE is playing
+   * from what the microphone hears — and the recording announcement is the
+   * device playing something it needs the microphone to hear. Whether a given
+   * browser's canceller actually reaches speech synthesis depends on whether
+   * synthesis shares the render path it uses as its reference, which differs
+   * by platform and is not something the page can ask.
+   *
+   * So this is a hedge, not a guarantee: best-effort, and every failure is
+   * swallowed. `applyConstraints` can reject outright (Safari has refused
+   * `echoCancellation` on a live track), and where it does the capture is
+   * exactly where it was before. It never rejects, so no caller has to guard
+   * an announcement behind it.
+   */
+  setEchoCancellation(on: boolean): Promise<void>;
 }
 
 /** Why a capture did not start, in words the strip can show as they are. */
@@ -433,6 +452,19 @@ export async function startMeetingCapture(opts: MeetingCaptureOpts): Promise<Mee
   return {
     ok: true,
     capture: {
+      setEchoCancellation: async (on: boolean) => {
+        await Promise.all(
+          stream.getAudioTracks().map(async (track) => {
+            try {
+              await track.applyConstraints({ echoCancellation: on });
+            } catch {
+              // A track that will not take the constraint keeps the one it
+              // has. Reporting this would be reporting a hedge that did not
+              // apply, which is not a state anybody can act on.
+            }
+          }),
+        );
+      },
       stop: () => {
         pump.onBlock = null;
         pump.stop();

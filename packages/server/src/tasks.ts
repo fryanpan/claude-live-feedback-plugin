@@ -259,18 +259,49 @@ export function refKey(ref: Ref): string {
   }
 }
 
-export interface WorkspaceSubgoal {
+export interface WorkspaceGoal {
   id: string;
   title: string;
   dueAt?: number;
 }
 
-export interface WorkspaceGoal {
+/**
+ * A goal list as it may arrive from OUTSIDE — a payload written before
+ * subgoals were removed, or a workspace on disk that still holds them.
+ *
+ * Subgoals are gone from the product (Bryan, 2026-08-30: *"We no longer
+ * support subgoals. If there's any code left for subgoals remove it"*), but
+ * a stored board is not rewritten by that decision. `flattenNestedGoals` is
+ * the one door such a payload comes through, and every one of them arrives
+ * flat on the other side.
+ */
+export interface NestedGoalInput {
   id: string;
   title: string;
   dueAt?: number;
-  /** ONE level max — deeper nesting kills the 5-second task (§3.2). */
-  subgoals?: WorkspaceSubgoal[];
+  subgoals?: NestedGoalInput[];
+}
+
+/**
+ * Splice any nested goals into the top level, each one landing directly after
+ * the parent that held it.
+ *
+ * That position is not a choice: the board has drawn subgoals as flat rows in
+ * exactly this order all along, so a flattened list looks like the board the
+ * reader already had. Depth beyond one level was never written, but the walk
+ * is recursive anyway — a payload that has it should still load rather than
+ * lose rows.
+ */
+export function flattenNestedGoals(goals: readonly NestedGoalInput[]): WorkspaceGoal[] {
+  const out: WorkspaceGoal[] = [];
+  const walk = (list: readonly NestedGoalInput[]) => {
+    for (const g of list) {
+      out.push({ id: g.id, title: g.title, ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}) });
+      if (g.subgoals?.length) walk(g.subgoals);
+    }
+  };
+  walk(goals);
+  return out;
 }
 
 export interface HubWorkspace {
@@ -512,28 +543,9 @@ export function isReservedGoalId(id: string): boolean {
   return RESERVED_GOAL_IDS.has(id);
 }
 
-/** Every goal and subgoal as one flat list, parent before its children. The
- *  ordered list is two levels deep and three call sites had each walked it by
- *  hand; a fourth that forgot the inner loop would silently ignore subgoals,
- *  which is exactly the kind of half-coverage the goal-list edits keep
- *  producing. Ordering is the read order, so callers can report in it. */
-export function flattenGoals(
-  goals: WorkspaceGoal[],
-): Array<{ id: string; title: string; dueAt?: number; parent?: string }> {
-  const out: Array<{ id: string; title: string; dueAt?: number; parent?: string }> = [];
-  for (const g of goals) {
-    out.push({ id: g.id, title: g.title, ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}) });
-    for (const s of g.subgoals ?? []) {
-      out.push({
-        id: s.id,
-        title: s.title,
-        ...(s.dueAt !== undefined ? { dueAt: s.dueAt } : {}),
-        parent: g.id,
-      });
-    }
-  }
-  return out;
-}
+/* `flattenGoals` lived here. It existed to walk a two-level list as one, and
+   the list has one level now — `workspace.goals` IS the flat list, so its
+   callers read it directly. */
 
 export interface TaskActor {
   id: string;
@@ -745,7 +757,7 @@ export interface Task {
    * row, so this needs no writer of its own.
    */
   reviews?: StoredReviewItem[];
-  /** Goal or subgoal id; `chores` is the catch-all. */
+  /** Goal id; `chores` is the catch-all. */
   goal: string;
   /** Fractional sort key — always room to insert between two tasks. */
   order: number;
@@ -1066,10 +1078,6 @@ export interface GoalRow {
   archivedBy?: string;
   /** Why, in the archiver's words. Cleared by a restore. */
   archiveReason?: string;
-  /** The PARENT goal whose archive took this subgoal with it — the subgoal's
-   *  half of `Task.archivedWithGoal`, and read for the same reason: a restore
-   *  must put back the subgoals its own archive removed and no others. */
-  archivedWithGoal?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -1839,8 +1847,8 @@ export interface TaskArchivedEvent {
    *  on the wire knows how to read. */
   kind?: 'goal';
   reason?: string;
-  /** Batch key, on the GOAL's own event: every task and subgoal the cascade
-   *  took carries it as `partOf`. The same shape `workspace.goals_changed`
+  /** Batch key, on the GOAL's own event: every task the cascade took carries
+   *  it as `partOf`. The same shape `workspace.goals_changed`
    *  uses for the moves it fans out. */
   batchId?: string;
   /** Set on a MEMBER of a cascade — the batchId of the goal archive that
@@ -2431,12 +2439,12 @@ export type SetAssigneeResult =
 /**
  * What a band's archive or restore actually moved.
  *
- * The two id lists are the point: the caller shows "Archived “Ship W3” and 14
+ * The id list is the point: the caller shows "Archived “Ship W3” and 14
  * tasks", and the number in that sentence is what happened rather than what
  * the confirmation guessed a moment earlier. `changed: false` means the band
  * was already in the state asked for — nothing written, nothing emitted, and
- * both lists empty, which is honest rather than a re-listing of rows this
- * call did not touch.
+ * the list empty, which is honest rather than a re-listing of rows this call
+ * did not touch.
  */
 export type ArchiveGoalResult =
   | {
@@ -2445,8 +2453,6 @@ export type ArchiveGoalResult =
       changed: boolean;
       /** Tasks this call archived (or restored), in board order. */
       taskIds: string[];
-      /** Subgoal bands that went with it. */
-      subgoalIds: string[];
     }
   | { ok: false; error: 'not-found' };
 
@@ -2505,7 +2511,7 @@ export function sequenceAfter<T extends { id: string }>(
  * goes is the whole contract (§3.2, restated once goal ids are generated):
  *
  *  - **`id` present** — "this is the band you already have". It must name a
- *    goal or subgoal this board holds right now; anything else is refused as
+ *    goal this board holds right now; anything else is refused as
  *    `unknown-goal-id`. That is the refusal that makes a re-key
  *    unexpressible: there is no input here that can hand an existing band a
  *    different id, and no input that can hand a NEW band an id of the
@@ -2515,14 +2521,17 @@ export function sequenceAfter<T extends { id: string }>(
  *
  * So submitting a list now means: these are my bands, in this order, and the
  * ones I did not name an id for are new. Everything else the call could ever
- * do it still does — reorder, retitle, reparent, remove (gated) — none of
- * which touch an id.
+ * do it still does — reorder, retitle, remove (gated) — none of which touch
+ * an id.
  */
 export interface GoalListEntry {
   /** Omit to CREATE. Present = must already exist on this board. */
   id?: string;
   title: string;
   dueAt?: number;
+  /** Legacy nesting. Still accepted so a board written before subgoals were
+   *  removed — and a caller this server cannot restart — still loads; the
+   *  store FLATTENS it into bands of its own. Never written back. */
   subgoals?: Array<{ id?: string; title: string; dueAt?: number }>;
 }
 
@@ -2532,12 +2541,11 @@ export type SetGoalListResult =
       workspace: HubWorkspace;
       /** False when the new list deep-equals the old — no event, no moves. */
       changed: boolean;
-      /** Goals and subgoals this call CREATED, in submission order (parents
-       *  before their subgoals), with the id the server generated for each.
-       *  The only way a caller learns a new band's id — which is the point:
-       *  they never chose it. */
-      created: Array<{ id: string; title: string; parent?: string }>;
-      /** Open tasks whose goal or subgoal id disappeared, moved to Backlog —
+      /** Goals this call CREATED, in submission order, with the id the
+       *  server generated for each. The only way a caller learns a new
+       *  band's id — which is the point: they never chose it. */
+      created: Array<{ id: string; title: string }>;
+      /** Open tasks whose goal id disappeared, moved to Backlog —
        *  reported so the caller can re-place them (§3.2 edit contract). */
       movedToChores: string[];
       /** DONE tasks left pointing at a goal id the list no longer has. They
@@ -2561,7 +2569,7 @@ export type SetGoalListResult =
   | {
       ok: false;
       error: 'would-strand-tasks';
-      /** Every goal or subgoal id the submitted list drops that still holds
+      /** Every goal id the submitted list drops that still holds
        *  tasks, with what it holds. Nothing was written — the caller either
        *  meant a RENAME (use `renameGoal`, which cannot move a task) or
        *  meant the removal, in which case naming these ids in `drop` says so
@@ -3793,7 +3801,7 @@ export class TaskStore {
   listGoalRows(workspaceId: string): GoalRow[] {
     const state = this.workspaces.get(workspaceId);
     if (!state) return [];
-    const live = new Set(flattenGoals(state.workspace.goals).map((g) => g.id));
+    const live = new Set(state.workspace.goals.map((g) => g.id));
     return Array.from(state.goalRows.values())
       .filter((row) => live.has(row.id))
       .sort((a, b) => a.order - b.order);
@@ -3823,9 +3831,6 @@ export class TaskStore {
    * Measured in `goal-rows.test.ts`. A real restore verb would go through
    * `setGoalList`'s id check and does not exist yet.
    *
-   * Subgoals flatten into rows of their own, in the position the board already
-   * draws them — it has rendered one flat level all along.
-   *
    * `mintStatus` is required rather than defaulted, because the two callers
    * that mint want OPPOSITE answers and a default would silently give one of
    * them the other's:
@@ -3845,7 +3850,7 @@ export class TaskStore {
    */
   private syncGoalRows(state: WorkspaceState, mintStatus: TaskStatus): void {
     const now = Date.now();
-    flattenGoals(state.workspace.goals).forEach((g, index) => {
+    state.workspace.goals.forEach((g, index) => {
       const existing = state.goalRows.get(g.id);
       if (existing) {
         // The list owns these three; the row owns status and transitions.
@@ -5320,9 +5325,8 @@ export class TaskStore {
   }
 
   /**
-   * Every row a goal's archive would take with it: the band itself, its
-   * subgoals, and every task standing under any of them that is not already
-   * archived.
+   * Every row a goal's archive would take with it: the band itself, and every
+   * task standing under it that is not already archived.
    *
    * Public because the CONFIRMATION needs it before the write. "Archive this
    * goal and its 14 tasks?" is the whole point of the dialog — the blast
@@ -5335,33 +5339,19 @@ export class TaskStore {
    * — worse — the restore would then bring back a row somebody had put away
    * on its own.
    *
-   * That skip carries a live task with it, and on purpose. Archive a subgoal,
-   * then put ONE of its tasks back by hand: the board draws that task in
-   * Backlog, because an archived subgoal is not a band anything can sit
-   * under. Archiving the parent therefore leaves it there. Sweeping it up
-   * would take a row off Backlog — somewhere the reader is not looking, and
-   * not in the band they just archived — which is the surprise the
-   * confirmation exists to prevent. What the board shows under the band is
-   * what goes.
+   * What the board shows under the band is what goes — nothing off it.
    */
-  goalCascade(goalId: string): { goalIds: string[]; subgoalIds: string[]; taskIds: string[] } {
-    const empty = { goalIds: [], subgoalIds: [], taskIds: [] };
+  goalCascade(goalId: string): { taskIds: string[] } {
+    const empty = { taskIds: [] };
     const row = this.getGoalRow(goalId);
     if (!row) return empty;
     const state = this.workspaces.get(row.workspaceId);
     if (!state) return empty;
-    const subgoalIds = (state.workspace.goals.find((g) => g.id === goalId)?.subgoals ?? [])
-      .map((s) => s.id)
-      .filter((id) => {
-        const sub = state.goalRows.get(id);
-        return sub !== undefined && !isArchived(sub);
-      });
-    const under = new Set<string>([goalId, ...subgoalIds]);
     const taskIds = Array.from(state.tasks.values())
-      .filter((t) => under.has(t.goal) && !isArchived(t))
+      .filter((t) => t.goal === goalId && !isArchived(t))
       .sort((a, b) => a.order - b.order || a.createdAt - b.createdAt)
       .map((t) => t.id);
-    return { goalIds: [goalId], subgoalIds, taskIds };
+    return { taskIds };
   }
 
   /**
@@ -5394,8 +5384,8 @@ export class TaskStore {
   ): ArchiveGoalResult {
     const goal = this.getGoalRow(goalId);
     if (!goal) return { ok: false, error: 'not-found' };
-    if (isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [], subgoalIds: [] };
-    const { subgoalIds, taskIds } = this.goalCascade(goalId);
+    if (isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [] };
+    const { taskIds } = this.goalCascade(goalId);
     const ts = Date.now();
     const reason = normalizeReason(opts.reason);
     const by: TaskActor = {
@@ -5413,13 +5403,6 @@ export class TaskStore {
     stamp(goal);
     goal.archiveReason = reason;
 
-    for (const id of subgoalIds) {
-      const sub = this.getGoalRow(id);
-      if (!sub) continue;
-      stamp(sub);
-      sub.archiveReason = reason;
-      sub.archivedWithGoal = goalId;
-    }
     for (const id of taskIds) {
       const task = this.getTask(id);
       if (!task) continue;
@@ -5441,14 +5424,13 @@ export class TaskStore {
       actor: by,
       ts,
     });
-    for (const id of [...subgoalIds, ...taskIds]) {
-      const row = this.getGoalRow(id) ?? this.getTask(id);
+    for (const id of taskIds) {
+      const row = this.getTask(id);
       if (!row) continue;
       this.emit({
         type: 'task.archived',
         workspaceId: goal.workspaceId,
         taskId: id,
-        ...(isGoalRow(row) ? { kind: 'goal' as const } : {}),
         title: row.title,
         ...(reason !== undefined ? { reason } : {}),
         partOf: batchId,
@@ -5456,7 +5438,7 @@ export class TaskStore {
         ts,
       });
     }
-    return { ok: true, goal, changed: true, taskIds, subgoalIds };
+    return { ok: true, goal, changed: true, taskIds };
   }
 
   /**
@@ -5472,7 +5454,7 @@ export class TaskStore {
   ): ArchiveGoalResult {
     const goal = this.getGoalRow(goalId);
     if (!goal) return { ok: false, error: 'not-found' };
-    if (!isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [], subgoalIds: [] };
+    if (!isArchived(goal)) return { ok: true, goal, changed: false, taskIds: [] };
     const state = this.workspaces.get(goal.workspaceId);
     if (!state) return { ok: false, error: 'not-found' };
     const ts = Date.now();
@@ -5497,17 +5479,13 @@ export class TaskStore {
       row.archivedAt = undefined;
       row.archivedBy = undefined;
       row.archiveReason = undefined;
+      // Only a TASK carries this; a goal row has no `archivedWithGoal` of its
+      // own, so the clear is a no-op on the band itself.
       row.archivedWithGoal = undefined;
       row.updatedAt = ts;
     };
     clear(goal);
 
-    const subgoalIds: string[] = [];
-    for (const sub of state.goalRows.values()) {
-      if (sub.archivedWithGoal !== goalId) continue;
-      subgoalIds.push(sub.id);
-      clear(sub);
-    }
     const taskIds: string[] = [];
     for (const task of state.tasks.values()) {
       if (task.archivedWithGoal !== goalId) continue;
@@ -5528,14 +5506,13 @@ export class TaskStore {
       actor: by,
       ts,
     });
-    for (const id of [...subgoalIds, ...taskIds]) {
-      const row = this.getGoalRow(id) ?? this.getTask(id);
+    for (const id of taskIds) {
+      const row = this.getTask(id);
       if (!row) continue;
       this.emit({
         type: 'task.restored',
         workspaceId: goal.workspaceId,
         taskId: id,
-        ...(isGoalRow(row) ? { kind: 'goal' as const } : {}),
         title: row.title,
         ...(reason !== undefined ? { reason } : {}),
         partOf: batchId,
@@ -5543,11 +5520,11 @@ export class TaskStore {
         ts,
       });
     }
-    return { ok: true, goal, changed: true, taskIds, subgoalIds };
+    return { ok: true, goal, changed: true, taskIds };
   }
 
   /**
-   * Place a task under a goal (or subgoal) at an exact position — the write
+   * Place a task under a goal at an exact position — the write
    * half of triage (§3.4: the agent picks the exact spot, not just the
    * bucket) and the board's regroup/rerank gesture (§3.3: open to everyone,
    * Bryan AND agents; every move recorded).
@@ -5681,11 +5658,11 @@ export class TaskStore {
    * A caller therefore cannot choose an id, and cannot change one: the two
    * gestures that used to strand a band's work are no longer expressible,
    * where before they were merely refused after the fact. Everything the call
-   * always did — reorder, retitle, reparent, remove — is untouched, and none
+   * always did — reorder, retitle, remove — is untouched, and none
    * of it moves an id.
    *
    * 'chores' is reserved and never present in goals[]; open tasks whose goal
-   * or subgoal id disappears are moved to Backlog, each emitting a
+   * id disappears are moved to Backlog, each emitting a
    * `task.regrouped` batched (via `partOf`) under the one
    * `workspace.goals_changed` event, and the result reports the moved ids so
    * the caller can re-place them. Deliberately NO re-triage request fires —
@@ -5709,7 +5686,7 @@ export class TaskStore {
     entries: GoalListEntry[],
     opts: {
       actor: { id: string; name: string; kind?: string };
-      /** Goal/subgoal ids the caller INTENDS to remove even though they hold
+      /** Goal ids the caller INTENDS to remove even though they hold
        *  tasks. Consulted only as a lookup set: an entry for an id that is
        *  not being removed does nothing, so it can never widen the replace. */
       drop?: string[];
@@ -5724,7 +5701,7 @@ export class TaskStore {
     // is generated here and nowhere else. Both refusals are computed over the
     // whole list first, so a rejected call names every offending id at once
     // rather than making the caller fix them one round trip at a time.
-    const existingIds = new Set(flattenGoals(workspace.goals).map((g) => g.id));
+    const existingIds = new Set(workspace.goals.map((g) => g.id));
     const submittedIds: string[] = [];
     const unknownIds: string[] = [];
     const reserved: string[] = [];
@@ -5751,30 +5728,32 @@ export class TaskStore {
     // new band with a generated one; nothing else about an entry can change
     // an id, because an id is never read from the entry again after this.
     const created: Array<{ id: string; title: string; parent?: string }> = [];
-    const goals: WorkspaceGoal[] = entries.map((g) => {
+    const goals: WorkspaceGoal[] = entries.flatMap((g) => {
       const id = g.id ?? newGoalId();
       if (g.id === undefined) created.push({ id, title: g.title });
-      const subgoals = g.subgoals?.map((s) => {
-        const subId = s.id ?? newGoalId();
-        if (s.id === undefined) created.push({ id: subId, title: s.title, parent: id });
+      // A submitted `subgoals` array is still ACCEPTED — the REST route has
+      // callers this server cannot restart — but it is never stored. Each
+      // entry becomes a band of its own, directly after the one that carried
+      // it, which is the position the board already drew it in.
+      const nested = (g.subgoals ?? []).map((sub) => {
+        const subId = sub.id ?? newGoalId();
+        if (sub.id === undefined) created.push({ id: subId, title: sub.title });
         return {
           id: subId,
-          title: s.title,
-          ...(s.dueAt !== undefined ? { dueAt: s.dueAt } : {}),
+          title: sub.title,
+          ...(sub.dueAt !== undefined ? { dueAt: sub.dueAt } : {}),
         };
       });
-      return {
-        id,
-        title: g.title,
-        ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
-        ...(subgoals !== undefined ? { subgoals } : {}),
-      };
+      return [
+        {
+          id,
+          title: g.title,
+          ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
+        },
+        ...nested,
+      ];
     });
-    const ids: string[] = [];
-    for (const g of goals) {
-      ids.push(g.id);
-      for (const s of g.subgoals ?? []) ids.push(s.id);
-    }
+    const ids: string[] = goals.map((g) => g.id);
 
     const oldGoals = workspace.goals;
     if (JSON.stringify(oldGoals) === JSON.stringify(goals)) {
@@ -5795,7 +5774,7 @@ export class TaskStore {
     const acknowledged = new Set(opts.drop ?? []);
     const stranding: Array<{ id: string; title: string; openTasks: number; doneTasks: number }> =
       [];
-    for (const removed of flattenGoals(oldGoals)) {
+    for (const removed of oldGoals) {
       if (keptIds.has(removed.id) || acknowledged.has(removed.id)) continue;
       let openTasks = 0;
       let doneTasks = 0;
@@ -5973,7 +5952,7 @@ export class TaskStore {
     if (isReservedGoalId(goalId)) return { ok: false, error: 'reserved-goal-id' };
 
     const oldGoals = workspace.goals;
-    const current = flattenGoals(oldGoals).find((g) => g.id === goalId);
+    const current = oldGoals.find((g) => g.id === goalId);
     if (!current) return { ok: false, error: 'goal-not-found' };
 
     const nextDueAt =
@@ -6005,14 +5984,9 @@ export class TaskStore {
     // A NEW array either way: `oldGoals` rides on the event, so mutating in
     // place would make both sides report the new title and the audit row
     // would say nothing (the same trap `reorderGoals` documents).
-    const newGoals: WorkspaceGoal[] = oldGoals.map((g) => {
-      if (g.id === goalId) return strip(retitled(g));
-      if (!g.subgoals?.some((s) => s.id === goalId)) return g;
-      return {
-        ...g,
-        subgoals: g.subgoals.map((s) => (s.id === goalId ? strip(retitled(s)) : s)),
-      };
-    });
+    const newGoals: WorkspaceGoal[] = oldGoals.map((g) =>
+      g.id === goalId ? strip(retitled(g)) : g,
+    );
     workspace.goals = newGoals;
     // A rename never adds an id, so nothing mints here — see `syncGoalRows`.
     this.syncGoalRows(state, 'todo');
@@ -6063,9 +6037,6 @@ export class TaskStore {
    * one — so id generation and the `workspace.goals_changed` emit are both
    * inherited rather than re-implemented.
    *
-   * Top-level only, deliberately. Display flattens subgoals, so there is no
-   * surface that could express "add under this parent", and adding one here
-   * would be a data shape nothing renders.
    */
   addGoal(
     workspaceId: string,
@@ -6086,7 +6057,6 @@ export class TaskStore {
       id: g.id,
       title: g.title,
       ...(g.dueAt !== undefined ? { dueAt: g.dueAt } : {}),
-      ...(g.subgoals !== undefined ? { subgoals: g.subgoals.map((s) => ({ ...s })) } : {}),
     }));
     const fresh: GoalListEntry = {
       title: patch.title,
@@ -6096,7 +6066,7 @@ export class TaskStore {
       entries.push(fresh);
     } else {
       const at = entries.findIndex((g) => g.id === patch.after);
-      // A subgoal id, or a band that has since gone, lands here. Refused
+      // A band that has since gone lands here. Refused
       // rather than silently appended: the caller asked for a POSITION, and
       // quietly ignoring it is how a board's order stops matching what the
       // person just did.
@@ -6120,9 +6090,7 @@ export class TaskStore {
   }
 
   /**
-   * Reorder goals at ONE scope — the top-level list, or the subgoals of
-   * `parent` — and nothing else. The priority gesture, separated from the
-   * edit.
+   * Reorder the goal list — the priority gesture, separated from the edit.
    *
    * PERMUTATION ONLY, and that constraint is the entire point. `setGoalList`
    * is a full replace, so reordering through it means restating every id and
@@ -6136,8 +6104,15 @@ export class TaskStore {
    * refusal is well-formed is checked over HTTP too, because the route layer
    * is where a param quietly disappears.
    *
-   * Titles, dueAt and subgoal arrays ride along untouched, and no task can
-   * move: there is no reachable input to this method that regroups anything.
+   * Titles and dueAt ride along untouched, and no task can move: there is no
+   * reachable input to this method that regroups anything.
+   *
+   * `parent` is still accepted, and now always refused. It scoped the reorder
+   * to one band's subgoals; subgoals are gone, so no id can name a sublist to
+   * order. Refusing beats ignoring it — a caller who meant "order these
+   * children" must not silently reorder the whole board instead — and beats
+   * dropping the field, because the REST route has callers this server cannot
+   * restart.
    * Emits the existing `workspace.goals_changed` with kind 'reorder' — the
    * event the board projection and the activity feed already render — so
    * nothing downstream needs a new case.
@@ -6151,16 +6126,11 @@ export class TaskStore {
     if (!state) return { ok: false, error: 'workspace-not-found' };
     const workspace = state.workspace;
 
-    // Scope: the top-level list, or one parent's subgoals. A SUBGOAL id as
-    // `parent` finds nothing here, which is the right answer — nesting is
-    // one level deep by design (§3.2), so it has no subgoals to order.
-    const parentId = opts.parent;
-    const parentGoal =
-      parentId === undefined ? undefined : workspace.goals.find((g) => g.id === parentId);
-    if (parentId !== undefined && !parentGoal) return { ok: false, error: 'parent-not-found' };
-    const current: Array<WorkspaceGoal | WorkspaceSubgoal> = parentGoal
-      ? (parentGoal.subgoals ?? [])
-      : workspace.goals;
+    // There is one scope now. A `parent` names a sublist that no longer
+    // exists, whether or not the id itself is a live goal, so it is refused
+    // rather than quietly widened to the whole list.
+    if (opts.parent !== undefined) return { ok: false, error: 'parent-not-found' };
+    const current: WorkspaceGoal[] = workspace.goals;
 
     const currentIds = current.map((g) => g.id);
     const currentSet = new Set(currentIds);
@@ -6206,15 +6176,8 @@ export class TaskStore {
     // the array we are replacing, so mutating in place would make the event
     // report the new order on both sides and the audit row would say nothing.
     const oldGoals = workspace.goals;
-    let newGoals: WorkspaceGoal[];
-    if (parentGoal) {
-      const byId = new Map((parentGoal.subgoals ?? []).map((s) => [s.id, s]));
-      const subgoals = order.map((id) => byId.get(id) as WorkspaceSubgoal);
-      newGoals = oldGoals.map((g) => (g.id === parentGoal.id ? { ...g, subgoals } : g));
-    } else {
-      const byId = new Map(oldGoals.map((g) => [g.id, g]));
-      newGoals = order.map((id) => byId.get(id) as WorkspaceGoal);
-    }
+    const byId = new Map(oldGoals.map((g) => [g.id, g]));
+    const newGoals: WorkspaceGoal[] = order.map((id) => byId.get(id) as WorkspaceGoal);
     workspace.goals = newGoals;
     // A reorder never adds an id, so nothing mints here — see `syncGoalRows`.
     this.syncGoalRows(state, 'todo');
@@ -6538,9 +6501,7 @@ export class TaskStore {
 
   private goalIdExists(workspace: HubWorkspace, goalId: string): boolean {
     if (isReservedGoalId(goalId)) return true;
-    return workspace.goals.some(
-      (g) => g.id === goalId || (g.subgoals ?? []).some((s) => s.id === goalId),
-    );
+    return workspace.goals.some((g) => g.id === goalId);
   }
 
   // ── Agent attachments (§4) ───────────────────────────────────────────────
@@ -7561,6 +7522,13 @@ export class TaskStore {
           console.error(`[tasks] sidecar ${entry} has no workspace — skipped`);
           continue;
         }
+        // Boards written before subgoals were removed still hold them, and
+        // every reader below this line looks at `goals` alone. Without this
+        // the nested bands would simply not exist after the deploy — their
+        // tasks reading as unknown-goal work, and the next goal-list edit
+        // stranding them for real. Flattened HERE, at the one door a stored
+        // list comes through, rather than in each reader.
+        workspace.goals = flattenNestedGoals((workspace.goals ?? []) as readonly NestedGoalInput[]);
         const tasks = new Map<string, Task>();
         for (const task of parsed.tasks ?? []) {
           if (typeof task?.id !== 'string') continue;
@@ -7599,10 +7567,32 @@ export class TaskStore {
           this.taskIndex.set(task.id, workspace.id);
         }
         const goalRows = new Map<string, GoalRow>();
+        // Goals archived as somebody ELSE's cascade member — the shape a
+        // subgoal's archive left behind, and the second half of the same
+        // migration. A goal row no longer carries `archivedWithGoal` at all,
+        // so the stored key is read once here and cleared.
+        const cascadedGoals = new Set<string>();
         for (const row of parsed.goalRows ?? []) {
           if (typeof row?.id !== 'string') continue;
+          const legacy = row as { archivedWithGoal?: string };
+          if (legacy.archivedWithGoal !== undefined) {
+            cascadedGoals.add(row.id);
+            legacy.archivedWithGoal = undefined;
+          }
           goalRows.set(row.id, row);
           this.goalIndex.set(row.id, workspace.id);
+        }
+        // Its tasks were stamped with the PARENT's id, which is what made the
+        // pair restore together. Flattened, that band restores on its own —
+        // and would come back empty, its work still archived, while restoring
+        // the old parent revived those tasks under a band that is still off
+        // the board. Re-point them at the band they actually sit in, so
+        // either restore is the whole of one decision again.
+        if (cascadedGoals.size > 0) {
+          for (const task of parsed.tasks ?? []) {
+            if (task?.archivedWithGoal === undefined) continue;
+            if (cascadedGoals.has(task.goal)) task.archivedWithGoal = task.goal;
+          }
         }
         this.workspaces.set(workspace.id, {
           workspace,

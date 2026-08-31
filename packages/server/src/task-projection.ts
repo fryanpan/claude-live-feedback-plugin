@@ -16,7 +16,6 @@ import {
   type Task,
   type TaskStore,
   type TaskStoreEvent,
-  type WorkspaceSubgoal,
   goalStatusMeta,
   taskAskedBy,
 } from './tasks.ts';
@@ -748,29 +747,18 @@ export class TaskProjection {
                   archivedAt: r.archivedAt,
                   ...(r.archivedBy !== undefined ? { archivedBy: r.archivedBy } : {}),
                   ...(r.archiveReason !== undefined ? { archiveReason: r.archiveReason } : {}),
-                  // And WHICH archive took it, when it went as part of a
-                  // band's cascade. The restore list needs this to tell a
-                  // subgoal somebody archived on its own — restorable, with
-                  // its own tasks under it — from one that only went because
-                  // its parent did, whose tasks carry the parent's marker and
-                  // so come back only when the parent does.
-                  ...(r.archivedWithGoal !== undefined
-                    ? { archivedWithGoal: r.archivedWithGoal }
-                    : {}),
                 }
               : {}),
           },
         ];
       }),
     );
-    const decorateSubgoal = (s: WorkspaceSubgoal) => ({ ...s, ...(goalMeta.get(s.id) ?? {}) });
     const wsFields: Record<string, unknown> = {
       id: ws.id,
       name: ws.name,
       goals: ws.goals.map((g) => ({
         ...g,
         ...(goalMeta.get(g.id) ?? {}),
-        ...(g.subgoals !== undefined ? { subgoals: g.subgoals.map(decorateSubgoal) } : {}),
       })),
       docIds: ws.docIds,
       // Who is responsible for this board. Conditional, never `undefined`:

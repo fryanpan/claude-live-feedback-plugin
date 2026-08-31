@@ -246,6 +246,24 @@ export function streamingUrl(
   return `${STREAM_URL}?${params.toString()}`;
 }
 
+/**
+ * Where in the engine's stream this frame's last word ends, in milliseconds.
+ *
+ * This is the correlation key the latency measurement runs on: audio goes up
+ * as raw PCM with no sequence number in it, so nothing in a frame can be
+ * echoed back — but an offset names the chunk that carried it arithmetically,
+ * from the relay's own byte count. Missing or unreadable is `undefined` and
+ * costs that frame its sample; an invented number would name the wrong chunk
+ * and land in the percentiles looking like a measurement.
+ */
+export function audioEndMsFromTurn(msg: Record<string, unknown>): number | undefined {
+  const words = msg.words;
+  if (!Array.isArray(words) || words.length === 0) return undefined;
+  const last = words[words.length - 1] as Record<string, unknown> | undefined;
+  const end = last?.end;
+  return typeof end === 'number' && Number.isFinite(end) ? end : undefined;
+}
+
 /** Labels the engine uses to mean "not decided yet" — never a speaker. */
 const PLACEHOLDER_LABELS = new Set(['PENDING', 'UNKNOWN']);
 
@@ -405,6 +423,9 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
               headers: { Authorization: key },
               onOpen: () => {},
               onMessage: (text) => {
+                // Taken before the parse: the vendor leg ends when the bytes
+                // arrive, not when we have finished reading them.
+                const engineMs = Date.now();
                 let msg: Record<string, unknown>;
                 try {
                   msg = JSON.parse(text) as Record<string, unknown>;
@@ -430,11 +451,17 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
                   const final = msg.end_of_turn === true && msg.turn_is_formatted === true;
                   const speaker = speakerFromLabel(msg.speaker_label);
                   if (final) leg.settled.set(order, { text: transcript, ...speaker });
+                  const audioEndMs = audioEndMsFromTurn(msg);
                   sessionOpts.onTurn({
                     turn: idFor(leg, order),
                     text: transcript,
                     final,
                     ...speaker,
+                    // Only when the frame actually carried words; a
+                    // SpeakerRevision deliberately carries neither, because a
+                    // relabel is not a latency event.
+                    ...(audioEndMs !== undefined ? { audioEndMs } : {}),
+                    engineMs,
                   });
                   return;
                 }

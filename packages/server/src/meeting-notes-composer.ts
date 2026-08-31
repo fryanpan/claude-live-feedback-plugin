@@ -21,7 +21,7 @@
  */
 
 import { readRenamedEnv } from '@feedback/core/env-names';
-import type { NotesComposeInput, NotesComposer } from './meeting-notes.ts';
+import type { NotesComposeInput, NotesComposer, NotesTurn } from './meeting-notes.ts';
 import { readKeychainPassword } from './share/keychain.ts';
 import { resolveKeyFrom } from './summarize.ts';
 
@@ -64,14 +64,25 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
     '  think one should read differently, return your version of that line in',
     '  its place and nothing else will change: it reaches them as a suggestion',
     '  they can accept or reject, never as a replacement. Never delete one,',
-    '  and never merge one into a note of your own.',
+    '  and never merge one into a note of your own. Never put a speaker tag',
+    '  on one either: a line a person typed is their own note, not something',
+    '  a voice in the room said.',
     '- Only what was said: never invent names, numbers, or decisions the',
     '  transcript does not contain. Transcription is imperfect — where a word',
     '  is garbled, prefer the reading that fits the project context.',
-    '- Transcript lines may be prefixed with who said them. Use that to name',
-    '  the owner of an action item or the side of a disagreement; a label like',
-    '  "Speaker B" is a voice nobody has named yet — keep it as written, never',
-    '  guess who it is.',
+    '- Transcript lines are prefixed with who said them, as "Name (LABEL):".',
+    '  Use that to name the owner of an action item or the side of a',
+    '  disagreement; a name like "Speaker B" is a voice nobody has named yet —',
+    '  keep it as written, never guess who it is.',
+    '- ATTRIBUTE EVERY NOTE TO THE VOICE THAT SAID IT, as a speaker tag: the',
+    '  markdown link `[@Name](speaker:LABEL)`, where LABEL is the label in',
+    "  parentheses on the transcript line and Name is that line's name. Write",
+    '  it where the person would be named — usually opening the note — and',
+    '  write one per voice the note covers, never a tag for a voice that line',
+    '  did not come from. A note that summarizes the room rather than anybody',
+    '  in it takes no tag. Tags already in the current notes stay on the notes',
+    '  they are on: keep them when you revise the line around them, and never',
+    '  move one to a different note.',
     '- Output markdown only: no preamble, no code fences, nothing after the',
     '  notes.',
   ].join('\n');
@@ -112,10 +123,20 @@ export function buildNotesPrompt(input: NotesComposeInput): { system: string; us
   }
   parts.push(
     `New transcript since the last update:\n${input.tick.turns
-      .map((t) => `- ${t.speaker ? `${t.speaker}: ` : ''}${t.text}`)
+      .map((t) => `- ${speakerPrefix(t)}${t.text}`)
       .join('\n')}`,
   );
   return { system, user: parts.join('\n\n') };
+}
+
+/**
+ * "Devi (B): " — the name to write and the label to tag with, in the one
+ * place the composer reads them from. A turn the session never mapped a
+ * label onto keeps the bare name; a turn with no voice at all keeps none.
+ */
+function speakerPrefix(turn: NotesTurn): string {
+  if (!turn.speaker) return '';
+  return turn.speakerLabel ? `${turn.speaker} (${turn.speakerLabel}): ` : `${turn.speaker}: `;
 }
 
 /**

@@ -49,7 +49,7 @@
  * whole notes every tick, and the next tick reads the person's text.
  */
 
-import { prose, suggestOps } from '@feedback/core';
+import { prose, speakerLabelsIn, suggestOps } from '@feedback/core';
 import * as Y from 'yjs';
 
 /** Who a proposed change to a person's note is attributed to. */
@@ -521,7 +521,28 @@ function canSuggestOn(target: NoteItem, incoming: IncomingItem): boolean {
   if (target.kind !== incoming.kind) return false;
   if (target.md.includes('\n') || incoming.md.includes('\n')) return false;
   if (target.kind === 'block' && target.el.nodeName !== 'paragraph') return false;
+  if (attributesToNewVoice(target.md, incoming.md)) return false;
   return textNodesOf(target) !== null;
+}
+
+/**
+ * Would taking `incoming` in place of `before` say a VOICE said something
+ * `before` did not credit to anyone?
+ *
+ * This is the guard on a person's own note. A line somebody typed into the
+ * notes is their idea, and the composer — seeing it beside a transcript —
+ * will sometimes return it with a speaker tag on the front, which reads as
+ * that voice having said it. That is not a wording proposal, it is a change
+ * of authorship, and it is not the composer's to make: attribution moves by
+ * the reassign gesture, never by a suggestion nobody read as one.
+ *
+ * Only NEW labels count. Re-emitting a tag the line already carries is the
+ * composer preserving an attribution, which is exactly what it is asked to
+ * do when it revises the words around one.
+ */
+function attributesToNewVoice(before: string, incoming: string): boolean {
+  const had = new Set(speakerLabelsIn(before));
+  return speakerLabelsIn(incoming).some((label) => !had.has(label));
 }
 
 /** The Y.XmlText run carrying an item's own words. Null when the shape is

@@ -62,7 +62,10 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     const G = await seedGoalsOverHttp(
       base,
       workspace.id,
-      [{ key: 'ship', title: '1. Ship', subgoals: [{ key: 'index', title: '1.1 Index' }] }],
+      [
+        { key: 'ship', title: '1. Ship' },
+        { key: 'index', title: '2. Index' },
+      ],
       AGENT,
     );
     return { wsId: workspace.id, G };
@@ -397,7 +400,7 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     const { wsId } = await seedWorkspace();
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: [] })).status).toBe(400);
     expect((await post(`/api/workspaces/${wsId}/tasks/batch`, { tasks: 'nope' })).status).toBe(400);
-    const missing = await post('/api/workspaces/w-does-not-exist/tasks/batch', {
+    const missing = await post('/api/workspaces/w-nope/tasks/batch', {
       author: AGENT,
       tasks: [{ title: 'Orphan' }],
     });

@@ -10,9 +10,9 @@
  *
  * Two things it answers, in one pass:
  *
- *  - **Order.** Goal position (a subgoal inherits its parent's band and
- *    sorts after it), then the task's own fractional order. A goal id the
- *    list no longer has — and `chores` — ranks last rather than vanishing.
+ *  - **Order.** Goal position, then the task's own fractional order. A goal
+ *    id the list no longer has — and `chores` — ranks last rather than
+ *    vanishing.
  *  - **Doable.** Open dependencies are reported; only an ENFORCED one holds
  *    a task back, matching the transition gate exactly rather than inventing
  *    a second notion of blocked.
@@ -64,7 +64,7 @@ export interface QueueRow {
    *  into these titles by hand, so deriving a second numbering here would
    *  let the two disagree. Falls back to the raw id for an unknown goal. */
   goalTitle: string;
-  /** False when `goal` matches no ranked goal or subgoal — the reserved
+  /** False when `goal` matches no ranked goal — the reserved
    *  `chores` id first of all. Such a row is formal backlog: listed, ranked
    *  last, and never auto-dispatched, which is what the ready gate reads
    *  this field for. */
@@ -153,36 +153,27 @@ export interface QueueOpts {
   staleAfterMs?: number;
 }
 
-/** Sort key for a goal id: `[band, sub]`. A goal is `[i, 0]`, its j-th
- *  subgoal `[i, j+1]`; anything unknown (including the reserved `chores`)
- *  sorts after every listed goal rather than disappearing. */
-/** Whether a goal id names a ranked goal or subgoal on this board. A board
+/** Whether a goal id names a ranked goal on this board. A board
  *  that declares NO goals has no bands, so nothing on it is backlog — the
  *  never-dispatch rule ranks rows against the goal list, and with no list
  *  there is nothing to be outside of. */
 export function inGoalBand(goals: WorkspaceGoal[], goalId: string): boolean {
-  return goals.length === 0 || goalRank(goals, goalId)[0] < goals.length;
+  return goals.length === 0 || goalRank(goals, goalId) < goals.length;
 }
 
-function goalRank(goals: WorkspaceGoal[], goalId: string): [number, number] {
+/** Sort key for a goal id: its position in the ordered list. Anything unknown
+ *  (including the reserved `chores`) sorts after every listed goal rather than
+ *  disappearing. */
+function goalRank(goals: WorkspaceGoal[], goalId: string): number {
   for (let i = 0; i < goals.length; i++) {
-    const g = goals[i];
-    if (!g) continue;
-    if (g.id === goalId) return [i, 0];
-    const subs = g.subgoals ?? [];
-    for (let j = 0; j < subs.length; j++) {
-      if (subs[j]?.id === goalId) return [i, j + 1];
-    }
+    if (goals[i]?.id === goalId) return i;
   }
-  return [goals.length, 0];
+  return goals.length;
 }
 
 function goalTitleOf(goals: WorkspaceGoal[], goalId: string): string {
   for (const g of goals) {
     if (g.id === goalId) return g.title;
-    for (const s of g.subgoals ?? []) {
-      if (s.id === goalId) return s.title;
-    }
   }
   return goalId;
 }
@@ -228,8 +219,7 @@ export function buildQueue(
     .map((t) => ({ task: t, rank: goalRank(goals, t.goal) }))
     .sort(
       (a, b) =>
-        a.rank[0] - b.rank[0] ||
-        a.rank[1] - b.rank[1] ||
+        a.rank - b.rank ||
         a.task.order - b.task.order ||
         a.task.createdAt - b.task.createdAt ||
         a.task.id.localeCompare(b.task.id),
@@ -291,20 +281,12 @@ export function buildQueue(
 export interface GoalSummaryRow {
   id: string;
   title: string;
-  /** 0 for a top-level goal, 1 for a subgoal (one level max). */
-  depth: number;
-  /** The parent goal's id, on subgoal rows only. Depth alone leaves the
-   *  parent to be inferred from row position, and `reorder_goals` needs it
-   *  BY NAME to scope a subgoal reorder — so the read states it. */
-  parent?: string;
-  /** Whether `reorder_goals` accepts this id at this scope — i.e. whether the
-   *  row is a member of the ordered goal list at all. False on the two rows
-   *  that are appended rather than ordered: `chores`, and a goal id left
-   *  behind on a done task by a removal. Both render at depth 0 and are
-   *  otherwise shaped exactly like a band, so "every depth-0 row" — the only
-   *  scoping rule the read used to offer — builds an order the write
-   *  REFUSES. This field is what makes the read writable back into the
-   *  write; filter on it, don't infer from depth. */
+  /** Whether `reorder_goals` accepts this id — i.e. whether the row is a
+   *  member of the ordered goal list at all. False on the two rows that are
+   *  appended rather than ordered: `chores`, and a goal id left behind on a
+   *  done task by a removal. Both are otherwise shaped exactly like a band,
+   *  so a caller that sends every row back builds an order the write REFUSES.
+   *  This field is what makes the read writable back into the write. */
   reorderable: boolean;
   dueAt?: number;
   /**
@@ -347,10 +329,6 @@ const CHORES_ID = 'chores';
 export interface PlaceableGoal {
   id: string;
   title: string;
-  /** 0 for a top-level goal, 1 for a subgoal (one level max). */
-  depth: number;
-  /** The parent goal's id, on subgoal rows only. */
-  parent?: string;
 }
 
 /**
@@ -364,19 +342,12 @@ export interface PlaceableGoal {
  * outcome it is reporting.
  */
 export function placeableGoals(goals: WorkspaceGoal[]): PlaceableGoal[] {
-  const out: PlaceableGoal[] = [];
-  for (const g of goals) {
-    out.push({ id: g.id, title: g.title, depth: 0 });
-    for (const s of g.subgoals ?? []) {
-      out.push({ id: s.id, title: s.title, depth: 1, parent: g.id });
-    }
-  }
-  return out;
+  return goals.map((g) => ({ id: g.id, title: g.title }));
 }
 
 /**
- * The goal list as an agent needs to read it: ordered, flat (parent then its
- * subgoals), each with its task counts. Every field here was already in the
+ * The goal list as an agent needs to read it: ordered, each with its task
+ * counts. Every field here was already in the
  * store — what was missing was any call that returned them together, which
  * is why "which goal is 1.1" had no answer an agent could look up.
  */
@@ -417,15 +388,11 @@ export function summarizeGoals(
   const row = (
     id: string,
     title: string,
-    depth: number,
     reorderable: boolean,
     dueAt?: number,
-    parent?: string,
   ): GoalSummaryRow => ({
     id,
     title,
-    depth,
-    ...(parent !== undefined ? { parent } : {}),
     reorderable,
     ...(dueAt !== undefined ? { dueAt } : {}),
     ...(meta.get(id) ?? {}),
@@ -434,15 +401,11 @@ export function summarizeGoals(
 
   const out: GoalSummaryRow[] = [];
   const placed = new Set<string>();
-  // Everything walked out of `goals` IS the ordered list, at either depth —
-  // so these are exactly the ids `reorderGoals` will accept.
+  // Everything in `goals` IS the ordered list — so these are exactly the ids
+  // `reorderGoals` will accept.
   for (const g of goals) {
-    out.push(row(g.id, g.title, 0, true, g.dueAt));
+    out.push(row(g.id, g.title, true, g.dueAt));
     placed.add(g.id);
-    for (const s of g.subgoals ?? []) {
-      out.push(row(s.id, s.title, 1, true, s.dueAt, g.id));
-      placed.add(s.id);
-    }
   }
   // Backlog, then anything sitting under a goal id the list no longer has —
   // both would otherwise be invisible in a view whose whole job is "where is
@@ -451,8 +414,8 @@ export function summarizeGoals(
   // appended by this function, and a caller that sends them back gets a 400.
   for (const id of counts.keys()) {
     if (placed.has(id) || id === CHORES_ID) continue;
-    out.push(row(id, id, 0, false));
+    out.push(row(id, id, false));
   }
-  if (counts.has(CHORES_ID)) out.push(row(CHORES_ID, 'Backlog', 0, false));
+  if (counts.has(CHORES_ID)) out.push(row(CHORES_ID, 'Backlog', false));
   return out;
 }

@@ -130,7 +130,13 @@ export type WsCtx = {
    * every existing upgrade predates this field and none of them should have
    * to be touched to keep meaning what they meant.
    */
-  kind?: 'yjs' | 'audio';
+  kind?: 'yjs' | 'audio' | 'recall';
+  /**
+   * The per-bot token the `/recall/<token>` upgrade matched. Only ever set
+   * on a `recall` socket; it is that socket's whole identity, since Recall
+   * dials in with no doc in the path and no origin to check.
+   */
+  token?: string;
   isAwarenessOrigin: symbol;
   /**
    * The share that authorized this socket, when it came from a share

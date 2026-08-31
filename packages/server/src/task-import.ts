@@ -200,10 +200,6 @@ export function parseTrackerMarkdown(
   for (const g of workspace.goals) {
     existingByTitle.set(titleKey(g.title), g.id);
     takenIds.add(g.id);
-    for (const s of g.subgoals ?? []) {
-      existingByTitle.set(titleKey(s.title), s.id);
-      takenIds.add(s.id);
-    }
   }
 
   const goals: ImportGoalMapping[] = [];

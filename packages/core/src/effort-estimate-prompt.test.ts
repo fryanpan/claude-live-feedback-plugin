@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_EFFORT_ESTIMATE_PROMPT,
   EFFORT_ESTIMATE_MAX_SECONDS,
+  EFFORT_ESTIMATE_PROMPT_VERSION,
   buildEffortEstimatePrompt,
   parseEffortEstimateResponse,
 } from './effort-estimate-prompt.ts';
+
+const DAY = 24 * 60 * 60;
 
 /** All fixtures are synthetic. */
 
@@ -34,6 +37,35 @@ describe('buildEffortEstimatePrompt', () => {
   it('the default prompt names both kinds of time it asks for', () => {
     expect(DEFAULT_EFFORT_ESTIMATE_PROMPT.toLowerCase()).toContain('hands-on');
     expect(DEFAULT_EFFORT_ESTIMATE_PROMPT.toLowerCase()).toContain('wall-clock');
+  });
+
+  // The whole point of version 2. A scorer with no baseline supplies the one
+  // from its training data — a person doing the work — and the board printed
+  // 15.5 days of the owner's own attention on a goal an agent was days from
+  // finishing. The baseline has to be IN the prompt, not in a reviewer's head.
+  it('the default prompt says agents do the work, and what that costs the owner', () => {
+    const p = DEFAULT_EFFORT_ESTIMATE_PROMPT.toLowerCase();
+    expect(p).toContain('agents do the work');
+    expect(p).toContain('minutes to a few hours');
+    expect(p).toContain('hours to a few days');
+    // And says out loud that the human-effort reading is the wrong one,
+    // rather than only implying it by giving ranges.
+    expect(p).toContain('do not estimate how long a human engineer would take');
+  });
+
+  it('tells the scorer the ceiling it will be judged against', () => {
+    // A ceiling the model is never shown turns every overshoot into a failed
+    // run — an estimate the board does not get — where naming it can turn
+    // some of them into an estimate in range.
+    const { system } = buildEffortEstimatePrompt(DEFAULT_EFFORT_ESTIMATE_PROMPT, { title: 'x' });
+    expect(system).toContain(String(EFFORT_ESTIMATE_MAX_SECONDS));
+    expect(system).toContain('14 days');
+  });
+
+  it('the version is past 1, so every version-1 estimate reads as stale', () => {
+    // The boot re-score pass and the calibrator both key on this. Left at 1,
+    // the new prompt would reach only tickets somebody happens to edit.
+    expect(EFFORT_ESTIMATE_PROMPT_VERSION).toBeGreaterThan(1);
   });
 });
 
@@ -92,6 +124,32 @@ describe('parseEffortEstimateResponse', () => {
     expect(
       parseEffortEstimateResponse('{"handsOnSeconds": 7200, "wallClockSeconds": 3600}'),
     ).toBeNull();
+  });
+
+  // The reply that prompted this whole change: 30 days hands-on over 60 days
+  // of calendar time on a real ticket, which the 90-day ceiling accepted and
+  // summed into a goal, where it was 98% of the remainder. Under the 14-day
+  // ceiling it is a REFUSAL — no numbers, and the caller records a failed run
+  // the row shows — which is the honest answer to a reply that sized the
+  // ticket for a person.
+  it('refuses the 30-day reply that the old ceiling let through', () => {
+    expect(
+      parseEffortEstimateResponse('{"handsOnSeconds": 2592000, "wallClockSeconds": 5184000}'),
+    ).toBeNull();
+    // Either number alone is enough to refuse it — a plausible hands-on
+    // figure does not rescue a 60-day calendar estimate.
+    expect(
+      parseEffortEstimateResponse('{"handsOnSeconds": 3600, "wallClockSeconds": 5184000}'),
+    ).toBeNull();
+    expect(
+      parseEffortEstimateResponse(`{"handsOnSeconds": 300, "wallClockSeconds": ${15 * DAY}}`),
+    ).toBeNull();
+    // Positive control: the ceiling is not refusing everything. A large but
+    // agent-plausible ticket — a day of the owner's attention over ten days
+    // of calendar time — still parses.
+    expect(
+      parseEffortEstimateResponse(`{"handsOnSeconds": ${DAY}, "wallClockSeconds": ${10 * DAY}}`),
+    ).toEqual({ handsOnSeconds: DAY, wallClockSeconds: 10 * DAY });
   });
 
   it('accepts a number right at the ceiling', () => {

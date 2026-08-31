@@ -14,11 +14,20 @@
  * hub keeps 200 events per channel for reconnect replay, and a conversation
  * emits that many words in about a minute — broadcasting partials would
  * evict every real doc event from the buffer for the length of a meeting.
+ *
+ * STAGE TIMING IS OFF UNLESS THE CLIENT ASKS. A `start` frame carrying
+ * `timing: true` (the strip's `?timing=1`) makes this relay keep a ledger of
+ * what it forwarded and when, and attach a block of timestamps to each
+ * transcript frame. Without it no ledger is allocated, no clock is read per
+ * chunk, and the wire is byte-for-byte what it was. Nothing in that block is
+ * content — see `meeting-timing.ts`.
  */
 
 import {
+  AudioChunkLedger,
   type CaptureMode,
   type MeetingServerMessage,
+  type MeetingTimingMark,
   detectsSpeakers,
   maxSpeakersFor,
   parseMeetingClientMessage,
@@ -71,12 +80,53 @@ interface Conn {
   /** Audio that arrived before the engine session finished opening. */
   pending: Uint8Array[];
   /**
+   * When each of those buffered chunks arrived, parallel to `pending`, so the
+   * hold shows up as its own leg rather than inside the vendor's. Populated
+   * only on a timing meeting; `pending` itself is untouched.
+   */
+  pendingRecv: number[];
+  /** This connection asked to be measured. Set synchronously from `start`. */
+  wantsTiming: boolean;
+  /** What was forwarded and when, once the meeting is live. */
+  ledger: AudioChunkLedger | null;
+  /**
    * A stop that arrived while the handshake was still out, carrying whether
    * the socket is still there to be answered. Held as its own field rather
    * than as a fifth state so the decision survives the await: the state is
    * what the connection IS, this is what it has been asked to become.
    */
   pendingStop: { reply: boolean } | null;
+}
+
+/**
+ * The timing block for one engine frame, or nothing at all.
+ *
+ * Nothing is the common answer and the safe one: no ledger (timing off), an
+ * engine that reports no word offsets (the mock), or a word whose chunk has
+ * already fallen out of the ledger's window. A frame without a block is a
+ * frame the client draws exactly as it always did.
+ */
+function timingFor(
+  ledger: AudioChunkLedger | null,
+  audioEndMs: number | undefined,
+  engineMs: number | undefined,
+): { timing?: MeetingTimingMark } {
+  if (!ledger || audioEndMs === undefined || engineMs === undefined) return {};
+  const chunk = ledger.chunkAt(audioEndMs);
+  if (!chunk) return {};
+  return {
+    timing: {
+      seq: chunk.seq,
+      audioEndMs,
+      chunkAudioEndMs: chunk.audioEndMs,
+      recvMs: chunk.recvMs,
+      fwdMs: chunk.fwdMs,
+      engineMs,
+      // The last thing read before the frame goes out, so the browser's leg
+      // starts where ours ends.
+      sendMs: Date.now(),
+    },
+  };
 }
 
 export class MeetingRelay {
@@ -102,6 +152,20 @@ export class MeetingRelay {
 
   constructor(private readonly deps: MeetingRelayDeps) {}
 
+  /**
+   * The notes pipeline this relay was built with, so the BOT relay can share
+   * it rather than build a second one from the same options.
+   *
+   * Sharing is the requirement, not a convenience: `meeting-notes-merge`'s
+   * ownership ledger is held per doc inside these deps' sink, and it is what
+   * decides whether an item in the notes section is the agent's to replace or
+   * a person's to leave alone. Two ledgers over one doc would each see the
+   * other's writes as a person's and stop replacing their own notes.
+   */
+  get notesDeps(): MeetingNotesDeps | null {
+    return this.deps.notes;
+  }
+
   onOpen(ws: MeetingClient): void {
     this.conns.set(ws, {
       state: 'idle',
@@ -109,6 +173,9 @@ export class MeetingRelay {
       session: null,
       notes: null,
       pending: [],
+      pendingRecv: [],
+      wantsTiming: false,
+      ledger: null,
       pendingStop: null,
     });
   }
@@ -117,6 +184,9 @@ export class MeetingRelay {
   onText(ws: MeetingClient, text: string): void {
     const conn = this.conns.get(ws);
     if (!conn) return;
+    // Before the parse, so a clock exchange is never charged for our own
+    // JSON work — the number it produces is used to price a network leg.
+    const serverRecvMs = Date.now();
     const msg = parseMeetingClientMessage(text);
     if (!msg) {
       // Distinct from `unavailable`: the meeting is not refused, this frame
@@ -124,8 +194,30 @@ export class MeetingRelay {
       this.send(ws, { type: 'error', message: 'unreadable frame' });
       return;
     }
+    if (msg.type === 'timing_ping') {
+      // Answered whatever the meeting is doing, and it changes nothing about
+      // it: a client that never asks to be measured never sends one.
+      this.send(ws, {
+        type: 'timing_pong',
+        id: msg.id,
+        clientMs: msg.clientMs,
+        serverRecvMs,
+        serverSendMs: Date.now(),
+      });
+      return;
+    }
     if (msg.type === 'start') {
+      // Synchronously, before the handshake is awaited: audio may arrive
+      // during it, and those chunks belong in the ledger too.
+      conn.wantsTiming = msg.timing === true;
       this.track(this.start(ws, conn, msg.sampleRate, msg.mode, msg.speakers));
+      return;
+    }
+    if (msg.type === 'announced') {
+      // The room has been told. Only ever after the fact — the strip does
+      // not claim one when the mic opens — so this is the single place a
+      // record learns it. Nothing to answer; the record is the only reader.
+      conn.meeting?.setAnnounced(msg.by);
       return;
     }
     if (msg.type === 'name_speaker') {
@@ -147,10 +239,31 @@ export class MeetingRelay {
       // words spoken in that window are as real as any other. Bounded so a
       // client streaming into an engine that never answers cannot grow this
       // without limit — roughly a few seconds of 16 kHz audio.
-      if (conn.pending.length < 256) conn.pending.push(chunk);
+      if (conn.pending.length < 256) {
+        conn.pending.push(chunk);
+        if (conn.wantsTiming) conn.pendingRecv.push(Date.now());
+      } else if (conn.wantsTiming) {
+        // The buffer is full, so this frame is being dropped — and the two
+        // sides count frames independently: the client numbers what it SENT,
+        // the ledger numbers what we FORWARDED. From the first dropped frame
+        // the two ordinals name different audio, and every later sample would
+        // be priced against an emit one frame per drop too early, with
+        // nothing on screen to say so. Refuse to measure rather than measure
+        // wrongly; the transcript itself is unaffected.
+        conn.wantsTiming = false;
+        conn.pendingRecv = [];
+      }
       return;
     }
     if (conn.state !== 'live') return;
+    if (!conn.ledger) {
+      conn.session?.send(chunk);
+      return;
+    }
+    // Recorded BEFORE the send: an engine may answer inside it, and the turn
+    // it answers with has to find this chunk already in the ledger.
+    const at = Date.now();
+    conn.ledger.record(chunk.byteLength, at, at);
     conn.session?.send(chunk);
   }
 
@@ -251,6 +364,11 @@ export class MeetingRelay {
       ? beginNotesSession(notesDeps, { docId, meetingId: meeting.meetingId })
       : null;
     conn.notes = notes;
+    // Held as a local for the same reason `notes` is: `stop()` detaches the
+    // conn's fields before awaiting the engine close, and the flushed final
+    // turn still deserves a mark.
+    const ledger = conn.wantsTiming ? new AudioChunkLedger(sampleRate) : null;
+    conn.ledger = ledger;
 
     let session: TranscriptionSession;
     try {
@@ -270,6 +388,11 @@ export class MeetingRelay {
             text: turn.text,
             final: turn.final,
             ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
+            // The ledger is a local (see above) but the PERMISSION is read
+            // off the connection every frame: the ledger is built before the
+            // handshake is awaited, and audio dropped during that wait
+            // withdraws the permission after the fact.
+            ...timingFor(conn.wantsTiming ? ledger : null, turn.audioEndMs, turn.engineMs),
           });
           // Only settled turns reach the file. A partial is a view of a turn
           // still being revised, and the record keeps what the turn became.
@@ -295,6 +418,8 @@ export class MeetingRelay {
       // failed handshake must not be replayed into that next meeting's
       // append-only transcript.
       conn.pending = [];
+      conn.pendingRecv = [];
+      conn.ledger = null;
       conn.pendingStop = null;
       this.send(ws, {
         type: 'unavailable',
@@ -309,8 +434,16 @@ export class MeetingRelay {
     // Whatever was said during the handshake goes in FIRST, and before any
     // pending stop: a meeting ended a second after it started still owes the
     // speaker the sentence they had already begun.
-    for (const chunk of conn.pending) session.send(chunk);
+    for (let i = 0; i < conn.pending.length; i++) {
+      const chunk = conn.pending[i] as Uint8Array;
+      // `recvMs` is when the chunk actually arrived, so the wait for the
+      // handshake reads as the server holding it — which is what happened —
+      // instead of disappearing into the engine's leg.
+      ledger?.record(chunk.byteLength, conn.pendingRecv[i] ?? Date.now(), Date.now());
+      session.send(chunk);
+    }
     conn.pending = [];
+    conn.pendingRecv = [];
     // Broadcast before the stop check so `meeting.started` and
     // `meeting.stopped` always reach the doc's other viewers as a pair — a
     // lone `stopped` reads as a meeting they missed the beginning of.
@@ -357,6 +490,8 @@ export class MeetingRelay {
     conn.meeting = null;
     conn.notes = null;
     conn.pending = [];
+    conn.pendingRecv = [];
+    conn.ledger = null;
     // Closing the session is what flushes the turn in progress, so the last
     // sentence of a meeting reaches `onTurn` — and therefore the file —
     // before the record is stopped.

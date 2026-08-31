@@ -13,6 +13,7 @@ import { createHaikuTaskCaptureExtractor } from './meeting-task-capture.ts';
 import { createPluginRefresher } from './plugin-refresh.ts';
 import { acquirePort, classifyBindError, probeLocalPort, shouldWalkPorts } from './port-bind.ts';
 import { lanHostnames, normalizePublicBaseUrl, tailscaleHost } from './public-host.ts';
+import { createRecallClient } from './recall.ts';
 import { haikuReviewJudge, reviewGateEnabled } from './review-judge.ts';
 import { captureServerError, flushServerSentry, initServerSentry } from './sentry.ts';
 import { createServer } from './server.ts';
@@ -465,6 +466,35 @@ if (!transcription) {
 // SAME dedicated-key consent as the summarizer, because what it sends off-
 // machine is the meeting transcript itself. Absent key → null → meetings
 // still record transcripts; the notes section simply never appears.
+// The ONLY place a real Recall client is constructed — the same seam again,
+// and the most expensive one to get wrong: a bot bills the vendor per
+// meeting-hour AND opens an AssemblyAI session behind it, so a client built
+// by anything that merely spins a server up would be a meter attached to a
+// test suite. No key → null → the invite route answers `not_configured` and
+// the doc says meeting bots are not set up.
+const meetingBot = createRecallClient({ publicBaseUrl: publicBaseUrlOverride });
+if (meetingBot && !meetingBot.config.publicWsBase) {
+  // Worth saying out loud rather than discovering at invite time: the server
+  // binds to localhost and Recall dials in from the public internet, so it
+  // has to be told the origin something in front of it answers on. Named
+  // rather than guessed, and named ONCE — the same value every human-facing
+  // link is built from.
+  console.log(
+    publicBaseUrlOverride
+      ? '[meetings] Recall key found but CW_PUBLIC_BASE_URL is not https; ' +
+          'bots stay disabled rather than stream a meeting in plaintext.'
+      : '[meetings] Recall key found but CW_PUBLIC_BASE_URL is unset; ' +
+          'bots stay disabled until it names the https origin this server is reached on.',
+  );
+}
+const meetingBotWebhookSecret = process.env.RECALL_WEBHOOK_SECRET?.trim() || undefined;
+if (meetingBot?.config.publicWsBase && !meetingBotWebhookSecret) {
+  console.log(
+    '[meetings] RECALL_WEBHOOK_SECRET is unset; bot status webhooks are ' +
+      'accepted unsigned. Set it to the signing secret from the Recall dashboard.',
+  );
+}
+
 const notesComposer = createHaikuNotesComposer();
 if (transcription && !notesComposer) {
   console.log(
@@ -626,6 +656,8 @@ while (!handle) {
       ...(effortEstimator ? { effortEstimator } : {}),
       ...(voiceComplete ? { voiceComplete } : {}),
       ...(transcription ? { transcription } : {}),
+      ...(meetingBot ? { meetingBot } : {}),
+      ...(meetingBotWebhookSecret ? { meetingBotWebhookSecret } : {}),
       ...(notesComposer ? { meetingNotes: { composer: notesComposer, taskExtractor } } : {}),
       ...(pluginRefresher ? { pluginRefresher } : {}),
       ...(deployer ? { deployer } : {}),

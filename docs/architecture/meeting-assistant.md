@@ -56,6 +56,13 @@ flowchart LR
   opened, so the strip reports the session being billed rather than the one
   it asked for, and the meeting record keeps it because it is what the
   meeting cost.
+- **A room capture announces itself, into its own microphone.** A
+  `conversation` start speaks a fixed sentence out loud once the mic is open
+  and the engine is receiving — so the announcement is in the captured audio
+  rather than in a moment before the recording that nothing can show
+  afterwards. One tap (`I'll say it`) hands the sentence to the person
+  instead, and a device that cannot speak falls back to the same place. Solo
+  announces nothing. See "The room is told" below.
 - **Who said it rides the same frame.** The engine's speaker label (`"A"`,
   `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
   a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
@@ -156,7 +163,8 @@ with retained text, so the relay needs no second channel. A turn still
 waiting on the pause tick takes the new label; notes ALREADY composed keep
 the label they were composed with — those words are in the doc and the
 revision has nowhere to land — but a person RENAMING a voice does reach
-them, retroactively; see "A rename reaches backwards" below. The revision
+them, retroactively, through both the tag rewrite and the text sweep; see
+"A rename reaches backwards" below. The revision
 can also take a label away (a
 placeholder is "no speaker"), which the record writes as an explicit
 `speaker: null` relabel line — an absent field would read as "says nothing
@@ -284,16 +292,207 @@ people.
 an error. `createServer` deliberately builds NO engine; only `bin.ts`
 constructs a real one, so no test run ever opens a metered session.
 
+## The bot path (Recall.ai) — Zoom and Google Meet
+
+Added 2026-08-30. The microphone hears the room Bryan is in; a bot joins the
+call everyone else is on. Everything after the words is the same pipeline:
+same `MeetingStore` record, same `beginNotesSession`, same
+`meeting.started` / `meeting.stopped` broadcasts. A bot meeting is not a
+second kind of meeting — it is the same meeting with a different way of
+hearing.
+
+```mermaid
+flowchart LR
+  Doc["Doc: paste a meeting link"] -->|POST /api/docs/&lt;id&gt;/meeting-bot| API[RecallMeetingRelay]
+  API -->|POST /api/v1/bot| Recall[Recall.ai]
+  Recall -->|joins| Call["Zoom / Meet call"]
+  Call --> Recall
+  Recall -->|per-participant audio| AAI["AssemblyAI v3 streaming<br/>(inside Recall)"]
+  AAI -->|transcript.data + partial_data| WS["WS /recall/&lt;token&gt;<br/>Recall dials US"]
+  WS --> API
+  Recall -->|bot.* status| Hook["POST /api/recall/status"]
+  Hook --> API
+  API -->|EngineTurn| Notes[MeetingNotesSession]
+  API -->|settled turns| Store[MeetingStore]
+  API -.->|meeting.bot| SSE[Doc SSE channel]
+```
+
+**What streams, and why not the audio.** Recall can forward raw per-participant
+PCM (`audio_separate_raw.data`, 16 kHz mono S16LE), which would drop straight
+into the existing engine seam. It is not what this uses. Instead Recall runs
+**AssemblyAI Universal Streaming itself** —
+`recording_config.transcript.provider.assembly_ai_v3_streaming`, with
+`format_turns: true` and
+`diarization.use_separate_streams_when_available: true` — and sends back
+`transcript.data` / `transcript.partial_data` carrying the platform's own
+`participant.name`. Same engine, same formatted-final contract, and the
+per-track audio plumbing is the vendor's problem rather than a base64 decode
+and N sockets on this server's critical path. `audio_separate_raw` is also
+documented as "limited support"; the transcript stream is not.
+
+**Diarization is off on this path, and that is the saving.** The microphone
+path pays AssemblyAI's `speaker_labels` surcharge to guess which voice is
+which. A bot does not have to guess: the platform already knows who is
+speaking and says so on every event. So the $0.12/hr label surcharge is gone.
+
+**What a bot meeting costs.**
+
+| | per meeting-hour |
+|---|---|
+| Microphone, with speaker labels (today) | $0.27 |
+| Bot: AssemblyAI, separate streams | $0.15 × speaking participants |
+| Bot: AssemblyAI, one mixed stream (`RECALL_SEPARATE_STREAMS=0`) | $0.15 |
+| Recall's own per-bot-hour fee | account pricing — not in the API docs |
+| Notes + capture (Haiku, unchanged) | $0.84 |
+
+AssemblyAI bills per streaming SESSION-second, so separate streams multiply by
+the number of people who actually speak: a two-person call is about what the
+microphone costs today, a four-person call about twice. The mixed-stream mode
+is a flat $0.15 and attributes turns by correlating Recall's own speech
+events, which is worse over crosstalk. Accuracy is the default; the cheap mode
+is opt-out, because someone asking for "who said what" asked for the accurate
+one.
+
+**Names, not labels.** The pipeline's `speaker` is an opaque LABEL that
+`speakerDisplayName` renders as "Speaker A" until a person names it. Putting
+"Rowan Pike" in that field directly would render "Speaker Rowan Pike"
+everywhere. So a bot meeting synthesises a label per participant (`p7`) and
+NAMES it immediately with the platform's name — which means the record's name
+map, the composer's display logic and the retroactive-rename machinery all
+work unchanged, and a person can still correct a name the platform got wrong.
+Two participants with the same display name are disambiguated at that seam
+("Alex Yun (2)"), because composed notes carry no per-mention attribution and
+the notes session correctly REFUSES to rewrite a name that means two voices.
+
+**Turn numbers are invented here.** AssemblyAI's own stream carries
+`turn_order`; Recall's does not. `recall-turns.ts` allocates them: a partial
+opens a participant's turn, a final settles it, and a final on an
+already-settled turn opens a NEW one **unless its words normalise to the same
+string AND it arrives within two seconds** — which is the `format_turns`
+double-final arriving as two indistinguishable events. Both halves of that
+clause are load-bearing. Without the same-words half, the punctuated pass
+becomes a duplicate turn. Without the two-second window, "Yes." said twice in
+one conversation becomes one turn and the second answer is deleted outright.
+Merging two different sentences would lose one, which is worse than a
+duplicated punctuation pass; deleting a repeated one is the same loss wearing
+a different hat.
+
+The record takes the SECOND of a folded pair: a later transcript line with
+words for a turn already written revises it in place (see Persistence), so
+the durable transcript reads the punctuated way rather than keeping the rough
+first draft forever.
+
+**The first word starts the meeting; a terminal state ends it.** Not the
+`bot.in_call_recording` webhook. The status channel and the word channel are
+independent and either can be late; waiting for the report would drop the
+opening sentences with no meeting to record them into. Conversely the vendor
+socket dropping is NOT the end — Recall reconnects, and the call is still
+going. This is the exact opposite of the microphone path's "the socket IS the
+meeting", and the difference is that a bot's socket is a delivery route rather
+than the meeting itself.
+
+**Zoom's consent banner is Zoom's.** Native recording permission is not a
+create-time flag: the bot joins, and
+`POST /api/v1/bot/{id}/request_recording_permission/` asks the host — which is
+what makes Zoom's own banner fire, so the room is told it is being recorded by
+Zoom rather than by us. Asked once, Zoom only. The answer arrives as
+`bot.recording_permission_allowed` / `_denied`, and
+`automatic_leave.recording_permission_denied_timeout` stops a refused bot from
+sitting in the call billing.
+
+**Config.** `CLAUDE_WORKSPACES_RECALL_API_KEY` env, then Keychain
+(`claude-workspaces-recall-api-key`) — the same order and the same reasoning
+as the AssemblyAI key. `RECALL_REGION` picks the API host and a key is only
+valid in its own region (a mismatch is a 401, which the client's error names).
+**Recall dials this server**, and this server binds to localhost behind a
+Cloudflare Tunnel, so it has to be told the origin something in front of it
+answers on — which is already `CW_PUBLIC_BASE_URL`, the single source of every
+link the server hands a human. The realtime endpoint is DERIVED from it
+(`https://host` → `wss://host/recall/<token>`) rather than configured
+separately: two settings naming one host is two things to get wrong, and
+nothing reports the disagreement — just a bot that records into a hostname
+nobody is listening on. A base that is unset, or is plain `http`, disables
+bots rather than stream a meeting's audio in cleartext.
+`RECALL_WEBHOOK_SECRET` verifies status webhooks (Svix HMAC); Recall publishes
+no static IPs to allowlist, so that signature is the only proof available.
+Retention is `{type: "timed", hours: 24}` by default — short, per the owner's
+call. See `.env.example`.
+
+**The AssemblyAI key for this path lives in Recall's dashboard**, per region,
+not in this repo and not in the create-bot body. The Keychain key still serves
+the browser-microphone path. Two places hold an AssemblyAI credential and they
+are for two different paths.
+
+**What is NOT here, deliberately.** No live word ticker for a bot meeting: a
+bot's words have no socket back to the browser (the strip's words come down the
+socket that sent the audio), and pushing them over the doc's SSE channel would
+evict every real doc event from its 200-event replay buffer within a minute.
+What a viewer sees is the bot's state and the notes composing themselves.
+Calendar auto-join is also not here, and it is not a single config call: it
+needs a Google/Outlook OAuth app, per-user OAuth consent, `POST /calendars`,
+and a `calendar.sync_events` webhook consumer before any bot is scheduled.
+
+**Load-bearing gotchas on this path**
+
+- **A server restart loses a bot meeting's stream.** The per-bot token map is
+  in memory, so a restarted process refuses the vendor's reconnect. `dispose`
+  therefore takes every bot OUT of its call rather than leaving one recording
+  into a socket nothing will accept — visible, rather than silently billing
+  two vendors for nothing.
+- **The `/recall/<token>` upgrade does NOT check Origin**, unlike `/audio/`
+  and `/y/`. The caller is a vendor backend; there is no origin, and requiring
+  one would refuse every real connection. The 128-bit per-bot token in the
+  path is the authentication, and it is forgotten when that bot's meeting ends.
+- **`assembly_ai_v3_streaming`, never `assembly_ai_streaming`** — the docs say
+  the older name fails. It is also **not supported in `eu-central-1`**
+  (docs.recall.ai/docs/assemblyai, FAQ), so `RECALL_REGION` and this provider
+  are not independent choices: an EU region needs a different provider, not
+  just a different key.
+- **The AssemblyAI key goes in Recall's Transcription dashboard, per region.**
+  Recall's regions are isolated, so the key is entered separately for each one
+  (docs.recall.ai/docs/assemblyai, Setup). It is never in a request body and
+  never in this repo.
+- **Cloudflare Access sits in FRONT of both of the vendor's inbound channels,
+  and will refuse them.** `route()` classifies the request's Host and runs the
+  Access verifier before any path match (`server.ts`, the `classifyHost` block
+  — `viaProxy: req.headers.has('cf-ray')` means a tunnel request can never
+  claim to be local). Recall's backend cannot present an Access JWT, a share
+  cookie, or a proxied-trusted identity, so both `wss://<host>/recall/<token>`
+  and `POST /api/recall/status` are refused before they reach their routes.
+  Deriving the right URL is therefore necessary and NOT sufficient: the two
+  vendor paths need a route that Access does not front, either at the
+  Cloudflare edge or as an explicit exemption here. Both paths already carry
+  their own credential — a 128-bit per-bot token, and the Svix signature — so
+  an exemption would not be unauthenticated, but it is a change to this
+  server's auth boundary and is Bryan's call, not an implementation detail.
+
 ## Persistence
 
 Append-only under `<dataDir>/meetings/<safeDocId>/`: one
 `<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
 `{turn, speaker, ts}` line with no text relabels a turn already written, and
-`speaker: null` there un-labels it),
+`speaker: null` there un-labels it; a later line WITH text revises the words
+and REPLACES the turn on read, keeping the position it first settled in —
+that is how the bot path's double final, rough then punctuated, lands as one
+turn reading the punctuated way),
 plus a `meetings.jsonl` index whose start/stop lines fold into one record
 per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized
 `[^A-Za-z0-9._-] → _`.
+
+**What the vendor keeps: nothing, and a 3-day floor under everything else.**
+The account (owner, 2026-08-31, Workspace → Settings → Data Controls) is
+opted out of model training with a 3-day TTL on audio and transcripts. The
+opt-out is what makes Streaming — the only thing this subsystem uses — ZERO
+retention of audio and transcripts, leaving just logging/billing metadata.
+The TTL caps AssemblyAI's ASYNC side at 3 days instead of the 30-day default,
+which is belt and braces here: this repo makes no `POST /v2/transcript` call,
+and on 2026-08-31 the account listed zero stored transcripts. Both are
+ACCOUNT settings, not session parameters, so no code here can set or assert
+them — `bun run scripts/assemblyai-retention-sweep.ts` is how you re-check
+what is actually stored, and deletes anything found (`--delete`); the
+mechanics it has to get right are in
+`packages/server/src/assemblyai-retention.ts`.
 
 ## Notes composition
 
@@ -407,15 +606,88 @@ Renaming an already-given name works the same way, because the rewrite reads
 the OLD DISPLAY NAME (what the composer actually wrote), not the raw label —
 "Devi" → "Devi Raman" replaces "Devi".
 
-**Two voices with the same name refuse the rewrite.** Display text is the
-only handle the notes give — composed prose carries no per-mention
-attribution — so if both A and B are called "Alex", "Alex" in the notes does
-not say which, and correcting A to "Sam" would silently reattribute B's
-words. The session detects that (across every label SEEN, not just the named
-ones — an unnamed B still reads as "Speaker B") and skips the retroactive
-part, reporting it through `onError`. The forward mapping still holds: that
-voice's later turns compose under the new name. Raised by review before
-merge, not in the field.
+**Two voices with the same name narrow the rewrite, they no longer refuse
+it.** Display text used to be the only handle the notes gave, so if both A
+and B were called "Alex", "Alex" in the notes did not say which and
+correcting A to "Sam" would have silently reattributed B's words; the session
+detected that and skipped the retroactive part entirely. Tagged mentions have
+their own handle — the label in the href — so the tag rewrite runs
+unconditionally and only the UNTAGGED text sweep is skipped when the display
+name is ambiguous (`rewriteUntagged: false` on the relabel). The session
+still reports through `onError`, now saying the rename reached only tagged
+mentions. The forward mapping always held: that voice's later turns compose
+under the new name.
+
+### Speaker tags: attribution the notes can carry
+
+A tag is a markdown link whose href names the voice —
+`[@Devi](speaker:B)` — so the visible half is the name and the durable half
+is the LABEL (`packages/core/src/speaker-tags.ts`). The shape was chosen
+because a meeting doc is a live Yjs doc that flushes to a `.md` on disk: a
+link is ordinary markdown and an ordinary Yjs `link` mark, so attribution
+survives the round trip and rides through an edit the way bold does. A mark
+invented for this would have been lost on the first flush.
+
+- **The composer proposes, the server disposes.** Tags come back from an LLM,
+  so every composed section passes `normalizeSpeakerTags` before it reaches a
+  doc: a tag naming a label the meeting never carried is unwrapped to plain
+  words (and reported), and a tag naming a real one is re-rendered from the
+  name map rather than trusted to spell it. Same law the task capture's
+  `requester` is held to — a model-claimed attribution must name something
+  the tick's own transcript contained. Lines a PERSON wrote are passed
+  through byte for byte, because the merge recognises them by exact text.
+- **A rename is keyed on the label, never the spelling.**
+  `retagSpeakerInNotes` walks the notes section's `Y.XmlText` nodes and
+  rewrites the text of every run whose link href is `speaker:<label>`,
+  in place, marks preserved — which is what makes two voices called Alex
+  separable where the display-text sweep could not tell them apart. It runs
+  AFTER the untagged sweep, and that order is load-bearing: an extension
+  rename ("Devi" → "Devi Raman") leaves the old name inside the new one, so a
+  sweep running second would find "Devi" inside the "@Devi Raman" the retag
+  had just written and make it "@Devi Raman Raman". Sweeping first, the retag
+  that follows canonicalises every tag for the voice and finds most of them
+  already right. Contiguous delta ops sharing the tag's href are coalesced
+  into one run before replacement, because a tag with an inner mark — half
+  its name bolded — reaches Yjs as several ops and would otherwise be
+  rewritten once per op.
+- **A name loses its brackets on the way into a tag.** A display name is free
+  text somebody typed, and a tag is a link: "Sam [PM]" written between the
+  brackets produces `[@Sam [PM]](speaker:C)`, which no longer parses as a tag
+  at all — the finder cannot see it, so every later rename silently reaches
+  nothing and the attribution is frozen on that spelling. `speakerTagText`
+  removes `[`, `]` and `\` for the tag only; the roster and the strip still
+  show the name as typed. Removed rather than backslash-escaped because
+  escaping is only safe if every writer escapes, and one of the writers is
+  the doc serializer, which wraps EVERY link's text in brackets and escapes
+  none of it — a pre-existing bug worth fixing on its own, but not one this
+  feature should depend on. A name that cannot break the syntax is safe
+  whichever path writes it. Found in the browser, reassigning a mention to a
+  seeded "Sam [PM]"; the unit tests had only ever used plain names.
+- **A suggestion may not re-attribute a person's note.** `canSuggestOn`
+  refuses a rewrite that introduces a speaker label the target did not
+  already carry, so the composer cannot attach a line someone typed to a
+  voice in the room.
+- **The editor renders a tag as a quiet chip, not a link.** Tiptap blanks an
+  href whose scheme is not in `protocols`, so the Link extension is
+  configured with `speaker`; `safeLinkHref` refuses the scheme, so a tag
+  never navigates. Clicking one opens the reassign menu instead.
+- **Correcting a tag is one mention, always** (owner's call, 2026-08-31:
+  *"reassigning should just affect the one item being reassigned"*).
+  `speaker-reassign.ts` rewrites the link mark under the finger and nothing
+  else — not the turn, not that voice's other notes. The larger gestures
+  ("…and every other note from this turn", reaching back into the
+  transcript) are each a different promise about scope, and the narrow one is
+  the promise nobody has to think about before tapping. The menu offers the
+  voices from `speakerRoster` — the meeting's cast, each with the last thing
+  it said, because "Speaker A" identifies nobody — plus *Nobody — this is not
+  a quote*, which takes the claim off and leaves the words. It is a popover
+  on a pointer and a bottom sheet under 560px.
+- **The correction is an ordinary document edit**, dispatched through the
+  editor the person is already in: same Yjs sync, same undo, same ~1s flush
+  to the `.md`. Nothing about it reaches the server as a special verb, and a
+  correction made a week after the meeting works exactly like one made
+  during it — which is why the menu is mounted whatever the doc, rather than
+  alongside the strip.
 
 ## Task capture ("file a ticket for that")
 
@@ -430,7 +702,27 @@ same speaker-prefixed transcript the composer does and may return a
 `requester` for a request — guarded on the same law, so it must be a voice
 that tick actually carried; the created row's body then says who asked,
 which is the half of "who said what" a task can still answer a week later,
-once the strip is gone. New rows are
+once the strip is gone.
+
+**Each pass also reads the tail of the one before it**, marked as already
+read — the boundary between two ticks falls where the room went quiet, which
+is nowhere near where an ask ends. Measured live, both halves: "…that is the
+real cost" / boundary / "can you file a ticket for that one?" filed a row
+titled *"file a ticket for that one, a small spike would do"*, and "we should
+file tickets for the next few things I mention" / boundary / the things
+themselves lost the ask entirely. The window is the previous tick's TAIL —
+180 characters, six turns, the newest line clipped rather than dropped — kept
+raw so a voice named since then reads under its new name. Marking is what
+stops a second filing: the prompt says those lines were read last pass and
+that every item must draw part of itself from the new ones, and the board's
+own find-or-create folds a re-file into a link to the row the previous pass
+created. Both the guards and the model see exactly the same window, or the
+reference guard would reject the very matches the overlap exists to enable.
+Cost, measured on the capture model with `count_tokens` rather than estimated
+(`scripts/capture-overlap-cost.ts`): **+92 input tokens per tick** at a full
+window — 43 for the standing instruction, 49 for the speech.
+
+New rows are
 attributed to the `Meeting Assistant` agent actor and enter triage; a request
 judged clear-and-doable goes to the chores band at `todo` and wakes the
 board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
@@ -439,6 +731,65 @@ plain markdown links into the notes; the doc editor's `TaskLinkChips`
 decoration (markdown-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
+
+## Measuring the latency (`?timing=1`)
+
+**How long a spoken word takes to become a word on the screen, and which hop
+spent it.** Off by default and costing nothing when off: without the flag the
+server allocates no ledger, reads no clock per audio chunk, and the wire is
+what it always was. Add `?timing=1` to a doc's address, start a meeting, and
+talk; a readout appears under the strip with the running p50/p95 and a CSV
+button. Nothing is sent anywhere — the samples live in the tab until someone
+downloads them, and no transcript text, doc id or path enters a sample, a
+column, or Sentry.
+
+The eight legs, in the order the time is spent: **capture** (waiting for the
+100ms frame carrying the word to close, uniform 0–100 by construction) ·
+**uplink** · **queue** (held on the server before the engine had a session —
+zero except at the very start of a meeting) · **vendor** · **serverOut** ·
+**downlink** · **render** · **paint**. They sum to **total**, spoken to
+painted.
+
+- **The correlation key is the AUDIO OFFSET, never the text.** Audio goes up
+  as raw PCM with no sequence number in it, so there is nothing in a frame to
+  echo back — but every `Turn` reports its words with `start`/`end` in
+  milliseconds of the engine's stream, and the server knows how many bytes it
+  had forwarded when it forwarded each chunk. A word's offset therefore names
+  the chunk that carried it arithmetically, with nothing added to the wire.
+  Correlating on text would break on the one thing this pipeline exists to do:
+  revise a word after it is already on screen.
+- **The ledger is written BEFORE the chunk is forwarded.** An engine may
+  answer inside the very `send` that fed it, and a turn arriving then would
+  resolve to the PREVIOUS chunk — understating the vendor by a whole frame.
+  The server suite drives a synchronous engine precisely to hold that line.
+- **Two clocks, and what survives them.** The browser and the server are
+  synced by an NTP-style `timing_ping`/`timing_pong` exchange (a burst at the
+  start, then a drip; lowest round trip wins). An error in the estimate moves
+  time BETWEEN uplink and downlink and cancels in their sum, so `total`, the
+  vendor leg and every server-internal leg are exact regardless — only the
+  up/down SPLIT is indicative. Read it that way.
+- **The headline is PARTIALS.** A partial is the newest word reaching the
+  screen, which is the experience being measured; a final arrives after the
+  engine has decided the turn ended and re-punctuated it, so it is slower by
+  construction and is counted separately.
+- **Paint is a frame after rAF, not rAF.** `requestAnimationFrame` runs
+  BEFORE style, layout and paint, so marking inside it would time the work up
+  to the frame and call it painted.
+- **A handshake long enough to drop audio turns the measurement OFF.** The
+  relay's opening buffer is bounded, and the two sides count frames
+  independently — the browser numbers what it sent, the ledger what we
+  forwarded. One dropped frame and every later ordinal names different audio,
+  so from that point the relay attaches no blocks at all. The readout going
+  quiet on a pathological start is the design; a plausible wrong number would
+  not be.
+- **What it does NOT separate.** The vendor leg is one number: the network
+  round trip to AssemblyAI is inside it, and nothing the vendor sends carries
+  a wall clock to subtract. Microphone and device input latency are before the
+  first mark and are not in `total` at all.
+
+Code: `packages/core/src/meeting-timing.ts` (the arithmetic, shared) ·
+`packages/markdown-app/src/meeting-timing-client.ts` (the browser marks, the
+readout, the CSV).
 
 ## Load-bearing gotchas (each cost real debugging)
 
@@ -500,9 +851,195 @@ stored content.
 - **The `/audio/` upgrade checks Origin and refuses unknown docs** — CORS
   does not apply to websockets, and this socket spends money while open.
 
+## The room is told, and the telling is in the recording
+
+Shipped 2026-08-30. **In-person captures only** — a Zoom or Meet bot gets its
+consent from the platform's own recording banner, and a second announcement
+over the top of that one would be noise.
+
+A `conversation` capture is by definition the one with other people in it, so
+it says so out loud. Bryan's decision was the **hybrid**: the device speaks by
+default, and one tap hands the sentence to the person instead. Both are on the
+strip as start buttons — `Start` and `I'll say it` — and the second appears
+only while a `conversation` capture is idle, because a solo capture has nobody
+to tell and a running one has already told them.
+
+**The order is the whole feature, and it is the opposite of the intuitive
+one.** The microphone opens FIRST and the sentence is spoken into it:
+
+```mermaid
+sequenceDiagram
+  participant P as Person
+  participant S as Strip
+  participant M as Mic
+  participant R as Relay
+  P->>S: tap Start (conversation)
+  S->>S: announcer.prime() — SYNCHRONOUS, spends the gesture
+  S->>M: getUserMedia + AudioWorklet
+  M-->>S: frames
+  S->>R: start {mode}
+  R-->>S: ready (engine is receiving)
+  S->>S: speechSynthesis.speak(RECORDING_ANNOUNCEMENT)
+  Note over M,R: the sentence is spoken INTO an open mic —<br/>it rides the same frames as everything else
+  S->>R: announced {by: "device"} — only now
+```
+
+Announcing before the mic opened would leave the sentence in a moment nothing
+recorded, which is exactly the thing an announcement cannot be: the point is to
+be able to show it afterwards, in the transcript. So the `ready` frame is the
+trigger — `ready` means the engine is receiving, and everything from there is
+in the transcript.
+
+**Not at socket-open, and that is a deliberate trade.** The relay buffers audio
+that arrives while the engine handshake is out (`conn.pending`, 256 chunks), so
+speaking at socket-open would land in the recording too, and land *earlier* —
+anything said in the room during the handshake is captured ahead of the
+announcement, which is a real if small ordering cost. What it would buy in
+exchange is the risk of telling a room it is being recorded when it is not:
+before `ready`, the socket can still answer `unavailable` — no key configured,
+or another tab already holding this doc — and a false announcement to a room is
+worse than a few hundred milliseconds of ordering. So the claim here is that
+the announcement is IN the captured audio, never that it is the first thing in
+it.
+
+**Why there is a prime step.** On iOS Safari — Bryan's main device —
+`speechSynthesis.speak()` is ignored unless it is reached from inside a user
+gesture's own task. The announcement cannot be spoken there, because it has to
+wait for `getUserMedia`, by which point the gesture is spent. So the tap spends
+its gesture on one silent utterance, which unlocks the queue, and the real
+sentence rides that unlock later. Same trick an `AudioContext` needs, same
+reason.
+
+**The sentence is a constant and is not localized.** `RECORDING_ANNOUNCEMENT`
+in `packages/core/src/meeting.ts`. Fixed because it is the thing anyone would
+later be asked to show, and deliberately passive about who is recording — the
+same words are correct in the device's mouth and in a person's, and a sentence
+that only worked in one would need a second sentence for the other.
+
+**The claim is never on the `start` frame**, and this is the one thing here
+that a review caught rather than the design getting right first time. A
+capture that announced its intention when the microphone opened would leave
+`announced: 'device'` standing on a meeting somebody stopped four words into
+the sentence — the record asserting the room was told, about a room that heard
+half a sentence. So `announced` is its own frame, sent after the fact:
+`device` only once the browser reports the utterance FINISHED, `spoken` the
+moment the sentence goes on screen (which is the whole of what `spoken` ever
+claims). A meeting that ends before either leaves the field absent, and that
+is the correct answer rather than a gap.
+
+**What the record claims, and what it does not.** `announced` on the meeting
+record is `'device'`, `'spoken'`, or ABSENT.
+
+| value | what it means |
+|---|---|
+| `device` | the browser reported the utterance finished |
+| `spoken` | the sentence was PUT ON SCREEN for a person to read |
+| absent | nothing is claimed — a solo capture, a meeting stopped mid-sentence, or a client too old to say |
+
+`spoken` is the weaker claim and the code never treats it as more: the client
+knows it displayed the sentence and cannot know anybody read it. Absent is
+never a quiet default either — `parseAnnouncedBy` answers `undefined` for
+anything it does not recognise, because the permissive direction would write a
+consent record out of a typo.
+
+**A device that cannot speak falls back and CORRECTS the record.** No synthesis
+engine, a refused gesture, and an utterance that is accepted and then never
+fires `end` or `error` (a real browser bug, hence the 12s timeout in
+`meeting-announce.ts`) are indistinguishable from the strip and all end the
+same way: the sentence goes on screen for a person, and the `announced` frame
+that goes up says `spoken` instead. A record claiming the device announced it
+when the device said nothing is worse than one that claims less. The index
+folds `announced` last-word-wins, the same rule the speaker names fold under,
+so a `device` that is later corrected to `spoken` reads as `spoken`.
+
+**The sentence a person has to READ holds the caption line.** The strip has
+one line, and a partial transcript normally takes it — which for the `spoken`
+path means any noise in the room can wipe the sentence out from under somebody
+mid-read, a moment after it appeared. So the `I'll say it` prompt is a
+*dismissible button* that holds the line: transcript turns accumulate but are
+not drawn until a SETTLED turn arrives (a whole utterance finished — the
+earliest evidence the sentence has been said) or the prompt is tapped away.
+Nothing is lost while it holds; the rolling window draws as soon as the line
+comes back. The device's own caption does NOT hold, because it is a courtesy
+for something the room is already hearing.
+
+**Every terminal path silences the announcement, not just Stop.** A relay
+error, an `unavailable`, a server-side stop and a dropped socket all end a
+recording as finally as the button does, and each one cancels the announcer
+and bumps the generation. Without that the device carries on saying "this
+conversation is being recorded" into a room where it is not, and the
+sentence's late resolution writes a claim onto a meeting that failed.
+
+Cancelling reaches an utterance that has started; it cannot reach one that has
+not. Suspending echo cancellation is itself a promise, so a stop can land in
+the window between the suspension and `speak()` — and there the announcement
+has to check for the terminal event rather than be told about it. That check
+is the reason the generation is read twice in one function.
+
+**The SERVER's mode decides whether there is a room.** `ready` echoes the mode
+that was actually opened, and the announcement is reconciled against that
+echo rather than against the request — otherwise an old server answering
+`solo` would announce a session the strip has just relabelled solo, and the
+inverse mismatch would skip an announcement a room is owed.
+
+**The store refuses a claim a solo meeting cannot have made.** `setAnnounced`
+is a no-op when the meeting's mode is `solo`. The frame is client-controlled
+and this record is the evidence, so the invariant lives where the record is
+written rather than being trusted of whatever opened the socket.
+
+**The strip says REC at every width while live**, not only on the phone. A
+pulsing dot was enough while the strip reported only to the person holding the
+device; it announces itself to a room now, and somebody who was told they are
+being recorded has to be able to look over and see that they still are.
+
+### What this is NOT proven by
+
+The mock engine returns a fixture's words, so no automated test can show that
+a real room hears the announcement or that AssemblyAI transcribes a device
+speaking through its own microphone. What the suites prove is the mechanism:
+the ordering (`meeting-strip.test.ts` — speech happens only after the mic is
+open and the `start` frame is away, and audio keeps reaching the socket
+throughout the sentence), every fallback path, and what the record ends up
+saying — including the two cases it must refuse to claim anything for, a
+solo capture and a meeting stopped mid-sentence (`meetings.test.ts`,
+`meeting-socket.test.ts`).
+
+**Echo cancellation is the known hazard, and it is hedged rather than solved.**
+`MEETING_CONSTRAINTS` asks for `echoCancellation: true`, and echo cancellation
+exists precisely to remove the device's own speaker output from the captured
+signal — which is the one moment that has to work the other way round. So the
+strip suspends it for the length of the sentence (`setEchoCancellation` on the
+live track) and restores it after. That is a hedge, not a proof: whether a
+given browser's canceller reaches speech-synthesis output depends on whether
+synthesis shares the render path it uses as its reference, and
+`applyConstraints` can refuse outright (Safari has refused `echoCancellation`
+on a live track). Every failure is swallowed — an announcement must never be
+blocked by a hedge.
+
+The suspension is bound to the **microphone instance** it was taken out on,
+not to whichever capture the strip currently holds. Cancelling speech does not
+settle its promise — the utterance can hang until its timeout — so the restore
+half of an abandoned announcement can run after a second meeting has started
+and is mid-sentence itself. Restoring cancellation there would silently defeat
+the suspension in exactly the case it exists for. Bound to the instance, a
+stale restore lands on a stopped track and does nothing.
+
+**So `device` on the record means what it says and no more:** the browser
+reported the utterance finished. It is not evidence that the sentence reached
+the transcript, and nothing in the code treats it as such.
+
+**What stays unverified as of 2026-08-30:** nobody has run this in a real room
+with a live engine. The two things to check when someone does are that the
+announcement is audible over a conversation, and that it appears in the
+transcript at all. If it does not, the constraint suspension is the first place
+to look, and the next step up is synthesizing the sentence into the audio graph
+itself rather than through the speaker — a bigger change, and not one worth
+making before the cheap hedge has been measured.
+
 ## Where things live
 
-`packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode`) ·
+`packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode` and
+`RECORDING_ANNOUNCEMENT`) ·
 `packages/server/src/meeting-protocol.ts` (lifecycle) ·
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
@@ -510,6 +1047,14 @@ stored content.
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
 (UI) · `packages/markdown-app/src/meeting-audio.ts` (capture + the room's
-microphone config) · `scripts/room-labels-check.ts` + `room-labels-score.ts`
-+ `ami-truth.ts` (the room measurement, its arithmetic, and the AMI corpus
-reference it scores against).
+microphone config) · `packages/markdown-app/src/meeting-announce.ts` (speech
+synthesis and every way it fails) · `packages/server/src/recall.ts` (vendor
+client) · `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
+`recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
+bot lifecycle) · `packages/core/src/meeting-bot.ts` (wire contract) ·
+`packages/markdown-app/src/meeting-bot-row.ts` (UI) ·
+`packages/core/src/meeting-timing.ts` +
+`packages/markdown-app/src/meeting-timing-client.ts` (the `?timing=1`
+latency measurement) · `scripts/room-labels-check.ts` +
+`room-labels-score.ts` + `ami-truth.ts` (the room measurement, its
+arithmetic, and the AMI corpus reference it scores against).
