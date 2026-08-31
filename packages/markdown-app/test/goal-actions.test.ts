@@ -352,6 +352,33 @@ describe('an archived band on the board', () => {
     ];
     expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-subarch', 'g-pr', 'g-old']);
   });
+
+  it('leaves out a subgoal that only went because its parent did', () => {
+    // Its tasks were stamped with the PARENT's id, so a restore aimed at the
+    // subgoal alone would find none of them: an empty band back on the board
+    // under a control that had just promised to bring its tasks. The parent
+    // is listed and restores both.
+    const goals = [
+      band({
+        archivedAt: NOW,
+        subgoals: [
+          { id: 'g-sub', title: 'Land the diff', archivedAt: NOW, archivedWithGoal: 'g-pr' },
+        ],
+      }),
+    ];
+    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-pr']);
+  });
+
+  it('keeps a subgoal that was archived on its own, which restores its own tasks', () => {
+    // The positive control for the rule above: same shape, no cascade marker,
+    // so this row is exactly as restorable as a band.
+    const goals = [
+      band({
+        subgoals: [{ id: 'g-sub', title: 'Land the diff', archivedAt: NOW }],
+      }),
+    ];
+    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-sub']);
+  });
 });
 
 describe('the restore list, with bands in it', () => {

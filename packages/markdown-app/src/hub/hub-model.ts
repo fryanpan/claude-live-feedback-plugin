@@ -224,6 +224,11 @@ export interface HubSubgoal {
   archivedAt?: number;
   archivedBy?: string;
   archiveReason?: string;
+  /** Set when this band went as part of ANOTHER band's archive, naming that
+   *  band. Its tasks carry the same marker, so only the named band's restore
+   *  brings them back — which is why `archivedGoals` does not offer this row
+   *  a restore of its own. */
+  archivedWithGoal?: string;
 }
 
 export interface HubGoal extends HubSubgoal {
@@ -402,15 +407,19 @@ export function isGoalArchived(goal: HubSubgoal): boolean {
 /**
  * Archived BANDS, newest removal first — the goals half of the restore list.
  *
- * Flattened: a subgoal archived with its parent is a row somebody may want
- * back, and burying it inside its parent would make the list's one control
- * ambiguous about what it restores.
+ * Flattened, so a subgoal archived ON ITS OWN is a row of its own here — but
+ * a subgoal that went only because its parent did is NOT listed. Its tasks
+ * were stamped with the parent's id, so restoring it alone would put an empty
+ * band back and leave its tasks archived, under a control that had just
+ * promised to bring them. The parent's row is in this list and restores the
+ * whole cascade, which is what the archive confirmation said would happen.
  */
 export function archivedGoals(goals: HubGoal[]): HubSubgoal[] {
   const out: HubSubgoal[] = [];
+  const own = (g: HubSubgoal) => isGoalArchived(g) && g.archivedWithGoal === undefined;
   for (const g of goals) {
-    if (isGoalArchived(g)) out.push(g);
-    for (const s of g.subgoals ?? []) if (isGoalArchived(s)) out.push(s);
+    if (own(g)) out.push(g);
+    for (const s of g.subgoals ?? []) if (own(s)) out.push(s);
   }
   return out.sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
 }
@@ -461,6 +470,7 @@ export interface BoardSection {
   archivedAt?: number;
   archivedBy?: string;
   archiveReason?: string;
+  archivedWithGoal?: string;
   isChores: boolean;
   tasks: HubTask[];
 }
@@ -486,6 +496,7 @@ function carriedOf(g: HubSubgoal) {
     ...(g.archivedAt !== undefined ? { archivedAt: g.archivedAt } : {}),
     ...(g.archivedBy !== undefined ? { archivedBy: g.archivedBy } : {}),
     ...(g.archiveReason !== undefined ? { archiveReason: g.archiveReason } : {}),
+    ...(g.archivedWithGoal !== undefined ? { archivedWithGoal: g.archivedWithGoal } : {}),
   };
 }
 

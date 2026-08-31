@@ -327,6 +327,31 @@ describe('goal archive + restore routes', () => {
     expect((after ?? []).find((g) => g.id === G.trust)?.archivedAt).toBeUndefined();
   });
 
+  it('projects WHICH archive took a subgoal, so the restore list can tell the two apart', async () => {
+    await post(`/api/goals/${G.fast}/archive`, { author: PERSON });
+    type Sub = { id: string; archivedAt?: number; archivedWithGoal?: string };
+    const read = () =>
+      (handle.rooms.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
+        | Array<{ id: string; subgoals?: Sub[] }>
+        | undefined) ?? [];
+    const sub = read()
+      .find((g) => g.id === G.fast)
+      ?.subgoals?.find((sg) => sg.id === G.index);
+    expect(sub?.archivedAt).toBeGreaterThan(0);
+    // The whole point of the field: this subgoal's tasks were stamped with the
+    // PARENT's id, so the restore list must not offer it a restore of its own.
+    expect(sub?.archivedWithGoal).toBe(G.fast);
+    // The band that took it carries no marker — it is the one that restores.
+    const parent = read().find((g) => g.id === G.fast) as Sub | undefined;
+    expect(parent?.archivedWithGoal).toBeUndefined();
+
+    await post(`/api/goals/${G.fast}/restore`, { author: PERSON });
+    const back = read()
+      .find((g) => g.id === G.fast)
+      ?.subgoals?.find((sg) => sg.id === G.index);
+    expect(back?.archivedWithGoal).toBeUndefined();
+  });
+
   it('reports the cascade before the write, and the same rows after it', async () => {
     const wire = await makeTask('Wire the index', G.fast);
     const crawl = await makeTask('Crawl the corpus', G.index);
