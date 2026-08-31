@@ -354,6 +354,20 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
       A: 'Dana',
     });
 
+    // 5. The rename reaches BACKWARDS, into notes already in the doc — the
+    //    owner's call: not "Speaker A" above the rename and "Dana" below it.
+    //    Asserted here, BEFORE any further tick, because a later compose
+    //    replaces the whole section and would make this pass for the wrong
+    //    reason.
+    await waitFor(
+      () => docMarkdown().includes('Dana: So the sync is the bottleneck.'),
+      'the rename to rewrite the note already written',
+    );
+    const rewritten = docMarkdown();
+    expect(rewritten).not.toContain('Speaker A');
+    // Only that voice moved. B was not named and still reads as a label.
+    expect(rewritten).toContain("Speaker B: Let's measure it first.");
+
     // Turn three is voice A again. It composes under the new name without
     // anyone renaming it a second time.
     client.speak(4);
