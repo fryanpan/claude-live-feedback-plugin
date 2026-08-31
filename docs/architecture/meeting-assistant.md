@@ -2,7 +2,8 @@
 
 **Goal:** a person opens a doc, presses one button, and talks. Words appear
 live in a compact strip while they speak; meeting notes compose themselves
-into the doc at the natural pauses in the conversation. The transcript is
+into the doc at the natural pauses in the conversation — and, when there are
+none, at least every fifteen seconds. The transcript is
 durable; the doc body stays the person's own writing plus the notes section.
 
 Shipped 2026-08-28 (capture PR #408, notes PR #410). This doc is the summary
@@ -19,7 +20,7 @@ flowchart LR
   Engine -->|turns| Relay
   Relay -->|transcript frames| WS
   Relay -->|settled turns| Store[MeetingStore<br/>append-only JSONL]
-  Relay -->|every turn| Notes[MeetingNotesSession<br/>pause-driven composer]
+  Relay -->|every turn| Notes[MeetingNotesSession<br/>pause + cadence composer]
   Notes -->|Yjs write| Doc[Doc "Meeting notes" section]
   Relay -.->|started/stopped only| SSE[Doc SSE channel]
 ```
@@ -134,13 +135,36 @@ into the record's name map, last word wins. Nothing deletes; ids sanitized
 
 ## Notes composition
 
-A pause in the conversation — no new turn activity past the quiet threshold
-— triggers the composer, which sees the transcript so far plus doc title and
-board task titles for context, and writes into the doc's "Meeting notes"
+A tick triggers the composer, which sees the transcript so far plus doc title
+and board task titles for context, and writes into the doc's "Meeting notes"
 section via the Yjs fragment. The composer is an LLM call (Haiku) and
 follows the same no-default seam as the engine: nothing that merely spins a
-server up can reach an LLM. Partials count as speech in progress and defer
-the pause tick.
+server up can reach an LLM.
+
+**Two clocks fire a tick, and whichever comes first wins.**
+
+- **A pause** — no new turn activity for `DEFAULT_NOTES_QUIET_MS` (4s).
+  Partials count as speech in progress and defer it: every frame replaces the
+  countdown.
+- **The cadence ceiling** — `DEFAULT_NOTES_CADENCE_MS` (15s), started when the
+  first unwritten sentence settles and **not** reset by speech. Added
+  2026-08-30 (owner: *"waits too long to update notes"*), because the pause
+  clock alone means a conversation where nobody stops for four seconds
+  produces nothing until it ends. Measured on a scripted three-minute meeting
+  (`scripts/notes-latency-check.ts`), sentence-settled to note-written went
+  from a 43.0s median / 92.2s worst case to 8.7s / 15.0s, and the same script
+  wrote 10 notes instead of 2.
+
+**A tick is two Haiku calls** (compose + task capture), so the ceiling raises
+the per-meeting LLM cost roughly in proportion to the extra ticks — five times
+as many on the script above. Transcription is billed on socket-seconds and is
+unchanged.
+
+**A cadence tick carries settled turns only.** This engine's partials are
+unformatted — punctuation and sentence casing arrive with `format_turns` when
+the turn settles — so there is no finished sentence inside a partial to cut
+at. A settled turn IS the unit of finished speech; the turn being spoken waits
+for the next tick rather than being written mid-clause.
 
 **The write is a MERGE, and a person can type in the section while it runs**
 (owner, 2026-08-30: *"destroyed my notes"*). The old write deleted the whole
@@ -321,6 +345,6 @@ stored content.
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
-doc sink) · `packages/server/src/meeting-notes-merge.ts` (the merge that
+doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
 (UI).
