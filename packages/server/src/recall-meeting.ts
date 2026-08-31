@@ -154,7 +154,7 @@ export class RecallMeetingRelay {
         ok: false,
         reason: 'not_configured',
         message:
-          'Recall dials this server back, so CW_PUBLIC_BASE_URL must name the public https origin this server is reached on. It is unset or is not https.',
+          'Recall dials this server back, so it needs a public address: set CW_RECALL_CALLBACK_HOST to the dedicated callback hostname, or CW_PUBLIC_BASE_URL to the public https origin this server is reached on. Neither is set to a usable value.',
       };
     }
     const meetingUrl = args.meetingUrl.trim();
