@@ -1774,6 +1774,16 @@ export function effortComputationLines(
   ];
   const said = (r: EffortRatio): string =>
     `\u00d7${r.ratio.toFixed(2)} from ${r.samples} closed ticket${r.samples === 1 ? '' : 's'}`;
+  // A factor with NO closed tickets behind it is the board's prior — the
+  // starting assumption that the scorer still sizes a ticket for a person
+  // (`EFFORT_PRIOR_*` in core). It has to be said, and it has to be said
+  // DIFFERENTLY: every number on this panel is traceable back to where it
+  // came from, and until priors existed a factor of 1 needed no sentence
+  // because it changed nothing. A silent \u00d70.07 would leave a reader
+  // looking at a figure fifteen times smaller than the scorer's own with
+  // nothing on the panel accounting for it.
+  const assumed = (r: EffortRatio): string =>
+    `\u00d7${r.ratio.toFixed(2)} from the board's starting assumption that agents do the work \u2014 nothing has closed under this goal to measure yet`;
   // Agreeing on the FACTOR is what makes it one correction to a reader; the
   // sample counts behind it can differ and the sentence is still about one
   // number. Keying "is this one correction?" on the counts as well printed
@@ -1793,6 +1803,20 @@ export function effortComputationLines(
   } else {
     if (handsRatio && handsRatio.samples > 0) lines.push(`Hands-on scaled ${said(handsRatio)}.`);
     if (wallRatio && wallRatio.samples > 0) lines.push(`Calendar time scaled ${said(wallRatio)}.`);
+  }
+  // Said once for both quantities when neither has evidence, which is the
+  // shape a board wears right after a prompt bump — two sentences saying
+  // "nothing has closed yet" is the same sentence twice.
+  const priorOnly = (r: EffortRatio | undefined): boolean =>
+    r !== undefined && r.samples === 0 && r.ratio.toFixed(2) !== '1.00';
+  if (priorOnly(handsRatio) && priorOnly(wallRatio) && handsRatio && wallRatio) {
+    lines.push(
+      `Hands-on scaled \u00d7${handsRatio.ratio.toFixed(2)} and calendar time \u00d7${wallRatio.ratio.toFixed(2)}, from the board's starting assumption that agents do the work \u2014 nothing has closed under this goal to measure yet.`,
+    );
+  } else {
+    if (priorOnly(handsRatio) && handsRatio) lines.push(`Hands-on scaled ${assumed(handsRatio)}.`);
+    if (priorOnly(wallRatio) && wallRatio)
+      lines.push(`Calendar time scaled ${assumed(wallRatio)}.`);
   }
   // What it actually took, once it is closed. Measured numbers are never
   // multiplied — these are reported exactly as they happened, beside the
