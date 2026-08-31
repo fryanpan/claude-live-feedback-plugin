@@ -387,8 +387,14 @@ function defaultPromptName(current: string): string | null {
  * and the person's is a line to READ, so it has to carry the instruction.
  * Both quote the sentence itself, because the sentence is the record.
  */
-export function announcementNote(by: AnnouncedBy): string {
+export function announcementNote(by: AnnouncedBy | 'tap'): string {
   const said = `\u201c${RECORDING_ANNOUNCEMENT}\u201d`;
+  // A third job, and the only one that is an INSTRUCTION TO THE DEVICE: the
+  // device was handed the sentence and never began it, and one tap is what
+  // its speech queue is waiting for. The sentence is quoted here too, so
+  // somebody who would rather just say it can, and never has to find out why
+  // a tap was being asked for.
+  if (by === 'tap') return `Tap to announce it out loud: ${said}`;
   return by === 'device' ? `Announcing: ${said}` : `Say this out loud: ${said}`;
 }
 
@@ -656,21 +662,49 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   }
 
   /**
-   * The sentence, held on the line until it has been said. A button because
-   * it is dismissible, and a dismissible thing has to be reachable by more
-   * than a pointer.
+   * The sentence, held on the line until it has been said. Always a button:
+   * whatever the tap does here — give the line back, or spend a gesture on
+   * the speech queue — it has to be reachable by more than a pointer.
    */
-  function showAnnouncement(text: string): void {
+  function holdLine(text: string, hint: string, onTap: () => void, extra?: string): void {
     holdAnnouncement = true;
     clearCaption();
     const note = document.createElement('button');
     note.type = 'button';
-    note.className = 'meeting-note meeting-note-dismiss';
+    note.className = extra
+      ? `meeting-note meeting-note-dismiss ${extra}`
+      : 'meeting-note meeting-note-dismiss';
     note.textContent = text;
-    note.title = 'Dismiss';
-    note.setAttribute('aria-label', `${text} (tap to dismiss)`);
-    note.addEventListener('click', releaseAnnouncement);
+    note.title = hint;
+    note.setAttribute('aria-label', `${text} (${hint.toLowerCase()})`);
+    note.addEventListener('click', onTap);
     line.append(note);
+  }
+
+  /** The line a person reads, dismissible once they have. */
+  function showAnnouncement(text: string): void {
+    holdLine(text, 'Tap to dismiss', releaseAnnouncement);
+  }
+
+  /**
+   * The line that is itself the fix.
+   *
+   * Shown only where a tap can still work: the device was given the sentence,
+   * never began it, and no gesture has ever reached its speech queue — which
+   * is exactly the state a meeting auto-started by the Board's button arrives
+   * in on iOS. The tap unlocks the queue and says the sentence into the
+   * microphone that is already open, so the announcement still lands in the
+   * recording. It looks like the read-it-yourself line because it IS that
+   * line with one more thing on offer: someone who would rather say it
+   * themselves can, and the quoted sentence is right there.
+   */
+  function offerToSpeak(attempt: number): void {
+    holdLine(
+      announcementNote('tap'),
+      'Say it out loud',
+      () => void sayItNow(attempt),
+      'meeting-note-speak',
+    );
   }
 
   /** Give the line back to the transcript, and draw whatever arrived. */
@@ -931,12 +965,54 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
    * more than the announcement's own convenience, because the record is the
    * thing anybody would later be asked to show.
    */
+  /**
+   * Tell the server the room HAS been told — never before it has, and never
+   * twice for the same path: a claim repeated on the wire is not a second
+   * announcement, and the record's own writer folds it away anyway.
+   */
+  function claim(path: AnnouncedBy): void {
+    if (announced === path) return;
+    announced = path;
+    if (socketOpen) socket?.send(JSON.stringify({ type: 'announced', by: path }));
+  }
+
+  /**
+   * Say it now, off the tap that unlocked the queue.
+   *
+   * `prime()` runs FIRST and synchronously — before any await and before any
+   * guard that could grow one — because the gesture's own task is the only
+   * place iOS accepts the unlock. Everything after it is the announcement
+   * proper, made the same way the automatic one is: into the microphone that
+   * is already open, with echo cancellation stood down for the length of the
+   * sentence.
+   */
+  async function sayItNow(attempt: number): Promise<void> {
+    // A meeting that has ended is not owed an announcement, and speaking into
+    // the NEXT one would announce a recording that this line was never about.
+    if (disposed || attempt !== generation) return;
+    announcer.prime();
+    const mic = capture;
+    await suspendEchoCancellation(mic, true);
+    if (disposed || attempt !== generation) {
+      await suspendEchoCancellation(mic, false);
+      return;
+    }
+    const outcome = await announcer.speak(RECORDING_ANNOUNCEMENT);
+    await suspendEchoCancellation(mic, false);
+    if (disposed || attempt !== generation) return;
+    if (outcome === 'spoke') {
+      claim('device');
+      // The room has heard it; the line has no reader left to wait for.
+      releaseAnnouncement();
+      return;
+    }
+    // The tap was the last thing that could have made the device speak. What
+    // is left is the sentence and a person, which is where every other
+    // failure ends too.
+    showAnnouncement(announcementNote('spoken'));
+  }
+
   async function announce(by: AnnouncedBy, attempt: number): Promise<void> {
-    /** Tell the server the room HAS been told — never before it has. */
-    const claim = (path: AnnouncedBy): void => {
-      announced = path;
-      if (socketOpen) socket?.send(JSON.stringify({ type: 'announced', by: path }));
-    };
     if (by === 'spoken') {
       // Held, not merely shown: this one is a line to READ, and a partial
       // from anywhere in the room would otherwise take it away mid-read.
@@ -968,18 +1044,27 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       await suspendEchoCancellation(mic, false);
       return;
     }
-    const spoke = await announcer.speak(RECORDING_ANNOUNCEMENT);
+    const outcome = await announcer.speak(RECORDING_ANNOUNCEMENT);
     await suspendEchoCancellation(mic, false);
     // A stop, or a second meeting, during the sentence: this one no longer
     // owns the strip or the socket, and — the reason nothing is claimed at
     // start — the room heard half a sentence at most, so the record is left
     // saying nothing rather than saying the device announced it.
     if (disposed || attempt !== generation) return;
-    if (spoke) {
+    if (outcome === 'spoke') {
       claim('device');
       return;
     }
-    showAnnouncement(announcementNote('spoken'));
+    // Accepted and never begun, on a page nothing has ever touched: iOS
+    // Safari's locked speech queue, and the ONE failure a tap can still turn
+    // into speech. Offered rather than assumed — a queue that was primed and
+    // stayed silent is a dead end, and a button that cannot work is worse
+    // than the line it would replace.
+    if (outcome === 'mute' && !announcer.primed()) offerToSpeak(attempt);
+    else showAnnouncement(announcementNote('spoken'));
+    // Claimed either way, and for the same reason it always was: the sentence
+    // is on screen for a person to read. The tap can only improve on that,
+    // and does — to `device`, once the room has actually heard it.
     claim('spoken');
   }
 
