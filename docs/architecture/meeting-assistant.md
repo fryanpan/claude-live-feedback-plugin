@@ -104,11 +104,16 @@ session reaches it. A minute before the `expires_at` the engine gave in
 `Begin`, the adapter opens the next session, waits for its `Begin`, moves
 the audio across, and only then terminates the old one, whose flush still
 delivers the sentence it was mid-way through. Two things it has to get
-right, both tested: turn ids CONTINUE across the join (each leg carries an
-offset — a fresh session counts from zero, and downstream a turn id is the
-identity a transcript revises in place and the key the record is written
-under), and a retired session is TERMINATED rather than dropped (a socket
-merely closed leaves the session open on their side, billed to the cap).
+right, both tested: turn ids CONTINUE across the join, and a retired session
+is TERMINATED rather than dropped (a socket merely closed leaves the session
+open on their side, billed to the cap). Ids are the adapter's own, allocated
+the first time a leg emits a given `turn_order` and then remembered per leg
+— a fresh session counts from zero, and downstream a turn id is the identity
+a transcript revises in place and the key the record is written under, so
+the two legs must never name the same id. Allocating on first emission is
+what makes that safe during the overlap: the old leg can still open a turn
+while the new one is already carrying audio, and a base fixed at rollover
+time would hand both of them the same number.
 The two sockets overlap for one handshake and both are billed for it; that
 is the price of not cutting a meeting in half at hour three.
 

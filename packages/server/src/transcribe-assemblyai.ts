@@ -105,12 +105,12 @@ export function expiryFrom(raw: unknown, now = Date.now()): number {
 /**
  * One engine socket. A meeting is a CHAIN of these — a new one is opened
  * before the current one hits its three-hour cap, and turn ids continue
- * across the join through `offset`.
+ * across the join because each leg remembers the ids its own turns got.
  */
 interface Leg {
   socket: EngineSocket;
-  /** Added to this session's `turn_order` before a turn leaves the adapter. */
-  offset: number;
+  /** This session's `turn_order` to the id the turn left the adapter under. */
+  ids: Map<number, number>;
   /** When the engine says this session will be closed for exceeding its cap. */
   expiresAt: number;
   /** Settled turns, by THIS session's order, for `SpeakerRevision`. */
@@ -293,13 +293,21 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
         /** `close()` was called: no more rollovers, and this is the last leg. */
         let closing = false;
         /**
-         * The highest turn id ANY leg has emitted. The next leg's ids start
-         * above it, which is what keeps a rollover invisible to everything
-         * downstream: a turn id is the identity a transcript revises in place
-         * and the key the record is written under, and a fresh AssemblyAI
-         * session starts counting at zero again.
+         * The next turn id to hand out. Ids are allocated the first time a
+         * leg emits a given `turn_order` and remembered per leg, which is
+         * what keeps a rollover invisible to everything downstream: a turn id
+         * is the identity a transcript revises in place and the key the
+         * record is written under, and a fresh AssemblyAI session starts
+         * counting at zero again.
+         *
+         * Allocating on first emission rather than from a per-leg base is
+         * what makes the handover safe. The two legs overlap: the old one is
+         * flushing while the new one is already carrying audio, and it can
+         * still open a turn of its own in that window. A base fixed at
+         * rollover time would give that turn the id the new leg's first turn
+         * also got, and downstream one would silently overwrite the other.
          */
-        let maxTurn = -1;
+        let nextId = 0;
         let cancelRollover: (() => void) | null = null;
         /** Resolves `close()` once the last leg says it has flushed. */
         let settleClose: (() => void) | null = null;
@@ -329,13 +337,27 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
           });
         };
 
+        /**
+         * The id this leg's `turn_order` speaks under, allocated once and
+         * then stable: the same order from the same leg is the same turn
+         * being revised, and the same order from a DIFFERENT leg is a
+         * different turn entirely.
+         */
+        const idFor = (leg: Leg, order: number): number => {
+          const known = leg.ids.get(order);
+          if (known !== undefined) return known;
+          const id = nextId++;
+          leg.ids.set(order, id);
+          return id;
+        };
+
         /** Open one leg and resolve when the engine says `Begin`. */
-        const connect = (offset: number): Promise<Leg> =>
+        const connect = (): Promise<Leg> =>
           new Promise<Leg>((resolveLeg, rejectLeg) => {
             let begun = false;
             const leg: Leg = {
               socket: null as unknown as EngineSocket,
-              offset,
+              ids: new Map(),
               expiresAt: Date.now() + MAX_SESSION_MS,
               settled: new Map(),
               done: false,
@@ -348,9 +370,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
               rejectLeg(new Error('assemblyai: no Begin within the connect timeout'));
             });
             const emit = (order: number, text: string, speaker: { speaker?: string }): void => {
-              const id = leg.offset + order;
-              if (id > maxTurn) maxTurn = id;
-              sessionOpts.onTurn({ turn: id, text, final: true, ...speaker });
+              sessionOpts.onTurn({ turn: idFor(leg, order), text, final: true, ...speaker });
             };
             leg.socket = makeSocket({
               url: streamingUrl(sessionOpts.sampleRate, sessionOpts.detectSpeakers),
@@ -382,10 +402,13 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
                   // is superseded.
                   const final = msg.end_of_turn === true && msg.turn_is_formatted === true;
                   const speaker = speakerFromLabel(msg.speaker_label);
-                  const id = leg.offset + order;
-                  if (id > maxTurn) maxTurn = id;
                   if (final) leg.settled.set(order, { text: transcript, ...speaker });
-                  sessionOpts.onTurn({ turn: id, text: transcript, final, ...speaker });
+                  sessionOpts.onTurn({
+                    turn: idFor(leg, order),
+                    text: transcript,
+                    final,
+                    ...speaker,
+                  });
                   return;
                 }
                 if (msg.type === 'SpeakerRevision') {
@@ -402,8 +425,8 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
                   // which we do not need — text is never revised by this pass).
                   //
                   // A revision is always this leg's own: it names turn orders
-                  // in the session that sent it, so it is mapped through THIS
-                  // leg's offset even when a newer leg is already carrying the
+                  // in the session that sent it, so it is looked up in THIS
+                  // leg's id map even when a newer leg is already carrying the
                   // audio.
                   const revisions = Array.isArray(msg.revisions) ? msg.revisions : [];
                   for (const rev of revisions as Array<Record<string, unknown>>) {
@@ -470,8 +493,9 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
          * destination once the engine has answered `Begin`, so there is no
          * window where a spoken word has nowhere to go. The old leg is then
          * terminated, which flushes the turn it was in the middle of — those
-         * frames still arrive, and they still map through the old offset, so
-         * a sentence spanning the handover is not lost or renumbered.
+         * frames still arrive, and they still carry the ids the old leg
+         * already gave them, so a sentence spanning the handover is revised in
+         * place rather than lost or duplicated.
          *
          * The two sockets overlap for the length of one handshake, and both
          * are billed for that second or so. That is the price of not cutting
@@ -479,7 +503,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
          */
         const rollover = (old: Leg): void => {
           if (closing || old !== active || old.done) return;
-          void connect(maxTurn + 1).then(
+          void connect().then(
             (next) => {
               if (closing) {
                 // The meeting ended while the handshake was out. The new
@@ -538,7 +562,7 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
           },
         };
 
-        void connect(0).then(
+        void connect().then(
           (leg) => {
             active = leg;
             armRollover(leg);

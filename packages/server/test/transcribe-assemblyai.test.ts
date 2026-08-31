@@ -296,7 +296,7 @@ describe('assemblyai session', () => {
     // The flush: the last turn arrives AFTER Terminate and before Termination.
     h.fake().deliver({
       type: 'Turn',
-      turn_order: 3,
+      turn_order: 0,
       turn_is_formatted: true,
       end_of_turn: true,
       transcript: "Let's pick it up tomorrow.",
@@ -308,7 +308,7 @@ describe('assemblyai session', () => {
       session_duration_seconds: 14,
     });
     await closing;
-    expect(h.turns.at(-1)).toEqual({ turn: 3, text: "Let's pick it up tomorrow.", final: true });
+    expect(h.turns.at(-1)).toEqual({ turn: 0, text: "Let's pick it up tomorrow.", final: true });
     expect(h.fake().closed).toBe(true);
     expect(h.errors).toEqual([]);
   });
@@ -444,6 +444,32 @@ describe('assemblyai session rollover — the three-hour cap', () => {
       [1, 'Second thing.'],
       [2, 'After the handover.'],
       [1, 'Second thing, finished.'],
+    ]);
+  });
+
+  it('gives the two legs distinct ids when the old one speaks again', async () => {
+    const h = harness({ manualSchedule: true, rolloverMarginMs: 60_000 });
+    h.fake(0).begin(soon());
+    await h.opening;
+    h.fake(0).deliver(turn({ turn_order: 0, transcript: 'Before the handover.' }));
+
+    h.pending().fire();
+    h.fake(1).begin(soon());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The new leg speaks first, and then the old one delivers a turn it had
+    // opened while the handshake was out. Both are turn 1 as far as arithmetic
+    // on the old session's numbering goes, and they are different sentences by
+    // (possibly) different people, so they cannot share an id: downstream a
+    // turn id is an identity, and one would overwrite the other.
+    h.fake(1).deliver(turn({ turn_order: 0, transcript: 'Said on the new session.' }));
+    h.fake(0).deliver(turn({ turn_order: 1, transcript: 'Said on the old session.' }));
+
+    expect(h.turns.map((t) => [t.turn, t.text])).toEqual([
+      [0, 'Before the handover.'],
+      [1, 'Said on the new session.'],
+      [2, 'Said on the old session.'],
     ]);
   });
 
