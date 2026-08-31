@@ -255,15 +255,17 @@ export function overlapWindow(
   for (let i = usable.length - 1; i >= 0 && out.length < OVERLAP_MAX_TURNS; i--) {
     const turn = usable[i];
     if (!turn) continue;
-    const cost = turn.text.length + (turn.speaker ? turn.speaker.length + 2 : 0);
-    if (cost > budget) {
+    // The speaker prefix is part of what the line costs the prompt.
+    const prefix = turn.speaker ? turn.speaker.length + 2 : 0;
+    if (turn.text.length + prefix > budget) {
       // Only the newest line is worth clipping into what is left; anything
       // older simply does not fit.
-      if (out.length === 0 && budget > 0) {
-        out.push({ ...turn, text: clipToBudget(turn.text, budget) });
+      if (out.length === 0 && budget - prefix > 0) {
+        out.push({ ...turn, text: clipToBudget(turn.text, budget - prefix) });
       }
       break;
     }
+    const cost = turn.text.length + prefix;
     budget -= cost;
     out.push(turn);
   }

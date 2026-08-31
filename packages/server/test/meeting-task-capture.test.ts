@@ -625,7 +625,8 @@ describe('the overlap window', () => {
     const window = overlapWindow(prior, deicticTick);
     expect(window).toHaveLength(1);
     const kept = window[0]?.text ?? '';
-    expect(kept.length).toBeLessThanOrEqual(OVERLAP_MAX_CHARS);
+    // The speaker prefix counts against the budget too, not only the words.
+    expect(kept.length + 'Priya: '.length).toBeLessThanOrEqual(OVERLAP_MAX_CHARS);
     // Clipped from the front: what a pointer points at is what was said last.
     expect(kept.startsWith('…')).toBe(true);
   });
