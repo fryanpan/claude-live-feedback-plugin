@@ -178,6 +178,10 @@ import {
   type ReadyWorkSnapshot,
   isBoardActivity,
 } from './ready-nudge.ts';
+import { RecallMeetingRelay } from './recall-meeting.ts';
+import { parseBotStatusWebhook } from './recall-status.ts';
+import { svixHeadersFrom, verifySvixSignature } from './recall-webhook-auth.ts';
+import type { RecallClient } from './recall.ts';
 import { listArchivedDocs, listArchivedReviews, readDocArchiveManifest } from './review-archive.ts';
 import { backfillReviewFiling } from './review-backfill.ts';
 import { type ReviewJudge, type ReviewJudgeVerdict } from './review-judge.ts';
@@ -872,6 +876,23 @@ export interface ServerOptions {
    */
   transcription?: TranscriptionEngine;
   /**
+   * The Recall.ai client that puts a BOT in a Zoom / Meet call. **No
+   * default**, the same seam rule as `transcription` directly above and for
+   * the same reason doubled: creating a bot bills the vendor per meeting-hour
+   * AND opens an AssemblyAI streaming session behind it. Omitting it makes
+   * the invite route answer `not_configured`, which the doc's strip renders
+   * as a settled state. Only `bin.ts` constructs a real one
+   * (`createRecallClient`).
+   */
+  meetingBot?: RecallClient;
+  /**
+   * Shared secret for verifying Recall's status webhooks (Svix format).
+   * When set, an unsigned or badly signed webhook is REFUSED; when unset the
+   * route falls back to the bot id being unguessable, which is weaker. The
+   * operator sets `RECALL_WEBHOOK_SECRET`.
+   */
+  meetingBotWebhookSecret?: string;
+  /**
    * Pause-driven meeting notes: composer, quiet threshold, optionally an
    * observing sink. **No default**, same seam rule as `transcription`
    * directly above — the real composer is an LLM call, and nothing that
@@ -1330,6 +1351,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         })
       : null,
     // Lifecycle only. The words never touch this hub — see meeting-protocol.
+    broadcast: (docId, payload) => sse.broadcast(docId, payload),
+  });
+  /**
+   * The bot path into the SAME pipeline. It gets the relay's own notes deps
+   * rather than a second set built from the same options: two sets would be
+   * two ownership ledgers over one doc's notes section, and the ledger is
+   * what stops a tick from eating what a person typed.
+   */
+  const recallRelay = new RecallMeetingRelay({
+    store: meetingStore,
+    notes: meetingRelay.notesDeps,
+    client: opts.meetingBot ?? null,
     broadcast: (docId, payload) => sse.broadcast(docId, payload),
   });
   // Late-bound because Rooms is constructed before the task store and the
@@ -3851,7 +3884,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // socket and the editing socket are told apart by what the upgrade
   // attached. Absent means the editing socket, which is every upgrade that
   // predates meetings.
-  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' }>({
+  const server = Bun.serve<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>({
     port,
     // Explicit because the DEFAULT is what broke the event streams: Bun's is
     // 10 seconds, the SSE keepalive ran on 20, and so every stream idled out
@@ -3909,7 +3942,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // table lives in here unchanged.
       async function route(
         req: Request,
-        server: BunServer<{ docId: string; kind?: 'yjs' | 'audio' }>,
+        server: BunServer<{ docId: string; kind?: 'yjs' | 'audio' | 'recall'; token?: string }>,
       ): Promise<Response | undefined> {
         const url = new URL(req.url);
         const { pathname } = url;
@@ -4910,6 +4943,29 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             const error = err instanceof Error ? err.message : 'delete_share_failed';
             return j(502, { error });
           }
+        }
+
+        // --- WebSocket upgrade: Recall dialling US with a bot's words ---
+        //
+        // NO Origin check, unlike `/audio/` and `/y/` below. That guard exists
+        // because a browser will open a socket from any page the user visits
+        // and hand it the data regardless of CORS. This caller is a vendor's
+        // backend: there is no origin, and requiring one would refuse every
+        // real connection. The unguessable per-bot token in the path is the
+        // authentication — 128 CSPRNG bits, one bot, forgotten when that
+        // bot's meeting ends (see RecallMeetingRelay's mintToken).
+        if (pathname.startsWith('/recall/')) {
+          const token = decodeURIComponent(pathname.slice('/recall/'.length));
+          // Shape-checked before it is looked up so a lookup is never the
+          // thing that distinguishes a malformed token from an unknown one.
+          if (!/^[0-9a-f]{32}$/.test(token) || !recallRelay.acceptsToken(token)) {
+            return j(404, { error: 'unknown endpoint' });
+          }
+          const upgraded = server.upgrade(req, {
+            data: { docId: '', token, kind: 'recall' as const },
+          });
+          if (!upgraded) return new Response('upgrade required', { status: 426 });
+          return undefined;
         }
 
         // --- WebSocket upgrade: a doc's live meeting audio ---
@@ -8616,6 +8672,76 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           return j(200, { ...record, transcript: meetingStore.transcript(docId, meetingId) });
         }
 
+        // --- Recall's bot status-change webhook ---
+        //
+        // Workspace-level at the vendor, so it carries no token of ours and
+        // arrives for every bot this account creates; the relay ignores bot
+        // ids it does not know. Answered 200 even for an event we do not
+        // model — a non-2xx makes the vendor retry, and retrying will not
+        // make an unmodelled code become one.
+        if (pathname === '/api/recall/status' && req.method === 'POST') {
+          const raw = await req.text();
+          const secret = opts.meetingBotWebhookSecret;
+          if (secret) {
+            const signed = await verifySvixSignature({
+              secret,
+              body: raw,
+              headers: svixHeadersFrom(req.headers),
+            });
+            if (!signed) return j(401, { error: 'bad signature' });
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            return j(400, { error: 'bad json' });
+          }
+          const event = parseBotStatusWebhook(parsed);
+          if (event) recallRelay.onStatus(event);
+          return j(200, { ok: true });
+        }
+
+        // --- A doc's meeting bot: invite one, read its state, send it home ---
+        const botMatch = pathname.match(/^\/api\/docs\/([^/]+)\/meeting-bot$/);
+        if (botMatch) {
+          const addressed = decodeURIComponent(botMatch[1] ?? '');
+          if (!isValidDocId(addressed)) return j(400, { error: 'bad docId' });
+          const docId = rooms.get(addressed)?.docId ?? addressed;
+          if (req.method === 'GET') {
+            // `configured` is why the UI can say "meeting bots are not set up
+            // on this server" instead of offering a button that always fails.
+            return j(200, {
+              docId,
+              configured: recallRelay.configured(),
+              bot: recallRelay.status(docId),
+            });
+          }
+          if (req.method === 'POST') {
+            // A bot costs money the moment it is created, so unlike the
+            // read above this one insists the doc actually exists.
+            if (!rooms.get(docId)) return j(404, { error: 'doc not found' });
+            const body = (await req.json().catch(() => null)) as { meetingUrl?: unknown } | null;
+            const meetingUrl = typeof body?.meetingUrl === 'string' ? body.meetingUrl : '';
+            if (!meetingUrl) return j(400, { error: 'meetingUrl required' });
+            const result = await recallRelay.invite({ docId, meetingUrl });
+            if (result.ok) return j(200, { bot: result.status });
+            const status =
+              result.reason === 'not_configured'
+                ? 503
+                : result.reason === 'already_recording'
+                  ? 409
+                  : result.reason === 'vendor_error'
+                    ? 502
+                    : 400;
+            return j(status, { error: result.reason, message: result.message });
+          }
+          if (req.method === 'DELETE') {
+            const left = await recallRelay.leave(docId);
+            return left ? j(200, { ok: true }) : j(404, { error: 'no bot on this doc' });
+          }
+          return j(405, { error: 'method not allowed' });
+        }
+
         const docMatch = pathname.match(/^\/api\/docs\/([^/]+)(?:\/(.*))?$/);
         if (docMatch) {
           const addressed = decodeURIComponent(docMatch[1] ?? '');
@@ -9869,6 +9995,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // context per socket.
       perMessageDeflate: true,
       open(ws) {
+        if (ws.data.kind === 'recall') return;
         if (ws.data.kind === 'audio') {
           meetingRelay.onOpen(ws);
           return;
@@ -9882,6 +10009,15 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         onOpen(room, typed);
       },
       message(ws, message) {
+        if (ws.data.kind === 'recall') {
+          // Text only. Recall's realtime transcript events are JSON frames;
+          // this endpoint subscribes no binary media, so a binary frame here
+          // is not ours to interpret.
+          if (typeof message === 'string' && ws.data.token) {
+            recallRelay.onSocketText(ws.data.token, message);
+          }
+          return;
+        }
         if (ws.data.kind === 'audio') {
           if (typeof message === 'string') {
             meetingRelay.onText(ws, message);
@@ -9911,6 +10047,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         onMessage(room, typed, data);
       },
       close(ws) {
+        if (ws.data.kind === 'recall') {
+          // NOT the end of the meeting — see RecallMeetingRelay.onSocketClose.
+          if (ws.data.token) recallRelay.onSocketClose(ws.data.token);
+          return;
+        }
         if (ws.data.kind === 'audio') {
           meetingRelay.onClose(ws);
           return;
@@ -10165,6 +10306,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // because the close handlers above start their teardowns async, and
       // their notes belong in the rooms this flushes next.
       await meetingRelay.dispose();
+      // And the bots. A bot left in a call after this process is gone bills
+      // two vendors and delivers nothing — see RecallMeetingRelay.dispose.
+      await recallRelay.dispose();
       // Flush pending body snapshots into the store BEFORE the store's own
       // flush, so the last keystrokes in a task body reach the sidecar.
       taskProjection.stop();

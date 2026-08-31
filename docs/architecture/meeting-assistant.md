@@ -167,12 +167,163 @@ was reachable from the session that wrote it.
 an error. `createServer` deliberately builds NO engine; only `bin.ts`
 constructs a real one, so no test run ever opens a metered session.
 
+## The bot path (Recall.ai) — Zoom and Google Meet
+
+Added 2026-08-30. The microphone hears the room Bryan is in; a bot joins the
+call everyone else is on. Everything after the words is the same pipeline:
+same `MeetingStore` record, same `beginNotesSession`, same
+`meeting.started` / `meeting.stopped` broadcasts. A bot meeting is not a
+second kind of meeting — it is the same meeting with a different way of
+hearing.
+
+```mermaid
+flowchart LR
+  Doc["Doc: paste a meeting link"] -->|POST /api/docs/&lt;id&gt;/meeting-bot| API[RecallMeetingRelay]
+  API -->|POST /api/v1/bot| Recall[Recall.ai]
+  Recall -->|joins| Call["Zoom / Meet call"]
+  Call --> Recall
+  Recall -->|per-participant audio| AAI["AssemblyAI v3 streaming<br/>(inside Recall)"]
+  AAI -->|transcript.data + partial_data| WS["WS /recall/&lt;token&gt;<br/>Recall dials US"]
+  WS --> API
+  Recall -->|bot.* status| Hook["POST /api/recall/status"]
+  Hook --> API
+  API -->|EngineTurn| Notes[MeetingNotesSession]
+  API -->|settled turns| Store[MeetingStore]
+  API -.->|meeting.bot| SSE[Doc SSE channel]
+```
+
+**What streams, and why not the audio.** Recall can forward raw per-participant
+PCM (`audio_separate_raw.data`, 16 kHz mono S16LE), which would drop straight
+into the existing engine seam. It is not what this uses. Instead Recall runs
+**AssemblyAI Universal Streaming itself** —
+`recording_config.transcript.provider.assembly_ai_v3_streaming`, with
+`format_turns: true` and
+`diarization.use_separate_streams_when_available: true` — and sends back
+`transcript.data` / `transcript.partial_data` carrying the platform's own
+`participant.name`. Same engine, same formatted-final contract, and the
+per-track audio plumbing is the vendor's problem rather than a base64 decode
+and N sockets on this server's critical path. `audio_separate_raw` is also
+documented as "limited support"; the transcript stream is not.
+
+**Diarization is off on this path, and that is the saving.** The microphone
+path pays AssemblyAI's `speaker_labels` surcharge to guess which voice is
+which. A bot does not have to guess: the platform already knows who is
+speaking and says so on every event. So the $0.12/hr label surcharge is gone.
+
+**What a bot meeting costs.**
+
+| | per meeting-hour |
+|---|---|
+| Microphone, with speaker labels (today) | $0.27 |
+| Bot: AssemblyAI, separate streams | $0.15 × speaking participants |
+| Bot: AssemblyAI, one mixed stream (`RECALL_SEPARATE_STREAMS=0`) | $0.15 |
+| Recall's own per-bot-hour fee | account pricing — not in the API docs |
+| Notes + capture (Haiku, unchanged) | $0.84 |
+
+AssemblyAI bills per streaming SESSION-second, so separate streams multiply by
+the number of people who actually speak: a two-person call is about what the
+microphone costs today, a four-person call about twice. The mixed-stream mode
+is a flat $0.15 and attributes turns by correlating Recall's own speech
+events, which is worse over crosstalk. Accuracy is the default; the cheap mode
+is opt-out, because someone asking for "who said what" asked for the accurate
+one.
+
+**Names, not labels.** The pipeline's `speaker` is an opaque LABEL that
+`speakerDisplayName` renders as "Speaker A" until a person names it. Putting
+"Rowan Pike" in that field directly would render "Speaker Rowan Pike"
+everywhere. So a bot meeting synthesises a label per participant (`p7`) and
+NAMES it immediately with the platform's name — which means the record's name
+map, the composer's display logic and the retroactive-rename machinery all
+work unchanged, and a person can still correct a name the platform got wrong.
+Two participants with the same display name are disambiguated at that seam
+("Alex Yun (2)"), because composed notes carry no per-mention attribution and
+the notes session correctly REFUSES to rewrite a name that means two voices.
+
+**Turn numbers are invented here.** AssemblyAI's own stream carries
+`turn_order`; Recall's does not. `recall-turns.ts` allocates them: a partial
+opens a participant's turn, a final settles it, and a final on an
+already-settled turn opens a NEW one **unless its words normalise to the same
+string AND it arrives within two seconds** — which is the `format_turns`
+double-final arriving as two indistinguishable events. Both halves of that
+clause are load-bearing. Without the same-words half, the punctuated pass
+becomes a duplicate turn. Without the two-second window, "Yes." said twice in
+one conversation becomes one turn and the second answer is deleted outright.
+Merging two different sentences would lose one, which is worse than a
+duplicated punctuation pass; deleting a repeated one is the same loss wearing
+a different hat.
+
+The record takes the SECOND of a folded pair: a later transcript line with
+words for a turn already written revises it in place (see Persistence), so
+the durable transcript reads the punctuated way rather than keeping the rough
+first draft forever.
+
+**The first word starts the meeting; a terminal state ends it.** Not the
+`bot.in_call_recording` webhook. The status channel and the word channel are
+independent and either can be late; waiting for the report would drop the
+opening sentences with no meeting to record them into. Conversely the vendor
+socket dropping is NOT the end — Recall reconnects, and the call is still
+going. This is the exact opposite of the microphone path's "the socket IS the
+meeting", and the difference is that a bot's socket is a delivery route rather
+than the meeting itself.
+
+**Zoom's consent banner is Zoom's.** Native recording permission is not a
+create-time flag: the bot joins, and
+`POST /api/v1/bot/{id}/request_recording_permission/` asks the host — which is
+what makes Zoom's own banner fire, so the room is told it is being recorded by
+Zoom rather than by us. Asked once, Zoom only. The answer arrives as
+`bot.recording_permission_allowed` / `_denied`, and
+`automatic_leave.recording_permission_denied_timeout` stops a refused bot from
+sitting in the call billing.
+
+**Config.** `CLAUDE_WORKSPACES_RECALL_API_KEY` env, then Keychain
+(`claude-workspaces-recall-api-key`) — the same order and the same reasoning
+as the AssemblyAI key. `RECALL_REGION` picks the API host and a key is only
+valid in its own region (a mismatch is a 401, which the client's error names).
+`RECALL_PUBLIC_WS_BASE` is the one value that cannot be inferred: **Recall
+dials this server**, and this server binds to localhost behind Tailscale, so
+bots stay disabled until it names a publicly reachable `wss://` origin.
+`RECALL_WEBHOOK_SECRET` verifies status webhooks (Svix HMAC); Recall publishes
+no static IPs to allowlist, so that signature is the only proof available.
+Retention is `{type: "timed", hours: 24}` by default — short, per the owner's
+call. See `.env.example`.
+
+**The AssemblyAI key for this path lives in Recall's dashboard**, per region,
+not in this repo and not in the create-bot body. The Keychain key still serves
+the browser-microphone path. Two places hold an AssemblyAI credential and they
+are for two different paths.
+
+**What is NOT here, deliberately.** No live word ticker for a bot meeting: a
+bot's words have no socket back to the browser (the strip's words come down the
+socket that sent the audio), and pushing them over the doc's SSE channel would
+evict every real doc event from its 200-event replay buffer within a minute.
+What a viewer sees is the bot's state and the notes composing themselves.
+Calendar auto-join is also not here, and it is not a single config call: it
+needs a Google/Outlook OAuth app, per-user OAuth consent, `POST /calendars`,
+and a `calendar.sync_events` webhook consumer before any bot is scheduled.
+
+**Load-bearing gotchas on this path**
+
+- **A server restart loses a bot meeting's stream.** The per-bot token map is
+  in memory, so a restarted process refuses the vendor's reconnect. `dispose`
+  therefore takes every bot OUT of its call rather than leaving one recording
+  into a socket nothing will accept — visible, rather than silently billing
+  two vendors for nothing.
+- **The `/recall/<token>` upgrade does NOT check Origin**, unlike `/audio/`
+  and `/y/`. The caller is a vendor backend; there is no origin, and requiring
+  one would refuse every real connection. The 128-bit per-bot token in the
+  path is the authentication, and it is forgotten when that bot's meeting ends.
+- **`assembly_ai_v3_streaming`, never `assembly_ai_streaming`** — the docs say
+  the older name fails.
+
 ## Persistence
 
 Append-only under `<dataDir>/meetings/<safeDocId>/`: one
 `<meetingId>.jsonl` of settled turns (`{turn, text, ts, speaker?}`; a later
 `{turn, speaker, ts}` line with no text relabels a turn already written, and
-`speaker: null` there un-labels it),
+`speaker: null` there un-labels it; a later line WITH text revises the words
+and REPLACES the turn on read, keeping the position it first settled in —
+that is how the bot path's double final, rough then punctuated, lands as one
+turn reading the punctuated way),
 plus a `meetings.jsonl` index whose start/stop lines fold into one record
 per meeting — and whose `{meetingId, speakers: {A: "Jordan"}}` lines fold
 into the record's name map, last word wins. Nothing deletes; ids sanitized
@@ -426,4 +577,8 @@ stored content.
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
-(UI).
+(UI) · `packages/server/src/recall.ts` (vendor client) ·
+`recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
+`recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
+bot lifecycle) · `packages/core/src/meeting-bot.ts` (wire contract) ·
+`packages/markdown-app/src/meeting-bot-row.ts` (UI).
