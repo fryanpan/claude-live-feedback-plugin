@@ -221,13 +221,16 @@ export function runRefsBackfill(opts: {
 
 /**
  * The live half: one settled doc, scanned the way the backfill would. Wired
- * to the content-revision hook so a link somebody writes into a doc TODAY
- * becomes a ref without anyone remembering a second call. Returns the
+ * to the content-revision hook so a link somebody writes TODAY becomes a
+ * ref without anyone remembering a second call. A `task:<id>` body room
+ * settles here too (a task's or goal's own prose gaining a doc link), and
+ * scans as that ROW — reading the live room rather than the row's `body`
+ * snapshot, which may still be a flush behind at settle time. Returns the
  * workspaces whose rows changed, for the caller's projection refresh.
  */
 export function scanSettledDocRefs(rooms: Rooms, tasks: TaskStore, docId: string): Set<string> {
   const canonical = rooms.resolveDocId(docId);
-  if (taskIdOfBodyDoc(canonical) !== null || canonical.startsWith('ws:')) return new Set();
+  if (canonical.startsWith('ws:')) return new Set();
   const ctx: Ctx = {
     rooms,
     tasks,
@@ -244,6 +247,19 @@ export function scanSettledDocRefs(rooms: Rooms, tasks: TaskStore, docId: string
       workspacesTouched: [],
     },
   };
-  scanDocRefs(ctx, canonical);
+  const rowId = taskIdOfBodyDoc(canonical);
+  if (rowId !== null) {
+    const body = rooms.readMarkdownBody(canonical);
+    if (body !== null) {
+      const task = tasks.getTask(rowId);
+      if (task) for (const id of docLinksIn(rooms, body)) addTaskDocRef(ctx, task, id, false);
+      else {
+        const goal = tasks.getGoalRow(rowId);
+        if (goal) for (const id of docLinksIn(rooms, body)) addGoalDocRef(ctx, goal, id);
+      }
+    }
+  } else {
+    scanDocRefs(ctx, canonical);
+  }
   return ctx.touched;
 }

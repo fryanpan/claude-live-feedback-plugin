@@ -215,6 +215,20 @@ describe('refs backfill (route + settle scan)', () => {
     expect(docRefsOf(handle.tasks.getTask(lateTaskId)?.links)).toEqual([docAId]);
   });
 
+  it('a settled TASK-BODY edit scans that row: a doc link typed into a task lands too', async () => {
+    const proseTaskId = await makeTask('Body gains a doc link later');
+    const bodyRoomId = `task:${proseTaskId}`;
+    const room = handle.rooms.get(bodyRoomId);
+    expect(room).toBeDefined();
+    expect(docRefsOf(handle.tasks.getTask(proseTaskId)?.links)).toEqual([]); // control
+    room?.ydoc.transact(() => {
+      const frag = prose.getProseFragment(room.ydoc);
+      frag.insert(0, prose.parseMarkdownBlocks('Background in /review/refs-doc-b here.'));
+    }, 'agent');
+    handle.rooms.settledContentRevision(bodyRoomId);
+    expect(docRefsOf(handle.tasks.getTask(proseTaskId)?.links)).toEqual([docBId]);
+  });
+
   it("backfilled refs — the goal row's especially — survive a restart", async () => {
     // GoalRow.links is row-owned: `syncGoalRows` must not rebuild it away on
     // hydrate, or every backfill would silently undo itself at the next boot.

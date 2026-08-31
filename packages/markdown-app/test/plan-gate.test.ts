@@ -22,7 +22,7 @@ beforeEach(() => {
 
 interface DocAnswer {
   meta?: { planState?: string };
-  tasks?: Array<{ id: string; planHeld?: boolean }>;
+  tasks?: Array<{ id: string; planHeld?: boolean; workspaceId?: string }>;
 }
 
 /** A fetch stub that answers the doc GET from `answers` in order (the last
@@ -119,6 +119,44 @@ describe('mountPlanGate', () => {
     expect(JSON.parse(String(post?.init?.body))).toEqual({ state: 'approved', author: JORDAN });
     // Approved: not a changed label — no row at all.
     expect(root.querySelector<HTMLElement>('.plan-gate')?.hidden).toBe(true);
+    gate.destroy();
+  });
+
+  it('an approval from ANYWHERE reaches it: a board task event reloads, then closes the stream', async () => {
+    const stub = stubFetch([
+      {
+        meta: { planState: 'pending' },
+        tasks: [{ id: 't-a', planHeld: true, workspaceId: 'w-test' }],
+      },
+      { meta: { planState: 'approved' }, tasks: [{ id: 't-a', workspaceId: 'w-test' }] },
+    ]);
+    const stops: string[] = [];
+    const live: { poke?: () => void } = {};
+    const subscribe = vi.fn((wsId: string, onEvent: () => void) => {
+      live.poke = onEvent;
+      return () => stops.push(wsId);
+    });
+    const gate = mountPlanGate({
+      docId: 'd-remote',
+      root,
+      user: JORDAN,
+      canWrite: true,
+      fetchJson: stub.fetchJson,
+      subscribe,
+    });
+    await gate.ready;
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledWith('w-test', expect.any(Function));
+    expect(root.querySelector<HTMLElement>('.plan-gate')?.hidden).toBe(false); // control
+    // The release's transition event lands: no press happened HERE, yet the
+    // stale Approve must go away…
+    live.poke?.();
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLElement>('.plan-gate')?.hidden).toBe(true),
+    );
+    expect(gate.planState()).toBe('approved');
+    // …and an approved plan needs no stream any more.
+    expect(stops).toEqual(['w-test']);
     gate.destroy();
   });
 });
