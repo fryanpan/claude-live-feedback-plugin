@@ -7,7 +7,6 @@
 import type { ReviewPayload } from '@feedback/core';
 import {
   EFFORT_MIN_CLOSES_FOR_PROJECTION,
-  EFFORT_PACE_WINDOW_DAYS,
   type EffortCalibration,
   type GoalEffortSummary,
   computeEffortCalibration,
@@ -799,6 +798,14 @@ export function goalEffortLabel(
         ? `${summary.unestimatedCount} not scored, ${summary.failedCount} failed`
         : `${summary.unestimatedCount} not scored`;
   const date = (at: number): string => formatEffortDate(at, now, locale);
+  // The pace window is the GOAL's, not a constant, so the sentence has to
+  // read it off the summary: a three-day-old goal saying "the last 14 days'
+  // pace" would be quoting a denominator its own arithmetic never used. It
+  // is rounded to whole days for the reader and never below one, matching
+  // the floor the rate itself is clamped to.
+  const paceWindowDays = Math.max(1, Math.round(summary.paceWindowDays));
+  const paceDays = `${paceWindowDays} day${paceWindowDays === 1 ? '' : 's'}`;
+  const paceWindow = `${paceDays}${paceWindowDays === 1 ? "'s" : "'"}`;
   // The two visible numbers are in different currencies: the bar is CALENDAR
   // time and the figure beside it is Bryan's own attention. Read together
   // unlabelled they invite one reading — "67% done, 40 minutes to go" — and
@@ -839,16 +846,16 @@ export function goalEffortLabel(
     const latest = summary.projectedLatestAt;
     titleParts.push(
       latest !== undefined
-        ? `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${date(summary.projectedFinishAt)}, likely by ${date(latest)}.`
-        : `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${date(summary.projectedFinishAt)}.`,
+        ? `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}, likely by ${date(latest)}.`
+        : `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}.`,
     );
   } else if (summary.projectionOverHorizonDays !== undefined) {
     titleParts.push(
-      `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace this goal is about ${Math.round(summary.projectionOverHorizonDays)} days out — too far for a date to mean anything. Either the remaining tickets are much larger than what has closed, or too little has closed to set a pace.`,
+      `On the last ${paceWindow} pace this goal is about ${Math.round(summary.projectionOverHorizonDays)} days out — too far for a date to mean anything. Either the remaining tickets are much larger than what has closed, or too little has closed to set a pace.`,
     );
   } else {
     titleParts.push(
-      `No finish date yet — that needs ${EFFORT_MIN_CLOSES_FOR_PROJECTION} tickets closed in the last ${EFFORT_PACE_WINDOW_DAYS} days, and ${summary.closesInWindow} ${summary.closesInWindow === 1 ? 'has' : 'have'} closed.`,
+      `No finish date yet — that needs ${EFFORT_MIN_CLOSES_FOR_PROJECTION} tickets closed in the last ${paceDays}, and ${summary.closesInWindow} ${summary.closesInWindow === 1 ? 'has' : 'have'} closed.`,
     );
   }
   if (summary.wallClockRatio.samples > 0) {

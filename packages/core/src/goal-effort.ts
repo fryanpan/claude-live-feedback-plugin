@@ -112,8 +112,34 @@ export const EFFORT_PRIOR_HANDS_ON_RATIO = 1 / 15;
  *  move a goal off the board's own experience. */
 export const EFFORT_SHRINK_K = 5;
 
-/** How far back `pace` looks when turning closes into a finish date. */
+/**
+ * The FURTHEST back `pace` looks when turning closes into a finish date.
+ *
+ * A ceiling rather than the window itself. It used to be both, and dividing
+ * every goal's closes by a flat fourteen days made the denominator a fact
+ * about the calendar instead of a fact about the goal: a goal three days old
+ * with two closes read as `2/14` per day and looked becalmed, while a goal
+ * running since spring read fast because only its last fortnight counted.
+ * Same numerator, and the one that had earned it got the smaller rate.
+ *
+ * So the divisor is now the goal's own ACTIVE WINDOW — see
+ * `goalPaceWindowDays` — and this constant only stops that window growing
+ * without limit. Fourteen days is still the horizon a pace is drawn from,
+ * because a rate learned from what a goal was doing two months ago is not a
+ * rate: it is history.
+ */
 export const EFFORT_PACE_WINDOW_DAYS = 14;
+
+/**
+ * And the floor, because a young goal's window shrinks toward zero.
+ *
+ * A goal whose first ticket was filed an hour ago would otherwise divide its
+ * closes by 1/24 of a day and claim a pace twenty-four times anything it has
+ * actually demonstrated. One day is the shortest span this board is willing
+ * to call a rate — below it, the goal is reported at the pace it managed in
+ * its first day, which is the most a few hours of evidence can honestly say.
+ */
+export const EFFORT_MIN_PACE_WINDOW_DAYS = 1;
 
 /** Below this many closes inside the pace window there is no projection —
  *  a date drawn from one or two closes is a number pretending to be a
@@ -160,6 +186,13 @@ export interface EffortTransition {
  */
 export interface EffortTaskInput {
   status: string;
+  /** When the ticket was filed. Read by `goalPaceWindowDays` only, to date
+   *  the goal it sits under: a goal is as old as its oldest live ticket,
+   *  because the goal record itself never reaches this module. Optional so a
+   *  caller holding a row without one still gets a pace — the window then
+   *  falls back to the ticket's first transition, and to the full
+   *  `EFFORT_PACE_WINDOW_DAYS` when a band carries no timestamp at all. */
+  createdAt?: number;
   /** Soft-deleted. Archived rows are excluded from every sum: a goal is not
    *  more finished because somebody archived the rest of it. */
   archivedAt?: number;
@@ -274,6 +307,63 @@ export function effortClosedAt(task: EffortTaskInput): number | null {
     if (t && t.to === 'done' && Number.isFinite(t.ts)) return t.ts;
   }
   return null;
+}
+
+/**
+ * The earliest moment this module can prove the ticket existed.
+ *
+ * `createdAt` when the caller has one, and the first transition otherwise —
+ * a row that moved must have existed by the time it moved. `null` when
+ * neither is there, which is a row we decline to date rather than one we
+ * date at the epoch: `Math.min` over a stray `0` would make every goal
+ * containing that row fifty-six years old.
+ */
+export function effortFirstSeenAt(task: EffortTaskInput): number | null {
+  if (isPositiveFinite(task.createdAt)) return task.createdAt;
+  let earliest: number | null = null;
+  for (const t of task.transitions ?? []) {
+    if (!Number.isFinite(t.ts) || t.ts <= 0) continue;
+    if (earliest === null || t.ts < earliest) earliest = t.ts;
+  }
+  return earliest;
+}
+
+/**
+ * How many days of history a goal's pace is divided by.
+ *
+ * The goal's own age — first ticket filed to now — clamped into
+ * `[EFFORT_MIN_PACE_WINDOW_DAYS, EFFORT_PACE_WINDOW_DAYS]`. This is the
+ * denominator that used to be a flat fourteen, and the fix is the whole of
+ * ticket "goal pace reflects how long the goal has actually run": two closes
+ * on a three-day-old goal are two closes in three days, not two closes in a
+ * fortnight.
+ *
+ * The goal's OWN creation date would be the better input and this module
+ * never sees it — `summarizeGoalEffort` is handed a list of tickets, by
+ * design, so that the board can recompute it client-side from the rows it
+ * already holds. The oldest live ticket in the band is the closest honest
+ * proxy, and it errs the safe way: a goal cannot have been running before
+ * anything was filed under it, so the window can only come out too SHORT,
+ * never too long. Where it is too short — a goal whose early tickets were
+ * all archived — the clamp still bounds the damage to a single day.
+ *
+ * Archived rows are already out of the list the caller passes (see
+ * `countsTowardEffort`); nothing here re-filters them.
+ */
+export function goalPaceWindowDays(tasks: EffortTaskInput[], now: number): number {
+  let earliest: number | null = null;
+  for (const task of tasks) {
+    const seen = effortFirstSeenAt(task);
+    if (seen === null) continue;
+    if (earliest === null || seen < earliest) earliest = seen;
+  }
+  // A band with no timestamp anywhere gets the old behaviour rather than the
+  // floor: nothing is known about its age, and one day is a CLAIM about a
+  // young goal, not a neutral answer.
+  if (earliest === null) return EFFORT_PACE_WINDOW_DAYS;
+  const days = (now - earliest) / DAY_MS;
+  if (!Number.isFinite(days)) return EFFORT_PACE_WINDOW_DAYS;
+  return Math.min(EFFORT_PACE_WINDOW_DAYS, Math.max(EFFORT_MIN_PACE_WINDOW_DAYS, days));
 }
 
 /**
@@ -584,6 +674,12 @@ export interface GoalEffortReady {
   projectedLatestAt?: number;
   /** Estimate-seconds closed per calendar day over the window. */
   paceSecondsPerDay: number;
+  /** How many days that rate was measured over — the goal's own age, capped
+   *  at `EFFORT_PACE_WINDOW_DAYS` and floored at
+   *  `EFFORT_MIN_PACE_WINDOW_DAYS`. On the summary rather than recomputed by
+   *  each surface, because the sentence a header prints ("on the last N
+   *  days' pace") has to name the same N the arithmetic used. */
+  paceWindowDays: number;
   closesInWindow: number;
   /** How many of the goal's live tickets carry a usable estimate, and how
    *  many do not. The bar covers only the first group and a reader is
@@ -647,7 +743,12 @@ export function summarizeGoalEffort(
   let failedCount = 0;
   let closesInWindow = 0;
   let closedSecondsInWindow = 0;
-  const windowStart = now - EFFORT_PACE_WINDOW_DAYS * DAY_MS;
+  // One window, used for both halves of the pace: the span it is divided by
+  // and the span a close has to fall inside to count. Deriving them
+  // separately is how a rate ends up measured over one period and divided by
+  // another.
+  const paceWindowDays = goalPaceWindowDays(live, now);
+  const windowStart = now - paceWindowDays * DAY_MS;
   for (const task of live) {
     const est = estimateNumbers(task);
     if (!est) {
@@ -684,7 +785,7 @@ export function summarizeGoalEffort(
   }
   const percentComplete =
     totalWallClock > 0 ? Math.round((doneWallClock / totalWallClock) * 100) : 0;
-  const paceSecondsPerDay = closedSecondsInWindow / EFFORT_PACE_WINDOW_DAYS;
+  const paceSecondsPerDay = closedSecondsInWindow / paceWindowDays;
   const summary: GoalEffortReady = {
     kind: 'ready',
     complete: wallClockRemaining === 0,
@@ -692,6 +793,7 @@ export function summarizeGoalEffort(
     handsOnRemainingSeconds: handsOnRemaining,
     wallClockRemainingSeconds: wallClockRemaining,
     paceSecondsPerDay,
+    paceWindowDays,
     closesInWindow,
     estimatedCount,
     unestimatedCount,
