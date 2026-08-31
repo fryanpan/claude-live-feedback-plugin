@@ -14,9 +14,12 @@ import { describe, expect, it } from 'bun:test';
 import type { NotesTurn } from '../src/meeting-notes.ts';
 import {
   MEETING_CAPTURE_ACTOR,
+  OVERLAP_MAX_CHARS,
+  OVERLAP_MAX_TURNS,
   type TaskCaptureCandidate,
   buildTaskCapturePrompt,
   createHaikuTaskCaptureExtractor,
+  overlapWindow,
   parseTaskCaptureReply,
   requestMatchesCandidate,
   runTaskCapture,
@@ -446,5 +449,226 @@ describe('who asked for the task', () => {
     expect(created[1]?.body).not.toContain('Asked for by');
     // The provenance line the row already carried is not displaced by it.
     expect(created[0]?.body).toContain('meeting assistant');
+  });
+});
+
+/**
+ * THE TICK BOUNDARY. A tick ends where the room went quiet, which is not
+ * where an ask ends. Each pass therefore also reads the tail of the one
+ * before it, marked as already read. The three cases below are the measured
+ * failures, one test each, plus the budget that keeps the overlap cheap.
+ *
+ * The transcript is invented — a fictional product, fictional voices. The
+ * repo is public.
+ */
+const priorTick: NotesTurn[] = [
+  {
+    turn: 41,
+    speaker: 'Priya',
+    text: 'The lantern sync retries every ninety seconds and that is the real cost.',
+  },
+];
+const deicticTick: NotesTurn[] = [
+  {
+    turn: 42,
+    speaker: 'Priya',
+    text: 'Can you file a ticket for that one? A small spike would do.',
+  },
+];
+
+describe('an ask that spans two ticks', () => {
+  it('case 1 — a deictic ask can be titled from the previous tick', () => {
+    const { user } = buildTaskCapturePrompt({
+      turns: deicticTick,
+      priorTurns: priorTick,
+      candidates: [],
+    });
+    // The subject of "that one" is in the window, and it is marked as read
+    // rather than presented as fresh speech.
+    expect(user).toContain('Earlier speech (already read):');
+    expect(user).toContain('- Priya: The lantern sync retries every ninety seconds');
+    expect(user.indexOf('Earlier speech')).toBeLessThan(user.indexOf('New speech'));
+    expect(user).toContain('- Priya: Can you file a ticket for that one?');
+    // The control: without the carry this pass sees a pointer and no subject,
+    // which is the bug — the row came out titled "file a ticket for that one".
+    const alone = buildTaskCapturePrompt({ turns: deicticTick, candidates: [] });
+    expect(alone.user).not.toContain('lantern');
+    expect(alone.user).not.toContain('Earlier speech');
+  });
+
+  it('case 1 — the guards vouch for a subject that was spoken one tick ago', () => {
+    const board: TaskCaptureCandidate[] = [
+      { id: 't-lan', title: 'Lantern sync retries too often', status: 'todo' },
+    ];
+    const raw = JSON.stringify({
+      items: [{ kind: 'reference', match: 0 }],
+    });
+    // Nothing in THIS tick's words is lantern-shaped, so the reference guard
+    // used to drop it as a hallucination.
+    expect(parseTaskCaptureReply(raw, board, deicticTick)).toEqual([]);
+    expect(parseTaskCaptureReply(raw, board, deicticTick, priorTick)).toEqual([
+      { kind: 'reference', taskId: 't-lan' },
+    ]);
+  });
+
+  it('case 2 — a trigger-first ask captures the requests in the following tick', async () => {
+    const trigger: NotesTurn[] = [
+      {
+        turn: 50,
+        speaker: 'Priya',
+        text: 'We should file tickets for the next few things I mention.',
+      },
+    ];
+    const subjects: NotesTurn[] = [
+      { turn: 51, speaker: 'Priya', text: 'The lantern badge counts stale invites.' },
+      { turn: 52, speaker: 'Priya', text: 'And the export dialog forgets the chosen range.' },
+    ];
+    const { user } = buildTaskCapturePrompt({
+      turns: subjects,
+      priorTurns: trigger,
+      candidates: [],
+    });
+    expect(user).toContain('We should file tickets for the next few things I mention.');
+
+    // Both rows are filed on THIS pass, and each is attributed to the voice
+    // that asked — a voice that spoke only in the earlier lines.
+    const reply = JSON.stringify({
+      items: [
+        {
+          kind: 'request',
+          title: 'Lantern badge counts stale invites',
+          actionable: true,
+          requester: 'Priya',
+        },
+        {
+          kind: 'request',
+          title: 'Export dialog forgets the chosen range',
+          actionable: true,
+          requester: 'Priya',
+        },
+      ],
+    });
+    const items = parseTaskCaptureReply(reply, [], subjects, trigger);
+    expect(items).toHaveLength(2);
+    expect(items.every((i) => i.kind === 'request' && i.requester === 'Priya')).toBe(true);
+
+    const { board, created } = boardStub();
+    const links = await runTaskCapture(
+      { board, extractor: extractorOf(items) },
+      { workspaceId: 'w-board', docId: 'doc-m', turns: subjects, priorTurns: trigger },
+    );
+    expect(created.map((c) => c.title)).toEqual([
+      'Lantern badge counts stale invites',
+      'Export dialog forgets the chosen range',
+    ]);
+    expect(created[0]?.body).toContain('Asked for by Priya.');
+    expect(links).toHaveLength(2);
+  });
+
+  it('case 3 — the overlap is marked, and last pass’s row is linked, not twinned', async () => {
+    const { system } = buildTaskCapturePrompt({
+      turns: deicticTick,
+      priorTurns: priorTick,
+      candidates: [],
+    });
+    // The marking is what the model is told to do with those lines. Read on
+    // one line: the prompt is hand-wrapped, so a phrase can straddle a break.
+    const rule = system.replace(/\s+/g, ' ');
+    expect(rule).toContain('"Earlier speech" was read last pass');
+    expect(rule).toContain('Every item must draw part of itself from the new lines.');
+
+    // And the deterministic half: the row the previous pass filed is on the
+    // board now, so a re-file of the same ask becomes a link to it.
+    const filed = {
+      id: 't-lan',
+      title: 'Lantern sync retries every ninety seconds',
+      status: 'todo' as const,
+    };
+    const created: Array<{ title: string }> = [];
+    const board = {
+      listTasks: () => [filed],
+      createTask: (_ws: string, opts: import('../src/tasks.ts').CreateTaskOpts) => {
+        created.push({ title: opts.title });
+        return { ok: true as const, task: { id: 't-twin' } };
+      },
+      transition: () => ({ ok: true as const }),
+    };
+    const links = await runTaskCapture(
+      {
+        board,
+        extractor: extractorOf([
+          { kind: 'request', title: 'Lantern sync retries every ninety seconds', actionable: true },
+        ]),
+      },
+      { workspaceId: 'w-board', docId: 'doc-m', turns: deicticTick, priorTurns: priorTick },
+    );
+    expect(created).toHaveLength(0);
+    expect(links).toEqual([
+      { title: filed.title, url: '/workspaces/w-board?task=t-lan', status: 'todo' },
+    ]);
+  });
+});
+
+describe('the overlap window', () => {
+  it('takes the tail of the previous tick, in spoken order', () => {
+    const prior: NotesTurn[] = [
+      { turn: 1, text: 'a'.repeat(200) },
+      { turn: 2, text: 'The middle sentence.' },
+      { turn: 3, text: 'The last sentence.' },
+    ];
+    const window = overlapWindow(prior, deicticTick);
+    expect(window.map((t) => t.turn)).toEqual([2, 3]);
+  });
+
+  it('never spends more than the budget, and always keeps the newest line', () => {
+    const prior: NotesTurn[] = [{ turn: 9, speaker: 'Priya', text: 'word '.repeat(400).trim() }];
+    const window = overlapWindow(prior, deicticTick);
+    expect(window).toHaveLength(1);
+    const kept = window[0]?.text ?? '';
+    expect(kept.length).toBeLessThanOrEqual(OVERLAP_MAX_CHARS);
+    // Clipped from the front: what a pointer points at is what was said last.
+    expect(kept.startsWith('…')).toBe(true);
+  });
+
+  it('caps the number of turns as well as the characters', () => {
+    const prior: NotesTurn[] = Array.from({ length: 20 }, (_, i) => ({ turn: i, text: 'ok.' }));
+    expect(overlapWindow(prior, deicticTick)).toHaveLength(OVERLAP_MAX_TURNS);
+  });
+
+  it('a carried turn is new speech, not overlap — it never appears twice', () => {
+    // A tick whose compose failed hands its turns to the next tick.
+    const carried: NotesTurn[] = [...priorTick, ...deicticTick];
+    expect(overlapWindow(priorTick, carried)).toEqual([]);
+    const { user } = buildTaskCapturePrompt({
+      turns: carried,
+      priorTurns: priorTick,
+      candidates: [],
+    });
+    expect(user).not.toContain('Earlier speech');
+    // Once, as new speech — not once in each half.
+    expect(user.split('lantern sync').length - 1).toBe(1);
+  });
+
+  it('costs the prompt a bounded number of characters, however long the tick was', () => {
+    const long: NotesTurn[] = Array.from({ length: 40 }, (_, i) => ({
+      turn: 100 + i,
+      speaker: 'Priya',
+      text: `A whole sentence of meeting speech, number ${i}, that nobody needs twice.`,
+    }));
+    const withOverlap = buildTaskCapturePrompt({
+      turns: deicticTick,
+      priorTurns: long,
+      candidates: [],
+    });
+    const without = buildTaskCapturePrompt({ turns: deicticTick, candidates: [] });
+    const delta =
+      withOverlap.system.length +
+      withOverlap.user.length -
+      (without.system.length + without.user.length);
+    // The standing instruction plus a full window. Measured at +92 tokens per
+    // tick on the capture model by `scripts/capture-overlap-cost.ts`, which
+    // asks the token counter rather than dividing characters by four; this
+    // bound is the character ceiling that number was taken at.
+    expect(delta).toBeLessThanOrEqual(400);
   });
 });
