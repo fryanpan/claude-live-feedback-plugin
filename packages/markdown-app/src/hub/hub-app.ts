@@ -1860,13 +1860,25 @@ async function main(): Promise<void> {
         // `current` rather than a lookup by task id: it is the item this
         // render drew, so the key that gets advanced past cannot be a
         // different row that happens to share a task.
-        onAnswer: (t, text, optionId) =>
-          finishWalkItem(current, next, () => answerDecision(t, text, optionId)),
+        onAnswer: async (t, text, optionId) => {
+          // The write first, then the advance — and only an ANSWER advances.
+          // A question converted server-side leaves the decision open on the
+          // queue, so settling it would mark done a row still waiting.
+          const wrote = await answerDecision(t, text, optionId);
+          if (wrote === 'asked') return true;
+          return finishWalkItem(current, next, async () => wrote === 'answered');
+        },
         // Not a finish either: nothing was answered, and the card stays put
         // with the note that the item is now waiting on its owner.
         onAskOnItem: (item, phrase, question) => askOnReviewItem(item, phrase, question),
-        onReply: (item, text, optionId) =>
-          finishWalkItem(item, next, () => replyToReviewItem(item, text, optionId)),
+        onReply: async (item, text, optionId) => {
+          // Same split as `onAnswer`: a reply the server read as a question
+          // holds the card with its waiting note (`replyToReviewItem` sets the
+          // hold) instead of settling and advancing past an unanswered ask.
+          const wrote = await replyToReviewItem(item, text, optionId);
+          if (wrote === 'asked') return true;
+          return finishWalkItem(item, next, async () => wrote === 'answered');
+        },
         onOpenItem: (item) => openFromWalk((back) => openReviewItem(item, back)),
         // Same one-step close-then-open as `onOpenItem`, aimed at the thread —
         // and the same doc jump underneath when the item has no thread on a
@@ -2362,7 +2374,11 @@ async function main(): Promise<void> {
 
   /** Resolves to whether the answer LANDED — the walkthrough advances on that
    *  and on nothing else, and the composer keeps the text until it hears yes. */
-  async function answerDecision(task: HubTask, text: string, optionId?: string): Promise<boolean> {
+  async function answerDecision(
+    task: HubTask,
+    text: string,
+    optionId?: string,
+  ): Promise<'answered' | 'asked' | false> {
     // Posted with the PERSON's own identity: answer.by shows who decided.
     // `text` is always the verbatim answer — tapping an option sends the
     // option's label as the answer and its id alongside, so nothing about the
@@ -2372,8 +2388,18 @@ async function main(): Promise<void> {
       ...(optionId ? { optionId } : {}),
       author,
     });
-    if (!res.ok) showToast('Recording the answer failed — your words are still in the box');
-    return res.ok;
+    if (!res.ok) {
+      showToast('Recording the answer failed — your words are still in the box');
+      return false;
+    }
+    // The server read the words as a QUESTION and recorded them as a request
+    // for more context — the decision stays open, and nothing was answered,
+    // so the caller must not settle or undo-toast it.
+    if (res.data?.asked === true) {
+      showToast('Sent as a question — the decision stays open until it is answered');
+      return 'asked';
+    }
+    return 'answered';
   }
 
   /**
@@ -2392,9 +2418,10 @@ async function main(): Promise<void> {
     text: string,
     optionId?: string,
   ): Promise<boolean> {
-    const ok = await answerDecision(task, text, optionId);
-    if (!ok) return false;
-    showToast('Answer recorded — Undo is on the ticket');
+    const wrote = await answerDecision(task, text, optionId);
+    if (wrote === false) return false;
+    // A question already toasted for itself, and there is no answer to undo.
+    if (wrote === 'answered') showToast('Answer recorded — Undo is on the ticket');
     // The row itself arrives over the ydoc; this is what moves the panel's
     // own queue on, since the review items are a REST-fed projection.
     await loadReviewItems();
@@ -2496,7 +2523,11 @@ async function main(): Promise<void> {
       showToast('Posting the answer failed — your text is still in the box');
       return false;
     }
-    showToast('Answer posted');
+    // A question converted server-side answered nothing — say what actually
+    // happened. The refreshes below repaint the row as waiting either way.
+    showToast(
+      res.data?.asked === true ? 'Sent as a question — the item stays open' : 'Answer posted',
+    );
     // Both, and in this order: the discussion so a reply appears in the
     // stream below (a ticket-borne answer writes no comment, but the reload
     // is cheap and keeps one path), the review items so the card it answered
@@ -2625,7 +2656,7 @@ async function main(): Promise<void> {
     item: ReviewItem,
     text: string,
     optionId?: string,
-  ): Promise<boolean> {
+  ): Promise<'answered' | 'asked' | false> {
     // ONE spelling of "where does this answer go" (`reviewReplyRequest`): a
     // declared thread item goes through the thread `/answer` route, which
     // posts the SAME reply and additionally records which candidate it came
@@ -2640,11 +2671,28 @@ async function main(): Promise<void> {
       showToast('Posting the reply failed — your text is still in the box');
       return false;
     }
+    // The server read the words as a QUESTION asked back at the item —
+    // nothing was answered. A ticket-borne item is now waiting on its owner,
+    // so hold its card exactly as `askOnReviewItem` does; a thread item stays
+    // where the conversation is either way.
+    if (res.data?.asked === true) {
+      const owner = item.thread?.askedBy ?? 'the owner';
+      if (item.thread?.kind === 'task-review') {
+        state.walkHold = {
+          key: item.key,
+          index: Math.max(0, state.walkIndex),
+          item: { ...item, waiting: { question: text, owner } },
+        };
+      }
+      showToast(`Sent as a question — waiting on ${owner}`);
+      await loadReviewItems();
+      return 'asked';
+    }
     // Refresh BEFORE the advance: the queue has to have dropped the answered
     // item before the new position is computed against it, or the aim lands on
     // a list that still holds the thing just replied to.
     await loadReviewItems();
-    return true;
+    return 'answered';
   }
 
   /**
