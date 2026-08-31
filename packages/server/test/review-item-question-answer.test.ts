@@ -328,6 +328,36 @@ describe('answering with a question asks back instead of closing', () => {
       expect((await queueRows(ws, task.id)).length).toBe(1);
     });
 
+    it('a question after the decision is answered is refused, not recorded', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedTask(ws, {
+        title: 'How should boards share work?',
+        needs: 'decision',
+        body: 'Push rows across, or mirror the whole board?',
+      });
+      await post(`/api/tasks/${task.id}/answer`, {
+        text: 'Mirror the whole board.',
+        author: PERSON,
+      });
+
+      // A stale form: the answer landed from another reader first. The
+      // question must not be swallowed into an infoRequest the answered row
+      // hides — the caller is told the answer stands.
+      const res = await post(`/api/tasks/${task.id}/answer`, {
+        text: 'Why is this important?',
+        author: PERSON,
+      });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error?: string }).error).toBe('answered');
+
+      const stored = (await storedTask(ws, task.id)) as Task & {
+        answer?: { text: string };
+        infoRequests?: Array<{ text: string }>;
+      };
+      expect(stored.answer?.text).toBe('Mirror the whole board.');
+      expect(stored.infoRequests ?? []).toHaveLength(0);
+    });
+
     it('positive control: prose still answers the decision', async () => {
       const ws = await seedWorkspace();
       const task = await seedTask(ws, {

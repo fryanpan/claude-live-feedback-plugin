@@ -7546,6 +7546,17 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             classifyActor(author) === 'person' &&
             answerAsksBack(text)
           ) {
+            // A stale form racing a recorded answer: the derived item is
+            // already 'answered', which outranks the request this would
+            // record — the question would be invisible. Refuse it, same as
+            // the review-item route below.
+            if (taskStore.getTask(taskId)?.answer !== undefined) {
+              return j(409, {
+                error: 'answered',
+                message:
+                  'this decision is already answered — a question cannot displace the recorded answer; undo the answer first, or ask on the task',
+              });
+            }
             const asked = taskStore.requestMoreInfo(taskId, text, { actor: author });
             if (!asked.ok) return j(asked.error === 'not-found' ? 404 : 400, asked);
             return j(200, { asked: true, task: asked.task });
@@ -7749,6 +7760,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // this project does not delete those to tidy a race (codex
               // review).
               const now = taskStore.listReviewItems(taskId).find((r) => r.id === reviewItemId);
+              if (now && reviewItemState(now) === 'answered') {
+                return j(409, {
+                  error: 'answered',
+                  message:
+                    'this item was answered while your question was being posted — it stands as a comment on the item; undo the answer first, or ask on the item’s thread',
+                });
+              }
               if (now && reviewItemState(now) === 'waiting') {
                 const openThreadId = latestThreadedQuestion(now)?.threadId;
                 const owner = now.createdBy.trim() || 'the owner';
