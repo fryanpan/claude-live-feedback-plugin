@@ -62,7 +62,10 @@ describe('POST /api/workspaces/<id>/tasks/batch', () => {
     const G = await seedGoalsOverHttp(
       base,
       workspace.id,
-      [{ key: 'ship', title: '1. Ship', subgoals: [{ key: 'index', title: '1.1 Index' }] }],
+      [
+        { key: 'ship', title: '1. Ship' },
+        { key: 'index', title: '2. Index' },
+      ],
       AGENT,
     );
     return { wsId: workspace.id, G };

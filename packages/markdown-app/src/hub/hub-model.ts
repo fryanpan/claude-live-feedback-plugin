@@ -413,9 +413,7 @@ export function cascadePhrase(tasks: number): string {
  * and what the archived counts are of.
  */
 export function archivedGoals(goals: HubGoal[]): HubGoal[] {
-  return goals
-    .filter(isGoalArchived)
-    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+  return goals.filter(isGoalArchived).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
 }
 
 export function taskVisible(task: HubTask, f: BoardFilters): boolean {

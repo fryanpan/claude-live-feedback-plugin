@@ -77,7 +77,11 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
     expect(newGoalId()).not.toBe(newGoalId());
   });
 
-  it('a subgoal with no id is created too, keyed to its parent', () => {
+  // Subgoals are gone (Bryan, 2026-08-30), but a board written before that is
+  // still on disk and the REST route has callers this build cannot restart —
+  // so a nested payload still LOADS, flattened into bands of its own directly
+  // after the entry that carried them. Each one is minted like any other band.
+  it('a legacy nested payload flattens into bands of its own', () => {
     const ws = store.createWorkspace('board');
     const res = store.setGoalList(ws.id, [{ title: 'Launch', subgoals: [{ title: 'QA pass' }] }], {
       actor: PERSON,
@@ -85,9 +89,12 @@ describe('a goal id is generated, and a caller cannot supply one', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.created.map((c) => c.title)).toEqual(['Launch', 'QA pass']);
-    const parent = res.created[0]?.id;
-    expect(res.created[1]?.parent).toBe(parent);
     expect(res.created[1]?.id).toMatch(GENERATED);
+    // Stored FLAT, in the position the board already drew them, and nothing
+    // nested comes back — the shape is not written back out.
+    const stored = store.getWorkspace(ws.id)?.goals ?? [];
+    expect(stored.map((g) => g.title)).toEqual(['Launch', 'QA pass']);
+    expect(stored.every((g) => !('subgoals' in g))).toBe(true);
   });
 
   it('an id this board does not hold is REFUSED, and nothing is written', () => {

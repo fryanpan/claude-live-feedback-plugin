@@ -2105,9 +2105,7 @@ async function main(): Promise<void> {
    *  server's own walk, so the sentence in the confirmation and the write that
    *  follows it cannot disagree. `null` = the question could not be asked, and
    *  the panel then refuses to offer Archive at all. */
-  async function goalCascadeCount(
-    goalId: string,
-  ): Promise<{ tasks: number } | null> {
+  async function goalCascadeCount(goalId: string): Promise<{ tasks: number } | null> {
     const res = await fetchJson<{ taskIds?: string[] }>(
       `/api/goals/${encodeURIComponent(goalId)}/cascade`,
     );

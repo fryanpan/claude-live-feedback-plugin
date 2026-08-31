@@ -45,11 +45,7 @@ const PERSON = { id: 'known-jordan', name: 'Jordan', kind: 'known' };
 const AGENT = { id: 'agent-search-revamp', name: 'Search Revamp', kind: 'known' };
 
 const GOAL_SPEC: SeedGoalSpec[] = [
-  {
-    key: 'launch',
-    title: '1. Ship the launch post',
-    subgoals: [{ key: 'launchQa', title: '1.1 QA pass' }],
-  },
+  { key: 'launch', title: '1. Ship the launch post' },
   { key: 'perf', title: '2. Cut page weight' },
 ];
 
@@ -70,12 +66,11 @@ describe('TaskStore.addGoal', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  function seed(): { wsId: string; launch: string; perf: string; launchQa: string; task: string } {
+  function seed(): { wsId: string; launch: string; perf: string; task: string } {
     const ws = store.createWorkspace('search-revamp');
     const ids = seedGoals(store, ws.id, GOAL_SPEC, PERSON);
     const launch = ids.launch as string;
     const perf = ids.perf as string;
-    const launchQa = ids.launchQa as string;
     const res = store.createTask(ws.id, {
       title: 'draft the announcement',
       goal: launch,
@@ -83,14 +78,14 @@ describe('TaskStore.addGoal', () => {
     });
     if (!res.ok) throw new Error(`fixture create failed: ${res.error}`);
     events.length = 0;
-    return { wsId: ws.id, launch, perf, launchQa, task: res.task.id };
+    return { wsId: ws.id, launch, perf, task: res.task.id };
   }
 
   const goalIds = (wsId: string): string[] =>
     (store.getWorkspace(wsId)?.goals ?? []).map((g) => g.id);
 
   it('appends a band with a fresh id, leaving every other band and its tasks alone', () => {
-    const { wsId, launch, perf, launchQa, task } = seed();
+    const { wsId, launch, perf, task } = seed();
     // Positive control: the probe can see the pre-existing bands and the work
     // filed under one of them right now.
     expect(goalIds(wsId)).toEqual([launch, perf]);
@@ -106,10 +101,8 @@ describe('TaskStore.addGoal', () => {
     expect(res.goal.id).not.toBe(CHORES_GOAL_ID);
 
     expect(goalIds(wsId)).toEqual([launch, perf, res.goal.id]);
-    // Nothing moved, and the subgoal rode along.
+    // Nothing moved.
     expect(store.getTask(task)?.goal).toBe(launch);
-    const goals = store.getWorkspace(wsId)?.goals ?? [];
-    expect(goals[0]?.subgoals?.map((s) => s.id)).toEqual([launchQa]);
   });
 
   it('inserts directly after a named band', () => {
@@ -131,7 +124,7 @@ describe('TaskStore.addGoal', () => {
   });
 
   it('refuses an `after` that names nothing on the list rather than silently appending', () => {
-    const { wsId, launch, perf, launchQa } = seed();
+    const { wsId, launch, perf } = seed();
     const before = goalIds(wsId);
     const res = store.addGoal(
       wsId,
@@ -141,15 +134,15 @@ describe('TaskStore.addGoal', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBe('after-not-found');
-    // A SUBGOAL id is the realistic near-miss, and it is refused for the same
-    // reason: display flattens subgoals, but the list this splices is the
-    // top-level one, so there is no position for it to mean.
-    const sub = store.addGoal(
+    // `chores` is the realistic near-miss — a real, resolvable goal id that
+    // is nonetheless not IN the ordered list, so it names no position this
+    // call could splice at.
+    const reserved = store.addGoal(
       wsId,
-      { title: '3. Cut support load', after: launchQa },
+      { title: '3. Cut support load', after: CHORES_GOAL_ID },
       { actor: PERSON },
     );
-    expect(sub.ok).toBe(false);
+    expect(reserved.ok).toBe(false);
     // Neither refusal wrote anything.
     expect(goalIds(wsId)).toEqual(before);
     expect(goalIds(wsId)).toEqual([launch, perf]);
