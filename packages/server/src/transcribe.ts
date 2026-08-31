@@ -61,6 +61,14 @@ export interface EngineTurn {
 
 export interface TranscriptionOpenOpts {
   sampleRate: number;
+  /**
+   * Ask the engine who is speaking. Off is the default state of the world —
+   * one person at a desk — and it is off that the caller must OPT OUT of,
+   * because diarization is billed per session-hour on top of the base rate.
+   * Required rather than optional so every call site states its intent and a
+   * new one cannot silently start spending.
+   */
+  detectSpeakers: boolean;
   onTurn: (turn: EngineTurn) => void;
   onError: (message: string) => void;
 }
@@ -122,6 +130,13 @@ export function createMockTranscriptionEngine(
       let index = 0;
       let revealed = 0;
       let closed = false;
+      /**
+       * The mock diarizes only when it was asked to, exactly as the real
+       * engine does — so a test can prove the flag REACHED an engine by
+       * watching the labels disappear. A mock that always labelled would let
+       * a solo session pay for labels forever with every suite green.
+       */
+      const labelling = opts.detectSpeakers;
 
       const settle = (): void => {
         const turn = script[index];
@@ -135,7 +150,7 @@ export function createMockTranscriptionEngine(
         revealed = 0;
       };
       const speakerOf = (turn: MockScriptTurn): { speaker?: string } =>
-        turn.speaker !== undefined ? { speaker: turn.speaker } : {};
+        labelling && turn.speaker !== undefined ? { speaker: turn.speaker } : {};
 
       return Promise.resolve({
         send(): void {

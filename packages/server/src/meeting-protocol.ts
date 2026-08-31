@@ -25,8 +25,10 @@
 
 import {
   AudioChunkLedger,
+  type CaptureMode,
   type MeetingServerMessage,
   type MeetingTimingMark,
+  detectsSpeakers,
   parseMeetingClientMessage,
 } from '@feedback/core';
 import {
@@ -193,7 +195,7 @@ export class MeetingRelay {
       // Synchronously, before the handshake is awaited: audio may arrive
       // during it, and those chunks belong in the ledger too.
       conn.wantsTiming = msg.timing === true;
-      this.track(this.start(ws, conn, msg.sampleRate));
+      this.track(this.start(ws, conn, msg.sampleRate, msg.mode));
       return;
     }
     if (msg.type === 'name_speaker') {
@@ -293,7 +295,12 @@ export class MeetingRelay {
     }
   }
 
-  private async start(ws: MeetingClient, conn: Conn, sampleRate: number): Promise<void> {
+  private async start(
+    ws: MeetingClient,
+    conn: Conn,
+    sampleRate: number,
+    mode: CaptureMode,
+  ): Promise<void> {
     if (conn.state !== 'idle') return;
     const docId = ws.data.docId;
     const engine = this.deps.engine;
@@ -307,7 +314,7 @@ export class MeetingRelay {
     }
     // Claim the doc BEFORE the handshake: two sockets starting at once would
     // otherwise both pass the check and both open a billed session.
-    const meeting = this.deps.store.start({ docId, engine: engine.name, sampleRate });
+    const meeting = this.deps.store.start({ docId, engine: engine.name, sampleRate, mode });
     if (!meeting) {
       this.send(ws, {
         type: 'unavailable',
@@ -341,6 +348,9 @@ export class MeetingRelay {
     try {
       session = await engine.open({
         sampleRate,
+        // The mode is the only thing that turns diarization on, and it turns
+        // it on for the ENGINE SESSION — there is no later switch.
+        detectSpeakers: detectsSpeakers(mode),
         onTurn: (turn) => {
           this.send(ws, {
             type: 'transcript',
@@ -428,6 +438,9 @@ export class MeetingRelay {
       meetingId: meeting.meetingId,
       startedAt: meeting.startedAt,
       engine: engine.name,
+      // What was actually opened, so the strip reports the session being
+      // billed rather than the one it asked for.
+      mode,
     });
   }
 

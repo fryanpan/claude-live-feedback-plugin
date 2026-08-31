@@ -37,12 +37,43 @@ export function meetingSocketPath(docId: string): string {
   return `/audio/${encodeURIComponent(docId)}`;
 }
 
+/**
+ * Who the microphone is expected to hear.
+ *
+ * `solo` is the default and the common case — Bryan talking to himself over a
+ * doc — and it is the CHEAP one: diarization is a per-session surcharge on
+ * top of the streaming rate ($0.12/hr against $0.15, so a 1.8x bill), and
+ * guessing at a second speaker who is not in the room buys nothing. Nothing
+ * announces an in-person conversation, so `conversation` is asked for: a
+ * button that says this is a conversation, or the strip's own switch.
+ */
+export type CaptureMode = 'solo' | 'conversation';
+
+/** The mode a capture runs in when nobody said otherwise. */
+export const DEFAULT_CAPTURE_MODE: CaptureMode = 'solo';
+
+/** Whether this mode pays for speaker labels. The one place that decides. */
+export function detectsSpeakers(mode: CaptureMode): boolean {
+  return mode === 'conversation';
+}
+
+/** A capture mode, or the default for anything else. */
+export function parseCaptureMode(raw: unknown): CaptureMode {
+  return raw === 'conversation' ? 'conversation' : DEFAULT_CAPTURE_MODE;
+}
+
 /** Client → server. Sent as a JSON text frame; audio is sent as binary frames. */
 export type MeetingClientMessage =
   | {
       type: 'start';
       sampleRate: number;
       encoding: typeof MEETING_AUDIO_ENCODING;
+      /**
+       * Absent means `solo`: a client built before modes existed, and a
+       * person who never asked for the surcharge, get the same cheap
+       * session.
+       */
+      mode: CaptureMode;
       /**
        * Measure this meeting's stage latencies (`?timing=1` on the address).
        * Absent on every ordinary meeting, and a server that is not asked
@@ -92,8 +123,12 @@ export type MeetingUnavailableReason =
 
 /** Server → client. Always a JSON text frame. */
 export type MeetingServerMessage =
-  /** Transcription is live; words follow. */
-  | { type: 'ready'; meetingId: string; startedAt: number; engine: string }
+  /**
+   * Transcription is live; words follow. `mode` is what the SERVER opened,
+   * echoed back so the strip reports the session that is actually running
+   * (and being billed) rather than the one the client asked for.
+   */
+  | { type: 'ready'; meetingId: string; startedAt: number; engine: string; mode: CaptureMode }
   /** No words will follow. The socket stays open so the strip can say why. */
   | { type: 'unavailable'; reason: MeetingUnavailableReason; message: string }
   /**
@@ -161,6 +196,10 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       type: 'start',
       sampleRate: Math.round(rate),
       encoding: MEETING_AUDIO_ENCODING,
+      // A missing or unreadable mode is `solo` rather than a refused frame:
+      // the field arrived after the meeting did, and the fallback is the one
+      // that spends nothing.
+      mode: parseCaptureMode(m.mode),
       // Only the literal `true` opts in: a stray truthy value on this frame
       // should read as a client that does not know about timing, not as one
       // asking for it.

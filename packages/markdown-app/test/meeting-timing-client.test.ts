@@ -9,7 +9,11 @@
  * exactly the arithmetic that must not depend on when the frame happened to
  * land.
  */
-import { MEETING_AUDIO_ENCODING, type MeetingTimingMark } from '@feedback/core';
+import {
+  DEFAULT_CAPTURE_MODE,
+  MEETING_AUDIO_ENCODING,
+  type MeetingTimingMark,
+} from '@feedback/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type MeetingSocket, mountMeetingStrip, parseTimingMark } from '../src/meeting-strip.ts';
 import { createTimingSession, wantsLatencyTiming } from '../src/meeting-timing-client.ts';
@@ -263,10 +267,12 @@ describe('the strip only measures when it is asked — and the control that prov
     expect(root.querySelector('.meeting-timing-row')).toBeNull();
     expect(root.classList.contains('has-timing')).toBe(false);
     const start = JSON.parse(socket.sent[0] as string) as Record<string, unknown>;
+    // Whole-shape, so `timing` being absent is asserted rather than assumed.
     expect(start).toEqual({
       type: 'start',
       sampleRate: 16_000,
       encoding: MEETING_AUDIO_ENCODING,
+      mode: DEFAULT_CAPTURE_MODE,
     });
   });
 

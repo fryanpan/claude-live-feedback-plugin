@@ -2,6 +2,7 @@ import { renderDiffNav, wireDiffNavRefresh } from '../diff-nav.ts';
 import type { MountContext } from '../mount-context.ts';
 import { startReadingTracker } from '../reading-tracker.ts';
 import { el, mountReviewChrome } from '../review-chrome.ts';
+import { lockDocToReading } from '../signin/write-gate.ts';
 import { renderWorkspaceTree, wireWorkspaceTreeRefresh } from '../workspace-tree.ts';
 import { createCodeEditor } from './code-editor.ts';
 import { isEditableFileMember } from './editable-policy.ts';
@@ -100,12 +101,18 @@ export async function mountCode(
     diffTarget: ctx.diffTarget,
     relPath: ctx.relPath,
     diffStatus: diffInfo?.status,
+    canWrite: ctx.canWrite,
   });
   if (editable) {
     awareness.setLocalStateField('user', { name: user.name, color: user.color });
     document.body.classList.add('code-editable');
     scope.onCleanup(() => document.body.classList.remove('code-editable'));
   }
+  // Same as the redline and the markdown surfaces: a locked surface must not
+  // wear an editor's chrome. Keyed on the ANSWER, not on `editable` — a
+  // pinned review is read-only for everybody and has always said so honestly;
+  // it is a refused browser that needs telling why.
+  if (!ctx.canWrite) lockDocToReading({});
 
   const editorMount = el<HTMLElement>('editor');
   const commentPill = el<HTMLButtonElement>('comment-pill');

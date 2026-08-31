@@ -115,6 +115,20 @@ export const widgetStyles = `
   align-items: center;
 }
 .auth-signin:hover { border-color: #2e7dd7; color: #2e7dd7; }
+/* Shown when the workspace refuses an unsigned comment. Same 44px target as
+   the sign-in button — it is the same action, arriving after the fact. */
+.auth-required {
+  font-size: 12px;
+  color: #2e7dd7;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
 .auth-signout {
   background: none;
   border: none;

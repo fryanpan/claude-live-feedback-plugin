@@ -254,6 +254,26 @@ button {
   color: #fff;
   border-color: var(--accent);
 }
+/* A control that cannot be used has to LOOK unusable. Same treatment as
+   `.comment-nav:disabled` above, hoisted to every icon button, because the
+   sign-in gate disables the edit and Suggesting toggles and they sat
+   pixel-identical to the live controls beside them. A `title` is not a
+   substitute: the primary device here is an iPad, where nothing hovers.
+   The `:hover` and pressed-state overrides are the point — without them a
+   disabled toggle still lights up under a pointer and a disabled
+   `aria-pressed` toggle still paints itself accent. */
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.icon-btn:disabled:hover {
+  background: var(--bg);
+}
+.icon-btn:disabled[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  border-color: var(--border);
+}
 /* In view mode, the editor is read-only — formatting commands are no-ops
    and the Aa toggle would just confuse. Hide it. The 💬 (threads) and
    ✏️ (edit-mode) buttons stay useful. */
@@ -1081,6 +1101,20 @@ body.hub-body {
 .hub-btn:hover {
   background: var(--bg-hover);
 }
+/* Unusable has to look unusable — see `.icon-btn:disabled`. The `:hover`
+   override is the load-bearing half on a pointer device, and the reason this
+   is not left to a `title` is that the primary device here has no hover at
+   all. */
+.hub-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.hub-btn:disabled:hover {
+  background: var(--bg-panel);
+}
+.hub-btn-primary:disabled:hover {
+  background: var(--accent);
+}
 .hub-btn-primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -1314,7 +1348,8 @@ body.hub-body {
 /* The same stroked glyphs the rail wears, sized as boxes — decoration, not a
    target (see `.voice-mic svg`). */
 .hub-quick-new svg,
-.hub-huddle-start svg {
+.hub-huddle-start svg,
+.hub-conversation-start svg {
   display: block;
   width: 15px;
   height: 15px;
@@ -6784,6 +6819,38 @@ body.is-reading-width #editor > .ProseMirror {
   border-radius: var(--radius-pill);
   cursor: pointer;
 }
+
+/* "Detect multiple speakers" — a switch, not a second Start. Unpressed it is
+   the quiet default (one voice, no diarization bill); pressed it fills, the
+   way the strip's own live state does. The label never changes with the
+   state: `aria-pressed` carries that, and a button whose words flip between
+   the state and the action reads as neither.
+
+   Same 36px floor as the toggle beside it (design-mobile.md) and nothing
+   inside it clips — the tag's lesson higher up this section. */
+.meeting-mode {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-mode[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  color: var(--accent);
+}
+.meeting-mode:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
 @media (min-width: 721px) {
   /* The strip is one row here, so the micro-row stops being a box and its
      children join the strip's own flex line. That flattens them in SOURCE
@@ -6798,8 +6865,11 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-caption {
     order: 2;
   }
-  .meeting-toggle {
+  .meeting-mode {
     order: 3;
+  }
+  .meeting-toggle {
+    order: 4;
   }
   /* The strip runs as a ROW here, so wrapping puts the readout on the next
      LINE and the bar's fixed 40px has to give. Both of these are scoped to
@@ -6814,7 +6884,8 @@ body.is-reading-width #editor > .ProseMirror {
   }
   .meeting-timing-row {
     flex: 0 0 100%;
-    order: 4;
+    /* Last on the flattened line, so it is the part that wraps away. */
+    order: 5;
   }
 }
 @media (max-width: 720px) {
@@ -6843,8 +6914,18 @@ body.is-reading-width #editor > .ProseMirror {
   .meeting-caption {
     height: 2.9em;
   }
-  .meeting-toggle {
+  /* The stacked micro-row: the mode sits with the clock and Start is pushed
+     to the far edge. Below 380px the words and both controls no longer fit on
+     one line, so the row wraps rather than squeezing the tap targets. */
+  .meeting-mode {
     margin-left: auto;
+  }
+  .meeting-toggle {
+    margin-left: 8px;
+  }
+  .meeting-strip-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
   /* ---- The strip yields while an editor has focus ----
      Bryan, from his phone after tapping a table cell: "the keyboard and voice
@@ -6873,8 +6954,11 @@ body.is-reading-width #editor > .ProseMirror {
   body[data-edit-viewport="compact"] .meeting-caption {
     display: none;
   }
-  /* Same rule as the caption: while somebody is typing, the panel keeps the
-     recording state and drops everything else. */
+  /* A live strip keeps the dot, the clock and Stop. The mode switch is
+     disabled for the length of a meeting anyway, and neither it nor the
+     readout has room to spare while a keyboard is up — the caption's rule,
+     applied to everything that is not the recording state. */
+  body[data-edit-viewport="compact"] .meeting-mode,
   body[data-edit-viewport="compact"] .meeting-timing-row {
     display: none;
   }
@@ -9910,6 +9994,77 @@ a.signin-link {
     height: 50px;
     font-size: 20px;
   }
+}
+
+/* ---------- Sign-in required (a refused write, and the standing notice) ----
+   Lives in this section rather than a new banner at EOF: it is sign-in UI,
+   and it reuses the identity prompt's scrim/card wholesale — only the primary
+   action differs (an <a>, because it navigates). The bar is fixed to the
+   bottom so it never covers the top bar's controls, and it wraps rather than
+   scrolls at 430px. */
+.signin-required-go {
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.signin-required-go:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+/* An in-flow row, not an overlay. It used to be `position: fixed` under the
+   viewport top, offset by the doc topbar's measured height; on the board
+   there is no `#topbar` to measure, so it fell back to a constant and landed
+   on the action row, and at 430px on the doc it covered the H1 and the format
+   bar. A fixed box over a page covers something at some width — the fix is to
+   take space rather than to find a band that looks free. `mountSignInBar`
+   puts it under each surface's header. */
+.signin-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  /* Reads as chrome attached to the header above it, which is what it is. */
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+/* The doc shell declares its rows, so the row this bar occupies has to be
+   declared too — `#shell`'s `48px 1fr` has no track for a third child, and
+   without this the bar is laid into the topbar's 48px and clipped. */
+body.signin-gated #shell {
+  grid-template-rows: auto 48px 1fr;
+}
+/* Fallback for a surface with no header to sit under (see mountSignInBar).
+   Bottom-docked, because the top of an unknown page is the band most likely
+   to already be spoken for. */
+.signin-bar--floating {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(12px + var(--safe-bottom, 0px));
+  z-index: 900;
+  max-width: min(560px, calc(100vw - 24px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.signin-bar a {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.signin-bar a:hover,
+.signin-bar a:focus-visible {
+  text-decoration: underline;
 }
 
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */

@@ -21,6 +21,19 @@ export interface EnsureIdentityOptions {
    *  can answer without a server; the default fetches the real route and
    *  treats any failure as "not signed in". */
   fetchSession?: () => Promise<SessionAnswer>;
+  /**
+   * Do not ask this browser to type a name.
+   *
+   * Set when the server requires a session to write (see
+   * signin/write-gate.ts). A typed name is worth nothing there — the server
+   * will refuse every write it labels — so asking for one is a modal that
+   * blocks boot to collect an answer nobody can use, and it arrives instead
+   * of the one question that matters. The caller shows the sign-in route;
+   * this option just gets the pointless prompt out of the way, leaving the
+   * stored-or-anonymous identity that labels a READER, which is what this
+   * person is.
+   */
+  suppressNamePrompt?: boolean;
 }
 
 /** Bounded, because this gates the editor's first packet: a server that
@@ -66,7 +79,7 @@ export async function ensureUserIdentity(
     storeUserName(storage, signedIn.name);
     return signedIn;
   };
-  if (!needsNamePrompt(asParam, storage)) {
+  if (opts.suppressNamePrompt || !needsNamePrompt(asParam, storage)) {
     const signedIn = await session;
     return signedIn ? adopt(signedIn) : resolveUser(asParam, storage);
   }

@@ -30,7 +30,8 @@
  * SPEAKER LABELS (https://www.assemblyai.com/docs/streaming/label-speakers-and-separate-channels
  * and the streaming API reference, read 2026-08-29): `speaker_labels=true`
  * on the same URL, supported on every streaming model, +$0.12/hr on top of
- * the session rate. Each `Turn` then carries `speaker_label` — `"A"`, `"B"`,
+ * the session rate — SENT ONLY WHEN THE CAPTURE SAID IT WAS A CONVERSATION,
+ * because a session's config is its URL and cannot be changed once open. Each `Turn` then carries `speaker_label` — `"A"`, `"B"`,
  * or a placeholder (`"PENDING"` / `"UNKNOWN"`) for a turn under about a
  * second of audio — and a `SpeakerRevision` arrives before `Termination`
  * listing the turns whose label the full-session pass changed. The
@@ -61,6 +62,64 @@ const ENCODING = 'pcm_s16le';
 const CONNECT_TIMEOUT_MS = 10_000;
 /** How long `Terminate` gets to produce a `Termination` before we hang up. */
 const FLUSH_TIMEOUT_MS = 5_000;
+
+/**
+ * The engine's own ceiling on one streaming session.
+ *
+ * "Sessions are capped at 3 hours" — a session left open is closed by the
+ * server with code 3008, "Session Expired: Maximum session duration
+ * exceeded", and billed for the full three hours
+ * (https://www.assemblyai.com/docs/streaming/common-session-errors-and-closures
+ * and the streaming API reference, read 2026-08-30). There is no inactivity
+ * limit unless one is asked for — `inactivity_timeout` is optional and this
+ * adapter does not send it — so a long QUIET session is not the problem; the
+ * three-hour wall is, and it is a wall a solo working session reaches.
+ *
+ * Used only when the engine's `Begin` did not say when this session expires.
+ */
+const MAX_SESSION_MS = 3 * 60 * 60 * 1_000;
+
+/**
+ * How far ahead of expiry a session is replaced. Long enough that the
+ * handshake, a retry and the old session's flush all fit inside it.
+ */
+const ROLLOVER_MARGIN_MS = 60_000;
+
+/** Never schedule a rollover closer than this, however near expiry looks. */
+const MIN_ROLLOVER_MS = 1_000;
+
+/**
+ * `expires_at` as milliseconds. The engine sends a Unix timestamp; seconds
+ * and milliseconds are told apart by size rather than trusted from the docs,
+ * because reading seconds as milliseconds would schedule the rollover in
+ * 1970 and roll the session over immediately, on repeat.
+ */
+export function expiryFrom(raw: unknown, now = Date.now()): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return now + MAX_SESSION_MS;
+  const ms = raw >= 1e12 ? raw : raw * 1000;
+  // A timestamp in the past (a clock skew, a fixture) means "no useful
+  // deadline", not "roll over now and forever".
+  return ms > now ? ms : now + MAX_SESSION_MS;
+}
+
+/**
+ * One engine socket. A meeting is a CHAIN of these — a new one is opened
+ * before the current one hits its three-hour cap, and turn ids continue
+ * across the join because each leg remembers the ids its own turns got.
+ */
+interface Leg {
+  socket: EngineSocket;
+  /** This session's `turn_order` to the id the turn left the adapter under. */
+  ids: Map<number, number>;
+  /** When the engine says this session will be closed for exceeding its cap. */
+  expiresAt: number;
+  /** Settled turns, by THIS session's order, for `SpeakerRevision`. */
+  settled: Map<number, { text: string; speaker?: string }>;
+  /** The socket is finished: terminated, closed, or failed. */
+  done: boolean;
+  /** We sent `Terminate`, so the close that follows is the normal path. */
+  terminating: boolean;
+}
 
 /**
  * The slice of a WebSocket this engine uses, with the handlers supplied at
@@ -104,6 +163,14 @@ export interface AssemblyAiOptions {
   socketFactory?: EngineSocketFactory;
   connectTimeoutMs?: number;
   flushTimeoutMs?: number;
+  /** How far before expiry a session is rolled over. Defaults to a minute. */
+  rolloverMarginMs?: number;
+  /**
+   * The rollover timer. Injected so a test fires it instead of waiting three
+   * hours; the flush timer is deliberately NOT on this clock, so a test that
+   * drives a rollover still exercises the real teardown timing.
+   */
+  schedule?: (ms: number, fn: () => void) => () => void;
 }
 
 /**
@@ -131,8 +198,16 @@ export function resolveAssemblyAiKey(
   return null;
 }
 
-/** The connect URL, exported so a test reads the real one rather than a copy. */
-export function streamingUrl(sampleRate: number): string {
+/**
+ * The connect URL, exported so a test reads the real one rather than a copy.
+ *
+ * `detectSpeakers` is the whole diarization decision and it is a PARAMETER,
+ * not a constant: the parameter is priced per session-hour on top of the base
+ * rate, so a session that nobody said was a conversation must not carry it.
+ * There is no way to add it to a session already open — the URL IS the
+ * configuration — which is why the mode is chosen before the mic starts.
+ */
+export function streamingUrl(sampleRate: number, detectSpeakers: boolean): string {
   const params = new URLSearchParams({
     sample_rate: String(sampleRate),
     encoding: ENCODING,
@@ -140,25 +215,23 @@ export function streamingUrl(sampleRate: number): string {
     // unpunctuated text, and the transcript a notes agent reads later is the
     // rough draft rather than the sentence.
     format_turns: 'true',
-    // Who said it. Priced per session hour on top of the base rate (see the
-    // header); without it every turn reads as one voice.
-    speaker_labels: 'true',
   });
+  // Who said it. Priced per session hour on top of the base rate (see the
+  // header); without it every turn reads as one voice, which is the right
+  // answer when there IS one voice.
+  if (detectSpeakers) params.set('speaker_labels', 'true');
   return `${STREAM_URL}?${params.toString()}`;
 }
 
 /**
- * Audio offset of the END of the last word in a `Turn`, in milliseconds of
- * the engine's stream — or undefined when the frame carries no word timings.
+ * Where in the engine's stream this frame's last word ends, in milliseconds.
  *
- * The `words` array is documented on every Turn (each entry `text`, `start`,
- * `end`, `confidence`, `word_is_final`, and `speaker` once diarization has
- * decided; api-reference/streaming-api, re-read 2026-08-30), but this is the
- * one field in the protocol we read for measurement rather than for words on
- * a screen, so it is guarded like anything else that could be absent: a
- * missing or malformed array costs the frame its latency sample and nothing
- * else. Partials are included deliberately — a partial IS the newest word
- * reaching the screen, which is the experience being measured.
+ * This is the correlation key the latency measurement runs on: audio goes up
+ * as raw PCM with no sequence number in it, so nothing in a frame can be
+ * echoed back — but an offset names the chunk that carried it arithmetically,
+ * from the relay's own byte count. Missing or unreadable is `undefined` and
+ * costs that frame its sample; an invented number would name the wrong chunk
+ * and land in the percentiles looking like a measurement.
  */
 export function audioEndMsFromTurn(msg: Record<string, unknown>): number | undefined {
   const words = msg.words;
@@ -223,36 +296,39 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
   const makeSocket = opts.socketFactory ?? defaultSocketFactory;
   const connectTimeoutMs = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   const flushTimeoutMs = opts.flushTimeoutMs ?? FLUSH_TIMEOUT_MS;
+  const rolloverMarginMs = opts.rolloverMarginMs ?? ROLLOVER_MARGIN_MS;
+  const schedule = opts.schedule ?? timer;
 
   return {
     name: 'assemblyai',
     open(sessionOpts: TranscriptionOpenOpts): Promise<TranscriptionSession> {
       return new Promise<TranscriptionSession>((resolve, reject) => {
-        let began = false;
-        let done = false;
         /**
-         * We sent `Terminate` and are waiting for the flush. Without this, the
-         * socket closing after a Terminate — which is the NORMAL end of every
-         * meeting — is indistinguishable from a mid-sentence disconnect, and
-         * every clean stop reports an error the strip would show the speaker.
+         * The leg carrying audio right now. Every other leg is either the one
+         * being handed over from (flushing its last turn) or gone.
          */
-        let terminating = false;
-        /** Resolves `close()` once the engine says it has flushed. */
+        let active: Leg | null = null;
+        /** `close()` was called: no more rollovers, and this is the last leg. */
+        let closing = false;
+        /**
+         * The next turn id to hand out. Ids are allocated the first time a
+         * leg emits a given `turn_order` and remembered per leg, which is
+         * what keeps a rollover invisible to everything downstream: a turn id
+         * is the identity a transcript revises in place and the key the
+         * record is written under, and a fresh AssemblyAI session starts
+         * counting at zero again.
+         *
+         * Allocating on first emission rather than from a per-leg base is
+         * what makes the handover safe. The two legs overlap: the old one is
+         * flushing while the new one is already carrying audio, and it can
+         * still open a turn of its own in that window. A base fixed at
+         * rollover time would give that turn the id the new leg's first turn
+         * also got, and downstream one would silently overwrite the other.
+         */
+        let nextId = 0;
+        let cancelRollover: (() => void) | null = null;
+        /** Resolves `close()` once the last leg says it has flushed. */
         let settleClose: (() => void) | null = null;
-        /**
-         * Every settled turn's text and label, kept so a `SpeakerRevision`
-         * — which names a turn but does not repeat its words — can be
-         * re-emitted as a whole turn. A meeting's worth of sentences is
-         * small next to the audio that produced them.
-         */
-        const settled = new Map<number, { text: string; speaker?: string }>();
-
-        const cancelConnect = timer(connectTimeoutMs, () => {
-          if (began) return;
-          done = true;
-          socket.close();
-          reject(new Error('assemblyai: no Begin within the connect timeout'));
-        });
 
         const finishClose = (): void => {
           const fn = settleClose;
@@ -260,138 +336,267 @@ export function createAssemblyAiEngine(opts: AssemblyAiOptions = {}): Transcript
           fn?.();
         };
 
-        const socket = makeSocket({
-          url: streamingUrl(sessionOpts.sampleRate),
-          // No `Bearer` prefix — the key is the whole header value.
-          headers: { Authorization: key },
-          onOpen: () => {},
-          onMessage: (text) => {
-            // Taken before the parse: the vendor leg ends when the bytes
-            // arrive, not when we have finished reading them.
-            const engineMs = Date.now();
-            let msg: Record<string, unknown>;
-            try {
-              msg = JSON.parse(text) as Record<string, unknown>;
-            } catch {
-              // A frame we cannot read is not a reason to end a meeting.
-              return;
-            }
-            if (msg.type === 'Begin') {
-              if (began) return;
-              began = true;
-              cancelConnect();
-              resolve(session);
-              return;
-            }
-            if (msg.type === 'Turn') {
-              const order = msg.turn_order;
-              const transcript = msg.transcript;
-              if (typeof order !== 'number' || typeof transcript !== 'string') return;
-              // Both flags, for the reason at the top of this file: with
-              // `format_turns` on the unformatted final arrives first and
-              // is superseded.
-              const final = msg.end_of_turn === true && msg.turn_is_formatted === true;
-              const speaker = speakerFromLabel(msg.speaker_label);
-              if (final) settled.set(order, { text: transcript, ...speaker });
-              const audioEndMs = audioEndMsFromTurn(msg);
-              sessionOpts.onTurn({
-                turn: order,
-                text: transcript,
-                final,
-                ...speaker,
-                ...(audioEndMs !== undefined ? { audioEndMs } : {}),
-                engineMs,
-              });
-              return;
-            }
-            if (msg.type === 'SpeakerRevision') {
-              // The whole-session pass relabelled some turns. Re-emit each
-              // as the settled turn it already was, with the text we kept,
-              // so a revised label rides the same path as a revised word.
-              //
-              // The array is `revisions`, NOT `turns` — checked against both
-              // the guide and streaming/api-spec/streaming-websocket, which
-              // give the same payload. A reviewer has already called this a
-              // P1 for reading the wrong field; it reads the right one, and
-              // a "fix" to `turns` would silently drop every revision.
-              // Entries carry `turn_order` and `speaker_label` (plus `words`,
-              // which we do not need — text is never revised by this pass).
-              const revisions = Array.isArray(msg.revisions) ? msg.revisions : [];
-              for (const rev of revisions as Array<Record<string, unknown>>) {
-                const order = rev.turn_order;
-                if (typeof order !== 'number') continue;
-                const known = settled.get(order);
-                if (!known) continue;
-                const speaker = speakerFromLabel(rev.speaker_label);
-                if (speaker.speaker === known.speaker) continue;
-                settled.set(order, { text: known.text, ...speaker });
-                sessionOpts.onTurn({ turn: order, text: known.text, final: true, ...speaker });
+        /**
+         * Hand a leg back to AssemblyAI. ALWAYS by `Terminate`, never by
+         * closing the socket: an unterminated session stays open on their
+         * side until the three-hour cap and is billed for the whole of it,
+         * so a rollover that merely dropped the old socket would turn one
+         * long meeting into two full sessions' worth of bill.
+         */
+        const retire = (leg: Leg): void => {
+          if (leg.done || leg.terminating) return;
+          leg.terminating = true;
+          leg.socket.send(JSON.stringify({ type: 'Terminate' }));
+          timer(flushTimeoutMs, () => {
+            if (leg.done) return;
+            leg.done = true;
+            leg.socket.close();
+            if (leg === active) finishClose();
+          });
+        };
+
+        /**
+         * The id this leg's `turn_order` speaks under, allocated once and
+         * then stable: the same order from the same leg is the same turn
+         * being revised, and the same order from a DIFFERENT leg is a
+         * different turn entirely.
+         */
+        const idFor = (leg: Leg, order: number): number => {
+          const known = leg.ids.get(order);
+          if (known !== undefined) return known;
+          const id = nextId++;
+          leg.ids.set(order, id);
+          return id;
+        };
+
+        /** Open one leg and resolve when the engine says `Begin`. */
+        const connect = (): Promise<Leg> =>
+          new Promise<Leg>((resolveLeg, rejectLeg) => {
+            let begun = false;
+            const leg: Leg = {
+              socket: null as unknown as EngineSocket,
+              ids: new Map(),
+              expiresAt: Date.now() + MAX_SESSION_MS,
+              settled: new Map(),
+              done: false,
+              terminating: false,
+            };
+            const cancelConnect = timer(connectTimeoutMs, () => {
+              if (begun) return;
+              leg.done = true;
+              leg.socket.close();
+              rejectLeg(new Error('assemblyai: no Begin within the connect timeout'));
+            });
+            const emit = (order: number, text: string, speaker: { speaker?: string }): void => {
+              sessionOpts.onTurn({ turn: idFor(leg, order), text, final: true, ...speaker });
+            };
+            leg.socket = makeSocket({
+              url: streamingUrl(sessionOpts.sampleRate, sessionOpts.detectSpeakers),
+              // No `Bearer` prefix — the key is the whole header value.
+              headers: { Authorization: key },
+              onOpen: () => {},
+              onMessage: (text) => {
+                // Taken before the parse: the vendor leg ends when the bytes
+                // arrive, not when we have finished reading them.
+                const engineMs = Date.now();
+                let msg: Record<string, unknown>;
+                try {
+                  msg = JSON.parse(text) as Record<string, unknown>;
+                } catch {
+                  // A frame we cannot read is not a reason to end a meeting.
+                  return;
+                }
+                if (msg.type === 'Begin') {
+                  if (begun) return;
+                  begun = true;
+                  cancelConnect();
+                  leg.expiresAt = expiryFrom(msg.expires_at);
+                  resolveLeg(leg);
+                  return;
+                }
+                if (msg.type === 'Turn') {
+                  const order = msg.turn_order;
+                  const transcript = msg.transcript;
+                  if (typeof order !== 'number' || typeof transcript !== 'string') return;
+                  // Both flags, for the reason at the top of this file: with
+                  // `format_turns` on the unformatted final arrives first and
+                  // is superseded.
+                  const final = msg.end_of_turn === true && msg.turn_is_formatted === true;
+                  const speaker = speakerFromLabel(msg.speaker_label);
+                  if (final) leg.settled.set(order, { text: transcript, ...speaker });
+                  const audioEndMs = audioEndMsFromTurn(msg);
+                  sessionOpts.onTurn({
+                    turn: idFor(leg, order),
+                    text: transcript,
+                    final,
+                    ...speaker,
+                    // Only when the frame actually carried words; a
+                    // SpeakerRevision deliberately carries neither, because a
+                    // relabel is not a latency event.
+                    ...(audioEndMs !== undefined ? { audioEndMs } : {}),
+                    engineMs,
+                  });
+                  return;
+                }
+                if (msg.type === 'SpeakerRevision') {
+                  // The whole-session pass relabelled some turns. Re-emit each
+                  // as the settled turn it already was, with the text we kept,
+                  // so a revised label rides the same path as a revised word.
+                  //
+                  // The array is `revisions`, NOT `turns` — checked against both
+                  // the guide and streaming/api-spec/streaming-websocket, which
+                  // give the same payload. A reviewer has already called this a
+                  // P1 for reading the wrong field; it reads the right one, and
+                  // a "fix" to `turns` would silently drop every revision.
+                  // Entries carry `turn_order` and `speaker_label` (plus `words`,
+                  // which we do not need — text is never revised by this pass).
+                  //
+                  // A revision is always this leg's own: it names turn orders
+                  // in the session that sent it, so it is looked up in THIS
+                  // leg's id map even when a newer leg is already carrying the
+                  // audio.
+                  const revisions = Array.isArray(msg.revisions) ? msg.revisions : [];
+                  for (const rev of revisions as Array<Record<string, unknown>>) {
+                    const order = rev.turn_order;
+                    if (typeof order !== 'number') continue;
+                    const known = leg.settled.get(order);
+                    if (!known) continue;
+                    const speaker = speakerFromLabel(rev.speaker_label);
+                    if (speaker.speaker === known.speaker) continue;
+                    leg.settled.set(order, { text: known.text, ...speaker });
+                    emit(order, known.text, speaker);
+                  }
+                  return;
+                }
+                if (msg.type === 'Termination') {
+                  leg.done = true;
+                  leg.socket.close();
+                  if (leg === active) finishClose();
+                  return;
+                }
+                if (msg.type === 'Error') {
+                  const detail = typeof msg.error === 'string' ? msg.error : 'engine error';
+                  sessionOpts.onError(`assemblyai: ${detail}`);
+                }
+              },
+              onError: (message) => {
+                if (!begun) {
+                  leg.done = true;
+                  cancelConnect();
+                  rejectLeg(new Error(`assemblyai: ${message}`));
+                  return;
+                }
+                // A leg that is no longer carrying audio has been asked to go
+                // away; its complaints on the way out are not the meeting's.
+                if (leg === active) sessionOpts.onError(`assemblyai: ${message}`);
+              },
+              onClose: () => {
+                if (!begun) {
+                  cancelConnect();
+                  if (!leg.done) {
+                    leg.done = true;
+                    rejectLeg(new Error('assemblyai: socket closed before the session began'));
+                  }
+                  return;
+                }
+                // A close we did not ask for ends the meeting's words; a close
+                // that follows our Terminate is the normal path and must not be
+                // reported as a failure. A retired leg is never the meeting.
+                if (!leg.done && !leg.terminating && leg === active) {
+                  leg.done = true;
+                  sessionOpts.onError('assemblyai: session closed unexpectedly');
+                }
+                leg.done = true;
+                if (leg === active) finishClose();
+              },
+            });
+          });
+
+        /**
+         * Move the meeting onto a fresh session before this one hits the
+         * three-hour cap.
+         *
+         * The new leg is opened FIRST and only becomes the audio's
+         * destination once the engine has answered `Begin`, so there is no
+         * window where a spoken word has nowhere to go. The old leg is then
+         * terminated, which flushes the turn it was in the middle of — those
+         * frames still arrive, and they still carry the ids the old leg
+         * already gave them, so a sentence spanning the handover is revised in
+         * place rather than lost or duplicated.
+         *
+         * The two sockets overlap for the length of one handshake, and both
+         * are billed for that second or so. That is the price of not cutting
+         * a meeting in half at the three-hour mark.
+         */
+        const rollover = (old: Leg): void => {
+          if (closing || old !== active || old.done) return;
+          void connect().then(
+            (next) => {
+              if (closing) {
+                // The meeting ended while the handshake was out. The new
+                // session is already open and already being billed, so it is
+                // terminated rather than dropped.
+                retire(next);
+                return;
               }
-              return;
-            }
-            if (msg.type === 'Termination') {
-              done = true;
-              socket.close();
-              finishClose();
-              return;
-            }
-            if (msg.type === 'Error') {
-              const detail = typeof msg.error === 'string' ? msg.error : 'engine error';
-              sessionOpts.onError(`assemblyai: ${detail}`);
-            }
-          },
-          onError: (message) => {
-            if (!began) {
-              done = true;
-              cancelConnect();
-              reject(new Error(`assemblyai: ${message}`));
-              return;
-            }
-            sessionOpts.onError(`assemblyai: ${message}`);
-          },
-          onClose: () => {
-            if (!began) {
-              cancelConnect();
-              if (!done) {
-                done = true;
-                reject(new Error('assemblyai: socket closed before the session began'));
-              }
-              return;
-            }
-            // A close we did not ask for ends the meeting's words; a close
-            // that follows our Terminate is the normal path and must not be
-            // reported as a failure.
-            if (!done && !terminating) {
-              done = true;
-              sessionOpts.onError('assemblyai: session closed unexpectedly');
-            }
-            finishClose();
-          },
-        });
+              active = next;
+              armRollover(next);
+              retire(old);
+            },
+            (err) => {
+              // Not fatal yet: the old session is still carrying audio and
+              // still has the margin left to run in. Try again inside it.
+              console.error('[assemblyai] session rollover failed, retrying:', err);
+              armRetry(old);
+            },
+          );
+        };
+
+        /** Roll this leg over a margin before the engine would close it. */
+        const armRollover = (leg: Leg): void => {
+          cancelRollover?.();
+          const delay = Math.max(leg.expiresAt - rolloverMarginMs - Date.now(), MIN_ROLLOVER_MS);
+          cancelRollover = schedule(delay, () => rollover(leg));
+        };
+
+        /** A failed rollover, retried inside the margin that is left. */
+        const armRetry = (leg: Leg): void => {
+          cancelRollover?.();
+          const left = leg.expiresAt - Date.now();
+          if (left <= MIN_ROLLOVER_MS) return;
+          cancelRollover = schedule(Math.max(left / 2, MIN_ROLLOVER_MS), () => rollover(leg));
+        };
 
         const session: TranscriptionSession = {
           send(audio: Uint8Array): void {
-            if (done) return;
-            socket.send(audio);
+            const leg = active;
+            if (closing || !leg || leg.done) return;
+            leg.socket.send(audio);
           },
           close(): Promise<void> {
-            if (done) return Promise.resolve();
+            const leg = active;
+            if (closing || !leg || leg.done) return Promise.resolve();
+            closing = true;
+            cancelRollover?.();
+            cancelRollover = null;
             return new Promise<void>((resolveClose) => {
               settleClose = resolveClose;
-              terminating = true;
-              socket.send(JSON.stringify({ type: 'Terminate' }));
               // Terminate is what flushes the open turn, so we wait for the
               // reply — but never forever: a stop the human pressed has to
               // end the meeting even when the engine has stopped answering.
-              timer(flushTimeoutMs, () => {
-                if (done) return;
-                done = true;
-                socket.close();
-                finishClose();
-              });
+              retire(leg);
             });
           },
         };
+
+        void connect().then(
+          (leg) => {
+            active = leg;
+            armRollover(leg);
+            resolve(session);
+          },
+          (err) => reject(err),
+        );
       });
     },
   };

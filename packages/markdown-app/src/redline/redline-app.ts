@@ -13,6 +13,7 @@ import {
 } from '../review-chrome.ts';
 import type { ReviewSurface } from '../review-surface.ts';
 import { navigateTo, remountCurrent } from '../router.ts';
+import { asBackgroundWrite, lockDocToReading } from '../signin/write-gate.ts';
 import { getMarkdownMount } from '../surface-registry.ts';
 import { createLiveRedlineEditor } from './live-redline-editor.ts';
 import { type MarkupMarginHandle, mountMarkupMargin } from './markup-margin.ts';
@@ -208,6 +209,21 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
         baseText,
         isAdded,
         onSelectionChange,
+        // Read-only from its first paint for a browser the server refuses —
+        // not locked a round trip later, which is a round trip of live
+        // editor.
+        //
+        // This line was dead when it was written, and the comment beside it
+        // was wrong. The companion open (`openCompanionDoc`) was itself
+        // caught by the server's write gate, so for a signed-out reader
+        // `companion` came back null, this editor was never constructed, and
+        // the surface fell back to the derived redline over the MEMBER doc —
+        // where the chrome reads a different set of comment threads. It only
+        // LOOKED locked, by accident of the fallback. The route is exempt now
+        // (server/middleware/write-gate.ts: opening a doc you may read is a
+        // read), so the companion opens for everybody, the threads are the
+        // same ones everybody else is reading, and THIS is what locks it.
+        editable: ctx.canWrite,
         docLink: ctx.workspaceId
           ? { workspaceId: ctx.workspaceId, relPath: ctx.relPath, navigate: navigateTo }
           : undefined,
@@ -224,6 +240,12 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
     });
   surfaceReady = true;
   scope.onCleanup(() => surface.destroy());
+
+  // The chrome has to agree with the surface. Signed out this said
+  // "Editing: notes.md" and "All changes saved" over an editor that would
+  // take nothing, and the shell's edit toggle stayed lit — a no-op, because
+  // only the markdown mount wires it, but a lit control is a promise.
+  if (!ctx.canWrite) lockDocToReading({});
 
   // Threads live where the surface anchors them: the companion doc's prose
   // fragment on the editable surface (interoperable with the agent's
@@ -360,7 +382,7 @@ export async function mountRedline(ctx: MountContext): Promise<void> {
   });
 }
 
-interface CompanionDoc {
+export interface CompanionDoc {
   docId: string;
   client: FeedbackClient;
   sourceUrl: string;
@@ -368,19 +390,33 @@ interface CompanionDoc {
 
 /**
  * Open (or create) the companion editable doc for this `.md` diff member and
- * connect its websocket. The companion is a separate doc with its own socket;
+ * connect its websocket.
+ *
+ * Exported for the test that a refusal here raises the standing bar and NOT
+ * the blocking modal — the failure it had, over a document nobody had
+ * touched. Mounting the whole redline surface to assert that would test
+ * twenty other things at the same time. The companion is a separate doc with its own socket;
  * the socket closes with the member's scope. Returns null when the companion
  * can't be opened (no workspace binding, server error) so callers can fall
  * back to a read-only surface.
  */
-async function openCompanionDoc(ctx: MountContext): Promise<CompanionDoc | null> {
+export async function openCompanionDoc(ctx: MountContext): Promise<CompanionDoc | null> {
   let opened: { docId: string; meta?: { sourceUrl?: string } };
   try {
-    const res = await fetch(`/api/reviews/${encodeURIComponent(ctx.workspaceId)}/editable-file`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ relPath: ctx.relPath }),
-    });
+    // Marked as the app's own, because it IS: this fires at mount over a
+    // document nobody has touched. Unmarked, a refusal raised the blocking
+    // "Sign in to write here" modal on plain page load — verbatim the failure
+    // the reading tracker's POST already taught us (see `asBackgroundWrite`).
+    // The server no longer refuses this route, so the marker is the belt to
+    // that braces: a 401 arriving for any other reason must still not
+    // interrupt somebody who is only reading.
+    const res = await asBackgroundWrite(() =>
+      fetch(`/api/reviews/${encodeURIComponent(ctx.workspaceId)}/editable-file`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ relPath: ctx.relPath }),
+      }),
+    );
     if (!res.ok) return null;
     opened = (await res.json()) as { docId: string; meta?: { sourceUrl?: string } };
   } catch {
