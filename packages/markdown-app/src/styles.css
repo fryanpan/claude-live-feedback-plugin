@@ -7051,6 +7051,33 @@ body.is-reading-width #editor > .ProseMirror {
   color: var(--fg);
   border-color: var(--border-strong);
 }
+/* The pill says it is editable WITHOUT hover: a pencil before the name. The
+   dotted underline alone did not read as tappable on the iPad — the reported
+   failure was a real two-voice meeting with "no ability to edit the speaker
+   names". CSS content rather than markup so the button's aria-label ("Name
+   Speaker A") stays the accessible name, and at the START of the pill so the
+   ellipsis clipping a long name can never eat it. */
+.meeting-speaker-pill::before {
+  content: '✎ ';
+}
+/* The rename surface a finished meeting leaves behind: the cast on the
+   caption line while the strip is idle. Same button, same pill, same
+   hit-box arithmetic as a turn's tag — the legend lives inside the
+   caption's clip, so the ~38px the tag measures is this bar's ceiling too;
+   a 44px target would mean a taller strip row. `wrap` is for the phone
+   panel: two named voices overflow one 430px line, and a legend that
+   widened the panel would push the strip off the window edge. */
+.meeting-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  max-width: 100%;
+}
+.meeting-legend-hint {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
 /* Why no words are coming — an unconfigured server, a refused mic, an origin
    the browser gives no mic on. It occupies the transcript's line because it is
    the answer to the same question. */

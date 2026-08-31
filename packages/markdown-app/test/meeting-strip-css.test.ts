@@ -263,6 +263,26 @@ describe('the speaker tag', () => {
     expect(rule('.meeting-speaker-pill', declarationsOnly(SECTION))).toMatch(
       /text-decoration:\s*underline dotted/,
     );
+    // And the underline alone still did not read as tappable there — the
+    // reported failure was a real two-voice meeting with "no ability to edit
+    // the speaker names". The pencil is at the START so the ellipsis on a
+    // long name can never eat it.
+    expect(rule('.meeting-speaker-pill::before', declarationsOnly(SECTION))).toMatch(
+      /content:\s*'✎ '/,
+    );
+  });
+
+  it('the stopped strip’s cast shares the tag’s button, and wraps on the phone', () => {
+    // The legend reuses .meeting-speaker wholesale — same pill, same hit-box
+    // arithmetic the measurements above assert — so it only needs layout.
+    const legend = rule('.meeting-legend', declarationsOnly(SECTION));
+    expect(legend, 'no .meeting-legend rule in the MEETING section').not.toBe('');
+    expect(legend).toMatch(/flex-wrap:\s*wrap/);
+    expect(legend).toMatch(/max-width:\s*100%/);
+    // The strip renders the cast inside the caption line the tags live in.
+    expect(MOUNT).toContain("legend.className = 'meeting-legend'");
+    // And the buttons it fills the legend with are the measured tag itself.
+    expect(MOUNT).toContain('speakerButton()');
   });
 
   it('gives each turn its own line, so a tag never strands above its words', () => {
