@@ -209,28 +209,52 @@ What does move: the sharing master switch does not cover this door. It is the
 operator's own, keyed to their own identity, and it is how sharing gets turned
 back on from outside.
 
-**Two requests skip the Access token here, and only two** (2026-08-31).
-Recall.ai's meeting bot dials this server back on the one public address it
-has — this hostname — and its backend has no browser, no Access session and no
-way to acquire either, so demanding a token refused every bot callback: the
-bot joined the call, recorded, billed, and delivered nothing. Both callbacks
-already carry their own credential, so each is exempted **only while that
-credential is configured**:
+**Nothing skips the Access token here** (2026-08-31). Two requests briefly
+did — Recall.ai's meeting-bot callbacks — because this hostname was the one
+public address this deployment had, and the vendor's backend has no browser,
+no Access session and no way to acquire either, so demanding a token refused
+every callback: the bot joined the call, recorded, billed, and delivered
+nothing.
+
+Bryan's call was a **dedicated first-level hostname** instead, not a hole in
+this one. `CW_RECALL_CALLBACK_HOST` names it (`recall.<domain>`), it is
+pointed at the same tunnel with **no Access application in front of it**, and
+it classifies its own host kind that serves exactly two routes:
 
 - `GET /recall/<token>` — the transcript websocket. The 128-bit per-bot token
-  in the path is the authentication. Exempt only when the Recall relay is
+  in the path is the authentication. Open only while the Recall relay is
   configured; on a server that can never mint a token there is no credential
-  behind the exemption. The route still answers 404 for a token no bot minted.
-- `POST /api/recall/status` — the bot status webhook. Recall's Svix signature
-  over the body is the credential, and the route verifies it. Exempt only when
+  behind the route. It still answers 404 for a token no bot minted.
+- `POST /recall/status` — the bot status webhook. Recall's Svix signature over
+  the body is the credential, and the route verifies it. Open only while
   `RECALL_WEBHOOK_SECRET` is set — with the secret unset the route accepts
   UNSIGNED bodies, and that mode must never be reachable from the tunnel.
 
-Nothing else on the hostname changes, and every near-miss fails closed —
+**Everything else on that hostname is 404** — the API, the app shell, a real
+doc's websocket, the deploy verb, and any of them even to a caller holding a
+valid operator Access token. It is an allowlist, so a route added to this
+server tomorrow is closed there by default, and every near-miss fails closed:
 `/recall/abc`, anything under or beside a token, a percent-encoded spelling of
-one, a trailing or doubled slash, the wrong method — each meets the gate it met
-before. Boot logs carry a `[meetings] bot callbacks on the operator hostname:
-…` line naming which half is exempt and which is still gated.
+one, a trailing or doubled slash, the wrong method. Unlisted hostnames are
+denied exactly as before.
+
+Two conditions this host class deliberately does NOT impose: Cloudflare Access
+(a browser flow the caller cannot complete — refusing it here is the whole
+point) and arrival through the Cloudflare edge (that veto protects a product
+this hostname does not serve, and requiring `cf-ray` would break a deployment
+fronted by anything else).
+
+The trade this makes is worth stating plainly: the unauthenticated surface
+went from two exemptions on the address people open the product on, to two
+credential-carrying routes on an address only a vendor is told about. Boot
+logs name the callback host, both URLs, and whether each route is armed.
+
+**And a bot that could not call back is not offered.** With the exemptions
+gone, a deployment still deriving its callback URL from `CW_PUBLIC_BASE_URL`
+would look configured while every callback was refused — a bot that joins,
+bills, and delivers nothing. When the address this server would hand Recall is
+one of its own Access-gated hostnames, meeting bots report themselves not
+configured and the invite names the fix.
 
 ## Per-repo team config
 
