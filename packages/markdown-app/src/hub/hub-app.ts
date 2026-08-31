@@ -28,6 +28,7 @@ import { type BoardHandlers, boardData, mountBoardIsland } from './board-island.
 import {
   type BoardLocation,
   buildBoardUrl,
+  goalShareUrl,
   historyStep,
   parseBoardLocation,
   resourceOf,
@@ -69,10 +70,12 @@ import {
   type WalkSources,
   advanceWalk,
   applyRefresh,
+  archivedGoals,
   archivedTasks,
   boardSections,
   clientDriftNotice,
   goalLabel,
+  goalSection,
   holdWaitingItem,
   hubTabTitle,
   humanBlockerRows,
@@ -256,6 +259,11 @@ const WALK_HANDOFF_DEADLINE_MS = 4000;
  */
 function taskUrl(taskId: string): string {
   return taskShareUrl(location.origin, workspaceIdFromPath(), taskId);
+}
+
+/** The same, for a band — `?goal=`. See `taskUrl`. */
+function goalUrl(goalId: string): string {
+  return goalShareUrl(location.origin, workspaceIdFromPath(), goalId);
 }
 
 function wsUrl(docId: string, type: string): string {
@@ -999,6 +1007,7 @@ async function main(): Promise<void> {
     // node itself (see `Board`'s focus effect), which is a re-focus of a
     // reference rather than a search for a replacement.
     const archived = archivedTasks(taskList());
+    const archivedBands = archivedGoals(state.info?.goals ?? []);
     const showArchived = state.pane === 'board' && state.showArchived;
     // The restore list is still a vanilla renderer, so it gets its OWN
     // container: no vanilla code may `replaceChildren` a node holding a live
@@ -1006,11 +1015,29 @@ async function main(): Promise<void> {
     el('hub-board').classList.toggle('hidden', showArchived);
     el('hub-archived').classList.toggle('hidden', !showArchived);
     if (showArchived) {
-      renderArchivedList(el('hub-archived'), archived, {
-        onRestore: (task) => void restoreTask(task),
-        onOpenTask: (task) => boardHandlers.onOpenTask(task),
-        onBack: () => setShowArchived(false),
-      });
+      renderArchivedList(
+        el('hub-archived'),
+        archived,
+        {
+          onRestore: (task) => void restoreTask(task),
+          onOpenTask: (task) => boardHandlers.onOpenTask(task),
+          onBack: () => setShowArchived(false),
+          // A band opens the goal panel, which is where its Archived note and
+          // its own Restore live — the same "the title still opens the row"
+          // rule the task rows follow, for the same reason: the discussion on
+          // an archived row is often why somebody came looking.
+          onRestoreGoal: (goal) => {
+            const s = goalSection(state.info?.goals ?? [], goal.id);
+            if (s) void restoreGoal(s);
+          },
+          onOpenGoal: (goal) => {
+            state.detailGoalId = goal.id;
+            state.detailTaskId = null;
+            renderDetail();
+          },
+        },
+        archivedBands,
+      );
     }
     // The island's one input. `pane` rides along rather than gating the write:
     // Home hides the board column outright, and a row built into it is a node
@@ -1331,12 +1358,18 @@ async function main(): Promise<void> {
       // Unfiltered on purpose: the panel's counts and advisory are facts
       // about the GOAL ("what would a done declaration leave open"), not
       // about whatever tab or done-window the board happens to be on.
-      const section = boardSections(state.info?.goals ?? [], taskList(), {
-        tab: 'all',
-        userName: user.name,
-        doneWindow: 'all',
-        now: Date.now(),
-      }).find((s) => s.id === state.detailGoalId);
+      const section =
+        boardSections(state.info?.goals ?? [], taskList(), {
+          tab: 'all',
+          userName: user.name,
+          doneWindow: 'all',
+          now: Date.now(),
+        }).find((s) => s.id === state.detailGoalId) ??
+        // An ARCHIVED band is on no board and so in no section — and the panel
+        // is exactly where its Restore lives, reached from the restore list or
+        // from a link somebody sent last week. `goalSection` is the lookup that
+        // does not apply "off the board", the way `state.tasks` is for a task.
+        goalSection(state.info?.goals ?? [], state.detailGoalId);
       if (section && !section.isChores) {
         if (renderedGoalId === null && renderedDetailId === null) {
           const active = document.activeElement;
@@ -1381,6 +1414,10 @@ async function main(): Promise<void> {
                 row === null ? null : { id: row.id, bodyDocId: goalBodyDocId(row) },
                 slot,
               ),
+            onCopyLink: (s) => void copyGoalLink(s),
+            onCascadeCount: (goalId) => goalCascadeCount(goalId),
+            onArchive: (s) => void archiveGoal(s),
+            onRestore: (s) => void restoreGoal(s),
             ...(state.detailThreadId ? { focusThreadId: state.detailThreadId } : {}),
             now: Date.now(),
           },
@@ -1544,6 +1581,19 @@ async function main(): Promise<void> {
    */
   async function copyTaskLink(task: HubTask): Promise<void> {
     const url = taskUrl(task.id);
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Link copied');
+    } catch {
+      showToast(url);
+    }
+  }
+
+  /** The same for a band. Separate only because the URL is — the clipboard
+   *  refusal is handled identically, by showing the link so it can be copied
+   *  by hand. */
+  async function copyGoalLink(section: BoardSection): Promise<void> {
+    const url = goalUrl(section.id);
     try {
       await navigator.clipboard.writeText(url);
       showToast('Link copied');
@@ -2039,6 +2089,80 @@ async function main(): Promise<void> {
       return;
     }
     showToast(`Restored “${task.title}”`);
+  }
+
+  /** How many rows the panel is about to say goodbye to. Straight from the
+   *  server's own walk, so the sentence in the confirmation and the write that
+   *  follows it cannot disagree. `null` = the question could not be asked, and
+   *  the panel then refuses to offer Archive at all. */
+  async function goalCascadeCount(
+    goalId: string,
+  ): Promise<{ tasks: number; subgoals: number } | null> {
+    const res = await fetchJson<{ taskIds?: string[]; subgoalIds?: string[] }>(
+      `/api/goals/${encodeURIComponent(goalId)}/cascade`,
+    );
+    if (!res) return null;
+    return { tasks: res.taskIds?.length ?? 0, subgoals: res.subgoalIds?.length ?? 0 };
+  }
+
+  /** How many rows a goal archive or restore actually moved, off the response.
+   *  Read defensively: an older server answers without the lists, and the
+   *  toast then names the band alone rather than inventing a zero. */
+  function movedCount(data: Record<string, unknown> | null): number {
+    return Array.isArray(data?.taskIds) ? data.taskIds.length : 0;
+  }
+
+  /**
+   * Take a BAND off the board, with everything under it.
+   *
+   * The panel has already asked and named the number — this is the commit, so
+   * there is no second confirmation here. What there IS, exactly as on a task,
+   * is Undo in the same breath: the archive is reversible by construction and
+   * the toast is what makes that reachable without going and finding the
+   * restore list.
+   *
+   * The toast counts what the SERVER moved, not what the confirmation
+   * predicted. The two are the same in every ordinary case; when a peer files
+   * a fifteenth ticket between the question and the answer, the honest number
+   * is the one that happened.
+   */
+  async function archiveGoal(section: BoardSection): Promise<void> {
+    const res = await send(`/api/goals/${encodeURIComponent(section.id)}/archive`, 'POST', {
+      author,
+    });
+    if (!res.ok) {
+      showToast('Archiving failed — the goal is still on the board');
+      return;
+    }
+    if (state.detailGoalId === section.id) {
+      state.detailGoalId = null;
+      renderDetail();
+    }
+    const n = movedCount(res.data);
+    showToast(
+      `Archived “${section.title}”${n > 0 ? ` and ${n === 1 ? '1 task' : `${n} tasks`}` : ''}`,
+      {
+        label: 'Undo',
+        run: () => void restoreGoal(section),
+        ms: ARCHIVE_UNDO_MS,
+      },
+    );
+  }
+
+  /** Put an archived band back, with the rows its archive took. The Undo
+   *  button, the panel's Restore and the restore list's rows are all this. */
+  async function restoreGoal(section: BoardSection): Promise<void> {
+    const res = await send(`/api/goals/${encodeURIComponent(section.id)}/restore`, 'POST', {
+      author,
+    });
+    if (!res.ok) {
+      showToast('Restoring failed — the goal is still archived');
+      return;
+    }
+    const n = movedCount(res.data);
+    showToast(
+      `Restored “${section.title}”${n > 0 ? ` and ${n === 1 ? '1 task' : `${n} tasks`}` : ''}`,
+    );
   }
 
   /**

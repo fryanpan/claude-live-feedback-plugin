@@ -215,6 +215,15 @@ export interface HubSubgoal {
   /** How many comments the goal's discussion holds. Absent means none; the
    *  band says nothing rather than saying zero. */
   commentCount?: number;
+  /**
+   * When this band was archived — the same three fields a task carries, read
+   * through `isGoalArchived`, and hidden by `boardSections` rather than by
+   * the projection: the restore list draws from the same board state, so a
+   * band the projection dropped could never be put back.
+   */
+  archivedAt?: number;
+  archivedBy?: string;
+  archiveReason?: string;
 }
 
 export interface HubGoal extends HubSubgoal {
@@ -383,6 +392,29 @@ export function archivedTasks(tasks: HubTask[]): HubTask[] {
   return tasks.filter(isTaskArchived).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
 }
 
+/** The band's half of `isTaskArchived`, and the one reader of a goal's
+ *  `archivedAt`. Separate from the task's only because the two carry
+ *  different types, never different rules. */
+export function isGoalArchived(goal: HubSubgoal): boolean {
+  return goal.archivedAt !== undefined;
+}
+
+/**
+ * Archived BANDS, newest removal first — the goals half of the restore list.
+ *
+ * Flattened: a subgoal archived with its parent is a row somebody may want
+ * back, and burying it inside its parent would make the list's one control
+ * ambiguous about what it restores.
+ */
+export function archivedGoals(goals: HubGoal[]): HubSubgoal[] {
+  const out: HubSubgoal[] = [];
+  for (const g of goals) {
+    if (isGoalArchived(g)) out.push(g);
+    for (const s of g.subgoals ?? []) if (isGoalArchived(s)) out.push(s);
+  }
+  return out.sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+}
+
 export function taskVisible(task: HubTask, f: BoardFilters): boolean {
   // First and unconditionally: an archived row is off the board. It is still
   // projected — the Undo toast and the restore list read it from the same
@@ -424,6 +456,11 @@ export interface BoardSection {
   body?: string;
   bodyTruncated?: boolean;
   commentCount?: number;
+  /** The band's soft delete, carried the same way again. Present only on a
+   *  section `goalSection` built — `boardSections` never returns one. */
+  archivedAt?: number;
+  archivedBy?: string;
+  archiveReason?: string;
   isChores: boolean;
   tasks: HubTask[];
 }
@@ -432,19 +469,11 @@ function byBoardOrder(a: HubTask, b: HubTask): number {
   return a.order - b.order || a.createdAt - b.createdAt || a.id.localeCompare(b.id);
 }
 
-/**
- * Goal order IS priority order (§3.2): sections follow goals[], each goal's
- * subgoals nested directly after it, Backlog always last. A task whose goal id
- * matches no section (transient state while a goal-list edit lands) renders
- * under Backlog — dropping it would be the store-has-it/surface-can't-show-it
- * bug all over again.
- */
-export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilters): BoardSection[] {
-  const sections: BoardSection[] = [];
-  // The status trio and the owner ride from the decorated goal onto its
-  // section verbatim — conditionally, so an undecorated band's section claims
-  // nothing rather than carrying a fistful of undefined keys.
-  const carriedOf = (g: HubSubgoal) => ({
+// The status trio and the owner ride from the decorated goal onto its section
+// verbatim — conditionally, so an undecorated band's section claims nothing
+// rather than carrying a fistful of undefined keys.
+function carriedOf(g: HubSubgoal) {
+  return {
     ...(g.status !== undefined ? { status: g.status } : {}),
     ...(g.doneAt !== undefined ? { doneAt: g.doneAt } : {}),
     ...(g.doneBy !== undefined ? { doneBy: g.doneBy } : {}),
@@ -454,8 +483,74 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
     ...(g.body !== undefined ? { body: g.body } : {}),
     ...(g.bodyTruncated !== undefined ? { bodyTruncated: g.bodyTruncated } : {}),
     ...(g.commentCount !== undefined ? { commentCount: g.commentCount } : {}),
-  });
+    ...(g.archivedAt !== undefined ? { archivedAt: g.archivedAt } : {}),
+    ...(g.archivedBy !== undefined ? { archivedBy: g.archivedBy } : {}),
+    ...(g.archiveReason !== undefined ? { archiveReason: g.archiveReason } : {}),
+  };
+}
+
+/**
+ * ONE band, by id, archived or not — what the detail panel opens on.
+ *
+ * `boardSections` deliberately cannot answer this: it leaves archived bands
+ * out, which is the whole of what "off the board" means for a goal, and the
+ * panel is exactly the surface that has to keep working afterwards. A reader
+ * arrives at an archived band from the restore list or from a link somebody
+ * sent last week, and the panel is where Restore lives. Same split the task
+ * side already has — `taskVisible` hides the row while `state.tasks` keeps
+ * it — expressed here as a second lookup because sections are built rather
+ * than stored.
+ *
+ * No tasks on the returned section: the panel shows none, and pretending to
+ * carry a band's tasks without applying the board's filters would be a list
+ * nobody could explain.
+ */
+export function goalSection(goals: HubGoal[], goalId: string): BoardSection | null {
   for (const g of goals) {
+    if (g.id === goalId)
+      return {
+        id: g.id,
+        title: g.title,
+        depth: 0,
+        dueAt: g.dueAt,
+        ...carriedOf(g),
+        isChores: false,
+        tasks: [],
+      };
+    for (const sg of g.subgoals ?? []) {
+      if (sg.id !== goalId) continue;
+      return {
+        id: sg.id,
+        title: sg.title,
+        depth: 1,
+        dueAt: sg.dueAt,
+        ...carriedOf(sg),
+        isChores: false,
+        tasks: [],
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Goal order IS priority order (§3.2): sections follow goals[], each goal's
+ * subgoals nested directly after it, Backlog always last. A task whose goal id
+ * matches no section (transient state while a goal-list edit lands) renders
+ * under Backlog — dropping it would be the store-has-it/surface-can't-show-it
+ * bug all over again.
+ *
+ * An ARCHIVED band gets no section, which is what takes it off the board —
+ * the goal's analogue of `taskVisible`'s first line, and applied here rather
+ * than in the projection so the restore list can still find it. Its tasks
+ * went with it and are filtered by `taskVisible` anyway; a straggler
+ * (restored by hand, or filed under the band after it was archived) falls
+ * through to Backlog by the rule above rather than disappearing.
+ */
+export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilters): BoardSection[] {
+  const sections: BoardSection[] = [];
+  for (const g of goals) {
+    if (isGoalArchived(g)) continue;
     sections.push({
       id: g.id,
       title: g.title,
@@ -466,6 +561,7 @@ export function boardSections(goals: HubGoal[], tasks: HubTask[], f: BoardFilter
       tasks: [],
     });
     for (const sg of g.subgoals ?? []) {
+      if (isGoalArchived(sg)) continue;
       sections.push({
         id: sg.id,
         title: sg.title,
@@ -2036,6 +2132,21 @@ export const ACTIVITY_REFRESH_EVENTS = [
   'workspace.goals_changed',
 ] as const;
 
+/**
+ * ", with its 14 tasks" — the half of a band's archive that is not visible
+ * from the band.
+ *
+ * Read off `cascadeTasks`, which only a GOAL's own archive or restore carries.
+ * A member of the cascade gets its own ordinary line, so the trail reads as a
+ * decision followed by its consequences rather than as fifteen unexplained
+ * removals — and a reader scanning for one ticket still finds the ticket.
+ */
+function cascadeClause(ev: ActivityEvent): string {
+  const n = typeof ev.cascadeTasks === 'number' ? ev.cascadeTasks : 0;
+  if (n <= 0) return '';
+  return `, with its ${n === 1 ? '1 task' : `${n} tasks`}`;
+}
+
 /** One human-readable line per audit row. Unknown event kinds fall back to
  *  the raw name — an exhaustive-table miss should be visible, not blank. */
 export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => string): string {
@@ -2083,11 +2194,11 @@ export function describeEvent(ev: ActivityEvent, titleOf: (taskId: string) => st
       // of what left the board on that day.
       const name = typeof ev.title === 'string' && ev.title ? `“${ev.title}”` : title();
       const why = typeof ev.reason === 'string' && ev.reason ? ` — ${ev.reason}` : '';
-      return `${actorName(ev)} archived ${name}${why}`;
+      return `${actorName(ev)} archived ${name}${cascadeClause(ev)}${why}`;
     }
     case 'task.restored': {
       const name = typeof ev.title === 'string' && ev.title ? `“${ev.title}”` : title();
-      return `${actorName(ev)} restored ${name}`;
+      return `${actorName(ev)} restored ${name}${cascadeClause(ev)}`;
     }
     case 'task.body_edited': {
       // Typing in a task body is deliberately NOT activity (the snapshot

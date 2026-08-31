@@ -2988,6 +2988,24 @@ body.hub-body {
   flex: 0 0 auto;
   margin-left: auto;
 }
+/* A band in the restore list wears its kind, because restoring one is not the
+   same act as restoring a ticket: its tasks come back with it. The chip reads
+   before the title on purpose — it is what changes the meaning of the button
+   at the other end of the row. */
+.hub-archived-kind {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg-muted) 8%, transparent);
+}
+.hub-archived-row--goal .hub-archived-title {
+  font-weight: 600;
+}
 /* --- row anatomy: drag handle · status · title · badges · open caret · assignee --- */
 /* The handle is invisible until you go looking for it: a permanent column of
    ⠿ is noise on a list whose job is to be skimmed. Revealed by hovering the
@@ -3693,6 +3711,47 @@ body.hub-body {
 }
 .hub-archived-note .hub-archived-restore {
   margin: 10px 0 0;
+}
+/* The goal panel's archive confirmation. It sits in the panel rather than in a
+   modal — a dialog on a tablet covers the very header the reader is checking —
+   and it is deliberately quiet: this is a reversible act, so the bar states
+   the blast radius and asks, rather than shouting. Full width and wrapping,
+   because the sentence carries a count and a title of any length and the
+   phone is 430px. */
+.hub-goal-archive-confirm {
+  margin: 12px 0 0;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.hub-goal-archive-ask {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.hub-goal-archive-note {
+  margin: 4px 0 0;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
+.hub-goal-archive-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+/* 36px is design-mobile.md's thumb floor. Both buttons get it: a Cancel that
+   is harder to hit than the commit is the wrong way round on a confirmation. */
+.hub-goal-archive-go,
+.hub-goal-archive-cancel {
+  min-height: 36px;
+  padding: 0 14px;
+}
+.hub-goal-archive-go {
+  font-weight: 600;
 }
 /* All four values are controls, so they get one box shape and one height and
    the row scans as a row. 36px is the thumb floor; `max-width: 100%` and
