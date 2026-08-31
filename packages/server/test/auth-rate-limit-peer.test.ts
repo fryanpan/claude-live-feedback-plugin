@@ -25,6 +25,7 @@ beforeAll(() => {
   // allow one server; its subject is the peer KEYING, and the ceilings have
   // their own file (auth-start-ceilings.test.ts). Lift them out of the way.
   handle = createServer({
+    dedicatedListener: true,
     port: 0,
     dataDir,
     authCeilings: { globalStartsPerHour: 10_000, peerStartsPerHour: 10_000 },

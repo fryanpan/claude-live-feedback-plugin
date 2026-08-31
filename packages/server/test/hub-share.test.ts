@@ -195,6 +195,7 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'hub-share-'));
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       share: { config: { publicHostname: PUBLIC_HOST } },

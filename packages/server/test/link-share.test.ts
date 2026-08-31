@@ -107,6 +107,7 @@ describe('link shares over HTTP', () => {
     writeFileSync(join(soloFolder, 'solo.md'), '# Solo\n\nBody.\n');
 
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       // No cfAccess, no account id, no API token — link mode needs none.

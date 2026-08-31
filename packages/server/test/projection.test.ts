@@ -189,7 +189,7 @@ describe('ydoc projection + workspace room', () => {
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), 'projection-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
   });
@@ -483,7 +483,7 @@ describe('ydoc projection + workspace room', () => {
     // the seed path is gated on an empty fragment, so identity survives.
     await settle(600); // let the debounced .ydoc + sidecar writes land
     await handle.stop();
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
     expect(resolves(handle)).toBe(true);
@@ -513,7 +513,7 @@ describe('ydoc projection + workspace room', () => {
     Y.applyUpdate(check, new Uint8Array(readFileSync(ydocPath)));
     expect((check.getMap('tasks').get(taskId) as ProjectedTask).status).toBe('done');
 
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
     const room = handle.rooms.get(workspaceRoomId(wsId));

@@ -101,6 +101,7 @@ describe('meeting audio socket', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-socket-'));
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       transcription: createMockTranscriptionEngine(),
@@ -352,7 +353,7 @@ describe('meeting audio socket with no engine configured', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-off-'));
     // No `transcription`: the default state of every server in this suite,
     // and the reason none of them can open a billed streaming session.
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     wsBase = `ws://localhost:${handle.port}`;
   });
@@ -431,6 +432,7 @@ describe('meeting audio socket with two voices', () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'cw-meeting-voices-'));
     handle = createServer({
+      dedicatedListener: true,
       port: 0,
       dataDir,
       transcription: createMockTranscriptionEngine([

@@ -98,7 +98,7 @@ describe('SSE Last-Event-ID replay', () => {
   beforeEach(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'sse-replay-'));
     srcDir = mkdtempSync(join(tmpdir(), 'sse-replay-src-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
     const path = join(srcDir, 'doc-replay.md');
     writeFileSync(path, '# doc-replay\n\nBody.\n');
@@ -535,7 +535,7 @@ describe('a restart is silent when nothing was missed', () => {
     post('/api/docs/doc-boot/threads', { author: PERSON, text, anchor: { kind: 'subject' } });
 
   const boot = async () => {
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     base = `http://localhost:${handle.port}`;
   };
 

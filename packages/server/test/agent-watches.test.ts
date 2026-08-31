@@ -122,7 +122,7 @@ describe('/api/agents/:agentId/watches', () => {
 
   const start = () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-watches-route-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     return `http://localhost:${handle.port}`;
   };
 
@@ -298,7 +298,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
 
   it('a comment posted after the merge reaches the new id, and the old id holds nothing', async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     const base = `http://localhost:${handle.port}`;
     const post = async (path: string, body: unknown) => {
       const res = await fetch(`${base}${path}`, {
@@ -403,7 +403,7 @@ describe('POST /api/agents/:id/merge re-keys watches so delivery follows the new
 
   it('refuses to merge INTO the shared identity, and refuses a self-merge', async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-refuse-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     const base = `http://localhost:${handle.port}`;
     const merge = async (from: string, body: unknown) => {
       const res = await fetch(`${base}/api/agents/${from}/merge`, {
@@ -480,7 +480,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
 
   it('an un-acked backlog follows the merge to the new id', async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-backlog-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     const wsId = await seed();
 
     // A comment lands while nobody is attached to receive it: queued for
@@ -524,7 +524,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
 
   it('a dry run reports the backlog it WOULD move and moves nothing', async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-backlog-dry-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     const wsId = await seed();
     expect(
       (
@@ -550,7 +550,12 @@ describe('POST /api/agents/:id/merge — review findings', () => {
   it('refuses a `from` that a person row already folds, including a link-file anon id', async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-person-'));
     // Boot seeding folds `known-bryan` into the owner's email identity.
-    handle = createServer({ port: 0, dataDir, ownerEmail: 'owner@example.com' });
+    handle = createServer({
+      dedicatedListener: true,
+      port: 0,
+      dataDir,
+      ownerEmail: 'owner@example.com',
+    });
     const owner = handle.identities.byEmail('owner@example.com');
     expect(owner?.kind).toBe('person');
     // POSITIVE CONTROL: the id under test really does resolve to a person.
@@ -573,7 +578,7 @@ describe('POST /api/agents/:id/merge — review findings', () => {
 
   it('is loopback-only, like /api/deploy — a tailnet caller cannot move a seat', async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'agent-merge-loopback-'));
-    handle = createServer({ port: 0, dataDir });
+    handle = createServer({ dedicatedListener: true, port: 0, dataDir });
     const wsId = await seed();
     const addrs = nonLoopbackIPv4();
     if (addrs.length === 0) {
