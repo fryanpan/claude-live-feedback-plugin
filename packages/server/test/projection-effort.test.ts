@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerHandle, createServer } from '../src/server.ts';
 import { workspaceRoomId } from '../src/task-projection.ts';
-import type { TaskEffortEstimate } from '../src/tasks.ts';
+import { type TaskEffortEstimate, wordsRevisionOf } from '../src/tasks.ts';
 
 const AGENT = { id: 'agent-x', name: 'Estimator Test', kind: 'agent' };
 
@@ -54,6 +54,11 @@ describe('the board projection carries the effort model', () => {
       forTitleWrittenAt: task.titleWrittenAt ?? task.createdAt,
       ...(task.bodyWrittenAt !== undefined ? { forBodyWrittenAt: task.bodyWrittenAt } : {}),
       forGoal: task.goal,
+      // The staleness guard keys on the words revision now (it moved off the
+      // written-at timestamps while this branch was open). A run built
+      // without it is refused as stale, which the `rec.ok` control below
+      // catches rather than letting the assertions test an unscored row.
+      forWordsRevision: wordsRevisionOf(task),
     } as Omit<TaskEffortEstimate, 'status'>;
   };
 
