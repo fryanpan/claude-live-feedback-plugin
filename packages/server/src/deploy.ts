@@ -47,11 +47,40 @@
  * `readDeploySource`, never parsed out of git's own chatter — the same
  * discipline `PluginRefresher` uses, and for the same reason: a command that
  * reports success while copying nothing is how a delivery gap hides.
+ *
+ * ## Dependencies are part of the delivery
+ *
+ * On 2026-08-30 a PR added a package; the deploy pulled, restarted, and the
+ * server booted into a missing-import crash — while the deploy answered 200
+ * and `release.json` advanced, because the bundles built fine before the
+ * server process died. Two changes close that gap, and each one alone is not
+ * enough:
+ *
+ * - `bun install --frozen-lockfile` runs before EVERY restart this module
+ *   schedules, not only when the pull touched `bun.lock`. Gating on the
+ *   lockfile misses the recovery case (a pull whose install failed leaves the
+ *   next deploy seeing nothing to pull) and the hand-pulled case
+ *   (restart-only over a checkout somebody updated without installing).
+ *   Frozen, because a deploy installs exactly what was merged — an install
+ *   that would rewrite `bun.lock` in the deploy source is a broken merge, not
+ *   something to paper over. A failed install refuses the restart outright:
+ *   `install-failed`, and the server keeps running on the code it has.
+ *
+ * - A restart is recorded as an INTENT, not a success. The result carries
+ *   `verification: pending` with a deadline; the restarted server confirms
+ *   its own boot (`confirmDeployBoot`, called from `bin.ts` once it is
+ *   actually serving), and a detached watchdog (`deploy-verify.ts`, spawned
+ *   alongside the restart precisely because the restart kills the process
+ *   that could otherwise check) marks the record `boot-failed` if the
+ *   deadline passes with no confirmation. `GET /api/deploy` reads the
+ *   verdict; a pending record past its deadline reads as failed even if the
+ *   watchdog never got to write.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { clientReleaseStatus } from './client-release.ts';
 import {
   type DeploySource,
@@ -73,6 +102,21 @@ export const RESTART_DELAY_MS = 1500;
 /** Ceiling on any single git invocation. A hung fetch must not hold the
  *  single-flight slot open forever. */
 const GIT_TIMEOUT_MS = 120_000;
+
+/** Ceiling on `bun install`. A cold cache pulling a new package over a slow
+ *  link is minutes, not seconds; a hang past this is a failed install, and a
+ *  failed install is a refused restart — never a restart into missing
+ *  imports. */
+export const INSTALL_TIMEOUT_MS = 300_000;
+
+/** How long a restarted server gets to confirm its own boot before the
+ *  deploy is recorded as `boot-failed`. Prod's restart re-runs
+ *  `scripts/serve.ts`, which rebuilds both browser bundles and then hydrates
+ *  every persisted document before the port answers — minutes on a bad day,
+ *  so the deadline is generous. What it must never be is infinite: a
+ *  `pending` that nothing expires is the 200-on-a-dead-server this exists to
+ *  remove. */
+export const VERIFY_BOOT_TIMEOUT_MS = 180_000;
 
 /** How long a busy bound document is given to finish before the deploy
  *  refuses over it. The write-back debounce is ~800ms (`rooms.ts`), so this
@@ -252,7 +296,34 @@ export type DeployStatus =
   | 'refuse-diverged'
   | 'refuse-dirty'
   | 'refuse-busy'
+  /** `bun install` failed after the pull (or before a restart-only), so the
+   *  restart was refused — the running server keeps its working
+   *  dependencies rather than booting into a missing import. */
+  | 'install-failed'
+  /** The restart was scheduled and the server never confirmed a healthy
+   *  boot before the verification deadline. Written by the watchdog, or
+   *  derived at read time from a `pending` past its deadline. */
+  | 'boot-failed'
   | 'error';
+
+/**
+ * Whether the restart a deploy scheduled actually produced a serving
+ * process. Three states, written by three different actors:
+ *
+ * - `pending` — stamped by the deploy itself, with the deadline, before the
+ *   restart kills the process that stamped it.
+ * - `healthy` — stamped by the RESTARTED server once it is serving
+ *   (`confirmDeployBoot`). Nothing else may claim health: the deploy cannot
+ *   know it, and the watchdog knowing the port answered is weaker than the
+ *   server knowing it finished coming up.
+ * - `failed` — stamped by the detached watchdog when the deadline passes
+ *   with the record still pending, or derived at read time when even the
+ *   watchdog did not survive to write it.
+ */
+export type DeployVerification =
+  | { state: 'pending'; deadlineAt: number }
+  | { state: 'healthy'; confirmedAt: number; detail: string }
+  | { state: 'failed'; failedAt: number; detail: string };
 
 export interface DeployResult {
   /** The deploy did what it set out to do. A refusal is `ok: false` with a
@@ -280,6 +351,12 @@ export interface DeployResult {
   /** A restart was scheduled. It is fire-and-forget by necessity: the
    *  restart kills the process that would have reported on it. */
   restartRequested: boolean;
+  /** Whether `bun install` ran (it runs before every restart). Absent on
+   *  paths that never reached one. */
+  installed?: boolean;
+  /** Whether the restarted server actually came back. Present exactly when
+   *  a restart was requested — see `DeployVerification`. */
+  verification?: DeployVerification;
   /** Whether the caller overrode the busy-document refusal. */
   forced?: boolean;
   requestedBy?: string;
@@ -303,6 +380,14 @@ export interface DeployDeps {
    * deployment publishes no release — see `DeployFacts.servedRef`.
    */
   readServed?: () => string | null;
+  /**
+   * `bun install --frozen-lockfile` in the deploy source. Runs before EVERY
+   * restart this module schedules (see the module header for why it is not
+   * gated on `bun.lock` moving). REQUIRED rather than defaulted, same rule
+   * as `wait`: a wiring that forgets it is a compile error, not a deploy
+   * that restarts into missing imports.
+   */
+  install: () => { ok: boolean; detail?: string };
   /**
    * Sleep. REQUIRED rather than defaulted, so a caller that forgets it is a
    * compile error instead of a test suite that sleeps for real.
@@ -436,13 +521,32 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
     // because a PULL overwrites files under a live editor; a restart writes
     // nothing, and `handle.stop()` flushes every pending write-back on the
     // way down (`Rooms.flush`).
+    //
+    // The install DOES apply: the checkout somebody pulled by hand may hold
+    // a lockfile nobody installed, and this path is also how a deploy whose
+    // install failed gets retried once the cause is fixed.
+    const installed = deps.install();
+    if (!installed.ok) {
+      return {
+        ...common,
+        ok: false,
+        status: 'install-failed',
+        message:
+          'bun install failed, so the restart was refused — restarting over missing ' +
+          `dependencies is how a dead server reports a successful deploy: ${
+            installed.detail ?? 'no detail'
+          }`,
+      };
+    }
     deps.restart();
     return {
       ...common,
       ok: true,
       status: 'restarted',
       restartRequested: true,
-      message: decision.reason,
+      installed: true,
+      verification: { state: 'pending', deadlineAt: deps.now() + VERIFY_BOOT_TIMEOUT_MS },
+      message: `${decision.reason}; boot verification pending — read it back with GET /api/deploy`,
     };
   }
   if (decision.kind === 'refuse-diverged') {
@@ -518,6 +622,27 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
     };
   }
 
+  // The pull may have moved `bun.lock`; the running process was booted
+  // against the OLD dependency set and the restarted one needs the new set
+  // on disk before it starts. Reported honestly on failure: the checkout DID
+  // move (`after`/`changed` say so), and the restart was refused.
+  const installed = deps.install();
+  if (!installed.ok) {
+    return {
+      ...common,
+      ok: false,
+      status: 'install-failed',
+      after,
+      changed,
+      message:
+        `deploy source moved ${before ?? 'unknown'} → ${after ?? 'unknown'}, but bun ` +
+        'install failed and the restart was refused — the server keeps running on the ' +
+        `previous code rather than booting into missing dependencies: ${
+          installed.detail ?? 'no detail'
+        }`,
+    };
+  }
+
   deps.restart();
   return {
     ...common,
@@ -526,11 +651,14 @@ export async function runDeploy(deps: DeployDeps, req: DeployRequest = {}): Prom
     after,
     changed,
     restartRequested: true,
+    installed: true,
+    verification: { state: 'pending', deadlineAt: deps.now() + VERIFY_BOOT_TIMEOUT_MS },
     ...(req.force ? { forced: true } : {}),
     message:
       `deploy source ${before ?? 'unknown'} → ${after ?? 'unknown'} ` +
       `(${plural(ab.behind, 'commit')}); restarting the server, which rebuilds and ` +
-      'republishes the browser client',
+      'republishes the browser client; boot verification pending — read it back with ' +
+      'GET /api/deploy',
   };
 }
 
@@ -572,6 +700,74 @@ export function readDeployLog(file: string): DeployResult | null {
 }
 
 // ---------------------------------------------------------------------------
+// Boot verification — who gets to say the restart worked
+// ---------------------------------------------------------------------------
+
+/**
+ * The RESTARTED server confirms the deploy that restarted it. Called from
+ * `bin.ts` once the server is actually serving (port bound, documents
+ * hydrated) — which is the only vantage point that can claim health, because
+ * the deploy's own process is dead by then and the watchdog can only see
+ * that something answered.
+ *
+ * Touches nothing unless the last record is a restart still pending: an
+ * ordinary boot with no deploy in flight, or one whose verdict is already
+ * written, is left alone.
+ */
+export function confirmDeployBoot(file: string, now: () => number = Date.now): DeployResult | null {
+  const last = readDeployLog(file);
+  if (!last || !last.restartRequested || last.verification?.state !== 'pending') return null;
+  const updated: DeployResult = {
+    ...last,
+    verification: {
+      state: 'healthy',
+      confirmedAt: now(),
+      detail: 'the restarted server came up and confirmed its own boot',
+    },
+  };
+  writeDeployLog(file, updated);
+  return updated;
+}
+
+/** The failed-boot verdict, shared by the watchdog's durable write and the
+ *  read-time derivation so the two can never tell different stories. */
+function bootFailedResult(last: DeployResult, now: number): DeployResult {
+  return {
+    ...last,
+    ok: false,
+    status: 'boot-failed',
+    verification: {
+      state: 'failed',
+      failedAt: now,
+      detail:
+        `the restarted server never confirmed a healthy boot within ${
+          VERIFY_BOOT_TIMEOUT_MS / 1000
+        }s — it may be crash-looping (a missing dependency, a startup throw); ` +
+        'check the launchd error log',
+    },
+  };
+}
+
+/**
+ * The watchdog's one write: a record still `pending` past its own deadline
+ * becomes a durable `boot-failed`. Deliberately keyed on the RECORD's
+ * deadline rather than on who spawned the watchdog — a newer deploy's record
+ * carries a future deadline, so a stale watchdog reads it and stands down
+ * instead of failing somebody else's restart.
+ */
+export function expireDeployVerification(
+  file: string,
+  now: () => number = Date.now,
+): DeployResult | null {
+  const last = readDeployLog(file);
+  if (!last || last.verification?.state !== 'pending') return null;
+  if (now() < last.verification.deadlineAt) return null;
+  const updated = bootFailedResult(last, now());
+  writeDeployLog(file, updated);
+  return updated;
+}
+
+// ---------------------------------------------------------------------------
 // The single-flight wrapper
 // ---------------------------------------------------------------------------
 
@@ -606,12 +802,25 @@ export class Deployer {
   }
 
   last(): DeployResult | null {
-    if (this.lastResult) return this.lastResult;
     if (!this.loaded && this.loadLast) {
       this.loaded = true;
       this.lastResult = this.loadLast();
     }
-    return this.lastResult;
+    // A pending verification is the one state another process may settle
+    // behind our back — the restarted server writes `healthy`, the watchdog
+    // writes `boot-failed` — so it is re-read rather than served from the
+    // cache. Rare (deploys, not requests) and a single small file.
+    if (this.lastResult?.verification?.state === 'pending' && this.loadLast) {
+      this.lastResult = this.loadLast() ?? this.lastResult;
+    }
+    const r = this.lastResult;
+    // Still pending past its deadline means nobody survived to write the
+    // verdict; the reader gets the verdict anyway rather than a stale
+    // "restarting" that reads as in-progress forever.
+    if (r?.verification?.state === 'pending' && this.now() >= r.verification.deadlineAt) {
+      return bootFailedResult(r, this.now());
+    }
+    return r;
   }
 
   deploy(req: DeployRequest = {}): Promise<DeployResult> {
@@ -658,6 +867,58 @@ function spawnGit(cwd: string): GitRunner {
       return { ok: r.exitCode === 0, stdout: r.stdout.toString() };
     } catch {
       return { ok: false, stdout: '' };
+    }
+  };
+}
+
+/**
+ * `bun install --frozen-lockfile` in the deploy source. Frozen because a
+ * deploy installs exactly what the merge delivered — an install that wants to
+ * rewrite `bun.lock` is a broken merge to refuse loudly, and a write to the
+ * lockfile would also dirty the deploy source, which the NEXT deploy then
+ * refuses over. Only `node_modules` moves.
+ */
+function spawnBunInstall(cwd: string): () => { ok: boolean; detail?: string } {
+  return () => {
+    try {
+      const r = spawnSync('bun', ['install', '--frozen-lockfile'], {
+        cwd,
+        encoding: 'utf8',
+        timeout: INSTALL_TIMEOUT_MS,
+      });
+      if (r.status === 0) return { ok: true };
+      // The tail, not the head: bun prints its resolution log first and the
+      // reason it stopped last.
+      const tail = `${r.stderr ?? ''}\n${r.stdout ?? ''}`.trim().slice(-500);
+      return { ok: false, detail: tail || `bun install exited with ${r.status ?? 'a signal'}` };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  };
+}
+
+/**
+ * The boot watchdog, as a DETACHED process — its own process group, stdio
+ * closed, unref'd — because `launchctl kickstart -k` is about to kill this
+ * process and everything that dies with it. All it can do is expire a still
+ * `pending` record into `boot-failed` (see `deploy-verify.ts`); the healthy
+ * verdict belongs to the restarted server alone.
+ */
+export function spawnDeployVerifier(logFile: string): () => void {
+  return () => {
+    try {
+      const script = fileURLToPath(new URL('./deploy-verify.ts', import.meta.url));
+      // No shell, fixed argv — same rule as the restart below.
+      const child = spawn(process.execPath, [script, logFile], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    } catch (err) {
+      // Losing the watchdog does not lose the verdict: a `pending` past its
+      // deadline reads as failed at read time (`Deployer.last`). It only
+      // loses the durable write.
+      console.error('[deploy] could not spawn the boot verifier:', err);
     }
   };
 }
@@ -734,7 +995,15 @@ export function createDeployer(opts: {
 }): Deployer {
   const git = spawnGit(opts.repoRoot);
   const logFile = deployLogPath(opts.dataDir);
-  const restart = opts.restart ?? launchctlRestart();
+  const realRestart = opts.restart ?? launchctlRestart();
+  // The watchdog rides the restart: they are scheduled together because the
+  // restart is the event whose outcome needs watching, and the process
+  // requesting it will not survive to ask.
+  const verify = spawnDeployVerifier(logFile);
+  const restart = () => {
+    verify();
+    realRestart();
+  };
   const readServed = servedRefReader(opts.clientReleaseRoot);
   return new Deployer({
     run: (req) =>
@@ -744,6 +1013,7 @@ export function createDeployer(opts: {
           readSource: () => readDeploySource(opts.repoRoot, git),
           busyDocs: opts.busyDocs,
           ...(readServed ? { readServed } : {}),
+          install: spawnBunInstall(opts.repoRoot),
           wait: (ms) => new Promise((r) => setTimeout(r, ms)),
           restart,
           now: Date.now,

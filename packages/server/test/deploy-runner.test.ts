@@ -18,6 +18,7 @@ import {
   type DeployDeps,
   type DeployResult,
   Deployer,
+  VERIFY_BOOT_TIMEOUT_MS,
   deployLogPath,
   readDeployLog,
   runDeploy,
@@ -56,6 +57,8 @@ function deps(over: Partial<DeployDeps> & { git: DeployDeps['git'] }): DeployDep
     readSource: () => ({ sourceRef: 'aaaaaaa' }),
     busyDocs: () => [],
     restart: () => {},
+    // Like `restart`: nothing in this file may run a real `bun install`.
+    install: () => ({ ok: true }),
     // No test in this file may sleep for real. `wait` is a REQUIRED dep for
     // exactly that reason: forgetting it is a compile error rather than a
     // suite that takes 1.5s longer per busy fixture.
@@ -145,6 +148,156 @@ describe('runDeploy — the fast-forward', () => {
       deps({ git: git.run, readSource: movingSource('aaaaaaa', 'bbbbbbb', git) }),
     );
     expect(res.changed).toBe(true);
+  });
+});
+
+describe('runDeploy — dependencies are part of the delivery', () => {
+  it('installs before the restart, in that order, on a fast-forward', async () => {
+    const git = fakeGit(behindScript());
+    const events: string[] = [];
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        readSource: movingSource('aaaaaaa', 'bbbbbbb', git),
+        install: () => {
+          events.push('install');
+          return { ok: true };
+        },
+        restart: () => {
+          events.push('restart');
+        },
+      }),
+    );
+    expect(res.status).toBe('deployed');
+    expect(res.installed).toBe(true);
+    // The order IS the feature: an install after the restart installs into a
+    // process that already crashed on the missing import.
+    expect(events).toEqual(['install', 'restart']);
+    // And the install ran after the merge — it installs the lockfile the
+    // pull just delivered, not the one it replaced.
+    expect(git.calls.map((c) => c.join(' '))).toContain(MERGE);
+  });
+
+  it('a failed install refuses the restart and reports the moved checkout honestly', async () => {
+    // The incident this exists for: the pull delivered a new package,
+    // nothing installed it, and the restart booted into a missing-import
+    // crash while the deploy answered 200. Now the restart is refused and
+    // the answer says so — including that the checkout DID move, because
+    // claiming `changed: false` would hide that the source and the running
+    // server now disagree.
+    const git = fakeGit(behindScript());
+    let restarts = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        readSource: movingSource('aaaaaaa', 'bbbbbbb', git),
+        install: () => ({
+          ok: false,
+          detail: 'error: lockfile had changes, but lockfile is frozen',
+        }),
+        restart: () => {
+          restarts++;
+        },
+      }),
+    );
+    expect(res.status).toBe('install-failed');
+    expect(res.ok).toBe(false);
+    expect(res.restartRequested).toBe(false);
+    expect(restarts).toBe(0);
+    expect(res.after).toBe('bbbbbbb');
+    expect(res.changed).toBe(true);
+    expect(res.message).toContain('lockfile is frozen');
+    expect(res.verification).toBeUndefined();
+  });
+
+  it('the restart-only path installs too — that is how a failed install gets retried', async () => {
+    // After an install-failed deploy the checkout is already at the tip, so
+    // the retry decides `restart-only`. If that path skipped the install,
+    // the failure would be unrecoverable through the deploy verb.
+    const git = fakeGit({
+      'fetch --quiet origin': { ok: true, stdout: '' },
+      [AHEAD_BEHIND]: { ok: true, stdout: '0\t0\n' },
+      [STATUS]: { ok: true, stdout: '' },
+    });
+    const events: string[] = [];
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        readServed: () => 'older99',
+        install: () => {
+          events.push('install');
+          return { ok: true };
+        },
+        restart: () => {
+          events.push('restart');
+        },
+      }),
+    );
+    expect(res.status).toBe('restarted');
+    expect(res.installed).toBe(true);
+    expect(events).toEqual(['install', 'restart']);
+  });
+
+  it('and a failed install refuses the restart-only restart as well', async () => {
+    const git = fakeGit({
+      'fetch --quiet origin': { ok: true, stdout: '' },
+      [AHEAD_BEHIND]: { ok: true, stdout: '0\t0\n' },
+      [STATUS]: { ok: true, stdout: '' },
+    });
+    let restarts = 0;
+    const res = await runDeploy(
+      deps({
+        git: git.run,
+        readServed: () => 'older99',
+        install: () => ({ ok: false, detail: 'registry unreachable' }),
+        restart: () => {
+          restarts++;
+        },
+      }),
+    );
+    expect(res.status).toBe('install-failed');
+    expect(res.restartRequested).toBe(false);
+    expect(restarts).toBe(0);
+    expect(res.message).toContain('registry unreachable');
+  });
+
+  it('never installs on a path that does not restart', async () => {
+    // The negative control: install is coupled to the restart, not to the
+    // deploy verb — a refusal must not churn node_modules under a running
+    // server for nothing.
+    let installs = 0;
+    const counting = () => {
+      installs++;
+      return { ok: true };
+    };
+    const upToDate = fakeGit({
+      'fetch --quiet origin': { ok: true, stdout: '' },
+      [AHEAD_BEHIND]: { ok: true, stdout: '0\t0\n' },
+      [STATUS]: { ok: true, stdout: '' },
+    });
+    expect((await runDeploy(deps({ git: upToDate.run, install: counting }))).status).toBe(
+      'up-to-date',
+    );
+    const dirty = fakeGit({
+      ...behindScript(),
+      [STATUS]: { ok: true, stdout: ' M packages/server/src/server.ts\0' },
+    });
+    expect((await runDeploy(deps({ git: dirty.run, install: counting }))).status).toBe(
+      'refuse-dirty',
+    );
+    expect(installs).toBe(0);
+  });
+
+  it('a restart is recorded as an intent: verification pending with a deadline', async () => {
+    const git = fakeGit(behindScript());
+    const res = await runDeploy(
+      deps({ git: git.run, readSource: movingSource('aaaaaaa', 'bbbbbbb', git) }),
+    );
+    expect(res.status).toBe('deployed');
+    expect(res.verification).toEqual({
+      state: 'pending',
+      deadlineAt: 1_700_000_000_000 + VERIFY_BOOT_TIMEOUT_MS,
+    });
   });
 });
 
