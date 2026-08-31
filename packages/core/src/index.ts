@@ -4,6 +4,7 @@ export * from './identity.ts';
 export * from './lcs.ts';
 export * from './markdown-blocks.ts';
 export * from './meeting.ts';
+export * from './meeting-timing.ts';
 export * from './redline.ts';
 export * from './review.ts';
 export * from './review-item.ts';
