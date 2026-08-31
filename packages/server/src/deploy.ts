@@ -323,7 +323,9 @@ export type DeployStatus =
 export type DeployVerification =
   | { state: 'pending'; deadlineAt: number }
   | { state: 'healthy'; confirmedAt: number; detail: string }
-  | { state: 'failed'; failedAt: number; detail: string };
+  /** `statusWas` keeps the status the deploy earned before the expiry
+   *  overwrote it, so a late confirmation can restore it. */
+  | { state: 'failed'; failedAt: number; detail: string; statusWas: DeployStatus };
 
 export interface DeployResult {
   /** The deploy did what it set out to do. A refusal is `ok: false` with a
@@ -710,23 +712,52 @@ export function readDeployLog(file: string): DeployResult | null {
  * the deploy's own process is dead by then and the watchdog can only see
  * that something answered.
  *
- * Touches nothing unless the last record is a restart still pending: an
- * ordinary boot with no deploy in flight, or one whose verdict is already
- * written, is left alone.
+ * A live server wins even PAST the deadline, in both write orders — a boot
+ * that lands late flips a still-pending record and also overturns a
+ * `boot-failed` the watchdog already wrote. The alternative is a verdict
+ * decided by which writer got to the file first: the same slow boot reading
+ * healthy or failed depending on scheduling. The deadline's honest meaning
+ * is "as of then, nothing had come up", and the lateness is kept in the
+ * detail rather than in the verdict. An ordinary boot with no restart in
+ * flight, or one already confirmed, is left alone.
  */
 export function confirmDeployBoot(file: string, now: () => number = Date.now): DeployResult | null {
   const last = readDeployLog(file);
-  if (!last || !last.restartRequested || last.verification?.state !== 'pending') return null;
-  const updated: DeployResult = {
-    ...last,
-    verification: {
-      state: 'healthy',
-      confirmedAt: now(),
-      detail: 'the restarted server came up and confirmed its own boot',
-    },
-  };
-  writeDeployLog(file, updated);
-  return updated;
+  if (!last || !last.restartRequested) return null;
+  const v = last.verification;
+  if (v?.state === 'pending') {
+    const late = now() >= v.deadlineAt;
+    const updated: DeployResult = {
+      ...last,
+      verification: {
+        state: 'healthy',
+        confirmedAt: now(),
+        detail: late
+          ? 'the restarted server came up and confirmed its own boot — after the ' +
+            'verification deadline, so a reader in between saw boot-failed'
+          : 'the restarted server came up and confirmed its own boot',
+      },
+    };
+    writeDeployLog(file, updated);
+    return updated;
+  }
+  if (v?.state === 'failed') {
+    const updated: DeployResult = {
+      ...last,
+      ok: true,
+      status: v.statusWas,
+      verification: {
+        state: 'healthy',
+        confirmedAt: now(),
+        detail:
+          'the restarted server came up after the verification deadline had already ' +
+          'expired the deploy — the boot-failed verdict is overturned',
+      },
+    };
+    writeDeployLog(file, updated);
+    return updated;
+  }
+  return null;
 }
 
 /** The failed-boot verdict, shared by the watchdog's durable write and the
@@ -738,6 +769,7 @@ function bootFailedResult(last: DeployResult, now: number): DeployResult {
     status: 'boot-failed',
     verification: {
       state: 'failed',
+      statusWas: last.status,
       failedAt: now,
       detail:
         `the restarted server never confirmed a healthy boot within ${

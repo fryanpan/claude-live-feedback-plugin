@@ -95,6 +95,36 @@ describe('confirmDeployBoot — the restarted server claims its own health', () 
       expect(confirmDeployBoot(file, () => T0)).toBeNull();
     });
   });
+
+  it('a late boot still wins: past the deadline it confirms healthy, noting the lateness', () => {
+    // The verdict must not depend on which writer reaches the file first.
+    // This is the confirm-first order; the test below is the watchdog-first
+    // order, and both converge on healthy.
+    withLog((file) => {
+      writeDeployLog(file, pendingRecord());
+      const confirmed = confirmDeployBoot(file, () => T0 + VERIFY_BOOT_TIMEOUT_MS + 5_000);
+      expect(confirmed?.verification?.state).toBe('healthy');
+      if (confirmed?.verification?.state === 'healthy') {
+        expect(confirmed.verification.detail).toContain('after the verification deadline');
+      }
+    });
+  });
+
+  it('and overturns a boot-failed the watchdog already wrote, restoring the status', () => {
+    withLog((file) => {
+      writeDeployLog(file, pendingRecord());
+      expect(expireDeployVerification(file, () => T0 + VERIFY_BOOT_TIMEOUT_MS + 1)?.status).toBe(
+        'boot-failed',
+      );
+      const confirmed = confirmDeployBoot(file, () => T0 + VERIFY_BOOT_TIMEOUT_MS + 5_000);
+      expect(confirmed?.verification?.state).toBe('healthy');
+      expect(confirmed?.status).toBe('deployed');
+      expect(confirmed?.ok).toBe(true);
+      const onDisk = readDeployLog(file);
+      expect(onDisk?.status).toBe('deployed');
+      expect(onDisk?.verification?.state).toBe('healthy');
+    });
+  });
 });
 
 describe('expireDeployVerification — the watchdog fails what nobody confirmed', () => {
