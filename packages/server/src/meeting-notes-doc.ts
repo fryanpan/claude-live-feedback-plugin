@@ -40,12 +40,32 @@
  * hands it `reclaimAfterInPlaceEdit` — the ledger has to learn the new
  * wording of its own lines, or the rename would hand every line it touched
  * to the person and the notes would freeze there.
+ *
+ * AND THE ENGINE'S OWN LATE CORRECTION IS A THIRD KIND OF EDIT.
+ * `reattributeNotesSection` does not change a name; it moves a MENTION from
+ * one voice to another, because AssemblyAI's end-of-session pass decided a
+ * turn belonged to somebody else. Which mentions move is read off each tag's
+ * own provenance rather than off the voice, and — unlike a rename — the walk
+ * is scoped to the items the LEDGER still claims. What a voice is called is
+ * true wherever it is written; a second thought about who spoke does not get
+ * to edit a sentence a person has taken over.
  */
 
-import { type DocType, contentKind, prose, speakerTagHref, speakerTagText } from '@feedback/core';
+import {
+  type DocType,
+  type SpeakerTagRef,
+  contentKind,
+  findSpeakerTags,
+  parseSpeakerTagHref,
+  prose,
+  reattributeSpeakerTags,
+  speakerTagHref,
+  speakerTagText,
+} from '@feedback/core';
 import * as Y from 'yjs';
 import {
   type NotesOwnership,
+  agentOwnedElements,
   createNotesOwnership,
   mergeNotesSection,
   readNotesSection,
@@ -55,6 +75,7 @@ import {
   type MeetingNotesDeps,
   type MeetingNotesOptions,
   type NotesProjectContext,
+  type NotesReattribution,
   type NotesRelabel,
   type NotesSectionState,
   type NotesUpdate,
@@ -185,37 +206,97 @@ export function retagSpeakerInNotes(
   displayName: string,
   heading: string = MEETING_NOTES_HEADING,
 ): { replaced: number } {
+  const want = speakerTagText(label, { [label]: displayName });
+  return rewriteSpeakerTagRuns(ydoc, heading, (tag) =>
+    // Keyed on the label alone: a rename says what this voice is CALLED, and
+    // where the mention came from is none of its business — so the href
+    // rides through untouched, provenance and all.
+    tag.ref.label === label && tag.text !== want ? { text: want, href: tag.href } : null,
+  );
+}
+
+/**
+ * One speaker tag as the DOC holds it: a contiguous run of delta ops sharing
+ * one link href, plus what the href parses to.
+ */
+interface SpeakerTagRun {
+  href: string;
+  ref: SpeakerTagRef;
+  /** The run's text, sigil included. */
+  text: string;
+}
+
+/** What a caller wants a tag to become. `href: null` takes the link mark off
+ *  entirely, which is how a claim is withdrawn while the words stay. */
+interface SpeakerTagRewrite {
+  text: string;
+  href: string | null;
+}
+
+/**
+ * Walk every speaker tag in the notes section and rewrite the ones `decide`
+ * answers for — in place, run by run, carrying each site's own marks.
+ *
+ * THE UNIT IS A RUN, NOT AN OP. A tag is not always one delta op: bold half
+ * a tag's name and Yjs carries it as two ops sharing the link href, and a
+ * loop treating each op as a whole tag writes the new name once per op. So
+ * contiguous ops with the SAME href accumulate into one run and the run is
+ * what gets replaced. (Two tags for one voice written back to back with
+ * nothing between them merge into one — markdown that says the same name
+ * twice in a row with no words between it.)
+ *
+ * `within` scopes the walk to a set of elements. Absent, the whole section
+ * is in scope, which is what a rename wants: what a voice is called is true
+ * wherever it is written. A correction of WHO SPOKE passes the agent's own
+ * items, because rewriting the attribution inside a sentence a person has
+ * taken over is a claim about their writing, not about the transcript.
+ */
+function rewriteSpeakerTagRuns(
+  ydoc: Y.Doc,
+  heading: string,
+  decide: (tag: SpeakerTagRun) => SpeakerTagRewrite | null,
+  within?: ReadonlySet<Y.XmlElement>,
+): { replaced: number } {
   const fragment = prose.getProseFragment(ydoc);
   const span = findNotesSectionSpan(fragment, heading);
   if (!span) return { replaced: 0 };
   const top = fragment.toArray() as Y.XmlElement[];
   const nodes: Y.XmlText[] = [];
   // From start + 1: the heading is the section's own anchor, never a tag.
-  for (let i = span.start + 1; i < span.endExclusive; i++) collectTextNodes(top[i]!, nodes);
-  const href = speakerTagHref(label);
-  const want = speakerTagText(label, { [label]: displayName });
+  for (let i = span.start + 1; i < span.endExclusive; i++) {
+    collectTextNodesWithin(top[i]!, within, nodes);
+  }
 
   let replaced = 0;
   ydoc.transact(() => {
     for (const node of nodes) {
-      const edits: Array<{ offset: number; length: number; attributes: Record<string, unknown> }> =
-        [];
-      // A tag is not always ONE delta op. Bold half a tag's name and Yjs
-      // carries it as two ops that share the link href, and a loop treating
-      // each op as a whole tag writes the new name once per op. So contiguous
-      // ops for this voice accumulate into a single run, and the run is what
-      // gets replaced. (Two tags for the same voice written back to back with
-      // nothing between them would merge into one — markdown that says the
-      // same name twice in a row with no words between it.)
+      const edits: Array<{
+        offset: number;
+        length: number;
+        attributes: Record<string, unknown>;
+        rewrite: SpeakerTagRewrite;
+      }> = [];
       let run: {
         offset: number;
         length: number;
         attributes: Record<string, unknown>;
         text: string;
+        href: string;
       } | null = null;
       const flush = () => {
-        if (run && run.text !== want) {
-          edits.push({ offset: run.offset, length: run.length, attributes: run.attributes });
+        if (run) {
+          const ref = parseSpeakerTagHref(run.href);
+          if (ref) {
+            const rewrite = decide({ href: run.href, ref, text: run.text });
+            if (rewrite) {
+              edits.push({
+                offset: run.offset,
+                length: run.length,
+                attributes: run.attributes,
+                rewrite,
+              });
+            }
+          }
         }
         run = null;
       };
@@ -230,20 +311,19 @@ export function retagSpeakerInNotes(
         }
         const length = op.insert.length;
         const attributes = op.attributes;
-        const linked = attributes?.link as { href?: unknown } | undefined;
-        if (linked?.href === href) {
-          // The FIRST op's marks carry the whole replacement: the text is
-          // being written anew, so emphasis that covered part of the old
-          // spelling has nothing left to cover. The link mark, which is the
-          // one that matters, is on every op of the run by definition.
-          if (run) {
-            run.length += length;
-            run.text += op.insert;
-          } else {
-            run = { offset, length, attributes: attributes ?? {}, text: op.insert };
-          }
+        const href = (attributes?.link as { href?: unknown } | undefined)?.href;
+        if (typeof href === 'string' && run?.href === href) {
+          run.length += length;
+          run.text += op.insert;
         } else {
           flush();
+          if (typeof href === 'string') {
+            // The FIRST op's marks carry the whole replacement: the text is
+            // being written anew, so emphasis that covered part of the old
+            // spelling has nothing left to cover. The link mark, which is
+            // the one that matters, is on every op of the run by definition.
+            run = { offset, length, attributes: attributes ?? {}, text: op.insert, href };
+          }
         }
         offset += length;
       }
@@ -253,12 +333,31 @@ export function retagSpeakerInNotes(
       for (let i = edits.length - 1; i >= 0; i--) {
         const edit = edits[i]!;
         node.delete(edit.offset, edit.length);
-        prose.insertTextWithMarks(node, edit.offset, want, { attributes: edit.attributes });
+        const text = edit.rewrite.text;
+        if (text.length > 0) {
+          prose.insertTextWithMarks(node, edit.offset, text, {
+            attributes: attributesFor(edit.attributes, edit.rewrite.href),
+          });
+        }
         replaced++;
       }
     }
   }, 'agent');
   return { replaced };
+}
+
+/** The site's marks with the link mark pointed somewhere new — or dropped,
+ *  which leaves the words carrying every other mark they had. */
+function attributesFor(
+  attributes: Record<string, unknown>,
+  href: string | null,
+): Record<string, unknown> {
+  const { link, ...rest } = attributes;
+  // Rebuilt WITHOUT the key rather than with an undefined one: these
+  // attributes go straight into a Yjs insert, and a present-but-undefined
+  // mark is not the same thing as an absent one.
+  if (href === null) return rest;
+  return { ...rest, link: { ...(link as Record<string, unknown> | undefined), href } };
 }
 
 /** One op of a `Y.XmlText` delta, as much of it as this module reads. */
@@ -273,6 +372,75 @@ function collectTextNodes(el: Y.XmlElement, into: Y.XmlText[]): void {
     if (child instanceof Y.XmlText) into.push(child);
     else if (child instanceof Y.XmlElement) collectTextNodes(child, into);
   }
+}
+
+/**
+ * The text nodes under `el` that a scoped edit may touch: all of them when
+ * there is no scope, and otherwise only those inside an element the scope
+ * names. Descends THROUGH an unnamed element rather than stopping at it — a
+ * bullet list is never itself an item, its `listItem` children are.
+ */
+function collectTextNodesWithin(
+  el: Y.XmlElement,
+  within: ReadonlySet<Y.XmlElement> | undefined,
+  into: Y.XmlText[],
+): void {
+  if (within === undefined || within.has(el)) {
+    collectTextNodes(el, into);
+    return;
+  }
+  for (const child of el.toArray()) {
+    if (child instanceof Y.XmlElement) collectTextNodesWithin(child, within, into);
+  }
+}
+
+/**
+ * Carry the engine's late correction of WHO SPOKE into the notes already
+ * written — the half a rename could never do.
+ *
+ * A rename is keyed on a voice and reaches every mention of it. This is
+ * keyed on TURNS, so which mentions move is decided per site from the
+ * provenance each one carries (`speaker:B?t=10,12`): the ones whose every
+ * turn moved the same way take the new voice, the ones whose turns now
+ * disagree are marked unsure, and the ones the revision never touched are
+ * left exactly alone. `reattributeSpeakerTags` in core is the same decision
+ * on a markdown string — one rule, so the session's memory of the notes and
+ * the doc itself cannot come out saying different things.
+ *
+ * SCOPED TO THE AGENT'S OWN ITEMS. Everything else here is scoped to the
+ * notes section; this is scoped further, to the lines the ledger still
+ * claims. Rewriting the attribution inside a sentence a person has taken
+ * over would be the note-taker editing their writing on a machine's second
+ * thoughts — and it is the same boundary that keeps this off an EARLIER
+ * meeting's leftovers in the same doc, whose turn numbers start again from
+ * the beginning and could otherwise collide with this meeting's.
+ */
+export function reattributeNotesSection(
+  ydoc: Y.Doc,
+  reattribution: Pick<NotesReattribution, 'revisions' | 'names'>,
+  owned: ReadonlySet<Y.XmlElement>,
+  heading: string = MEETING_NOTES_HEADING,
+): { replaced: number } {
+  if (reattribution.revisions.size === 0) return { replaced: 0 };
+  return rewriteSpeakerTagRuns(
+    ydoc,
+    heading,
+    (tag) => {
+      // Run through core on a one-tag markdown string, so the doc and the
+      // session's `previous` are decided by the same code rather than by two
+      // implementations of the same rule.
+      const before = `[${tag.text}](${tag.href})`;
+      const after = reattributeSpeakerTags(before, reattribution).markdown;
+      if (after === before) return null;
+      const rewritten = findSpeakerTags(after)[0];
+      // No tag left in the answer is the withdrawn claim: the words stay and
+      // the link mark goes.
+      return rewritten
+        ? { text: rewritten.text, href: speakerTagHref(rewritten.label, rewritten) }
+        : { text: after, href: null };
+    },
+    owned,
+  );
 }
 
 export interface RelabelNotesResult {
@@ -512,6 +680,35 @@ export function applyNotesRelabel(
 }
 
 /**
+ * Carry the engine's late correction of who spoke into the meeting's doc.
+ * Same tolerances as `applyNotesRelabel`, and the same reclaim wrapper: this
+ * edits the agent's own lines in place, so the ledger has to come out the
+ * other side still recognising them.
+ */
+export function applyNotesReattribution(
+  rooms: NotesDocRooms,
+  reattribution: NotesReattribution,
+  ledger: NotesLedger,
+): number {
+  const room = rooms.get(reattribution.docId);
+  if (!room) return 0;
+  if (contentKind(room.meta.type) !== 'prose') return 0;
+  const ownership = ledger.forDoc(reattribution.docId);
+  // Read BEFORE the edit, for the same reason `reclaimAfterInPlaceEdit`
+  // snapshots there: ownership is element AND text, and the edit changes the
+  // text. Afterwards the ledger would no longer claim the very lines this is
+  // allowed to touch.
+  const owned = agentOwnedElements(room.ydoc, MEETING_NOTES_HEADING, ownership);
+  if (owned.size === 0) return 0;
+  return reclaimAfterInPlaceEdit(
+    room.ydoc,
+    MEETING_NOTES_HEADING,
+    ownership,
+    () => reattributeNotesSection(room.ydoc, reattribution, owned).replaced,
+  );
+}
+
+/**
  * Wire caller options into the deps a meeting session runs on: the doc write
  * becomes the sink (a caller `onNotes` observes after it), and the context
  * resolver reads the doc's title and its board's open task titles at meeting
@@ -628,6 +825,17 @@ export function withServerNotesSinks(
         console.error('[meeting-notes] relabel failed:', err);
       }
       options.onRelabel?.(relabel);
+    },
+    onReattribute: (reattribution: NotesReattribution): void => {
+      try {
+        applyNotesReattribution(deps.rooms(), reattribution, ledger);
+      } catch (err) {
+        // Same containment as the relabel above: an attribution left stale
+        // is a blemish, and a rejection reaching the compose chain would
+        // cost the meeting its next notes.
+        console.error('[meeting-notes] reattribution failed:', err);
+      }
+      options.onReattribute?.(reattribution);
     },
   };
 }

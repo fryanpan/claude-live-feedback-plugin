@@ -45,7 +45,12 @@
  * writes them into the doc decides delivery (the CRDT, not the event hub).
  */
 
-import { normalizeSpeakerTags, renameSpeakerTags, speakerDisplayName } from '@feedback/core';
+import {
+  normalizeSpeakerTags,
+  reattributeSpeakerTags,
+  renameSpeakerTags,
+  speakerDisplayName,
+} from '@feedback/core';
 import type { EngineTurn } from './transcribe.ts';
 
 /** One settled turn as a tick's delta carries it. */
@@ -130,6 +135,16 @@ export interface PauseTickerOpts {
    */
   cadenceMs?: number;
   onTick: (tick: NotesTick) => void;
+  /**
+   * A settled turn the engine has changed its mind about AFTER its words
+   * already went out in a tick.
+   *
+   * The ticker itself can do nothing with one — its delta is gone — so it
+   * hands it up. Words still WAITING on a tick are patched in place below
+   * and never reach here: they compose under the new label on their own,
+   * which is not a correction, just the right answer arriving in time.
+   */
+  onRevised?: (revision: { turn: number; speaker?: string }) => void;
   schedule?: TickScheduler;
 }
 
@@ -195,9 +210,10 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
         if (seen.has(turn.turn)) {
           // A settled turn arriving AGAIN is the engine's end-of-session
           // speaker pass changing its mind. One still waiting to compose
-          // takes the new label; one that already went out in a tick keeps
-          // what it was composed with — those words are in the doc, and the
-          // revision has nowhere left to land.
+          // simply takes the new label. One that already went out in a tick
+          // is a CORRECTION to words in the doc: the ticker has no delta
+          // left to change, so it is reported up to the session, which can
+          // find the mentions those words produced.
           const at = pending.findIndex((t) => t.turn === turn.turn);
           const waiting = pending[at];
           // Rebuilt rather than patched: a revision can take the label away
@@ -209,6 +225,11 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
               text: waiting.text,
               ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
             };
+          } else {
+            opts.onRevised?.({
+              turn: turn.turn,
+              ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
+            });
           }
         } else {
           seen.add(turn.turn);
@@ -387,6 +408,36 @@ export interface NotesRelabel {
   rewriteUntagged: boolean;
 }
 
+/**
+ * "The engine now says turn 12 was someone else" — a correction reaching
+ * notes that were already written.
+ *
+ * A THIRD SINK, beside `onNotes` and `onRelabel`, because it is a third kind
+ * of change. An update carries whole notes and replaces what the agent
+ * wrote; a relabel says a voice is called something new and rewrites two
+ * words wherever that voice appears; this says nothing about any name — it
+ * moves a MENTION from one voice to another, and which mentions move is
+ * decided per site from the turns each was composed from.
+ *
+ * Sent as a batch, because the engine sends one: a `SpeakerRevision` names
+ * every turn the whole-session pass changed its mind about, and applying
+ * them one at a time would rewrite the same mention repeatedly and reach the
+ * unsure state through doors it should never have opened.
+ */
+export interface NotesReattribution {
+  docId: string;
+  meetingId: string;
+  /**
+   * Turn id → the label the engine now gives it, `null` for "nobody". Only
+   * turns whose words are ALREADY in the notes: a turn still waiting on a
+   * tick composes under the new label without any of this.
+   */
+  revisions: ReadonlyMap<number, string | null>;
+  /** The name map as it stands, so the doc writes the display name the
+   *  moved-to voice actually answers to. */
+  names: Readonly<Record<string, string>>;
+}
+
 export interface MeetingNotesDeps {
   composer: NotesComposer;
   /** Quiet threshold; defaults to {@link DEFAULT_NOTES_QUIET_MS}. */
@@ -440,6 +491,12 @@ export interface MeetingNotesDeps {
    * strip; only the words already in the doc go unrevised.
    */
   onRelabel?: (relabel: NotesRelabel) => void;
+  /**
+   * Where the engine's late correction of who spoke goes. Optional on the
+   * same terms as `onRelabel`: a session with no sink still corrects its own
+   * `previous`, so nothing composed afterwards disagrees with the record.
+   */
+  onReattribute?: (reattribution: NotesReattribution) => void;
   onError?: (message: string) => void;
 }
 
@@ -497,6 +554,23 @@ export function extendsWord(ch: string | undefined): boolean {
  * a RegExp: a speaker's name is arbitrary text a person typed, and escaping
  * it for a pattern is a bug waiting for the first name with a dot in it.
  */
+/**
+ * Which turns of this tick belong to which voice — the provenance every
+ * mention the tick composes is stamped with.
+ *
+ * Keyed on the RAW engine label rather than the display name: the label is
+ * what the tag's href carries, and two voices a person has given the same
+ * name must not pool their turns into one bucket.
+ */
+function turnsByLabel(turns: readonly NotesTurn[]): Record<string, number[]> {
+  const byLabel: Record<string, number[]> = {};
+  for (const turn of turns) {
+    if (turn.speakerLabel === undefined) continue;
+    (byLabel[turn.speakerLabel] ??= []).push(turn.turn);
+  }
+  return byLabel;
+}
+
 export function replaceWholeToken(text: string, from: string, to: string): string {
   if (!from || from === to) return text;
   let out = '';
@@ -626,6 +700,12 @@ export function beginNotesSession(
           names,
           known: seen,
           ...(input.humanNotes ? { protect: input.humanNotes } : {}),
+          // What this tick actually carried, per voice. A mention the
+          // composer has just written is stamped with it, so a later
+          // revision of any of those turns can find the mention again.
+          // Mentions this tick merely re-emitted keep the provenance they
+          // already have — see `turnsByLabel` in core.
+          turnsByLabel: turnsByLabel(turns),
         });
         if (checked.unknown.length > 0) {
           deps.onError?.(
@@ -649,11 +729,73 @@ export function beginNotesSession(
     });
   };
 
+  /**
+   * Turns the engine has changed its mind about since the last time this
+   * session acted on a batch. Filled straight off the wire and drained on
+   * the compose chain, because the whole point is to land AFTER whatever is
+   * composing — that compose read the old labels and would otherwise write
+   * them back over the correction.
+   */
+  const revisedTurns = new Map<number, string | null>();
+  let reattributionQueued = false;
+
+  const applyRevisions = (): void => {
+    reattributionQueued = false;
+    const revisions = new Map(revisedTurns);
+    revisedTurns.clear();
+    // A turn that has fallen back into `carry` since the revision arrived is
+    // one whose compose FAILED: its words are not in the doc, and it will
+    // compose under the new label by itself. Correcting words nobody has
+    // read yet is nothing, so it leaves the batch here rather than becoming
+    // a rewrite that finds no mention.
+    for (const [turn, speaker] of [...revisions]) {
+      const at = carry.findIndex((c) => c.turn === turn);
+      if (at < 0) continue;
+      const carried = carry[at]!;
+      carry[at] = {
+        turn: carried.turn,
+        text: carried.text,
+        ...(speaker !== null ? { speaker } : {}),
+      };
+      revisions.delete(turn);
+    }
+    if (revisions.size === 0) return;
+    if (previous !== null) {
+      const out = reattributeSpeakerTags(previous, { revisions, names });
+      previous = out.markdown;
+      if (out.unsure > 0) {
+        deps.onError?.(
+          `notes: the engine revised who spoke for part of ${out.unsure} ` +
+            `mention${out.unsure > 1 ? 's' : ''}, so ` +
+            `${out.unsure > 1 ? 'they are' : 'it is'} marked unsure rather than moved`,
+        );
+      }
+    }
+    deps.onReattribute?.({
+      docId: ids.docId,
+      meetingId: ids.meetingId,
+      revisions,
+      names: { ...names },
+    });
+  };
+
   const ticker = createPauseTicker({
     quietMs: deps.quietMs ?? DEFAULT_NOTES_QUIET_MS,
     cadenceMs: deps.cadenceMs ?? DEFAULT_NOTES_CADENCE_MS,
     ...(deps.schedule ? { schedule: deps.schedule } : {}),
     onTick: composeTick,
+    onRevised: ({ turn, speaker }) => {
+      revisedTurns.set(turn, speaker ?? null);
+      // ONE chain step for the whole batch, however many turns it names. The
+      // engine sends a `SpeakerRevision` as a single message and the adapter
+      // re-emits it turn by turn in a synchronous loop, so every turn of the
+      // batch is in the map before this step runs — and a mention whose
+      // turns disagree is then seen disagreeing, rather than being moved by
+      // the first revision and marked unsure by the second.
+      if (reattributionQueued) return;
+      reattributionQueued = true;
+      chain = chain.then(applyRevisions);
+    },
   });
 
   return {
