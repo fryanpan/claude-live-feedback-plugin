@@ -279,9 +279,15 @@ sitting in the call billing.
 (`claude-workspaces-recall-api-key`) — the same order and the same reasoning
 as the AssemblyAI key. `RECALL_REGION` picks the API host and a key is only
 valid in its own region (a mismatch is a 401, which the client's error names).
-`RECALL_PUBLIC_WS_BASE` is the one value that cannot be inferred: **Recall
-dials this server**, and this server binds to localhost behind Tailscale, so
-bots stay disabled until it names a publicly reachable `wss://` origin.
+**Recall dials this server**, and this server binds to localhost behind a
+Cloudflare Tunnel, so it has to be told the origin something in front of it
+answers on — which is already `CW_PUBLIC_BASE_URL`, the single source of every
+link the server hands a human. The realtime endpoint is DERIVED from it
+(`https://host` → `wss://host/recall/<token>`) rather than configured
+separately: two settings naming one host is two things to get wrong, and
+nothing reports the disagreement — just a bot that records into a hostname
+nobody is listening on. A base that is unset, or is plain `http`, disables
+bots rather than stream a meeting's audio in cleartext.
 `RECALL_WEBHOOK_SECRET` verifies status webhooks (Svix HMAC); Recall publishes
 no static IPs to allowlist, so that signature is the only proof available.
 Retention is `{type: "timed", hours: 24}` by default — short, per the owner's
@@ -313,7 +319,27 @@ and a `calendar.sync_events` webhook consumer before any bot is scheduled.
   one would refuse every real connection. The 128-bit per-bot token in the
   path is the authentication, and it is forgotten when that bot's meeting ends.
 - **`assembly_ai_v3_streaming`, never `assembly_ai_streaming`** — the docs say
-  the older name fails.
+  the older name fails. It is also **not supported in `eu-central-1`**
+  (docs.recall.ai/docs/assemblyai, FAQ), so `RECALL_REGION` and this provider
+  are not independent choices: an EU region needs a different provider, not
+  just a different key.
+- **The AssemblyAI key goes in Recall's Transcription dashboard, per region.**
+  Recall's regions are isolated, so the key is entered separately for each one
+  (docs.recall.ai/docs/assemblyai, Setup). It is never in a request body and
+  never in this repo.
+- **Cloudflare Access sits in FRONT of both of the vendor's inbound channels,
+  and will refuse them.** `route()` classifies the request's Host and runs the
+  Access verifier before any path match (`server.ts`, the `classifyHost` block
+  — `viaProxy: req.headers.has('cf-ray')` means a tunnel request can never
+  claim to be local). Recall's backend cannot present an Access JWT, a share
+  cookie, or a proxied-trusted identity, so both `wss://<host>/recall/<token>`
+  and `POST /api/recall/status` are refused before they reach their routes.
+  Deriving the right URL is therefore necessary and NOT sufficient: the two
+  vendor paths need a route that Access does not front, either at the
+  Cloudflare edge or as an explicit exemption here. Both paths already carry
+  their own credential — a 128-bit per-bot token, and the Svix signature — so
+  an exemption would not be unauthenticated, but it is a change to this
+  server's auth boundary and is Bryan's call, not an implementation detail.
 
 ## Persistence
 
