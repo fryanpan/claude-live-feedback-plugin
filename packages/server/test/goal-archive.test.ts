@@ -154,6 +154,27 @@ describe('archiving a goal', () => {
     expect(store.getGoalRow(G.index)?.archivedAt).toBeUndefined();
   });
 
+  it('leaves a live task under an ALREADY-archived subgoal, because the board shows it in Backlog', () => {
+    const { wsId, G, rows } = seed();
+    // The subgoal goes on its own, then one of its tasks is put back by hand.
+    store.archiveGoal(G.index, { actor: PERSON });
+    store.unarchiveTask(rows.crawl.id, { actor: PERSON });
+    // An archived subgoal is not a band anything can sit under, so the board
+    // draws this task in Backlog from here on.
+    expect(store.listTasks(wsId).map((t) => t.id)).toContain(rows.crawl.id);
+
+    const res = store.archiveGoal(G.fast, { actor: PERSON });
+    if (!res.ok) throw new Error('archiveGoal refused');
+    expect(res.subgoalIds).not.toContain(G.index);
+    expect(res.taskIds).not.toContain(rows.crawl.id);
+    // Still on the board: archiving a band took a row off Backlog nowhere.
+    expect(store.listTasks(wsId).map((t) => t.id)).toContain(rows.crawl.id);
+    // And the count the confirmation showed is the set the write took — the
+    // one promise this rule could still break.
+    expect(store.goalCascade(G.fast).taskIds).toHaveLength(0);
+    expect(res.taskIds.sort()).toEqual([rows.wire.id, rows.cache.id].sort());
+  });
+
   it('a hand restore leaves the cascade, so re-restoring the band does not reclaim it', () => {
     const { G, rows } = seed();
     store.archiveGoal(G.fast, { actor: PERSON });

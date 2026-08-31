@@ -5334,6 +5334,15 @@ export class TaskStore {
    * them, so counting them would promise a removal that does not happen, and
    * — worse — the restore would then bring back a row somebody had put away
    * on its own.
+   *
+   * That skip carries a live task with it, and on purpose. Archive a subgoal,
+   * then put ONE of its tasks back by hand: the board draws that task in
+   * Backlog, because an archived subgoal is not a band anything can sit
+   * under. Archiving the parent therefore leaves it there. Sweeping it up
+   * would take a row off Backlog — somewhere the reader is not looking, and
+   * not in the band they just archived — which is the surprise the
+   * confirmation exists to prevent. What the board shows under the band is
+   * what goes.
    */
   goalCascade(goalId: string): { goalIds: string[]; subgoalIds: string[]; taskIds: string[] } {
     const empty = { goalIds: [], subgoalIds: [], taskIds: [] };
