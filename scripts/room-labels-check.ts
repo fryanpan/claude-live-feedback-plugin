@@ -48,8 +48,16 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MEETING_SAMPLE_RATE } from '../packages/core/src/meeting.ts';
@@ -60,6 +68,7 @@ import {
 } from '../packages/server/src/meetings.ts';
 import { createAssemblyAiEngine } from '../packages/server/src/transcribe-assemblyai.ts';
 import { createMockTranscriptionEngine } from '../packages/server/src/transcribe.ts';
+import { amiUtterances, amiWindow, busiestWindow, parseAmiWords } from './ami-truth.ts';
 import {
   DEFAULT_SCORING,
   type ScoredTurn,
@@ -254,6 +263,138 @@ export function emulate(input: string, keys: readonly string[], dir: string): st
   return out;
 }
 
+/* ===== AMI: a real room, from a corpus, without downloading a meeting ===== */
+
+/** Where the corpus is kept. Outside the repo: it is 23 MB of somebody else's data. */
+function amiCacheDir(): string {
+  return join(homedir(), 'Library', 'Caches', 'claude-workspaces', 'ami');
+}
+
+const AMI_AUDIO_BASE = 'https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus';
+const AMI_ANNOTATIONS =
+  'https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip';
+
+/** The far-field channel: ONE element of the array on the table. */
+export function amiAudioUrl(meeting: string): string {
+  return `${AMI_AUDIO_BASE}/${meeting}/audio/${meeting}.Array1-01.wav`;
+}
+
+/**
+ * The excerpt's bytes, and only those.
+ *
+ * The array channel is already 16 kHz mono 16-bit PCM — the meeting wire's own
+ * format — so a byte offset IS a time offset and an HTTP range asks for
+ * exactly the seconds wanted. A whole meeting is 40 MB and this is under 5;
+ * on a link measured at tens of KB/s that is the difference between a
+ * measurement and an afternoon. The header is read first rather than assumed:
+ * a WAV whose `data` chunk did not start at 44 would otherwise be decoded half
+ * a chunk out and sound like noise.
+ */
+export async function fetchAmiExcerpt(
+  meeting: string,
+  fromSeconds: number,
+  seconds: number,
+  cacheDir: string,
+): Promise<Uint8Array> {
+  mkdirSync(cacheDir, { recursive: true });
+  const cached = join(cacheDir, `${meeting}.Array1-01.${fromSeconds}+${seconds}.raw`);
+  if (existsSync(cached)) return new Uint8Array(readFileSync(cached));
+  const url = amiAudioUrl(meeting);
+  const head = await fetch(url, { headers: { Range: 'bytes=0-199' } });
+  if (!head.ok) throw new Error(`AMI audio ${head.status} for ${meeting}`);
+  const header = new Uint8Array(await head.arrayBuffer());
+  const view = new DataView(header.buffer);
+  const tag = (at: number) => String.fromCharCode(...header.subarray(at, at + 4));
+  if (tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('not a WAV');
+  const rate = view.getUint32(24, true);
+  const channels = view.getUint16(22, true);
+  const bits = view.getUint16(34, true);
+  if (rate !== MEETING_SAMPLE_RATE || channels !== 1 || bits !== 16) {
+    throw new Error(`AMI audio is ${rate}Hz ${channels}ch ${bits}bit, not the meeting's format`);
+  }
+  let at = 12;
+  while (at + 8 < header.length && tag(at) !== 'data') {
+    at += 8 + view.getUint32(at + 4, true);
+  }
+  if (tag(at) !== 'data') throw new Error('no data chunk in the first 200 bytes');
+  const dataAt = at + 8;
+  const bytesPerSecond = MEETING_SAMPLE_RATE * 2;
+  const start = dataAt + Math.round(fromSeconds * bytesPerSecond);
+  const end = start + Math.round(seconds * bytesPerSecond) - 1;
+  const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
+  if (res.status !== 206) throw new Error(`AMI audio did not honour the range: ${res.status}`);
+  const pcm = new Uint8Array(await res.arrayBuffer());
+  writeFileSync(cached, pcm);
+  return pcm;
+}
+
+/** A WAV around raw PCM, so ffmpeg can be handed the excerpt for `--emulate`. */
+export function wrapWav(pcm: Uint8Array, path: string): string {
+  const header = new Uint8Array(44);
+  const view = new DataView(header.buffer);
+  const ascii = (at: number, text: string) => {
+    for (let i = 0; i < text.length; i++) header[at + i] = text.charCodeAt(i);
+  };
+  ascii(0, 'RIFF');
+  view.setUint32(4, 36 + pcm.length, true);
+  ascii(8, 'WAVEfmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, MEETING_SAMPLE_RATE, true);
+  view.setUint32(28, MEETING_SAMPLE_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, 'data');
+  view.setUint32(40, pcm.length, true);
+  const out = new Uint8Array(header.length + pcm.length);
+  out.set(header, 0);
+  out.set(pcm, header.length);
+  writeFileSync(path, out);
+  return path;
+}
+
+/** The meeting's reference words, unzipped once into the cache. */
+export function amiWordFiles(meeting: string, cacheDir: string): string[] {
+  const wordsDir = join(cacheDir, 'words');
+  const zip = join(cacheDir, 'ami_public_manual_1.6.2.zip');
+  const existing = () =>
+    existsSync(wordsDir)
+      ? readdirSync(wordsDir)
+          .filter((f) => f.startsWith(`${meeting}.`) && f.endsWith('.words.xml'))
+          .map((f) => join(wordsDir, f))
+      : [];
+  if (existing().length > 0) return existing();
+  if (!existsSync(zip)) {
+    throw new Error(
+      `No annotations at ${zip}.\nDownload once (CC BY 4.0):\n  curl -o ${zip} ${AMI_ANNOTATIONS}`,
+    );
+  }
+  mkdirSync(wordsDir, { recursive: true });
+  // -j so the files land flat whatever the zip's internal layout is; the
+  // layout is the corpus's business and has changed between releases.
+  run('unzip', ['-o', '-j', zip, `words/${meeting}.*.words.xml`, '-d', wordsDir]);
+  const found = existing();
+  if (found.length === 0) throw new Error(`No words files for ${meeting} inside ${zip}`);
+  return found;
+}
+
+/** Every speaker's reference words for a meeting, as one time-ordered stream. */
+export function amiReference(meeting: string, cacheDir: string): AmiTruth {
+  const files = amiWordFiles(meeting, cacheDir);
+  const words = files.flatMap((file) => {
+    // `ES2002a.A.words.xml` — the speaker is the middle segment.
+    const speaker = file.split('/').pop()?.split('.')[1] ?? '?';
+    return parseAmiWords(readFileSync(file, 'utf8'), speaker);
+  });
+  return { utterances: amiUtterances(words), speakers: new Set(words.map((w) => w.speaker)).size };
+}
+
+interface AmiTruth {
+  utterances: ReturnType<typeof amiUtterances>;
+  speakers: number;
+}
+
 /**
  * The script as read, out of a text file: one `Name: line` per line.
  *
@@ -358,6 +499,12 @@ const USAGE = `room-labels-check — score speaker labels against the script tha
   --meeting <meetingId>           which one (default: the most recent)
   --audio <file>                  send a file through the real engine (costs)
   --synthetic                     build a two-voice fixture and use --audio on it
+  --ami [meeting]                 an excerpt of a real meeting from the AMI
+                                  corpus, off ONE far-field array element
+                                  (default ES2002a)
+  --ami-seconds <n>               how much of it (default 120)
+  --ami-from <s>                  where to start (default: the busiest window)
+  --cache <dir>                   where the corpus is kept, outside the repo
   --truth <file>                  the script, "Name: line" per line (required
                                   except with --synthetic, which knows its own)
   --setting <label>               what the recording was made under, e.g. ec1-ns0-agc0
@@ -375,7 +522,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return args.size === 0 ? 1 : 0;
   }
   const setting = args.get('setting')?.[0] ?? 'unstated';
-  const maxSpeakers = Number(args.get('speakers')?.[0] ?? '2');
+  const speakersArg = args.get('speakers')?.[0];
 
   if (args.has('meeting') || args.has('doc')) {
     const truthFile = args.get('truth')?.[0];
@@ -419,7 +566,33 @@ async function main(argv: readonly string[]): Promise<number> {
     let audioFile: string;
     let truth: TruthUtterance[];
     let synthetic = false;
-    if (args.has('synthetic')) {
+    let provenance: string | null = null;
+    let speakersInRoom = 2;
+    if (args.has('ami')) {
+      const meeting = args.get('ami')?.[0] ?? 'ES2002a';
+      const cacheDir = args.get('cache')?.[0] ?? amiCacheDir();
+      const seconds = Number(args.get('ami-seconds')?.[0] ?? '120');
+      const reference = amiReference(meeting, cacheDir);
+      // The busiest window unless pinned: the opening minutes are one person
+      // explaining the recording equipment, and measuring there would look
+      // like a result while testing nothing about telling people apart.
+      const fromArg = args.get('ami-from')?.[0];
+      const from =
+        fromArg !== undefined ? Number(fromArg) : busiestWindow(reference.utterances, seconds);
+      const window = amiWindow(reference.utterances, from, seconds);
+      if (window.length === 0) {
+        console.error(`Nothing said in ${meeting} between ${from}s and ${from + seconds}s.`);
+        return 1;
+      }
+      speakersInRoom = new Set(window.map((u) => u.speaker)).size;
+      const pcm = await fetchAmiExcerpt(meeting, from, seconds, cacheDir);
+      audioFile = wrapWav(pcm, join(dir, `${meeting}.${from}+${seconds}.wav`));
+      truth = window.map((u) => ({ speaker: u.speaker, text: u.text }));
+      provenance =
+        `AMI ${meeting} Array1-01 (ONE far-field element), ${from}s–${from + seconds}s, ` +
+        `${speakersInRoom} people, ${window.length} reference utterances — CC BY 4.0`;
+      console.log(`${provenance}\n  corpus cache: ${cacheDir}`);
+    } else if (args.has('synthetic')) {
       if (!has('say') || !has('ffmpeg')) {
         console.error('--synthetic needs macOS `say` and ffmpeg on PATH.');
         return 1;
@@ -428,6 +601,7 @@ async function main(argv: readonly string[]): Promise<number> {
       audioFile = built.file;
       truth = SYNTHETIC_SCRIPT.map((t) => ({ speaker: t.speaker, text: t.line }));
       synthetic = true;
+      speakersInRoom = new Set(SYNTHETIC_SCRIPT.map((t) => t.speaker)).size;
       console.log(`Built a ${built.seconds.toFixed(1)}s synthetic two-voice room.`);
     } else {
       const file = args.get('audio')?.[0];
@@ -438,7 +612,12 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       audioFile = file;
       truth = parseTruth(readFileSync(truthFile, 'utf8'));
+      speakersInRoom = new Set(truth.map((t) => t.speaker)).size;
     }
+    // The cap is what the room holds, unless the caller is deliberately
+    // testing a wrong one. Hard-coding 2 would have quietly capped a
+    // four-person AMI meeting at two and scored the merge as our failure.
+    const maxSpeakers = Number(speakersArg ?? String(speakersInRoom));
 
     const emulations = args.get('emulate') ?? [];
     const used = emulations.length > 0 ? emulate(audioFile, emulations, dir) : audioFile;
@@ -456,6 +635,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const flags = [
       args.has('mock') ? 'MOCK ENGINE — proves the harness, measures nothing' : null,
       synthetic ? 'SYNTHETIC FIXTURE — two TTS voices, not a room' : null,
+      provenance,
       emulations.length > 0 ? `EMULATED: ${emulations.join(', ')} (ffmpeg, not the browser)` : null,
       `microphone settings: ${setting}`,
     ].filter(Boolean);
