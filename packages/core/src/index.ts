@@ -8,6 +8,7 @@ export * from './redline.ts';
 export * from './review.ts';
 export * from './review-item.ts';
 export * from './review-judge-prompt.ts';
+export * from './speaker-roster.ts';
 export * from './speaker-tags.ts';
 export * from './suggest.ts';
 export * from './thread-summary.ts';
