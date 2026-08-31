@@ -24,6 +24,22 @@
  * person's line it proposes them as a suggestion. `replaceNotesSection` is
  * kept for the first write of a section and for callers that own the whole
  * span; see `meeting-notes-merge.ts` for the invariant and its reasoning.
+ *
+ * A RENAME REWRITES THE NOTES ALREADY WRITTEN, and does it as a TARGETED
+ * replacement rather than a section rewrite (owner, 2026-08-29: "rewrite
+ * them" — he does not want the same person reading as "Speaker B" above a
+ * rename and by name below it). `relabelNotesSection` replaces only the
+ * exact token the composer put there ("Speaker B"), only inside the notes
+ * section, and touches nothing else in the doc.
+ *
+ * It deliberately does NOT go through `replaceNotesSection`, for the same
+ * reason the notes sink no longer does: that path replaces the whole section
+ * with a string this module composed, discarding whatever the human had
+ * typed into it. A rename is a two-word correction and must cost no more
+ * than two words. It edits IN PLACE, under the agent's hand, so the sink
+ * hands it `reclaimAfterInPlaceEdit` — the ledger has to learn the new
+ * wording of its own lines, or the rename would hand every line it touched
+ * to the person and the notes would freeze there.
  */
 
 import { type DocType, contentKind, prose } from '@feedback/core';
@@ -33,13 +49,16 @@ import {
   createNotesOwnership,
   mergeNotesSection,
   readNotesSection,
+  reclaimAfterInPlaceEdit,
 } from './meeting-notes-merge.ts';
-import type {
-  MeetingNotesDeps,
-  MeetingNotesOptions,
-  NotesProjectContext,
-  NotesSectionState,
-  NotesUpdate,
+import {
+  type MeetingNotesDeps,
+  type MeetingNotesOptions,
+  type NotesProjectContext,
+  type NotesRelabel,
+  type NotesSectionState,
+  type NotesUpdate,
+  extendsWord,
 } from './meeting-notes.ts';
 import { type TaskCaptureBoard, runTaskCapture } from './meeting-task-capture.ts';
 
@@ -93,6 +112,30 @@ export function replaceNotesSection(
   if (blocks.length === 0) return { ok: false, error: 'empty' };
 
   const fragment = prose.getProseFragment(ydoc);
+  const span = findNotesSectionSpan(fragment, heading);
+
+  if (!span) {
+    ydoc.transact(() => {
+      fragment.insert(fragment.length, blocks);
+    }, 'agent');
+    return { ok: true, mode: 'appended' };
+  }
+
+  ydoc.transact(() => {
+    fragment.delete(span.start, span.endExclusive - span.start);
+    fragment.insert(span.start, blocks);
+  }, 'agent');
+  return { ok: true, mode: 'replaced' };
+}
+
+/** Where the notes section sits in the top-level fragment: the heading's own
+ *  index, and the first index past its body (the next heading at the same or
+ *  a higher level, or the end of the doc). Null when the heading is absent —
+ *  which is the "never written yet" state, not a failure. */
+function findNotesSectionSpan(
+  fragment: Y.XmlFragment,
+  heading: string,
+): { start: number; endExclusive: number } | null {
   const top = fragment.toArray() as Y.XmlElement[];
   let start = -1;
   let level = 0;
@@ -104,13 +147,7 @@ export function replaceNotesSection(
     level = prose.headingLevelOf(el);
     break;
   }
-
-  if (start < 0) {
-    ydoc.transact(() => {
-      fragment.insert(fragment.length, blocks);
-    }, 'agent');
-    return { ok: true, mode: 'appended' };
-  }
+  if (start < 0) return null;
 
   let endExclusive = top.length;
   for (let i = start + 1; i < top.length; i++) {
@@ -121,11 +158,76 @@ export function replaceNotesSection(
       break;
     }
   }
+  return { start, endExclusive };
+}
+
+export interface RelabelNotesResult {
+  /** How many occurrences were rewritten. Zero is an ordinary answer: the
+   *  notes may not mention that voice, or may not exist yet. */
+  replaced: number;
+  /** Matches that straddled two Y.XmlText nodes and were left alone. A
+   *  count the caller cannot see is a stale label nobody knows about. */
+  skippedCrossNode?: number;
+}
+
+/**
+ * Rewrite `from` to `to` inside the notes section only — the rename made
+ * retroactive across notes already composed.
+ *
+ * SCOPED THREE WAYS, because this runs on a doc a human is writing in:
+ *  1. Only inside the notes section, and never its heading. Prose the human
+ *     wrote elsewhere in the doc cannot be reached from here, whatever it
+ *     says.
+ *  2. Only the exact token, on word boundaries — the string this module's
+ *     own composer put there ("Speaker B"), not a substring of one.
+ *  3. In place, character-for-character, carrying each site's marks. The
+ *     surrounding sentence is not re-composed, re-parsed, or replaced, so a
+ *     sentence the human edited into the section keeps every other word.
+ */
+export function relabelNotesSection(
+  ydoc: Y.Doc,
+  from: string,
+  to: string,
+  heading: string = MEETING_NOTES_HEADING,
+): RelabelNotesResult {
+  if (!from || !to || from === to) return { replaced: 0 };
+  const fragment = prose.getProseFragment(ydoc);
+  const span = findNotesSectionSpan(fragment, heading);
+  if (!span) return { replaced: 0 };
+
+  const top = fragment.toArray() as Y.XmlElement[];
+  // From start + 1: the heading is the replace contract's own anchor and
+  // holds no speaker, so it is never eligible.
+  const inSection = new Set<unknown>(top.slice(span.start + 1, span.endExclusive));
+  if (inSection.size === 0) return { replaced: 0 };
+
+  const { matches, crossNode, plainText } = prose.locateMatches(fragment, { find: from });
+  const kept = matches.filter((m) => {
+    if (!inSection.has(m.segment.topBlock)) return false;
+    if (extendsWord(plainText[m.docOffset - 1])) return false;
+    if (extendsWord(plainText[m.docOffset + m.length])) return false;
+    return true;
+  });
+  if (kept.length === 0) {
+    return { replaced: 0, ...(crossNode > 0 ? { skippedCrossNode: crossNode } : {}) };
+  }
+
   ydoc.transact(() => {
-    fragment.delete(start, endExclusive - start);
-    fragment.insert(start, blocks);
+    // Descending, for the reason findAndReplace's sweep is: every offset not
+    // yet used stays valid because edits only land at or above the next site.
+    for (let i = kept.length - 1; i >= 0; i--) {
+      const m = kept[i]!;
+      const siteMarks = prose.coveringInlineMarks([
+        { node: m.segment.node, offset: m.offsetInNode, length: m.length },
+      ]);
+      m.segment.node.delete(m.offsetInNode, m.length);
+      prose.insertTextWithMarks(m.segment.node, m.offsetInNode, to, {
+        attributes: siteMarks.attributes,
+      });
+    }
   }, 'agent');
-  return { ok: true, mode: 'replaced' };
+
+  return { replaced: kept.length, ...(crossNode > 0 ? { skippedCrossNode: crossNode } : {}) };
 }
 
 /**
@@ -247,6 +349,32 @@ export function readNotesState(
 }
 
 /**
+ * Carry a rename into the notes already written in the meeting's doc.
+ * Same tolerances as `applyNotesUpdate`: a doc that has gone away or was
+ * never prose is not an error, it is a meeting whose notes are elsewhere.
+ * Returns how many mentions moved — zero when the voice was never written
+ * about, which is ordinary.
+ */
+export function applyNotesRelabel(
+  rooms: NotesDocRooms,
+  relabel: NotesRelabel,
+  ledger: NotesLedger,
+): number {
+  const room = rooms.get(relabel.docId);
+  if (!room) return 0;
+  if (contentKind(room.meta.type) !== 'prose') return 0;
+  // Through the reclaim wrapper, not straight at the doc: the rename edits
+  // the agent's own lines in place, and the ledger has to come out the other
+  // side still recognising them. See `reclaimAfterInPlaceEdit`.
+  return reclaimAfterInPlaceEdit(
+    room.ydoc,
+    MEETING_NOTES_HEADING,
+    ledger.forDoc(relabel.docId),
+    () => relabelNotesSection(room.ydoc, relabel.from, relabel.to).replaced,
+  );
+}
+
+/**
  * Wire caller options into the deps a meeting session runs on: the doc write
  * becomes the sink (a caller `onNotes` observes after it), and the context
  * resolver reads the doc's title and its board's open task titles at meeting
@@ -351,6 +479,17 @@ export function withServerNotesSinks(
         console.error('[meeting-notes] doc write failed:', err);
       }
       options.onNotes?.(update);
+    },
+    onRelabel: (relabel: NotesRelabel): void => {
+      try {
+        applyNotesRelabel(deps.rooms(), relabel, ledger);
+      } catch (err) {
+        // A rename that cannot reach the doc leaves a stale label, which is
+        // a blemish; letting it reach the compose chain as a rejection would
+        // cost the meeting its next notes, which is not.
+        console.error('[meeting-notes] relabel failed:', err);
+      }
+      options.onRelabel?.(relabel);
     },
   };
 }

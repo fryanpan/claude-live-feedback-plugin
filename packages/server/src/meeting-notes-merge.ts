@@ -878,3 +878,48 @@ export function readNotesSection(
     human: items.filter((_, i) => !isAgent[i]).map((i) => i.md),
   };
 }
+
+/**
+ * Run an agent edit that rewrites text IN PLACE inside the notes section,
+ * and keep the ledger's idea of its own lines in step with it.
+ *
+ * The speaker rename (`relabelNotesSection`) is one: it does not replace
+ * items, it edits the characters inside them, so an item the ledger knows as
+ * "Speaker B said yes" now reads "Dana said yes" while the ledger still
+ * holds the old string. Ownership is element AND text — deliberately, so a
+ * person retyping a line takes it back — which means without this the rename
+ * would hand every line it touched to the person, and the note-taker could
+ * never revise its own notes about that speaker again.
+ *
+ * Only the lines the ledger ALREADY claimed, snapshotted before the edit,
+ * are re-recorded. A line the person had made theirs stays theirs: it is not
+ * in the snapshot, so nothing here can claim it back.
+ */
+export function reclaimAfterInPlaceEdit<T>(
+  ydoc: Y.Doc,
+  heading: string,
+  ownership: NotesOwnership,
+  edit: () => T,
+): T {
+  const owned = new Set<Y.XmlElement>();
+  const before = sectionItems(ydoc, heading);
+  const claimed = classifyOwnership(before, ownership);
+  for (let i = 0; i < before.length; i++) if (claimed[i]) owned.add(before[i]!.el);
+
+  const result = edit();
+
+  if (owned.size > 0) {
+    const after = sectionItems(ydoc, heading);
+    ownership.record(
+      after.filter((item) => owned.has(item.el)).map((item) => ({ el: item.el, md: item.md })),
+    );
+  }
+  return result;
+}
+
+/** The section's items, or none when the section is not there. */
+function sectionItems(ydoc: Y.Doc, heading: string): NoteItem[] {
+  const fragment = prose.getProseFragment(ydoc);
+  const span = findNotesSection(fragment, heading);
+  return span ? itemsInSection(fragment, span) : [];
+}
