@@ -268,7 +268,7 @@ describe('the speaker tag', () => {
     // the speaker names". The pencil is at the START so the ellipsis on a
     // long name can never eat it.
     expect(rule('.meeting-speaker-pill::before', declarationsOnly(SECTION))).toMatch(
-      /content:\s*'✎ '/,
+      /content:\s*["']✎ ["']/,
     );
   });
 

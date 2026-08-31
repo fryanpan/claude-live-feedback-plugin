@@ -436,8 +436,7 @@ export class MeetingStore {
     // was named live before it ever did. Anything else is a typo becoming a
     // durable attribution.
     const carried =
-      speaker in priorNames ||
-      this.transcript(docId, meetingId).some((t) => t.speaker === speaker);
+      speaker in priorNames || this.transcript(docId, meetingId).some((t) => t.speaker === speaker);
     if (!carried) return { ok: false, reason: 'unknown_speaker' };
     appendLine(meetingIndexPath(this.dataDir, docId), { meetingId, speakers: { [speaker]: name } });
     return { ok: true, priorNames, speakers: { ...priorNames, [speaker]: name } };

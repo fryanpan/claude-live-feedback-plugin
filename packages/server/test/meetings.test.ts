@@ -485,7 +485,12 @@ describe('meeting store: naming a voice after the meeting', () => {
 
   /** A stopped two-voice conversation, the shape the rename surface outlives. */
   const stoppedMeeting = (store: MeetingStore, docId: string): string => {
-    const meeting = store.start({ docId, engine: 'mock', sampleRate: 16_000, mode: 'conversation' });
+    const meeting = store.start({
+      docId,
+      engine: 'mock',
+      sampleRate: 16_000,
+      mode: 'conversation',
+    });
     if (!meeting) throw new Error('expected a meeting');
     meeting.recordTurn(0, 'So the sync is the bottleneck.', 'A');
     meeting.recordTurn(1, "Let's measure it first.", 'B');
@@ -496,7 +501,12 @@ describe('meeting store: naming a voice after the meeting', () => {
   it('names a voice on a stopped meeting, and the record folds it like a live rename', () => {
     const store = new MeetingStore(dataDir);
     const meetingId = stoppedMeeting(store, 'late');
-    const result = store.nameSpeakerLater({ docId: 'late', meetingId, speaker: 'B', name: 'Priya' });
+    const result = store.nameSpeakerLater({
+      docId: 'late',
+      meetingId,
+      speaker: 'B',
+      name: 'Priya',
+    });
     if (!result.ok) throw new Error(`refused: ${result.reason}`);
     expect(result.speakers).toEqual({ B: 'Priya' });
     // Read back off disk, same as a live rename would be.

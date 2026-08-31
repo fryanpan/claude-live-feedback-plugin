@@ -82,16 +82,19 @@ describe('loadDocSpeakers', () => {
 
 describe('postSpeakerName', () => {
   it('posts the name to the meeting it belongs to, and reports the server took it', async () => {
-    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200 }) as unknown as Response);
+    const calls: Array<[string, RequestInit]> = [];
+    const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push([String(url), init ?? {}]);
+      return { ok: true, status: 200 } as unknown as Response;
+    };
     const took = await postSpeakerName(
       { docId: 'a/b', meetingId: 'm 1', speaker: 'B', name: 'Priya' },
       fetchImpl as unknown as typeof fetch,
     );
     expect(took).toBe(true);
-    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe('/api/docs/a%2Fb/meetings/m%201/speakers');
-    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(String(init.body))).toEqual({ speaker: 'B', name: 'Priya' });
+    expect(calls[0]?.[0]).toBe('/api/docs/a%2Fb/meetings/m%201/speakers');
+    expect(calls[0]?.[1].method).toBe('POST');
+    expect(JSON.parse(String(calls[0]?.[1].body))).toEqual({ speaker: 'B', name: 'Priya' });
   });
 
   it('reports a refusal as false — the caller must not show a name the record refused', async () => {

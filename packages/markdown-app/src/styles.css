@@ -7058,7 +7058,7 @@ body.is-reading-width #editor > .ProseMirror {
    Speaker A") stays the accessible name, and at the START of the pill so the
    ellipsis clipping a long name can never eat it. */
 .meeting-speaker-pill::before {
-  content: '✎ ';
+  content: "✎ ";
 }
 /* The rename surface a finished meeting leaves behind: the cast on the
    caption line while the strip is idle. Same button, same pill, same

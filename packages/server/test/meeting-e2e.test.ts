@@ -477,8 +477,9 @@ describe('a meeting end to end: pauses become notes, stop/start stays consistent
     expect(((await renamed.json()) as { speakers: unknown }).speakers).toEqual({ B: 'Priya' });
 
     // 1. The record keeps the name, folded like a live rename's.
-    expect(listMeetings(dataDir, lateDocId).find((m) => m.meetingId === meetingId)?.speakers)
-      .toEqual({ B: 'Priya' });
+    expect(
+      listMeetings(dataDir, lateDocId).find((m) => m.meetingId === meetingId)?.speakers,
+    ).toEqual({ B: 'Priya' });
     // 2. The rename reaches BACKWARDS into notes already written…
     await waitFor(
       () => lateMarkdown().includes("Priya: Let's measure it first."),

@@ -24,6 +24,7 @@ import {
   parseMeetingServerMessage,
   rollTranscript,
 } from '../src/meeting-strip.ts';
+import type { DocSpeakers } from '../src/speaker-voices.ts';
 
 /**
  * The strip is the only surface a meeting has, so every way a meeting can fail
@@ -868,7 +869,13 @@ describe('naming a voice after the meeting', () => {
     await settle();
     h.sockets[0]?.onopen?.();
     h.sockets[0]?.serve({ type: 'ready', meetingId: 'm1', startedAt: 1_000, engine: 'test' });
-    h.sockets[0]?.serve({ type: 'transcript', turn: 0, text: 'Take it?', final: true, speaker: 'A' });
+    h.sockets[0]?.serve({
+      type: 'transcript',
+      turn: 0,
+      text: 'Take it?',
+      final: true,
+      speaker: 'A',
+    });
     h.sockets[0]?.serve({ type: 'transcript', turn: 1, text: 'Sure.', final: true, speaker: 'B' });
     h.sockets[0]?.serve({ type: 'stopped', meetingId: 'm1', endedAt: 2_000 });
     return h;
@@ -892,9 +899,7 @@ describe('naming a voice after the meeting', () => {
   it('a tap after stop renames over HTTP — the socket is gone', async () => {
     const postName = vi.fn(() => Promise.resolve(true));
     const h = await stopped({ promptName: () => 'Priya', postName });
-    const tag = h.root.querySelectorAll(
-      '.meeting-legend .meeting-speaker',
-    )[1] as HTMLButtonElement;
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
     tag.click();
     await settle();
     expect(legendTags(h)).toEqual(['Speaker A', 'Priya']);
@@ -907,9 +912,7 @@ describe('naming a voice after the meeting', () => {
   it('a name the server refused does not stay on screen claiming it was saved', async () => {
     const postName = vi.fn(() => Promise.resolve(false));
     const h = await stopped({ promptName: () => 'Priya', postName });
-    const tag = h.root.querySelectorAll(
-      '.meeting-legend .meeting-speaker',
-    )[1] as HTMLButtonElement;
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
     tag.click();
     await settle();
     expect(legendTags(h)).toEqual(['Speaker A', 'Speaker B']);
@@ -932,9 +935,7 @@ describe('naming a voice after the meeting', () => {
     await settle();
     // The names given live come back; the unnamed voice is still a label.
     expect(legendTags(h)).toEqual(['Devi', 'Speaker B']);
-    const tag = h.root.querySelectorAll(
-      '.meeting-legend .meeting-speaker',
-    )[1] as HTMLButtonElement;
+    const tag = h.root.querySelectorAll('.meeting-legend .meeting-speaker')[1] as HTMLButtonElement;
     tag.click();
     await settle();
     expect(legendTags(h)).toEqual(['Devi', 'Priya']);
