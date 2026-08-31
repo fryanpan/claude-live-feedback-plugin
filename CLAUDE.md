@@ -15,7 +15,7 @@ on every PR that touches widget code.
 
 Per-subsystem summaries live in [docs/architecture/](docs/architecture/):
 [meeting-assistant](docs/architecture/meeting-assistant.md) (live
-transcription + pause-driven notes) and
+transcription + notes on a pause-or-cadence clock) and
 [stall-detection](docs/architecture/stall-detection.md) (board wakes and
 their economics). Read the relevant one before touching its subsystem.
 Deliberately not `@`-imported — they cost no context until needed; keep it
