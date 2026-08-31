@@ -6966,6 +6966,24 @@ body.is-reading-width #editor > .ProseMirror {
   text-align: left;
   cursor: pointer;
 }
+/* The same line when the tap DOES something — the device was handed the
+   sentence, never began it, and this tap is the gesture its speech queue has
+   been waiting for. It has to read as a control at rest: hover is not an
+   answer on the iPad (the tag above learned the same lesson), and the words
+   alone read as one more caption. The speaker tag's dotted underline rather
+   than a button shape, because the caption has no room for a second control
+   and the affordance is still the whole line. */
+.meeting-note-speak {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  /* And unlike the line that only dismisses, this one is a control someone
+     has to HIT — measured at 22px tall in the caption, which is under
+     design-mobile.md's floor and leaves the strip's own dead space above and
+     below the words. Padding rather than a min-height, so a sentence that
+     wraps to two lines on the phone grows the target instead of centring a
+     fixed box inside it. */
+  padding-block: 7px;
+}
 /* And it needs somewhere to be that size. The caption is a fixed window —
    1.45em here, 2.9em on a phone — measured against the strip's 12.5px, so a
    16px sentence would be clipped by the very rule that keeps a rolling
