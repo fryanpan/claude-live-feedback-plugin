@@ -234,6 +234,23 @@ describe('retagSpeakerInNotes — renaming by label rather than by spelling', ()
     expect(md).toContain('- [@Speaker A](speaker:A) pushed back.');
   });
 
+  it('two touching tags for one voice were never two tags', () => {
+    // Raised in review as a rename silently deleting one of two adjacent
+    // mentions. It cannot: two links with the same href and nothing between
+    // them are already ONE link by the time the markdown is parsed, so the
+    // doc reads "[@Speaker B@Speaker B](speaker:B)" before any rename runs.
+    // The rename then canonicalises that single tag, which repairs the
+    // doubled text rather than losing an attribution. Splitting the run at
+    // each sigil to "recover" two tags would invent a mention the document
+    // never had, and would break any name containing an @.
+    const ydoc = docFrom(
+      '## Meeting notes\n\n- [@Speaker B](speaker:B)[@Speaker B](speaker:B) asked.\n',
+    );
+    expect(markdownOf(ydoc)).toContain('- [@Speaker B@Speaker B](speaker:B) asked.');
+    expect(retagSpeakerInNotes(ydoc, 'B', 'Devi').replaced).toBe(1);
+    expect(markdownOf(ydoc)).toContain('- [@Devi](speaker:B) asked.');
+  });
+
   it('renames a tag once when its text is split across marks', () => {
     // A person bolds half of a tag's name. Yjs then carries that tag as two
     // delta ops with the same link href, and a loop that treats each op as a

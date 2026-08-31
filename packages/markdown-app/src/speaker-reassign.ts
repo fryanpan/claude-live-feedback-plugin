@@ -21,6 +21,7 @@
 
 import { type RosterVoice, speakerTagHref, speakerTagLabel, speakerTagText } from '@feedback/core';
 import type { Editor } from '@tiptap/core';
+import type { Mark, MarkType } from '@tiptap/pm/model';
 import type { EditorState } from '@tiptap/pm/state';
 
 /** A speaker tag as it sits in the document. */
@@ -111,14 +112,34 @@ export function applyReassign(
   // Marks OTHER than the link are kept: bold inside a tag is the person's
   // emphasis, and a correction is not a reason to lose it. The link mark is
   // rebuilt rather than patched, because "nobody" has to remove it entirely.
-  const carried = state.doc
-    .resolve(tag.from + 1)
-    .marks()
-    .filter((m) => m.type !== linkType);
+  //
+  // Only marks covering the WHOLE tag carry over. Sampling one position
+  // instead — the sigil, as this first did — gets it wrong in both
+  // directions: a fully bolded name loses its bold because the "@" was not
+  // bold, and a bolded "@" spreads emphasis across a name the person never
+  // emphasised. Partial emphasis is dropped rather than remapped, because
+  // the text is being replaced with a different name and there is nothing
+  // left for "the bold half" to mean.
+  const carried = coveringMarks(state, tag, linkType);
   const marks = wantHref ? [...carried, linkType.create({ href: wantHref })] : carried;
   tr.replaceWith(tag.from, tag.to, state.schema.text(wantText, marks));
   editor.view.dispatch(tr);
   return true;
+}
+
+/** The non-link marks that cover every character of the tag. */
+function coveringMarks(
+  state: EditorState,
+  tag: SpeakerTagRange,
+  linkType: MarkType,
+): readonly Mark[] {
+  let covering: readonly Mark[] | null = null;
+  state.doc.nodesBetween(tag.from, tag.to, (node) => {
+    if (!node.isText) return;
+    const here = node.marks.filter((m) => m.type !== linkType);
+    covering = covering === null ? here : covering.filter((m) => here.some((other) => other.eq(m)));
+  });
+  return covering ?? [];
 }
 
 /** "@Devi" → "Devi". A tag that has stopped being a tag keeps its words. */

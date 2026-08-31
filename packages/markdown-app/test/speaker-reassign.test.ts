@@ -123,6 +123,28 @@ describe('applyReassign — one mention, and only one', () => {
     expect(findSpeakerTags(md)[0]?.label).toBe('C');
   });
 
+  it('keeps emphasis that covered the whole tag', () => {
+    const { editor, ydoc } = editorFor('- [**@Devi**](speaker:B) asked.\n');
+    const tag = findSpeakerTagAt(editor.state, posOf(editor, 'Devi'));
+    applyReassign(editor, tag!, { label: 'A', name: 'Marisol', lastSaid: '' });
+    expect(markdownOf(ydoc)).toContain('[**@Marisol**](speaker:A)');
+  });
+
+  it('does not spread emphasis that covered only part of the tag', () => {
+    // Review caught this sampling ONE position — the character after the
+    // start, which is the sigil. Emphasis on the sigil alone then spread
+    // across a name the person never emphasised. Partial emphasis is dropped
+    // instead, because the words it covered are not the words being written.
+    // (The mirror case, emphasis on the name but not the sigil, reads the
+    // same under both rules, which is why it does not pin this on its own.)
+    const { editor, ydoc } = editorFor('- [**@**Devi](speaker:B) asked.\n');
+    const tag = findSpeakerTagAt(editor.state, posOf(editor, 'Devi'));
+    applyReassign(editor, tag!, { label: 'A', name: 'Marisol', lastSaid: '' });
+    const md = markdownOf(ydoc);
+    expect(md).toContain('[@Marisol](speaker:A)');
+    expect(md).not.toContain('**');
+  });
+
   it('leaves the words around the tag untouched', () => {
     const { editor, ydoc } = editorFor('- Before [@Devi](speaker:B) after.\n');
     const tag = findSpeakerTagAt(editor.state, posOf(editor, 'Devi'));
