@@ -47,12 +47,18 @@ export interface ScoringSettings {
   similarity: 'jaccard-words';
   /** Below this, a turn is UNALIGNED and scores nothing either way. */
   matchThreshold: number;
-  /** Monotonic: speech happens in order, so alignments cannot cross. */
-  alignment: 'monotonic-dp';
+  /** Monotonic, many-to-one: in order, and a turn may cover several lines. */
+  alignment: 'monotonic-dp-span';
   /** Labels to people: the assignment maximising correct turns, exactly. */
   mapping: 'optimal-assignment';
   /** What an unattributed turn does to attribution accuracy. */
   unlabelled: 'excluded' | 'counted-wrong';
+  /**
+   * What a turn covering more than one person does. Always wrong: it is the
+   * worst thing the transcript can say — two people's words under one name —
+   * and there is no person it could be attributed to.
+   */
+  mixed: 'counted-wrong';
 }
 
 export const DEFAULT_SCORING: ScoringSettings = {
@@ -60,12 +66,13 @@ export const DEFAULT_SCORING: ScoringSettings = {
   // Half the words shared. High enough that two different lines do not match,
   // low enough to survive the mishearings that are the point of a transcript.
   matchThreshold: 0.5,
-  alignment: 'monotonic-dp',
+  alignment: 'monotonic-dp-span',
   mapping: 'optimal-assignment',
   // A turn the engine declined to attribute is not a wrong attribution; it is
   // reported on its own line, because a run that labels nothing would
   // otherwise score 100%.
   unlabelled: 'excluded',
+  mixed: 'counted-wrong',
 };
 
 export interface DiarizationScore {
@@ -76,11 +83,15 @@ export interface DiarizationScore {
   speakersPredicted: number;
   /** How many labels beyond the real number — the invention the cap stops. */
   speakersInvented: number;
+  /** How many people the labels never distinguished — the opposite failure. */
+  speakersMissed: number;
   turnsTotal: number;
   turnsAligned: number;
   turnsUnlabelled: number;
   /** Of the aligned ones, how many carried no label — the attribution base. */
   turnsAlignedUnlabelled: number;
+  /** Aligned turns whose words came from more than one person. Never right. */
+  turnsMixed: number;
   /** Consecutive aligned pairs where change-of-label matched change-of-person. */
   boundaryPairs: number;
   boundaryAgreements: number;
@@ -112,50 +123,64 @@ export function similarity(a: string, b: string): number {
 }
 
 /**
- * Match turns to script lines, keeping order.
+ * Match turns to script lines, keeping order — and letting ONE turn cover
+ * several lines.
  *
  * Speech happens in sequence, so an alignment that crosses itself is wrong
- * however well the words match — an engine that merged two turns should lose
- * one of them, not steal a line from further down the script. Returns, per
- * turn, the index of the line it belongs to, or -1.
+ * however well the words match. The many-to-one part is not a nicety: the
+ * first live run of this harness came back as three turns covering six lines
+ * of two-person dialogue, because the engine's turn detector never found a
+ * boundary. A one-line-per-turn alignment silently threw four of those lines
+ * away and scored the remainder at 100%. A turn that covers two people is the
+ * WORST outcome the transcript can have — the words of two people under one
+ * name — and it has to be visible, which means it has to be aligned first.
+ *
+ * Returns, per turn, the line indices it covers, in order. Empty means the
+ * turn matched nothing.
  */
 export function alignMonotonic(
   turns: readonly ScoredTurn[],
   truth: readonly TruthUtterance[],
   threshold: number,
-): number[] {
+  maxSpan = 24,
+): number[][] {
   const n = turns.length;
   const m = truth.length;
-  // best[i][j] — the most similarity obtainable from turns i.. and lines j..
+  // best[i][j] — the most similarity obtainable from turns i.. and lines j..,
+  // and the span that achieved it (0 = this turn took nothing here).
   const best: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  const take: boolean[][] = Array.from({ length: n + 1 }, () =>
-    new Array<boolean>(m + 1).fill(false),
-  );
+  const span: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
-      const s = similarity(turns[i]?.text ?? '', truth[j]?.text ?? '');
-      const paired = s >= threshold ? s + (best[i + 1]?.[j + 1] ?? 0) : Number.NEGATIVE_INFINITY;
-      const bestSkip = Math.max(best[i + 1]?.[j] ?? 0, best[i]?.[j + 1] ?? 0);
       const row = best[i];
-      const takeRow = take[i];
-      if (!row || !takeRow) continue;
-      if (paired >= bestSkip) {
-        row[j] = paired;
-        takeRow[j] = true;
-      } else {
-        row[j] = bestSkip;
-        takeRow[j] = false;
+      const spanRow = span[i];
+      if (!row || !spanRow) continue;
+      let bestScore = Math.max(best[i + 1]?.[j] ?? 0, best[i]?.[j + 1] ?? 0);
+      let bestSpan = 0;
+      let joined = '';
+      for (let k = 1; k <= maxSpan && j + k <= m; k++) {
+        joined = `${joined} ${truth[j + k - 1]?.text ?? ''}`;
+        const sim = similarity(turns[i]?.text ?? '', joined);
+        if (sim < threshold) continue;
+        const total = sim + (best[i + 1]?.[j + k] ?? 0);
+        if (total > bestScore) {
+          bestScore = total;
+          bestSpan = k;
+        }
       }
+      row[j] = bestScore;
+      spanRow[j] = bestSpan;
     }
   }
-  const out = new Array<number>(n).fill(-1);
+  const out: number[][] = Array.from({ length: n }, () => []);
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (take[i]?.[j]) {
-      out[i] = j;
+    const k = span[i]?.[j] ?? 0;
+    if (k > 0) {
+      for (let d = 0; d < k; d++) out[i]?.push(j + d);
       i++;
-      j++;
+      j += k;
     } else if ((best[i + 1]?.[j] ?? 0) >= (best[i]?.[j + 1] ?? 0)) {
       i++;
     } else {
@@ -215,12 +240,21 @@ export function scoreDiarization(
   settings: ScoringSettings = DEFAULT_SCORING,
 ): DiarizationScore {
   const aligned = alignMonotonic(turns, truth, settings.matchThreshold);
-  const pairs: Array<{ label: string | undefined; person: string; words: number }> = [];
+  const pairs: Array<{
+    label: string | undefined;
+    /** The one person this turn is all of, or null when it covers several. */
+    person: string | null;
+    words: number;
+  }> = [];
   turns.forEach((turn, i) => {
-    const at = aligned[i] ?? -1;
-    const line = at >= 0 ? truth[at] : undefined;
-    if (!line) return;
-    pairs.push({ label: turn.speaker, person: line.speaker, words: words(turn.text).length });
+    const lines = (aligned[i] ?? []).map((at) => truth[at]).filter((l): l is TruthUtterance => !!l);
+    if (lines.length === 0) return;
+    const people = new Set(lines.map((l) => l.speaker));
+    pairs.push({
+      label: turn.speaker,
+      person: people.size === 1 ? (lines[0]?.speaker ?? null) : null,
+      words: words(turn.text).length,
+    });
   });
 
   const scored =
@@ -228,8 +262,10 @@ export function scoreDiarization(
   const counts = new Map<string, Map<string, number>>();
   const wordCounts = new Map<string, Map<string, number>>();
   for (const p of scored) {
-    // Under `counted-wrong` an unattributed turn is counted under a label no
-    // person can be assigned to, so it can only ever score as wrong.
+    // A mixed turn belongs to nobody, and an unattributed one is nobody's
+    // label: both are counted under keys no assignment can ever claim, so
+    // they stay in the denominator and can only ever score as wrong.
+    if (p.person === null) continue;
     const label = p.label ?? UNLABELLED;
     const row = counts.get(label) ?? new Map<string, number>();
     row.set(p.person, (row.get(p.person) ?? 0) + 1);
@@ -250,12 +286,13 @@ export function scoreDiarization(
   for (let i = 1; i < pairs.length; i++) {
     const prev = pairs[i - 1];
     const cur = pairs[i];
-    // ADJACENT turns only, and both must carry a label. Dropping the
-    // unattributed ones and then walking the remainder would make the turns
-    // either side of a silent one look consecutive, and score a boundary the
-    // engine never expressed: A / unattributed / A would count as an
-    // agreement between two turns that were never next to each other.
-    if (!prev || !cur || prev.label === undefined || cur.label === undefined) continue;
+    // ADJACENT turns only, both labelled, and neither of them mixed. Dropping
+    // the others and walking the remainder would make the turns either side
+    // of a gap look consecutive and score a boundary the engine never
+    // expressed; a mixed turn has no single person to compare against at all.
+    if (!prev || !cur) continue;
+    if (prev.label === undefined || cur.label === undefined) continue;
+    if (prev.person === null || cur.person === null) continue;
     boundaryPairs++;
     if ((prev.label === cur.label) === (prev.person === cur.person)) boundaryAgreements++;
   }
@@ -267,10 +304,12 @@ export function scoreDiarization(
     speakersTruth: truthSpeakers.size,
     speakersPredicted: predicted.size,
     speakersInvented: Math.max(0, predicted.size - truthSpeakers.size),
+    speakersMissed: Math.max(0, truthSpeakers.size - predicted.size),
     turnsTotal: turns.length,
     turnsAligned: pairs.length,
     turnsUnlabelled: turns.filter((t) => t.speaker === undefined).length,
     turnsAlignedUnlabelled: pairs.filter((p) => p.label === undefined).length,
+    turnsMixed: pairs.filter((p) => p.person === null).length,
     boundaryPairs,
     boundaryAgreements,
     turnsCorrect: assignment.correct,
@@ -296,12 +335,17 @@ export function formatScore(title: string, score: DiarizationScore): string {
     Object.entries(score.labelMap)
       .map(([label, person]) => `${label}=${person}`)
       .join(', ') || 'none';
+  const counted =
+    score.speakersInvented > 0
+      ? `  (+${score.speakersInvented} INVENTED)`
+      : score.speakersMissed > 0
+        ? `  (${score.speakersMissed} NEVER DISTINGUISHED)`
+        : '';
   return [
     `  ${title}`,
-    `    speakers: ${score.speakersPredicted} labelled vs ${score.speakersTruth} in the room` +
-      (score.speakersInvented > 0 ? `  (+${score.speakersInvented} INVENTED)` : ''),
+    `    speakers: ${score.speakersPredicted} labelled vs ${score.speakersTruth} in the room${counted}`,
     `    turns: ${score.turnsAligned}/${score.turnsTotal} aligned to the script, ` +
-      `${score.turnsUnlabelled} unattributed`,
+      `${score.turnsUnlabelled} unattributed, ${score.turnsMixed} covering more than one person`,
     `    boundary agreement: ${pct(score.boundaryAgreements, score.boundaryPairs)} ` +
       `(${score.boundaryAgreements}/${score.boundaryPairs} consecutive pairs)`,
     `    turn attribution: ${pct(score.turnsCorrect, scoredTurns)} ` +
@@ -310,6 +354,6 @@ export function formatScore(title: string, score: DiarizationScore): string {
       `(${score.wordsCorrect}/${score.wordsScored})`,
     `    labels mapped: ${mapped}`,
     `    SCORING: similarity=${s.similarity} threshold=${s.matchThreshold} ` +
-      `alignment=${s.alignment} mapping=${s.mapping} unlabelled=${s.unlabelled}`,
+      `alignment=${s.alignment} mapping=${s.mapping} unlabelled=${s.unlabelled} mixed=${s.mixed}`,
   ].join('\n');
 }

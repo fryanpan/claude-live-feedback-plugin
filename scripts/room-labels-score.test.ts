@@ -120,14 +120,14 @@ describe('alignment', () => {
         speaker: 'A',
       },
     ];
-    expect(alignMonotonic(heard, TRUTH, DEFAULT_SCORING.matchThreshold)).toEqual([0]);
+    expect(alignMonotonic(heard, TRUTH, DEFAULT_SCORING.matchThreshold)).toEqual([[0]]);
   });
 
   it('leaves a turn that matches nothing unaligned rather than forcing it', () => {
     const heard: ScoredTurn[] = [
       { turn: 0, text: 'completely unrelated words here', speaker: 'A' },
     ];
-    expect(alignMonotonic(heard, TRUTH, DEFAULT_SCORING.matchThreshold)).toEqual([-1]);
+    expect(alignMonotonic(heard, TRUTH, DEFAULT_SCORING.matchThreshold)).toEqual([[]]);
     const score = scoreDiarization(heard, TRUTH);
     expect(score.turnsAligned).toBe(0);
     // Nothing measured is reported as nothing measured, never as zero.
@@ -140,7 +140,7 @@ describe('alignment', () => {
       { turn: 1, text: TRUTH[1]?.text ?? '', speaker: 'B' },
     ];
     const aligned = alignMonotonic(heard, TRUTH, DEFAULT_SCORING.matchThreshold);
-    expect(aligned[0] ?? -1).toBeLessThan(aligned[1] ?? -1);
+    expect(aligned[0]?.[0] ?? -1).toBeLessThan(aligned[1]?.[0] ?? -1);
   });
 });
 
@@ -176,7 +176,7 @@ describe('the report', () => {
     for (const setting of [
       'similarity=jaccard-words',
       'threshold=0.5',
-      'alignment=monotonic-dp',
+      'alignment=monotonic-dp-span',
       'mapping=optimal-assignment',
       'unlabelled=excluded',
     ]) {
@@ -211,5 +211,34 @@ describe('inputs', () => {
     // of diarization.
     expect(new Set(SYNTHETIC_SCRIPT.map((l) => l.speaker)).size).toBe(2);
     for (const line of SYNTHETIC_SCRIPT) expect(line.line.split(' ').length).toBeGreaterThan(8);
+  });
+});
+
+describe('a turn that covers two people', () => {
+  it('is counted wrong and named, never attributed to whoever dominated it', () => {
+    // The first live run of this harness looked like this: the engine's turn
+    // detector never found a boundary, so one turn carried both voices. A
+    // scorer that aligned one line per turn dropped the rest and reported
+    // 100%.
+    const runOn: ScoredTurn[] = [
+      {
+        turn: 0,
+        text: `${TRUTH[0]?.text} ${TRUTH[1]?.text}`,
+        speaker: 'A',
+      },
+      { turn: 1, text: TRUTH[2]?.text ?? '', speaker: 'A' },
+    ];
+    const score = scoreDiarization(runOn, TRUTH);
+    expect(score.turnsAligned).toBe(2);
+    expect(score.turnsMixed).toBe(1);
+    // Two turns scored, and the mixed one can never be right.
+    expect(score.turnsCorrect).toBe(1);
+    expect(formatScore('x', score)).toContain('1 covering more than one person');
+  });
+
+  it('names a room whose voices were never distinguished', () => {
+    const score = scoreDiarization(turns(['A', 'A', 'A', 'A']), TRUTH);
+    expect(score.speakersMissed).toBe(1);
+    expect(formatScore('x', score)).toContain('NEVER DISTINGUISHED');
   });
 });
