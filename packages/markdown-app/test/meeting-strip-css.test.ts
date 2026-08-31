@@ -317,17 +317,64 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(rule('.meeting-announce', SECTION)).toMatch(/white-space:\s*nowrap/);
   });
 
-  it('makes the readable announcement look like the note it replaces', () => {
+  it('keeps the announcement buttonless — the affordance is the whole line', () => {
     // It is a <button> because it is dismissible and a dismissible thing has
-    // to be reachable by more than a pointer — but the affordance is the
-    // whole line, not a control someone has to go and find.
+    // to be reachable by more than a pointer — but nothing about it should
+    // read as a control someone has to go and find.
     const note = rule('.meeting-note-dismiss', SECTION);
     expect(note, 'no rule for the dismissible announcement').not.toBe('');
     expect(note).toMatch(/background:\s*none/);
     expect(note).toMatch(/border:\s*0/);
-    expect(note).toMatch(/font:\s*inherit/);
-    expect(note).toMatch(/color:\s*inherit/);
+    expect(note).toMatch(/padding:\s*0/);
     expect(note).toMatch(/cursor:\s*pointer/);
+  });
+
+  it('sets the announcement at reading size, because someone reads it ALOUD', () => {
+    // Every other string in the strip is a readout for the person holding the
+    // device. This one is a script: it is read out to a room, off an iPad at
+    // arm's length. At the strip's inherited 12.5px in --fg-muted it was the
+    // size and weight of a status line.
+    const note = rule('.meeting-note-dismiss', SECTION);
+    const size = /font-size:\s*(\d+(?:\.\d+)?)px/.exec(note);
+    expect(size, 'the announcement has no size of its own').not.toBeNull();
+    expect(Number(size?.[1])).toBeGreaterThanOrEqual(16);
+    // Body colour, not the muted grey the notes beside it use.
+    expect(note).toMatch(/color:\s*var\(--fg\)/);
+    expect(note).not.toMatch(/color:\s*var\(--fg-muted\)/);
+  });
+
+  it('gives the bigger sentence somewhere to be, at BOTH widths', () => {
+    // The caption is a fixed window — 1.45em on the bar, 2.9em on the phone —
+    // measured against the strip's 12.5px. Raising the sentence to 16px
+    // without releasing that window would just clip it, which is worse than
+    // leaving it small: a half-visible line is not readable at all.
+    const released = rule('.meeting-caption:has(.meeting-note-dismiss)');
+    expect(released, 'nothing releases the caption window').not.toBe('');
+    expect(released).toMatch(/height:\s*auto/);
+    // And the BAR has to give the caption that room rather than clipping it
+    // at 40px — measured, one line asks for 42 and two ask for 64. Safe
+    // because the editor pane's third grid track is `auto`, so the strip
+    // reserves its height instead of covering the prose.
+    expect(rule('#editor-pane')).toMatch(/grid-template-rows:\s*auto 1fr auto/);
+    const grown = rule('.meeting-strip:has(.meeting-note-dismiss)');
+    expect(grown, 'the bar never grows, so the sentence is clipped').not.toBe('');
+    expect(grown).toMatch(/height:\s*auto/);
+    // Positive control on the thing it has to beat: the bar really is a
+    // fixed 40px, so `height: auto` here is load-bearing and not a no-op.
+    expect(rule('.meeting-strip')).toMatch(/height:\s*40px/);
+    // It has to sit in the BASE section, not inside a media query: the two
+    // media queries each set a fixed height, and one rule at higher
+    // specificity outside them beats both. Inside one, the other width clips.
+    // Scoped to SECTION: the stylesheet has four `max-width: 720px` blocks
+    // and an unscoped read finds the first one, which belongs to the hub.
+    const wide = declarationsOnly(block('@media (min-width: 721px)', SECTION));
+    const narrow = declarationsOnly(block('@media (max-width: 720px)', SECTION));
+    expect(wide).not.toMatch(/:has\(\.meeting-note-dismiss\)/);
+    expect(narrow).not.toMatch(/:has\(\.meeting-note-dismiss\)/);
+    // Positive control: those blocks were actually read, and DO carry the
+    // fixed heights this rule has to beat.
+    expect(wide.length + narrow.length).toBeGreaterThan(0);
+    expect(rule('.meeting-caption', narrow)).toMatch(/height:\s*2\.9em/);
   });
 
   it('says REC at every width while the mic is live, not only on the phone', () => {
