@@ -20,6 +20,21 @@
  * live. Priming is the same trick an AudioContext needs and for the same
  * reason.
  *
+ * MUTE IS NOT THE SAME FAILURE AS THE OTHERS. Reported from a real iPad,
+ * 2026-08-30: the Board's "Record a conversation" button navigates to the doc
+ * and the strip starts the mic without a press, so nothing ever primes and the
+ * queue is still locked when the sentence is handed to it. WebKit does not
+ * refuse that — it accepts the utterance and simply never begins it. Told
+ * apart from every other failure (`mute` rather than `failed`) because it is
+ * the only one a tap can still fix, and because waiting out the twelve-second
+ * end timeout to discover it leaves a room standing in silence.
+ *
+ * AND THE QUEUE IS NOT CLEARED ON THE WAY IN. `cancel()` immediately before
+ * `speak()` is a known way to lose an utterance on Safari, and on the path
+ * that matters — an auto-started meeting, nothing queued — the cancel was
+ * clearing nothing. It now runs only when an earlier announcement is actually
+ * still in progress, which is the case it was written for.
+ *
  * NOTHING HERE CHOOSES A VOICE. `getVoices()` is asynchronous on first call in
  * several browsers and empty until it resolves, so picking one means either
  * waiting (delaying the announcement past the start of the conversation) or
@@ -46,6 +61,30 @@ export interface SpeechSynthesisLike {
  */
 export const SPEECH_TIMEOUT_MS = 12_000;
 
+/**
+ * How long an utterance gets to BEGIN before it is treated as one the browser
+ * is never going to say.
+ *
+ * A locked iOS queue gives no event at all, so the only evidence that speech
+ * is not happening is that none has started — and the room is waiting through
+ * every second of it. Long enough that a voice which has to load first is not
+ * cut off (measured in the hundreds of milliseconds, worst case around one
+ * second on a cold Safari), short enough that the fallback is on screen while
+ * the meeting is still starting rather than a quarter of a minute into it.
+ */
+export const SPEECH_START_TIMEOUT_MS = 2_500;
+
+/**
+ * What became of the sentence.
+ *
+ * `mute` is the one worth its own name: the utterance was accepted and never
+ * began, which is what an un-primed iOS queue looks like from here and the
+ * only outcome a tap can still turn into speech. Everything else — no engine,
+ * a throw, an error event, an utterance that started and never finished — is
+ * `failed`, and the sentence goes on screen for a person instead.
+ */
+export type SpeechOutcome = 'spoke' | 'mute' | 'failed';
+
 export interface AnnouncerDeps {
   /** Defaults to `window.speechSynthesis`, or null where there is none. */
   synth?: SpeechSynthesisLike | null;
@@ -65,12 +104,19 @@ export interface Announcer {
    */
   prime(): void;
   /**
-   * Say it. Resolves `true` only when the browser reported the utterance
-   * finished — anything else (no synthesis, an error, an utterance that never
-   * came back) resolves `false`, which is the strip's cue to put the sentence
-   * on screen for a person instead.
+   * Whether a gesture has already been spent on the unlock. The strip asks
+   * before offering a tap: a queue nothing has primed is one a tap can still
+   * unlock, and a queue that was primed and stayed silent is a dead end that
+   * must not be dressed up as a button.
    */
-  speak(text: string): Promise<boolean>;
+  primed(): boolean;
+  /**
+   * Say it. `spoke` only when the browser reported the utterance finished;
+   * `mute` when it never began, which a tap may still fix; `failed` for
+   * everything else. Both of the latter are the strip's cue to put the
+   * sentence on screen for a person.
+   */
+  speak(text: string): Promise<SpeechOutcome>;
   /** Stop anything in progress. A meeting stopped mid-sentence says no more. */
   cancel(): void;
 }
@@ -114,8 +160,21 @@ export function createAnnouncer(deps: AnnouncerDeps = {}): Announcer {
    */
   let generation = 0;
 
+  /**
+   * Which `speak()` still has an utterance the engine might be working on, or
+   * 0 for a quiet queue. The pre-emptive `cancel()` is spent only on this —
+   * see the note at the top about losing an utterance to a cancel that had
+   * nothing to clear.
+   */
+  let pendingAttempt = 0;
+
+  /** Set once a prime actually reached the engine. A prime that threw
+   *  unlocked nothing, so it may not claim to have. */
+  let hasPrimed = false;
+
   return {
     supported: () => synth !== null,
+    primed: () => hasPrimed,
     prime(): void {
       if (!synth) return;
       try {
@@ -125,54 +184,78 @@ export function createAnnouncer(deps: AnnouncerDeps = {}): Announcer {
         const warm = makeUtterance(' ');
         warm.volume = 0;
         synth.speak(warm);
+        hasPrimed = true;
       } catch {
         // Priming is best-effort by construction. If it throws, `speak()`
         // will fail too and the fallback picks it up there, where there is
         // somewhere to report it.
       }
     },
-    speak(text: string): Promise<boolean> {
-      if (!synth) return Promise.resolve(false);
+    speak(text: string): Promise<SpeechOutcome> {
+      if (!synth) return Promise.resolve('failed');
       const attempt = ++generation;
-      return new Promise<boolean>((resolve) => {
+      return new Promise<SpeechOutcome>((resolve) => {
         let done = false;
-        let cancelTimer: (() => void) | null = null;
-        const settle = (ok: boolean): void => {
+        let cancelEnd: (() => void) | null = null;
+        let cancelStart: (() => void) | null = null;
+        /** Take it out of the queue, whatever state the engine left it in. */
+        const clear = (): void => {
+          try {
+            synth.cancel();
+          } catch {
+            // Then it was never going to speak anyway.
+          }
+        };
+        const settle = (outcome: SpeechOutcome): void => {
           if (done) return;
           done = true;
-          cancelTimer?.();
+          cancelEnd?.();
+          cancelStart?.();
+          if (pendingAttempt === attempt) pendingAttempt = 0;
           // A late event from an utterance this call has already replaced
           // resolves nothing: the newer announcement owns the answer.
-          resolve(attempt === generation ? ok : false);
+          resolve(attempt === generation ? outcome : 'failed');
         };
         try {
           const utterance = makeUtterance(text);
-          utterance.onend = () => settle(true);
-          utterance.onerror = () => settle(false);
-          // Anything already queued is a stale announcement; this one is the
-          // meeting that is actually starting.
-          synth.cancel();
+          // The engine opening its mouth, which is the whole of what the
+          // start timeout is watching for.
+          utterance.onstart = () => {
+            cancelStart?.();
+            cancelStart = null;
+          };
+          utterance.onend = () => settle('spoke');
+          utterance.onerror = () => settle('failed');
+          // Only a stale announcement still in progress is worth clearing;
+          // a cancel with nothing to cancel can cost this utterance instead.
+          if (pendingAttempt !== 0) clear();
+          pendingAttempt = attempt;
           synth.speak(utterance);
-          cancelTimer = timer(() => {
+          cancelStart = timer(() => {
+            // Accepted and never begun: the queue is locked, and nothing is
+            // going to unlock it on its own. Cleared first so a tap that
+            // primes later cannot set this one going over the sentence a
+            // person has by then been asked to read.
+            clear();
+            settle('mute');
+          }, SPEECH_START_TIMEOUT_MS);
+          cancelEnd = timer(() => {
             // Take it out of the queue before answering. The timeout means
             // the engine never said what happened — not that it did nothing,
             // and an utterance still sitting in the queue can start speaking
             // after the strip has already put the sentence on screen for a
             // person. Two announcements over each other is worse than either.
-            try {
-              synth.cancel();
-            } catch {
-              // Then it was never going to speak anyway.
-            }
-            settle(false);
+            clear();
+            settle('failed');
           }, SPEECH_TIMEOUT_MS);
         } catch {
-          settle(false);
+          settle('failed');
         }
       });
     },
     cancel(): void {
       generation += 1;
+      pendingAttempt = 0;
       try {
         synth?.cancel();
       } catch {

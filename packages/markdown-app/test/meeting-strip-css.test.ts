@@ -329,6 +329,22 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     expect(note).toMatch(/cursor:\s*pointer/);
   });
 
+  it('makes the tap-to-announce line LOOK tappable, since hover cannot', () => {
+    // Shown when the device never began the sentence — one tap unlocks its
+    // speech queue and says it. On the iPad there is no hover to reveal that,
+    // and the line is otherwise indistinguishable from the one that only
+    // dismisses, so the affordance has to be visible at rest.
+    const speak = rule('.meeting-note-speak', SECTION);
+    expect(speak, 'no rule for the tap-to-announce line').not.toBe('');
+    expect(speak).toMatch(/text-decoration:\s*underline dotted/);
+    // And it is a control someone has to hit, not a line to dismiss: the
+    // announcement's own `padding: 0` leaves a 22px target, under
+    // design-mobile.md's 36px floor. Two 7px bands on a 22px line clear it.
+    const pad = /padding-block:\s*(\d+(?:\.\d+)?)px/.exec(speak);
+    expect(pad, 'the tap target is whatever the sentence happens to be tall').not.toBeNull();
+    expect(Number(pad?.[1]) * 2 + 22).toBeGreaterThanOrEqual(36);
+  });
+
   it('sets the announcement at reading size, because someone reads it ALOUD', () => {
     // Every other string in the strip is a readout for the person holding the
     // device. This one is a script: it is read out to a room, off an iPad at
