@@ -5024,15 +5024,25 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // opened the link. Markdown and code already fail their attach
           // loudly; this is the same courtesy, and it runs BEFORE the room is
           // created so a failed bind leaves nothing behind.
+          // The read happens HERE too, not after the room exists: it is the
+          // content the capture below stores, and holding it means a source
+          // that goes away between the check and the read is still a refusal
+          // with nothing created rather than a doc bound to a copy nobody
+          // took.
+          let mockupHtml: string | null = null;
           if (type === 'mockup' && sourceUrl) {
-            const check = checkMockupSource(sourceUrl);
-            if (!check.ok) {
-              return j(400, {
+            const unreadable = (reason: string) =>
+              j(400, {
                 error: 'mockup_source_unreadable',
                 path: sourceUrl,
-                reason: check.reason,
-                hint: `Cannot read the mockup HTML at ${sourceUrl} (${check.reason}). Pass an absolute path to a readable file — the server captures its content at bind time so the link keeps working after the file is cleaned up, and it cannot capture a file it cannot read.`,
+                reason,
+                hint: `Cannot read the mockup HTML at ${sourceUrl} (${reason}). Pass an absolute path to a readable file — the server captures its content at bind time so the link keeps working after the file is cleaned up, and it cannot capture a file it cannot read.`,
               });
+            const check = checkMockupSource(sourceUrl);
+            if (!check.ok) return unreadable(check.reason);
+            if (isHtmlMockupSource(sourceUrl)) {
+              mockupHtml = readMockupHtml(sourceUrl);
+              if (mockupHtml === null) return unreadable('became unreadable while binding');
             }
           }
           // The caller NAMES the doc; the server decides its id. `docId` in
@@ -5084,14 +5094,26 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // and then never opened until after its scratch dir is cleaned is
           // exactly the case that produced this. Keyed on the CANONICAL id,
           // so a rebind under the same readable name replaces the same copy.
-          if (type === 'mockup' && sourceUrl && isHtmlMockupSource(sourceUrl)) {
-            const html = readMockupHtml(sourceUrl);
+          if (mockupHtml !== null) {
             // `allowEmpty`: a bind REPLACES, including with nothing. The
             // serve-time refusal protects a capture from its own source being
             // caught mid-write; a rebind names a different file, and holding
             // the old copy there would leave the link resolving to a mockup
             // nobody pointed it at.
-            if (html !== null) captureMockup(dataDir, canonicalId, html, { allowEmpty: true });
+            const captured = captureMockup(dataDir, canonicalId, mockupHtml, { allowEmpty: true });
+            if (captured === 'failed') {
+              // The bind READ fine — this is the data dir refusing the write,
+              // so it is the box's problem, not the caller's, and it gets a
+              // 5xx. It still fails: durability is part of what bind_mock now
+              // promises, and a 200 here would hand back a link that reads as
+              // durable and is not. That is the shape of the incident.
+              return j(500, {
+                error: 'mockup_capture_failed',
+                docId: canonicalId,
+                path: sourceUrl,
+                hint: `Bound ${canonicalId} but could not store its captured copy under the data dir — see the server log for the write error. The mockup would serve from ${sourceUrl} only, and 404 once that file is gone.`,
+              });
+            }
           }
           return j(200, {
             docId: room.docId,
