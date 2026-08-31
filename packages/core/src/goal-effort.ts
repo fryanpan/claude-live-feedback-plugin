@@ -45,13 +45,67 @@
  *    2026-04-19 no-taxes-on-primary-metrics decision holding where it was
  *    aimed — correcting a known bias is the whole job of a forecast and
  *    none of the job of a measurement.
+ *
+ * The priors added in the same pass as prompt version 2 change none of the
+ * three. A prior is the board ratio a goal inherits when nothing has closed
+ * to learn from — a starting point for the FORECAST, replacing an identity
+ * factor that was itself an assumption (that the scorer is unbiased) and
+ * simply a worse one. It multiplies no measurement, it fills no absent
+ * estimate with a number, and it sits on the same side of the fraction as
+ * everything else the forecast is built from.
  */
 
-/** A ratio outside this band is a correction nobody should trust more than
- *  the estimate it corrects — the same trim the weekly-review multiplier
- *  uses. */
-export const EFFORT_RATIO_MIN = 0.5;
+import { EFFORT_ESTIMATE_PROMPT_VERSION } from './effort-estimate-prompt.ts';
+
+/**
+ * A ratio outside this band is a correction nobody should trust more than
+ * the estimate it corrects.
+ *
+ * The floor was 0.5, borrowed from the weekly-review multiplier, and on
+ * this board it threw away the only thing calibration had learned. Nine
+ * closed tickets ran at a median 0.099 of their estimated calendar time and
+ * five at 0.010 of their estimated hands-on time; the clamp reported both
+ * as 0.5, so a measured ten-fold speed-up left the forecast at half. A
+ * floor is meant to refuse a correction drawn from too little evidence, and
+ * a two-order-of-magnitude one drawn from nine samples is not that — it is
+ * the answer. 0.02 still refuses the fifty-fold correction a single
+ * mis-scored ticket can produce, and lets a measured 0.1 through intact.
+ *
+ * The ceiling is untouched: an estimate that ran LONGER than expected is the
+ * direction where a single stuck ticket does the damage the trim exists to
+ * stop.
+ */
+export const EFFORT_RATIO_MIN = 0.02;
 export const EFFORT_RATIO_MAX = 2.0;
+
+/**
+ * What a board assumes before it has closed anything of its own: that the
+ * scorer, told agents do the work, still sizes a ticket for a person.
+ *
+ * The weekly-review tool's priors, and the reason they are not 1.0. An
+ * identity ratio is not the neutral choice it looks like — it is the claim
+ * that the scorer is unbiased, which this board has direct evidence against
+ * in both quantities and in the same direction. Starting at 1.0 meant every
+ * goal with nothing closed under it forecast human effort, which on the
+ * board that prompted this work read as months of the owner's own attention
+ * on a goal an agent was days from finishing.
+ *
+ * Wall-clock corrects less than hands-on because it corrects a different
+ * thing. An agent working continuously compresses the calendar, but a
+ * ticket still waits on a review, a decision, or the thing before it — and
+ * none of that waiting gets faster. Hands-on has no such floor: the work an
+ * agent does alone leaves the owner's column entirely.
+ *
+ * A prior is a STARTING POINT, not a setting, and the handover is gradual
+ * rather than a step: `computeEffortRatios` shrinks the board's measured
+ * median TOWARD the prior on `EFFORT_SHRINK_K`, so the first close carries a
+ * sixth of the answer and the prior is most of what is left. Without that
+ * shrinkage a prior would not be a prior at all — the first ticket to close
+ * would delete it, and one outlying close would move every forecast on the
+ * board.
+ */
+export const EFFORT_PRIOR_WALL_CLOCK_RATIO = 1 / 7;
+export const EFFORT_PRIOR_HANDS_ON_RATIO = 1 / 15;
 
 /** Shrinkage weight: a goal's own ratio carries `n / (n + K)` of the answer
  *  and the board-wide ratio carries the rest, so two closed tickets barely
@@ -116,6 +170,15 @@ export interface EffortTaskInput {
     status: string;
     handsOnSeconds?: number;
     wallClockSeconds?: number;
+    /** Which generation of the ask produced this — see
+     *  `EFFORT_ESTIMATE_PROMPT_VERSION`. Read by the CALIBRATOR only, never
+     *  by the rollup: an estimate made under an older prompt is still the
+     *  best number this ticket has, and dropping it from the forecast would
+     *  make a scored goal read "not scored" for as long as re-scoring takes.
+     *  What it must not do is teach a correction factor — see
+     *  `isCurrentGenerationEstimate`. Absent on every row written before the
+     *  field existed. */
+    promptVersion?: number;
   };
   /** The append-only trail. Wall-clock actuals are read from it. */
   transitions?: EffortTransition[];
@@ -149,6 +212,33 @@ export function estimateNumbers(task: EffortTaskInput): EffortEstimateNumbers | 
   const { handsOnSeconds, wallClockSeconds } = e;
   if (!isPositiveFinite(handsOnSeconds) || !isPositiveFinite(wallClockSeconds)) return null;
   return { handsOnSeconds, wallClockSeconds };
+}
+
+/**
+ * Was this estimate made under the CURRENT ask?
+ *
+ * Only calibration asks. A correction factor is `actual / estimate`, and
+ * the estimate in that fraction was produced by one particular prompt — so
+ * a factor learned from version 1's human-scaled numbers describes version
+ * 1's bias and nothing else. Applied to version 2's agent-scaled numbers it
+ * would discount the same speed-up twice: once because the prompt now says
+ * an agent does the work, and again because the old estimates were wrong
+ * about that. On the board this was measured on, that is a factor of 0.02
+ * on top of an estimate already ten times smaller, which renders a goal
+ * with real work left in it as "<1m".
+ *
+ * So a prompt bump deliberately empties the sample set, and the priors are
+ * what a board forecasts with until it has closed tickets scored under the
+ * new ask. That is the cost of changing the question, paid where it is
+ * visible, rather than a stale answer to the old one carried forward
+ * silently.
+ *
+ * A row with no `promptVersion` at all predates the field and is treated as
+ * an older generation — the safe direction, and the same one
+ * `recordEffortEstimate` takes with a missing revision.
+ */
+export function isCurrentGenerationEstimate(task: EffortTaskInput): boolean {
+  return task.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION;
 }
 
 /** The three states named, for a surface that has to say which one it is. */
@@ -288,9 +378,21 @@ export interface EffortRatio {
   spread: number;
 }
 
-/** The identity ratio: what a board with nothing to learn from uses. */
-export function neutralRatio(): EffortRatio {
-  return { ratio: 1, samples: 0, spread: 1 };
+/**
+ * The ratio a board with nothing to learn from uses.
+ *
+ * `samples: 0` is the load-bearing field and it stays honest: a prior is
+ * not evidence, so nothing may report it as a correction learned from
+ * closed tickets. Every surface that explains a factor keys on this count,
+ * and the one that says "×N from M closed tickets" must never say it about
+ * a number no ticket produced.
+ *
+ * Defaults to the identity for a caller that genuinely has no prior; the
+ * two quantities' own priors are named above and applied by
+ * `neutralCalibration`.
+ */
+export function neutralRatio(prior = 1): EffortRatio {
+  return { ratio: clampEffortRatio(prior), samples: 0, spread: 1 };
 }
 
 /** One quantity's ratios: the board's, and each goal's. */
@@ -313,12 +415,26 @@ export interface EffortCalibration {
   handsOn: EffortRatioSet;
 }
 
-export function neutralRatioSet(): EffortRatioSet {
-  return { board: neutralRatio(), byGoal: {} };
+export function neutralRatioSet(prior = 1): EffortRatioSet {
+  return { board: neutralRatio(prior), byGoal: {} };
 }
 
+/**
+ * Both quantities at their priors — what a board forecasts with before
+ * anything has closed under the current prompt.
+ *
+ * Not the identity calibration any more, and callers that want THAT (a
+ * test isolating the rollup arithmetic from the correction) ask for it by
+ * building one out of `neutralRatioSet()` with no argument. Making the
+ * priors the default is deliberate: this is the function every real caller
+ * reaches for when there is nothing to calibrate from, and a default that
+ * quietly forecast human effort is the bug being fixed.
+ */
 export function neutralCalibration(): EffortCalibration {
-  return { wallClock: neutralRatioSet(), handsOn: neutralRatioSet() };
+  return {
+    wallClock: neutralRatioSet(EFFORT_PRIOR_WALL_CLOCK_RATIO),
+    handsOn: neutralRatioSet(EFFORT_PRIOR_HANDS_ON_RATIO),
+  };
 }
 
 /** A closed ticket with both an estimate and a measured actual. */
@@ -342,16 +458,29 @@ function spreadOf(ratios: number[], centre: number): number {
  * one ticket that sat open over a holiday would otherwise set the whole
  * board's factor.
  */
-export function computeEffortRatios(samples: EffortSample[]): EffortRatioSet {
+export function computeEffortRatios(samples: EffortSample[], prior = 1): EffortRatioSet {
   const usable = samples.filter(
     (s) => isPositiveFinite(s.estimateSeconds) && isPositiveFinite(s.actualSeconds),
   );
-  if (usable.length === 0) return neutralRatioSet();
+  if (usable.length === 0) return neutralRatioSet(prior);
   const allRatios = usable.map((s) => s.actualSeconds / s.estimateSeconds);
   const boardMedian = median(allRatios);
+  // The BOARD is shrunk toward the prior, on the same weight a goal is
+  // shrunk toward the board. Without this the prior is not a prior at all —
+  // it is a placeholder that the first close deletes: `boardMedian` would
+  // replace it outright, every goal with no samples inherits the board, and
+  // every goal WITH samples is shrunk toward it, so one outlying close moves
+  // every forecast on the board from ×0.07 to anywhere inside the clamp.
+  // Shrinkage is what makes the handover gradual, which is the only thing
+  // that makes a prior worth having.
+  const boardRatio = clampEffortRatio(shrinkEffortRatio(boardMedian, prior, usable.length));
   const board: EffortRatio = {
-    ratio: clampEffortRatio(boardMedian),
+    ratio: boardRatio,
     samples: usable.length,
+    // Spread is measured against the board's OWN median, not the shrunk
+    // ratio: it answers "how scattered were these closes", which is a fact
+    // about the samples and has nothing to do with how much of the prior is
+    // still in the answer.
     spread: spreadOf(allRatios, boardMedian),
   };
   const grouped = new Map<string, number[]>();
@@ -367,8 +496,13 @@ export function computeEffortRatios(samples: EffortSample[]): EffortRatioSet {
     // Shrink toward the board BEFORE clamping. Clamping a wild sample first
     // and then pulling it toward the board would launder an outlier into a
     // number that looks like evidence.
+    //
+    // Toward `boardRatio` — the board as everything else on this board sees
+    // it — not toward the raw median. A goal with no samples inherits
+    // `board.ratio`, so shrinking a one-sample goal toward a different number
+    // would have two goals disagreeing about what the board's answer is.
     byGoal[goal] = {
-      ratio: clampEffortRatio(shrinkEffortRatio(own, boardMedian, ratios.length)),
+      ratio: clampEffortRatio(shrinkEffortRatio(own, boardRatio, ratios.length)),
       samples: ratios.length,
       spread: spreadOf(ratios, own),
     };
@@ -395,6 +529,7 @@ export function computeEffortCalibration(tasks: EffortCalibrationTask[]): Effort
   const handsOn: EffortSample[] = [];
   for (const task of tasks) {
     if (!countsTowardEffort(task) || !isEffortDone(task)) continue;
+    if (!isCurrentGenerationEstimate(task)) continue;
     const est = estimateNumbers(task);
     if (!est) continue;
     const wall = effortActualWallClockSeconds(task);
@@ -410,7 +545,10 @@ export function computeEffortCalibration(tasks: EffortCalibrationTask[]): Effort
       handsOn.push({ goal: task.goal, estimateSeconds: est.handsOnSeconds, actualSeconds: hands });
     }
   }
-  return { wallClock: computeEffortRatios(wallClock), handsOn: computeEffortRatios(handsOn) };
+  return {
+    wallClock: computeEffortRatios(wallClock, EFFORT_PRIOR_WALL_CLOCK_RATIO),
+    handsOn: computeEffortRatios(handsOn, EFFORT_PRIOR_HANDS_ON_RATIO),
+  };
 }
 
 /** The factor in force for one goal, in one ratio set. */

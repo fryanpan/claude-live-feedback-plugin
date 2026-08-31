@@ -13,11 +13,39 @@
  * reading, reviewing, deciding, testing). Calibrating either against what
  * actually happened is a later chunk; this one only produces the guess and
  * says clearly when it could not.
+ *
+ * **The baseline is agent-executed work, and that is the whole point of
+ * version 2.** Version 1 asked the question with no baseline at all, and a
+ * model with no baseline answers with the one from its training data: a
+ * person doing the work. It scored one ticket on the live board at 30 days
+ * hands-on over 60 days of calendar time — 98% of that goal's whole
+ * remainder, from a row an agent finished inside a week — and the board
+ * printed the goal as 15.5 days of Bryan's own attention finishing some
+ * time between October and December. The rows the board had already closed
+ * said otherwise: nine of them ran at a median 0.099 of their estimated
+ * calendar time and five at 0.010 of their estimated hands-on time.
+ *
+ * So the prompt now says who does the work, and the ceiling is fourteen
+ * days rather than ninety. Both halves matter and neither is enough alone:
+ * a stated baseline the model may still overshoot, and a ceiling that
+ * turns an overshoot into a REFUSAL — a failed run visible on the row —
+ * rather than a number nobody would stand behind being summed into a goal.
  */
 
-/** Bumped when the frame around the prompt changes, so a stored estimate
- *  can be told from one made under an older ask. */
-export const EFFORT_ESTIMATE_PROMPT_VERSION = 1;
+/**
+ * Bumped when the frame around the prompt changes, so a stored estimate can
+ * be told from one made under an older ask.
+ *
+ * It is not a label. Two things read it: the boot pass that re-scores every
+ * open ticket whose estimate predates the current ask (`server.ts`), and
+ * the calibrator, which will only learn a correction factor from estimates
+ * made under the CURRENT generation (`goal-effort.ts`). A ratio learned
+ * against version 1's human-scaled numbers, applied to version 2's
+ * agent-scaled ones, would discount the same speed-up twice.
+ *
+ * 2 — agent-executed baseline, 14-day ceiling (2026-08-30).
+ */
+export const EFFORT_ESTIMATE_PROMPT_VERSION = 2;
 
 /**
  * What a workspace asks its effort scorer to weigh, until somebody edits
@@ -28,11 +56,28 @@ export const EFFORT_ESTIMATE_PROMPT_VERSION = 1;
  */
 export const DEFAULT_EFFORT_ESTIMATE_PROMPT = [
   'Estimate the effort a ticket like this typically takes on this board, from its title, description and goal.',
-  "- Hands-on time is the OWNER's own attention: reading the ticket, reviewing a diff or a doc, deciding something, testing a result. It is not the time an agent spends working alone.",
-  '- Wall-clock time is calendar time from filing to done, including any time the ticket spends waiting on review, on a decision, or on something else finishing first.',
+  '- AI AGENTS DO THE WORK, not people. An agent writes the code, the tests and the docs, runs the checks and opens the PR, and it works continuously at machine speed. Estimate the ticket as an agent-executed ticket. Do NOT estimate how long a human engineer would take on it.',
+  "- Hands-on time is the OWNER's own attention and NOTHING ELSE: reading the ticket, reviewing a diff or a mockup, answering a question, deciding something, trying the result. It is never the time the agent spends working alone. A typical ticket costs the owner MINUTES TO A FEW HOURS of hands-on time.",
+  '- Wall-clock time is calendar time from filing to done, including any time the ticket spends waiting on review, on a decision, or on something else finishing first. A typical ticket takes HOURS TO A FEW DAYS of wall-clock time.',
   '- A ticket that carries an open decision or a design question usually costs more wall-clock time than hands-on time — most of the wait is not spent looking at it.',
   '- A small, well-scoped fix costs little of either. A vague or exploratory ticket costs more of both; say so with a larger number rather than guessing low.',
+  '- A ticket that reads like weeks of work is a ticket an agent finishes in days. If a number is heading past a couple of weeks of calendar time, you are estimating human effort — halve it and check again.',
 ].join('\n');
+
+/**
+ * The longest either number may be — 14 days in seconds. A reply outside
+ * this range is exactly the "bad prompt" case the positive control is for:
+ * no estimate stored, not a number nobody would stand behind.
+ *
+ * It was 90 days, which is a ceiling that refuses nothing: the reply this
+ * ceiling exists for was 30 days of hands-on time over 60 days of calendar
+ * time, and 90 days let it through and into a goal total, where it was 98%
+ * of the remainder. Fourteen days is the largest agent-executed ticket this
+ * board has any evidence of, so past it the honest reading is that the
+ * scorer answered a different question — and a failed run says that on the
+ * row, where a stored 30 days silently does not.
+ */
+export const EFFORT_ESTIMATE_MAX_SECONDS = 14 * 24 * 60 * 60;
 
 export interface EffortEstimateTicket {
   title: string;
@@ -65,6 +110,7 @@ export function buildEffortEstimatePrompt(
     'Weigh it against the prompt below, then answer in SECONDS for both fields.',
     'Reply with JSON only, on one line: {"handsOnSeconds": <number>, "wallClockSeconds": <number>}.',
     'Both numbers must be positive. wallClockSeconds is normally the larger of the two — hands-on time is a slice of the calendar time a ticket takes, never more than it.',
+    `Neither number may exceed ${EFFORT_ESTIMATE_MAX_SECONDS} seconds (14 days). A ticket on this board that seems to need more than that is a ticket you are sizing for a human rather than for an agent.`,
     'When the title and description give you nothing to go on, still answer with your best guess for a ticket that vague — never refuse and never answer with zero.',
     '',
     'Prompt:',
@@ -75,11 +121,6 @@ export function buildEffortEstimatePrompt(
   lines.push(`Description: ${ticket.body?.trim() ? ticket.body.trim() : '(none)'}`);
   return { system, user: lines.join('\n') };
 }
-
-/** The longest either number may be — 90 days in seconds. A reply outside
- *  this range is exactly the "bad prompt" case the positive control is
- *  for: no estimate stored, not a number nobody would stand behind. */
-export const EFFORT_ESTIMATE_MAX_SECONDS = 90 * 24 * 60 * 60;
 
 /** Checked AFTER rounding, deliberately — a raw reply like `0.4` passes a
  *  pre-round positivity check yet rounds to zero, which would then violate
