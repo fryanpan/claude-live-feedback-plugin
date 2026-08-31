@@ -278,6 +278,58 @@ decoration (markdown-app) renders title + live status chip beside them,
 refreshed on the board's `task.transitioned` SSE push, without ever touching
 stored content.
 
+## Measuring the latency (`?timing=1`)
+
+**How long a spoken word takes to become a word on the screen, and which hop
+spent it.** Off by default and costing nothing when off: without the flag the
+server allocates no ledger, reads no clock per audio chunk, and the wire is
+what it always was. Add `?timing=1` to a doc's address, start a meeting, and
+talk; a readout appears under the strip with the running p50/p95 and a CSV
+button. Nothing is sent anywhere — the samples live in the tab until someone
+downloads them, and no transcript text, doc id or path enters a sample, a
+column, or Sentry.
+
+The eight legs, in the order the time is spent: **capture** (waiting for the
+100ms frame carrying the word to close, uniform 0–100 by construction) ·
+**uplink** · **queue** (held on the server before the engine had a session —
+zero except at the very start of a meeting) · **vendor** · **serverOut** ·
+**downlink** · **render** · **paint**. They sum to **total**, spoken to
+painted.
+
+- **The correlation key is the AUDIO OFFSET, never the text.** Audio goes up
+  as raw PCM with no sequence number in it, so there is nothing in a frame to
+  echo back — but every `Turn` reports its words with `start`/`end` in
+  milliseconds of the engine's stream, and the server knows how many bytes it
+  had forwarded when it forwarded each chunk. A word's offset therefore names
+  the chunk that carried it arithmetically, with nothing added to the wire.
+  Correlating on text would break on the one thing this pipeline exists to do:
+  revise a word after it is already on screen.
+- **The ledger is written BEFORE the chunk is forwarded.** An engine may
+  answer inside the very `send` that fed it, and a turn arriving then would
+  resolve to the PREVIOUS chunk — understating the vendor by a whole frame.
+  The server suite drives a synchronous engine precisely to hold that line.
+- **Two clocks, and what survives them.** The browser and the server are
+  synced by an NTP-style `timing_ping`/`timing_pong` exchange (a burst at the
+  start, then a drip; lowest round trip wins). An error in the estimate moves
+  time BETWEEN uplink and downlink and cancels in their sum, so `total`, the
+  vendor leg and every server-internal leg are exact regardless — only the
+  up/down SPLIT is indicative. Read it that way.
+- **The headline is PARTIALS.** A partial is the newest word reaching the
+  screen, which is the experience being measured; a final arrives after the
+  engine has decided the turn ended and re-punctuated it, so it is slower by
+  construction and is counted separately.
+- **Paint is a frame after rAF, not rAF.** `requestAnimationFrame` runs
+  BEFORE style, layout and paint, so marking inside it would time the work up
+  to the frame and call it painted.
+- **What it does NOT separate.** The vendor leg is one number: the network
+  round trip to AssemblyAI is inside it, and nothing the vendor sends carries
+  a wall clock to subtract. Microphone and device input latency are before the
+  first mark and are not in `total` at all.
+
+Code: `packages/core/src/meeting-timing.ts` (the arithmetic, shared) ·
+`packages/markdown-app/src/meeting-timing-client.ts` (the browser marks, the
+readout, the CSV).
+
 ## Load-bearing gotchas (each cost real debugging)
 
 - **AssemblyAI `format_turns: true` ends every turn TWICE** at the same turn
@@ -347,4 +399,6 @@ stored content.
 `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
-(UI).
+(UI) · `packages/core/src/meeting-timing.ts` +
+`packages/markdown-app/src/meeting-timing-client.ts` (the `?timing=1`
+latency measurement).
