@@ -5107,11 +5107,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               // 5xx. It still fails: durability is part of what bind_mock now
               // promises, and a 200 here would hand back a link that reads as
               // durable and is not. That is the shape of the incident.
+              //
+              // DELIBERATELY not rolled back. The binding itself is in place
+              // and works — the doc is exactly as durable as every mockup was
+              // before this change — so the response says that rather than
+              // claiming nothing happened. Undoing it would mean purging a
+              // room, or restoring a previous sourceUrl, on the one path that
+              // only fires when the disk is already refusing writes; that is
+              // destructive machinery guarding a condition an operator has to
+              // fix anyway, and the capture write is atomic, so a failure here
+              // cannot have damaged an existing copy.
               return j(500, {
                 error: 'mockup_capture_failed',
                 docId: canonicalId,
                 path: sourceUrl,
-                hint: `Bound ${canonicalId} but could not store its captured copy under the data dir — see the server log for the write error. The mockup would serve from ${sourceUrl} only, and 404 once that file is gone.`,
+                bound: true,
+                hint: `Bound ${canonicalId} to ${sourceUrl}, but could not store its captured copy under the data dir — see the server log for the write error. The binding works and serves from the file; it is NOT durable, so it will 404 once that file is gone. Fix the data dir and bind again.`,
               });
             }
           }

@@ -3,6 +3,7 @@ import {
   accessSync,
   existsSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -146,11 +147,25 @@ export function captureMockup(
   if (!opts?.allowEmpty && html.trim() === '' && existing !== null && existing.trim() !== '') {
     return 'refused-empty';
   }
+  // Written to a sibling and renamed over, never truncated in place. A
+  // straight `writeFileSync` opens the durable copy for truncation FIRST, so
+  // a full disk or a process that dies mid-write leaves the fallback empty or
+  // half-written — destroying the one thing this file exists to keep, at
+  // precisely the moment it is needed. A same-directory rename is atomic: the
+  // capture is either the old bytes or the new ones.
+  const path = mockupCapturePath(dataDir, docId);
+  const tmp = `${path}.tmp`;
   try {
-    writeFileSync(mockupCapturePath(dataDir, docId), html);
+    writeFileSync(tmp, html);
+    renameSync(tmp, path);
     return 'written';
   } catch (err) {
     console.error(`[mockup-capture] failed to capture ${docId}:`, err);
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* best effort — a stray .tmp is inert and the next write reuses it */
+    }
     return 'failed';
   }
 }
@@ -164,8 +179,12 @@ export function captureMockup(
  * meantime. A purge is the one place that is asking for the bytes to be gone.
  */
 export function deleteMockupCapture(dataDir: string, docId: string): void {
+  const path = mockupCapturePath(dataDir, docId);
   try {
-    rmSync(mockupCapturePath(dataDir, docId), { force: true });
+    rmSync(path, { force: true });
+    // The staging sibling too: a purge that left one behind would leave the
+    // page's bytes on disk under a name nobody looks for.
+    rmSync(`${path}.tmp`, { force: true });
   } catch {
     /* best effort — a stray capture is inert */
   }
