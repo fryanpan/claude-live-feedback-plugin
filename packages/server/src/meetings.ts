@@ -404,6 +404,44 @@ export class MeetingStore {
     return listMeetings(this.dataDir, docId);
   }
 
+  /**
+   * "Label `speaker` is `name`", said AFTER the meeting ended.
+   *
+   * The live handle closes its name map at stop — deliberately, alongside the
+   * transcript — but a person renames voices from the device they recorded
+   * on, and that device often reaches the names only once the meeting is
+   * over. This is the one verb that reopens the map, and only the map: the
+   * same append-only index line a live rename writes, validated against what
+   * the meeting actually carried, and never a rewrite of a transcript line.
+   *
+   * Refused while the meeting is live ('recording'): a running rename must
+   * also rewrite the notes composer's memory of what it wrote, which only the
+   * session reached over the audio socket can do — recording the name here
+   * would watch the next tick reintroduce the placeholder.
+   */
+  nameSpeakerLater(args: {
+    docId: string;
+    meetingId: string;
+    speaker: string;
+    name: string;
+  }):
+    | { ok: true; priorNames: Record<string, string>; speakers: Record<string, string> }
+    | { ok: false; reason: 'unknown_meeting' | 'recording' | 'unknown_speaker' } {
+    const { docId, meetingId, speaker, name } = args;
+    const record = this.list(docId).find((m) => m.meetingId === meetingId);
+    if (!record) return { ok: false, reason: 'unknown_meeting' };
+    if (this.active(docId)?.meetingId === meetingId) return { ok: false, reason: 'recording' };
+    const priorNames = { ...(record.speakers ?? {}) };
+    // A name attaches to a voice the meeting HAD: one that spoke, or one that
+    // was named live before it ever did. Anything else is a typo becoming a
+    // durable attribution.
+    const carried =
+      speaker in priorNames || this.transcript(docId, meetingId).some((t) => t.speaker === speaker);
+    if (!carried) return { ok: false, reason: 'unknown_speaker' };
+    appendLine(meetingIndexPath(this.dataDir, docId), { meetingId, speakers: { [speaker]: name } });
+    return { ok: true, priorNames, speakers: { ...priorNames, [speaker]: name } };
+  }
+
   /** One meeting's settled turns. */
   transcript(docId: string, meetingId: string): TranscriptTurn[] {
     return readTranscript(this.dataDir, docId, meetingId);

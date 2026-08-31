@@ -58,7 +58,7 @@ import {
   showSignInBar,
 } from './signin/write-gate.ts';
 import { mountSpeakerReassign } from './speaker-reassign-menu.ts';
-import { loadDocVoices } from './speaker-voices.ts';
+import { loadDocSpeakers, loadDocVoices, postSpeakerName } from './speaker-voices.ts';
 import { installStaleClientNotice } from './stale-client.ts';
 import { readSuggestModePref, setSuggesting, writeSuggestModePref } from './suggest-input.ts';
 import { registerMarkdownMount } from './surface-registry.ts';
@@ -371,6 +371,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       ...(roomSpeakers !== undefined ? { speakers: roomSpeakers } : {}),
       ...(roomAudio ? { room: roomAudio } : {}),
       timing: wantsLatencyTiming(location.search),
+      // The rename surface a finished meeting leaves behind: the last
+      // meeting's cast on mount, and the HTTP rename for a socket that is
+      // gone. Same record the reassign menu below reads.
+      loadSpeakers: () => loadDocSpeakers(docId),
+      postName: (meetingId, speaker, name) => postSpeakerName({ docId, meetingId, speaker, name }),
     });
     scope.onCleanup(() => strip.destroy());
     // A sibling of the strip, not part of it: a bot has its own lifecycle and

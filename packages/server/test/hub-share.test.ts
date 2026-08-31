@@ -659,6 +659,22 @@ describe('workspace-hub minimal share (§3.12 commit 8)', () => {
       });
       expect(reply.status).toBe(200);
     });
+
+    it('naming a meeting speaker is refused — it rewrites the record and the notes', async () => {
+      const rename = {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ speaker: 'A', name: 'Priya' }),
+      };
+      const r = await pub(`/api/docs/${attachedId}/meetings/m-none/speakers`, hubCookie, rename);
+      // 403 BEFORE the meeting lookup: the guard, not a missing meeting.
+      expect(r.status).toBe(403);
+      // Positive control: the owner's same probe gets PAST the guard and is
+      // refused by the lookup instead — the route was really reached.
+      expect((await local(`/api/docs/${attachedId}/meetings/m-none/speakers`, rename)).status).toBe(
+        404,
+      );
+    });
   });
 
   describe('a workspace visitor reaches the workspace’s own docs, comments only', () => {
