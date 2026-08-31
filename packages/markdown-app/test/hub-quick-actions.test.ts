@@ -98,6 +98,44 @@ describe('renderQuickActions — the buttons in the quick-add slot', () => {
     expect(root.querySelector('form')).toBeNull();
   });
 
+  it('disables all of them when the server will not accept writes from this browser', () => {
+    // Error prevention, matching the doc surface's edit toggle: a signed-out
+    // reader is told these are unavailable rather than pressing one and
+    // receiving a refusal. Every one of them creates something on the board,
+    // so none is exempt — the conversation button included.
+    const onNewTask = vi.fn(() => Promise.resolve(true));
+    renderQuickActions(root, {
+      onNewTask,
+      onStartHuddle: () => Promise.resolve(true),
+      onStartConversation: () => Promise.resolve(true),
+      canWrite: false,
+    });
+    const buttons = Array.from(root.querySelectorAll('button'));
+    expect(buttons).toHaveLength(3);
+    for (const b of buttons) {
+      expect(b.disabled).toBe(true);
+      // Says why. A disabled control with no explanation is a dead end.
+      expect(b.title).toMatch(/sign in/i);
+      expect(b.getAttribute('aria-label')).toMatch(/sign in/i);
+    }
+    (root.querySelector('.hub-quick-new') as HTMLButtonElement).click();
+    expect(onNewTask).not.toHaveBeenCalled();
+  });
+
+  it('leaves them live when nothing says otherwise', () => {
+    // The control for the case above. Without it "both are disabled" would
+    // also be true of a render that disabled them unconditionally — which is
+    // every board today, since the gate ships off.
+    renderQuickActions(root, {
+      onNewTask: () => Promise.resolve(true),
+      onStartHuddle: () => Promise.resolve(true),
+      onStartConversation: () => Promise.resolve(true),
+    });
+    for (const b of Array.from(root.querySelectorAll('button'))) {
+      expect(b.disabled).toBe(false);
+    }
+  });
+
   it('a press calls its own handler once and holds the button while the call is out', async () => {
     const newTask = pending();
     const onNewTask = vi.fn(() => newTask.promise);
