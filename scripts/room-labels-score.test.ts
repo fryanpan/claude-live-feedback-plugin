@@ -395,6 +395,45 @@ describe('coverage of the script', () => {
     expect(COMPARABLE_COVERAGE_DELTA).toBeGreaterThan(0);
   });
 
+  it('does not let a run score higher by attempting less', () => {
+    // The figure that ranks settings. Two runs: one attributes half the
+    // script correctly, the other attributes a QUARTER of it correctly but
+    // gets everything it attempted right. The over-the-covered-part figure
+    // prefers the second; the over-everything figure must not.
+    const half: ScoredTurn[] = script.slice(0, 3).map((l, i) => ({
+      turn: i + 1,
+      text: l.text,
+      speaker: i % 2 === 0 ? 'A' : 'B',
+    }));
+    const sliver: ScoredTurn[] = script.slice(0, 1).map((l, i) => ({
+      turn: i + 1,
+      text: l.text,
+      speaker: 'A',
+    }));
+    const halfScore = scoreDiarization(half, script, DEFAULT_SCORING);
+    const sliverScore = scoreDiarization(sliver, script, DEFAULT_SCORING);
+    // Both perfect over what they attempted...
+    expect(halfScore.wordsCorrect).toBe(halfScore.wordsScored);
+    expect(sliverScore.wordsCorrect).toBe(sliverScore.wordsScored);
+    // ...and the whole-script figure separates them anyway.
+    expect(halfScore.refWordsCorrect).toBeGreaterThan(sliverScore.refWordsCorrect);
+    expect(halfScore.refWordsTotal).toBe(sliverScore.refWordsTotal);
+  });
+
+  it('counts nothing as correct when every label went to the wrong person', () => {
+    // The positive control for the figure: it must be able to reach zero, or
+    // it is measuring transcription rather than attribution.
+    const swapped: ScoredTurn[] = script.map((l, i) => ({
+      turn: i + 1,
+      text: l.text,
+      // One label for everyone: no assignment can make both people right.
+      speaker: 'A',
+    }));
+    const score = scoreDiarization(swapped, script, DEFAULT_SCORING);
+    expect(score.refWordsCorrect).toBeLessThan(score.refWordsTotal);
+    expect(score.refWordsTotal).toBeGreaterThan(0);
+  });
+
   it('scores no boundary across a turn that aligned to nothing', () => {
     // The reproduction: turn 2 is garbage the alignment drops, so turns 1 and
     // 3 become neighbours in the scored list without ever having been

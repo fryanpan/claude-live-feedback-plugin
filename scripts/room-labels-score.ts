@@ -91,6 +91,13 @@ export interface DiarizationScore {
   /** The same in words — the denominator every percentage here is a part of. */
   refWordsTotal: number;
   refWordsCovered: number;
+  /**
+   * Reference words that were BOTH transcribed and attributed to the right
+   * person. Over `refWordsTotal` this is the only figure on the card that
+   * does not move with how much a run attempted, which makes it the one that
+   * can rank two settings against each other.
+   */
+  refWordsCorrect: number;
   turnsTotal: number;
   turnsAligned: number;
   turnsUnlabelled: number;
@@ -251,6 +258,8 @@ export function scoreDiarization(
     /** The one person this turn is all of, or null when it covers several. */
     person: string | null;
     words: number;
+    /** The reference lines themselves, for the whole-script figure. */
+    lines: number[];
     /** Which turn this was, and which reference lines it covered. Both are
      *  needed to know whether two pairs were ACTUALLY next to each other:
      *  being adjacent in this array only means nothing scoreable sat between
@@ -270,6 +279,7 @@ export function scoreDiarization(
       label: turn.speaker,
       person: people.size === 1 ? (lines[0]?.speaker ?? null) : null,
       words: words(turn.text).length,
+      lines: [...at],
       turnIndex: i,
       firstLine: at[0] ?? -1,
       lastLine: at[at.length - 1] ?? -1,
@@ -299,6 +309,15 @@ export function scoreDiarization(
     (n, [label, person]) => n + (wordCounts.get(label)?.get(person) ?? 0),
     0,
   );
+
+  // Of everything said in the room, how much came back attributed to the
+  // person who said it. Reference words on both sides of the fraction, so a
+  // run that attempted less cannot score higher by attempting less.
+  const refWordsCorrect = pairs.reduce((n, p) => {
+    if (p.person === null || p.label === undefined) return n;
+    if (assignment.map[p.label] !== p.person) return n;
+    return n + p.lines.reduce((w, k) => w + words(truth[k]?.text ?? '').length, 0);
+  }, 0);
 
   let boundaryPairs = 0;
   let boundaryAgreements = 0;
@@ -333,6 +352,7 @@ export function scoreDiarization(
     linesCovered: covered.size,
     refWordsTotal: truth.reduce((n, t) => n + words(t.text).length, 0),
     refWordsCovered: [...covered].reduce((n, k) => n + words(truth[k]?.text ?? '').length, 0),
+    refWordsCorrect,
     turnsTotal: turns.length,
     turnsAligned: pairs.length,
     turnsUnlabelled: turns.filter((t) => t.speaker === undefined).length,
@@ -394,6 +414,9 @@ export function formatScore(title: string, score: DiarizationScore): string {
   return [
     `  ${title}`,
     `    speakers: ${score.speakersPredicted} labelled vs ${score.speakersTruth} in the room${counted}`,
+    `    OF EVERYTHING SAID: ${pct(score.refWordsCorrect, score.refWordsTotal)} ` +
+      `transcribed AND attributed right (${score.refWordsCorrect}/${score.refWordsTotal} words) ` +
+      '— the figure that compares two settings',
     `    script covered: ${pct(score.refWordsCovered, score.refWordsTotal)} of the words ` +
       `(${score.linesCovered}/${score.linesTotal} lines) — EVERY FIGURE BELOW IS OVER THAT PART`,
     `    turns: ${score.turnsAligned}/${score.turnsTotal} aligned to the script, ` +
@@ -463,6 +486,7 @@ export function summarizeRuns(scores: readonly DiarizationScore[]): string {
   });
   const wordPct = scores.map((s) => ratio(s.wordsCorrect, s.wordsScored));
   const covered = scores.map((s) => 100 * coverage(s));
+  const overall = scores.map((s) => ratio(s.refWordsCorrect, s.refWordsTotal));
   const labelled = scores.map((s) => s.speakersPredicted);
   const one = (v: number) => (Number.isNaN(v) ? 'n/a' : `${v.toFixed(1)}%`);
   const show = (values: readonly number[]) =>
@@ -473,6 +497,7 @@ export function summarizeRuns(scores: readonly DiarizationScore[]): string {
   const lines = [
     `  ACROSS ${scores.length} RUN${scores.length === 1 ? '' : 'S'} of the same audio:`,
     `    speakers labelled: ${Math.min(...labelled)}–${Math.max(...labelled)} of ${scores[0]?.speakersTruth ?? 0}`,
+    `    of everything said: ${show(overall)}`,
     `    script covered: ${show(covered)}`,
     `    turn attribution: ${show(turnPct)}`,
     `    word attribution: ${show(wordPct)}`,

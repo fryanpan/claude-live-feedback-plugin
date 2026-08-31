@@ -69,20 +69,33 @@ const SOLO_AUDIO_PROCESSING: RoomAudioProcessing = {
 /**
  * What a room capture asks for, now that the measurement has spoken.
  *
- * Gain control is OFF. Measured through the real engine on one far-field
- * element of the AMI array — one microphone on a table with people around
- * it — it was the worst of the four settings in both windows scored, and the
- * only one that lost against leaving everything alone:
+ * Measured through the real engine on one far-field element of the AMI array
+ * — one microphone on a table with people around it. The figure is the one
+ * that survives a change of denominator: reference words BOTH transcribed and
+ * attributed to the person who said them, over every word said in the window.
+ * (Attribution over the part a run covered cannot rank settings, because each
+ * setting produces a different transcript and so covers a different amount.)
  *
- *     two people, 120s      raw 24.0%   ns 40.2%   agc 19.7%   ns+agc 24.1%
- *     four people, 120s     raw 35.1%   ns 39.3%   agc 31.2%   ns+agc 50.2%
+ *     two people, 120s     raw 16.4%   ns 34.4%   agc 13.4%   ns+agc 16.4%
+ *     four people, 120s    raw 27.3%   ns 29.5%   agc 31.8%   ns+agc 49.0%
  *
- * (word attribution; `docs/architecture/meeting-assistant.md` prints the
- * scoring settings and the caveats.) There is a mechanism behind the number,
- * which is why it is trusted at this size: telling people apart on ONE
- * microphone leans on how loud each of them is, and gain control exists to
- * remove exactly that difference. Noise suppression stays on — it helped in
- * both windows.
+ * NOISE SUPPRESSION ON beats noise suppression off in all four pairings —
+ * both windows, gain control either way. That one is not close and it is not
+ * split.
+ *
+ * GAIN CONTROL IS SPLIT, and the honest reading is that it depends on how
+ * many people are in the room. On two voices it costs (13.4 against 16.4, and
+ * it cancels the whole of noise suppression's gain: 16.4 against 34.4); on
+ * four it helps (31.8 against 27.3, and the best row of the eight). A
+ * mechanism fits both halves: telling people apart on ONE microphone leans on
+ * how loud each of them is, so removing that difference costs when two voices
+ * are already separable and pays when four voices are so unequal that the
+ * quiet ones are lost entirely.
+ *
+ * So this default is chosen for the room this product is FOR — two people
+ * with a device on the table — and not by a majority of the eight numbers. A
+ * bigger room wants `?mic=ec1-ns1-agc1`, which is exactly why the knob is on
+ * the address.
  *
  * Echo cancellation stays on and UNMEASURED: it cancels what the device's own
  * speaker is playing, and an AMI recording has no far-end signal to cancel,

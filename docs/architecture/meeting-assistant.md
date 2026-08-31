@@ -205,24 +205,46 @@ scored under each. The excerpt is range-fetched into a cache outside the repo
 a byte offset is a time offset and 4.8 MB arrives instead of 40 MB.
 
 Measured 2026-08-31, ES2002a, 120-second windows, through the real engine with
-`max_speakers` set to the number of people in the window. Word attribution,
-scored `similarity=jaccard-words threshold=0.5 alignment=monotonic-dp-span
+`max_speakers` set to the number of people in the window. The figure is
+**reference words both transcribed AND attributed to the person who said
+them, over every word said in the window** — the only one on the card that
+does not move with how much a run attempted. Scored
+`similarity=jaccard-words threshold=0.5 alignment=monotonic-dp-span
 mapping=optimal-assignment unlabelled=excluded mixed=counted-wrong`:
 
 | window | ec1-ns0-agc0 | ec1-ns1-agc0 | ec1-ns0-agc1 | ec1-ns1-agc1 |
 |---|---|---|---|---|
-| two people (590s–710s) | 24.0% | **40.2%** | 19.7% | 24.1% |
-| four people (900s–1020s) | 35.1% | 39.3% | 31.2% | **50.2%** |
+| two people (590s–710s), 262 words | 16.4% | **34.4%** | 13.4% | 16.4% |
+| four people (900s–1020s), 400 words | 27.3% | 29.5% | 31.8% | **49.0%** |
 | speakers labelled, two-person window | 2 of 2 | 2 of 2 | 2 of 2 | 2 of 2 |
 | speakers labelled, four-person window | 3 of 4 | 2 of 4 | 2 of 4 | 3 of 4 |
 
-Noise suppression helped in both windows; gain control alone was the worst
-column in both, and the only setting that lost against changing nothing. There
-is a mechanism behind that, which is why it is trusted at this size: telling
-people apart on ONE microphone leans on how loud each of them is, and gain
-control exists to remove exactly that difference. So `ROOM_AUDIO_DEFAULT` is
-`ec1-ns1-agc0`. Solo keeps all three — it was measured by nothing here, and
-the two defaults are now separate constants so that moving one cannot move the
+**Why that figure and not attribution accuracy.** Each setting produces a
+different transcript and therefore covers a different amount of the script, so
+a percentage over the covered part compares two numbers with different
+denominators. It is not a small effect here: on the two-person window,
+coverage ran from 66.0% (`ns`) to 86.3% (`agc`), and `agc` — the setting that
+covered the MOST — attributed the least. Ranking on the covered-part figure
+would have preferred whichever setting attempted least. The scorer now prints
+coverage on every card and refuses the comparison out loud when two runs
+differ by more than five points.
+
+**Noise suppression on wins all four pairings** — both windows, gain control
+either way. That one is neither close nor split.
+
+**Gain control is split, and it appears to depend on how many people are in
+the room.** On two voices it costs (13.4% against 16.4%) and cancels the whole
+of noise suppression's gain (16.4% against 34.4%); on four it helps (31.8%
+against 27.3%, and the best row of the eight). A mechanism fits both halves:
+telling people apart on ONE microphone leans on how loud each of them is, so
+removing that difference costs when two voices are already separable and pays
+when four voices are unequal enough that the quiet ones are lost outright.
+
+So `ROOM_AUDIO_DEFAULT` is `ec1-ns1-agc0`, chosen for the room this product is
+FOR — two people with a device on the table — and not by a majority of the
+eight numbers. A bigger room wants `?mic=ec1-ns1-agc1`, which is why the knob
+is on the address. Solo keeps all three; it was measured by nothing here, and
+the two defaults are separate constants so that moving one cannot move the
 other.
 
 **Echo cancellation is untested and stays on.** It cancels what the device's
@@ -234,19 +256,20 @@ is four rows about two processors.
 far-field audio with human reference annotations. They are NOT the browser:
 `afftdn` and `dynaudnorm` are ffmpeg approximations of WebRTC's processors,
 doing the same job by a different algorithm, and the report labels every such
-run `EMULATED`. Two windows of one meeting is a small sample, and the
-four-person case is harder than the product's. Bryan's own two-minute
+run `EMULATED`. Two windows of one meeting is a small sample; the four-person case is harder
+than the product's, and it is the half that disagrees about gain control, so
+the split above rests on one window each way. Bryan's own two-minute
 recording is what confirms the direction on the case we actually ship; moving
 the default back is one line.
 
 Repeats matter more than they look. `--repeat n` runs the same audio n times,
 prints every run and their median, and warns when the spread WITHIN one
-setting is wide enough to swallow the gaps BETWEEN settings. Across the 20
-runs above, each setting's own runs agreed to within 0.1 points — the engine
-is near-deterministic on identical bytes — and the one disagreement was a
-single transcribed word. That was worth establishing: the first pass at this
-matrix printed identical scores for two settings and read them as run-to-run
-noise. They were identical because the emulation had silently not applied
+setting is wide enough to swallow the gaps BETWEEN settings. Measured over 20
+runs, each setting's own runs agreed to within 0.1 points of attribution — the
+engine is near-deterministic on identical bytes — with the largest single
+disagreement being one transcribed word, and one `ns` pair differing by 1.6
+points of coverage. That was worth establishing: the first pass at this matrix
+printed identical scores for two settings and read them as run-to-run noise. They were identical because the emulation had silently not applied
 (zsh does not word-split an unquoted parameter, so `ns agc` arrived as one
 unknown key, and the script dropped it while still printing `EMULATED`).
 `emulate` now refuses a key it cannot apply.
