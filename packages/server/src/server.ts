@@ -3438,14 +3438,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     // the same route: a mockup is somebody's own file, and neither the review
     // scaffolding nor the box's monitoring config belongs in it on disk.
     const withWidget = injectWidget(html, room.meta.docId);
-    return new Response(injectSentryHead(withWidget, browserSentry, 'mockup'), {
+    const body = injectSentryHead(withWidget, browserSentry, 'mockup');
+    return new Response(body, {
       headers: {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-cache',
         // Content-derived like serveStatic's, and for the same reason: a
         // reload of an unchanged mock should cost a 304, and a deploy that
-        // changed nothing should not throw the cache away.
-        etag: `"${Bun.hash(html).toString(16)}"`,
+        // changed nothing should not throw the cache away. Hashed from the
+        // BODY WE SEND rather than the file we read — the widget embed and
+        // the Sentry head are part of what the browser is holding, so a
+        // source-derived tag would revalidate a page whose injected half had
+        // changed underneath it. `serveShellHtml` hashes its injected HTML
+        // for the same reason.
+        etag: `"${Bun.hash(body).toString(16)}"`,
         // Which copy answered. A page served from the capture is still the
         // page — but "the source file is gone" is a fact somebody may want to
         // act on, and it must not be inferred from the absence of an error.
@@ -5080,7 +5086,12 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // so a rebind under the same readable name replaces the same copy.
           if (type === 'mockup' && sourceUrl && isHtmlMockupSource(sourceUrl)) {
             const html = readMockupHtml(sourceUrl);
-            if (html !== null) captureMockup(dataDir, canonicalId, html);
+            // `allowEmpty`: a bind REPLACES, including with nothing. The
+            // serve-time refusal protects a capture from its own source being
+            // caught mid-write; a rebind names a different file, and holding
+            // the old copy there would leave the link resolving to a mockup
+            // nobody pointed it at.
+            if (html !== null) captureMockup(dataDir, canonicalId, html, { allowEmpty: true });
           }
           return j(200, {
             docId: room.docId,

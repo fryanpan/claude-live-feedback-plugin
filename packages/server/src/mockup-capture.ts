@@ -126,11 +126,26 @@ export type CaptureOutcome = 'written' | 'unchanged' | 'refused-empty' | 'failed
  * truncated or half-written source cannot take the good copy with it. Every
  * other write is content read from the bound file moments earlier, replacing
  * an older copy of that same file.
+ *
+ * `allowEmpty` is how a BIND opts out of that refusal, and it has to. The
+ * refusal reads "this file was probably caught mid-write", which is only true
+ * of a file the capture already came from. A rebind names a DIFFERENT source,
+ * and if that one is deliberately empty then keeping the old copy leaves the
+ * link resolving to a mockup nobody pointed it at — silently, which is the
+ * exact failure this module exists to end. So a bind always replaces; only a
+ * serve, which re-reads the same source, gets to protect the copy.
  */
-export function captureMockup(dataDir: string, docId: string, html: string): CaptureOutcome {
+export function captureMockup(
+  dataDir: string,
+  docId: string,
+  html: string,
+  opts?: { allowEmpty?: boolean },
+): CaptureOutcome {
   const existing = readMockupCapture(dataDir, docId);
   if (existing === html) return 'unchanged';
-  if (html.trim() === '' && existing !== null && existing.trim() !== '') return 'refused-empty';
+  if (!opts?.allowEmpty && html.trim() === '' && existing !== null && existing.trim() !== '') {
+    return 'refused-empty';
+  }
   try {
     writeFileSync(mockupCapturePath(dataDir, docId), html);
     return 'written';
