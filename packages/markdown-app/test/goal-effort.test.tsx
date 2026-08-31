@@ -155,6 +155,64 @@ describe('boardEffort ignores the reader’s filter', () => {
   });
 });
 
+describe('the board says when a projection is uncalibrated', () => {
+  const labelFor = (tasks: HubTask[]) => {
+    const summary = boardEffort(GOALS, tasks, NOW).byGoal.get('g-ship');
+    if (!summary) throw new Error('no summary');
+    return goalEffortLabel(summary, NOW, 'en-US');
+  };
+
+  /** Closed, worked, and scored under an OLDER ask — so it sets a pace and
+   *  teaches the calibrator nothing. The shape a board wears right after a
+   *  prompt bump, and the only way to hold a date and no correction at once. */
+  const staleClose = (agoMs: number): HubTask =>
+    closed(agoMs, HOUR, {
+      effortEstimate: {
+        status: 'ok',
+        handsOnSeconds: 600,
+        wallClockSeconds: 3600,
+        promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION - 1,
+      },
+    });
+
+  it('marks a date whose factor no closed ticket has corrected', () => {
+    const l = labelFor([staleClose(DAY), staleClose(2 * DAY), staleClose(3 * DAY), task()]);
+    // Positive control: there IS a date to qualify. Without it the marker
+    // would be suppressed and the assertion below would pass on the wrong
+    // branch.
+    expect(l.finishText).not.toBe('');
+    expect(l.uncalibratedText).toBe('estimate only');
+    expect(l.title).toContain('Estimate only');
+    expect(l.title).toContain("board's starting assumption");
+  });
+
+  it('drops the marker once three closes have corrected the factor', () => {
+    // The same fixture scored under the CURRENT ask. This is what stops the
+    // test above passing for a marker that is simply always on.
+    const l = labelFor([closed(DAY), closed(2 * DAY), closed(3 * DAY), task()]);
+    expect(l.finishText).not.toBe('');
+    expect(l.uncalibratedText).toBe('');
+    expect(l.title).not.toContain('Estimate only');
+  });
+
+  it('says nothing about calibration when there is no date to qualify', () => {
+    // A goal already saying "date after 3 closes" does not also need telling
+    // that the estimate behind the date it has not got is uncorrected.
+    const l = labelFor([staleClose(DAY), task()]);
+    expect(l.finishText).toContain('date after');
+    expect(l.uncalibratedText).toBe('');
+  });
+
+  it('names the factor, not the pace, as the thing that is uncorrected', () => {
+    // The strip is saying something precise: the DATE rests on three closes
+    // it did watch, and the estimate that date divides was scaled by a
+    // number none of them corrected. Blaming the pace would be wrong.
+    const l = labelFor([staleClose(DAY), staleClose(2 * DAY), staleClose(3 * DAY), task()]);
+    expect(l.title).toContain('no closed ticket has corrected the scorer');
+    expect(l.title).not.toContain('date after');
+  });
+});
+
 describe('goalEffortLabel keeps three states apart', () => {
   const labelFor = (tasks: HubTask[]) => {
     const summary = boardEffort(GOALS, tasks, NOW).byGoal.get('g-ship');
@@ -351,6 +409,42 @@ describe('the board renders the readout and leaves the rows alone', () => {
   const paint = (tasks: HubTask[]): void => {
     renderBoard(host, boardSectionsWithEffort(GOALS, tasks, filters(), NOW), {} as never);
   };
+
+  it('draws "estimate only" under the date, never in the title row', () => {
+    // Scored under an older ask: three closes set a pace, and none of them
+    // corrected the factor the date divides.
+    const stale = (agoMs: number): HubTask =>
+      closed(agoMs, HOUR, {
+        effortEstimate: {
+          status: 'ok',
+          handsOnSeconds: 600,
+          wallClockSeconds: 3600,
+          promptVersion: EFFORT_ESTIMATE_PROMPT_VERSION - 1,
+        },
+      });
+    paint([stale(DAY), stale(2 * DAY), stale(3 * DAY), task()]);
+    const strip = host.querySelector('.hub-goal-effort') as HTMLElement;
+    const est = strip.querySelector('.hub-goal-effort-est');
+    expect(est?.textContent).toBe('estimate only');
+    // In the DATE's column — so it wraps under the date and spends height,
+    // the axis this board has, rather than width from the goal title.
+    expect(est?.closest('.hub-goal-effort-fin')).not.toBeNull();
+    expect(est?.closest('.hub-goal-row')).toBeNull();
+    // The pair still has exactly two children, which is what keeps
+    // `space-between` holding the label and the date at opposite edges.
+    expect(strip.querySelector('.hub-goal-effort-fin')?.children).toHaveLength(2);
+    // The date itself is untouched beside it.
+    expect(strip.querySelector('.hub-goal-effort-fin .hub-goal-effort-v')?.textContent).toContain(
+      '~',
+    );
+
+    // Positive control: the same board scored under the CURRENT ask draws no
+    // marker at all, so the assertion above is the state and not the markup.
+    disposeBoards();
+    host.innerHTML = '';
+    paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task()]);
+    expect(host.querySelector('.hub-goal-effort-est')).toBeNull();
+  });
 
   it('draws the strip on its own row beneath the header, not on the meta row', () => {
     paint([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
@@ -590,7 +684,21 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
   const factor = (ratio: number, samples: number, spread = 1): EffortRatio => ({
     ratio,
     samples,
+    // A hand-built factor with samples behind it is a CALIBRATED one; the
+    // panel's prior-only wording is keyed on that flag, and a fixture that
+    // left it false would put every one of these assertions on the wrong
+    // branch. `uncalibrated` below is the deliberate other case.
+    observedSamples: samples,
     spread,
+    calibrated: samples > 0,
+  });
+  /** A factor resting on no measured close: the prior, plus what HAS closed. */
+  const uncalibrated = (ratio: number, observedSamples = 0): EffortRatio => ({
+    ratio,
+    samples: 0,
+    observedSamples,
+    spread: 1,
+    calibrated: false,
   });
   const shipCal = (wall: EffortRatio, hands: EffortRatio = wall): EffortCalibration => ({
     wallClock: { board: wall, byGoal: { 'g-ship': wall } },
@@ -717,6 +825,43 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     expect(agreed.detail.textContent).toContain('Scaled ×2.00 from 6 closed tickets');
   });
 
+  it('says how many HAVE closed when a goal is below the calibration floor', () => {
+    // One or two closes and the factor is still the prior. "Nothing has
+    // closed under this goal" would be false about a row the reader can see
+    // on the same board, so the sentence names the count it has.
+    const two = effortFields(task(), shipCal(uncalibrated(0.07, 2), uncalibrated(0.07, 2)));
+    if (!two) throw new Error('expected fields');
+    const text = two.detail.textContent ?? '';
+    expect(text).toContain('2 closed tickets so far, below the 3 needed');
+    expect(text).not.toContain('nothing has closed');
+    // Singular, because a sentence that says "1 closed tickets" is a
+    // sentence nobody proof-read.
+    const one = effortFields(task(), shipCal(uncalibrated(0.07, 1), uncalibrated(0.07, 1)));
+    if (!one) throw new Error('expected fields');
+    expect(one.detail.textContent).toContain('1 closed ticket so far');
+    // Positive control: with nothing closed at all the older wording stands.
+    const none = effortFields(task(), shipCal(uncalibrated(0.07), uncalibrated(0.07)));
+    if (!none) throw new Error('expected fields');
+    expect(none.detail.textContent).toContain('nothing has closed under this goal');
+  });
+
+  it('does not call a board-learned factor an assumption', () => {
+    // A goal that has closed nothing of its own, on a board that HAS
+    // learned, inherits a measured correction. It reports samples: 0 like a
+    // prior does, and the panel used to key on exactly that — so the one
+    // number it exists to explain would have been described as a guess.
+    const inherited: EffortRatio = {
+      ratio: 0.07,
+      samples: 0,
+      observedSamples: 1,
+      spread: 1,
+      calibrated: true,
+    };
+    const f = effortFields(task(), shipCal(inherited, inherited));
+    if (!f) throw new Error('expected fields');
+    expect(f.detail.textContent).not.toContain('starting assumption');
+  });
+
   it('accounts for a factor with no closed tickets behind it — the board\u2019s prior', () => {
     // A board that has closed nothing still scales, because the priors are
     // not 1 (see EFFORT_PRIOR_* in core). Until they existed, a factor of 1
@@ -775,8 +920,14 @@ describe('the ticket panel shows two estimates and hides the arithmetic', () => 
     const stale = effortFields(orphan, calibration, 'g-vanished');
     expect(filed?.detail.textContent).toContain('4 closed tickets');
     // Keyed on the stale id the lookup misses the bucket entirely and falls
-    // back to the board's ten — a different number, quoted about the same
-    // ticket. That is the parameter this exists to close.
-    expect(stale?.detail.textContent).toContain('10 closed tickets');
+    // back to the board — a different factor, and now a visibly different
+    // sentence, quoted about the same ticket. That is the parameter this
+    // exists to close.
+    expect(stale?.detail.textContent).toContain('closed tickets elsewhere on the board');
+    expect(stale?.detail.textContent).not.toContain('4 closed tickets');
+    // And the board's own count never lands on the goal: ten closed on this
+    // board, none of them under `g-vanished`, and the sentence says so.
+    expect(stale?.detail.textContent).not.toContain('10 closed');
+    expect(stale?.detail.textContent).toContain('nothing has closed under this goal yet');
   });
 });

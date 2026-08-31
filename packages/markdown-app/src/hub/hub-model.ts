@@ -7,7 +7,6 @@
 import type { ReviewPayload } from '@feedback/core';
 import {
   EFFORT_MIN_CLOSES_FOR_PROJECTION,
-  EFFORT_PACE_WINDOW_DAYS,
   type EffortCalibration,
   type GoalEffortSummary,
   computeEffortCalibration,
@@ -736,6 +735,12 @@ export interface GoalEffortLabel {
   finishText: string;
   /** `4 not scored` / `4 not scored, 1 failed`, or `''` at full coverage. */
   coverageText: string;
+  /** `estimate only` when the date rests on a factor no closed ticket has
+   *  corrected, `''` otherwise — and `''` whenever there is no date, since a
+   *  caveat about a projection nobody can see is noise. It rides the DATE's
+   *  own column, never the title's: the title is the primary task at every
+   *  width, and a caveat that pushes it is in the wrong place. */
+  uncalibratedText: string;
   /** The long version, for the element's `title`. */
   title: string;
   /** Whether there is anything at all to draw. */
@@ -767,6 +772,7 @@ export function goalEffortLabel(
     leftTextShort: leftText,
     finishText: '',
     coverageText: '',
+    uncalibratedText: '',
     title,
     show,
     showBar: false,
@@ -799,6 +805,14 @@ export function goalEffortLabel(
         ? `${summary.unestimatedCount} not scored, ${summary.failedCount} failed`
         : `${summary.unestimatedCount} not scored`;
   const date = (at: number): string => formatEffortDate(at, now, locale);
+  // The pace window is the GOAL's, not a constant, so the sentence has to
+  // read it off the summary: a three-day-old goal saying "the last 14 days'
+  // pace" would be quoting a denominator its own arithmetic never used. It
+  // is rounded to whole days for the reader and never below one, matching
+  // the floor the rate itself is clamped to.
+  const paceWindowDays = Math.max(1, Math.round(summary.paceWindowDays));
+  const paceDays = `${paceWindowDays} day${paceWindowDays === 1 ? '' : 's'}`;
+  const paceWindow = `${paceDays}${paceWindowDays === 1 ? "'s" : "'"}`;
   // The two visible numbers are in different currencies: the bar is CALENDAR
   // time and the figure beside it is Bryan's own attention. Read together
   // unlabelled they invite one reading — "67% done, 40 minutes to go" — and
@@ -839,21 +853,56 @@ export function goalEffortLabel(
     const latest = summary.projectedLatestAt;
     titleParts.push(
       latest !== undefined
-        ? `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${date(summary.projectedFinishAt)}, likely by ${date(latest)}.`
-        : `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${date(summary.projectedFinishAt)}.`,
+        ? `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}, likely by ${date(latest)}.`
+        : `On the last ${paceWindow} pace, finishing around ${date(summary.projectedFinishAt)}.`,
     );
   } else if (summary.projectionOverHorizonDays !== undefined) {
     titleParts.push(
-      `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace this goal is about ${Math.round(summary.projectionOverHorizonDays)} days out — too far for a date to mean anything. Either the remaining tickets are much larger than what has closed, or too little has closed to set a pace.`,
+      `On the last ${paceWindow} pace this goal is about ${Math.round(summary.projectionOverHorizonDays)} days out — too far for a date to mean anything. Either the remaining tickets are much larger than what has closed, or too little has closed to set a pace.`,
     );
   } else {
     titleParts.push(
-      `No finish date yet — that needs ${EFFORT_MIN_CLOSES_FOR_PROJECTION} tickets closed in the last ${EFFORT_PACE_WINDOW_DAYS} days, and ${summary.closesInWindow} ${summary.closesInWindow === 1 ? 'has' : 'have'} closed.`,
+      // "worked on and closed", not "closed": a row swept straight to done
+      // no longer counts toward the floor, so a reader looking at four
+      // closed tickets and a sentence asking for three would otherwise think
+      // the board could not count.
+      `No finish date yet — that needs ${EFFORT_MIN_CLOSES_FOR_PROJECTION} tickets worked on and closed in the last ${paceDays}, and ${summary.closesInWindow} ${summary.closesInWindow === 1 ? 'has' : 'have'}.`,
     );
   }
   if (summary.wallClockRatio.samples > 0) {
     titleParts.push(
-      `Estimates on this goal are scaled \u00d7${summary.wallClockRatio.ratio.toFixed(2)} from ${summary.wallClockRatio.samples} closed ticket${summary.wallClockRatio.samples === 1 ? '' : 's'}.`,
+      `Estimates on this goal are scaled \u00d7${summary.wallClockRatio.ratio.toFixed(2)} from ${summary.wallClockRatio.samples} closed ticket${summary.wallClockRatio.samples === 1 ? '' : 's'} on this goal.`,
+    );
+  } else if (summary.wallClockRatio.calibrated) {
+    // Scaled by a MEASURED factor this goal did not teach. The sentence used
+    // to be the one above, printing the board's count after the words "on
+    // this goal" \u2014 forty closes attributed to a goal that had none.
+    titleParts.push(
+      `Estimates on this goal are scaled \u00d7${summary.wallClockRatio.ratio.toFixed(2)}, learned from closed tickets elsewhere on the board.`,
+    );
+  }
+  // The marker, and the sentence behind it. It is about the FACTOR, not the
+  // pace: a date can rest on three observed closes and still be scaled by a
+  // number no close has corrected, and that is the state worth naming.
+  //
+  // Only where there IS a date. A goal already saying "date after 3 closes"
+  // does not also need telling that the estimate behind the date it has not
+  // got is uncorrected.
+  const hasDate =
+    summary.projectedFinishAt !== undefined || summary.projectionOverHorizonDays !== undefined;
+  //
+  // One sentence, not two. On this surface the marker is only ever reachable
+  // with NO usable samples behind the factor: a date needs
+  // EFFORT_MIN_CLOSES_FOR_PROJECTION observed closes, and an observed close
+  // scored under the current ask is exactly what the calibrator counts \u2014 so
+  // three of them would have calibrated it. What is left is a goal whose
+  // closes were scored under an OLDER ask, which is the shape a board wears
+  // after a prompt bump. The one-or-two-closes wording belongs on the ticket
+  // panel, where it is reachable, and lives there.
+  const uncalibratedText = hasDate && !summary.wallClockRatio.calibrated ? 'estimate only' : '';
+  if (uncalibratedText) {
+    titleParts.push(
+      `Estimate only \u2014 no closed ticket has corrected the scorer on this goal yet, so this date is the raw estimate at the board's starting assumption.`,
     );
   }
   return {
@@ -863,6 +912,7 @@ export function goalEffortLabel(
     leftTextShort,
     finishText,
     coverageText,
+    uncalibratedText,
     title: titleParts.join(' '),
     show: true,
     showBar: true,

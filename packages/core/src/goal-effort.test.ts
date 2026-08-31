@@ -3,12 +3,14 @@ import { EFFORT_ESTIMATE_PROMPT_VERSION } from './effort-estimate-prompt.ts';
 import {
   EFFORT_MAX_PROJECTION_DAYS,
   EFFORT_MIN_CLOSES_FOR_PROJECTION,
+  EFFORT_MIN_PACE_WINDOW_DAYS,
   EFFORT_PACE_WINDOW_DAYS,
   EFFORT_PRIOR_HANDS_ON_RATIO,
   EFFORT_PRIOR_WALL_CLOCK_RATIO,
   EFFORT_RATIO_MIN,
   type EffortCalibration,
   type EffortCalibrationTask,
+  type EffortSample,
   type EffortTaskInput,
   type GoalEffortReady,
   applyEffortRatio,
@@ -22,7 +24,9 @@ import {
   estimateNumbers,
   formatEffortSeconds,
   formatGoalEffortSeconds,
+  goalPaceWindowDays,
   isCurrentGenerationEstimate,
+  isObservedClose,
   neutralCalibration,
   neutralRatioSet,
   ratioForGoal,
@@ -63,8 +67,25 @@ function identity(): EffortCalibration {
   return { wallClock: neutralRatioSet(), handsOn: neutralRatioSet() };
 }
 
+/**
+ * A ticket on a goal that has been running a while.
+ *
+ * `createdAt` is part of the default because the PACE WINDOW is now the
+ * goal's own age (`goalPaceWindowDays`), and a fixture with no timestamps
+ * would silently date every goal from its first close — making the
+ * denominator an accident of when the closes were placed rather than
+ * something each test states. Dating the fixture a full window back keeps
+ * the denominator at `EFFORT_PACE_WINDOW_DAYS`, which is what the arithmetic
+ * in the projection tests is written against; a test about a YOUNG goal
+ * overrides it and says so.
+ */
 function task(over: Partial<EffortTaskInput> = {}): EffortTaskInput {
-  return { status: 'todo', effortEstimate: ok(3600, 600), ...over };
+  return {
+    status: 'todo',
+    createdAt: NOW - EFFORT_PACE_WINDOW_DAYS * DAY,
+    effortEstimate: ok(3600, 600),
+    ...over,
+  };
 }
 
 /** A closed ticket: worked for `workedMs`, finished `agoMs` before NOW. */
@@ -221,20 +242,47 @@ describe('computeEffortRatios', () => {
     expect(shrinkEffortRatio((2 + 2 + 10) / 3, 1, 3)).toBeCloseTo(2.375);
   });
 
-  it('pulls a two-sample goal most of the way back to the board', () => {
+  /** Ten closes that ran exactly to estimate, so the board factor is 1. */
+  const boardOfTen = (): EffortSample[] =>
+    Array.from({ length: 10 }, () => ({ goal: 'g1', estimateSeconds: 100, actualSeconds: 100 }));
+
+  it('gives a two-sample goal the board factor whole, not a bent version of it', () => {
+    // Below EFFORT_MIN_SAMPLES_FOR_CALIBRATION a goal inherits rather than
+    // shrinks. This used to read 1.2857 — the board pulled 2/7 of the way
+    // toward an anecdote — and on a board whose only closes are that goal's,
+    // the same arithmetic moved the factor the whole way, because the shrink
+    // target was the anecdote itself.
     const set = computeEffortRatios([
-      ...Array.from({ length: 10 }, () => ({
-        goal: 'g1',
-        estimateSeconds: 100,
-        actualSeconds: 100,
-      })),
+      ...boardOfTen(),
       { goal: 'g2', estimateSeconds: 100, actualSeconds: 200 },
       { goal: 'g2', estimateSeconds: 100, actualSeconds: 200 },
     ]);
     expect(set.board.ratio).toBe(1);
-    // 1 + (2 - 1) * 2/(2+5) = 1.2857…
-    expect(ratioForGoal(set, 'g2').ratio).toBeCloseTo(1 + 2 / 7, 5);
-    expect(ratioForGoal(set, 'g2').samples).toBe(2);
+    const g2 = ratioForGoal(set, 'g2');
+    expect(g2.ratio).toBe(set.board.ratio);
+    // Learned from none of its own, but two DID close, and the goal's
+    // projection is calibrated — from the board.
+    expect(g2.samples).toBe(0);
+    expect(g2.observedSamples).toBe(2);
+    expect(g2.calibrated).toBe(true);
+  });
+
+  it('pulls a three-sample goal most of the way back to the board', () => {
+    // At the floor, shrinkage takes over and does the job it was always good
+    // at. Positive control on the test above: the inheritance there is the
+    // sample count, not calibration having been switched off.
+    const set = computeEffortRatios([
+      ...boardOfTen(),
+      ...Array.from({ length: 3 }, () => ({
+        goal: 'g2',
+        estimateSeconds: 100,
+        actualSeconds: 200,
+      })),
+    ]);
+    expect(set.board.ratio).toBe(1);
+    // 1 + (2 - 1) * 3/(3+5) = 1.375
+    expect(ratioForGoal(set, 'g2').ratio).toBeCloseTo(1.375, 5);
+    expect(ratioForGoal(set, 'g2').samples).toBe(3);
   });
 
   it('never lets a wild goal ratio out past the clamp', () => {
@@ -603,6 +651,366 @@ describe('summarizeGoalEffort — the fraction', () => {
     expect(s.handsOnRemainingSeconds).toBe(Math.round(600 * hands) * 2);
     expect(s.handsOnRemainingSeconds).not.toBe(Math.round(600 * wall) * 2);
     expect(s.wallClockRemainingSeconds).toBe(Math.round(3600 * wall) * 2);
+  });
+});
+
+describe("goalPaceWindowDays — the goal's own age, not the calendar's", () => {
+  it('dates a band from its oldest live ticket', () => {
+    const days = goalPaceWindowDays(
+      [task({ createdAt: NOW - 3 * DAY }), task({ createdAt: NOW - 2 * DAY })],
+      NOW,
+    );
+    expect(days).toBeCloseTo(3, 6);
+  });
+
+  it('falls back to the first transition when a row carries no createdAt', () => {
+    const { createdAt: _dropped, ...noCreated } = closed(2 * DAY, HOUR);
+    // The close is 2 days old and ran for an hour, so the trail starts at
+    // 2d 1h — which is what dates the goal once `createdAt` is gone.
+    expect(goalPaceWindowDays([noCreated], NOW)).toBeCloseTo(2 + 1 / 24, 4);
+  });
+
+  it('gives a band with no timestamps the full window rather than the floor', () => {
+    // Nothing is known about this band's age. One day is a claim about a
+    // YOUNG goal; the full window is the old behaviour, which is the honest
+    // answer when there is no evidence either way.
+    expect(goalPaceWindowDays([{ status: 'todo' }], NOW)).toBe(EFFORT_PACE_WINDOW_DAYS);
+    expect(goalPaceWindowDays([], NOW)).toBe(EFFORT_PACE_WINDOW_DAYS);
+  });
+
+  it('clamps at both ends', () => {
+    expect(goalPaceWindowDays([task({ createdAt: NOW - 400 * DAY })], NOW)).toBe(
+      EFFORT_PACE_WINDOW_DAYS,
+    );
+    expect(goalPaceWindowDays([task({ createdAt: NOW - HOUR })], NOW)).toBe(
+      EFFORT_MIN_PACE_WINDOW_DAYS,
+    );
+  });
+
+  it('ignores a zero timestamp rather than dating the goal from the epoch', () => {
+    // `Math.min` over a stray 0 would make this band fifty-six years old and
+    // clamp to the full window — the same number a correct answer produces
+    // for an OLD goal, so the assertion is on the young goal beside it.
+    expect(
+      goalPaceWindowDays([task({ createdAt: 0 }), task({ createdAt: NOW - 2 * DAY })], NOW),
+    ).toBeCloseTo(2, 6);
+  });
+});
+
+describe("summarizeGoalEffort — pace over the goal's active window", () => {
+  // The ticket this covers: "goal pace reflects how long the goal has
+  // actually run". Both goals below close the same two tickets; the only
+  // difference is how long the goal has existed.
+  const twoCloses = (createdAt: number): EffortTaskInput[] => [
+    closed(0.5 * DAY, HOUR, { createdAt }),
+    closed(DAY, HOUR, { createdAt }),
+    task({ createdAt }),
+  ];
+
+  it('divides a three-day-old goal by three days, not by fourteen', () => {
+    const s = summarizeGoalEffort(twoCloses(NOW - 3 * DAY), 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.paceWindowDays).toBeCloseTo(3, 6);
+    expect(s.closesInWindow).toBe(2);
+    // 7,200 estimate-seconds closed over three days.
+    expect(s.paceSecondsPerDay).toBeCloseTo(7200 / 3, 6);
+  });
+
+  it('divides an old goal with the same closes by the full window', () => {
+    const s = summarizeGoalEffort(twoCloses(NOW - 90 * DAY), 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.paceWindowDays).toBe(EFFORT_PACE_WINDOW_DAYS);
+    expect(s.closesInWindow).toBe(2);
+    expect(s.paceSecondsPerDay).toBeCloseTo(7200 / EFFORT_PACE_WINDOW_DAYS, 6);
+  });
+
+  it('reads the young goal as faster than the old one on identical closes', () => {
+    // The whole point, stated as the comparison the ticket makes: same
+    // numerator, and the goal that earned it in three days is not reported
+    // at the rate of one that took three months.
+    const young = summarizeGoalEffort(twoCloses(NOW - 3 * DAY), 'g1', identity(), NOW);
+    const old = summarizeGoalEffort(twoCloses(NOW - 90 * DAY), 'g1', identity(), NOW);
+    if (young.kind !== 'ready' || old.kind !== 'ready') throw new Error('expected ready');
+    expect(young.paceSecondsPerDay).toBeGreaterThan(old.paceSecondsPerDay);
+    expect(young.paceSecondsPerDay / old.paceSecondsPerDay).toBeCloseTo(
+      EFFORT_PACE_WINDOW_DAYS / 3,
+      6,
+    );
+  });
+
+  it('projects a young goal sooner than an old one, on the same evidence', () => {
+    const rows = (createdAt: number): EffortTaskInput[] => [
+      closed(0.25 * DAY, HOUR, { createdAt }),
+      closed(0.5 * DAY, HOUR, { createdAt }),
+      closed(DAY, HOUR, { createdAt }),
+      task({ createdAt }),
+    ];
+    const young = summarizeGoalEffort(rows(NOW - 3 * DAY), 'g1', identity(), NOW);
+    const old = summarizeGoalEffort(rows(NOW - 90 * DAY), 'g1', identity(), NOW);
+    if (young.kind !== 'ready' || old.kind !== 'ready') throw new Error('expected ready');
+    // Positive control: both DO get a date, so "sooner" is a comparison of
+    // two projections rather than one projection and one absence.
+    expect(young.projectedFinishAt).toBeDefined();
+    expect(old.projectedFinishAt).toBeDefined();
+    expect(young.projectedFinishAt ?? 0).toBeLessThan(old.projectedFinishAt ?? 0);
+  });
+
+  it('will not read a rate off a goal hours old', () => {
+    // Three closes inside two hours on a goal filed this morning. Without
+    // the floor the denominator is 1/12 of a day and the pace is twelve
+    // times anything the goal has shown.
+    const born = NOW - 2 * HOUR;
+    const s = summarizeGoalEffort(
+      [
+        closed(5 * 60 * 1000, 60 * 1000, { createdAt: born }),
+        closed(10 * 60 * 1000, 60 * 1000, { createdAt: born }),
+        closed(15 * 60 * 1000, 60 * 1000, { createdAt: born }),
+        task({ createdAt: born }),
+      ],
+      'g1',
+      identity(),
+      NOW,
+    );
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.paceWindowDays).toBe(EFFORT_MIN_PACE_WINDOW_DAYS);
+    expect(s.paceSecondsPerDay).toBeCloseTo(10_800 / EFFORT_MIN_PACE_WINDOW_DAYS, 6);
+  });
+
+  it('counts a close only inside the window it divides by', () => {
+    // The two halves of the pace share one window. A close five days back on
+    // a three-day-old goal cannot happen in real data, but a divisor and a
+    // filter derived separately would let one in and rate it against the
+    // other's span.
+    const born = NOW - 3 * DAY;
+    const s = summarizeGoalEffort(
+      [
+        closed(DAY, HOUR, { createdAt: born }),
+        closed(2 * DAY, HOUR, { createdAt: born }),
+        closed(5 * DAY, HOUR, { createdAt: born }),
+        task({ createdAt: born }),
+      ],
+      'g1',
+      identity(),
+      NOW,
+    );
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.paceWindowDays).toBeCloseTo(3, 6);
+    expect(s.closesInWindow).toBe(2);
+  });
+});
+
+describe('a factor is learned from three closes, not one', () => {
+  // The ticket this covers: "projections stop swinging on a single closed
+  // ticket". shrink(r, r, 1) = r exactly, and on a board whose only sample
+  // is one goal's close, that goal's shrink target IS the close — so the
+  // first ticket to close moved every estimate at full strength.
+  const overrun = (goal: string, times: number): EffortSample => ({
+    goal,
+    estimateSeconds: 100,
+    actualSeconds: 100 * times,
+  });
+
+  it('leaves the board on its prior after one close', () => {
+    const set = computeEffortRatios([overrun('g1', 3)], EFFORT_PRIOR_WALL_CLOCK_RATIO);
+    expect(set.board.ratio).toBeCloseTo(EFFORT_PRIOR_WALL_CLOCK_RATIO, 10);
+    expect(set.board.samples).toBe(0);
+    expect(set.board.calibrated).toBe(false);
+    // What DID close is still reported, so nothing has to claim that nothing
+    // closed in order to say it has not calibrated.
+    expect(set.board.observedSamples).toBe(1);
+    expect(ratioForGoal(set, 'g1').observedSamples).toBe(1);
+  });
+
+  it('calibrates at the third close, and not before', () => {
+    const two = computeEffortRatios([overrun('g1', 3), overrun('g1', 3)], 1);
+    expect(two.board.calibrated).toBe(false);
+    expect(two.board.ratio).toBe(1);
+    // Positive control: one more identical close and the same code path DOES
+    // learn — so the two-sample answer above is the floor and not a
+    // calibrator that never fires.
+    const three = computeEffortRatios([overrun('g1', 3), overrun('g1', 3), overrun('g1', 3)], 1);
+    expect(three.board.calibrated).toBe(true);
+    expect(three.board.samples).toBe(3);
+    expect(three.board.ratio).toBeGreaterThan(1);
+  });
+
+  it("does not triple a goal's projection on one ticket that ran 3x its estimate", () => {
+    // The acceptance criterion, stated as its arithmetic. One close at 3x on
+    // an otherwise fresh board: the remainder must come out at the PRIOR,
+    // not at three times the raw estimate.
+    const born = NOW - 10 * DAY;
+    const rows: EffortCalibrationTask[] = [
+      { goal: 'g1', ...closed(DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...task({ createdAt: born }) },
+    ];
+    const cal = computeEffortCalibration(rows);
+    const s = summarizeGoalEffort(rows, 'g1', cal, NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    // The close really did run 3x: a 3600s estimate worked for three hours.
+    expect(effortActualWallClockSeconds(rows[0] as EffortTaskInput)).toBe(3 * 3600);
+    expect(s.wallClockRatio.calibrated).toBe(false);
+    expect(s.wallClockRatio.ratio).toBeCloseTo(EFFORT_PRIOR_WALL_CLOCK_RATIO, 10);
+    // One open ticket at 3600s. Tripled it would be 10,800s.
+    expect(s.wallClockRemainingSeconds).toBe(Math.round(3600 * EFFORT_PRIOR_WALL_CLOCK_RATIO));
+    expect(s.wallClockRemainingSeconds).toBeLessThan(3600);
+  });
+
+  it('lets three closes at 3x move the forecast', () => {
+    // The other half of the same claim, and the reason the assertion above
+    // is not just "calibration is off": with enough evidence the correction
+    // lands, and it lands upward.
+    const born = NOW - 10 * DAY;
+    const rows: EffortCalibrationTask[] = [
+      { goal: 'g1', ...closed(DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...closed(2 * DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...closed(3 * DAY, 3 * HOUR, { createdAt: born }) },
+      { goal: 'g1', ...task({ createdAt: born }) },
+    ];
+    const cal = computeEffortCalibration(rows);
+    const s = summarizeGoalEffort(rows, 'g1', cal, NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.wallClockRatio.calibrated).toBe(true);
+    expect(s.wallClockRatio.samples).toBe(3);
+    expect(s.wallClockRatio.ratio).toBeGreaterThan(EFFORT_PRIOR_WALL_CLOCK_RATIO);
+  });
+
+  it("never reports another goal's closes as this goal's", () => {
+    // Below the floor, the board holds two closes and both belong to g1. A
+    // goal with no entry falls back to the board row, and before the
+    // fallback zeroed the counts it inherited "2 closed tickets so far" —
+    // two closes reported under a goal that has none, on a surface whose
+    // every sentence says "on this goal".
+    const set = computeEffortRatios(
+      [overrun('g1', 3), overrun('g1', 3)],
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    expect(set.board.observedSamples).toBe(2);
+    const other = ratioForGoal(set, 'g2');
+    expect(other.observedSamples).toBe(0);
+    expect(other.samples).toBe(0);
+    // Positive control: the goal those closes DID happen under still counts
+    // them, so the zero above is the fallback and not a counter that never
+    // increments.
+    expect(ratioForGoal(set, 'g1').observedSamples).toBe(2);
+  });
+
+  it('keeps a calibrated goal calibrated when it has closed nothing of its own', () => {
+    // A goal inheriting a board that HAS learned is not an uncalibrated
+    // goal, and must not wear the "estimate only" marker. `samples: 0` is
+    // true of both cases and cannot tell them apart; `calibrated` is what
+    // does.
+    const learned = computeEffortRatios(
+      Array.from({ length: 5 }, () => overrun('g1', 2)),
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    const fresh = ratioForGoal(learned, 'g-never-closed-anything');
+    expect(fresh.calibrated).toBe(true);
+    expect(fresh.ratio).toBe(learned.board.ratio);
+    // It inherits the FACTOR and none of the evidence. Handing back the
+    // board's row whole reported the board's five closes as five closes
+    // under a goal that has none, on every surface that says "on this goal".
+    expect(fresh.samples).toBe(0);
+    expect(fresh.observedSamples).toBe(0);
+    expect(learned.board.observedSamples).toBe(5);
+    const oneClose = computeEffortRatios(
+      [...Array.from({ length: 5 }, () => overrun('g1', 2)), overrun('g2', 2)],
+      EFFORT_PRIOR_WALL_CLOCK_RATIO,
+    );
+    expect(ratioForGoal(oneClose, 'g2').calibrated).toBe(true);
+    expect(ratioForGoal(oneClose, 'g2').samples).toBe(0);
+    expect(ratioForGoal(oneClose, 'g2').observedSamples).toBe(1);
+  });
+});
+
+describe('summarizeGoalEffort — a close with no work behind it', () => {
+  // The ticket this covers: "projected finish ignores tickets that went
+  // straight to done". A row swept out of the backlog was already refused by
+  // the calibrator, which needs an actual; pace and the projection floor
+  // took it, so bulk-closing stale rows faked a speed-up.
+  const born = NOW - 10 * DAY;
+
+  /** Closed without ever entering `in-progress` — a bulk sweep. */
+  const swept = (agoMs: number): EffortTaskInput =>
+    task({
+      status: 'done',
+      createdAt: born,
+      transitions: [{ ts: NOW - agoMs, to: 'done' }],
+    });
+
+  const worked = (agoMs: number): EffortTaskInput => closed(agoMs, HOUR, { createdAt: born });
+
+  it('keeps a swept row out of the pace', () => {
+    const s = summarizeGoalEffort([swept(HOUR), swept(2 * HOUR), task()], 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.closesInWindow).toBe(0);
+    expect(s.paceSecondsPerDay).toBe(0);
+    // Positive control on the fixture: those rows ARE closed, so a zero pace
+    // is the exclusion firing and not two tickets that never closed.
+    expect(s.percentComplete).toBe(67);
+  });
+
+  it('still counts a swept row as done everywhere it is a plain fact', () => {
+    // The bar, the remainder and `complete` are statements about what is
+    // finished, not about how fast the goal moves. Withholding those would
+    // be a different and worse bug.
+    const s = summarizeGoalEffort([swept(HOUR), swept(2 * HOUR)], 'g1', identity(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.complete).toBe(true);
+    expect(s.percentComplete).toBe(100);
+    expect(s.wallClockRemainingSeconds).toBe(0);
+  });
+
+  it('does not move the projected date when three stale rows close in one minute', () => {
+    const base = [worked(DAY), worked(2 * DAY), worked(3 * DAY), task({ createdAt: born })];
+    const before = summarizeGoalEffort(base, 'g1', identity(), NOW);
+    if (before.kind !== 'ready') throw new Error('expected ready');
+    // Positive control: there IS a date to move, so "unmoved" is a
+    // comparison of two projections rather than two absences.
+    expect(before.projectedFinishAt).toBeDefined();
+
+    const bulk = [...base, swept(20_000), swept(40_000), swept(60_000)];
+    const after = summarizeGoalEffort(bulk, 'g1', identity(), NOW);
+    if (after.kind !== 'ready') throw new Error('expected ready');
+    expect(after.closesInWindow).toBe(before.closesInWindow);
+    expect(after.paceSecondsPerDay).toBe(before.paceSecondsPerDay);
+    expect(after.projectedFinishAt).toBe(before.projectedFinishAt);
+
+    // And the control in the other direction: the same three rows, this time
+    // actually worked, DO pull the date in. Without this the assertion above
+    // would also pass on a projection that never responds to anything.
+    const real = summarizeGoalEffort(
+      [...base, worked(20_000), worked(40_000), worked(60_000)],
+      'g1',
+      identity(),
+      NOW,
+    );
+    if (real.kind !== 'ready') throw new Error('expected ready');
+    expect(real.paceSecondsPerDay).toBeGreaterThan(before.paceSecondsPerDay);
+    expect(real.projectedFinishAt ?? 0).toBeLessThan(before.projectedFinishAt ?? 0);
+  });
+
+  it('will not unlock a date on swept rows alone', () => {
+    // Three closes in the window and still no projection, because none of
+    // them was worked. The floor counts observed closes.
+    const s = summarizeGoalEffort(
+      [swept(HOUR), swept(2 * HOUR), swept(3 * HOUR), task({ createdAt: born })],
+      'g1',
+      identity(),
+      NOW,
+    );
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.closesInWindow).toBe(0);
+    expect(s.projectedFinishAt).toBeUndefined();
+    expect(s.projectionOverHorizonDays).toBeUndefined();
+  });
+
+  it('reports a swept close as unobserved and a worked one as observed', () => {
+    expect(isObservedClose(swept(HOUR))).toBe(false);
+    expect(isObservedClose(worked(HOUR))).toBe(true);
+    // An open ticket is not a close at all, however much of a trail it has.
+    expect(isObservedClose(task({ transitions: [{ ts: NOW - HOUR, to: 'in-progress' }] }))).toBe(
+      false,
+    );
   });
 });
 
