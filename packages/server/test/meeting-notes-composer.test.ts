@@ -72,6 +72,32 @@ describe('notes prompt', () => {
     expect(system).toContain('Speaker B');
   });
 
+  it('carries the LABEL beside the name, and asks for the tag that uses it', () => {
+    // The name is what a reader recognises; the label is what a rename can
+    // find again. The prompt has to hand over both or the tag it asks for
+    // cannot be written.
+    const { system, user } = buildNotesPrompt({
+      ...input,
+      tick: {
+        ...input.tick,
+        turns: [
+          { turn: 3, text: 'Move the gate.', speaker: 'Devi', speakerLabel: 'B' },
+          { turn: 4, text: 'Agreed.', speaker: 'Speaker A', speakerLabel: 'A' },
+          { turn: 5, text: 'Unattributed.' },
+        ],
+      },
+    });
+    expect(user).toContain('- Devi (B): Move the gate.');
+    expect(user).toContain('- Speaker A (A): Agreed.');
+    expect(user).toContain('- Unattributed.');
+    expect(system).toContain('[@Name](speaker:LABEL)');
+  });
+
+  it('tells the model a person’s own line never takes a speaker tag', () => {
+    const { system } = buildNotesPrompt(input);
+    expect(system).toContain('Never put a speaker tag');
+  });
+
   it('says so when there are no notes yet, instead of an empty section', () => {
     const { user } = buildNotesPrompt({ ...input, previous: null, context: undefined });
     expect(user).toContain('none yet');

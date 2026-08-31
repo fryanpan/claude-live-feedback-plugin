@@ -545,3 +545,52 @@ describe('ownership, items and similarity', () => {
     expect(similarity('we should ship on friday', 'Dana owns the migration')).toBeLessThan(0.3);
   });
 });
+
+describe('a suggestion may not re-attribute a person’s note', () => {
+  /** A section holding one agent bullet and one bullet Bryan typed. */
+  const setup = (typed: string): { ydoc: Y.Doc; own: NotesOwnership; basedOn: string[] } => {
+    const ydoc = docFrom('# Huddle\n');
+    const own = createNotesOwnership();
+    mergeNotesSection(ydoc, '## Meeting notes\n\n- Agent bullet\n', HEADING, { ownership: own });
+    typeBullet(ydoc, 1, typed);
+    const read = readNotesSection(ydoc, HEADING, own)!;
+    return { ydoc, own, basedOn: read.items };
+  };
+
+  it('drops a rewrite that puts a speaker tag on a line the person typed', () => {
+    // A line Bryan typed is HIS idea. The composer, seeing it beside the
+    // transcript, returns it credited to a voice — which is not a wording
+    // proposal, it is a change of authorship, and nobody would read the
+    // redline as one. Attribution moves by the reassign gesture only.
+    const { ydoc, own, basedOn } = setup('we should ship on friday i think');
+    const merged = mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\n- Agent bullet\n- [@Devi](speaker:B) says we should ship on Friday, I think\n',
+      HEADING,
+      { ownership: own, basedOn },
+    );
+    expect(merged.suggested).toBe(0);
+    expect(merged.dropped).toBe(1);
+    expect(suggestOps.listSuggestions(ydoc).length).toBe(0);
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- we should ship on friday i think');
+    expect(md).not.toContain('speaker:B');
+  });
+
+  it('still proposes a wording change on a line that already carries that tag', () => {
+    // The positive control: without it, a guard that dropped every proposal
+    // would pass the test above. An attribution the line ALREADY carries is
+    // the composer preserving it while it revises the words, which is
+    // exactly what it is asked to do.
+    const { ydoc, own, basedOn } = setup('[@Devi](speaker:B) we shuold ship on friday');
+    const merged = mergeNotesSection(
+      ydoc,
+      '## Meeting notes\n\n- Agent bullet\n- [@Devi](speaker:B) we should ship on Friday\n',
+      HEADING,
+      { ownership: own, basedOn },
+    );
+    expect(merged.suggested).toBe(1);
+    // And his words are still the accepted state until he accepts it.
+    expect(markdownOf(ydoc)).toContain('we shuold ship on friday');
+  });
+});
