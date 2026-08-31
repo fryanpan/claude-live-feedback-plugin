@@ -75,6 +75,14 @@ export async function probe(
 ): Promise<ProbeResult> {
   const samples: ProbeSample[] = [];
   const ledger = new AudioChunkLedger(MEETING_SAMPLE_RATE);
+  // One observation per word endpoint — the FIRST. The engine re-emits a
+  // turn on every revision (and a formatted final repeats the unformatted
+  // one's last word verbatim), so sampling every callback would weight the
+  // percentiles by how often the vendor revises rather than by words — and
+  // revision cadence itself varies with frame size, which is exactly the
+  // comparison this script exists to make. First sighting is also the thing
+  // being priced: the earliest instant this word could have painted.
+  const seen = new Set<string>();
   let transcriptChars = 0;
   const session = await engine.open({
     sampleRate: MEETING_SAMPLE_RATE,
@@ -82,6 +90,9 @@ export async function probe(
     onTurn: (t) => {
       transcriptChars = Math.max(transcriptChars, t.text.length);
       if (t.audioEndMs === undefined || t.engineMs === undefined) return;
+      const key = `${t.turn}:${t.audioEndMs}`;
+      if (seen.has(key)) return;
+      seen.add(key);
       const mark = ledger.chunkAt(t.audioEndMs);
       if (!mark) return;
       samples.push({
