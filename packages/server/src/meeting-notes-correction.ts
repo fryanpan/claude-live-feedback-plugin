@@ -115,6 +115,18 @@ export function correctionPhraseUsable(phrase: string): boolean {
  * tail of "mañana", because the "ñ" before it does not look like a letter.
  * Combining marks count too, so a decomposed "ñ" (n + U+0303) is not a
  * boundary either. Found by `codex review`.
+ *
+ * And the folding is LENGTH-PRESERVING, because an offset found in a folded
+ * copy is used to edit the ORIGINAL. `String.prototype.toLowerCase` is not a
+ * per-character map: "İ" (U+0130) lowercases to TWO code units, so one such
+ * letter earlier in a note shifts every offset after it by one, and the
+ * correction lands a character to the right of the word it meant. The
+ * whole-token guard turns most of that drift into a silent miss rather than a
+ * misplaced edit, which is the better failure and still the wrong one — a
+ * person's correction disappearing with no note of why. Folding one character
+ * at a time and keeping the original wherever its lowercase is not exactly one
+ * unit costs those few letters their case-insensitivity and keeps every offset
+ * true. Also found by `codex review`.
  */
 const WORD_CHAR = /[\p{L}\p{N}\p{M}]/u;
 
@@ -124,10 +136,21 @@ function extendsWordUnicode(ch: string | undefined): boolean {
   return ch !== undefined && WORD_CHAR.test(ch);
 }
 
+/** Lowercase, one code unit at a time, keeping any character whose lowercase
+ *  is not the same length — so the result indexes exactly like its input. */
+function foldPreservingLength(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const lowered = ch.toLowerCase();
+    out += lowered.length === ch.length ? lowered : ch;
+  }
+  return out;
+}
+
 export function phraseSites(text: string, phrase: string): number[] {
   if (phrase.length === 0) return [];
-  const haystack = text.toLowerCase();
-  const needle = phrase.toLowerCase();
+  const haystack = foldPreservingLength(text);
+  const needle = foldPreservingLength(phrase);
   const out: number[] = [];
   let i = 0;
   while (true) {

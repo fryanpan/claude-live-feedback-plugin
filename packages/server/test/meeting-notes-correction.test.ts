@@ -199,6 +199,18 @@ describe('correctNotesSection', () => {
     expect(markdownOf(ydoc)).not.toContain('Thursday');
   });
 
+  it('lands on the right characters after a letter that changes length when lowered', () => {
+    // `\u0130`.toLowerCase() is TWO code units, so a lowercased copy of the
+    // note is no longer index-aligned with the note itself. Matching on that
+    // copy drifts every offset after it, and the drift is not a miss — it is
+    // a delete one character to the right of the word.
+    const ydoc = docFrom(NOTES('- \u0130stanbul ships on Tuesday.\n'));
+    expect(correct(ydoc, ownershipClaimingAll(ydoc), 'Tuesday', 'Thursday').applied).toBe(
+      'revised',
+    );
+    expect(markdownOf(ydoc)).toContain('\u0130stanbul ships on Thursday.');
+  });
+
   it('never reaches prose outside the notes section', () => {
     const ydoc = docFrom(
       [
