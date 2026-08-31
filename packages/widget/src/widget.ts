@@ -110,6 +110,10 @@ async function isSignInRequired(res: Response): Promise<boolean> {
 const TAG = 'claude-feedback-widget';
 const IGNORE_ATTR = 'data-feedback-widget';
 
+/** One speech bubble, three uses: the FAB icon, the feedback-mode cursor. */
+const BUBBLE_PATH =
+  'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z';
+
 // The host page and the claude-workspaces server normally live on different ports
 // (e.g. Astro dev :4321 vs LF :8788). The widget bundle is served by the LF
 // server, so its script origin is the right default for the WS server URL.
@@ -140,7 +144,8 @@ class FeedbackWidgetEl extends HTMLElement {
   };
   private currentContext: AnchorContext = {};
   private historyPatched = false;
-  private pickerActive = false;
+  private feedbackMode = false;
+  private modeCleanup: (() => void) | null = null;
   private hoverEl: HTMLElement | null = null;
   private overlay: HTMLDivElement | null = null;
   private pinLayer: HTMLDivElement | null = null;
@@ -300,6 +305,9 @@ class FeedbackWidgetEl extends HTMLElement {
 
   disconnectedCallback(): void {
     try {
+      this.exitFeedbackMode();
+    } catch {}
+    try {
       this.client?.close();
     } catch {}
     try {
@@ -369,14 +377,27 @@ class FeedbackWidgetEl extends HTMLElement {
     style.textContent = widgetStyles;
     this.shadow.appendChild(style);
 
+    // Above the FAB: the way into the thread list, now that the FAB itself
+    // arms feedback mode instead of opening a panel.
+    const listBtn = document.createElement('button');
+    listBtn.className = 'fab-list';
+    listBtn.type = 'button';
+    listBtn.title = 'Comment threads';
+    listBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>' +
+      '<span class="count" hidden></span>';
+    listBtn.addEventListener('click', () => this.togglePanel());
+    this.shadow.appendChild(listBtn);
+
     const fab = document.createElement('button');
     fab.className = 'fab';
     fab.type = 'button';
-    fab.title = 'Feedback';
+    fab.title = 'Give feedback — click anything to comment';
+    fab.setAttribute('aria-pressed', 'false');
     fab.innerHTML =
-      '<svg class="fab-icon fab-icon-bubble" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>' +
+      `<svg class="fab-icon fab-icon-bubble" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${BUBBLE_PATH}"/></svg>` +
       '<span class="fab-icon fab-icon-close">×</span>';
-    fab.addEventListener('click', () => this.togglePanel());
+    fab.addEventListener('click', () => this.toggleFeedbackMode());
     this.shadow.appendChild(fab);
 
     const panel = document.createElement('div');
@@ -399,7 +420,7 @@ class FeedbackWidgetEl extends HTMLElement {
     this.updateAuthUi();
 
     panel.querySelector('.close-panel')?.addEventListener('click', () => this.togglePanel(false));
-    panel.querySelector('.pick-btn')?.addEventListener('click', () => this.startPicker());
+    panel.querySelector('.pick-btn')?.addEventListener('click', () => this.enterFeedbackMode());
 
     // Make the pin overlay in the light DOM so pins can use page coords
     this.overlay = document.createElement('div');
@@ -422,8 +443,6 @@ class FeedbackWidgetEl extends HTMLElement {
     const open = force ?? !this.panelOpen;
     this.panelOpen = open;
     panel.classList.toggle('open', open);
-    const fab = this.shadow.querySelector('.fab') as HTMLElement | null;
-    fab?.classList.toggle('open', open);
   }
 
   // --- Workspace sign-in (popup-token handshake, auth-offer embeds only) ---
@@ -636,32 +655,49 @@ class FeedbackWidgetEl extends HTMLElement {
     actions.appendChild(note);
   }
 
-  // --- Element picker ---
+  // --- Feedback mode ---
+  //
+  // The FAB is a MODE toggle, not a menu: one click arms it, every click on
+  // the page after that composes a comment, and it stays armed until the FAB
+  // is clicked again (or Escape with no composer open). Modeled on the
+  // comment mode in Claude Desktop artifacts — toggle on, click to place a
+  // bubble, type — because the whole point is fewer clicks per comment.
 
-  private startPicker(): void {
-    if (this.pickerActive) return;
-    this.pickerActive = true;
-    document.body.style.cursor = 'crosshair';
+  private toggleFeedbackMode(): void {
+    if (this.feedbackMode) this.exitFeedbackMode();
+    else this.enterFeedbackMode();
+  }
+
+  private enterFeedbackMode(): void {
+    if (this.feedbackMode) return;
+    this.feedbackMode = true;
+    // The speech-bubble cursor rides a body class (see injectLightStyles) so
+    // it beats per-element cursor styles the host page declares.
+    document.body.classList.add('cfw-feedback-mode');
     // iOS Safari fires `click` reliably only on elements that have
-    // `cursor: pointer` (or are a button/anchor). The picker needs to
-    // catch taps on arbitrary mockup elements — `<div>`s, custom
-    // components, etc. — that DON'T have a clickable cursor style. A
-    // window-level click listener silently no-ops on those.
+    // `cursor: pointer` (or are a button/anchor). The mode needs to catch
+    // taps on arbitrary mockup elements — `<div>`s, custom components,
+    // etc. — that DON'T have a clickable cursor style. A window-level click
+    // listener silently no-ops on those.
     //
-    // Switching to pointer events fixes it: `pointerup` fires for
-    // mouse, touch, and pen regardless of cursor style. Bonus:
-    // `touch-action: manipulation` on the body suppresses the 300ms
-    // double-tap-zoom delay on iOS so taps register instantly.
+    // Pointer events fix it: `pointerup` fires for mouse, touch, and pen
+    // regardless of cursor style. Bonus: `touch-action: manipulation` on the
+    // body suppresses the 300ms double-tap-zoom delay on iOS so taps
+    // register instantly.
     const prevTouchAction = document.body.style.touchAction;
     document.body.style.touchAction = 'manipulation';
     this.togglePanel(false);
+    const fab = this.shadow.querySelector('.fab');
+    fab?.setAttribute('aria-pressed', 'true');
+    fab?.classList.add('open');
 
-    // Show a banner so the user knows picker mode is on and how to exit.
+    // The banner names the mode and holds the way out — the cursor alone
+    // says "you're in a mode" but not how to leave it.
     const banner = document.createElement('div');
     banner.className = 'picker-banner';
     banner.innerHTML = `
-      <span>Tap any element to leave a comment.</span>
-      <button type="button" class="picker-cancel">Cancel (Esc)</button>
+      <span>Click anything to comment.</span>
+      <button type="button" class="picker-cancel">Done (Esc)</button>
     `;
     this.shadow.appendChild(banner);
 
@@ -675,33 +711,54 @@ class FeedbackWidgetEl extends HTMLElement {
       if (t) this.highlight(t);
     };
     const onTap = (ev: PointerEvent) => {
+      const t = this.hitTest(ev);
+      // Own chrome (FAB, composer, pins) keeps its normal behavior — a
+      // preventDefault here would break the very controls the mode relies on.
+      if (!t) return;
       ev.preventDefault();
       ev.stopPropagation();
-      const t = this.hitTest(ev);
-      if (t) this.openComposerForElement(t, ev.clientX, ev.clientY);
-      cleanup();
+      this.openComposerForElement(t, ev.clientX, ev.clientY);
     };
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') cleanup();
-    };
-    const cleanup = () => {
-      this.pickerActive = false;
-      document.body.style.cursor = '';
-      document.body.style.touchAction = prevTouchAction;
-      if (this.hoverEl) this.unhighlight(this.hoverEl);
-      this.hoverEl = null;
-      banner.remove();
-      window.removeEventListener('pointermove', onMove, true);
-      window.removeEventListener('pointerup', onTap, true);
-      window.removeEventListener('keydown', onKey, true);
+      if (ev.key !== 'Escape') return;
+      // First Escape backs out of the comment being written; the next one
+      // exits the mode. Matches every modal-inside-a-mode convention.
+      const composer = this.shadow.querySelector('.composer');
+      if (composer) {
+        composer.remove();
+        return;
+      }
+      this.exitFeedbackMode();
     };
     banner.querySelector('.picker-cancel')?.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      cleanup();
+      this.exitFeedbackMode();
     });
     window.addEventListener('pointermove', onMove, true);
     window.addEventListener('pointerup', onTap, true);
     window.addEventListener('keydown', onKey, true);
+
+    this.modeCleanup = () => {
+      document.body.classList.remove('cfw-feedback-mode');
+      document.body.style.touchAction = prevTouchAction;
+      if (this.hoverEl) this.unhighlight(this.hoverEl);
+      this.hoverEl = null;
+      banner.remove();
+      fab?.setAttribute('aria-pressed', 'false');
+      fab?.classList.remove('open');
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onTap, true);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }
+
+  /** A composer left open survives the exit — mid-typed text is not the
+   *  mode's to discard. */
+  private exitFeedbackMode(): void {
+    if (!this.feedbackMode) return;
+    this.feedbackMode = false;
+    this.modeCleanup?.();
+    this.modeCleanup = null;
   }
 
   private hitTest(ev: MouseEvent): HTMLElement | null {
@@ -755,15 +812,34 @@ class FeedbackWidgetEl extends HTMLElement {
     const ta = composer.querySelector('textarea') as HTMLTextAreaElement;
     ta.focus();
     composer.querySelector('.cancel')?.addEventListener('click', () => composer.remove());
-    composer.querySelector('.submit')?.addEventListener('click', async () => {
+    const submit = composer.querySelector('.submit') as HTMLButtonElement;
+    submit.addEventListener('click', async () => {
       const text = ta.value.trim();
       if (!text || !this.user) return;
-      const posted = replyTo
-        ? await this.postReply(replyTo, text)
-        : await this.postNewThread(anchor, text);
-      // Kept on failure, with the text still in it. `showSignInRequired` has
-      // already put the way forward in the panel.
-      if (!posted) return;
+      // A silent await reads as a dead button — say the click landed.
+      submit.disabled = true;
+      submit.textContent = 'Posting…';
+      // A rejected fetch (server unreachable) is a failed post like any
+      // other — without the catch it would strand the button at "Posting…".
+      let posted = false;
+      try {
+        posted = replyTo
+          ? await this.postReply(replyTo, text)
+          : await this.postNewThread(anchor, text);
+      } catch {}
+      if (!posted) {
+        // Kept on failure, with the text still in it. `showSignInRequired`
+        // has already put the way forward in the panel when that's the cause.
+        submit.disabled = false;
+        submit.textContent = 'Post';
+        if (!composer.querySelector('.composer-err')) {
+          const err = document.createElement('div');
+          err.className = 'composer-err';
+          err.textContent = 'Couldn’t post — try again.';
+          composer.appendChild(err);
+        }
+        return;
+      }
       composer.remove();
     });
   }
@@ -889,6 +965,12 @@ class FeedbackWidgetEl extends HTMLElement {
       this.threadPositions.set(t.id, { el: res.element, status: statusBase });
     }
     this.positionPins();
+    const badge = this.shadow.querySelector('.fab-list .count') as HTMLElement | null;
+    if (badge) {
+      const open = annotated.filter((a) => a.status === 'open').length;
+      badge.textContent = String(open);
+      badge.hidden = open === 0;
+    }
     this.renderPanelList(annotated);
   }
 
@@ -919,7 +1001,7 @@ class FeedbackWidgetEl extends HTMLElement {
     if (entries.length === 0) {
       const e = document.createElement('div');
       e.className = 'empty';
-      e.textContent = 'No threads yet. Click “Comment on element…” to start.';
+      e.textContent = 'No comments yet. Tap the bubble, then click anything on the page.';
       list.appendChild(e);
       return;
     }
@@ -1057,10 +1139,15 @@ class FeedbackWidgetEl extends HTMLElement {
     const s = document.createElement('style');
     s.id = 'cfw-light-styles';
     s.setAttribute(IGNORE_ATTR, '');
+    // The cursor is the mode indicator (a speech bubble, tail on the pointer
+    // tip). `!important` on every element so the host page's own cursor
+    // styles — pointer on links, text on inputs — don't flicker it away.
+    const bubbleCursor = `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="${BUBBLE_PATH}" fill="%232e7dd7" stroke="white" stroke-width="1.5"/></svg>') 3 21`;
     s.textContent = `
       .cfw-pin:hover { transform: translate(-50%,-100%) scale(1.08); }
       .cfw-pin[data-status="resolved"] { background: ${STATUS_COLORS.resolved} !important; }
       .cfw-pin[data-status="orphan"] { background: ${STATUS_COLORS.orphan} !important; }
+      body.cfw-feedback-mode, body.cfw-feedback-mode * { cursor: ${bubbleCursor}, crosshair !important; }
     `;
     document.head.appendChild(s);
   }
