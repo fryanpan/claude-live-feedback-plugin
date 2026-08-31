@@ -477,7 +477,17 @@ describe('review-item comments and revisions', () => {
       expect((await queueRows(ws, task.id)).map((r) => r.state)).toEqual(['open']);
     });
 
-    it('refuses the derived legacy decision row — its words live on the ticket', async () => {
+    /**
+     * The derived legacy row used to be REFUSED here, on the reasoning that
+     * its words live on the ticket and rewriting those is `rewrite_task`'s
+     * job. Both halves of that were true and the conclusion still left a dead
+     * end: once the quality gate reached this row (a `needs: 'decision'`
+     * ticket reaches the reader's queue through it), a held decision had no
+     * verb its filer could call. So the door now DELEGATES — it rewrites the
+     * ticket's own words, through the ordinary title/body doors — which is
+     * what makes the hold liftable. What still refuses is asserted below.
+     */
+    it('revises the ticket’s own decision by rewriting the ticket’s words', async () => {
       const ws = await seedWorkspace();
       const { task } = await jj<{ task: Task }>(
         await post(`/api/workspaces/${ws}/tasks`, {
@@ -489,11 +499,50 @@ describe('review-item comments and revisions', () => {
           author: AGENT,
         }),
       );
+      const res = await jj<{ task: Task }>(
+        await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
+          headline: 'Pick a retry budget for the poller',
+          author: AGENT,
+        }),
+      );
+      // The headline IS the title — the words moved on the ticket, and no
+      // phantom stored item was minted beside the decision to hold them.
+      expect(res.task.title).toBe('Pick a retry budget for the poller');
+      expect(res.task.reviews ?? []).toEqual([]);
+    });
+
+    it('refuses the derived row on a ticket that is not a decision', async () => {
+      const ws = await seedWorkspace();
+      const task = await seedTask(ws);
       const res = await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
         headline: 'Pick a retry budget for the poller',
         author: AGENT,
       });
       expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('not-a-decision');
+    });
+
+    it('refuses to rewrite a decision a person has already answered', async () => {
+      const ws = await seedWorkspace();
+      const { task } = await jj<{ task: Task }>(
+        await post(`/api/workspaces/${ws}/tasks`, {
+          title: 'Pick a retry budget',
+          body: 'How many times should the poller retry? Three tries costs a minute per failure; once loses the row on a blip. Blocked: the poller rollout.',
+          assignee: 'human',
+          needs: 'decision',
+          options: [{ label: 'Three' }, { label: 'Once' }],
+          author: AGENT,
+        }),
+      );
+      await jj(
+        await post(`/api/tasks/${task.id}/answer`, { text: 'Three tries.', author: PERSON }),
+      );
+      const res = await post(`/api/tasks/${task.id}/review-items/r-legacy/revise`, {
+        headline: 'Pick a retry budget for the poller',
+        author: AGENT,
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('answered');
     });
 
     it('a second question after a revision puts the item back to waiting', async () => {
