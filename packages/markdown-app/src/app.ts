@@ -11,6 +11,7 @@ import { wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
+import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
@@ -286,7 +287,15 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         withoutHuddleStart(location.pathname + location.search + location.hash),
       );
     }
-    const strip = mountMeetingStrip({ docId, root: meetingStripEl, autoStart: huddleStart });
+    // `?timing=1` measures this meeting's stage latencies and shows the
+    // running numbers. Left in the address on purpose, unlike the huddle
+    // flag: a reload should keep measuring, and it opens no mic by itself.
+    const strip = mountMeetingStrip({
+      docId,
+      root: meetingStripEl,
+      autoStart: huddleStart,
+      timing: wantsLatencyTiming(location.search),
+    });
     scope.onCleanup(() => strip.destroy());
   }
 
