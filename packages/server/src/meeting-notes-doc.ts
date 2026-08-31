@@ -406,7 +406,7 @@ export function withServerNotesSinks(
   const captureTasks: MeetingNotesDeps['captureTasks'] =
     options.captureTasks ??
     (extractor && captureBoard
-      ? async ({ docId, turns }) => {
+      ? async ({ docId, turns, priorTurns }) => {
           // The doc's board is the capture's scope: a meeting on a doc no
           // workspace owns has no board to find or create on.
           const room = deps.rooms().get(docId);
@@ -424,6 +424,7 @@ export function withServerNotesSinks(
               docId,
               ...(room.meta.title !== undefined ? { docTitle: room.meta.title } : {}),
               turns,
+              priorTurns,
             },
           );
         }
