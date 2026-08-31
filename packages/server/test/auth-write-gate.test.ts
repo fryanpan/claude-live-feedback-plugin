@@ -351,6 +351,53 @@ describe('with the gate ON', () => {
     expect(((await gated.json()) as { error?: string }).error).toBe(SIGN_IN_REQUIRED_ERROR);
   });
 
+  it('lets an unsigned browser OPEN a review member it is allowed to read', async () => {
+    // Opening a file in a review is a POST for its request shape — the path
+    // of the member does not belong in a URL — and a read in its effect: the
+    // docId is derived from the review and the relPath, the room is created
+    // idempotently under the review's own root, and no user content comes
+    // into being. Gated, a signed-out reader's redline companion never
+    // opened, so the comment threads anchored to it silently vanished and
+    // the fallback showed a DIFFERENT thread set with no error anywhere.
+    const b = boot(true);
+    const folder = mkdtempSync(join(tmpdir(), 'review-src-'));
+    cleanups.push(() => rmSync(folder, { recursive: true, force: true }));
+    writeFileSync(join(folder, 'note.md'), '# Note\n\nProse a reader can comment on.\n');
+    // Created over the AGENT path, which is how a review actually comes into
+    // being — the browser is only ever the reader here.
+    const bound = await fetch(`${b.base}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ folderPath: folder, title: 'A folder review' }),
+    });
+    expect(bound.status).toBe(200);
+    const setId = ((await bound.json()) as { workspaceId?: string }).workspaceId ?? '';
+    expect(setId).not.toBe('');
+
+    const opened = await fetch(`${b.base}/api/reviews/${encodeURIComponent(setId)}/editable-file`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
+      body: JSON.stringify({ relPath: 'note.md' }),
+    });
+    // A real 200 with a real docId, not merely "not a 401" — a route that
+    // 404s is equally not-a-401 and would prove nothing about the exemption.
+    expect(opened.status).toBe(200);
+    expect(((await opened.json()) as { docId?: string }).docId).toBeTruthy();
+
+    // The control, in the same test on the same server: a sibling write under
+    // the SAME `/api/reviews/<id>/` prefix from the SAME unsigned browser is
+    // still refused. Without it the 200 above is equally consistent with a
+    // gate that had stopped working, or with an exemption written wide enough
+    // to open the whole prefix.
+    const gated = await fetch(`${b.base}/api/reviews/${encodeURIComponent(setId)}/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...browserHeaders(b.base) },
+      body: '{}',
+    });
+    expect(gated.status).toBe(401);
+    expect(await errorOf(gated)).toBe(SIGN_IN_REQUIRED_ERROR);
+  });
+
   it('leaves the sign-in flow reachable — otherwise the gate is a deadlock', async () => {
     // `signIn` is itself the assertion: it POSTs /api/auth/start and
     // /api/auth/verify as a browser with no session, and expects 200 from
