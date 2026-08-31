@@ -188,4 +188,23 @@ describe('task status notes route', () => {
     expect(row.notes?.[0]?.text).toBe(`update ${TASK_NOTES_READ_CAP + 2}`);
     expect(row.notes?.every((n) => n.kind === 'status')).toBe(true);
   });
+
+  it('ignores a body taskId — the URL names the row', async () => {
+    const wsId = await board();
+    const target = await todoRow(wsId, 'Wire the index');
+    const other = await todoRow(wsId, 'Another row');
+    const r = await post(`/api/tasks/${target}/notes`, {
+      agent: AGENT.name,
+      kind: 'status',
+      text: 'On the URL row',
+      // Not even a string: this route predates the field and must not start
+      // validating it (the hook route is where a body taskId means something).
+      taskId: 42,
+    });
+    expect(r.status).toBe(202);
+    expect(await r.json()).toMatchObject({ ok: true, taskId: target });
+    await settle();
+    expect(handle.tasks.getTask(target)?.notes?.map((n) => n.text)).toEqual(['On the URL row']);
+    expect(handle.tasks.getTask(other)?.notes ?? []).toHaveLength(0);
+  });
 });

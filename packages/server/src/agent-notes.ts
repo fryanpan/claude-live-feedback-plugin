@@ -7,12 +7,18 @@
  *    the 400s it refuses. The server stores the text VERBATIM — reducing a
  *    closing message to one safe line is the hook's job, and a server that
  *    quietly filtered would hide from the hook's author that it had to.
- *  - `resolveCurrentTask`: which row an agent is working RIGHT NOW. There is
+ *  - `resolveNoteTarget`: which row an agent is working RIGHT NOW. There is
  *    no register of that: the dispatch registry keys on task, heartbeats key
  *    on agent, and neither names the other. The answer the board already
  *    gives (`claimSessionReader`) is the row's latest `in-progress` claim,
  *    so this reads the same evidence — an in-progress row the agent owns or
- *    last claimed — and takes the newest claim across every workspace.
+ *    last claimed — across every workspace. It answers with a row only when
+ *    the agent holds exactly ONE: a 2-week replay of prod notes (2026-08-31)
+ *    found 93% of automatic notes faced 2+ held rows, and a judged sample
+ *    put the old newest-claim guess wrong ~3 times in 4 — a lead session
+ *    claims rows for the builders it dispatches, so its end-of-turn digest
+ *    was landing on whichever row happened to be claimed last. Ambiguity now
+ *    goes to the ring marked `needsFiling` instead of onto a coin-flip row.
  *  - `AgentNoteRing`: the per-agent memory, in-process and bounded. A note
  *    with no current task has nowhere durable to go, but the pane still
  *    wants to show it; a bound note is recorded here too, tagged with its
@@ -45,6 +51,7 @@ export { TASK_NOTES_STORE_CAP } from './tasks.ts';
 export const NOTE_TEXT_MAX = 4000;
 const AGENT_NAME_MAX = 200;
 const SESSION_ID_MAX = 200;
+const TASK_ID_MAX = 200;
 
 export type AgentNoteKind = TaskNote['kind'];
 const KINDS: ReadonlySet<string> = new Set<AgentNoteKind>(['turn', 'denial', 'status']);
@@ -62,6 +69,11 @@ export interface AgentNoteInput {
    *  the server's; the server's otherwise, and when absent. */
   at: number;
   sessionId?: string;
+  /** An explicit address from a caller that knows its row. The hook route
+   *  appends there directly instead of resolving a current claim; the named
+   *  route (`/api/tasks/:id/notes`) takes the row from its URL and ignores
+   *  this field. */
+  taskId?: string;
 }
 
 export type ParseAgentNoteResult =
@@ -111,6 +123,17 @@ export function parseAgentNote(body: unknown, now: number = Date.now()): ParseAg
     }
     sessionId = b.sessionId;
   }
+  let taskId: string | undefined;
+  if (b.taskId !== undefined && b.taskId !== null) {
+    if (
+      typeof b.taskId !== 'string' ||
+      b.taskId.trim().length === 0 ||
+      b.taskId.length > TASK_ID_MAX
+    ) {
+      return { ok: false, error: 'bad-task', message: '`taskId` must be a task id' };
+    }
+    taskId = b.taskId;
+  }
   return {
     ok: true,
     note: {
@@ -119,6 +142,7 @@ export function parseAgentNote(body: unknown, now: number = Date.now()): ParseAg
       text: b.text,
       at,
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(taskId !== undefined ? { taskId } : {}),
     },
   };
 }
@@ -130,11 +154,16 @@ function latestClaim(task: Task): Task['transitions'][number] | undefined {
   return claim;
 }
 
+/** Where a note with no explicit address should land, if anywhere. */
+export type NoteTarget = { task: Task; ambiguous: false } | { task: undefined; ambiguous: boolean };
+
 /**
  * The row `agentName` is working now: the in-progress row, across every
- * workspace, that is the agent's — and of those, the one claimed most
- * recently. A row handed back and retaken belongs to whoever took it last;
- * an agent holding two rows is reported on the one it took last.
+ * workspace, that is the agent's — when it holds exactly one. An agent
+ * holding several rows gets NO answer (`ambiguous: true`): the old rule
+ * took the newest claim, and the 2026-08-31 replay showed that guess wrong
+ * far more often than right (see the module header). A note that cannot be
+ * placed is worth more unfiled than filed wrongly.
  *
  * Whose a row is: when its latest in-progress claim was made by an AGENT,
  * that claimant — the stored assignee is stale the moment another agent takes
@@ -142,7 +171,7 @@ function latestClaim(task: Task): Task['transitions'][number] | undefined {
  * worker's row. When a person moved it (or nothing records who did), the
  * assignee, by any spelling the roster folds.
  */
-export function resolveCurrentTask(store: TaskStore, agentName: string): Task | undefined {
+export function resolveNoteTarget(store: TaskStore, agentName: string): NoteTarget {
   const owned = store.ownerMatcher(agentName);
   const wantedIds = new Set([agentIdForName(agentName), normalizeAgent(agentName)]);
   const claimedBy = (task: Task): boolean => {
@@ -154,23 +183,28 @@ export function resolveCurrentTask(store: TaskStore, agentName: string): Task | 
       normalizeAgent(claim.by.name) === normalizeAgent(agentName)
     );
   };
-  let best: { task: Task; at: number } | undefined;
+  let only: Task | undefined;
   for (const ws of store.listWorkspaces()) {
     for (const task of store.listTasks(ws.id, { status: 'in-progress' })) {
       const claim = latestClaim(task);
       const mine = claim?.by.kind === 'agent' ? claimedBy(task) : owned(task);
       if (!mine) continue;
-      const at = latestClaim(task)?.ts ?? task.updatedAt;
-      if (!best || at > best.at) best = { task, at };
+      if (only !== undefined) return { task: undefined, ambiguous: true };
+      only = task;
     }
   }
-  return best?.task;
+  return only !== undefined
+    ? { task: only, ambiguous: false }
+    : { task: undefined, ambiguous: false };
 }
 
 /** One ring entry: the note as posted, plus the row it was pinned to. */
 export interface AgentRingNote extends AgentNoteInput {
   taskId?: string;
   workspaceId?: string;
+  /** The note faced 2+ candidate rows and was deliberately left unfiled —
+   *  the pane shows it as needing a home rather than hiding the miss. */
+  needsFiling?: boolean;
 }
 
 export class AgentNoteRing {
