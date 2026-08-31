@@ -862,6 +862,51 @@ describe('task capture riding the notes session', () => {
     ]);
   });
 
+  it('hands each pass the previous tick’s words, under any name given since', async () => {
+    // The boundary case: an ask spoken across two ticks. The second pass has
+    // to see the first tick's speech or it is reading a pointer with nothing
+    // to point at — and it must see it under the name the voice has NOW.
+    const schedule = new ManualScheduler();
+    const passes: Array<{ turns: string[]; prior: string[] }> = [];
+    const session = beginNotesSession(
+      {
+        composer: createStubNotesComposer(),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        captureTasks: (input) => {
+          passes.push({
+            turns: input.turns.map((t) => `${t.speaker ?? '?'}: ${t.text}`),
+            prior: input.priorTurns.map((t) => `${t.speaker ?? '?'}: ${t.text}`),
+          });
+          return Promise.resolve([]);
+        },
+      },
+      ids,
+    );
+    session.onTurn({
+      turn: 0,
+      text: 'That retry loop is the real cost.',
+      final: true,
+      speaker: 'A',
+    });
+    schedule.fire();
+    await Promise.resolve();
+    session.nameSpeaker('A', 'Priya');
+    session.onTurn({ turn: 1, text: 'File a ticket for that one.', final: true, speaker: 'A' });
+    schedule.fire();
+    await session.end();
+    expect(passes).toHaveLength(2);
+    // Nothing came before the first tick.
+    expect(passes[0]?.prior).toEqual([]);
+    expect(passes[0]?.turns).toEqual(['Speaker A: That retry loop is the real cost.']);
+    // The second pass sees the first tick's line, mapped through the rename
+    // that landed in between — raw labels are kept and mapped at use, so the
+    // window never reads "Speaker A" beside "Priya" for the same voice.
+    expect(passes[1]?.prior).toEqual(['Priya: That retry loop is the real cost.']);
+    expect(passes[1]?.turns).toEqual(['Priya: File a ticket for that one.']);
+  });
+
   it('links reach the composer, and a capture failure costs links, not notes', async () => {
     const schedule = new ManualScheduler();
     const inputs: NotesComposeInput[] = [];

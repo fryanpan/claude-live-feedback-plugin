@@ -327,7 +327,27 @@ same speaker-prefixed transcript the composer does and may return a
 `requester` for a request — guarded on the same law, so it must be a voice
 that tick actually carried; the created row's body then says who asked,
 which is the half of "who said what" a task can still answer a week later,
-once the strip is gone. New rows are
+once the strip is gone.
+
+**Each pass also reads the tail of the one before it**, marked as already
+read — the boundary between two ticks falls where the room went quiet, which
+is nowhere near where an ask ends. Measured live, both halves: "…that is the
+real cost" / boundary / "can you file a ticket for that one?" filed a row
+titled *"file a ticket for that one, a small spike would do"*, and "we should
+file tickets for the next few things I mention" / boundary / the things
+themselves lost the ask entirely. The window is the previous tick's TAIL —
+180 characters, six turns, the newest line clipped rather than dropped — kept
+raw so a voice named since then reads under its new name. Marking is what
+stops a second filing: the prompt says those lines were read last pass and
+that every item must draw part of itself from the new ones, and the board's
+own find-or-create folds a re-file into a link to the row the previous pass
+created. Both the guards and the model see exactly the same window, or the
+reference guard would reject the very matches the overlap exists to enable.
+Cost, measured on the capture model with `count_tokens` rather than estimated
+(`scripts/capture-overlap-cost.ts`): **+92 input tokens per tick** at a full
+window — 43 for the standing instruction, 49 for the speech.
+
+New rows are
 attributed to the `Meeting Assistant` agent actor and enter triage; a request
 judged clear-and-doable goes to the chores band at `todo` and wakes the
 board's lead through `ReadyWorkNudger.taskReady` — the composer never claims
