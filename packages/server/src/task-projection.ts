@@ -290,6 +290,12 @@ export function projectTask(
     ...(task.archiveReason !== undefined ? { archiveReason: task.archiveReason } : {}),
     links: task.links,
     ...(task.origin !== undefined ? { origin: task.origin } : {}),
+    // Plan-draft state, both halves conditional so a release / reconcile
+    // removes the key on refresh (the refresh deletes keys absent here).
+    // Workspace content, not host data: the docId is a workspace doc's own
+    // id, and everything in a workspace is available to everyone in it.
+    ...(task.planHold !== undefined ? { planHold: task.planHold } : {}),
+    ...(task.possiblyStale !== undefined ? { possiblyStale: task.possiblyStale } : {}),
     ...(task.quote !== undefined ? { quote: task.quote } : {}),
     ...(task.answer !== undefined ? { answer: task.answer } : {}),
     // Narrowed to the declared shape, never spread: the pre-fix writer

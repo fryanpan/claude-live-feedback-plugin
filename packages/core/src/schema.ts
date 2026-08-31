@@ -67,6 +67,10 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
   const diffGroupRank = m.get('diffGroupRank') as number | undefined;
   const diffGroupDetails = m.get('diffGroupDetails') as string | undefined;
   const huddle = m.get('huddle') as boolean | undefined;
+  const planState = m.get('planState') as DocMeta['planState'] | undefined;
+  const planApprovedBy = m.get('planApprovedBy') as string | undefined;
+  const planApprovedAt = m.get('planApprovedAt') as number | undefined;
+  const contentRevision = m.get('contentRevision') as number | undefined;
   return {
     docId,
     type,
@@ -91,6 +95,10 @@ export function readDocMeta(doc: Y.Doc): DocMeta {
     diffGroupRank,
     diffGroupDetails,
     huddle,
+    planState,
+    planApprovedBy,
+    planApprovedAt,
+    contentRevision,
   };
 }
 

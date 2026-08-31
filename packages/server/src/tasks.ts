@@ -852,6 +852,36 @@ export interface Task {
   /** The thread/doc this was promoted from. */
   origin?: Ref;
   /**
+   * This row is a DRAFT derived from a plan doc that has not been approved:
+   * it exists and is visible, but the transition gate refuses to move it out
+   * of triage until `POST /api/docs/:id/plan` approves the plan — which
+   * clears the hold and releases the row to `todo`. Held rows are already
+   * invisible to every dispatch read by their `triage` status; this field is
+   * what makes the hold un-liftable by an ordinary transition. The docId is
+   * the plan doc AS THE CREATE ROUTE SAW IT (canonical id), which is what
+   * the release matches on.
+   */
+  planHold?: { docId: string };
+  /**
+   * The source doc's `contentRevision` at the moment this row was derived
+   * from it (or last reconciled with it — a body edit re-stamps). The
+   * ordering token `flagStaleFromDocEdit` compares, mirroring
+   * `wordsRevision`'s counter-not-clock rule. Absent on rows that predate
+   * the field or whose source doc was not in memory at create: those rows
+   * never join the staleness comparison, which is the quiet direction to be
+   * wrong in.
+   */
+  originDocRevision?: number;
+  /**
+   * The source plan doc changed AFTER this row was derived from it — an
+   * advisory flag, never a gate. Set by `flagStaleFromDocEdit` when the
+   * doc's settled `contentRevision` passes `originDocRevision`; cleared by
+   * the body-edit choke point (`updateBodySnapshot`), which reads a rewrite
+   * as "somebody reconciled the row with the plan as it now stands" and
+   * re-stamps `originDocRevision` so a still-later plan edit re-flags.
+   */
+  possiblyStale?: { docRevision: number; ts: number };
+  /**
    * The words this task CAME FROM, verbatim, and never rewritten.
    *
    * Originally "the human's verbatim words at promotion or creation", which
@@ -1178,6 +1208,12 @@ export interface CreateTaskOpts {
   links?: Ref[];
   origin?: Ref;
   quote?: string;
+  /**
+   * File the row as a plan DRAFT: forced to `triage` whatever the actor, and
+   * held there until the named plan doc is approved. Set by the create
+   * routes when the source doc's plan gate is pending — see `Task.planHold`.
+   */
+  planHold?: { docId: string };
   /** Who is creating it, when the caller knows — attributed on the event
    *  and in the audit log. Optional: the create routes predate it and a
    *  missing author must not become an anonymous 400. */
@@ -1200,7 +1236,7 @@ export type TransitionResult =
   | { ok: true; task: BoardRow; blockers: TransitionBlocker[] }
   | {
       ok: false;
-      error: 'not-found' | 'bad-status' | 'same-status' | 'blocked';
+      error: 'not-found' | 'bad-status' | 'same-status' | 'blocked' | 'plan-unapproved';
       blockers?: TransitionBlocker[];
       /** Refusal text shaped to land verbatim in an agent's context. */
       message?: string;
@@ -2829,6 +2865,19 @@ export class TaskStore {
   private readonly commentAckGraceMs: number;
   private agentStreamProbe: AgentStreamProbe | undefined;
   private eventListeners = new Set<(event: TaskStoreEvent) => void>();
+  /**
+   * The doc store's settled `contentRevision` for a docId, wired by server.ts
+   * (`rooms.settledContentRevision`). At the STORE rather than per route so
+   * every create path — batch, promote, import, the meeting capture — stamps
+   * `originDocRevision` without remembering to; a route guard here would be
+   * a guarantee for that route's callers only. Left unwired (store-only
+   * tests), no stamp happens and no row ever flags, which changes nothing.
+   */
+  private docRevisionFor: ((docId: string) => number | undefined) | undefined;
+
+  setDocRevisionReader(reader: ((docId: string) => number | undefined) | undefined): void {
+    this.docRevisionFor = reader;
+  }
 
   constructor(opts: {
     dataDir: string;
@@ -3661,6 +3710,17 @@ export class TaskStore {
     }
 
     const now = Date.now();
+    // Where the row came from, as a revision it can later be measured
+    // against. Asked of the injected reader HERE — the one place every
+    // create path converges — and settled on the reader's side, so words
+    // typed just before this create stamp the post-edit revision rather
+    // than flagging the row they produced.
+    const originDocId =
+      opts.origin !== undefined && (opts.origin.kind === 'doc' || opts.origin.kind === 'thread')
+        ? opts.origin.docId
+        : undefined;
+    const originDocRevision =
+      originDocId !== undefined ? this.docRevisionFor?.(originDocId) : undefined;
     const assigneeKind = declaredAssigneeKind(opts.assignee ?? '', opts.assigneeKind, opts.actor);
     const assigneeId = this.rosterIdFor(opts.assignee ?? 'agent');
     const inGoal = Array.from(state.tasks.values()).filter((t) => t.goal === goal);
@@ -3680,12 +3740,17 @@ export class TaskStore {
       ...(options.length > 0 ? { options } : {}),
       goal,
       order,
-      status: initialTaskStatus(opts.actor),
+      // A plan draft is triage WHOEVER filed it: the batch declared its rows
+      // drafts of an unapproved plan, and a person's rows are not exempt from
+      // their own declaration.
+      status: opts.planHold !== undefined ? 'triage' : initialTaskStatus(opts.actor),
       after,
       ...(afterEnforce.length > 0 ? { afterEnforce } : {}),
       ...(opts.dueAt !== undefined ? { dueAt: opts.dueAt } : {}),
       links: opts.links ?? [],
       ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
+      ...(opts.planHold !== undefined ? { planHold: opts.planHold } : {}),
+      ...(originDocRevision !== undefined ? { originDocRevision } : {}),
       ...(opts.quote !== undefined ? { quote: opts.quote } : {}),
       transitions: [],
       createdAt: now,
@@ -3994,6 +4059,21 @@ export class TaskStore {
         ok: false,
         error: 'same-status',
         message: `${task.title} is already ${to}. Nothing to do — a status change is the only thing this gate records, and the row is already there.`,
+      };
+    }
+
+    // A plan draft may not leave triage by ANY door — that is the whole of
+    // what the hold means. The release is the plan's approval
+    // (`POST /api/docs/:id/plan`), which clears the hold and moves the row
+    // itself; archiving stays available (it is not a status). Goals never
+    // carry the field, so `isGoalRow` rows pass untouched.
+    if (!isGoalRow(task) && task.planHold !== undefined) {
+      return {
+        ok: false,
+        error: 'plan-unapproved',
+        message:
+          `${task.title} is a draft derived from a plan doc (${task.planHold.docId}) that has not been approved. ` +
+          'It stays in triage until the plan is approved — which releases it — or the row is archived.',
       };
     }
 
@@ -6472,6 +6552,15 @@ export class TaskStore {
     // so a no-op flush cannot make a stale body look freshly written — which
     // would silently clear the drift notice on exactly the rows that need it.
     task.bodyWrittenAt = Date.now();
+    // A body rewrite reads as "somebody reconciled this row with the plan as
+    // it now stands": the flag clears and the row re-stamps at the revision
+    // it was flagged against, so a STILL-later plan edit flags it again.
+    // Here at the choke point rather than on any one route, for the same
+    // reason `quote` preservation is.
+    if (task.possiblyStale !== undefined) {
+      task.originDocRevision = task.possiblyStale.docRevision;
+      task.possiblyStale = undefined;
+    }
     this.bumpWordsRevision(task);
     this.scheduleSave(task.workspaceId);
     return true;
@@ -6621,6 +6710,80 @@ export class TaskStore {
   /** Thread→task surfacing: exact thread-ref matches only. */
   tasksReferencingThread(docId: string, threadId: string): Task[] {
     return this.backlinksFor({ kind: 'thread', docId, threadId });
+  }
+
+  /**
+   * A plan doc's content moved past the revision some derived rows were
+   * stamped at — flag them `possiblyStale`. Wired to the doc store's settled
+   * revision bump (`rooms.onContentRevision`); `docIds` carries the canonical
+   * id AND the alias because origin refs routinely hold the caller-chosen
+   * name. Advisory only: nothing here gates a transition. Open rows only —
+   * a done row's premise no longer matters, and an archived one has left the
+   * board. Rows with no `originDocRevision` (predate the field, or the doc
+   * was not in memory at create) are skipped rather than guessed at.
+   *
+   * Emits no store event — §3.6's table is exhaustive by contract — so the
+   * CALLER refreshes the ydoc projection for the returned workspaces, the
+   * same pattern as `linkRef`.
+   */
+  flagStaleFromDocEdit(docIds: string[], revision: number): Set<string> {
+    const ids = new Set(docIds);
+    const touched = new Set<string>();
+    for (const state of this.workspaces.values()) {
+      for (const task of state.tasks.values()) {
+        if (task.status === 'done' || isArchived(task)) continue;
+        const o = task.origin;
+        if (!isValidRef(o) || (o.kind !== 'doc' && o.kind !== 'thread')) continue;
+        if (!ids.has(o.docId)) continue;
+        if (task.originDocRevision === undefined) continue;
+        if (task.originDocRevision >= revision) continue;
+        if (task.possiblyStale?.docRevision === revision) continue;
+        task.possiblyStale = { docRevision: revision, ts: Date.now() };
+        touched.add(task.workspaceId);
+        this.scheduleSave(task.workspaceId);
+      }
+    }
+    return touched;
+  }
+
+  /**
+   * The plan was approved: clear every hold pointing at it and release the
+   * held rows to `todo` — approval IS the "start the work" gesture the
+   * drafts were waiting for, so leaving them in triage would hand the
+   * approver a second chore per row. The release goes through the ordinary
+   * transition gate (hold cleared first), so each row's trail records who
+   * approved and the projection refreshes off the emitted events. A held row
+   * that is archived, or that somebody already moved before holds existed,
+   * just loses the hold.
+   *
+   * Returns the released task ids plus every workspace whose rows changed —
+   * the caller refreshes projections for holds cleared WITHOUT a transition
+   * (clearing alone emits nothing).
+   */
+  releasePlanHolds(
+    docIds: string[],
+    actor: { id: string; name: string; kind?: string },
+  ): { released: string[]; workspaceIds: Set<string> } {
+    const ids = new Set(docIds);
+    const released: string[] = [];
+    const workspaceIds = new Set<string>();
+    for (const state of this.workspaces.values()) {
+      for (const task of state.tasks.values()) {
+        if (task.planHold === undefined || !ids.has(task.planHold.docId)) continue;
+        task.planHold = undefined;
+        task.updatedAt = Date.now();
+        workspaceIds.add(task.workspaceId);
+        this.scheduleSave(task.workspaceId);
+        if (task.status === 'triage' && !isArchived(task)) {
+          const moved = this.transition(task.id, 'todo', {
+            actor,
+            note: 'Plan approved — draft released to the queue.',
+          });
+          if (moved.ok) released.push(task.id);
+        }
+      }
+    }
+    return { released, workspaceIds };
   }
 
   /**

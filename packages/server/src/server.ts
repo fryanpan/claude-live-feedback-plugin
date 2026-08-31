@@ -2433,6 +2433,20 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
 
+  // Provenance stamping at the store's one choke point: every create whose
+  // origin names a doc records the doc's settled content revision, whichever
+  // route (or the meeting capture) filed it.
+  taskStore.setDocRevisionReader((docId) => rooms.settledContentRevision(docId));
+  // …and the return half: a settled edit burst on a doc flags the open rows
+  // derived from an earlier revision of it. Flagging emits no store event
+  // (§3.6's table is exhaustive), so the projection refresh happens here,
+  // the same pattern as the links route.
+  rooms.onContentRevision = (docIds, revision) => {
+    for (const workspaceId of taskStore.flagStaleFromDocEdit(docIds, revision)) {
+      taskProjection.ensureWorkspace(workspaceId);
+    }
+  };
+
   /**
    * Re-score every OPEN ticket whose estimate predates the current ask.
    *
@@ -6809,7 +6823,22 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (mapping.tasks.some((row) => !resolveAssignee(row.assignee, author))) {
             return j(400, { error: ASSIGNEE_REQUIRED_ERROR, message: ASSIGNEE_REQUIRED_MESSAGE });
           }
-          const res = applyImport(taskStore, workspaceId, mapping, { actor: author });
+          // Looked up BEFORE the apply now: when the tracker is bound as a
+          // live doc, the imported rows carry a structured origin ref back to
+          // it — the doc→task tie used to exist only in the file's banner,
+          // which no backlink query can see. A pending plan gate on the bound
+          // doc holds the rows as drafts, same as the batch route.
+          const resolved = resolve(path);
+          const bound = rooms
+            .list()
+            .find((m) => m.sourceUrl !== undefined && resolve(m.sourceUrl) === resolved);
+          const res = applyImport(taskStore, workspaceId, mapping, {
+            actor: author,
+            ...(bound !== undefined ? { origin: { kind: 'doc', docId: bound.docId } } : {}),
+            ...(bound !== undefined && bound.planState === 'pending'
+              ? { planHold: { docId: bound.docId } }
+              : {}),
+          });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
           // Stamp the source file. If the tracker is bound as a live doc,
           // pull the banner into the live doc too — reparse right after our
@@ -6825,10 +6854,6 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               ts: Date.now(),
             }) + markdown,
           );
-          const resolved = resolve(path);
-          const bound = rooms
-            .list()
-            .find((m) => m.sourceUrl !== undefined && resolve(m.sourceUrl) === resolved);
           if (bound) rooms.reparseFromDisk(bound.docId);
           // Task/goal events already refreshed the projection; this covers a
           // mapping with zero new goals and zero tasks (nothing emitted).
@@ -7106,6 +7131,47 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               message: `a batch takes at most ${MAX_BATCH_TASKS} rows; this one had ${rows.length}. Nothing was created — split it, or use import_tasks_markdown for a whole tracker.`,
             });
           }
+          // The batch's provenance, declared ONCE for every row: tasks
+          // derived from a doc carry a structured origin ref without the
+          // caller repeating it per row (or remembering a second link call),
+          // and a PLAN doc's rows are filed as drafts — held in triage until
+          // the plan is approved. `mode` defaults from what the doc says it
+          // is: a huddle is a conversation whose tasks may start at once, an
+          // ordinary doc being turned into tasks is a plan.
+          const sourceDocRaw = body?.sourceDoc as
+            | { docId?: unknown; mode?: unknown }
+            | null
+            | undefined;
+          let sourceDoc: { docId: string; mode: 'plan' | 'discussion'; hold: boolean } | undefined;
+          if (sourceDocRaw !== undefined && sourceDocRaw !== null) {
+            const sdId = sourceDocRaw.docId;
+            const sdMode = sourceDocRaw.mode;
+            if (typeof sdId !== 'string' || sdId.length === 0) {
+              return j(400, { error: 'bad-source-doc', message: 'sourceDoc.docId is required' });
+            }
+            if (sdMode !== undefined && sdMode !== 'plan' && sdMode !== 'discussion') {
+              return j(400, {
+                error: 'bad-source-doc',
+                message: "sourceDoc.mode must be 'plan' or 'discussion'",
+              });
+            }
+            // Unlike a bare `links` ref, the source doc must EXIST: its plan
+            // state decides whether these rows are drafts, and a gate read
+            // off a doc that isn't there would answer with a shrug.
+            const sourceRoom = rooms.get(sdId);
+            if (!sourceRoom) {
+              return j(404, { error: 'source-doc-not-found', docId: sdId });
+            }
+            const mode = sdMode ?? (sourceRoom.meta.huddle === true ? 'discussion' : 'plan');
+            const hold = mode === 'plan' && sourceRoom.meta.planState !== 'approved';
+            // Filing plan drafts is what DECLARES the doc a pending plan —
+            // one call, no separate "mark this a plan" step. An approved
+            // plan stays approved: later rows ride in ungated.
+            if (hold && sourceRoom.meta.planState === undefined) {
+              rooms.setPlanState(sourceRoom.docId, 'pending');
+            }
+            sourceDoc = { docId: sourceRoom.docId, mode, hold };
+          }
           const createdBy = authorFor(body?.author);
           const createdIds = new Set<string>();
           const failures: Array<{
@@ -7203,6 +7269,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               });
               continue;
             }
+            if (sourceDoc !== undefined) {
+              // The batch-level declaration fans onto every row: a doc origin
+              // where the row named none (a row's own origin — a promoted
+              // thread's, say — outranks the batch default), and the draft
+              // hold when the plan gate is pending.
+              if (parsed.opts.origin === undefined) {
+                parsed.opts.origin = { kind: 'doc', docId: sourceDoc.docId };
+              }
+              if (sourceDoc.hold) parsed.opts.planHold = { docId: sourceDoc.docId };
+            }
             const res = taskStore.createTask(workspaceId, parsed.opts);
             if (!res.ok) {
               failures.push({
@@ -7235,7 +7311,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               reviewAdvice.push({ taskId: res.task.id, advice: parsed.reviewAdvice });
             }
             {
-              const note = createdVisibility(res.task.status, parsed.review !== undefined);
+              const note = createdVisibility(
+                res.task.status,
+                parsed.review !== undefined,
+                res.task.planHold !== undefined,
+              );
               if (note !== undefined) visibility.push({ taskId: res.task.id, note });
             }
             createdIds.add(res.task.id);
@@ -7322,6 +7402,14 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // Absent when every row is ordinarily visible — a note that is
             // always there is a note nobody reads.
             ...(visibility.length > 0 ? { visibility } : {}),
+            // What the batch's provenance came out as: the canonical docId
+            // the rows now cite, the mode after defaulting, and whether the
+            // plan gate held the rows as drafts.
+            ...(sourceDoc !== undefined
+              ? {
+                  sourceDoc: { docId: sourceDoc.docId, mode: sourceDoc.mode, held: sourceDoc.hold },
+                }
+              : {}),
           });
         }
         // The single gate for status changes: attributed and
@@ -7347,8 +7435,9 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           if (!res.ok) {
             // A gate refusal is a refusal, not a malformed request: same 409
             // an enforce-marked blocker returns, so callers have one shape
-            // for "the gate said no".
-            const refused = res.error === 'blocked';
+            // for "the gate said no". A plan-hold refusal is the same shape:
+            // the gate said no, and the message names the release.
+            const refused = res.error === 'blocked' || res.error === 'plan-unapproved';
             const status = res.error === 'not-found' ? 404 : refused ? 409 : 400;
             return j(status, res);
           }
@@ -8441,6 +8530,13 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
               message: ASSIGNEE_REQUIRED_MESSAGE,
             });
           }
+          // A thread on a PENDING plan doc is part of the plan: its promoted
+          // rows are drafts like the batch-filed ones, held until the same
+          // approval. A doc with no plan gate (or an approved one) promotes
+          // exactly as before.
+          const promoteRoom = rooms.get(docId);
+          const promoteHold =
+            promoteRoom?.meta.planState === 'pending' ? { docId: promoteRoom.docId } : undefined;
           const res = taskStore.createTask(workspaceId, {
             title,
             body: draftBody,
@@ -8455,12 +8551,19 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             dueAt: typeof body?.dueAt === 'number' ? Number(body.dueAt) : undefined,
             links: promoteLinks.links,
             origin: { kind: 'thread', docId, threadId },
+            ...(promoteHold !== undefined ? { planHold: promoteHold } : {}),
             ...(quote !== undefined ? { quote } : {}),
             actor: promotedBy ?? undefined,
           });
           if (!res.ok) return j(res.error === 'workspace-not-found' ? 404 : 400, res);
+          const promoteVisibility = createdVisibility(
+            res.task.status,
+            false,
+            res.task.planHold !== undefined,
+          );
           return j(200, {
             task: res.task,
+            ...(promoteVisibility !== undefined ? { visibility: promoteVisibility } : {}),
             // Third create path, same report. Promoting a thread has exactly
             // the same goal semantics as a create, so an agent that learns to
             // read `placement` on one and finds it missing on another is being
@@ -9553,11 +9656,40 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // deliberate — it is what makes the subroutes correct by default
           // rather than each one having to remember.
           const docId = room.docId;
+          // Tasks referencing this doc under EITHER of its names: origin and
+          // link refs routinely hold the caller-chosen alias rather than the
+          // minted id, and an exact-match query under only the canonical id
+          // silently drops those rows from the doc's own surface.
+          const docTaskRows = (): Task[] => {
+            const rows = taskStore.tasksReferencingDoc(docId);
+            const alias = room.meta.alias;
+            if (alias === undefined || alias === docId) return rows;
+            const seen = new Set(rows.map((t) => t.id));
+            return [
+              ...rows,
+              ...taskStore.tasksReferencingDoc(alias).filter((t) => !seen.has(t.id)),
+            ];
+          };
+          // The chip a MEMBER sees carries what the doc page's derived-work
+          // strip draws: where the row lives (a board id is an unguessable
+          // URL capability, so it never reaches a visitor), and the two
+          // plan-linkage marks. A visitor keeps the bare §3.3 chip.
+          const docTaskEntries = (): Array<Record<string, unknown>> =>
+            docTaskRows().map((t) =>
+              visitor
+                ? { ...taskChip(t) }
+                : {
+                    ...taskChip(t),
+                    workspaceId: t.workspaceId,
+                    ...(t.planHold !== undefined ? { planHeld: true } : {}),
+                    ...(t.possiblyStale !== undefined ? { possiblyStale: true } : {}),
+                  },
+            );
           if (rest === '' && req.method === 'GET') {
             // Doc→task surfacing (§3.12 commit 4): chips for the tasks that
             // reference this doc — directly or via one of its threads.
             // Visitor-safe by construction (§3.3 rule 2); omitted when empty.
-            const taskRefs = taskStore.tasksReferencingDoc(docId).map(taskChip);
+            const taskRefs = docTaskEntries();
             // Which hub workspace this doc is attached to, so the doc surface
             // can route voice utterances (§3.8: voice is not board-only).
             // OWNER ONLY: a workspace id is an unguessable URL capability, and
@@ -9612,7 +9744,35 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
           // board room. The chip is the visitor-safe shape (id, title,
           // status, assignee) — adding a field to it is a sharing decision.
           if (rest === 'tasks' && req.method === 'GET') {
-            return j(200, { docId, tasks: taskStore.tasksReferencingDoc(docId).map(taskChip) });
+            return j(200, { docId, tasks: docTaskEntries() });
+          }
+          // The plan gate's one control: a doc becomes a pending plan, or a
+          // pending plan is approved — which clears every draft hold pointing
+          // at it and releases the held rows to todo, attributed to the
+          // approver. Owner-only: approval is a decision about the board, and
+          // a share visitor does not hold that seat.
+          if (rest === 'plan' && req.method === 'POST') {
+            if (visitor) return j(403, { error: 'not available to share visitors' });
+            const body = await safeJson(req);
+            const state = body?.state;
+            if (state !== 'pending' && state !== 'approved') {
+              return j(400, { error: "state must be 'pending' or 'approved'" });
+            }
+            const author = authorFor(body?.author);
+            if (!author) return j(400, { error: 'author required' });
+            const set = rooms.setPlanState(docId, state, author.name);
+            if (!set.ok) return j(404, { error: 'doc not found' });
+            let released: string[] = [];
+            if (state === 'approved') {
+              const ids = room.meta.alias ? [docId, room.meta.alias] : [docId];
+              const rel = taskStore.releasePlanHolds(ids, author);
+              released = rel.released;
+              // Holds cleared WITHOUT a transition (archived rows, rows
+              // already moved) emit nothing — refresh those boards by hand,
+              // the linkRef pattern.
+              for (const wsId of rel.workspaceIds) taskProjection.ensureWorkspace(wsId);
+            }
+            return j(200, { docId, planState: state, released });
           }
           const threadIdMatch = rest.match(/^threads\/([^/]+)(\/.*)?$/);
           if (threadIdMatch) {
