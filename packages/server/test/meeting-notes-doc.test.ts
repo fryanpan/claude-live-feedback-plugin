@@ -13,6 +13,7 @@ import {
   MEETING_NOTES_HEADING,
   applyNotesRelabel,
   applyNotesUpdate,
+  createNotesLedger,
   relabelNotesSection,
   replaceNotesSection,
   withServerNotesSinks,
@@ -113,19 +114,19 @@ describe('applyNotesUpdate', () => {
 
   it('writes prose docs and reports true', () => {
     const { rooms, ydoc } = roomsWith('doc-a', 'markdown');
-    expect(applyNotesUpdate(rooms, update('doc-a', '- noted'))).toBe(true);
+    expect(applyNotesUpdate(rooms, update('doc-a', '- noted'), createNotesLedger())).toBe(true);
     expect(markdownOf(ydoc)).toContain('- noted');
   });
 
   it('refuses flat docs — a diff surface is not a notepad', () => {
     const { rooms, ydoc } = roomsWith('doc-a', 'diff');
-    expect(applyNotesUpdate(rooms, update('doc-a', '- noted'))).toBe(false);
+    expect(applyNotesUpdate(rooms, update('doc-a', '- noted'), createNotesLedger())).toBe(false);
     expect(markdownOf(ydoc)).not.toContain('- noted');
   });
 
   it('an unknown doc is a false, never a throw', () => {
     const { rooms } = roomsWith('doc-a', 'markdown');
-    expect(applyNotesUpdate(rooms, update('doc-gone', '- noted'))).toBe(false);
+    expect(applyNotesUpdate(rooms, update('doc-gone', '- noted'), createNotesLedger())).toBe(false);
   });
 });
 
@@ -233,15 +234,83 @@ describe('applyNotesRelabel', () => {
       'markdown',
       '## Meeting notes\n\n- Speaker B: yes.\n',
     );
-    expect(applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'))).toBe(1);
+    expect(
+      applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'), createNotesLedger()),
+    ).toBe(1);
     expect(markdownOf(ydoc)).toContain('- Marisol: yes.');
+  });
+
+  it('leaves the agent still owning the lines it renamed', () => {
+    // The rename edits the agent's own bullet in place. If the ledger came
+    // out of that not recognising its own line, the note-taker would have
+    // silently handed it to Bryan: the next tick could only propose on it,
+    // and the notes would freeze at the moment of the rename.
+    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const ledger = createNotesLedger();
+    let n = 0;
+    const tick = (notes: string) =>
+      applyNotesUpdate(
+        rooms,
+        {
+          docId: 'doc-a',
+          meetingId: 'm-1',
+          tick: { tick: ++n, reason: 'pause', turns: [] },
+          notes,
+        },
+        ledger,
+      );
+    tick('## Meeting notes\n\n- Speaker B: yes.\n');
+    expect(applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'), ledger)).toBe(1);
+
+    tick('## Meeting notes\n\n- Marisol: yes, on Friday.\n');
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- Marisol: yes, on Friday.');
+    expect(md).not.toContain('- Marisol: yes.\n');
+  });
+
+  it('a rename does not let the agent reclaim a line Bryan made his', () => {
+    const { rooms, ydoc } = roomsWith('doc-a', 'markdown', '# Huddle\n');
+    const ledger = createNotesLedger();
+    let n = 0;
+    const tick = (notes: string) =>
+      applyNotesUpdate(
+        rooms,
+        {
+          docId: 'doc-a',
+          meetingId: 'm-1',
+          tick: { tick: ++n, reason: 'pause', turns: [] },
+          notes,
+        },
+        ledger,
+      );
+    tick('## Meeting notes\n\n- Speaker B: yes.\n- Speaker B: and the date.\n');
+    // He rewrites the second bullet in his own words, then the rename runs.
+    const list = (prose.getProseFragment(ydoc).toArray() as Y.XmlElement[]).find(
+      (el) => el.nodeName === 'bulletList',
+    )!;
+    const li = list.toArray()[1] as Y.XmlElement;
+    const text = (li.toArray()[0] as Y.XmlElement).toArray()[0] as Y.XmlText;
+    ydoc.transact(() => {
+      text.delete(0, text.length);
+      prose.insertTextWithMarks(text, 0, 'Speaker B — MY wording of the date', {
+        parseInlineMarks: true,
+      });
+    }, 'browser');
+    applyNotesRelabel(rooms, relabel('doc-a', 'Speaker B', 'Marisol'), ledger);
+
+    tick('## Meeting notes\n\n- Marisol: yes.\n- Marisol: the date, tidied up.\n');
+    expect(markdownOf(ydoc)).toContain('Marisol — MY wording of the date');
   });
 
   it('a gone doc and a flat doc are both zero, never a throw', () => {
     const { rooms } = roomsWith('doc-a', 'markdown', '## Meeting notes\n\n- Speaker B: yes.\n');
-    expect(applyNotesRelabel(rooms, relabel('doc-gone', 'Speaker B', 'Marisol'))).toBe(0);
+    expect(
+      applyNotesRelabel(rooms, relabel('doc-gone', 'Speaker B', 'Marisol'), createNotesLedger()),
+    ).toBe(0);
     const flat = roomsWith('doc-b', 'diff', '## Meeting notes\n\n- Speaker B: yes.\n');
-    expect(applyNotesRelabel(flat.rooms, relabel('doc-b', 'Speaker B', 'Marisol'))).toBe(0);
+    expect(
+      applyNotesRelabel(flat.rooms, relabel('doc-b', 'Speaker B', 'Marisol'), createNotesLedger()),
+    ).toBe(0);
     expect(markdownOf(flat.ydoc)).toContain('- Speaker B: yes.');
   });
 });
@@ -393,5 +462,91 @@ describe('withServerNotesSinks task capture', () => {
       { rooms: () => w.rooms, tasks: () => ({ listTasks: () => [] }), captureBoard: () => w.board },
     );
     expect(wired.captureTasks).toBeUndefined();
+  });
+});
+
+describe('withServerNotesSinks — the person’s writing survives the next tick', () => {
+  const wire = () => {
+    const ydoc = docFrom('# Planning\n');
+    const rooms = {
+      get: (id: string) =>
+        id === 'doc-a'
+          ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Q3 planning', setId: 'w-1' } }
+          : undefined,
+    };
+    const wired = withServerNotesSinks(
+      { composer: { name: 's', compose: async () => 'n' } },
+      { rooms: () => rooms, tasks: () => ({ listTasks: () => [] }) },
+    );
+    return { ydoc, wired };
+  };
+
+  it('keeps a bullet typed between two ticks, and still revises the agent’s', () => {
+    const { ydoc, wired } = wire();
+    wired.onNotes(update('doc-a', '## Meeting notes\n\n- agent point one\n'));
+
+    // The person types into the section, the way the editor would.
+    const list = (prose.getProseFragment(ydoc).toArray() as Y.XmlElement[]).find(
+      (el) => el.nodeName === 'bulletList',
+    )!;
+    const li = new Y.XmlElement('listItem');
+    const p = new Y.XmlElement('paragraph');
+    const t = new Y.XmlText();
+    li.insert(0, [p]);
+    p.insert(0, [t]);
+    ydoc.transact(() => {
+      list.insert(1, [li]);
+      prose.insertTextWithMarks(t, 0, 'and MY note, in my words', { parseInlineMarks: true });
+    }, 'browser');
+
+    // The next tick reads the section first, exactly as the session does.
+    const read = wired.readSection?.({ docId: 'doc-a', meetingId: 'm-doc-a-1' });
+    expect(read?.human).toEqual(['and MY note, in my words']);
+    wired.onNotes({
+      ...update(
+        'doc-a',
+        '## Meeting notes\n\n- agent point one, revised\n' +
+          '- and MY note, in my words\n- agent point two\n',
+      ),
+      ...(read ? { basedOn: read.items } : {}),
+    });
+
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- and MY note, in my words');
+    expect(md.split('and MY note, in my words').length).toBe(2);
+    expect(md).toContain('- agent point one, revised');
+    expect(md).toContain('- agent point two');
+    expect(md).not.toContain('- agent point one\n');
+  });
+
+  it('a second meeting on the same doc still revises the first one’s notes', () => {
+    const { ydoc, wired } = wire();
+    wired.onNotes(update('doc-a', '## Meeting notes\n\n- last meeting’s note\n'));
+    // The ledger is per doc and outlives a meeting, so notes the agent wrote
+    // last time are still its own to replace.
+    wired.onNotes({ ...update('doc-a', '## Meeting notes\n\n- this meeting\n'), meetingId: 'm-2' });
+    const md = markdownOf(ydoc);
+    expect(md).not.toContain('last meeting’s note');
+    expect(md).toContain('- this meeting');
+  });
+
+  it('a restarted server adds rather than replacing — it wrote none of this', () => {
+    const { ydoc, wired } = wire();
+    wired.onNotes(update('doc-a', '## Meeting notes\n\n- from before the restart\n'));
+    // A fresh wiring is a fresh process: its ledger claims nothing.
+    const rooms = {
+      get: (id: string) =>
+        id === 'doc-a'
+          ? { ydoc, meta: { type: 'markdown' as DocType, title: 'Q3 planning', setId: 'w-1' } }
+          : undefined,
+    };
+    const restarted = withServerNotesSinks(
+      { composer: { name: 's', compose: async () => 'n' } },
+      { rooms: () => rooms, tasks: () => ({ listTasks: () => [] }) },
+    );
+    restarted.onNotes(update('doc-a', '## Meeting notes\n\n- after the restart\n'));
+    const md = markdownOf(ydoc);
+    expect(md).toContain('- from before the restart');
+    expect(md).toContain('- after the restart');
   });
 });
