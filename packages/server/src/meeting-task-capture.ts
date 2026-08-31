@@ -221,11 +221,18 @@ export const OVERLAP_MAX_CHARS = 180;
  *  on line prefixes. */
 export const OVERLAP_MAX_TURNS = 6;
 
-/** Keep the END of an over-long line: the referent of a pointer is what was
- *  said last, so the tail is the half worth paying for. */
+/**
+ * Keep the END of an over-long line: the referent of a pointer is what was
+ * said last, so the tail is the half worth paying for.
+ *
+ * The leading ellipsis is part of what the line costs, so the tail is one
+ * character shorter than the budget — a turn with no spaces in it at all (a
+ * URL, an unbroken ASR token) would otherwise return `max + 1` and quietly
+ * break the bound the prompt cost is measured against. Raised by review.
+ */
 function clipToBudget(text: string, max: number): string {
   if (text.length <= max) return text;
-  const tail = text.slice(text.length - max);
+  const tail = text.slice(text.length - (max - 1));
   const space = tail.indexOf(' ');
   return `…${space >= 0 ? tail.slice(space + 1) : tail}`;
 }
@@ -334,11 +341,6 @@ export function taskCaptureUrl(workspaceId: string, taskId: string): string {
 }
 
 /**
- * Prompt building is pure and exported, same reason as the notes composer's:
- * what the transcript is asked to become is behaviour worth pinning without
- * a network in the test.
- */
-/**
  * The overlap's whole contract, in the fewest tokens that carry it: what the
  * earlier lines are for, in both directions, and the rule that stops last
  * pass's items being filed a second time. Standing text — it costs its tokens
@@ -351,6 +353,11 @@ export const OVERLAP_PROMPT_RULE = [
   'itself from the new lines.',
 ] as const;
 
+/**
+ * Prompt building is pure and exported, same reason as the notes composer's:
+ * what the transcript is asked to become is behaviour worth pinning without
+ * a network in the test.
+ */
 export function buildTaskCapturePrompt(input: TaskCaptureInput): { system: string; user: string } {
   const system = [
     'You listen to a live working meeting and extract exactly two things:',

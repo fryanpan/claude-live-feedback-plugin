@@ -631,6 +631,15 @@ describe('the overlap window', () => {
     expect(kept.startsWith('…')).toBe(true);
   });
 
+  it('holds the budget even for a line with nowhere to break', () => {
+    // A URL or an unbroken ASR token has no space to clip at, so the tail is
+    // taken whole — and the ellipsis still has to fit inside the budget.
+    const prior: NotesTurn[] = [{ turn: 9, text: 'x'.repeat(500) }];
+    const kept = overlapWindow(prior, deicticTick)[0]?.text ?? '';
+    expect(kept.length).toBe(OVERLAP_MAX_CHARS);
+    expect(kept.startsWith('…')).toBe(true);
+  });
+
   it('caps the number of turns as well as the characters', () => {
     const prior: NotesTurn[] = Array.from({ length: 20 }, (_, i) => ({ turn: i, text: 'ok.' }));
     expect(overlapWindow(prior, deicticTick)).toHaveLength(OVERLAP_MAX_TURNS);
