@@ -296,10 +296,10 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(thin.title).toContain('No finish date yet');
 
     const enough = labelFor([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
-    // Three closes at a 3600s estimate over a 14-day window is a pace of
-    // 771.43 estimate-seconds a day; 7,200s remain, so 9.33 days out from
-    // Sep 1 is Sep 10.
-    expect(enough.finishText).toBe('~Sep 10');
+    // Three closes at a 3600s estimate each, the oldest three days back, is
+    // a window of three days and a pace of 3,600 estimate-seconds a day;
+    // 7,200s remain, so two days out from Sep 1 is Sep 3.
+    expect(enough.finishText).toBe('~Sep 3');
     expect(enough.percentText).toBe('60%');
     // The remainder names whose time it is. The bar beside it is CALENDAR
     // time and this figure is Bryan's attention; unlabelled they invite the
@@ -360,6 +360,60 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(faraway.title).toContain('too far for a date to mean anything');
   });
 
+  it("names the pace window in hours when the goal's run was hours long", () => {
+    // The window floors at an hour, not a day, so a goal that closed most of
+    // itself in one afternoon carries a window under a day — and the
+    // sentence naming it has to be able to count hours. The old whole-day
+    // rounding printed this as "the last 1 day's pace", quoting a
+    // denominator six times the one the date actually came from.
+    const l = labelFor([closed(4 * HOUR), closed(3 * HOUR), closed(2 * HOUR), task()]);
+    expect(l.title).toContain("the last 4 hours' pace");
+    expect(l.title).not.toContain("day's pace");
+  });
+
+  it('still names the window in days when the run took days', () => {
+    // Positive control for the test above: the hour wording is chosen by the
+    // window, not printed unconditionally.
+    const l = labelFor([closed(DAY), closed(2 * DAY), closed(3 * DAY), task()]);
+    expect(l.title).toContain("the last 3 days' pace");
+  });
+
+  it('counts hours through the second day, where whole days still mislead', () => {
+    // Rounding to whole days misstates the denominator by 0.5/n. At a
+    // day and a half that is a third of it — a window of 36 hours announced
+    // as "the last 1 day's pace", which is the same defect as calling four
+    // hours a day, one unit up.
+    const l = labelFor([closed(36 * HOUR), closed(30 * HOUR), closed(2 * HOUR), task()]);
+    expect(l.title).toContain("the last 36 hours' pace");
+    expect(l.title).not.toContain("day's pace");
+  });
+
+  it('prints one date when the range lands inside a single day', () => {
+    // Short projections made a same-day range the common case rather than a
+    // curiosity: a goal finishing this afternoon has its central date and
+    // its late end inside one day, and "~Sep 1–Sep 1" spends the narrow
+    // tier's scarcest resource saying one day twice.
+    const same = labelFor([closed(4 * HOUR), closed(3 * HOUR), closed(2 * HOUR), task()]);
+    expect(same.finishText).toBe('~Sep 1');
+    expect(same.title).toContain('finishing around Sep 1.');
+    expect(same.title).not.toContain('likely by');
+
+    // Positive control: a range that really does span two days still prints
+    // both ends, so the collapse above is a property of the dates and not of
+    // the renderer having stopped drawing ranges.
+    const varied = labelFor([
+      closed(3 * DAY, 2 * HOUR),
+      closed(2 * DAY, HOUR),
+      closed(DAY, 4 * HOUR),
+      task(),
+      task(),
+      task(),
+      task(),
+    ]);
+    expect(varied.finishText).toBe('~Sep 5\u2013Sep 9');
+    expect(varied.title).toContain('likely by Sep 9');
+  });
+
   it('carries the year once the date leaves this one', () => {
     // A bare "~Dec 29" was rendered for a date in 2041 — the same four
     // characters a date four months out gets.
@@ -383,13 +437,16 @@ describe('goalEffortLabel keeps three states apart', () => {
       closed(DAY, HOUR, tiny),
       closed(2 * DAY, HOUR, tiny),
       closed(3 * DAY, HOUR, tiny),
-      ...Array.from({ length: 20 }, () => task(mid)),
+      // Sixty of them: three 600s closes over a three-day window is a pace
+      // of 600 a day, so 78,000s of remainder is 130 days out — into next
+      // year, and still inside the one-year horizon.
+      ...Array.from({ length: 60 }, () => task(mid)),
     ]);
     expect(l.finishText).toMatch(/20\d\d/);
     // Positive control: a date inside the current year still renders bare,
     // so the assertion above cannot be met by always printing a year.
     const near = labelFor([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
-    expect(near.finishText).toBe('~Sep 10');
+    expect(near.finishText).toBe('~Sep 3');
   });
 });
 
@@ -470,7 +527,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
     expect(label('.hub-goal-effort-progress')).toBe('Progress');
     expect(label('.hub-goal-effort-fin')).toBe('Projected finish');
     expect(value('.hub-goal-effort-progress')).toBe('60%');
-    expect(value('.hub-goal-effort-fin')).toContain('~Sep 10');
+    expect(value('.hub-goal-effort-fin')).toContain('~Sep 3');
     // The figure is the figure alone: the words are the label's job now, so
     // the value must not repeat them.
     expect(value('.hub-goal-effort-hands')).not.toContain('hands-on');
@@ -505,7 +562,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
   });
 
   it('reddens a projected finish that lands past the goal’s due date', () => {
-    // The strip's one colour. The fixture projects ~Sep 10; a goal due Sep 5
+    // The strip's one colour. The fixture projects ~Sep 3; a goal due Sep 2
     // is late by it, a goal due Sep 20 is not — the same tasks either way, so
     // what is under test is the comparison and not the projection.
     const withDue = (dueAt: number): HTMLElement => {
@@ -524,7 +581,7 @@ describe('the board renders the readout and leaves the rows alone', () => {
       );
       return host.querySelector('.hub-goal-effort-fin .hub-goal-effort-v') as HTMLElement;
     };
-    expect(withDue(Date.UTC(2026, 8, 5)).className).toContain('hub-goal-effort-late');
+    expect(withDue(Date.UTC(2026, 8, 2)).className).toContain('hub-goal-effort-late');
     expect(withDue(Date.UTC(2026, 8, 20)).className).not.toContain('hub-goal-effort-late');
   });
 
