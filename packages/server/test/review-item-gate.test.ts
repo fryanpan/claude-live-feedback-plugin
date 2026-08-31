@@ -1198,6 +1198,227 @@ describe('the review-item quality gate', () => {
       expect(await threadQueue(workspaceId)).toEqual([]);
     });
 
+    /** A decision-shaped body — the deterministic shape gate at the create
+     *  door refuses a `needs: 'decision'` row without one, and that refusal
+     *  is a different gate from the judge under test here. */
+    const DECISION_BODY =
+      'Which cache size should the nightly rebuild use? At stake: a full pass reads the index once, and halving the cache makes it read twice and adds an hour. Blocked until answered: the rollout.';
+    interface BatchReply {
+      tasks: Array<{ id: string }>;
+      failures: Array<{ error: string; message?: string }>;
+      held?: Array<{
+        taskId: string;
+        reviewItemId: string;
+        heldReason: string;
+        message: string;
+      }>;
+    }
+    /** File one row through the batch door — what `create_tasks` calls. */
+    async function createTasks(workspaceId: string, row: unknown): Promise<BatchReply> {
+      return jj<BatchReply>(
+        await post(`/api/workspaces/${workspaceId}/tasks/batch`, { author: FILER, tasks: [row] }),
+      );
+    }
+    /** The queue rows the ticket's OWN decision produces. */
+    async function decisionQueue(workspaceId: string): Promise<QueueRow[]> {
+      const { items } = await jj<{ items: QueueRow[] }>(
+        await get(`/api/workspaces/${workspaceId}/review-items`),
+      );
+      return items.filter((i) => i.reviewItemId === 'r-legacy');
+    }
+
+    it('create_tasks(needs: decision) — the ticket that IS the ask is judged too', async () => {
+      const { workspaceId } = await board();
+      verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+      const weak = await createTasks(workspaceId, {
+        title: 'ri-77 cfg?',
+        body: DECISION_BODY,
+        needs: 'decision',
+        assignee: PERSON.name,
+        options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+      });
+      expect(weak.failures).toEqual([]);
+      // Judged — the whole point. Before this path was gated it was zero.
+      expect(calls).toHaveLength(1);
+      const taskId = weak.tasks[0]?.id ?? '';
+      const hold = weak.held?.[0];
+      expect(hold?.taskId).toBe(taskId);
+      expect(hold?.heldReason).toBe('The headline is a ticket id, not a decision.');
+      // The address is the TICKET, with no reviewItemId — the ticket's own
+      // decision has none, and naming one that does not exist is the dead end
+      // this path is here to rule out.
+      expect(hold?.message).toContain(`revise_review_item(taskId="${taskId}")`);
+      expect(hold?.message).not.toContain('reviewItemId');
+      expect(await decisionQueue(workspaceId)).toEqual([]);
+
+      verdict = { ok: true, reason: 'Complete.' };
+      const good = await createTasks(workspaceId, {
+        title: 'Which cache size should the nightly rebuild use?',
+        body: DECISION_BODY,
+        needs: 'decision',
+        assignee: PERSON.name,
+        options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+      });
+      expect(good.held ?? []).toEqual([]);
+      const passed = good.tasks[0]?.id ?? '';
+      expect((await decisionQueue(workspaceId)).map((r) => r.taskId)).toEqual([passed]);
+    });
+
+    it('the ticket form with NO reviewItemId re-judges, so a held decision is not a dead end', async () => {
+      const { workspaceId } = await board();
+      verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+      const weak = await createTasks(workspaceId, {
+        title: 'ri-77 cfg?',
+        body: DECISION_BODY,
+        needs: 'decision',
+        assignee: PERSON.name,
+        options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+      });
+      const taskId = weak.tasks[0]?.id ?? '';
+      expect(await decisionQueue(workspaceId)).toEqual([]);
+
+      // Exactly the call the hold's message spelled out: the ticket, no item
+      // id. The route the MCP's bare-taskId form posts to.
+      verdict = { ok: true, reason: 'Complete.' };
+      const revised = await jj<{ held?: boolean; task: { title: string } }>(
+        await post(`/api/tasks/${taskId}/review-items/r-legacy/revise`, {
+          author: FILER,
+          headline: 'Which cache size should the nightly rebuild use?',
+          detail: DECISION_BODY,
+        }),
+      );
+      expect(revised.held ?? false).toBe(false);
+      // The revision rewrote the ROW's words — that is what the decision's
+      // headline is — rather than patching an item that does not exist.
+      expect(revised.task.title).toBe('Which cache size should the nightly rebuild use?');
+      expect(calls).toHaveLength(2);
+      expect((await decisionQueue(workspaceId)).map((r) => r.taskId)).toEqual([taskId]);
+    });
+
+    it('a held decision comes back when rewrite_task fixes the words it was held for', async () => {
+      const { workspaceId } = await board();
+      verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+      const weak = await createTasks(workspaceId, {
+        title: 'ri-77 cfg?',
+        body: DECISION_BODY,
+        needs: 'decision',
+        assignee: PERSON.name,
+        options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+      });
+      const taskId = weak.tasks[0]?.id ?? '';
+      expect(await decisionQueue(workspaceId)).toEqual([]);
+
+      // The decision's words ARE the ticket's words, so the obvious remedy is
+      // rewrite_task. If that did not re-judge, the row would stay off the
+      // queue with the filer believing it fixed — a hold nothing can lift.
+      verdict = { ok: true, reason: 'Complete.' };
+      await jj(
+        await post(`/api/tasks/${taskId}/body`, {
+          author: FILER,
+          title: 'Which cache size should the nightly rebuild use?',
+          markdown: DECISION_BODY,
+          reason: 'the title named an id, not the question',
+        }),
+      );
+      expect(calls).toHaveLength(2);
+      expect((await decisionQueue(workspaceId)).map((r) => r.taskId)).toEqual([taskId]);
+    });
+
+    it(
+      'the filer is woken with the ticket address, and the stall report carries it',
+      async () => {
+        const { workspaceId } = await board();
+        const filer = await agentStream(workspaceId, FILER);
+        const lead = await agentStream(workspaceId, LEAD);
+        try {
+          verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+          const weak = await createTasks(workspaceId, {
+            title: 'ri-77 cfg?',
+            body: DECISION_BODY,
+            needs: 'decision',
+            assignee: PERSON.name,
+            options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+          });
+          const taskId = weak.tasks[0]?.id ?? '';
+          const revise = `revise_review_item(taskId="${taskId}")`;
+          const [frame] = await waitForFrames(filer.frames, REVIEW_ITEM_HELD_EVENT, 1);
+          expect(frame?.data).toMatchObject({
+            taskId,
+            reviewItemId: 'r-legacy',
+            revise,
+            reason: 'The headline is a ticket id, not a decision.',
+          });
+          // Addressed at the ticket, with no doc half of the address on it.
+          expect(frame?.data?.docId).toBeUndefined();
+
+          // The stall loop names the SAME call — see the doc-form test above
+          // for why one tick has to pass first.
+          await settle(5);
+          handle.nudgeStalls();
+          const stalls = await waitForFrames(lead.frames, STALL_EVENT, 1);
+          const held = (stalls.at(-1)?.data as { heldItems?: Array<Record<string, unknown>> })
+            ?.heldItems;
+          expect(held?.[0]).toMatchObject({
+            revise,
+            reason: 'The headline is a ticket id, not a decision.',
+          });
+        } finally {
+          await filer.stop();
+          await lead.stop();
+        }
+      },
+      SSE_TEST_TIMEOUT_MS,
+    );
+
+    it('an ANSWERED decision is never held off the queue by a later verdict', async () => {
+      const { workspaceId } = await board();
+      verdict = { ok: true, reason: 'Complete.' };
+      const good = await createTasks(workspaceId, {
+        title: 'Which cache size should the nightly rebuild use?',
+        body: DECISION_BODY,
+        needs: 'decision',
+        assignee: PERSON.name,
+        options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+      });
+      const taskId = good.tasks[0]?.id ?? '';
+      await jj(
+        await post(`/api/tasks/${taskId}/answer`, { author: PERSON, text: 'Keep it as it is.' }),
+      );
+      // A rewrite after the answer must not re-hold it: the answer was given
+      // to these words, and a decision nobody can see the answer to is worse
+      // than an unjudged one.
+      verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+      await jj(await post(`/api/tasks/${taskId}/title`, { author: FILER, title: 'ri-77 cfg?' }));
+      const { items } = await jj<{ items: QueueRow[] }>(
+        await get(`/api/workspaces/${workspaceId}/review-items`),
+      );
+      expect(items.filter((i) => i.reviewItemId === 'r-legacy')).toEqual([]);
+    });
+
+    it('the reader can overrule a held decision, the same button as any other hold', async () => {
+      const { workspaceId } = await board();
+      verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
+      const weak = await createTasks(workspaceId, {
+        title: 'ri-77 cfg?',
+        body: DECISION_BODY,
+        needs: 'decision',
+        assignee: PERSON.name,
+        options: [{ label: 'Keep it' }, { label: 'Halve it' }],
+      });
+      const taskId = weak.tasks[0]?.id ?? '';
+      expect(await decisionQueue(workspaceId)).toEqual([]);
+
+      // "Ask me anyway". Unlike a held comment, this row IS in front of the
+      // reader — it is a ticket on the board — so there is a surface to press
+      // it from, and no judge is consulted to honour it.
+      const released = await jj<{ released: boolean }>(
+        await post(`/api/tasks/${taskId}/review-items/r-legacy/release`, { author: PERSON }),
+      );
+      expect(released.released).toBe(true);
+      expect(calls).toHaveLength(1);
+      expect((await decisionQueue(workspaceId)).map((r) => r.taskId)).toEqual([taskId]);
+    });
+
     it('CONTROL — the ticket form behaves exactly as it did', async () => {
       const { workspaceId, taskId } = await board();
       verdict = { ok: false, reason: 'The headline is a ticket id, not a decision.' };
