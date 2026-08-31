@@ -70,9 +70,12 @@ import {
   type WalkSources,
   advanceWalk,
   applyRefresh,
+  archivedGoalTotal,
   archivedGoals,
   archivedTasks,
   boardSections,
+  cascadePhrase,
+  cascadedSubgoals,
   clientDriftNotice,
   goalLabel,
   goalSection,
@@ -126,7 +129,7 @@ import {
 import { mountPushToggle } from './push-toggle.ts';
 import { createRepaintGuard } from './repaint-guard.ts';
 import { mountReviewCriteria } from './review-criteria.ts';
-import { createTaskBodyEditorHost } from './task-body-editor.ts';
+import { GOAL_PLACEHOLDER_TEXT, createTaskBodyEditorHost } from './task-body-editor.ts';
 import { type DetailTab, mountTaskDetailIsland, taskDetailData } from './task-detail-island.tsx';
 import {
   type WalkProgress,
@@ -1037,6 +1040,10 @@ async function main(): Promise<void> {
           },
         },
         archivedBands,
+        {
+          total: archivedGoalTotal(state.info?.goals ?? []),
+          cascaded: (goalId) => cascadedSubgoals(state.info?.goals ?? [], goalId),
+        },
       );
     }
     // The island's one input. `pane` rides along rather than gating the write:
@@ -1052,7 +1059,11 @@ async function main(): Promise<void> {
       pane: state.pane,
       showArchived,
       knownAgentIds: knownAgentIds(),
-      archivedCount: archived.length,
+      // Bands count too: the chip is the way back to the restore list, and a
+      // board whose only archived thing is a goal must not read "0 archived"
+      // and hide the door. Cascade members are counted — they are archived —
+      // even though the list gives them no row of their own.
+      archivedCount: archived.length + archivedGoalTotal(state.info?.goals ?? []),
     };
     // No "N tasks have no goal yet" strip above the board any more (Bryan,
     // 2026-08-29, by voice: it "is taking out space and all of it's not
@@ -1411,7 +1422,13 @@ async function main(): Promise<void> {
             // synchronously, so nothing out here can know when the slot exists.
             onBodySlot: (row, slot) =>
               bodyEditor.sync(
-                row === null ? null : { id: row.id, bodyDocId: goalBodyDocId(row) },
+                row === null
+                  ? null
+                  : {
+                      id: row.id,
+                      bodyDocId: goalBodyDocId(row),
+                      placeholder: GOAL_PLACEHOLDER_TEXT,
+                    },
                 slot,
               ),
             onCopyLink: (s) => void copyGoalLink(s),
@@ -2108,8 +2125,9 @@ async function main(): Promise<void> {
   /** How many rows a goal archive or restore actually moved, off the response.
    *  Read defensively: an older server answers without the lists, and the
    *  toast then names the band alone rather than inventing a zero. */
-  function movedCount(data: Record<string, unknown> | null): number {
-    return Array.isArray(data?.taskIds) ? data.taskIds.length : 0;
+  function movedCount(data: Record<string, unknown> | null, key = 'taskIds'): number {
+    const ids = data?.[key];
+    return Array.isArray(ids) ? ids.length : 0;
   }
 
   /**
@@ -2138,15 +2156,15 @@ async function main(): Promise<void> {
       state.detailGoalId = null;
       renderDetail();
     }
-    const n = movedCount(res.data);
-    showToast(
-      `Archived “${section.title}”${n > 0 ? ` and ${n === 1 ? '1 task' : `${n} tasks`}` : ''}`,
-      {
-        label: 'Undo',
-        run: () => void restoreGoal(section),
-        ms: ARCHIVE_UNDO_MS,
-      },
-    );
+    // The same phrase the confirmation used, from the same builder: a reader
+    // told "and its 1 subgoal and 5 tasks" and then "and 5 tasks" would have
+    // to conclude the subgoal stayed.
+    const rode = cascadePhrase(movedCount(res.data, 'subgoalIds'), movedCount(res.data, 'taskIds'));
+    showToast(`Archived “${section.title}”${rode ? ` and its ${rode}` : ''}`, {
+      label: 'Undo',
+      run: () => void restoreGoal(section),
+      ms: ARCHIVE_UNDO_MS,
+    });
   }
 
   /** Put an archived band back, with the rows its archive took. The Undo
@@ -3146,6 +3164,10 @@ async function main(): Promise<void> {
       },
       closeDetail: () => {
         state.detailTaskId = null;
+        // The goal panel closes on Escape too. It floats over the board the
+        // same way the task panel does, and one overlay that ignores the key
+        // its neighbour obeys reads as stuck rather than as different.
+        state.detailGoalId = null;
         state.detailThreadId = null;
         renderDetail();
       },
@@ -3185,10 +3207,16 @@ async function main(): Promise<void> {
         bootLoc.task !== null &&
         state.detailTaskId === bootLoc.task &&
         !state.tasks.has(bootLoc.task);
+      // `goalSection` rather than a scan of the top level, because a goal is
+      // not always a BAND: a subgoal is one level down, and an archived one is
+      // on no board at all. The top-level `some()` this replaces called both
+      // of those "gone" and closed the panel four seconds after it opened —
+      // a live subgoal deep link included, which is the link the panel's own
+      // Copy hands out.
       const goneGoal =
         bootLoc.goal !== null &&
         state.detailGoalId === bootLoc.goal &&
-        !(state.info?.goals ?? []).some((g) => g.id === bootLoc.goal);
+        goalSection(state.info?.goals ?? [], bootLoc.goal) === null;
       if (goneTask || goneGoal) {
         state.detailTaskId = null;
         state.detailGoalId = null;

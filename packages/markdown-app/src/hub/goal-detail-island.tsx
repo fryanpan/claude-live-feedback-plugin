@@ -65,6 +65,7 @@ import {
   type BoardSection,
   GOAL_STATUS_ORDER,
   type TaskStatus,
+  cascadePhrase,
   isGoalArchived,
   statusLabel,
   statusOptions,
@@ -101,10 +102,6 @@ export interface GoalCascade {
   subgoals: number;
 }
 
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? '' : 's'}`;
-}
-
 /**
  * The sentence the confirmation asks, with the count in it.
  *
@@ -125,10 +122,9 @@ export function archiveConfirmLine(title: string, cascade: GoalCascade | null): 
   if (cascade === null) return `Archive ${name} and everything under it?`;
   const { tasks, subgoals } = cascade;
   if (tasks === 0 && subgoals === 0) return `Archive ${name}? Nothing else is under it.`;
-  const parts: string[] = [];
-  if (subgoals > 0) parts.push(plural(subgoals, 'subgoal'));
-  if (tasks > 0) parts.push(plural(tasks, 'task'));
-  return `Archive ${name} and its ${parts.join(' and ')}?`;
+  // Shared with the toast that follows this confirmation, so the two cannot
+  // describe the same archive differently.
+  return `Archive ${name} and its ${cascadePhrase(subgoals, tasks)}?`;
 }
 
 /** One `<dt>/<dd>` pair. Built here rather than as JSX so the fields row can go
@@ -155,6 +151,10 @@ function GoalDetailPanel(props: {
   const { host, section, discussion, handlers } = props;
   const now = handlers.now ?? Date.now();
   const archived = isGoalArchived(section);
+  // Archived AS PART OF a band's cascade, rather than on its own. The one
+  // rule both restore surfaces enforce: this row comes back with its parent
+  // or not at all.
+  const withParent = archived && section.archivedWithGoal !== undefined;
   // The reader's full-screen choice, seeded from the host so a panel that
   // opens while the last one was expanded does not silently un-expand it.
   const [full, setFull] = useState(host.classList.contains('hub-detail--full'));
@@ -398,7 +398,7 @@ function GoalDetailPanel(props: {
           >
             {full ? '⤡' : '⤢'}
           </button>
-          {(archived ? handlers.onRestore : handlers.onArchive) && (
+          {(archived ? handlers.onRestore && !withParent : handlers.onArchive) && (
             <button
               type="button"
               class="hub-btn hub-icon-btn hub-detail-archive"
@@ -471,14 +471,26 @@ function GoalDetailPanel(props: {
               section.archivedBy ? ` by ${section.archivedBy}` : ''
             }${section.archiveReason ? ` — ${section.archiveReason}` : ''}`}
           </p>
-          {handlers.onRestore && (
-            <button
-              type="button"
-              class="hub-btn hub-archived-restore"
-              onClick={() => handlers.onRestore?.(section)}
-            >
-              Restore to the board
-            </button>
+          {/* A row that went as part of a band's cascade has no restore of
+              its own — its tasks were stamped with the BAND's id, so putting
+              it back alone would return an empty subgoal and leave its work
+              archived. The restore list withholds the control for the same
+              reason; saying which band brings it back is what turns that
+              absence from a missing button into an answer. */}
+          {withParent ? (
+            <p class="hub-archived-with-note">
+              {`Archived with “${section.archivedWithGoalTitle ?? 'its goal'}” — restoring that goal brings this one back, with its tasks.`}
+            </p>
+          ) : (
+            handlers.onRestore && (
+              <button
+                type="button"
+                class="hub-btn hub-archived-restore"
+                onClick={() => handlers.onRestore?.(section)}
+              >
+                Restore to the board
+              </button>
+            )
           )}
         </div>
       )}

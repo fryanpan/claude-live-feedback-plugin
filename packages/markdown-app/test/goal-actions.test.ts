@@ -4,13 +4,17 @@ import {
   DEFAULT_DONE_WINDOW,
   type HubGoal,
   type HubTask,
+  archivedGoalTotal,
   archivedGoals,
   boardSections,
+  cascadePhrase,
+  cascadedSubgoals,
   describeEvent,
   goalSection,
   isGoalArchived,
 } from '../src/hub/hub-model.ts';
 import { type GoalDetailHandlers, renderArchivedList } from '../src/hub/hub-render.ts';
+import { GOAL_PLACEHOLDER_TEXT, PLACEHOLDER_TEXT } from '../src/hub/task-body-editor.ts';
 import { disposeGoalDetail, renderGoalDetail } from './support/goal-detail.ts';
 
 /**
@@ -294,6 +298,51 @@ describe('archiving a goal from the panel', () => {
     expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-pr' }));
     expect(panel().querySelector('.hub-goal-archive-confirm')).toBeNull();
   });
+
+  it('offers NO restore on a row that went with its parent, and says which one brings it back', () => {
+    // The rule the restore list already enforces: this row's tasks carry the
+    // BAND's id, so restoring it alone returns an empty subgoal and leaves
+    // its work archived. Both surfaces have to agree, or the panel becomes a
+    // way round the list's refusal.
+    const onRestore = vi.fn();
+    const goals: HubGoal[] = [
+      {
+        id: 'g-pr',
+        title: 'Ship the widget',
+        archivedAt: NOW,
+        subgoals: [
+          { id: 'g-sub', title: 'Land the diff', archivedAt: NOW, archivedWithGoal: 'g-pr' },
+        ],
+      },
+    ];
+    const section = goalSection(goals, 'g-sub');
+    if (!section) throw new Error('goalSection lost the cascaded subgoal');
+    renderGoalDetail(host, section, handlers({ onRestore, onCascadeCount: vi.fn() }));
+    expect(button('.hub-detail-archive')).toBeNull();
+    expect(panel().querySelector('.hub-archived-restore')).toBeNull();
+    // Named, not hinted: "archived with g-sub…" is not something anybody can act on.
+    expect(panel().querySelector('.hub-archived-with-note')?.textContent).toContain(
+      'Archived with “Ship the widget”',
+    );
+    expect(onRestore).not.toHaveBeenCalled();
+  });
+
+  it('still offers restore on a band archived on its own — the control for the rule above', () => {
+    const onRestore = vi.fn();
+    const goals: HubGoal[] = [
+      {
+        id: 'g-pr',
+        title: 'Ship the widget',
+        subgoals: [{ id: 'g-sub', title: 'Land the diff', archivedAt: NOW }],
+      },
+    ];
+    const section = goalSection(goals, 'g-sub');
+    if (!section) throw new Error('goalSection lost the subgoal');
+    renderGoalDetail(host, section, handlers({ onRestore, onCascadeCount: vi.fn() }));
+    expect(panel().querySelector('.hub-archived-with-note')).toBeNull();
+    panel().querySelector<HTMLButtonElement>('.hub-archived-restore')?.click();
+    expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({ id: 'g-sub' }));
+  });
 });
 
 describe('an archived band on the board', () => {
@@ -379,6 +428,31 @@ describe('an archived band on the board', () => {
     ];
     expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-sub']);
   });
+
+  it('is findable by the lookup a deep link is judged against, at either level', () => {
+    // The boot deadline asks "is this goal still here?" four seconds after
+    // the panel opens, and answers with THIS lookup. It used to scan only the
+    // top level, so every subgoal link — archived or live, including the one
+    // the panel's own Copy button hands out — was called gone and the panel
+    // closed itself with a "nothing matches that link" toast.
+    const goals = [
+      band({
+        subgoals: [
+          { id: 'g-live-sub', title: 'Land the diff' },
+          { id: 'g-gone-sub', title: 'Archived sub', archivedAt: NOW, archivedWithGoal: 'g-pr' },
+        ],
+      }),
+    ];
+    for (const id of ['g-pr', 'g-live-sub', 'g-gone-sub']) {
+      expect(goalSection(goals, id)?.id).toBe(id);
+      // What the old predicate saw: only the band. Kept as the contrast,
+      // because "goalSection finds it" means nothing without it.
+      expect(goals.some((g) => g.id === id)).toBe(id === 'g-pr');
+    }
+    // And it still says no to an id that really is not here — or the fix
+    // would just be a lookup that never closes anything.
+    expect(goalSection(goals, 'g-never')).toBeNull();
+  });
 });
 
 describe('the restore list, with bands in it', () => {
@@ -438,10 +512,97 @@ describe('the restore list, with bands in it', () => {
     expect(container.querySelector('.hub-section-title')?.textContent).toBe('2 archived tasks');
   });
 
+  it('counts the goal that has no row of its own, and says on the band where it went', () => {
+    // The cascade member is archived and is NOT restorable alone, so it is
+    // counted but not listed. Without the "with 1 subgoal" line the heading
+    // would look like an off-by-one against the rows under it.
+    renderArchivedList(
+      container,
+      [task({ archivedAt: NOW })],
+      { ...base, onRestoreGoal: vi.fn(), onOpenGoal: vi.fn() },
+      [{ id: 'g-pr', title: 'Ship the widget', archivedAt: NOW }],
+      { total: 2, cascaded: (id) => (id === 'g-pr' ? 1 : 0) },
+    );
+    expect(container.querySelector('.hub-section-title')?.textContent).toBe(
+      '2 archived goals and 1 archived task',
+    );
+    expect(container.querySelector('.hub-archived-row--goal .hub-archived-with')?.textContent).toBe(
+      'with 1 subgoal',
+    );
+    // Still exactly one goal ROW: the count went up, the list did not.
+    expect(container.querySelectorAll('.hub-archived-row--goal')).toHaveLength(1);
+  });
+
+  it('says nothing about subgoals on a band that took none', () => {
+    // The control for the line above — a band archived on its own must not
+    // grow a "with 0 subgoals" note.
+    renderArchivedList(
+      container,
+      [],
+      { ...base, onRestoreGoal: vi.fn(), onOpenGoal: vi.fn() },
+      [{ id: 'g-pr', title: 'Ship the widget', archivedAt: NOW }],
+      { total: 1, cascaded: () => 0 },
+    );
+    expect(container.querySelector('.hub-archived-with')).toBeNull();
+    expect(container.querySelector('.hub-section-title')?.textContent).toBe('1 archived goal');
+  });
+
   it('draws no band when the caller wired no way to restore one', () => {
     renderArchivedList(container, [], base, [{ id: 'g-pr', title: 'Ship W3', archivedAt: NOW }]);
     expect(container.querySelector('.hub-archived-row--goal')).toBeNull();
     expect(container.querySelector('.hub-section-empty')).not.toBeNull();
+  });
+});
+
+describe('one phrase for one archive, wherever it is described', () => {
+  it('builds the same words the confirmation and the toast both use', () => {
+    expect(cascadePhrase(1, 5)).toBe('1 subgoal and 5 tasks');
+    expect(cascadePhrase(0, 5)).toBe('5 tasks');
+    expect(cascadePhrase(2, 1)).toBe('2 subgoals and 1 task');
+    // Empty rather than a stray "and": the caller asks "is there anything to
+    // name" by testing the string.
+    expect(cascadePhrase(0, 0)).toBe('');
+  });
+
+  it('is the phrase the confirmation asks with, so the toast cannot drift from it', () => {
+    expect(archiveConfirmLine('Ship the widget', { subgoals: 1, tasks: 5 })).toBe(
+      `Archive “Ship the widget” and its ${cascadePhrase(1, 5)}?`,
+    );
+  });
+
+  it('counts every archived band, including one with no row of its own', () => {
+    const goals: HubGoal[] = [
+      {
+        id: 'g-pr',
+        title: '1. Get the PR out',
+        archivedAt: NOW,
+        subgoals: [
+          { id: 'g-sub', title: 'Land the diff', archivedAt: NOW, archivedWithGoal: 'g-pr' },
+        ],
+      },
+      { id: 'g-live', title: '2. Keep it live' },
+    ];
+    // Two are off the board; only one of them can be restored on its own.
+    expect(archivedGoalTotal(goals)).toBe(2);
+    expect(archivedGoals(goals).map((g) => g.id)).toEqual(['g-pr']);
+    expect(cascadedSubgoals(goals, 'g-pr')).toBe(1);
+    // A band that took nothing reports nothing — the control for the above.
+    expect(cascadedSubgoals(goals, 'g-live')).toBe(0);
+  });
+});
+
+describe('what the empty description asks for', () => {
+  it('asks a goal about the goal, in one line', () => {
+    // Two things at once. The wording: the goal panel invited people to
+    // "describe the task". And the length: Tiptap floats the placeholder with
+    // `height: 0`, so it paints OUTSIDE the slot instead of growing it — at
+    // 430px the task wording wraps to a second line and strikes through
+    // "Open in the full editor" underneath (measured: slot clips at 41px,
+    // content runs to 58px). Staying shorter than the task's is what keeps it
+    // to one line there.
+    expect(GOAL_PLACEHOLDER_TEXT).toContain('goal');
+    expect(GOAL_PLACEHOLDER_TEXT).not.toContain('task');
+    expect(GOAL_PLACEHOLDER_TEXT.length).toBeLessThan(PLACEHOLDER_TEXT.length);
   });
 });
 

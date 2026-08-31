@@ -474,6 +474,16 @@ export function renderArchivedList(
   tasks: HubTask[],
   handlers: ArchivedViewHandlers,
   goals: HubSubgoal[] = [],
+  /**
+   * The counts, which are NOT `goals.length`.
+   *
+   * `goals` is the restorable rows; a subgoal swept up by its parent is
+   * archived without being one of them. The heading counts everything that is
+   * off the board, and each band's row says how many subgoals came with it —
+   * together that is why "2 archived goals" can sit above a single goal row
+   * without the two contradicting each other.
+   */
+  bands: { total?: number; cascaded?: (goalId: string) => number } = {},
 ): void {
   container.replaceChildren();
   const head = document.createElement('div');
@@ -483,13 +493,14 @@ export function renderArchivedList(
   back.className = 'hub-linklike hub-archived-back';
   back.textContent = '← Back to the board';
   back.addEventListener('click', () => handlers.onBack());
-  const bands = handlers.onRestoreGoal ? goals : [];
+  const rows = handlers.onRestoreGoal ? goals : [];
+  const total = handlers.onRestoreGoal ? (bands.total ?? rows.length) : 0;
   const h = document.createElement('h3');
   h.className = 'hub-section-title';
-  h.textContent = archivedHeading(bands.length, tasks.length);
+  h.textContent = archivedHeading(total, tasks.length);
   head.append(back, h);
   container.append(head);
-  if (tasks.length === 0 && bands.length === 0) {
+  if (tasks.length === 0 && rows.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'hub-section-empty';
     // Reached by editing the URL, or by restoring the last one from here —
@@ -503,7 +514,7 @@ export function renderArchivedList(
   // Bands first, and marked as bands: restoring one brings its tasks with it,
   // so a reader scanning for a ticket they lost should meet the goal that took
   // it before they meet the ticket itself.
-  for (const goal of bands) {
+  for (const goal of rows) {
     const li = document.createElement('li');
     li.className = 'hub-archived-row hub-archived-row--goal';
     li.dataset.goalId = goal.id;
@@ -531,7 +542,17 @@ export function renderArchivedList(
     // press it rather than after.
     restore.setAttribute('aria-label', `Restore “${goal.title}” and its tasks to the board`);
     restore.addEventListener('click', () => handlers.onRestoreGoal?.(goal));
-    li.append(kind, title, why, restore);
+    li.append(kind, title, why);
+    // Where the heading's other goal went. Without this the count above reads
+    // as an off-by-one against the rows below it.
+    const rode = bands.cascaded?.(goal.id) ?? 0;
+    if (rode > 0) {
+      const withSubs = document.createElement('span');
+      withSubs.className = 'hub-archived-with';
+      withSubs.textContent = `with ${rode === 1 ? '1 subgoal' : `${rode} subgoals`}`;
+      li.append(withSubs);
+    }
+    li.append(restore);
     list.append(li);
   }
   for (const task of tasks) {

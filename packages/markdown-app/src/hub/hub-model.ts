@@ -414,6 +414,47 @@ export function isGoalArchived(goal: HubSubgoal): boolean {
  * promised to bring them. The parent's row is in this list and restores the
  * whole cascade, which is what the archive confirmation said would happen.
  */
+/**
+ * "1 subgoal and 5 tasks" — the blast radius, as words.
+ *
+ * ONE builder, because the confirmation, the toast that follows it and the
+ * Activity line are three statements about the SAME archive, and a reader who
+ * is told "1 subgoal and 5 tasks" before and "5 tasks" after is being told the
+ * subgoal did not go. It did. Returns '' when nothing rode along, so a caller
+ * can ask "is there anything to name" without counting again.
+ */
+export function cascadePhrase(subgoals: number, tasks: number): string {
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  const parts: string[] = [];
+  if (subgoals > 0) parts.push(plural(subgoals, 'subgoal'));
+  if (tasks > 0) parts.push(plural(tasks, 'task'));
+  return parts.join(' and ');
+}
+
+/** Every archived band, cascade members included — what the COUNTS are of.
+ *  `archivedGoals` is the shorter list of rows that can be restored on their
+ *  own; a count taken from that one would report a subgoal back onto the
+ *  board while it was still off it. */
+export function archivedGoalTotal(goals: HubGoal[]): number {
+  let n = 0;
+  for (const g of goals) {
+    if (isGoalArchived(g)) n += 1;
+    for (const s of g.subgoals ?? []) if (isGoalArchived(s)) n += 1;
+  }
+  return n;
+}
+
+/** How many subgoals went with this band, and so come back with it. The
+ *  restore list says this on the band's row, which is what keeps its heading's
+ *  count and its rows from looking like they disagree. */
+export function cascadedSubgoals(goals: HubGoal[], goalId: string): number {
+  for (const g of goals) {
+    if (g.id !== goalId) continue;
+    return (g.subgoals ?? []).filter((s) => s.archivedWithGoal === goalId).length;
+  }
+  return 0;
+}
+
 export function archivedGoals(goals: HubGoal[]): HubSubgoal[] {
   const out: HubSubgoal[] = [];
   const own = (g: HubSubgoal) => isGoalArchived(g) && g.archivedWithGoal === undefined;
@@ -471,6 +512,9 @@ export interface BoardSection {
   archivedBy?: string;
   archiveReason?: string;
   archivedWithGoal?: string;
+  /** The title of the band named by `archivedWithGoal`, when this section is
+   *  one. Set by `goalSection`, which is the only lookup holding the tree. */
+  archivedWithGoalTitle?: string;
   isChores: boolean;
   tasks: HubTask[];
 }
@@ -536,6 +580,10 @@ export function goalSection(goals: HubGoal[], goalId: string): BoardSection | nu
         depth: 1,
         dueAt: sg.dueAt,
         ...carriedOf(sg),
+        // The band that took it, BY NAME. The panel has to tell a reader why
+        // this row has no Restore of its own, and "archived with g-vBRG…" is
+        // not something anybody can act on.
+        ...(sg.archivedWithGoal === g.id ? { archivedWithGoalTitle: g.title } : {}),
         isChores: false,
         tasks: [],
       };

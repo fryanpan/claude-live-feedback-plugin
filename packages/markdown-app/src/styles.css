@@ -3006,6 +3006,15 @@ body.hub-body {
 .hub-archived-row--goal .hub-archived-title {
   font-weight: 600;
 }
+/* "with 1 subgoal" — where the heading's other archived goal went. A subgoal
+   swept up by its parent has no row of its own (restoring it alone would
+   return an empty band), so without this line the count above the list looks
+   like it disagrees with the rows in it. */
+.hub-archived-with {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
 /* --- row anatomy: drag handle · status · title · badges · open caret · assignee --- */
 /* The handle is invisible until you go looking for it: a permanent column of
    ⠿ is noise on a list whose job is to be skimmed. Revealed by hovering the
@@ -3719,6 +3728,15 @@ body.hub-body {
 }
 .hub-archived-note .hub-archived-restore {
   margin: 10px 0 0;
+}
+/* Stands where that button would be, on a row that cannot be restored on its
+   own — it names the band that brings it back, so the missing control reads
+   as an answer rather than as something that failed to render. */
+.hub-archived-with-note {
+  margin: 10px 0 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 /* The goal panel's archive confirmation. It sits in the panel rather than in a
    modal — a dialog on a tablet covers the very header the reader is checking —
