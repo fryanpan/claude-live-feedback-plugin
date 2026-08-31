@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EFFORT_MAX_PROJECTION_DAYS,
   EFFORT_MIN_CLOSES_FOR_PROJECTION,
   EFFORT_PACE_WINDOW_DAYS,
   type EffortCalibrationTask,
@@ -431,7 +432,7 @@ describe('summarizeGoalEffort — projection', () => {
     expect(s.projectedFinishAt).toBeCloseTo(NOW + days * DAY, 0);
   });
 
-  it('projects today when nothing is left', () => {
+  it('calls a finished goal finished, rather than dating it today', () => {
     const s = summarizeGoalEffort(
       [closed(DAY), closed(2 * DAY), closed(3 * DAY)],
       'g1',
@@ -439,8 +440,41 @@ describe('summarizeGoalEffort — projection', () => {
       NOW,
     );
     if (s.kind !== 'ready') throw new Error('expected ready');
-    expect(s.projectedFinishAt).toBe(NOW);
+    expect(s.complete).toBe(true);
     expect(s.percentComplete).toBe(100);
+    // No date at all. Dating it "now" rendered as a goal with a minute of
+    // work landing today, which is the opposite of what it is.
+    expect(s.projectedFinishAt).toBeUndefined();
+    expect(s.handsOnRemainingSeconds).toBe(0);
+  });
+
+  it('refuses to name a day for a projection years out', () => {
+    // Three small closes against five large open tickets — an ordinary shape
+    // on a board with a long tail — divides into 5,600 days. A date that far
+    // out rendered in the same four characters as one months away.
+    const tiny = { effortEstimate: ok(600, 600) };
+    const huge = { effortEstimate: ok(144000, 3600) };
+    const small = [
+      closed(DAY, HOUR, tiny),
+      closed(2 * DAY, HOUR, tiny),
+      closed(3 * DAY, HOUR, tiny),
+    ];
+    const big = [task(huge), task(huge), task(huge), task(huge), task(huge)];
+    const s = summarizeGoalEffort([...small, ...big], 'g1', neutralCalibration(), NOW);
+    if (s.kind !== 'ready') throw new Error('expected ready');
+    expect(s.projectedFinishAt).toBeUndefined();
+    expect(s.projectionOverHorizonDays).toBeGreaterThan(EFFORT_MAX_PROJECTION_DAYS);
+    // Positive control: the same shape inside the horizon still gets a date,
+    // so the assertion above cannot be met by a projection that never fires.
+    const near = summarizeGoalEffort(
+      [...small, task(tiny), task(tiny)],
+      'g1',
+      neutralCalibration(),
+      NOW,
+    );
+    if (near.kind !== 'ready') throw new Error('expected ready');
+    expect(near.projectedFinishAt).toBeDefined();
+    expect(near.projectionOverHorizonDays).toBeUndefined();
   });
 
   it('adds the later end of the range only when the samples support a spread', () => {
@@ -484,6 +518,26 @@ describe('formatting — seconds never reach the screen', () => {
   it('never renders a 60-minute hour or a 24-hour day', () => {
     expect(formatEffortSeconds(3600 + 3576)).toBe('2h');
     expect(formatEffortSeconds(86400 + 86000)).toBe('2d');
+    // The carry across a BRANCH boundary, which the version that rounded
+    // inside each branch got wrong in both directions: a second under an
+    // hour rendered "60m" and a second under a day rendered "24h".
+    expect(formatEffortSeconds(3599)).toBe('1h');
+    expect(formatEffortSeconds(86399)).toBe('1d');
+    // Positive control on the same pair: a value that genuinely belongs to
+    // the smaller unit still uses it, so the assertions above cannot be met
+    // by a formatter that always promotes.
+    expect(formatEffortSeconds(3540)).toBe('59m');
+    expect(formatEffortSeconds(85000)).toBe('23h 37m');
+  });
+
+  it('has no step where a bucket boundary swallows a goal total', () => {
+    // Bucketing to ten minutes made 4m59s print "<1m" and 5m00s print "10m"
+    // — a full bucket of movement across one second. Under ten minutes the
+    // real minutes are reported, and the two paths meet at 600s.
+    expect(formatGoalEffortSeconds(299)).toBe('5m');
+    expect(formatGoalEffortSeconds(300)).toBe('5m');
+    expect(formatGoalEffortSeconds(599)).toBe('10m');
+    expect(formatGoalEffortSeconds(600)).toBe('10m');
   });
 
   it('says <1m rather than counting a handful of seconds', () => {

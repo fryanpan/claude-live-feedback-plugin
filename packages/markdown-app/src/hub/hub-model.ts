@@ -708,8 +708,13 @@ export function goalEffortLabel(
     // legible as producing nothing, not as a goal that has not started.
     if (summary.reason === 'no-tasks') return none('', '', false);
     const failed = summary.failedCount;
+    // The two silences are different events and must not read as synonyms.
+    // They previously rendered "no estimate yet" and "not estimated", which
+    // a reader cannot tell apart — and telling them apart is the acceptance
+    // criterion this whole feature was built on. "Scoring failed" names an
+    // attempt that happened; "not scored yet" names one that never ran.
     return none(
-      failed > 0 ? 'no estimate yet' : 'not estimated',
+      failed > 0 ? `scoring failed on ${failed}` : 'not scored yet',
       failed > 0
         ? `Scoring ran on ${failed} of these tickets and produced nothing usable; the rest were never scored.`
         : 'None of these tickets has been scored yet.',
@@ -723,23 +728,52 @@ export function goalEffortLabel(
       : summary.failedCount > 0
         ? `${summary.unestimatedCount} not scored, ${summary.failedCount} failed`
         : `${summary.unestimatedCount} not scored`;
-  const finishText =
-    summary.projectedFinishAt !== undefined
-      ? `~${formatEffortDate(summary.projectedFinishAt, locale)}`
-      : '';
+  const date = (at: number): string => formatEffortDate(at, now, locale);
+  // The two visible numbers are in different currencies: the bar is CALENDAR
+  // time and the figure beside it is Bryan's own attention. Read together
+  // unlabelled they invite one reading — "67% done, 40 minutes to go" — and
+  // that reading is wrong, because the calendar remainder on the same goal
+  // was 2h. The sentence that disambiguated them lived only in the `title`,
+  // and the device this board is mostly read from has no hover. So the
+  // remainder now names whose time it is, on screen.
+  const leftText = summary.complete ? 'done' : `${left} of your time left`;
+  // Why there is no date is as much of an answer as a date, and it was also
+  // hover-only. Three different absences, three different sentences.
+  const finishText = summary.complete
+    ? ''
+    : summary.projectedFinishAt !== undefined
+      ? summary.projectedLatestAt !== undefined
+        ? `~${date(summary.projectedFinishAt)}\u2013${date(summary.projectedLatestAt)}`
+        : `~${date(summary.projectedFinishAt)}`
+      : summary.projectionOverHorizonDays !== undefined
+        ? 'over a year out'
+        : `date after ${EFFORT_MIN_CLOSES_FOR_PROJECTION} closes`;
   const titleParts = [
-    `${summary.percentComplete}% of this goal's estimated calendar time is done.`,
-    `About ${left} of your own attention left across ${summary.estimatedCount} scored ticket${
-      summary.estimatedCount === 1 ? '' : 's'
-    }.`,
+    summary.complete
+      ? `Every scored ticket in this goal is closed.`
+      : `${summary.percentComplete}% of this goal's estimated calendar time is done.`,
   ];
+  if (!summary.complete) {
+    titleParts.push(
+      `About ${left} of your own attention left across ${summary.estimatedCount} scored ticket${
+        summary.estimatedCount === 1 ? '' : 's'
+      }.`,
+    );
+  }
   if (coverageText) titleParts.push(`${coverageText} — the bar covers only the scored ones.`);
-  if (summary.projectedFinishAt !== undefined) {
+  if (summary.complete) {
+    // No pace sentence on a finished goal: there is nothing left for a pace
+    // to be applied to.
+  } else if (summary.projectedFinishAt !== undefined) {
     const latest = summary.projectedLatestAt;
     titleParts.push(
       latest !== undefined
-        ? `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${formatEffortDate(summary.projectedFinishAt, locale)}, likely by ${formatEffortDate(latest, locale)}.`
-        : `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${formatEffortDate(summary.projectedFinishAt, locale)}.`,
+        ? `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${date(summary.projectedFinishAt)}, likely by ${date(latest)}.`
+        : `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace, finishing around ${date(summary.projectedFinishAt)}.`,
+    );
+  } else if (summary.projectionOverHorizonDays !== undefined) {
+    titleParts.push(
+      `On the last ${EFFORT_PACE_WINDOW_DAYS} days' pace this goal is about ${Math.round(summary.projectionOverHorizonDays)} days out — too far for a date to mean anything. Either the remaining tickets are much larger than what has closed, or too little has closed to set a pace.`,
     );
   } else {
     titleParts.push(
@@ -748,14 +782,13 @@ export function goalEffortLabel(
   }
   if (summary.wallClockRatio.samples > 0) {
     titleParts.push(
-      `Estimates on this goal are scaled ×${summary.wallClockRatio.ratio.toFixed(2)} from ${summary.wallClockRatio.samples} closed ticket${summary.wallClockRatio.samples === 1 ? '' : 's'}.`,
+      `Estimates on this goal are scaled \u00d7${summary.wallClockRatio.ratio.toFixed(2)} from ${summary.wallClockRatio.samples} closed ticket${summary.wallClockRatio.samples === 1 ? '' : 's'}.`,
     );
   }
-  void now;
   return {
     percentText: `${summary.percentComplete}%`,
     percentFill: Math.min(100, Math.max(0, summary.percentComplete)),
-    leftText: `${left} left`,
+    leftText,
     finishText,
     coverageText,
     title: titleParts.join(' '),

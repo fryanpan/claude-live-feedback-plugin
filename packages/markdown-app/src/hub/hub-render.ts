@@ -1594,13 +1594,25 @@ export function effortCellText(
   // are only spoken as one when they are in fact one.
   const said = (r: EffortRatio): string =>
     `\u00d7${r.ratio.toFixed(2)} from ${r.samples} closed ticket${r.samples === 1 ? '' : 's'}`;
+  // Agreeing on the FACTOR is what makes it one correction to a reader; the
+  // sample counts behind it can differ and the sentence is still about one
+  // number. Keying "is this one correction?" on the counts as well printed
+  // "your time ×2.00 from 2 closed tickets · the calendar ×2.00 from 4 closed
+  // tickets" — correct, and a hundred characters that read as a bug. Equal
+  // factors are said once, with the range of evidence behind them.
   const same =
     handsRatio !== undefined &&
     wallRatio !== undefined &&
-    handsRatio.ratio.toFixed(2) === wallRatio.ratio.toFixed(2) &&
-    handsRatio.samples === wallRatio.samples;
-  if (same && wallRatio !== undefined && wallRatio.samples > 0) {
-    parts.push(`scaled ${said(wallRatio)}`);
+    handsRatio.samples > 0 &&
+    wallRatio.samples > 0 &&
+    handsRatio.ratio.toFixed(2) === wallRatio.ratio.toFixed(2);
+  if (same && handsRatio !== undefined && wallRatio !== undefined) {
+    const lo = Math.min(handsRatio.samples, wallRatio.samples);
+    const hi = Math.max(handsRatio.samples, wallRatio.samples);
+    const count = lo === hi ? `${hi}` : `${lo}\u2013${hi}`;
+    parts.push(
+      `scaled \u00d7${wallRatio.ratio.toFixed(2)} from ${count} closed ticket${hi === 1 ? '' : 's'}`,
+    );
   } else {
     if (handsRatio && handsRatio.samples > 0) parts.push(`your time ${said(handsRatio)}`);
     if (wallRatio && wallRatio.samples > 0) parts.push(`the calendar ${said(wallRatio)}`);

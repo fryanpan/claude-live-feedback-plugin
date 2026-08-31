@@ -721,8 +721,13 @@ function GoalEffort(props: {
         title={label.title}
       >
         {bar}
+        {/* The percentage rides BOTH variants. It used to be computed and
+            then dropped here, so the phone showed "67% · …" and the iPad —
+            the tier this readout was designed for, and the device the board
+            is mostly read from — showed only a bar to eyeball. On a feature
+            whose subject is percent complete, that was backwards. */}
         <span class="hub-goal-effort-left">
-          {[label.leftText, label.finishText].filter(Boolean).join(' \u00b7 ')}
+          {[label.percentText, label.leftText, label.finishText].filter(Boolean).join(' \u00b7 ')}
         </span>
         {/* The caveat rides on BOTH variants, not just the phone's. It used
             to live in the `title` alone up here, which put it out of reach on

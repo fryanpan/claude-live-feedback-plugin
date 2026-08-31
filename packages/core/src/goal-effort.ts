@@ -70,6 +70,24 @@ export const EFFORT_MIN_CLOSES_FOR_PROJECTION = 3;
  *  range computed from one sample is not a range. */
 export const EFFORT_MIN_SAMPLES_FOR_RANGE = 3;
 
+/**
+ * Past this many days out, a projection stops being a forecast.
+ *
+ * The pace window is fourteen days and the remainder is unbounded, so an
+ * ordinary shape — a handful of small closes against a tail of large open
+ * tickets — divides into years. Measured on a seeded board: three ten-minute
+ * closes against five forty-hour tickets projected 5,600 days, and the board
+ * printed it as a bare `~Dec 29`, which is December 2041 in the same four
+ * characters as four months away. Nobody would have believed that date if
+ * they could see it, and nobody could see it.
+ *
+ * So the horizon is a year: beyond it the readout says how far out it is
+ * rather than naming a day. The date is not suppressed silently — a reader
+ * who sees no date at all cannot tell "too little has closed" from "this
+ * will take forever", and those are opposite situations.
+ */
+export const EFFORT_MAX_PROJECTION_DAYS = 365;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The slice of a transition this module reads. Structural, so both the
@@ -441,6 +459,19 @@ export interface GoalEffortReady {
   /** The corrections in force, so a number on screen can be traced back. */
   wallClockRatio: EffortRatio;
   handsOnRatio: EffortRatio;
+  /** Every SCORED ticket in this goal is closed. Distinct from
+   *  `percentComplete === 100`, which rounding can also produce, and it is
+   *  what lets a surface say "done" instead of "<1m left" — a finished goal
+   *  was rendering as a goal with a minute of work landing today. Unscored
+   *  tickets may still remain; the coverage figures say so separately. */
+  complete: boolean;
+  /** How many days out the projection came to, when that is past
+   *  `EFFORT_MAX_PROJECTION_DAYS`. Present INSTEAD of `projectedFinishAt`:
+   *  the pace says the goal is years away, which is a real answer and a
+   *  useless date. A surface says how far out rather than naming a day, and
+   *  the presence of this field is what lets it tell "too far to say" apart
+   *  from "too little has closed to say". */
+  projectionOverHorizonDays?: number;
 }
 
 /** A goal with nothing to say, and which of the two silences it is. */
@@ -518,6 +549,7 @@ export function summarizeGoalEffort(
   const paceSecondsPerDay = closedSecondsInWindow / EFFORT_PACE_WINDOW_DAYS;
   const summary: GoalEffortReady = {
     kind: 'ready',
+    complete: wallClockRemaining === 0,
     percentComplete,
     handsOnRemainingSeconds: handsOnRemaining,
     wallClockRemainingSeconds: wallClockRemaining,
@@ -531,12 +563,17 @@ export function summarizeGoalEffort(
   };
   if (closesInWindow >= EFFORT_MIN_CLOSES_FOR_PROJECTION && paceSecondsPerDay > 0) {
     if (wallClockRemaining === 0) {
-      summary.projectedFinishAt = now;
+      // Nothing left to project. No date at all rather than "today": the
+      // goal is finished, and `complete` is how a surface says so.
     } else {
       const days = wallClockRemaining / paceSecondsPerDay;
-      summary.projectedFinishAt = now + days * DAY_MS;
-      if (wallClockRatio.spread > 1) {
-        summary.projectedLatestAt = now + days * wallClockRatio.spread * DAY_MS;
+      if (days > EFFORT_MAX_PROJECTION_DAYS) {
+        summary.projectionOverHorizonDays = days;
+      } else {
+        summary.projectedFinishAt = now + days * DAY_MS;
+        if (wallClockRatio.spread > 1) {
+          summary.projectedLatestAt = now + days * wallClockRatio.spread * DAY_MS;
+        }
       }
     }
   }
@@ -556,20 +593,26 @@ export function formatEffortSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
   const s = Math.round(seconds);
   if (s < 30) return '<1m';
-  if (s >= 86400) {
-    const days = Math.floor(s / 86400);
-    const hours = Math.round((s % 86400) / 3600);
-    if (hours >= 24) return `${days + 1}d`;
-    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-  }
-  if (s >= 3600) {
-    const h = Math.floor(s / 3600);
-    const m = Math.round((s % 3600) / 60);
-    // 59.6 minutes past the hour must carry, not render as "1h 60m".
-    return m >= 60 ? `${h + 1}h` : m > 0 ? `${h}h ${m}m` : `${h}h`;
-  }
-  const minutes = Math.round(s / 60);
-  return minutes >= 1 ? `${minutes}m` : '<1m';
+  // Round to whole minutes ONCE, up front, and branch on the ROUNDED value.
+  // Branching first and rounding inside each branch is what produced "60m"
+  // for 3599s and "24h" for 86399s: the carry was handled inside the hours
+  // branch and never ACROSS a branch boundary, so a value that rounds up into
+  // the next unit was still formatted by the unit it started in. Rounding
+  // first makes the carry structural instead of something each branch has to
+  // remember.
+  const totalMinutes = Math.round(s / 60);
+  if (totalMinutes < 1) return '<1m';
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (totalHours < 24) return minutes > 0 ? `${totalHours}h ${minutes}m` : `${totalHours}h`;
+  const days = Math.floor(totalHours / 24);
+  // The leftover hours are ROUNDED, not truncated — 1d 23h 53m reads as 2d
+  // rather than losing the best part of an hour — and the carry that rounding
+  // can produce is handled here rather than left to the caller.
+  const hours = Math.round((totalMinutes - days * 24 * 60) / 60);
+  if (hours >= 24) return `${days + 1}d`;
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
 }
 
 /**
@@ -585,13 +628,35 @@ export function formatGoalEffortSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
   const s = Math.round(seconds);
   if (s < 30) return '<1m';
+  // Under ten minutes there is no bucket to round into, so report the real
+  // minutes. Bucketing here produced a hard step at the boundary — 4m59s
+  // rounded down to nothing and printed "<1m", while 5m00s rounded up a whole
+  // bucket and printed "10m", a jump of a full bucket across one second. The
+  // two paths meet continuously at 600s, which both render as "10m".
+  if (s < 600) return formatEffortSeconds(s);
   if (s < 86400) return formatEffortSeconds(Math.round(s / 600) * 600);
   const days = Math.round(s / (86400 / 2)) / 2;
   return `${days}d`;
 }
 
-/** `Sep 12`, in the reader's own locale. Every date this module produces is
- *  approximate; the surface that shows one says so beside it. */
-export function formatEffortDate(at: number, locale?: string): string {
-  return new Date(at).toLocaleDateString(locale, { month: 'short', day: 'numeric' });
+/**
+ * `Sep 12` — or `Sep 12, 2027` once the date leaves the current year.
+ *
+ * The year is not decoration. Without it a projection years out renders in
+ * the same four characters as one months out, and the reader has no way to
+ * tell them apart; `~Dec 29` was observed on the board for a date in 2041.
+ * `now` is a parameter rather than a `Date.now()` call so that the decision
+ * is testable and so every date on one render is judged against one clock.
+ *
+ * Every date this module produces is approximate; the surface that shows one
+ * says so beside it.
+ */
+export function formatEffortDate(at: number, now: number, locale?: string): string {
+  const d = new Date(at);
+  const sameYear = d.getFullYear() === new Date(now).getFullYear();
+  return d.toLocaleDateString(locale, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
 }

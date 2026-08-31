@@ -154,10 +154,10 @@ describe('goalEffortLabel keeps three states apart', () => {
     expect(labelFor([]).show).toBe(false);
   });
 
-  it('says "not estimated" — never 0% — when nothing has been scored', () => {
+  it('says "not scored yet" — never 0% — when nothing has been scored', () => {
     const l = labelFor([task({ effortEstimate: undefined }), task({ effortEstimate: undefined })]);
     expect(l.show).toBe(true);
-    expect(l.leftText).toBe('not estimated');
+    expect(l.leftText).toBe('not scored yet');
     expect(l.percentText).toBe('');
     // No bar: an empty grey track is how this component draws 0% done.
     expect(l.showBar).toBe(false);
@@ -168,9 +168,17 @@ describe('goalEffortLabel keeps three states apart', () => {
       task({ effortEstimate: { status: 'failed', reason: 'unparseable' } }),
       task({ effortEstimate: undefined }),
     ]);
-    expect(l.leftText).toBe('no estimate yet');
+    expect(l.leftText).toBe('scoring failed on 1');
     expect(l.showBar).toBe(false);
     expect(l.title).toContain('produced nothing usable');
+    // The distinction the whole three-state design exists to preserve, and
+    // the one it lost at the last step: side by side on the board these were
+    // "no estimate yet" and "not estimated", which no reader can tell apart.
+    // A run that happened and failed must not read like one that never ran.
+    const never = labelFor([task({ effortEstimate: undefined })]);
+    expect(never.leftText).toBe('not scored yet');
+    expect(l.leftText).not.toBe(never.leftText);
+    expect(l.leftText).toContain('failed');
   });
 
   it('draws a real 0% as a bar at zero, which is a different statement', () => {
@@ -202,7 +210,8 @@ describe('goalEffortLabel keeps three states apart', () => {
 
   it('withholds a finish date until enough has closed, and says why', () => {
     const thin = labelFor([closed(DAY), closed(2 * DAY), task()]);
-    expect(thin.finishText).toBe('');
+    // No DATE — but the slot is not left blank; see the next test.
+    expect(thin.finishText).not.toMatch(/~/);
     expect(thin.title).toContain('No finish date yet');
 
     const enough = labelFor([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
@@ -211,7 +220,65 @@ describe('goalEffortLabel keeps three states apart', () => {
     // Sep 1 is Sep 10.
     expect(enough.finishText).toBe('~Sep 10');
     expect(enough.percentText).toBe('60%');
-    expect(enough.leftText).toBe('20m left');
+    // The remainder names whose time it is. The bar beside it is CALENDAR
+    // time and this figure is Bryan's attention; unlabelled they invite the
+    // reading "60% done, 20 minutes to go", and the calendar remainder on
+    // this same goal is 2h.
+    expect(enough.leftText).toBe('20m of your time left');
+  });
+
+  it('says WHY there is no date, rather than just omitting one', () => {
+    // On screen the date was simply absent and nothing explained it, so a
+    // reader could not tell "too little has closed" from "this goal has no
+    // work left" from "it is years away". Three absences, three sentences.
+    const thin = labelFor([closed(DAY), closed(2 * DAY), task()]);
+    expect(thin.finishText).toBe('date after 3 closes');
+
+    const finished = labelFor([closed(DAY), closed(2 * DAY), closed(3 * DAY)]);
+    expect(finished.percentText).toBe('100%');
+    expect(finished.leftText).toBe('done');
+    expect(finished.finishText).toBe('');
+
+    const tiny = {
+      effortEstimate: { status: 'ok' as const, handsOnSeconds: 600, wallClockSeconds: 600 },
+    };
+    const huge = {
+      effortEstimate: { status: 'ok' as const, handsOnSeconds: 3600, wallClockSeconds: 144000 },
+    };
+    const faraway = labelFor([
+      closed(DAY, HOUR, tiny),
+      closed(2 * DAY, HOUR, tiny),
+      closed(3 * DAY, HOUR, tiny),
+      task(huge),
+      task(huge),
+      task(huge),
+      task(huge),
+      task(huge),
+    ]);
+    expect(faraway.finishText).toBe('over a year out');
+    expect(faraway.title).toContain('too far for a date to mean anything');
+  });
+
+  it('carries the year once the date leaves this one', () => {
+    // A bare "~Dec 29" was rendered for a date in 2041 — the same four
+    // characters a date four months out gets.
+    const tiny = {
+      effortEstimate: { status: 'ok' as const, handsOnSeconds: 600, wallClockSeconds: 600 },
+    };
+    const mid = {
+      effortEstimate: { status: 'ok' as const, handsOnSeconds: 600, wallClockSeconds: 1300 },
+    };
+    const l = labelFor([
+      closed(DAY, HOUR, tiny),
+      closed(2 * DAY, HOUR, tiny),
+      closed(3 * DAY, HOUR, tiny),
+      ...Array.from({ length: 20 }, () => task(mid)),
+    ]);
+    expect(l.finishText).toMatch(/20\d\d/);
+    // Positive control: a date inside the current year still renders bare,
+    // so the assertion above cannot be met by always printing a year.
+    const near = labelFor([closed(DAY), closed(2 * DAY), closed(3 * DAY), task(), task()]);
+    expect(near.finishText).toBe('~Sep 10');
   });
 });
 
@@ -412,18 +479,32 @@ describe('the ticket panel states the numbers the board no longer shows', () => 
   it('never prints one factor over two different corrections', () => {
     // The two axes learn from different samples: a close with a transition
     // trail and no reading time teaches the calendar and nothing about your
-    // attention. Here the calendar ran 2x long over 4 closes while only one
-    // of them recorded reading time, so the counts differ and one "×N" would
-    // be a claim about a number that was never scaled that way.
+    // attention. One "×N" printed over two DIFFERENT factors would be a
+    // claim about a number that was never scaled that way.
+    // Only one close records reading time, and it read for HALF its estimate
+    // while the calendar ran double — so the two factors genuinely differ.
     const rows = closedSet().map((t, i) =>
-      i === 0 ? t : { ...t, readingTime: undefined },
+      i === 0
+        ? { ...t, readingTime: { totalSeconds: 300, sessionCount: 1, lastSessionAt: NOW } }
+        : { ...t, readingTime: undefined },
     ) as HubTask[];
     const text = effortCellText(task(), computeEffortCalibration(rows));
     expect(text).toContain('your time');
     expect(text).toContain('the calendar');
-    expect(text).toContain('from 1 closed ticket');
-    expect(text).toContain('from 6 closed tickets');
-    // Positive control: when the two agree, they are still said once.
+    expect(text).not.toContain('scaled ×');
+
+    // When the FACTOR agrees, it is one correction to a reader and is said
+    // once — even where the two axes learned it from different numbers of
+    // closes. Keying that on the counts too printed the same number twice in
+    // a hundred characters.
+    const uneven = closedSet().map((t, i) =>
+      i < 2 ? t : ({ ...t, readingTime: undefined } as HubTask),
+    );
+    const once = effortCellText(task(), computeEffortCalibration(uneven));
+    expect(once).toContain('scaled ×2.00 from 2–6 closed tickets');
+    expect(once).not.toContain('the calendar');
+
+    // Positive control: agreeing on both still reads as one plain count.
     const agreed = effortCellText(task(), computeEffortCalibration(closedSet()));
     expect(agreed).toContain('scaled ×2.00 from 6 closed tickets');
     expect(agreed).not.toContain('the calendar');
