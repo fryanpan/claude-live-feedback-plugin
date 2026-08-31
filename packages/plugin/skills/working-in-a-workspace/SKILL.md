@@ -20,7 +20,8 @@ The purpose of a workspace is to provide a significantly better agent and human 
       1. Ways to ask for review
          1. `add_review_item(taskId, review)` adds a review item to a task as the last comment
          2. Use the `review` payload on `create_thread` or `post_reply`
-         3. Every one of these is judged by the board's quality gate, whichever verb filed it. `held: true` in the result means the item is off the reviewer's queue until you close the gap the reason names — the result and the `workspace.review_item_held` wake both carry the exact `revise_review_item(…)` call for that item, and every revision is judged again.
+         3. A `create_tasks` row that is itself the decision (`needs: "decision"`) is the ask, so it is judged as one — revise it with `revise_review_item(taskId)`, no item id
+         4. Every one of these is judged by the board's quality gate, whichever verb filed it. `held: true` in the result means the item is off the reviewer's queue until you close the gap the reason names — the result and the `workspace.review_item_held` wake both carry the exact `revise_review_item(…)` call for that item, and every revision is judged again.
       2. Payload Types
          1. `review_type: "decision"` offers 2–6 options to pick between
          2. `review_type: "question"` asks for a look and an answer in their own words

@@ -73,9 +73,10 @@ the fleet to file asks with `create_thread(review=…)` / `post_reply(review=…
 — so the documented path reached the queue with the judge called zero times
 (measured 2026-08-29, both calls in one run). A gate the standard path
 bypasses is worse than no gate, because it produces confidence it has not
-earned. One implementation now serves both surfaces (`runReviewGate` in
-`server.ts`, with one adapter per store), so the order of operations, the
-failure policy and the shape of a hold cannot drift apart:
+earned. One implementation now serves all THREE surfaces (`runReviewGate` in
+`server.ts`, with one adapter each for a ticket item, a comment-borne payload
+and a ticket's own decision), so the order of operations, the failure policy
+and the shape of a hold cannot drift apart:
 
 | Filing path | Where the row lands | Judged? | How a hold is lifted |
 |---|---|---|---|
@@ -88,10 +89,39 @@ failure policy and the shape of a hold cannot drift apart:
 | `revise_review_item` doc form → `…/threads/:id/revise` | as above | yes, on every revision | same |
 | `…/threads/:id/withdraw/undo` (reinstate) | as above | **exempt** — no new words | the hold placed on those words still stands, so a reinstated held item stays off the queue and is not announced |
 | `…/review-items/:id/release` (the reader overruling) | `task-review` | **exempt by design** — see below | n/a |
-| A legacy `needs: 'decision'` task (`r-legacy`) | `task-review` | **exempt** — a derived row with no stored item to stamp; `recordReviewJudgement` refuses it | n/a |
+| `create_tasks` / `POST …/tasks` with `needs: 'decision'` — the ticket that IS the ask (`r-legacy`) | `task-review` | yes | `revise_review_item(taskId)`, no item id |
+| `rewrite_task` / `POST …/tasks/:id/body` / `…/title` on a decision row | `task-review` | yes, on every words edit | same |
 | The allow-rule filer (`allow-rules.ts`, `store.addReviewItem` direct) | `task-review` | **exempt** — the words are the PRODUCT's, built by `buildAllowRuleReview` from a fixed template, and no agent authored them. Holding one would be the dead end this design forbids: the "filer" is the server, which cannot revise, and a held finding is a finding silently dropped | n/a |
 | Meeting research capture (`meeting-task-capture.ts`, same door) | `task-review` | **exempt**, same reason — template text the assistant fills in, with no author to send it back to | n/a |
 | An `unreplied` row (prose the server INFERRED asks a person) | thread rows | **exempt** — nobody declared it, so there are no authored words to judge; a held declaration's own comment is excluded from this band so a hold cannot leak back through it | n/a |
+
+**The ticket that is itself the decision.** A `needs: 'decision'` row reaches
+the queue through the row `legacyReviewItem` DERIVES at read time, whose id is
+the fixed `r-legacy` — so it was the last path that put a row in front of the
+reader with the judge never called (measured 2026-08-31: one `create_tasks`
+decision row, zero judge calls, one queue row). It is gated now by the same
+`runReviewGate`, through a third adapter, with two differences that both fall
+out of the row having nothing of its own:
+
+- **The verdict lives on the TASK** (`Task.decisionJudge`), because the item is
+  rebuilt on every read and a stamp on it would vanish. `listReviewItems` hangs
+  it back on the derived row, so `isReviewItemGated` — the one predicate the
+  queue consults — is unchanged.
+- **The version is `wordsRevisionOf`**, not a count of revisions, because the
+  words being judged are the row's own title, body and options. Every door that
+  writes those already moves that counter, which is what makes a verdict that
+  outlived them refusable.
+
+The same fact is why the hold is not a dead end and why lifting it needed no
+new verb: revising the decision means rewriting the ticket's words, so
+`revise_review_item(taskId=…)` — `reviewItemId` omitted, the shape
+`answer_decision` has always taken for this row — delegates into
+`reviseTaskDecision`, which writes through the ordinary title/body doors. The
+`r-legacy` REST address delegates the same way, exactly as `answerTaskReview`
+delegates it into `answerDecision`. And because those words have other writers,
+`rewrite_task` and the board's inline title edit re-judge too: a filer who
+fixed a held decision the obvious way would otherwise leave the stale hold
+standing with nothing left that could clear it.
 
 The item's verdict lives on `TaskReviewItem.judge` for a ticket item and on
 `ReviewPayload.judge` for a comment-borne one — the payload IS the item there,
@@ -112,12 +142,17 @@ next revision goes past the judge like any other. Added after a UX review
 found the note had no interactive element at all, so a reader looking at a
 question they could answer in ten seconds could only wait for an agent.
 
-Known limit: the release door exists for the TICKET form only. A held
-comment-borne item can be lifted by its filer revising it (and by the gate
-being turned off, which releases it on the next revision), but there is no
-"ask me anyway" for the reader — a held comment is not on the queue, so the
-reader has no surface to press it from. Giving one means rendering held
-declarations in the doc, which is a UI decision rather than a gate one.
+It takes a ticket's own decision too (`r-legacy`), where the verdict lands on
+the task instead of on an item. That row is worth releasing precisely because
+the reader CAN see it: a held decision is still a ticket on the board, and the
+held note renders on it.
+
+Known limit: the release door does not reach a COMMENT-borne item. One can be
+lifted by its filer revising it (and by the gate being turned off, which
+releases it on the next revision), but there is no "ask me anyway" for the
+reader — a held comment is not on the queue, so the reader has no surface to
+press it from. Giving one means rendering held declarations in the doc, which
+is a UI decision rather than a gate one.
 
 A release can be issued while the judge is still out, and it wins. The
 verdict a judge comes back with is refused unless the `pending` stamp it
