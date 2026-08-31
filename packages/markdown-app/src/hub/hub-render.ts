@@ -38,6 +38,7 @@ import {
   type HubDecisionOption,
   type HubGoal,
   type HubReviewItem,
+  type HubSubgoal,
   type HubTask,
   type HubTransition,
   type LeadSeatView,
@@ -264,6 +265,21 @@ export interface ArchivedViewHandlers {
   onRestore: (task: HubTask) => void;
   onOpenTask: (task: HubTask) => void;
   onBack: () => void;
+  /** The same two verbs for an archived BAND. Optional: without them the list
+   *  draws tasks alone, which is what it drew before goals could be archived
+   *  — a surface that cannot restore a row must not offer to. */
+  onRestoreGoal?: (goal: HubSubgoal) => void;
+  onOpenGoal?: (goal: HubSubgoal) => void;
+}
+
+/** "1 archived goal and 3 archived tasks" — and each half is dropped when it
+ *  is empty, because "0 archived goals" is a sentence about nothing. */
+function archivedHeading(goals: number, tasks: number): string {
+  const parts: string[] = [];
+  if (goals > 0) parts.push(goals === 1 ? '1 archived goal' : `${goals} archived goals`);
+  if (tasks > 0 || goals === 0)
+    parts.push(tasks === 1 ? '1 archived task' : `${tasks} archived tasks`);
+  return parts.join(' and ');
 }
 
 /**
@@ -418,6 +434,35 @@ export interface GoalDetailHandlers {
    * panel's, and for the same reason.
    */
   onBodySlot?: (section: BoardSection | null, slot: HTMLElement | null) => void;
+  /**
+   * Put a link to this goal on the clipboard — the task panel's 🔗, one row
+   * type over, and for the same reason: a band is a thing people forward.
+   *
+   * The renderer does not build the URL, because only the app knows which
+   * workspace this board is. No handler, no button.
+   */
+  onCopyLink?: (section: BoardSection) => void;
+  /**
+   * What archiving this band would take with it, asked BEFORE the write.
+   *
+   * The panel will not commit an archive without an answer here, and that is
+   * the point of the handler existing at all: the blast radius is the part a
+   * reader cannot see from a band header (Bryan, 2026-08-30 — "say what is
+   * about to happen, with the count"), and a count the panel invented would
+   * be a second implementation of the server's walk, free to be wrong in the
+   * direction that matters.
+   *
+   * Resolves to null when the question could not be asked — the panel then
+   * says so and offers no Archive, rather than offering one whose
+   * consequences it cannot state.
+   */
+  onCascadeCount?: (goalId: string) => Promise<{ tasks: number; subgoals: number } | null>;
+  /** Commit the archive, cascade and all. Only ever reached through the
+   *  confirmation above. */
+  onArchive?: (section: BoardSection) => void;
+  /** Put an archived band back, with the rows its archive took — the panel's
+   *  other face, drawn in place of Archive when the open band is archived. */
+  onRestore?: (section: BoardSection) => void;
   /** Clock seam, so "3 hours ago" is assertable. */
   now?: number;
 }
@@ -439,6 +484,17 @@ export function renderArchivedList(
   container: HTMLElement,
   tasks: HubTask[],
   handlers: ArchivedViewHandlers,
+  goals: HubSubgoal[] = [],
+  /**
+   * The counts, which are NOT `goals.length`.
+   *
+   * `goals` is the restorable rows; a subgoal swept up by its parent is
+   * archived without being one of them. The heading counts everything that is
+   * off the board, and each band's row says how many subgoals came with it —
+   * together that is why "2 archived goals" can sit above a single goal row
+   * without the two contradicting each other.
+   */
+  bands: { total?: number; cascaded?: (goalId: string) => number } = {},
 ): void {
   container.replaceChildren();
   const head = document.createElement('div');
@@ -448,12 +504,14 @@ export function renderArchivedList(
   back.className = 'hub-linklike hub-archived-back';
   back.textContent = '← Back to the board';
   back.addEventListener('click', () => handlers.onBack());
+  const rows = handlers.onRestoreGoal ? goals : [];
+  const total = handlers.onRestoreGoal ? (bands.total ?? rows.length) : 0;
   const h = document.createElement('h3');
   h.className = 'hub-section-title';
-  h.textContent = tasks.length === 1 ? '1 archived task' : `${tasks.length} archived tasks`;
+  h.textContent = archivedHeading(total, tasks.length);
   head.append(back, h);
   container.append(head);
-  if (tasks.length === 0) {
+  if (tasks.length === 0 && rows.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'hub-section-empty';
     // Reached by editing the URL, or by restoring the last one from here —
@@ -464,6 +522,50 @@ export function renderArchivedList(
   }
   const list = document.createElement('ul');
   list.className = 'hub-archived-list';
+  // Bands first, and marked as bands: restoring one brings its tasks with it,
+  // so a reader scanning for a ticket they lost should meet the goal that took
+  // it before they meet the ticket itself.
+  for (const goal of rows) {
+    const li = document.createElement('li');
+    li.className = 'hub-archived-row hub-archived-row--goal';
+    li.dataset.goalId = goal.id;
+    const title = document.createElement('button');
+    title.type = 'button';
+    title.className = 'hub-linklike hub-archived-title';
+    title.textContent = goal.title;
+    title.addEventListener('click', () => handlers.onOpenGoal?.(goal));
+    const kind = document.createElement('span');
+    kind.className = 'hub-archived-kind';
+    kind.textContent = 'Goal';
+    const why = document.createElement('span');
+    why.className = 'hub-archived-why';
+    const who = goal.archivedBy ? ` by ${goal.archivedBy}` : '';
+    const when = goal.archivedAt ? new Date(goal.archivedAt).toLocaleDateString() : '';
+    why.textContent = goal.archiveReason
+      ? `${when}${who} — ${goal.archiveReason}`
+      : `${when}${who}`;
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'hub-btn hub-archived-restore';
+    restore.textContent = 'Restore';
+    // The label says what the button does that the word "Restore" cannot: the
+    // tasks come back too, which is the half a reader has to know BEFORE they
+    // press it rather than after.
+    restore.setAttribute('aria-label', `Restore “${goal.title}” and its tasks to the board`);
+    restore.addEventListener('click', () => handlers.onRestoreGoal?.(goal));
+    li.append(kind, title, why);
+    // Where the heading's other goal went. Without this the count above reads
+    // as an off-by-one against the rows below it.
+    const rode = bands.cascaded?.(goal.id) ?? 0;
+    if (rode > 0) {
+      const withSubs = document.createElement('span');
+      withSubs.className = 'hub-archived-with';
+      withSubs.textContent = `with ${rode === 1 ? '1 subgoal' : `${rode} subgoals`}`;
+      li.append(withSubs);
+    }
+    li.append(restore);
+    list.append(li);
+  }
   for (const task of tasks) {
     const li = document.createElement('li');
     li.className = 'hub-archived-row';

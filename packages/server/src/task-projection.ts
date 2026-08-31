@@ -737,6 +737,28 @@ export class TaskProjection {
                   ownerKind: resolveOwnerKind(r.assignee, undefined, isAttachedAgent),
                 }
               : {}),
+            // A band that has been archived rides out SAYING so, the way an
+            // archived task does — projected rather than filtered here,
+            // because the restore list is drawn from the same projection the
+            // board is and a band the projection dropped could never be put
+            // back. `boardSections` is the one place "off the board" is
+            // applied, exactly as `taskVisible` is for a task.
+            ...(r.archivedAt !== undefined
+              ? {
+                  archivedAt: r.archivedAt,
+                  ...(r.archivedBy !== undefined ? { archivedBy: r.archivedBy } : {}),
+                  ...(r.archiveReason !== undefined ? { archiveReason: r.archiveReason } : {}),
+                  // And WHICH archive took it, when it went as part of a
+                  // band's cascade. The restore list needs this to tell a
+                  // subgoal somebody archived on its own — restorable, with
+                  // its own tasks under it — from one that only went because
+                  // its parent did, whose tasks carry the parent's marker and
+                  // so come back only when the parent does.
+                  ...(r.archivedWithGoal !== undefined
+                    ? { archivedWithGoal: r.archivedWithGoal }
+                    : {}),
+                }
+              : {}),
           },
         ];
       }),
