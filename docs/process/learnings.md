@@ -1102,6 +1102,36 @@ The rules that fall out, now enforced in `packages/server/src/port-bind.ts`:
 Related: "A negative probe needs a positive control" — the boolean probe here
 *was* the failed control, reporting a confident "no" it had no way to justify.
 
+**The second half, from the post-mortem (2026-08-31): the outage was
+kernel-wide socket CREATION failing, and its cause is still unknown.**
+
+- **Two events, not one** — 2026-08-29 16:54:56 → reboot 18:00, and
+  2026-08-30 04:27:43 → reboot 08:47 — pinned to the second from
+  `~/Library/Logs/email-channel-watcher.log`, which probes Gmail once a
+  minute and records the raw errno. A free, already-installed,
+  minute-resolution canary nobody was reading.
+- **The failure state is `socket(AF_INET, SOCK_STREAM)` itself returning
+  `ENOBUFS`** — 29 unrelated Apple daemons hit it in the window. Not port
+  pressure, not TIME_WAIT, not any one app's traffic. The port-bind fix above
+  hardened the amplifier; the cause survived it and recurred 12 hours later.
+- **The server test suite was blamed and is exonerated twice over**: the
+  ticket's ~600 listeners × 30s TIME_WAIT derivation did not reproduce (a full
+  run leaves loopback TIME_WAIT averaging 5–11 on a quiet machine), and the
+  same suite was running for hours either side of both onsets.
+- **`net.inet.tcp.pcbcount` sits at ~52k on a healthy machine while only
+  350–850 sockets are enumerable.** A 3,000-connection churn burst adds exactly
+  2 pcbs per connection and drains fully in 30–45s, so that resident pool is
+  not TIME_WAIT and was stable over 40 minutes — possibly a benign kernel
+  cache. Only a watcher can tell a cache (plateau) from a leak (climbs).
+- **Nothing recorded who held the sockets** — the unified log names victims,
+  never holders — so the culprit is not determinable post-hoc. That is what
+  `scripts/socket-watch.sh` fixes: each minute it records pcbcount, the
+  enumerable count, mbuf %, a live socket()-creation canary with its errno,
+  and the top five socket-holding processes. Its positive control: the canary
+  returns `EMFILE` under a lowered `ulimit -n`, so it demonstrably can say no.
+  It cannot synthesize global exhaustion, so the 120k WARN threshold is a
+  guess the CSV will calibrate.
+
 ## macOS launchd + non-default home volume
 
 - **TCC blocks launchd-spawned processes from reading `/Volumes/<X>/Users/...`
