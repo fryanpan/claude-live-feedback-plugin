@@ -616,6 +616,26 @@ describe('assemblyai speaker labels', () => {
     expect(new URL(streamingUrl(16_000, false)).searchParams.get('speaker_labels')).toBeNull();
   });
 
+  it('caps how many speakers the session may name, and never without the labels', () => {
+    const cap = (detect: boolean, max?: number) =>
+      new URL(streamingUrl(16_000, detect, max)).searchParams.get('max_speakers');
+    expect(cap(true, 2)).toBe('2');
+    // Absent when nobody named a cap: the engine's own default is unbounded
+    // and this builder does not invent one — the decision is `maxSpeakersFor`.
+    expect(cap(true, undefined)).toBeNull();
+    // And never on a solo session, where there are no labels to cap.
+    expect(cap(false, 2)).toBeNull();
+  });
+
+  it('clamps a cap into the range the engine accepts', () => {
+    // Out of range, AssemblyAI refuses the session, and a refused session
+    // reads to the person in the room as "transcription is broken".
+    const cap = (max: number) =>
+      new URL(streamingUrl(16_000, true, max)).searchParams.get('max_speakers');
+    expect(cap(0)).toBe('1');
+    expect(cap(99)).toBe('10');
+  });
+
   it('carries the turn-level speaker label through the seam', async () => {
     const h = harness();
     h.fake().begin();

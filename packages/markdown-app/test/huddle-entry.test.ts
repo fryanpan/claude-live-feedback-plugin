@@ -4,9 +4,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   HUDDLE_MODE_PARAM,
   HUDDLE_START_PARAM,
+  ROOM_MIC_PARAM,
+  ROOM_SPEAKERS_PARAM,
   applyHuddleCrumb,
   applyReadingCrumb,
   huddleCaptureMode,
+  huddleRoomAudio,
+  huddleRoomSpeakers,
   resetReadingCrumbForTest,
   wantsHuddleStart,
   withoutHuddleStart,
@@ -143,5 +147,35 @@ describe('the markdown mount honours the flag once', () => {
     // A reload, or Back into this entry later, must not restart the mic.
     expect(APP).toContain('withoutHuddleStart(');
     expect(APP).toMatch(/history\.replaceState\([^)]*withoutHuddleStart/);
+  });
+});
+
+describe('the room knobs on the address', () => {
+  it('reads how many people are in the room, clamped, and nothing when unsaid', () => {
+    expect(huddleRoomSpeakers(`?${ROOM_SPEAKERS_PARAM}=3`)).toBe(3);
+    expect(huddleRoomSpeakers(`?${ROOM_SPEAKERS_PARAM}=99`)).toBe(10);
+    expect(huddleRoomSpeakers('?huddle=1')).toBeUndefined();
+    expect(huddleRoomSpeakers(`?${ROOM_SPEAKERS_PARAM}=some`)).toBeUndefined();
+  });
+
+  it('reads which microphone processors to ask for', () => {
+    expect(huddleRoomAudio(`?${ROOM_MIC_PARAM}=ec0-ns0-agc0`)).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
+    expect(huddleRoomAudio('?huddle=1')).toBeUndefined();
+  });
+
+  it('keeps both when the one-shot huddle flags are taken back off the address', () => {
+    // They are facts about the ROOM, not about the press: a reload of this
+    // address must record the same way, or the measurement compares two
+    // different setups and calls the difference diarization.
+    const kept = withoutHuddleStart(
+      `/review/d1?huddle=1&${HUDDLE_MODE_PARAM}=conversation&${ROOM_SPEAKERS_PARAM}=3&${ROOM_MIC_PARAM}=ec0-ns0-agc0`,
+    );
+    expect(huddleRoomSpeakers(kept.slice(kept.indexOf('?')))).toBe(3);
+    expect(huddleRoomAudio(kept.slice(kept.indexOf('?')))).toBeTruthy();
+    expect(wantsHuddleStart(kept.slice(kept.indexOf('?')))).toBe(false);
   });
 });

@@ -55,6 +55,9 @@ import { type Announcer, createAnnouncer } from './meeting-announce.ts';
 import {
   type MeetingCapture,
   type MeetingCaptureStart,
+  ROOM_AUDIO_DEFAULT,
+  type RoomAudioProcessing,
+  captureConstraints,
   startMeetingCapture,
 } from './meeting-audio.ts';
 import { type TimingSession, createTimingSession } from './meeting-timing-client.ts';
@@ -267,7 +270,11 @@ export interface MeetingStripOpts {
    *  deterministic in tests. */
   interval?: (fn: () => void, ms: number) => () => void;
   openSocket?: (url: string) => MeetingSocket;
-  startCapture?: (opts: { onFrame: (pcm: Int16Array) => void }) => Promise<MeetingCaptureStart>;
+  startCapture?: (opts: {
+    onFrame: (pcm: Int16Array) => void;
+    mode: CaptureMode;
+    room?: RoomAudioProcessing;
+  }) => Promise<MeetingCaptureStart>;
   /**
    * Ask for the mic on mount, without a press — the Board's "Start a planning
    * huddle" button was the press, on a page that is gone by the time this
@@ -284,6 +291,15 @@ export interface MeetingStripOpts {
    * Board's "Record a conversation" button carries it in on the address.
    */
   mode?: CaptureMode;
+  /**
+   * How many people the room holds, and which microphone processors to ask
+   * for. Both ride the address (`?speakers=3&mic=ec1-ns0-agc0`) and both are
+   * about the ROOM, so neither means anything to a solo capture: the count
+   * only reaches the engine when the mode pays for labels, and the processing
+   * only replaces the defaults for a `conversation`.
+   */
+  speakers?: number;
+  room?: RoomAudioProcessing;
   /**
    * Ask the person what to call a speaker; `current` is what the tag says
    * now. Null or blank means leave it. Defaults to `window.prompt` — the
@@ -791,11 +807,30 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     suspended: boolean,
   ): Promise<void> {
     try {
-      await mic?.setEchoCancellation(!suspended);
+      // Restored to what the ROOM asked for, not to `true`. Echo cancellation
+      // is a knob (`?mic=ec0-…`) and the announcement is made on exactly the
+      // mode that knob applies to, so restoring a constant would turn every
+      // `ec0` room back on mid-meeting — silently, and for good.
+      await mic?.setEchoCancellation(suspended ? false : wantsEchoCancellation());
     } catch {
       // Then the capture keeps the cancellation it has, and the sentence is
       // spoken into it anyway.
     }
+  }
+
+  /**
+   * What the microphone that is open right now was OPENED with.
+   *
+   * Read off `captureConstraints` at the press, so this is the same rule the
+   * capture itself used rather than a second copy of it that has to be kept
+   * in step. Deriving it from `opts.room` instead would be wrong for any mode
+   * the room config does not apply to — solo does not announce today, so that
+   * path is unreachable, but the invariant should not depend on a guard two
+   * hundred lines away staying where it is.
+   */
+  let openedEchoCancellation: boolean = ROOM_AUDIO_DEFAULT.echoCancellation;
+  function wantsEchoCancellation(): boolean {
+    return openedEchoCancellation;
   }
 
   function endAnnouncement(): void {
@@ -970,7 +1005,17 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         // ordinal the server's ledger gives the chunk it receives.
         timing?.frameSent();
       },
+      // Read HERE rather than at mount: the switch can be flipped between
+      // meetings, and the constraints belong to the microphone this press is
+      // about to open.
+      mode,
+      ...(opts.room ? { room: opts.room } : {}),
     });
+    // The same call the capture just made, so the announcement restores what
+    // was actually asked for rather than what a different mode would want.
+    openedEchoCancellation =
+      (captureConstraints(mode, opts.room).audio as MediaTrackConstraints).echoCancellation ===
+      true;
     if (disposed || attempt !== generation) {
       if (started.ok) started.capture.stop();
       return;
@@ -995,6 +1040,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           sampleRate: MEETING_SAMPLE_RATE,
           encoding: MEETING_AUDIO_ENCODING,
           mode,
+          // Absent unless somebody said, so the server's default stays the
+          // one place the room size is guessed.
+          ...(opts.speakers !== undefined ? { speakers: opts.speakers } : {}),
           ...(timing ? { timing: true } : {}),
         }),
       );

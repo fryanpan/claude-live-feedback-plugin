@@ -63,6 +63,66 @@ export function parseCaptureMode(raw: unknown): CaptureMode {
 }
 
 /**
+ * How many people the room holds, and why the engine is TOLD.
+ *
+ * AssemblyAI's streaming diarization takes a `max_speakers` alongside
+ * `speaker_labels` — "a hard cap on the number of speaker labels (1-10). If
+ * more people speak than this value, the additional speakers are merged into
+ * the closest existing label" (streaming/label-speakers-and-separate-channels,
+ * read 2026-08-30). Left absent it is unbounded, and an unbounded diarizer in
+ * a room where two people share ONE far-field microphone is free to answer a
+ * change of posture with a new letter: the failure this cap exists to stop is
+ * a model inventing people, not a model missing one.
+ *
+ * The docs also say to "give the model a little headroom above the number of
+ * speakers you expect; setting it too high can cause over-splitting". We do
+ * not take the headroom by default, because the two failures are not
+ * symmetrical here: a third voice merged into the closest label costs one
+ * misattributed turn, while an invented Speaker C costs the reader their
+ * belief that the labels mean anything. The number is a knob (`?speakers=3`
+ * on the doc address) precisely so a room that really holds three says so
+ * rather than being guessed at.
+ */
+export const DEFAULT_ROOM_SPEAKERS = 2;
+
+/** The range AssemblyAI accepts for `max_speakers`. Not ours to widen. */
+export const MIN_ROOM_SPEAKERS = 1;
+export const MAX_ROOM_SPEAKERS = 10;
+
+/**
+ * A room size, clamped into the engine's range, or nothing.
+ *
+ * Nothing — rather than the default — is the answer for an absent or
+ * unreadable field, so the caller can tell "nobody said" from "somebody said
+ * two" and apply the default in ONE place.
+ */
+export function parseRoomSpeakers(raw: unknown): number | undefined {
+  // An empty or blank string is NOT a room of zero people. `?speakers=` with
+  // nothing after it is what an address bar produces when the value is
+  // deleted, and `Number('')` is 0, which clamps to one label — every voice
+  // merged into one, the exact opposite of what the cap is for, from a
+  // parameter that said nothing.
+  if (typeof raw === 'string' && raw.trim() === '') return undefined;
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return undefined;
+  const rounded = Math.round(n);
+  if (rounded < MIN_ROOM_SPEAKERS) return MIN_ROOM_SPEAKERS;
+  if (rounded > MAX_ROOM_SPEAKERS) return MAX_ROOM_SPEAKERS;
+  return rounded;
+}
+
+/**
+ * The cap this capture asks the engine for, or nothing when it asks for no
+ * labels at all. A solo session sends neither parameter: an unpriced session
+ * is one that never asked, and a cap on a feature that is off is noise on the
+ * URL that a reader would have to work out is inert.
+ */
+export function maxSpeakersFor(mode: CaptureMode, speakers?: number): number | undefined {
+  if (!detectsSpeakers(mode)) return undefined;
+  return parseRoomSpeakers(speakers) ?? DEFAULT_ROOM_SPEAKERS;
+}
+
+/**
  * What the room hears when an in-person capture starts.
  *
  * ONE SENTENCE, FIXED, NOT LOCALIZED. It is the thing that makes a recording
@@ -129,6 +189,13 @@ export type MeetingClientMessage =
        * session.
        */
       mode: CaptureMode;
+      /**
+       * How many people are in the room, when the client knows. Only the
+       * browser can know it — nothing on the server can hear the room — and
+       * it is absent from every solo capture and from any client built before
+       * the cap existed, both of which fall back to `DEFAULT_ROOM_SPEAKERS`.
+       */
+      speakers?: number;
       /**
        * Measure this meeting's stage latencies (`?timing=1` on the address).
        * Absent on every ordinary meeting, and a server that is not asked
@@ -267,6 +334,7 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       return null;
     }
     if (m.encoding !== MEETING_AUDIO_ENCODING) return null;
+    const speakers = parseRoomSpeakers(m.speakers);
     return {
       type: 'start',
       sampleRate: Math.round(rate),
@@ -275,6 +343,11 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
       // the field arrived after the meeting did, and the fallback is the one
       // that spends nothing.
       mode: parseCaptureMode(m.mode),
+      // Same rule for the room size, one step further: out of range is
+      // clamped rather than refused, because a bad number here is a knob
+      // typed into an address bar and the meeting is worth more than the
+      // typo.
+      ...(speakers !== undefined ? { speakers } : {}),
       // Only the literal `true` opts in: a stray truthy value on this frame
       // should read as a client that does not know about timing, not as one
       // asking for it.

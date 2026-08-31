@@ -15,7 +15,13 @@ import { type EditMode, initialEditMode, writeEditModePref } from './edit-mode.t
 import { wireEditViewport } from './edit-viewport.ts';
 import { type EditorHandle, createEditor } from './editor.ts';
 import { trackGesture } from './gesture.ts';
-import { huddleCaptureMode, wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
+import {
+  huddleCaptureMode,
+  huddleRoomAudio,
+  huddleRoomSpeakers,
+  wantsHuddleStart,
+  withoutHuddleStart,
+} from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import { mountMeetingBotRow } from './meeting-bot-row.ts';
@@ -338,6 +344,8 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
     // time this mounts. It rides in on the address with the start flag and
     // leaves with it.
     const huddleMode = huddleStart ? huddleCaptureMode(location.search) : DEFAULT_CAPTURE_MODE;
+    const roomSpeakers = huddleRoomSpeakers(location.search);
+    const roomAudio = huddleRoomAudio(location.search);
     if (huddleStart) {
       history.replaceState(
         history.state,
@@ -357,6 +365,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // fact, read from `location.search` there too, so both come off the
       // same address; see `huddleCaptureMode`.
       mode: huddleMode,
+      // Room facts, not gestures: read on every visit — including one where
+      // the person flips the strip's own switch — and left on the address.
+      ...(roomSpeakers !== undefined ? { speakers: roomSpeakers } : {}),
+      ...(roomAudio ? { room: roomAudio } : {}),
       timing: wantsLatencyTiming(location.search),
     });
     scope.onCleanup(() => strip.destroy());
