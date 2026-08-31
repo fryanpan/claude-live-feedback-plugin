@@ -1,6 +1,6 @@
 /**
- * Pause-driven meeting notes: the quiet detector, the composer seam, and the
- * per-meeting session that joins them.
+ * Meeting notes on two clocks: the quiet detector, the cadence ceiling, the
+ * composer seam, and the per-meeting session that joins them.
  *
  * WHY A PAUSE IS THE UNIT. Notes composed per turn would interrupt a thought
  * mid-argument; notes composed at the end would arrive after the meeting they
@@ -8,6 +8,24 @@
  * detector watches the transcript stream — EVERY frame, partials included,
  * because a partial is speech in progress and therefore evidence there is no
  * pause — and fires only when the stream has been quiet for the threshold.
+ *
+ * WHY A PAUSE IS NOT THE ONLY UNIT (owner, 2026-08-30: "waits too long to
+ * update notes"). Every frame REPLACES the quiet countdown, so a conversation
+ * where nobody stops for the threshold never fires one — and the meeting that
+ * most needs notes, the one where people are talking without a break, was
+ * exactly the meeting that produced nothing until it ended. The cadence timer
+ * is the ceiling on that: it starts when the first unwritten sentence settles
+ * and is NOT reset by speech, so no finished sentence waits longer than
+ * `cadenceMs` to reach the doc. The two clocks are additive and whichever
+ * expires first fires the tick.
+ *
+ * WHY A CADENCE TICK CARRIES ONLY SETTLED TURNS. The words still in flight
+ * are a partial, and this engine's partials are UNFORMATTED — no punctuation,
+ * no sentence casing, which arrive only when the turn settles (see
+ * `format_turns` in the architecture summary). So there is no such thing as a
+ * finished sentence inside a partial to cut at: a settled turn IS the unit of
+ * finished speech, and the turn being spoken waits for the next tick rather
+ * than being written mid-clause.
  *
  * WHY THE COMPOSER IS A SEAM WITH NO DEFAULT. The real composer is an LLM
  * call; same rule as `transcribe.ts` and the summarizer — `createServer` must
@@ -42,8 +60,11 @@ export interface NotesTurn {
   speaker?: string;
 }
 
-/** Why a tick fired: the speaker went quiet, or the meeting ended. */
-export type NotesTickReason = 'pause' | 'end';
+/**
+ * Why a tick fired: the speaker went quiet, the cadence ceiling was reached
+ * while they kept talking, or the meeting ended.
+ */
+export type NotesTickReason = 'pause' | 'cadence' | 'end';
 
 /** One "notes moment": the new settled words since the previous tick. */
 export interface NotesTick {
@@ -74,9 +95,28 @@ export const realTickScheduler: TickScheduler = {
  */
 export const DEFAULT_NOTES_QUIET_MS = 4_000;
 
+/**
+ * The longest a finished sentence may wait for a note, however continuously
+ * people are talking. Long enough that a tick still covers a stretch of
+ * conversation worth summarizing rather than one sentence at a time — and
+ * short enough that the notes read as keeping up rather than catching up
+ * (owner's number, 2026-08-30: "about 15 seconds").
+ *
+ * Unlike `DEFAULT_NOTES_QUIET_MS` this is a CEILING, not a threshold: quiet
+ * still fires sooner whenever it comes.
+ */
+export const DEFAULT_NOTES_CADENCE_MS = 15_000;
+
 export interface PauseTickerOpts {
   /** How long the transcript stream must be quiet before a tick fires. */
   quietMs: number;
+  /**
+   * The ceiling on how long a settled turn waits, measured from the moment
+   * it settled rather than from the last frame. Omitted or non-finite means
+   * no ceiling — pause ticks only, which is what every meeting did before
+   * this clock existed.
+   */
+  cadenceMs?: number;
   onTick: (tick: NotesTick) => void;
   schedule?: TickScheduler;
 }
@@ -98,8 +138,17 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
   const seen = new Set<number>();
   let pending: NotesTurn[] = [];
   let timer: unknown = null;
+  /**
+   * The cadence countdown. Held separately from `timer` because the two
+   * clocks answer different questions — `timer` asks "has speech stopped?"
+   * and restarts on every frame, `cadence` asks "how long has the oldest
+   * unwritten sentence been waiting?" and must not.
+   */
+  let cadence: unknown = null;
   let ticks = 0;
   let ended = false;
+  const cadenceMs = opts.cadenceMs;
+  const hasCadence = cadenceMs !== undefined && Number.isFinite(cadenceMs) && cadenceMs > 0;
 
   const disarm = (): void => {
     if (timer !== null) {
@@ -108,11 +157,21 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
     }
   };
 
+  const disarmCadence = (): void => {
+    if (cadence !== null) {
+      schedule.clear(cadence);
+      cadence = null;
+    }
+  };
+
   const fire = (reason: NotesTickReason): void => {
     // Quiet with nothing new said is just quiet, not an empty tick.
     if (pending.length === 0) return;
     const turns = pending;
     pending = [];
+    // Whatever fired, the wait it was measuring is over: the next ceiling
+    // starts from the next sentence to settle, not from this one.
+    disarmCadence();
     ticks++;
     opts.onTick({ tick: ticks, reason, turns });
   };
@@ -146,9 +205,21 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
             text: turn.text,
             ...(turn.speaker !== undefined ? { speaker: turn.speaker } : {}),
           });
+          // The FIRST unwritten sentence starts the ceiling and later ones
+          // join the same wait. Re-arming per sentence would push the clock
+          // out on every one, which is the pause timer's failure with a
+          // longer number on it.
+          if (hasCadence && cadence === null) {
+            cadence = schedule.set(() => {
+              cadence = null;
+              fire('cadence');
+            }, cadenceMs);
+          }
         }
       }
-      // Any frame is speech: replace whatever countdown was running.
+      // Any frame is speech: replace whatever countdown was running. Only
+      // the quiet one — a partial says the sentences already settled have
+      // been waiting LONGER, never less long.
       disarm();
       timer = schedule.set(() => {
         timer = null;
@@ -159,6 +230,7 @@ export function createPauseTicker(opts: PauseTickerOpts): PauseTicker {
       if (ended) return;
       ended = true;
       disarm();
+      disarmCadence();
       fire('end');
     },
   };
@@ -197,8 +269,19 @@ export interface NotesComposeInput {
   docId: string;
   meetingId: string;
   tick: NotesTick;
-  /** The notes as previously composed; null on a meeting's first tick. */
+  /**
+   * The notes as they CURRENTLY READ — the live section including anything a
+   * person typed into it, not merely what this composer last returned. A
+   * composer that saw only its own output would keep re-proposing the words
+   * a person has already fixed. Null on a meeting's first tick.
+   */
   previous: string | null;
+  /**
+   * The lines of `previous` a PERSON wrote. They are theirs: reproduce them
+   * verbatim. Returning a changed version of one is read as a proposal and
+   * lands as a suggestion on their line, never as a rewrite of it.
+   */
+  humanNotes?: readonly string[];
   context?: NotesProjectContext;
   /** Tasks captured from THIS tick's speech. Absent when capture is off,
    *  found nothing, or failed — the notes compose either way. */
@@ -237,6 +320,24 @@ export interface NotesUpdate {
   /** The tick as composed — includes any words carried from a failed tick. */
   tick: NotesTick;
   notes: string;
+  /**
+   * The notes section's items as the compose READ them. Anything in the doc
+   * that is not in this list arrived while the compose was in flight, so
+   * these notes were written without knowing about it — the sink withholds
+   * changes to those rather than landing older words on a newer edit.
+   * Absent when the sink was composed without a doc to read.
+   */
+  basedOn?: readonly string[];
+}
+
+/** The notes section as it currently stands, read fresh for each compose. */
+export interface NotesSectionState {
+  /** Heading plus body, the accepted state. */
+  markdown: string;
+  /** Every item, in reading order. */
+  items: readonly string[];
+  /** The subset the agent did not write. */
+  human: readonly string[];
 }
 
 /**
@@ -262,6 +363,13 @@ export interface MeetingNotesDeps {
   composer: NotesComposer;
   /** Quiet threshold; defaults to {@link DEFAULT_NOTES_QUIET_MS}. */
   quietMs?: number;
+  /**
+   * Ceiling on how long a settled turn waits for a note while people keep
+   * talking; defaults to {@link DEFAULT_NOTES_CADENCE_MS}. Pass `Infinity`
+   * for pause-only behaviour — the latency harness uses that to measure the
+   * two cadences against one script.
+   */
+  cadenceMs?: number;
   schedule?: TickScheduler;
   context?: NotesProjectContext;
   /**
@@ -281,6 +389,13 @@ export interface MeetingNotesDeps {
     meetingId: string;
     turns: readonly NotesTurn[];
   }) => Promise<NoteTaskLink[]>;
+  /**
+   * Read the doc's notes section at the START of each compose, so the
+   * composer sees what the person has written rather than only what it last
+   * returned. Absent in tests that wire no doc; then the composer's own last
+   * output is `previous`, as it always was.
+   */
+  readSection?: (input: { docId: string; meetingId: string }) => NotesSectionState | null;
   /** Where composed notes go. The doc-writing stage plugs in here. */
   onNotes: (update: NotesUpdate) => void;
   /**
@@ -417,18 +532,45 @@ export function beginNotesSession(
           deps.onError?.(err instanceof Error ? err.message : 'task capture failed');
         }
       }
+      // Read INSIDE the chain, immediately before composing: the compose is
+      // the thing that must not be written from stale text, and the chain is
+      // what serializes it against the previous tick's write.
+      let live: NotesSectionState | null = null;
+      try {
+        live = deps.readSection?.({ docId: ids.docId, meetingId: ids.meetingId }) ?? null;
+      } catch (err) {
+        // The section is an input to a better compose, never a dependency of
+        // one — same rule as context and capture.
+        deps.onError?.(err instanceof Error ? err.message : 'notes section read failed');
+      }
       const input: NotesComposeInput = {
         docId: ids.docId,
         meetingId: ids.meetingId,
         tick: { ...tick, turns },
-        previous,
+        // The FIRST tick of a session composes from scratch, even on a doc
+        // whose notes section still holds the last meeting's — handing that
+        // in would make every meeting a continuation of the one before it.
+        // From the second tick on, `previous` is what the doc actually says,
+        // which is how a person's edits reach the composer at all.
+        previous: previous === null ? null : (live?.markdown ?? previous),
+        // Gated with `previous` for the same reason: on tick one the human
+        // lines in the section are the LAST meeting's, or an agenda written
+        // before this one, and telling a from-scratch compose to reproduce
+        // them verbatim would copy them into these notes.
+        ...(previous !== null && live && live.human.length > 0 ? { humanNotes: live.human } : {}),
         ...(context ? { context } : {}),
         ...(taskLinks.length > 0 ? { taskLinks } : {}),
       };
       try {
         const notes = await deps.composer.compose(input);
         previous = notes;
-        deps.onNotes({ docId: ids.docId, meetingId: ids.meetingId, tick: input.tick, notes });
+        deps.onNotes({
+          docId: ids.docId,
+          meetingId: ids.meetingId,
+          tick: input.tick,
+          notes,
+          ...(live ? { basedOn: live.items } : {}),
+        });
       } catch (err) {
         carry = [...raw, ...carry];
         deps.onError?.(err instanceof Error ? err.message : 'notes composer failed');
@@ -438,6 +580,7 @@ export function beginNotesSession(
 
   const ticker = createPauseTicker({
     quietMs: deps.quietMs ?? DEFAULT_NOTES_QUIET_MS,
+    cadenceMs: deps.cadenceMs ?? DEFAULT_NOTES_CADENCE_MS,
     ...(deps.schedule ? { schedule: deps.schedule } : {}),
     onTick: composeTick,
   });

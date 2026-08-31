@@ -14444,7 +14444,7 @@ var STATUS_TEXT_MAX = 4000;
 function suggestionAuthor() {
   return { id: AUTHOR.id, name: AUTHOR.name, color: AUTHOR.color };
 }
-var PLUGIN_VERSION = "0.1.130";
+var PLUGIN_VERSION = "0.1.131";
 var PROCESS_ID = randomUUID();
 var server = new Server({
   name: "claude-workspaces",
@@ -14827,7 +14827,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "bind_mock",
-      description: "Serve an HTML mockup at /mockup/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.",
+      description: "Serve an HTML mockup at /mockup/<docId> and bind it for comments — the server reads the file at sourceHtmlPath on each request, so edits show up on reload, and captures what it read so the link keeps working after your scratch directory is cleaned up. An unreadable sourceHtmlPath fails HERE rather than 404ing later in front of the reviewer. Hand the returned meta.reviewUrl to a person. Single-file mockups only: relative CSS/JS siblings will not resolve. Idempotent.",
       inputSchema: {
         type: "object",
         properties: {
