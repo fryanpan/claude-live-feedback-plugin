@@ -94,6 +94,7 @@ import { newEventId } from './event-id.ts';
 import { scanFolderPaths } from './fs-scan.ts';
 import { showFile } from './git-diff.ts';
 import { gitConflictHint } from './git-provenance.ts';
+import { deleteMockupCapture } from './mockup-capture.ts';
 import {
   deletePrivateMeta,
   isPrivateMetaKey,
@@ -1383,6 +1384,11 @@ export class Rooms {
       if (existsSync(p)) rmSync(p);
       deletePrivateMeta(this.cfg.dataDir, docId);
       deleteDocIndex(this.cfg.dataDir, docId);
+      // A mockup's captured HTML is the reviewer's copy of somebody's page.
+      // Archiving leaves it alone (see mockup-capture.ts); a purge is the one
+      // caller that has actually been asked for the bytes to be gone, so it
+      // goes with the .ydoc rather than outliving it in the data dir.
+      deleteMockupCapture(this.cfg.dataDir, docId);
       return !existsSync(p);
     } catch (err) {
       console.error(`[rooms] failed to remove persisted ${docId}:`, err);
