@@ -18,6 +18,7 @@ import { trackGesture } from './gesture.ts';
 import { huddleCaptureMode, wantsHuddleStart, withoutHuddleStart } from './huddle-entry.ts';
 import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
+import { mountMeetingBotRow } from './meeting-bot-row.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
@@ -351,6 +352,11 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       mode: huddleMode,
     });
     scope.onCleanup(() => strip.destroy());
+    // A sibling of the strip, not part of it: a bot has its own lifecycle and
+    // shares none of the microphone's state. It hides itself when the server
+    // has no Recall key, so this costs one GET on a doc that cannot use it.
+    const botRow = mountMeetingBotRow({ docId, root: meetingStripEl });
+    scope.onCleanup(() => botRow.destroy());
   }
 
   // Editing under an on-screen keyboard: the meeting strip gives its grid row

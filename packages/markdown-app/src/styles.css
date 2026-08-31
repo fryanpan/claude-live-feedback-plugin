@@ -6887,6 +6887,77 @@ body.is-reading-width #editor > .ProseMirror {
   }
 }
 
+/* ---------- meeting BOT row (Recall) ----------
+   A sibling of the strip row, not part of it. Hidden entirely by the module
+   when the server has no Recall key, so nothing here has a "disabled feature"
+   state to style. Wraps rather than scrolls: at 430px the link input takes a
+   line of its own, and the row must never push the caption out of the strip's
+   reserved grid track — it is inside that track, and it is two short lines at
+   its tallest. */
+.meeting-bot-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+.meeting-bot-state {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.meeting-bot-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.meeting-bot-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.meeting-bot-invite,
+.meeting-bot-leave {
+  font: inherit;
+  /* 32px of target on a control that sits in a height-scarce strip. The
+     transcript strip's own floor is 36 on a tap target that is a pseudo-
+     element inside clipped text; these are ordinary buttons that clip
+     nothing, and the strip's track is the constraint the caption needs. */
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-alt, transparent);
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meeting-bot-invite:disabled,
+.meeting-bot-leave:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.meeting-bot-error {
+  color: var(--danger, #b3261e);
+  flex-basis: 100%;
+}
+/* The compact editor viewport hands the strip's grid row back to the
+   keyboard. The bot row goes with the caption for the same reason: a link
+   being pasted is not the thing a person needs while typing in the doc. */
+body[data-edit-viewport="compact"] .meeting-bot-row {
+  display: none;
+}
+
 /* ================= COMMENT PILL (inline, near selection/caret) =================
    Small circular button anchored near the end of the selection (or the
    caret when the selection is empty). Positioned absolutely inside the
