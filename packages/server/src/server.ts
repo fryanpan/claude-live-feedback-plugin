@@ -151,6 +151,7 @@ import {
   isTrustedLocalHost,
   shareScopeAllows,
 } from './middleware/host-guard.ts';
+import { recallCallbackExempt } from './middleware/recall-callback-gate.ts';
 import { isBrowserRequest, isGatedWrite, signInRequiredBody } from './middleware/write-gate.ts';
 import {
   captureMockup,
@@ -4423,23 +4424,43 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             // Non-null by construction (the host could not have classified
             // proxied-local otherwise), re-checked because "I could not
             // verify" must never mean "serve it".
-            if (!proxiedTrustedVerifier) {
-              return j(503, { error: 'access_not_configured' });
+            //
+            // TWO REQUESTS SKIP THE TOKEN, and only these two: the meeting
+            // bot's callbacks. Recall.ai's backend dials this server on the
+            // one public address it has — this hostname — and it has no
+            // browser, no Access session and no way to get either, so
+            // demanding a token here refuses every bot callback and a bot
+            // joins, records, bills and delivers nothing. Both callbacks
+            // carry their OWN credential (a 128-bit per-bot token in the
+            // websocket path; a Svix signature over the webhook body), so
+            // what the Access token would add is a second one — and each
+            // exemption is conditional on that credential actually being
+            // configured, which is what stops it from being a hole on a
+            // server that has no bots or no signing secret. Shape rules and
+            // the fail-closed near-misses live in the predicate.
+            const botCallback = recallCallbackExempt(pathname, req.method, {
+              relayConfigured: recallRelay.configured(),
+              webhookSecretSet: Boolean(opts.meetingBotWebhookSecret),
+            });
+            if (!botCallback) {
+              if (!proxiedTrustedVerifier) {
+                return j(503, { error: 'access_not_configured' });
+              }
+              const result = await proxiedTrustedVerifier(req);
+              if (!result.ok) return j(result.status, { error: result.error });
+              // A token is admission, not identity. The Access policy this
+              // server cannot read may admit collaborators through the same
+              // application, and their tokens verify exactly as the
+              // operator's does. The verified email is the only thing that
+              // says WHO, so it must be on the allowlist — folded the way the
+              // roster folds — or the door stays shut. The body names
+              // nothing: not the email, not that an allowlist exists.
+              const who = result.email ? normalizeEmail(result.email) : '';
+              if (who === '' || !proxiedTrustedEmails.has(who)) {
+                return j(403, { error: 'forbidden' });
+              }
+              accessEmail = result.email ?? null;
             }
-            const result = await proxiedTrustedVerifier(req);
-            if (!result.ok) return j(result.status, { error: result.error });
-            // A token is admission, not identity. The Access policy this
-            // server cannot read may admit collaborators through the same
-            // application, and their tokens verify exactly as the operator's
-            // does. The verified email is the only thing that says WHO, so it
-            // must be on the allowlist — folded the way the roster folds — or
-            // the door stays shut. The body names nothing: not the email, not
-            // that an allowlist exists.
-            const who = result.email ? normalizeEmail(result.email) : '';
-            if (who === '' || !proxiedTrustedEmails.has(who)) {
-              return j(403, { error: 'forbidden' });
-            }
-            accessEmail = result.email ?? null;
             // Nothing else: no `visitor`, no scope. From here on the request
             // is what a loopback request is.
           } else if (cfAccessVerifier && !shares) {
