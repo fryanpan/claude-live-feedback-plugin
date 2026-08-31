@@ -71,10 +71,12 @@ import { createMockTranscriptionEngine } from '../packages/server/src/transcribe
 import { amiUtterances, amiWindow, busiestWindow, parseAmiWords } from './ami-truth.ts';
 import {
   DEFAULT_SCORING,
+  type DiarizationScore,
   type ScoredTurn,
   type TruthUtterance,
   formatScore,
   scoreDiarization,
+  summarizeRuns,
 } from './room-labels-score.ts';
 
 /**
@@ -511,7 +513,10 @@ const USAGE = `room-labels-check — score speaker labels against the script tha
   --emulate <ns|agc>...           ADD an approximation of a processor first
   --mock                          run the whole path against the mock engine:
                                   no key, no bill, and no measurement
-  --speakers <n>                  the cap to ask the engine for (default 2)
+  --repeat <n>                    run the same audio n times: the engine is not
+                                  deterministic and one run ranks nothing
+  --speakers <n>                  the cap to ask the engine for (default: the
+                                  number of people in the script)
   --data-dir <path>               where the meetings live (default ./data)
 `;
 
@@ -629,9 +634,17 @@ async function main(argv: readonly string[]): Promise<number> {
         : `Speaking ${seconds.toFixed(1)}s through the real engine with max_speakers=${maxSpeakers}…`,
     );
     const mocked = args.has('mock') ? truth : undefined;
-    const turns = await transcribe(pcm, maxSpeakers, mocked);
-    for (const t of turns) console.log(`  ${t.speaker ?? '(unattributed)'}  ${t.text}`);
-    const score = scoreDiarization(turns, truth, DEFAULT_SCORING);
+    // One run per setting cannot rank settings: the same AMI excerpt under
+    // identical settings scored 35.1% and 50.2% on two runs. Repeats are how
+    // the report distinguishes a difference from a draw.
+    const repeats = Math.max(1, Number(args.get('repeat')?.[0] ?? '1'));
+    const scores: DiarizationScore[] = [];
+    for (let run = 1; run <= repeats; run++) {
+      if (repeats > 1) console.log(`\n— run ${run} of ${repeats} —`);
+      const turns = await transcribe(pcm, maxSpeakers, mocked);
+      for (const t of turns) console.log(`  ${t.speaker ?? '(unattributed)'}  ${t.text}`);
+      scores.push(scoreDiarization(turns, truth, DEFAULT_SCORING));
+    }
     const flags = [
       args.has('mock') ? 'MOCK ENGINE — proves the harness, measures nothing' : null,
       synthetic ? 'SYNTHETIC FIXTURE — two TTS voices, not a room' : null,
@@ -640,8 +653,15 @@ async function main(argv: readonly string[]): Promise<number> {
       `microphone settings: ${setting}`,
     ].filter(Boolean);
     console.log(`\n${flags.join('\n')}\n`);
-    console.log(formatScore(audioFile, score));
-    return score.speakersInvented > 0 || score.speakersPredicted < score.speakersTruth ? 1 : 0;
+    for (const [i, score] of scores.entries()) {
+      console.log(formatScore(repeats > 1 ? `${audioFile} — run ${i + 1}` : audioFile, score));
+    }
+    if (repeats > 1) console.log(`\n${summarizeRuns(scores)}`);
+    // Any run that invented a speaker or never found one is a failure, not the
+    // median of them: the cap exists to make the first impossible.
+    return scores.some((s) => s.speakersInvented > 0 || s.speakersPredicted < s.speakersTruth)
+      ? 1
+      : 0;
   } finally {
     // Only the scratch directory goes; anything the caller passed in is theirs.
     rmSync(dir, { recursive: true, force: true });

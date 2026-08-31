@@ -6,8 +6,10 @@ import {
   type TruthUtterance,
   alignMonotonic,
   formatScore,
+  median,
   optimalAssignment,
   scoreDiarization,
+  summarizeRuns,
 } from './room-labels-score.ts';
 
 /**
@@ -240,5 +242,81 @@ describe('a turn that covers two people', () => {
     const score = scoreDiarization(turns(['A', 'A', 'A', 'A']), TRUTH);
     expect(score.speakersMissed).toBe(1);
     expect(formatScore('x', score)).toContain('NEVER DISTINGUISHED');
+  });
+});
+
+/* ===== Several runs of the same audio ===== */
+
+/**
+ * Runs are built through `scoreDiarization` rather than as literals, so the
+ * spread these tests describe is a spread the scorer can actually produce.
+ */
+function runScoring(labels: readonly string[]): ReturnType<typeof scoreDiarization> {
+  const truth: TruthUtterance[] = [
+    { speaker: 'Rowan', text: 'the kettle is on the left of the sink' },
+    { speaker: 'Devi', text: 'and the mugs are in the cupboard above' },
+    { speaker: 'Rowan', text: 'I will put the tray down by the door' },
+    { speaker: 'Devi', text: 'that works for the morning as well' },
+  ];
+  const turns: ScoredTurn[] = truth.map((t, i) => ({
+    turn: i + 1,
+    text: t.text,
+    speaker: labels[i] ?? 'A',
+  }));
+  return scoreDiarization(turns, truth, DEFAULT_SCORING);
+}
+
+describe('median', () => {
+  it('is the middle of an odd count and the mean of the middle two of an even one', () => {
+    expect(median([3, 1, 2])).toBe(2);
+    expect(median([4, 1, 3, 2])).toBe(2.5);
+  });
+
+  it('is not a number when there is nothing to take the middle of', () => {
+    expect(Number.isNaN(median([]))).toBe(true);
+  });
+});
+
+describe('summarizeRuns', () => {
+  const perfect = runScoring(['A', 'B', 'A', 'B']);
+  const halfWrong = runScoring(['A', 'B', 'B', 'B']);
+  const allOne = runScoring(['A', 'A', 'A', 'A']);
+
+  it('prints every run and their median rather than one number', () => {
+    const text = summarizeRuns([perfect, halfWrong]);
+    expect(text).toContain('ACROSS 2 RUNS');
+    expect(text).toContain('median');
+    // Both runs are visible: a reader can see the disagreement, not just its
+    // average.
+    expect(text.match(/%/g)?.length).toBeGreaterThan(4);
+  });
+
+  it('says the runs cannot rank settings when one setting spreads by 10 points', () => {
+    // This is the finding the AMI matrix ran into: the same audio under the
+    // same settings scored 35.1% and 50.2%, which is wider than any gap
+    // between settings. Without this line the matrix reads as a result.
+    const text = summarizeRuns([perfect, allOne]);
+    expect(text).toContain('SPREAD');
+    expect(text).toContain('Do not');
+  });
+
+  it('stays quiet when the runs agree, so the warning means something', () => {
+    // The positive control for the warning: it must not fire on every
+    // multi-run summary, or it carries no information when it does.
+    const text = summarizeRuns([perfect, perfect]);
+    expect(text).not.toContain('SPREAD');
+  });
+
+  it('reports the range of speaker counts, because that varies run to run too', () => {
+    const text = summarizeRuns([perfect, allOne]);
+    expect(text).toContain('speakers labelled: 1-2 of 2'.replace('-', '\u2013'));
+  });
+
+  it('has something to say about a single run', () => {
+    expect(summarizeRuns([perfect])).toContain('ACROSS 1 RUN of the same audio');
+  });
+
+  it('does not divide by a zero when there were no runs', () => {
+    expect(summarizeRuns([])).toBe('  no runs');
   });
 });

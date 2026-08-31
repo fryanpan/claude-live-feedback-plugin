@@ -357,3 +357,65 @@ export function formatScore(title: string, score: DiarizationScore): string {
       `alignment=${s.alignment} mapping=${s.mapping} unlabelled=${s.unlabelled} mixed=${s.mixed}`,
   ].join('\n');
 }
+
+/* ===== Several runs of the same audio ===== */
+
+/**
+ * The middle value, for an odd or even count.
+ *
+ * The median rather than the mean because these runs are a handful of samples
+ * from a heavy-tailed thing: one run where the engine merged the whole excerpt
+ * into two turns drags a mean somewhere no run actually was.
+ */
+export function median(values: readonly number[]): number {
+  if (values.length === 0) return Number.NaN;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const low = sorted[mid - 1];
+  const high = sorted[mid];
+  if (sorted.length % 2 === 1) return high ?? Number.NaN;
+  return low !== undefined && high !== undefined ? (low + high) / 2 : Number.NaN;
+}
+
+/**
+ * Several runs of ONE recording, reported as a spread rather than a number.
+ *
+ * The engine is not deterministic: the same 120 seconds of AMI audio scored
+ * 35.1% and 50.2% on two runs under identical settings. A single run per
+ * setting therefore cannot rank settings, and the matrix that does it anyway
+ * reads as a finding. So the summary prints every run, and says so out loud
+ * when the spread within one setting is wide enough to swallow the difference
+ * between settings — the reader needs to know the measurement is too coarse
+ * before they believe its ordering.
+ */
+export function summarizeRuns(scores: readonly DiarizationScore[]): string {
+  if (scores.length === 0) return '  no runs';
+  const turnPct = scores.map((s) => {
+    const base =
+      s.settings.unlabelled === 'excluded'
+        ? s.turnsAligned - s.turnsAlignedUnlabelled
+        : s.turnsAligned;
+    return base === 0 ? 0 : (100 * s.turnsCorrect) / base;
+  });
+  const wordPct = scores.map((s) =>
+    s.wordsScored === 0 ? 0 : (100 * s.wordsCorrect) / s.wordsScored,
+  );
+  const labelled = scores.map((s) => s.speakersPredicted);
+  const show = (values: readonly number[]) =>
+    `${values.map((v) => `${v.toFixed(1)}%`).join(' / ')}  (median ${median(values).toFixed(1)}%)`;
+  const spread = Math.max(...wordPct) - Math.min(...wordPct);
+  const lines = [
+    `  ACROSS ${scores.length} RUN${scores.length === 1 ? '' : 'S'} of the same audio:`,
+    `    speakers labelled: ${Math.min(...labelled)}–${Math.max(...labelled)} of ${scores[0]?.speakersTruth ?? 0}`,
+    `    turn attribution: ${show(turnPct)}`,
+    `    word attribution: ${show(wordPct)}`,
+  ];
+  if (scores.length > 1 && spread >= 10) {
+    lines.push(
+      `    SPREAD ${spread.toFixed(1)} POINTS WITHIN ONE SETTING — the engine is not`,
+      '    deterministic, and this is wider than the gaps between settings. Do not',
+      '    rank settings on these runs.',
+    );
+  }
+  return lines.join('\n');
+}
