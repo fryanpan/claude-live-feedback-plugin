@@ -209,6 +209,29 @@ What does move: the sharing master switch does not cover this door. It is the
 operator's own, keyed to their own identity, and it is how sharing gets turned
 back on from outside.
 
+**Two requests skip the Access token here, and only two** (2026-08-31).
+Recall.ai's meeting bot dials this server back on the one public address it
+has — this hostname — and its backend has no browser, no Access session and no
+way to acquire either, so demanding a token refused every bot callback: the
+bot joined the call, recorded, billed, and delivered nothing. Both callbacks
+already carry their own credential, so each is exempted **only while that
+credential is configured**:
+
+- `GET /recall/<token>` — the transcript websocket. The 128-bit per-bot token
+  in the path is the authentication. Exempt only when the Recall relay is
+  configured; on a server that can never mint a token there is no credential
+  behind the exemption. The route still answers 404 for a token no bot minted.
+- `POST /api/recall/status` — the bot status webhook. Recall's Svix signature
+  over the body is the credential, and the route verifies it. Exempt only when
+  `RECALL_WEBHOOK_SECRET` is set — with the secret unset the route accepts
+  UNSIGNED bodies, and that mode must never be reachable from the tunnel.
+
+Nothing else on the hostname changes, and every near-miss fails closed —
+`/recall/abc`, anything under or beside a token, a percent-encoded spelling of
+one, a trailing or doubled slash, the wrong method — each meets the gate it met
+before. Boot logs carry a `[meetings] bot callbacks on the operator hostname:
+…` line naming which half is exempt and which is still gated.
+
 ## Per-repo team config
 
 Each repo that uses sharing should set a default allow-list in its
