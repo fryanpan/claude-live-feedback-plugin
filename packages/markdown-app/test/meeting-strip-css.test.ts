@@ -323,6 +323,9 @@ describe('at 1180x820 the strip is one 40px bar', () => {
     // told they are being recorded has to be able to look over and see that
     // they still are.
     expect(rule('.meeting-strip.is-live .meeting-status')).toMatch(/display:\s*inline/);
+    // 11px text, so the 4.5:1 floor applies, not the 3:1 the dot gets:
+    // --red measures 4.26:1 on --bg-panel and fails it; --red-strong is 5.0:1.
+    expect(rule('.meeting-strip.is-live .meeting-status')).toMatch(/color:\s*var\(--red-strong\)/);
     // …and "Paused" still is not: the bar has no room for a word that says
     // nothing is happening.
     expect(rule('.meeting-status')).toMatch(/display:\s*none/);

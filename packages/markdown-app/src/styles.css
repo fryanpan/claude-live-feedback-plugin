@@ -6597,7 +6597,12 @@ body.is-reading-width #editor > .ProseMirror {
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--red);
+  /* --red-strong, not --red, and measured rather than picked: this is 11px
+     text, so the 4.5:1 floor applies rather than the 3:1 a graphical object
+     gets. On --bg-panel, --red is 4.26:1 (base) and fails; --red-strong is
+     5.0:1 base and 5.1:1 through the Open Props layer. The dot keeps --red —
+     it is a shape, and 3:1 is its bar. */
+  color: var(--red-strong);
 }
 .meeting-elapsed {
   font-weight: 600;
