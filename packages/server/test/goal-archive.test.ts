@@ -50,19 +50,17 @@ describe('archiving a goal', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  /** A band with a subgoal, two tasks of its own and one under the subgoal,
-   *  plus a second band whose task must never be touched by any of this. */
+  /** A band with two tasks, plus two more bands whose rows must never be
+   *  touched by any of this — one of them next to it in the list, which is
+   *  where a cascade that walked too far would show up. */
   function seed() {
     const ws = store.createWorkspace('search-revamp');
     const G = seedGoals(
       store,
       ws.id,
       [
-        {
-          key: 'fast',
-          title: 'Make review fast',
-          subgoals: [{ key: 'index', title: 'Index the corpus' }],
-        },
+        { key: 'fast', title: 'Make review fast' },
+        { key: 'index', title: 'Index the corpus' },
         { key: 'trust', title: 'Make the board trustworthy' },
       ],
       AGENT,
@@ -85,33 +83,31 @@ describe('archiving a goal', () => {
   it('counts what it is about to take, before it takes it', () => {
     const { G } = seed();
     const cascade = store.goalCascade(G.fast);
-    expect(cascade.subgoalIds).toEqual([G.index]);
-    // Three: the band's own two, plus the one under its subgoal. The other
-    // band's task is not in the blast radius and must not be counted into it.
-    expect(cascade.taskIds).toHaveLength(3);
-    expect(store.goalCascade(G.fast).goalIds).toEqual([G.fast]);
+    // Two: the band's own. The other bands' tasks are not in the blast radius
+    // and must not be counted into it.
+    expect(cascade.taskIds).toHaveLength(2);
   });
 
-  it('archives the band, its subgoal and every task under both', () => {
+  it('archives the band and every task under it', () => {
     const { G, rows } = seed();
     const res = store.archiveGoal(G.fast, { actor: PERSON, reason: 'goal moved past' });
     if (!res.ok) throw new Error('archiveGoal refused');
     expect(res.changed).toBe(true);
-    expect(res.taskIds).toHaveLength(3);
-    expect(res.subgoalIds).toEqual([G.index]);
+    expect(res.taskIds).toHaveLength(2);
 
     expect(store.getGoalRow(G.fast)?.archivedAt).toBeGreaterThan(0);
     expect(store.getGoalRow(G.fast)?.archivedBy).toBe('Jordan');
     expect(store.getGoalRow(G.fast)?.archiveReason).toBe('goal moved past');
-    expect(store.getGoalRow(G.index)?.archivedAt).toBeGreaterThan(0);
-    for (const id of [rows.wire.id, rows.cache.id, rows.crawl.id]) {
+    for (const id of [rows.wire.id, rows.cache.id]) {
       expect(store.getTask(id)?.archivedAt).toBeGreaterThan(0);
       expect(store.getTask(id)?.archivedWithGoal).toBe(G.fast);
     }
-    // The neighbouring band is untouched — in both halves, because a cascade
+    // The neighbouring bands are untouched — in both halves, because a cascade
     // that also archived the board would pass a test that only checked the
     // rows it was meant to take.
+    expect(store.getGoalRow(G.index)?.archivedAt).toBeUndefined();
     expect(store.getGoalRow(G.trust)?.archivedAt).toBeUndefined();
+    expect(store.getTask(rows.crawl.id)?.archivedAt).toBeUndefined();
     expect(store.getTask(rows.audit.id)?.archivedAt).toBeUndefined();
   });
 
@@ -119,7 +115,7 @@ describe('archiving a goal', () => {
     const { wsId, G, rows } = seed();
     store.archiveGoal(G.fast, { actor: PERSON });
     const live = store.listTasks(wsId).map((t) => t.id);
-    expect(live).toEqual([rows.audit.id]);
+    expect(live.sort()).toEqual([rows.crawl.id, rows.audit.id].sort());
     // Both directions: a listing that hid an unarchived row would be a board
     // that has lost work.
     expect(store.listTasks(wsId, { includeArchived: true })).toHaveLength(4);
@@ -146,33 +142,11 @@ describe('archiving a goal', () => {
 
     const back = store.unarchiveGoal(G.fast, { actor: PERSON });
     if (!back.ok) throw new Error('unarchiveGoal refused');
-    expect(back.taskIds.sort()).toEqual([rows.wire.id, rows.crawl.id].sort());
+    expect(back.taskIds).toEqual([rows.wire.id]);
     // The point of the whole marker: a decision somebody made about ONE row
     // survives a decision somebody made about the band.
     expect(store.getTask(rows.cache.id)?.archivedAt).toBeGreaterThan(0);
     expect(store.getGoalRow(G.fast)?.archivedAt).toBeUndefined();
-    expect(store.getGoalRow(G.index)?.archivedAt).toBeUndefined();
-  });
-
-  it('leaves a live task under an ALREADY-archived subgoal, because the board shows it in Backlog', () => {
-    const { wsId, G, rows } = seed();
-    // The subgoal goes on its own, then one of its tasks is put back by hand.
-    store.archiveGoal(G.index, { actor: PERSON });
-    store.unarchiveTask(rows.crawl.id, { actor: PERSON });
-    // An archived subgoal is not a band anything can sit under, so the board
-    // draws this task in Backlog from here on.
-    expect(store.listTasks(wsId).map((t) => t.id)).toContain(rows.crawl.id);
-
-    const res = store.archiveGoal(G.fast, { actor: PERSON });
-    if (!res.ok) throw new Error('archiveGoal refused');
-    expect(res.subgoalIds).not.toContain(G.index);
-    expect(res.taskIds).not.toContain(rows.crawl.id);
-    // Still on the board: archiving a band took a row off Backlog nowhere.
-    expect(store.listTasks(wsId).map((t) => t.id)).toContain(rows.crawl.id);
-    // And the count the confirmation showed is the set the write took — the
-    // one promise this rule could still break.
-    expect(store.goalCascade(G.fast).taskIds).toHaveLength(0);
-    expect(res.taskIds.sort()).toEqual([rows.wire.id, rows.cache.id].sort());
   });
 
   it('a hand restore leaves the cascade, so re-restoring the band does not reclaim it', () => {
@@ -183,24 +157,24 @@ describe('archiving a goal', () => {
     const back = store.unarchiveGoal(G.fast, { actor: PERSON });
     if (!back.ok) throw new Error('unarchiveGoal refused');
     expect(back.taskIds).not.toContain(rows.wire.id);
-    expect(back.taskIds.sort()).toEqual([rows.cache.id, rows.crawl.id].sort());
+    expect(back.taskIds).toEqual([rows.cache.id]);
   });
 
   it('emits one decision with its members batched under it', () => {
     const { G } = seed();
     store.archiveGoal(G.fast, { actor: PERSON, reason: 'goal moved past' });
     const archived = events.filter((e) => e.type === 'task.archived');
-    expect(archived).toHaveLength(5); // band + subgoal + three tasks
+    expect(archived).toHaveLength(3); // band + two tasks
     const band = archived.find((e) => e.taskId === G.fast);
     expect(band?.kind).toBe('goal');
-    expect(band?.cascadeTasks).toBe(3);
+    expect(band?.cascadeTasks).toBe(2);
     expect(typeof band?.batchId).toBe('string');
     for (const e of archived) {
       if (e.taskId === G.fast) continue;
       expect(e.partOf).toBe(band?.batchId);
+      // A member is a TASK — nothing else rides a goal's cascade.
+      expect(e.kind).toBeUndefined();
     }
-    // The subgoal's member event still says what kind of row it is.
-    expect(archived.find((e) => e.taskId === G.index)?.kind).toBe('goal');
   });
 
   it('is idempotent: re-archiving writes nothing and emits nothing', () => {
@@ -227,7 +201,7 @@ describe('archiving a goal', () => {
       ok: false,
       error: 'not-found',
     });
-    expect(store.goalCascade('g-nope')).toEqual({ goalIds: [], subgoalIds: [], taskIds: [] });
+    expect(store.goalCascade('g-nope')).toEqual({ taskIds: [] });
   });
 
   it('survives a reload — the archive is on disk, not in the process', () => {
@@ -240,10 +214,15 @@ describe('archiving a goal', () => {
       expect(reopened.getGoalRow(G.fast)?.archivedAt).toBeGreaterThan(0);
       expect(reopened.getGoalRow(G.fast)?.archiveReason).toBe('goal moved past');
       expect(reopened.getTask(rows.wire.id)?.archivedWithGoal).toBe(G.fast);
-      expect(reopened.listTasks(wsId).map((t) => t.id)).toEqual([rows.audit.id]);
+      expect(
+        reopened
+          .listTasks(wsId)
+          .map((t) => t.id)
+          .sort(),
+      ).toEqual([rows.crawl.id, rows.audit.id].sort());
       const back = reopened.unarchiveGoal(G.fast, { actor: PERSON });
       if (!back.ok) throw new Error('unarchiveGoal refused after reload');
-      expect(back.taskIds).toHaveLength(3);
+      expect(back.taskIds).toHaveLength(2);
     } finally {
       reopened.stop();
     }
@@ -297,11 +276,8 @@ describe('goal archive + restore routes', () => {
       base,
       wsId,
       [
-        {
-          key: 'fast',
-          title: 'Make review fast',
-          subgoals: [{ key: 'index', title: 'Index the corpus' }],
-        },
+        { key: 'fast', title: 'Make review fast' },
+        { key: 'index', title: 'Index the corpus' },
         { key: 'trust', title: 'Make the board trustworthy' },
       ],
       PERSON,
@@ -348,29 +324,20 @@ describe('goal archive + restore routes', () => {
     expect((after ?? []).find((g) => g.id === G.trust)?.archivedAt).toBeUndefined();
   });
 
-  it('projects WHICH archive took a subgoal, so the restore list can tell the two apart', async () => {
+  // Bands are a FLAT list now (subgoals were removed 2026-08-30), so an
+  // archive reaches exactly one of them. The projection has to say so: a walk
+  // that stamped a neighbour would take a live band off the lanes.
+  it('stamps only the archived band, leaving the one next to it on the board', async () => {
     await post(`/api/goals/${G.fast}/archive`, { author: PERSON });
-    type Sub = { id: string; archivedAt?: number; archivedWithGoal?: string };
     const read = () =>
       (handle.rooms.get(`ws:${wsId}`)?.ydoc.getMap('workspace').get('goals') as
-        | Array<{ id: string; subgoals?: Sub[] }>
+        | Array<{ id: string; archivedAt?: number }>
         | undefined) ?? [];
-    const sub = read()
-      .find((g) => g.id === G.fast)
-      ?.subgoals?.find((sg) => sg.id === G.index);
-    expect(sub?.archivedAt).toBeGreaterThan(0);
-    // The whole point of the field: this subgoal's tasks were stamped with the
-    // PARENT's id, so the restore list must not offer it a restore of its own.
-    expect(sub?.archivedWithGoal).toBe(G.fast);
-    // The band that took it carries no marker — it is the one that restores.
-    const parent = read().find((g) => g.id === G.fast) as Sub | undefined;
-    expect(parent?.archivedWithGoal).toBeUndefined();
+    expect(read().find((g) => g.id === G.fast)?.archivedAt).toBeGreaterThan(0);
+    expect(read().find((g) => g.id === G.index)?.archivedAt).toBeUndefined();
 
     await post(`/api/goals/${G.fast}/restore`, { author: PERSON });
-    const back = read()
-      .find((g) => g.id === G.fast)
-      ?.subgoals?.find((sg) => sg.id === G.index);
-    expect(back?.archivedWithGoal).toBeUndefined();
+    expect(read().find((g) => g.id === G.fast)?.archivedAt).toBeUndefined();
   });
 
   it('reports the cascade before the write, and the same rows after it', async () => {
@@ -380,10 +347,8 @@ describe('goal archive + restore routes', () => {
 
     const pre = (await (await local(`/api/goals/${G.fast}/cascade`)).json()) as {
       taskIds: string[];
-      subgoalIds: string[];
     };
-    expect(pre.taskIds.sort()).toEqual([wire.id, crawl.id].sort());
-    expect(pre.subgoalIds).toEqual([G.index]);
+    expect(pre.taskIds).toEqual([wire.id]);
 
     const res = await post(`/api/goals/${G.fast}/archive`, {
       author: PERSON,
@@ -396,11 +361,11 @@ describe('goal archive + restore routes', () => {
       goal: { archiveReason?: string };
     };
     expect(body.changed).toBe(true);
-    expect(body.taskIds.sort()).toEqual([wire.id, crawl.id].sort());
+    expect(body.taskIds).toEqual([wire.id]);
     expect(body.goal.archiveReason).toBe('goal moved past');
 
     // The board's own listing, both directions.
-    expect(await listIds()).toEqual([audit.id]);
+    expect((await listIds()).sort()).toEqual([crawl.id, audit.id].sort());
     expect((await listIds('?includeArchived=true')).length).toBe(3);
 
     const back = await post(`/api/goals/${G.fast}/restore`, { author: PERSON });

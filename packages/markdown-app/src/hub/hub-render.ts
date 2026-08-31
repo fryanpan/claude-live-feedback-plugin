@@ -38,7 +38,6 @@ import {
   type HubDecisionOption,
   type HubGoal,
   type HubReviewItem,
-  type HubSubgoal,
   type HubTask,
   type HubTransition,
   type LeadSeatView,
@@ -268,8 +267,8 @@ export interface ArchivedViewHandlers {
   /** The same two verbs for an archived BAND. Optional: without them the list
    *  draws tasks alone, which is what it drew before goals could be archived
    *  — a surface that cannot restore a row must not offer to. */
-  onRestoreGoal?: (goal: HubSubgoal) => void;
-  onOpenGoal?: (goal: HubSubgoal) => void;
+  onRestoreGoal?: (goal: HubGoal) => void;
+  onOpenGoal?: (goal: HubGoal) => void;
 }
 
 /** "1 archived goal and 3 archived tasks" — and each half is dropped when it
@@ -456,7 +455,7 @@ export interface GoalDetailHandlers {
    * says so and offers no Archive, rather than offering one whose
    * consequences it cannot state.
    */
-  onCascadeCount?: (goalId: string) => Promise<{ tasks: number; subgoals: number } | null>;
+  onCascadeCount?: (goalId: string) => Promise<{ tasks: number } | null>;
   /** Commit the archive, cascade and all. Only ever reached through the
    *  confirmation above. */
   onArchive?: (section: BoardSection) => void;
@@ -484,17 +483,7 @@ export function renderArchivedList(
   container: HTMLElement,
   tasks: HubTask[],
   handlers: ArchivedViewHandlers,
-  goals: HubSubgoal[] = [],
-  /**
-   * The counts, which are NOT `goals.length`.
-   *
-   * `goals` is the restorable rows; a subgoal swept up by its parent is
-   * archived without being one of them. The heading counts everything that is
-   * off the board, and each band's row says how many subgoals came with it —
-   * together that is why "2 archived goals" can sit above a single goal row
-   * without the two contradicting each other.
-   */
-  bands: { total?: number; cascaded?: (goalId: string) => number } = {},
+  goals: HubGoal[] = [],
 ): void {
   container.replaceChildren();
   const head = document.createElement('div');
@@ -505,7 +494,7 @@ export function renderArchivedList(
   back.textContent = '← Back to the board';
   back.addEventListener('click', () => handlers.onBack());
   const rows = handlers.onRestoreGoal ? goals : [];
-  const total = handlers.onRestoreGoal ? (bands.total ?? rows.length) : 0;
+  const total = handlers.onRestoreGoal ? rows.length : 0;
   const h = document.createElement('h3');
   h.className = 'hub-section-title';
   h.textContent = archivedHeading(total, tasks.length);
@@ -553,17 +542,7 @@ export function renderArchivedList(
     // press it rather than after.
     restore.setAttribute('aria-label', `Restore “${goal.title}” and its tasks to the board`);
     restore.addEventListener('click', () => handlers.onRestoreGoal?.(goal));
-    li.append(kind, title, why);
-    // Where the heading's other goal went. Without this the count above reads
-    // as an off-by-one against the rows below it.
-    const rode = bands.cascaded?.(goal.id) ?? 0;
-    if (rode > 0) {
-      const withSubs = document.createElement('span');
-      withSubs.className = 'hub-archived-with';
-      withSubs.textContent = `with ${rode === 1 ? '1 subgoal' : `${rode} subgoals`}`;
-      li.append(withSubs);
-    }
-    li.append(restore);
+    li.append(kind, title, why, restore);
     list.append(li);
   }
   for (const task of tasks) {
@@ -974,7 +953,7 @@ export interface DetailHandlers {
   /** The agents currently attached to this workspace — see `BoardHandlers`. */
   knownAgentIds?: string[];
   /** Names the goal the way the board's own section header does — pass
-   *  `hub-model`'s `goalLabel`, which resolves subgoals and Backlog. The panel
+   *  `hub-model`'s `goalLabel`, which resolves Backlog too. The panel
    *  is where a reader goes to find out what a task is FOR, so an id is a
    *  fact about the store rather than an answer. Optional, and without it the
    *  row falls back to the id — a missing lookup must not blank it. */
@@ -984,7 +963,7 @@ export interface DetailHandlers {
    *  rather than disappearing, because a field that vanishes when a lookup is
    *  missing reads as a bug in the task. */
   goals?: HubGoal[];
-  /** Move the task to another goal or subgoal. */
+  /** Move the task to another goal. */
   onGoalSet?: (task: HubTask, goalId: string) => void;
   /** Set the due date, or clear it with `null`. */
   onDueSet?: (task: HubTask, dueAt: number | null) => void;
@@ -1639,26 +1618,22 @@ export function detailFields(
   cell('Due', due);
 
   // The goal list comes from the board rather than being re-derived, so the
-  // options here are the sections a reader can already see — including
-  // subgoals, which is the grain a task is actually placed at. The task's own
+  // options here are the sections a reader can already see. The task's own
   // goal is always present even when the list does not have it: a stale or
   // deleted band must not silently re-place the task on the next change event.
   const goal = document.createElement('select');
   goal.className = 'hub-detail-select hub-detail-goal';
   const seen = new Set<string>();
-  const addGoalOption = (id: string, label: string, depth: number): void => {
+  const addGoalOption = (id: string, label: string): void => {
     if (seen.has(id)) return;
     seen.add(id);
     const opt = document.createElement('option');
     opt.value = id;
-    opt.textContent = depth > 0 ? `— ${label}` : label;
+    opt.textContent = label;
     goal.append(opt);
   };
-  for (const g of handlers.goals ?? []) {
-    addGoalOption(g.id, g.title, 0);
-    for (const sub of g.subgoals ?? []) addGoalOption(sub.id, sub.title, 1);
-  }
-  addGoalOption(task.goal, handlers.goalLabel?.(task.goal) ?? task.goal, 0);
+  for (const g of handlers.goals ?? []) addGoalOption(g.id, g.title);
+  addGoalOption(task.goal, handlers.goalLabel?.(task.goal) ?? task.goal);
   goal.value = task.goal;
   goal.setAttribute('aria-label', 'Goal');
   goal.addEventListener('change', () => {

@@ -207,7 +207,6 @@ function offBand(task: HubTask, goals: HubGoal[], rank: (goalId: string) => numb
   if (rank(task.goal) === last) return true;
   for (const g of goals) {
     if (g.id === task.goal) return g.status === 'done';
-    for (const sg of g.subgoals ?? []) if (sg.id === task.goal) return sg.status === 'done';
   }
   return false;
 }

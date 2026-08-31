@@ -40,12 +40,20 @@ function declarationFor(tool: string): string {
 }
 
 describe('set_goal_list declares the generated-id contract', () => {
-  it('does not require an id, at either level', () => {
+  it('does not require an id', () => {
     const decl = declarationFor('set_goal_list');
-    // Positive control: the schema is really in view — `title` is required at
-    // both levels, so a decl slice that captured nothing fails here first.
-    expect(decl.match(/required: \['title'\]/g) ?? []).toHaveLength(2);
+    // Positive control: the schema is really in view — `title` is required, so
+    // a decl slice that captured nothing fails here first.
+    expect(decl.match(/required: \['title'\]/g) ?? []).toHaveLength(1);
     expect(decl).not.toMatch(/required: \['id', 'title'\]/);
+  });
+
+  // Subgoals were removed from the product (Bryan, 2026-08-30). The tool must
+  // stop offering a shape the store will only flatten — an agent that submits
+  // one gets bands it did not mean to create.
+  it('offers no nesting', () => {
+    expect(declarationFor('set_goal_list')).not.toMatch(/subgoals/);
+    expect(declarationFor('reorder_goals')).not.toMatch(/parent/);
   });
 
   it('says how to create, how to keep, and what happens to an id the board lacks', () => {
@@ -67,7 +75,7 @@ describe('set_goal_list declares the generated-id contract', () => {
 describe('the handler forwards `created` rather than dropping it', () => {
   it('reads it off the response and returns it', () => {
     const h = handlerFor('set_goal_list');
-    expect(h).toMatch(/created: Array<\{ id: string; title: string; parent\?: string \}>/);
+    expect(h).toMatch(/created: Array<\{ id: string; title: string \}>/);
     expect(h).toMatch(/created: res\.created/);
   });
 });

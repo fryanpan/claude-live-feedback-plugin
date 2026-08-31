@@ -50,7 +50,8 @@ function note(agoMs: number, text: string, overrides: Partial<HubNote> = {}): Hu
 }
 
 const GOALS: HubGoal[] = [
-  { id: 'g-pr', title: '1. Get the PR out', subgoals: [{ id: 'g-pr-sub', title: '1.1 Tickets' }] },
+  { id: 'g-pr', title: '1. Get the PR out' },
+  { id: 'g-pr-sub', title: '1.1 Tickets' },
   { id: 'g-blog', title: '2. Blog post' },
   { id: 'g-old', title: '3. Shipped', status: 'done' },
 ];

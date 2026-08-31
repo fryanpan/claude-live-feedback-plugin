@@ -13,15 +13,10 @@ import { buildQueue, summarizeGoals } from '../src/task-queue.ts';
 import type { GoalRow, Task, WorkspaceGoal } from '../src/tasks.ts';
 
 const GOALS: WorkspaceGoal[] = [
-  {
-    id: 'g-ship',
-    title: '1. Ship the search revamp',
-    subgoals: [
-      { id: 'g-ship-blockers', title: '1.1 Delivery blockers' },
-      { id: 'g-ship-loop', title: '1.2 The loop itself' },
-    ],
-  },
-  { id: 'g-reach', title: '2. Reach' },
+  { id: 'g-ship', title: '1. Ship the search revamp' },
+  { id: 'g-ship-blockers', title: '2. Delivery blockers' },
+  { id: 'g-ship-loop', title: '3. The loop itself' },
+  { id: 'g-reach', title: '4. Reach' },
 ];
 
 let seq = 0;
@@ -57,7 +52,7 @@ describe('buildQueue — priority order', () => {
     // The band label is the goal's own title — the numbering is Bryan's, typed
     // into the title, and inventing a second numbering scheme here would let
     // the two disagree.
-    expect(rows[1]?.goalTitle).toBe('1.1 Delivery blockers');
+    expect(rows[1]?.goalTitle).toBe('2. Delivery blockers');
   });
 
   it('sorts by task order within one goal', () => {
@@ -159,7 +154,7 @@ describe('buildQueue — a deferred row is a triage row', () => {
 });
 
 describe('summarizeGoals', () => {
-  it('flattens parent-then-subgoals in priority order, with counts', () => {
+  it('lists the bands in priority order, with counts', () => {
     const rows = summarizeGoals(
       [
         task({ goal: 'g-ship-blockers', status: 'todo' }),
@@ -170,7 +165,6 @@ describe('summarizeGoals', () => {
       GOALS,
     );
     expect(rows.map((r) => r.id)).toEqual(['g-ship', 'g-ship-blockers', 'g-ship-loop', 'g-reach']);
-    expect(rows.map((r) => r.depth)).toEqual([0, 1, 1, 0]);
     const blockers = rows.find((r) => r.id === 'g-ship-blockers');
     expect(blockers).toMatchObject({ todo: 1, inProgress: 1, done: 1 });
     // A goal with nothing in it still appears — an empty band is information.
@@ -226,7 +220,7 @@ describe('summarizeGoals', () => {
       doneAt: 1_700_000_000_000,
       doneBy: { name: 'Jordan', kind: 'person' },
     });
-    // Subgoal rows are goal rows too — the flattening covers both depths.
+    // Every listed band carries its own row's status, not just the first.
     expect(rows.find((r) => r.id === 'g-ship-blockers')).toMatchObject({ status: 'in-progress' });
     // An open row claims no done attribution.
     const reach = rows.find((r) => r.id === 'g-reach');
@@ -244,7 +238,7 @@ describe('buildQueue — which rows are in a goal band', () => {
   // outside every ranked band is never auto-dispatched (Bryan, 2026-08-22),
   // so counting it "ready" wakes a lead over work the dispatch rule would
   // never start.
-  it('marks goal and subgoal rows in-band, and chores out', () => {
+  it('marks listed goal rows in-band, and chores out', () => {
     const rows = buildQueue(
       [task({ goal: 'g-ship-loop' }), task({ goal: 'g-reach' }), task({ goal: 'chores' })],
       GOALS,

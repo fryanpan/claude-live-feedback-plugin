@@ -79,11 +79,8 @@ function task(overrides: Partial<HubTask> = {}): HubTask {
 }
 
 const GOALS: HubGoal[] = [
-  {
-    id: 'g-pr',
-    title: '1. Get the PR out',
-    subgoals: [{ id: 'g-pr-tickets', title: '1.1 Post-PR tickets' }],
-  },
+  { id: 'g-pr', title: '1. Get the PR out' },
+  { id: 'g-pr-tickets', title: '1.1 Post-PR tickets' },
   { id: 'g-blog', title: '2. Blog post' },
 ];
 
@@ -95,15 +92,14 @@ const filters: BoardFilters = {
 };
 
 describe('boardSections', () => {
-  it('orders sections by goal priority, subgoals nested after their parent, Backlog last', () => {
+  it('orders sections by goal priority, Backlog last', () => {
     const sections = boardSections(GOALS, [], filters);
     expect(sections.map((s) => s.id)).toEqual(['g-pr', 'g-pr-tickets', 'g-blog', CHORES_ID]);
-    expect(sections.map((s) => s.depth)).toEqual([0, 1, 0, 0]);
     expect(sections[3]?.isChores).toBe(true);
     expect(sections[3]?.title).toBe('Backlog');
   });
 
-  it('places tasks in their goal or subgoal section, sorted by fractional order', () => {
+  it('places tasks in their goal section, sorted by fractional order', () => {
     const a = task({ goal: 'g-pr', order: 2 });
     const b = task({ goal: 'g-pr', order: 1.5 });
     const sub = task({ goal: 'g-pr-tickets', order: 1 });
@@ -128,8 +124,8 @@ describe('boardSections', () => {
         status: 'done',
         doneAt: NOW - HOUR,
         doneBy: { name: 'Jordan', kind: 'person' },
-        subgoals: [{ id: 'g-pr-tickets', title: '1.1 Post-PR tickets', status: 'todo' }],
       },
+      { id: 'g-pr-tickets', title: '1.1 Post-PR tickets', status: 'todo' },
       { id: 'g-blog', title: '2. Blog post' },
     ];
     const sections = boardSections(goals, [], filters);
@@ -163,7 +159,7 @@ describe('boardSections', () => {
 });
 
 describe('goalLabel', () => {
-  it('names a goal and a subgoal the way its section header does', () => {
+  it('names each band the way its section header does', () => {
     expect(goalLabel(GOALS, 'g-pr')).toBe('1. Get the PR out');
     expect(goalLabel(GOALS, 'g-pr-tickets')).toBe('1.1 Post-PR tickets');
   });
@@ -888,7 +884,7 @@ describe('stepTarget (the keyboard half of reordering)', () => {
   // that crosses a section boundary — otherwise reordering is pointer-only
   // for exactly the move that matters most (re-prioritising into a goal).
   it('crosses into the neighbouring section at the ends', () => {
-    // 'b' is last in g-pr; down lands it in the next section (the subgoal).
+    // 'b' is last in g-pr; down lands it in the next section.
     expect(stepTarget(stepSections(), 'b', 1)?.goal).toBe('g-pr-tickets');
     // 'z' is alone in g-blog; up lands it in the section above it.
     expect(stepTarget(stepSections(), 'z', -1)?.goal).toBe('g-pr-tickets');
@@ -1513,8 +1509,7 @@ describe('reviewQueue — task priority is the primary key', () => {
       needs: 'decision',
     });
     const q = reviewQueue([mid, sub, top], [], T0, GOALS);
-    // A subgoal is its own band, nested directly after its parent — the same
-    // sequence `boardSections` renders.
+    // Band order, the same sequence `boardSections` renders.
     expect(ids(q)).toEqual(['decision:d-top', 'decision:d-mid', 'decision:d-sub']);
   });
 
