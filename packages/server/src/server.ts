@@ -1854,6 +1854,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
    * sees the post-edit value and the run it overtook holds a smaller one.
    */
   function scoreEffortEstimate(task: Task): void {
+    void runEffortEstimate(task);
+  }
+
+  /**
+   * The same run, awaitable — for the boot pass, which must space its calls
+   * out rather than firing one per open ticket at once.
+   *
+   * Resolves once the record has been written (or refused). The event-driven
+   * caller above throws the promise away, which is the fire-and-forget
+   * contract it has always had; only the backfill awaits it.
+   */
+  async function runEffortEstimate(task: Task): Promise<void> {
     const estimator = opts.effortEstimator;
     if (!estimator) return;
     const prompt = taskStore.effortEstimatePrompt(task.workspaceId);
@@ -1862,7 +1874,7 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     const forBodyWrittenAt = task.bodyWrittenAt;
     const forGoal = task.goal;
     const forWordsRevision = wordsRevisionOf(task);
-    void (async () => {
+    {
       let verdict: EffortEstimateVerdict | null = null;
       try {
         verdict = await estimator({
@@ -1904,8 +1916,18 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // A `stale` refusal here is expected under concurrent edits, not a
       // bug — see the doc comment above — so it is silently dropped rather
       // than logged.
-      taskStore.recordEffortEstimate(task.id, record);
-    })();
+      const written = taskStore.recordEffortEstimate(task.id, record);
+      // Re-project the board, because NOTHING ELSE WILL. `recordEffortEstimate`
+      // is deliberately quiet — no store event, no `updatedAt` bump, or the
+      // write would re-trigger its own scorer forever — and the projection
+      // refreshes off store events. So an estimate landed in the store and the
+      // board kept drawing the goal it drew before, until some unrelated edit
+      // happened to refresh the workspace. The bar is the only surface these
+      // numbers appear on; a score nobody can see is a score that did not
+      // happen. Refresh is diff-aware, so a projection already in step is a
+      // no-op transaction.
+      if (written.ok) taskProjection.refresh(task.workspaceId);
+    }
   }
 
   // Effort-estimate scoring: re-score a ticket in the background whenever
@@ -1979,6 +2001,76 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
   // authoritative for gated fields on restart.
   const taskProjection = new TaskProjection({ rooms, tasks: taskStore });
   taskProjection.init();
+
+  /**
+   * Re-score every OPEN ticket whose estimate predates the current ask.
+   *
+   * Scoring is otherwise event-driven — it fires on create, on a retitle, on
+   * a body edit and on a re-triage — and none of those events happen when
+   * the PROMPT changes. Without this pass a prompt bump reaches only tickets
+   * somebody happens to edit afterwards, so a board keeps forecasting from
+   * answers to a question nobody is asking any more, indefinitely and
+   * silently. `EFFORT_ESTIMATE_PROMPT_VERSION` is the token that makes the
+   * staleness decidable; this is the thing that acts on it.
+   *
+   * Open rows only. A closed ticket's estimate is HISTORY — it is one half
+   * of a calibration sample whose other half already happened, and
+   * re-scoring it under a new prompt would be scoring a ticket whose outcome
+   * is known, which is the one thing the effort plan's backfill section says
+   * never to do ("blind scoring is the whole point"). The calibrator drops
+   * old-generation samples instead (`isCurrentGenerationEstimate`), which
+   * costs the board its learned factors and is why the priors exist.
+   *
+   * SEQUENTIAL, with a gap between calls. A hundred open rows is a hundred
+   * API calls, and firing them together on boot would spend the rate limit
+   * that live edits need on work nobody is waiting for. Nothing is waiting
+   * on this loop, so it can afford to be slow.
+   *
+   * Never blocks startup and never fails one: the promise is thrown away,
+   * every call already records its own failure on the row, and a server with
+   * no estimator wired does nothing here at all.
+   */
+  const EFFORT_RESCORE_GAP_MS = 250;
+  let effortRescoreStopped = false;
+  async function rescoreStaleEffortEstimates(): Promise<void> {
+    if (!opts.effortEstimator) return;
+    const stale: Task[] = [];
+    for (const ws of taskStore.listWorkspaces()) {
+      for (const task of taskStore.listTasks(ws.id)) {
+        if (task.status === 'done') continue;
+        // Absent AND older-generation, both. A never-scored open ticket is
+        // the same problem from the other side — it contributes nothing to
+        // its goal's bar and says "not scored" forever unless somebody edits
+        // it — and this loop is already walking past it.
+        if (task.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION) continue;
+        stale.push(task);
+      }
+    }
+    if (stale.length === 0) return;
+    console.log(
+      `[effort-estimate] re-scoring ${stale.length} open ticket${stale.length === 1 ? '' : 's'} under prompt version ${EFFORT_ESTIMATE_PROMPT_VERSION}`,
+    );
+    for (const task of stale) {
+      if (effortRescoreStopped) return;
+      // Re-read: the row may have been edited, archived or closed since the
+      // list was taken, and a rescore of a row that moved on is wasted at
+      // best — `recordEffortEstimate` would refuse it as stale anyway.
+      const current = taskStore.getTask(task.id);
+      if (!current || current.status === 'done' || current.archivedAt !== undefined) continue;
+      // And re-ask the question this loop exists to answer. A row queued
+      // behind a hundred others can be edited while it waits, and an edit
+      // triggers its own scoring — so by the time the loop reaches it the row
+      // may already carry a current-generation estimate. Without this check
+      // the pass spends a second call and can land its answer on top of the
+      // newer one, which `recordEffortEstimate`'s guard does not catch
+      // because no words changed between the two reads.
+      if (current.effortEstimate?.promptVersion === EFFORT_ESTIMATE_PROMPT_VERSION) continue;
+      await runEffortEstimate(current);
+      if (effortRescoreStopped) return;
+      await new Promise((r) => setTimeout(r, EFFORT_RESCORE_GAP_MS));
+    }
+    console.log('[effort-estimate] re-scoring pass done');
+  }
 
   // The done-artifact check (artifact-check.ts): a move to done gets the
   // row's links verified after the transition commits — a dead PR link or a
@@ -10094,6 +10186,16 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
     },
   });
 
+  // The effort re-scoring pass starts HERE, after the port is bound, not
+  // where it is defined. `createServer` THROWS when the port is taken, and
+  // `bin.ts` answers by constructing a whole new server on the next port —
+  // so a pass kicked off during construction runs once for every attempt,
+  // from stores belonging to servers nobody kept, all writing the same data
+  // directory. Observed on a dev box where 8788 was already held: two passes
+  // over the same 99 rows, and the abandoned one still calling the API.
+  // Reaching this line is what makes a server real.
+  void rescoreStaleEffortEstimates();
+
   /**
    * The base every human-facing URL this server emits is built on.
    *
@@ -10317,6 +10419,11 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
       // server that is going away.
       readyNudger.stop();
       stallNudger.stop();
+      // The boot re-scoring pass runs for as long as there are stale rows, so
+      // a short-lived server (every test) can still be mid-loop here. Setting
+      // the flag is enough: the loop checks it either side of each call, so
+      // it stops before the next write rather than being torn out mid-write.
+      effortRescoreStopped = true;
       // Close the worktree watchers with the loop that read them; the
       // persisted dispatch set survives for the next process to re-arm.
       dispatches.stop();

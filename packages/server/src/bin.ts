@@ -472,14 +472,19 @@ if (!transcription) {
 // by anything that merely spins a server up would be a meter attached to a
 // test suite. No key → null → the invite route answers `not_configured` and
 // the doc says meeting bots are not set up.
-const meetingBot = createRecallClient();
+const meetingBot = createRecallClient({ publicBaseUrl: publicBaseUrlOverride });
 if (meetingBot && !meetingBot.config.publicWsBase) {
-  // Worth saying out loud rather than discovering at invite time: this is the
-  // one piece of configuration that cannot be inferred, because the server
-  // binds to localhost and Recall dials in from the public internet.
+  // Worth saying out loud rather than discovering at invite time: the server
+  // binds to localhost and Recall dials in from the public internet, so it
+  // has to be told the origin something in front of it answers on. Named
+  // rather than guessed, and named ONCE — the same value every human-facing
+  // link is built from.
   console.log(
-    '[meetings] Recall key found but RECALL_PUBLIC_WS_BASE is unset; ' +
-      'bots stay disabled until it names a publicly reachable wss:// origin.',
+    publicBaseUrlOverride
+      ? '[meetings] Recall key found but CW_PUBLIC_BASE_URL is not https; ' +
+          'bots stay disabled rather than stream a meeting in plaintext.'
+      : '[meetings] Recall key found but CW_PUBLIC_BASE_URL is unset; ' +
+          'bots stay disabled until it names the https origin this server is reached on.',
   );
 }
 const meetingBotWebhookSecret = process.env.RECALL_WEBHOOK_SECRET?.trim() || undefined;

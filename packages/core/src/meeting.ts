@@ -62,6 +62,61 @@ export function parseCaptureMode(raw: unknown): CaptureMode {
   return raw === 'conversation' ? 'conversation' : DEFAULT_CAPTURE_MODE;
 }
 
+/**
+ * What the room hears when an in-person capture starts.
+ *
+ * ONE SENTENCE, FIXED, NOT LOCALIZED. It is the thing that makes a recording
+ * defensible, so it must read the same every time and be quotable back — a
+ * sentence composed per meeting is one nobody can point at afterwards. It is
+ * deliberately passive about who is recording: the same words are correct
+ * whether the device says them or the person in the room reads them aloud,
+ * and a sentence that only worked in one of those mouths would need a second
+ * sentence for the other.
+ *
+ * Short because it is spoken over the top of a conversation that has already
+ * started, and because a long one gets talked over, which is the failure mode
+ * an announcement cannot have.
+ */
+export const RECORDING_ANNOUNCEMENT =
+  'Just so everyone knows, this conversation is being recorded and transcribed.';
+
+/**
+ * Whose mouth the announcement came out of.
+ *
+ * `device` is the default — the browser speaks it, which is the only path
+ * that needs nothing of the person holding the iPad. `spoken` means the
+ * sentence was put ON SCREEN for a human to read out instead, either because
+ * they asked to say it themselves or because speech synthesis was unavailable
+ * or refused.
+ *
+ * `spoken` is a weaker claim than `device` and the record must not be read as
+ * if it were not: the client knows it displayed the sentence, and it cannot
+ * know that anybody actually read it. Absent means no announcement was made
+ * at all — a `solo` capture, or a client built before this existed.
+ */
+export type AnnouncedBy = 'device' | 'spoken';
+
+/** The path taken when nobody asked for the other one. */
+export const DEFAULT_ANNOUNCED_BY: AnnouncedBy = 'device';
+
+/**
+ * An announcement path, or `undefined` for anything else.
+ *
+ * Undefined rather than a default, and that is the whole point: this field is
+ * the evidence that a room was told it was being recorded, so an unreadable
+ * value has to come back as "nothing is claimed" rather than as a claim
+ * nobody made. The permissive direction here would write a consent record out
+ * of a typo.
+ */
+export function parseAnnouncedBy(raw: unknown): AnnouncedBy | undefined {
+  return raw === 'device' || raw === 'spoken' ? raw : undefined;
+}
+
+/** Whether a capture in this mode announces itself. Only a room needs telling. */
+export function announcesRecording(mode: CaptureMode): boolean {
+  return mode === 'conversation';
+}
+
 /** Client → server. Sent as a JSON text frame; audio is sent as binary frames. */
 export type MeetingClientMessage =
   | {
@@ -94,7 +149,20 @@ export type MeetingClientMessage =
    * record, in the notes — reads as the name from then on. Per meeting: the
    * same letter is a different person next time.
    */
-  | { type: 'name_speaker'; speaker: string; name: string };
+  | { type: 'name_speaker'; speaker: string; name: string }
+  /**
+   * The room HAS been told, this way.
+   *
+   * Sent after the fact and never with the `start` frame, and that is the
+   * whole design: a claim made at the moment the mic opened would be a claim
+   * about something that had not happened yet, and a meeting stopped
+   * mid-sentence would leave it standing. `device` goes up only once the
+   * browser reports the utterance finished; `spoken` goes up the moment the
+   * sentence is put on screen, which is all `spoken` has ever claimed. A
+   * meeting that ends before either is a meeting whose record says nothing —
+   * which is the honest answer.
+   */
+  | { type: 'announced'; by: AnnouncedBy };
 
 /** Longest name a speaker label can be given. A name, not a bio. */
 export const MAX_SPEAKER_NAME = 60;
@@ -173,6 +241,13 @@ export function parseMeetingClientMessage(raw: unknown): MeetingClientMessage | 
   if (typeof parsed !== 'object' || parsed === null) return null;
   const m = parsed as Record<string, unknown>;
   if (m.type === 'stop') return { type: 'stop' };
+  if (m.type === 'announced') {
+    const by = parseAnnouncedBy(m.by);
+    // A frame that names no path says nothing, and the record says nothing
+    // in turn — the permissive direction would write a consent claim out of
+    // a typo.
+    return by ? { type: 'announced', by } : null;
+  }
   if (m.type === 'timing_ping') {
     if (typeof m.id !== 'number' || !Number.isFinite(m.id)) return null;
     if (typeof m.clientMs !== 'number' || !Number.isFinite(m.clientMs)) return null;

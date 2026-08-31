@@ -20,10 +20,10 @@ import {
   buildCreateBotBody,
   createRecallClient,
   isRecallRegion,
-  normalizeWsBase,
   recallApiBase,
   recallConfigFromEnv,
   resolveRecallKey,
+  wsBaseFromPublicBaseUrl,
 } from '../src/recall.ts';
 
 const FAKE_KEY = 'test-key-not-a-credential';
@@ -106,13 +106,30 @@ describe('recall config', () => {
     expect(recallApiBase('eu-central-1')).toBe('https://eu-central-1.recall.ai/api');
   });
 
-  it('disables bots when no public ws base is set', () => {
+  it('derives the realtime endpoint from the one public base URL, never its own', () => {
+    // Two settings naming one host is two things to get wrong, and nothing
+    // reports the disagreement — just a bot that records into a hostname
+    // nobody is listening on. So this reads the value every human-facing
+    // link is already built from.
+    expect(wsBaseFromPublicBaseUrl('https://example.test')).toBe('wss://example.test');
+    expect(wsBaseFromPublicBaseUrl('https://example.test/')).toBe('wss://example.test');
+    expect(wsBaseFromPublicBaseUrl('https://example.test/at/')).toBe('wss://example.test/at');
+    expect(recallConfigFromEnv({}, 'https://example.test').publicWsBase).toBe('wss://example.test');
+  });
+
+  it('disables bots rather than stream a meeting over plaintext', () => {
+    // A plain-http base means nothing is terminating TLS in front, so the
+    // only thing derivable is a plaintext socket carrying everything said in
+    // the meeting across the public internet. "Not configured" is the honest
+    // answer and the UI already knows how to show it.
+    expect(wsBaseFromPublicBaseUrl('http://example.test')).toBeNull();
+    expect(wsBaseFromPublicBaseUrl('http://localhost:8787')).toBeNull();
+    expect(wsBaseFromPublicBaseUrl('wss://example.test')).toBeNull();
+    expect(wsBaseFromPublicBaseUrl('not a url')).toBeNull();
+    expect(wsBaseFromPublicBaseUrl(undefined)).toBeNull();
+    expect(wsBaseFromPublicBaseUrl(null)).toBeNull();
     expect(recallConfigFromEnv({}).publicWsBase).toBeNull();
-    // http:// is not a websocket scheme, and silently coercing it would send
-    // Recall to an endpoint that cannot upgrade.
-    expect(normalizeWsBase('https://example.test')).toBeNull();
-    expect(normalizeWsBase('wss://example.test/')).toBe('wss://example.test');
-    expect(normalizeWsBase('wss://example.test/hook/')).toBe('wss://example.test/hook');
+    expect(recallConfigFromEnv({}, 'http://example.test').publicWsBase).toBeNull();
   });
 
   it('floors retention at the documented minimum and defaults it short', () => {

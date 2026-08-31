@@ -56,6 +56,13 @@ flowchart LR
   opened, so the strip reports the session being billed rather than the one
   it asked for, and the meeting record keeps it because it is what the
   meeting cost.
+- **A room capture announces itself, into its own microphone.** A
+  `conversation` start speaks a fixed sentence out loud once the mic is open
+  and the engine is receiving — so the announcement is in the captured audio
+  rather than in a moment before the recording that nothing can show
+  afterwards. One tap (`I'll say it`) hands the sentence to the person
+  instead, and a device that cannot speak falls back to the same place. Solo
+  announces nothing. See "The room is told" below.
 - **Who said it rides the same frame.** The engine's speaker label (`"A"`,
   `"B"`) travels as `speaker` on each transcript frame; the strip shows it as
   a muted tag at the head of the turn ("Speaker A"), and a tap on the tag
@@ -280,9 +287,15 @@ sitting in the call billing.
 (`claude-workspaces-recall-api-key`) — the same order and the same reasoning
 as the AssemblyAI key. `RECALL_REGION` picks the API host and a key is only
 valid in its own region (a mismatch is a 401, which the client's error names).
-`RECALL_PUBLIC_WS_BASE` is the one value that cannot be inferred: **Recall
-dials this server**, and this server binds to localhost behind Tailscale, so
-bots stay disabled until it names a publicly reachable `wss://` origin.
+**Recall dials this server**, and this server binds to localhost behind a
+Cloudflare Tunnel, so it has to be told the origin something in front of it
+answers on — which is already `CW_PUBLIC_BASE_URL`, the single source of every
+link the server hands a human. The realtime endpoint is DERIVED from it
+(`https://host` → `wss://host/recall/<token>`) rather than configured
+separately: two settings naming one host is two things to get wrong, and
+nothing reports the disagreement — just a bot that records into a hostname
+nobody is listening on. A base that is unset, or is plain `http`, disables
+bots rather than stream a meeting's audio in cleartext.
 `RECALL_WEBHOOK_SECRET` verifies status webhooks (Svix HMAC); Recall publishes
 no static IPs to allowlist, so that signature is the only proof available.
 Retention is `{type: "timed", hours: 24}` by default — short, per the owner's
@@ -314,7 +327,27 @@ and a `calendar.sync_events` webhook consumer before any bot is scheduled.
   one would refuse every real connection. The 128-bit per-bot token in the
   path is the authentication, and it is forgotten when that bot's meeting ends.
 - **`assembly_ai_v3_streaming`, never `assembly_ai_streaming`** — the docs say
-  the older name fails.
+  the older name fails. It is also **not supported in `eu-central-1`**
+  (docs.recall.ai/docs/assemblyai, FAQ), so `RECALL_REGION` and this provider
+  are not independent choices: an EU region needs a different provider, not
+  just a different key.
+- **The AssemblyAI key goes in Recall's Transcription dashboard, per region.**
+  Recall's regions are isolated, so the key is entered separately for each one
+  (docs.recall.ai/docs/assemblyai, Setup). It is never in a request body and
+  never in this repo.
+- **Cloudflare Access sits in FRONT of both of the vendor's inbound channels,
+  and will refuse them.** `route()` classifies the request's Host and runs the
+  Access verifier before any path match (`server.ts`, the `classifyHost` block
+  — `viaProxy: req.headers.has('cf-ray')` means a tunnel request can never
+  claim to be local). Recall's backend cannot present an Access JWT, a share
+  cookie, or a proxied-trusted identity, so both `wss://<host>/recall/<token>`
+  and `POST /api/recall/status` are refused before they reach their routes.
+  Deriving the right URL is therefore necessary and NOT sufficient: the two
+  vendor paths need a route that Access does not front, either at the
+  Cloudflare edge or as an explicit exemption here. Both paths already carry
+  their own credential — a 128-bit per-bot token, and the Svix signature — so
+  an exemption would not be unauthenticated, but it is a change to this
+  server's auth boundary and is Bryan's call, not an implementation detail.
 
 ## Persistence
 
@@ -804,9 +837,195 @@ readout, the CSV).
 - **The `/audio/` upgrade checks Origin and refuses unknown docs** — CORS
   does not apply to websockets, and this socket spends money while open.
 
+## The room is told, and the telling is in the recording
+
+Shipped 2026-08-30. **In-person captures only** — a Zoom or Meet bot gets its
+consent from the platform's own recording banner, and a second announcement
+over the top of that one would be noise.
+
+A `conversation` capture is by definition the one with other people in it, so
+it says so out loud. Bryan's decision was the **hybrid**: the device speaks by
+default, and one tap hands the sentence to the person instead. Both are on the
+strip as start buttons — `Start` and `I'll say it` — and the second appears
+only while a `conversation` capture is idle, because a solo capture has nobody
+to tell and a running one has already told them.
+
+**The order is the whole feature, and it is the opposite of the intuitive
+one.** The microphone opens FIRST and the sentence is spoken into it:
+
+```mermaid
+sequenceDiagram
+  participant P as Person
+  participant S as Strip
+  participant M as Mic
+  participant R as Relay
+  P->>S: tap Start (conversation)
+  S->>S: announcer.prime() — SYNCHRONOUS, spends the gesture
+  S->>M: getUserMedia + AudioWorklet
+  M-->>S: frames
+  S->>R: start {mode}
+  R-->>S: ready (engine is receiving)
+  S->>S: speechSynthesis.speak(RECORDING_ANNOUNCEMENT)
+  Note over M,R: the sentence is spoken INTO an open mic —<br/>it rides the same frames as everything else
+  S->>R: announced {by: "device"} — only now
+```
+
+Announcing before the mic opened would leave the sentence in a moment nothing
+recorded, which is exactly the thing an announcement cannot be: the point is to
+be able to show it afterwards, in the transcript. So the `ready` frame is the
+trigger — `ready` means the engine is receiving, and everything from there is
+in the transcript.
+
+**Not at socket-open, and that is a deliberate trade.** The relay buffers audio
+that arrives while the engine handshake is out (`conn.pending`, 256 chunks), so
+speaking at socket-open would land in the recording too, and land *earlier* —
+anything said in the room during the handshake is captured ahead of the
+announcement, which is a real if small ordering cost. What it would buy in
+exchange is the risk of telling a room it is being recorded when it is not:
+before `ready`, the socket can still answer `unavailable` — no key configured,
+or another tab already holding this doc — and a false announcement to a room is
+worse than a few hundred milliseconds of ordering. So the claim here is that
+the announcement is IN the captured audio, never that it is the first thing in
+it.
+
+**Why there is a prime step.** On iOS Safari — Bryan's main device —
+`speechSynthesis.speak()` is ignored unless it is reached from inside a user
+gesture's own task. The announcement cannot be spoken there, because it has to
+wait for `getUserMedia`, by which point the gesture is spent. So the tap spends
+its gesture on one silent utterance, which unlocks the queue, and the real
+sentence rides that unlock later. Same trick an `AudioContext` needs, same
+reason.
+
+**The sentence is a constant and is not localized.** `RECORDING_ANNOUNCEMENT`
+in `packages/core/src/meeting.ts`. Fixed because it is the thing anyone would
+later be asked to show, and deliberately passive about who is recording — the
+same words are correct in the device's mouth and in a person's, and a sentence
+that only worked in one would need a second sentence for the other.
+
+**The claim is never on the `start` frame**, and this is the one thing here
+that a review caught rather than the design getting right first time. A
+capture that announced its intention when the microphone opened would leave
+`announced: 'device'` standing on a meeting somebody stopped four words into
+the sentence — the record asserting the room was told, about a room that heard
+half a sentence. So `announced` is its own frame, sent after the fact:
+`device` only once the browser reports the utterance FINISHED, `spoken` the
+moment the sentence goes on screen (which is the whole of what `spoken` ever
+claims). A meeting that ends before either leaves the field absent, and that
+is the correct answer rather than a gap.
+
+**What the record claims, and what it does not.** `announced` on the meeting
+record is `'device'`, `'spoken'`, or ABSENT.
+
+| value | what it means |
+|---|---|
+| `device` | the browser reported the utterance finished |
+| `spoken` | the sentence was PUT ON SCREEN for a person to read |
+| absent | nothing is claimed — a solo capture, a meeting stopped mid-sentence, or a client too old to say |
+
+`spoken` is the weaker claim and the code never treats it as more: the client
+knows it displayed the sentence and cannot know anybody read it. Absent is
+never a quiet default either — `parseAnnouncedBy` answers `undefined` for
+anything it does not recognise, because the permissive direction would write a
+consent record out of a typo.
+
+**A device that cannot speak falls back and CORRECTS the record.** No synthesis
+engine, a refused gesture, and an utterance that is accepted and then never
+fires `end` or `error` (a real browser bug, hence the 12s timeout in
+`meeting-announce.ts`) are indistinguishable from the strip and all end the
+same way: the sentence goes on screen for a person, and the `announced` frame
+that goes up says `spoken` instead. A record claiming the device announced it
+when the device said nothing is worse than one that claims less. The index
+folds `announced` last-word-wins, the same rule the speaker names fold under,
+so a `device` that is later corrected to `spoken` reads as `spoken`.
+
+**The sentence a person has to READ holds the caption line.** The strip has
+one line, and a partial transcript normally takes it — which for the `spoken`
+path means any noise in the room can wipe the sentence out from under somebody
+mid-read, a moment after it appeared. So the `I'll say it` prompt is a
+*dismissible button* that holds the line: transcript turns accumulate but are
+not drawn until a SETTLED turn arrives (a whole utterance finished — the
+earliest evidence the sentence has been said) or the prompt is tapped away.
+Nothing is lost while it holds; the rolling window draws as soon as the line
+comes back. The device's own caption does NOT hold, because it is a courtesy
+for something the room is already hearing.
+
+**Every terminal path silences the announcement, not just Stop.** A relay
+error, an `unavailable`, a server-side stop and a dropped socket all end a
+recording as finally as the button does, and each one cancels the announcer
+and bumps the generation. Without that the device carries on saying "this
+conversation is being recorded" into a room where it is not, and the
+sentence's late resolution writes a claim onto a meeting that failed.
+
+Cancelling reaches an utterance that has started; it cannot reach one that has
+not. Suspending echo cancellation is itself a promise, so a stop can land in
+the window between the suspension and `speak()` — and there the announcement
+has to check for the terminal event rather than be told about it. That check
+is the reason the generation is read twice in one function.
+
+**The SERVER's mode decides whether there is a room.** `ready` echoes the mode
+that was actually opened, and the announcement is reconciled against that
+echo rather than against the request — otherwise an old server answering
+`solo` would announce a session the strip has just relabelled solo, and the
+inverse mismatch would skip an announcement a room is owed.
+
+**The store refuses a claim a solo meeting cannot have made.** `setAnnounced`
+is a no-op when the meeting's mode is `solo`. The frame is client-controlled
+and this record is the evidence, so the invariant lives where the record is
+written rather than being trusted of whatever opened the socket.
+
+**The strip says REC at every width while live**, not only on the phone. A
+pulsing dot was enough while the strip reported only to the person holding the
+device; it announces itself to a room now, and somebody who was told they are
+being recorded has to be able to look over and see that they still are.
+
+### What this is NOT proven by
+
+The mock engine returns a fixture's words, so no automated test can show that
+a real room hears the announcement or that AssemblyAI transcribes a device
+speaking through its own microphone. What the suites prove is the mechanism:
+the ordering (`meeting-strip.test.ts` — speech happens only after the mic is
+open and the `start` frame is away, and audio keeps reaching the socket
+throughout the sentence), every fallback path, and what the record ends up
+saying — including the two cases it must refuse to claim anything for, a
+solo capture and a meeting stopped mid-sentence (`meetings.test.ts`,
+`meeting-socket.test.ts`).
+
+**Echo cancellation is the known hazard, and it is hedged rather than solved.**
+`MEETING_CONSTRAINTS` asks for `echoCancellation: true`, and echo cancellation
+exists precisely to remove the device's own speaker output from the captured
+signal — which is the one moment that has to work the other way round. So the
+strip suspends it for the length of the sentence (`setEchoCancellation` on the
+live track) and restores it after. That is a hedge, not a proof: whether a
+given browser's canceller reaches speech-synthesis output depends on whether
+synthesis shares the render path it uses as its reference, and
+`applyConstraints` can refuse outright (Safari has refused `echoCancellation`
+on a live track). Every failure is swallowed — an announcement must never be
+blocked by a hedge.
+
+The suspension is bound to the **microphone instance** it was taken out on,
+not to whichever capture the strip currently holds. Cancelling speech does not
+settle its promise — the utterance can hang until its timeout — so the restore
+half of an abandoned announcement can run after a second meeting has started
+and is mid-sentence itself. Restoring cancellation there would silently defeat
+the suspension in exactly the case it exists for. Bound to the instance, a
+stale restore lands on a stopped track and does nothing.
+
+**So `device` on the record means what it says and no more:** the browser
+reported the utterance finished. It is not evidence that the sentence reached
+the transcript, and nothing in the code treats it as such.
+
+**What stays unverified as of 2026-08-30:** nobody has run this in a real room
+with a live engine. The two things to check when someone does are that the
+announcement is audible over a conversation, and that it appears in the
+transcript at all. If it does not, the constraint suspension is the first place
+to look, and the next step up is synthesizing the sentence into the audio graph
+itself rather than through the speaker — a bigger change, and not one worth
+making before the cheap hedge has been measured.
+
 ## Where things live
 
-`packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode`) ·
+`packages/core/src/meeting.ts` (wire contract, incl. `CaptureMode` and
+`RECORDING_ANNOUNCEMENT`) ·
 `packages/server/src/meeting-protocol.ts` (lifecycle) ·
 `packages/server/src/transcribe-assemblyai.ts` (engine) ·
 `packages/server/src/meetings.ts` (store) ·
@@ -814,7 +1033,8 @@ readout, the CSV).
 at) · `packages/server/src/meeting-notes.ts` + `meeting-notes-doc.ts` (composer +
 doc sink; the two clocks live in `createPauseTicker`) · `packages/server/src/meeting-notes-merge.ts` (the merge that
 keeps a person's writing) · `packages/markdown-app/src/meeting-strip.ts`
-(UI) · `packages/server/src/recall.ts` (vendor client) ·
+(UI) · `packages/markdown-app/src/meeting-announce.ts` (speech synthesis and
+every way it fails) · `packages/server/src/recall.ts` (vendor client) ·
 `recall-turns.ts` (frames → turns, naming) · `recall-status.ts` +
 `recall-webhook-auth.ts` (bot state, signatures) · `recall-meeting.ts` (the
 bot lifecycle) · `packages/core/src/meeting-bot.ts` (wire contract) ·
