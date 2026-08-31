@@ -27,6 +27,7 @@ import {
   latestThreadedQuestion,
   locateReviewItemRange,
   normalizeEmail,
+  parseThreadReviewItemId,
   pendingDeclaration,
   readReviewPayload,
   readTaskReviewItem,
@@ -6299,6 +6300,51 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
         // One request rather than one per doc: a board with forty tasks is a
         // board with forty rooms, and the strip has to be right at first
         // paint or it is not a "what do I look at next" surface.
+        // WHERE a review item lives, from its bare id — the lookup that makes
+        // `reviewItemId` a universal address. Two id families, two answers
+        // from one route: a derived `rt-…` id decodes to the doc-thread
+        // triple it encodes (verified to still exist before it is answered —
+        // a decodable id is a claim, not a fact), and a minted `r-…` id is
+        // found on whichever ticket holds it. The fixed r-legacy id is on
+        // every legacy-decision ticket at once, so alone it addresses
+        // nothing and is refused by name.
+        const reviewItemResolveMatch = pathname.match(/^\/api\/review-items\/([^/]+)$/);
+        if (reviewItemResolveMatch && req.method === 'GET') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const reviewItemId = decodeURIComponent(reviewItemResolveMatch[1] ?? '');
+          if (reviewItemId === LEGACY_REVIEW_ITEM_ID) {
+            return j(400, {
+              error: 'ambiguous',
+              message:
+                "every legacy-decision ticket derives this same id — address the ticket's own decision with its taskId and no reviewItemId",
+            });
+          }
+          const threadAddress = parseThreadReviewItemId(reviewItemId);
+          if (threadAddress) {
+            const { docId, threadId, commentId } = threadAddress;
+            const comment = rooms
+              .getThread(docId, threadId)
+              ?.comments.find((c) => c.id === commentId);
+            if (!comment?.review) return j(404, { error: 'unknown-review-item' });
+            const workspaceId = resolveWorkspaceForDoc(docId);
+            return j(200, {
+              reviewItemId,
+              kind: 'doc-thread',
+              docId,
+              threadId,
+              commentId,
+              ...(workspaceId !== undefined ? { workspaceId } : {}),
+            });
+          }
+          const found = taskStore.findReviewItem(reviewItemId);
+          if (!found) return j(404, { error: 'unknown-review-item' });
+          return j(200, {
+            reviewItemId,
+            kind: 'task-item',
+            taskId: found.taskId,
+            workspaceId: found.workspaceId,
+          });
+        }
         const wsReviewMatch = pathname.match(/^\/api\/workspaces\/([^/]+)\/review-items$/);
         if (wsReviewMatch && req.method === 'GET') {
           const workspaceId = decodeURIComponent(wsReviewMatch[1] ?? '');
@@ -8074,6 +8120,57 @@ export function createServer(opts: ServerOptions = {}): ServerHandle {
             ...(res.advice !== undefined ? { reviewAdvice: res.advice } : {}),
             ...heldFields(gate),
           });
+        }
+        // Taking a TICKET-borne ask back — the same exit the doc-thread
+        // withdraw route has had, for the surface that lacked it: an item
+        // filed with add_review_item had no way off the reader's queue short
+        // of revising it into something else, which is a lie about what was
+        // asked. Same contract as the doc route: the words stay on the ticket
+        // verbatim, marked withdrawn with the reason beside them; refused on
+        // an answered item (409 — the state, not the request, is what's
+        // wrong); `/undo` puts the ask back in front of the reader.
+        const taskReviewWithdrawMatch = pathname.match(
+          /^\/api\/tasks\/([^/]+)\/review-items\/([^/]+)\/withdraw(\/undo)?$/,
+        );
+        if (taskReviewWithdrawMatch && req.method === 'POST') {
+          if (visitor) return j(403, { error: 'not available to share visitors' });
+          const taskId = decodeURIComponent(taskReviewWithdrawMatch[1] ?? '');
+          const reviewItemId = decodeURIComponent(taskReviewWithdrawMatch[2] ?? '');
+          const undo = taskReviewWithdrawMatch[3] !== undefined;
+          const body = await safeJson(req);
+          const author = authorFor(body?.author);
+          if (!author) return j(400, { error: 'author required' });
+          if (isCategoryAuthor(author)) return refuseCategoryAuthor();
+          const reason = body?.reason;
+          if (reason !== undefined && typeof reason !== 'string') {
+            return j(400, { error: 'reason must be a string' });
+          }
+          const res = taskStore.withdrawReviewItem(taskId, reviewItemId, {
+            actor: author,
+            ...(reason !== undefined ? { reason } : {}),
+            ...(undo ? { undo: true } : {}),
+          });
+          if (!res.ok) {
+            const status =
+              res.error === 'not-found' || res.error === 'unknown-review-item'
+                ? 404
+                : res.error === 'answered'
+                  ? 409
+                  : 400;
+            return j(status, {
+              error: res.error,
+              ...(res.message !== undefined ? { message: res.message } : {}),
+            });
+          }
+          taskProjection.ensureWorkspace(res.task.workspaceId);
+          // Announced on the way BACK only, exactly as the doc route reasons:
+          // a withdrawal must not buzz the reader with the ask just taken off
+          // their queue, and a reinstated item still held by the gate is on
+          // nobody's queue yet.
+          if (undo && !isReviewItemHeld(res.item)) {
+            announceTaskReview(res.task, res.item, author);
+          }
+          return j(200, { taskId, reviewItemId, item: res.item, withdrawn: !undo });
         }
         // set_task_dependencies: edit `after` / `afterEnforce` on a task that
         // already exists. Until this route, `after` could only be set at

@@ -36,6 +36,7 @@ import {
   reviewItemState,
   reviewPayloadRevision,
   reviewWithdrawn,
+  threadReviewItemId,
 } from '@feedback/core';
 import { classifyActor } from './activity.ts';
 
@@ -97,6 +98,15 @@ export interface ReviewThreadItem {
   commentId: string;
   /** The declaration itself, present exactly when `band === 'declared'`. */
   review?: ReviewPayload;
+  /**
+   * The item's universal id, present exactly when `band === 'declared'` — an
+   * inferred `unreplied` row is an ask, not an item, and gets none. DERIVED
+   * from (docId, threadId, commentId) rather than minted (`threadReviewItemId`),
+   * so giving every old item an identity rewrote no stored doc; a ticket row
+   * carries its minted id in the same field name, which is the point — one
+   * vocabulary, and every tool addresses either kind by it.
+   */
+  reviewItemId?: string;
   /** Present on a task discussion, and on a goal's — the board opens the ROW,
    *  not the doc, and `kind` says which panel that is. */
   taskId?: string;
@@ -615,6 +625,7 @@ export function reviewThreadItems(args: {
           docId,
           threadId: thread.id,
           commentId: declaring.id,
+          reviewItemId: threadReviewItemId(docId, thread.id, declaring.id),
           review: declaring.review,
           ...(revised ? { revisedAt: revised.at } : {}),
           ...(revised?.revisedRange ? { revisedRange: revised.revisedRange } : {}),
