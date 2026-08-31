@@ -942,6 +942,26 @@ export function reclaimAfterInPlaceEdit<T>(
   return result;
 }
 
+/**
+ * The elements in the notes section the ledger says the AGENT wrote — the
+ * scope of an edit that may not reach a person's own writing.
+ *
+ * A block for a paragraph, the `listItem` for one bullet, exactly as
+ * ownership is tracked: an item is the agent's only if the agent wrote that
+ * element AND it still reads as the agent left it.
+ */
+export function agentOwnedElements(
+  ydoc: Y.Doc,
+  heading: string,
+  ownership: NotesOwnership,
+): Set<Y.XmlElement> {
+  const items = sectionItems(ydoc, heading);
+  const claimed = classifyOwnership(items, ownership);
+  const owned = new Set<Y.XmlElement>();
+  for (let i = 0; i < items.length; i++) if (claimed[i]) owned.add(items[i]!.el);
+  return owned;
+}
+
 /** The section's items, or none when the section is not there. */
 function sectionItems(ydoc: Y.Doc, heading: string): NoteItem[] {
   const fragment = prose.getProseFragment(ydoc);

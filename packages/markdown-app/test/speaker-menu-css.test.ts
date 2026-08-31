@@ -100,3 +100,41 @@ describe('the reassign menu in the stylesheet', () => {
     expect(coarse).toMatch(/inset:\s*-10px/);
   });
 });
+
+describe('an attribution the engine could not settle', () => {
+  /** The chip rule for a tag the revision touched and could not place. */
+  const UNSURE = '#editor > .ProseMirror a[href^="speaker:"][href*="unsure=1"]';
+
+  it('is marked in the chip, not only in the href', () => {
+    // The href says `unsure=1` and a reader of the raw .md can see it; a
+    // reader of the DOC sees only what the stylesheet draws, so the mark has
+    // to exist here or the correction is invisible to the person it is for.
+    const css = withoutComments(CSS);
+    expect(css).toContain(`${UNSURE} {`);
+    expect(css).toContain(`${UNSURE}::before {`);
+    // A "?" beside the name, and the warning colour the rest of the app uses.
+    const marker = css.slice(css.indexOf(`${UNSURE}::before {`));
+    expect(marker.slice(0, marker.indexOf('}'))).toContain('content: "?"');
+    const chip = css.slice(css.indexOf(`${UNSURE} {`));
+    expect(chip.slice(0, chip.indexOf('}'))).toContain('--warn-fg');
+  });
+
+  it('does not grow the chip box the touch target is measured against', () => {
+    // The mobile hit area is an overlay on the chip's own box. A border
+    // would move that box; an inset shadow draws the same ring and does not.
+    const css = withoutComments(CSS);
+    const chip = css.slice(css.indexOf(`${UNSURE} {`));
+    const body = chip.slice(0, chip.indexOf('}'));
+    expect(body).toContain('box-shadow: inset');
+    expect(body).not.toMatch(/\bborder:/);
+  });
+
+  it('is declared after the base chip rule it has to beat', () => {
+    // A media query adds no specificity and neither does source order on
+    // its own — but the hover rule below it sets the same property, so this
+    // one has to come later as well as be more specific.
+    expect(CSS.indexOf(UNSURE)).toBeGreaterThan(
+      CSS.indexOf('#editor > .ProseMirror a[href^="speaker:"]:hover'),
+    );
+  });
+});
