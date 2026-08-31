@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   REVIEW_LIMITS,
+  type ReviewItemJudgement,
+  type ReviewJudgeVerdictKind,
   type ReviewPayload,
   type TaskReviewItem,
   answerFromReply,
@@ -8,6 +10,8 @@ import {
   isReviewItemGated,
   isReviewItemHeld,
   isReviewItemOpen,
+  isReviewPayloadGated,
+  isReviewPayloadHeld,
   judgeReasonClause,
   judgeReasonSentence,
   pendingDeclaration,
@@ -17,6 +21,7 @@ import {
   reviewFromDecisionTask,
   reviewGapAdvice,
   reviewPayloadMessage,
+  reviewPayloadVersion,
 } from './review-item.ts';
 
 /** All fixtures are synthetic — invented names, ids and copy throughout. */
@@ -1247,6 +1252,65 @@ describe('an item whose verdict is still out', () => {
 
   it('reads a pending verdict off the wire', () => {
     expect(readTaskReviewItem(item('pending'))?.judge?.verdict).toBe('pending');
+  });
+});
+
+describe('the gate, on an item that lives on a COMMENT', () => {
+  const payload = (judge?: ReviewItemJudgement, answered = false): ReviewPayload => ({
+    shape: 'decision',
+    headline: 'Which index?',
+    ...(judge ? { judge } : {}),
+    ...(answered ? { answeredAt: 9, answeredBy: 'Jordan', answerText: 'Keep it' } : {}),
+  });
+  const at = (verdict: ReviewJudgeVerdictKind): ReviewItemJudgement => ({
+    at: 2,
+    verdict,
+    reason: 'r',
+  });
+
+  it('holds and gates on exactly the verdicts the ticket form does', () => {
+    expect(isReviewPayloadHeld(payload(at('held')))).toBe(true);
+    expect(isReviewPayloadGated(payload(at('held')))).toBe(true);
+    // Still being judged: off the queue, but there is nothing to revise yet.
+    expect(isReviewPayloadGated(payload(at('pending')))).toBe(true);
+    expect(isReviewPayloadHeld(payload(at('pending')))).toBe(false);
+  });
+
+  it('lets every passing verdict through — including the judge failing', () => {
+    for (const v of ['ok', 'unavailable'] as const) {
+      expect(isReviewPayloadGated(payload(at(v)))).toBe(false);
+      expect(isReviewPayloadHeld(payload(at(v)))).toBe(false);
+    }
+    // Never judged at all — an item filed before the gate existed, or on a
+    // board with no judge. A pass, like every other judge failure.
+    expect(isReviewPayloadGated(payload())).toBe(false);
+  });
+
+  it('an ANSWERED item is never held: the answer closed it', () => {
+    expect(isReviewPayloadHeld(payload(at('held'), true))).toBe(false);
+    expect(isReviewPayloadGated(payload(at('held'), true))).toBe(false);
+  });
+
+  it('round-trips the verdict through the reader, and drops an unreadable one', () => {
+    expect(readReviewPayload(payload(at('held')))?.judge).toEqual(at('held'));
+    // Junk reads as never-judged, which is a PASS — the fail-open rule.
+    const junk = readReviewPayload({
+      shape: 'decision',
+      headline: 'Which index?',
+      judge: { verdict: 'sideways', at: 'soon' },
+    });
+    expect(junk?.judge).toBeUndefined();
+    expect(junk ? isReviewPayloadGated(junk) : null).toBe(false);
+  });
+
+  it('versions the words the way the ticket form does, so a stale verdict is refusable', () => {
+    expect(reviewPayloadVersion(payload())).toBe(0);
+    expect(
+      reviewPayloadVersion({
+        ...payload(),
+        revisions: [{ at: 3, by: 'Index Keeper', headline: 'Which index?' }],
+      }),
+    ).toBe(1);
   });
 });
 
