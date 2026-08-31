@@ -107,9 +107,15 @@ export interface RecallConfig {
   /**
    * The PUBLIC wss:// origin Recall dials back on, e.g. `wss://x.example.com`.
    *
+   * DERIVED from `CW_PUBLIC_BASE_URL`, never configured on its own. That
+   * value already exists because this deployment sits behind a Cloudflare
+   * Tunnel and the server cannot discover its own external origin; a second
+   * variable naming the same host would be a second thing to get wrong, and
+   * the failure when they disagreed would be a bot that joins, records,
+   * bills, and delivers nothing.
+   *
    * Null is the ordinary state on a tailnet-only server and it disables the
-   * whole feature: a bot created without a reachable realtime endpoint would
-   * join the call, record, bill, and deliver nothing.
+   * whole feature — see `wsBaseFromPublicBaseUrl` for exactly when.
    */
   publicWsBase: string | null;
   retentionHours: number;
@@ -140,7 +146,10 @@ export const DEFAULT_BOT_NAME = 'Meeting Assistant';
  * answers a reason a person can read, and no separate enabled flag exists to
  * disagree with the key.
  */
-export function recallConfigFromEnv(env: Record<string, string | undefined>): RecallConfig {
+export function recallConfigFromEnv(
+  env: Record<string, string | undefined>,
+  publicBaseUrl?: string | null,
+): RecallConfig {
   const rawRegion = env.RECALL_REGION?.trim() ?? '';
   const region: RecallRegion = isRecallRegion(rawRegion) ? rawRegion : 'us-east-1';
   const rawHours = Number(env.RECALL_RETENTION_HOURS);
@@ -150,7 +159,7 @@ export function recallConfigFromEnv(env: Record<string, string | undefined>): Re
       : DEFAULT_RETENTION_HOURS;
   return {
     region,
-    publicWsBase: normalizeWsBase(env.RECALL_PUBLIC_WS_BASE),
+    publicWsBase: wsBaseFromPublicBaseUrl(publicBaseUrl),
     retentionHours,
     // Opt OUT rather than opt in: the accurate setting is the one a person
     // asked for when they asked for "who said what", and the cheap one is a
@@ -161,13 +170,25 @@ export function recallConfigFromEnv(env: Record<string, string | undefined>): Re
 }
 
 /**
- * A `wss://host[/path]` origin with no trailing slash, or null.
+ * The `wss://` origin Recall should dial, derived from the operator-declared
+ * external base URL — or null, which disables meeting bots.
  *
- * `ws://` is accepted so a tunnel-less local run can be exercised end to end
- * against a fake vendor; Recall itself is given whatever this returns, and a
- * plaintext endpoint on the public internet is the operator's call to make.
+ * WHY THIS IS DERIVED AND NOT ITS OWN SETTING. `CW_PUBLIC_BASE_URL` already
+ * names the origin this deployment is reached on from outside, because the
+ * server sits behind something that terminates TLS and cannot discover its
+ * own external name. Recall needs the same host. Two settings naming one host
+ * is two things to get wrong, and there is no error when they disagree — just
+ * a bot that joins a call, records, bills, and streams to a hostname nobody
+ * is listening on.
+ *
+ * WHY `http://` IS REFUSED RATHER THAN DOWNGRADED TO `ws://`. A plain-http
+ * base means nothing is terminating TLS in front, so the only thing that
+ * could be derived is a plaintext socket carrying a meeting's audio and
+ * everything said in it across the public internet. Refusing it reads as
+ * "meeting bots are not configured", which is true and is the state the UI
+ * already knows how to show. Accepting it would be the quiet kind of wrong.
  */
-export function normalizeWsBase(raw: string | undefined): string | null {
+export function wsBaseFromPublicBaseUrl(raw: string | null | undefined): string | null {
   const value = raw?.trim();
   if (!value) return null;
   let parsed: URL;
@@ -176,9 +197,9 @@ export function normalizeWsBase(raw: string | undefined): string | null {
   } catch {
     return null;
   }
-  if (parsed.protocol !== 'wss:' && parsed.protocol !== 'ws:') return null;
+  if (parsed.protocol !== 'https:') return null;
   const path = parsed.pathname.replace(/\/+$/, '');
-  return `${parsed.protocol}//${parsed.host}${path}`;
+  return `wss://${parsed.host}${path}`;
 }
 
 /** What `createBot` needs that is not config. */
@@ -209,6 +230,12 @@ export interface RecallClientOptions {
   env?: Record<string, string | undefined>;
   readKey?: (service: string) => string | null;
   config?: RecallConfig;
+  /**
+   * The operator-declared external base URL (`CW_PUBLIC_BASE_URL`, already
+   * normalized by `normalizePublicBaseUrl`). Recall's realtime endpoint is
+   * derived from it; absent, meeting bots stay off.
+   */
+  publicBaseUrl?: string | null;
   fetch?: FetchLike;
 }
 
@@ -284,7 +311,7 @@ export function createRecallClient(opts: RecallClientOptions = {}): RecallClient
   // declaration and the narrowing above does not follow it into the closure
   // below on every TS version.
   const apiKey: string = key;
-  const config = opts.config ?? recallConfigFromEnv(opts.env ?? process.env);
+  const config = opts.config ?? recallConfigFromEnv(opts.env ?? process.env, opts.publicBaseUrl);
   const doFetch = opts.fetch ?? ((url, init) => fetch(url, init));
   const base = recallApiBase(config.region);
 
