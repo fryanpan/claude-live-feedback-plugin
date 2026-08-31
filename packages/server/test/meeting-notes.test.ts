@@ -22,6 +22,7 @@ import {
 import {
   type NotesComposeInput,
   type NotesComposer,
+  type NotesReattribution,
   type NotesRelabel,
   type NotesTick,
   type NotesUpdate,
@@ -1148,7 +1149,7 @@ describe('inline speaker tags', () => {
     );
     session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
     await session.end();
-    expect(updates[0]?.notes).toContain('[@Speaker B](speaker:B) wants the gate moved.');
+    expect(updates[0]?.notes).toContain('[@Speaker B](speaker:B?t=0) wants the gate moved.');
   });
 
   it('unwraps a tag naming a voice the meeting never carried, and says so', async () => {
@@ -1203,7 +1204,7 @@ describe('inline speaker tags', () => {
     await new Promise((r) => setTimeout(r, 0));
     session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'B' });
     await session.end();
-    expect(inputs[1]?.previous).toContain('[@Speaker B](speaker:B)');
+    expect(inputs[1]?.previous).toContain('[@Speaker B](speaker:B?t=0)');
   });
 
   it('a rename rewrites the tags in the session memory and names the label to the sink', async () => {
@@ -1234,7 +1235,7 @@ describe('inline speaker tags', () => {
     await session.end();
 
     expect(relabels[0]).toMatchObject({ label: 'B', from: 'Speaker B', to: 'Devi' });
-    expect(inputs[1]?.previous).toContain('[@Devi](speaker:B) wants the gate moved.');
+    expect(inputs[1]?.previous).toContain('[@Devi](speaker:B?t=0) wants the gate moved.');
     expect(inputs[1]?.previous).not.toContain('Speaker B');
   });
 
@@ -1268,7 +1269,7 @@ describe('inline speaker tags', () => {
     session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'B' });
     await session.end();
 
-    expect(inputs[1]?.previous).toContain('[@Devi Raman](speaker:B) wants it.');
+    expect(inputs[1]?.previous).toContain('[@Devi Raman](speaker:B?t=0) wants it.');
     expect(inputs[1]?.previous).toContain('Devi Raman will file it.');
     expect(inputs[1]?.previous).not.toContain('Raman Raman');
   });
@@ -1307,7 +1308,7 @@ describe('inline speaker tags', () => {
     session.onTurn({ turn: 1, text: 'Two.', final: true, speaker: 'B' });
     await session.end();
     expect(updates[1]?.notes).toContain(`- ${mine}`);
-    expect(updates[1]?.notes).toContain('- [@Speaker B](speaker:B) said it.');
+    expect(updates[1]?.notes).toContain('- [@Speaker B](speaker:B?t=1) said it.');
   });
 });
 
@@ -1414,20 +1415,23 @@ describe('a tagged meeting through the audio socket', () => {
 
     // 1. The notes in the DOC carry a tag per mention, one per voice.
     const tagged = docMarkdown();
-    expect(tagged).toContain('[@Speaker A](speaker:A) said "Move the gate."');
-    expect(tagged).toContain('[@Speaker B](speaker:B) said "Not before Friday."');
+    // Each tag also carries the turn it was composed from, which is what a
+    // later engine revision of who spoke has to aim at.
+    expect(tagged).toContain('[@Speaker A](speaker:A?t=0) said "Move the gate."');
+    expect(tagged).toContain('[@Speaker B](speaker:B?t=1) said "Not before Friday."');
 
     // 2. Naming a voice renames its tags where they already stand — the
     //    label, not the words, is what the rename matched on.
     ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Dana' }));
     await waitFor(
-      () => docMarkdown().includes('[@Dana](speaker:A)'),
+      () => docMarkdown().includes('[@Dana](speaker:A?t=0)'),
       'the rename to reach the tag already written',
     );
     const renamed = docMarkdown();
-    expect(renamed).toContain('[@Dana](speaker:A) said "Move the gate."');
+    // The rename moved the NAME and left the provenance exactly where it was.
+    expect(renamed).toContain('[@Dana](speaker:A?t=0) said "Move the gate."');
     // 3. And the other voice is untouched: it was never this label.
-    expect(renamed).toContain('[@Speaker B](speaker:B) said "Not before Friday."');
+    expect(renamed).toContain('[@Speaker B](speaker:B?t=1) said "Not before Friday."');
     expect(renamed).not.toContain('speaker:A) said "Not before Friday."');
 
     // 4. THE DISCRIMINATOR. Everything above would also pass on the old
@@ -1438,21 +1442,259 @@ describe('a tagged meeting through the audio socket', () => {
     //    reach anything at all.
     ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'B', name: 'Dana' }));
     await waitFor(
-      () => docMarkdown().includes('[@Dana](speaker:B)'),
+      () => docMarkdown().includes('[@Dana](speaker:B?t=1)'),
       'the second voice to take the same name',
     );
     ws.send(JSON.stringify({ type: 'name_speaker', speaker: 'A', name: 'Dana Ruiz' }));
     await waitFor(
-      () => docMarkdown().includes('[@Dana Ruiz](speaker:A)'),
+      () => docMarkdown().includes('[@Dana Ruiz](speaker:A?t=0)'),
       'the ambiguous correction to reach the tag it belongs to',
     );
     const corrected = docMarkdown();
     // The other Dana kept her tag. A text sweep for "Dana" would have taken
     // this one too — that it did not is the proof the label did the work.
-    expect(corrected).toContain('[@Dana](speaker:B) said "Not before Friday."');
+    expect(corrected).toContain('[@Dana](speaker:B?t=1) said "Not before Friday."');
 
     ws.send(JSON.stringify({ type: 'stop' }));
     await waitFor(() => frames.some((f) => f.type === 'stopped'), 'stopped');
     ws.close();
+  });
+});
+
+describe('a late speaker correction reaches notes already written', () => {
+  const ids = { docId: 'doc-late', meetingId: 'm-late' };
+
+  /** A composer that returns whatever the test hands it, and records what it
+   *  was given. */
+  const scripted = (replies: string[], inputs: NotesComposeInput[]): NotesComposer => ({
+    name: 'scripted',
+    compose(input) {
+      inputs.push(input);
+      return Promise.resolve(replies.shift() ?? '## Meeting notes');
+    },
+  });
+
+  /** Let the compose chain drain. Every step is a microtask on one promise
+   *  chain, so a macrotask turn is enough for all of them. */
+  const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+  it('moves a mention when the engine revises the only turn behind it', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const corrections: NotesReattribution[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- [@Speaker B](speaker:B) wants the gate moved.',
+            '## Meeting notes\n\n- more',
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onReattribute: (r) => corrections.push(r),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    schedule.fire();
+    await settle();
+
+    // The end-of-session pass: turn 0 was C, not B. Same turn id, same
+    // words, a different voice — exactly how the adapter re-emits one.
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'C' });
+    await settle();
+
+    expect(corrections).toHaveLength(1);
+    expect([...corrections[0]!.revisions]).toEqual([[0, 'C']]);
+
+    session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'C' });
+    await session.end();
+    // The session's own memory of the notes is corrected too, so the next
+    // compose does not put the old voice straight back.
+    expect(inputs[1]?.previous).toContain('[@Speaker C](speaker:C?t=0) wants the gate moved.');
+    expect(inputs[1]?.previous).not.toContain('speaker:B');
+  });
+
+  it('takes the batch as one, so a mention whose turns all moved is moved', async () => {
+    // The engine sends ONE SpeakerRevision naming every turn it changed its
+    // mind about, and the adapter re-emits them in a synchronous loop.
+    // Applying them one at a time would move this mention on the first and
+    // then find it disagreeing with itself on the second.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- [@Speaker B](speaker:B) wants the gate moved.',
+            '## Meeting notes\n\n- more',
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    session.onTurn({ turn: 1, text: 'Before merge.', final: true, speaker: 'B' });
+    schedule.fire();
+    await settle();
+    expect(inputs[0]).toBeDefined();
+
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'C' });
+    session.onTurn({ turn: 1, text: 'Before merge.', final: true, speaker: 'C' });
+    await settle();
+
+    session.onTurn({ turn: 2, text: 'By Friday.', final: true, speaker: 'C' });
+    await session.end();
+    expect(inputs[1]?.previous).toContain('[@Speaker C](speaker:C?t=0,1) wants the gate moved.');
+    expect(inputs[1]?.previous).not.toContain('unsure');
+  });
+
+  it('marks what it cannot place, and says so, rather than guessing', async () => {
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const errors: string[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(
+          [
+            '## Meeting notes\n\n- [@Speaker B](speaker:B) wants the gate moved.',
+            '## Meeting notes\n\n- more',
+          ],
+          inputs,
+        ),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onError: (m) => errors.push(m),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    session.onTurn({ turn: 1, text: 'Before merge.', final: true, speaker: 'B' });
+    schedule.fire();
+    await settle();
+
+    // Only ONE of the two turns behind the mention moved.
+    session.onTurn({ turn: 1, text: 'Before merge.', final: true, speaker: 'C' });
+    await settle();
+
+    session.onTurn({ turn: 2, text: 'By Friday.', final: true, speaker: 'C' });
+    await session.end();
+    expect(inputs[1]?.previous).toContain('(speaker:B?t=0,1&unsure=1)');
+    expect(errors.join(' ')).toContain('marked unsure');
+  });
+
+  it('a turn still waiting on a tick is not a correction at all', async () => {
+    // It composes under the new label by itself; nothing in the doc is
+    // wrong yet, so nothing needs rewriting.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const corrections: NotesReattribution[] = [];
+    const session = beginNotesSession(
+      {
+        composer: scripted(['## Meeting notes\n\n- one'], inputs),
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onReattribute: (r) => corrections.push(r),
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'C' });
+    await session.end();
+    expect(corrections).toHaveLength(0);
+    expect(inputs[0]?.tick.turns[0]).toMatchObject({ speakerLabel: 'C' });
+  });
+
+  it('corrects a compose that was in flight when the revision arrived', async () => {
+    // That compose read the old label and will return notes written the old
+    // way. The correction is queued behind it on the same chain, so it lands
+    // ON those notes rather than under them.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    let release: () => void = () => {};
+    const thinking = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const composer: NotesComposer = {
+      name: 'deferred',
+      async compose(input) {
+        inputs.push(input);
+        if (inputs.length === 1) {
+          await thinking;
+          return '## Meeting notes\n\n- [@Speaker B](speaker:B) wants the gate moved.';
+        }
+        return '## Meeting notes\n\n- more';
+      },
+    };
+    const session = beginNotesSession(
+      { composer, quietMs: 1000, schedule, onNotes: () => {} },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    schedule.fire();
+    await settle();
+    expect(inputs).toHaveLength(1);
+
+    // The revision arrives while the first compose is still thinking.
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'C' });
+    release();
+    await settle();
+
+    session.onTurn({ turn: 1, text: 'By Friday.', final: true, speaker: 'C' });
+    await session.end();
+    expect(inputs[1]?.previous).toContain('speaker:C?t=0');
+    expect(inputs[1]?.previous).not.toContain('speaker:B');
+  });
+
+  it('re-labels a carried turn instead of correcting words nobody has read', async () => {
+    // The compose FAILED, so those words are not in the doc: they are in
+    // `carry`, waiting for another attempt. Rewriting mentions of them would
+    // find nothing; taking the new label into the retry is the whole fix.
+    const schedule = new ManualScheduler();
+    const inputs: NotesComposeInput[] = [];
+    const corrections: NotesReattribution[] = [];
+    let first = true;
+    const composer: NotesComposer = {
+      name: 'fails-once',
+      compose(input) {
+        inputs.push(input);
+        if (first) {
+          first = false;
+          return Promise.reject(new Error('composer down'));
+        }
+        return Promise.resolve('## Meeting notes\n\n- [@Speaker C](speaker:C) wants the gate.');
+      },
+    };
+    const session = beginNotesSession(
+      {
+        composer,
+        quietMs: 1000,
+        schedule,
+        onNotes: () => {},
+        onReattribute: (r) => corrections.push(r),
+        onError: () => {},
+      },
+      ids,
+    );
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'B' });
+    schedule.fire();
+    await settle();
+
+    session.onTurn({ turn: 0, text: 'Move the gate.', final: true, speaker: 'C' });
+    await settle();
+    await session.end();
+
+    expect(corrections).toHaveLength(0);
+    // The retry composed the carried turn under the voice the revision gave it.
+    expect(inputs[1]?.tick.turns[0]).toMatchObject({ turn: 0, speakerLabel: 'C' });
   });
 });
