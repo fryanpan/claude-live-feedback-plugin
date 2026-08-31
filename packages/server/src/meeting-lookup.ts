@@ -1,0 +1,317 @@
+/**
+ * "Pull in last week's notes" — resolving material a meeting asked for.
+ *
+ * The capture pass hears the ask (see `meeting-task-capture.ts`); this module
+ * decides WHAT it points at. Two ways in, in this order:
+ *
+ * 1. **By title.** The board's docs — huddles included, because a huddle IS a
+ *    doc — and its task rows, through the same fuzzy matcher voice navigation
+ *    uses (`resolveByTitle`). One matcher, one set of tuned thresholds.
+ * 2. **By when.** "Last week", "yesterday", "Tuesday", "the last meeting" —
+ *    a phrase that names no title at all, resolved against the docs that
+ *    actually carry a past meeting, newest inside the window.
+ *
+ * WHY RECENCY IS ITS OWN PATH RATHER THAN MORE WORDS IN THE QUERY. A past
+ * meeting has no title of its own: a `MeetingRecord` carries times, not a
+ * subject, and the human-readable name of one is the DOC it was held on. So
+ * "last week's notes" has nothing to fuzzy-match against — "notes" matches
+ * every doc on the board and "week" is a stopword. Time is the only thing
+ * spoken that identifies it, so time is what this resolves on.
+ *
+ * NOTHING IS A GUESS. An ambiguous title match resolves to no link rather
+ * than to the better-scoring of two, and a recency window with no meeting in
+ * it returns nothing. A wrong link is worse than no link — the same law the
+ * capture guards are written to, for the same reason: a link in the notes
+ * puts the board's authority behind a connection nobody made.
+ */
+
+import { type TitleCandidate, resolveByTitle } from './voice-resolve.ts';
+
+/** A doc the lookup may resolve to, as its board describes it. */
+export interface LookupDoc {
+  docId: string;
+  title: string;
+  /**
+   * When this doc last carried a meeting, if it ever has. Its presence is
+   * what makes the doc reachable by a recency phrase — a doc nobody has ever
+   * talked over is not "last week's meeting" however old it is.
+   */
+  meetingAt?: number;
+}
+
+/** A board row the lookup may fall back to, as the capture pass sees it. */
+export interface LookupTask {
+  id: string;
+  title: string;
+}
+
+export type LookupHit =
+  | { kind: 'doc'; docId: string; title: string; via: 'title' | 'recency'; meetingAt?: number }
+  | { kind: 'task'; taskId: string; title: string; via: 'title' };
+
+/** The window a spoken "when" names, and the words to say it back in. */
+export interface RecencyWindow {
+  from: number;
+  to: number;
+  /** How the notes may refer to it — the speaker's own frame, not a date. */
+  label: string;
+}
+
+const WEEKDAYS = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+] as const;
+
+/**
+ * EVERY BOUNDARY HERE IS A CALENDAR OPERATION, NEVER A FIXED 86,400,000 ms.
+ *
+ * A local day is not always 86,400,000 ms long. On the two daylight-saving
+ * days a year it is 23 or 25 hours, so "midnight minus a day" lands at 23:00
+ * or 01:00 of the wrong date, and a meeting held near midnight resolves into
+ * the day next door. `setDate` rolls the calendar and `setHours` re-floors
+ * it, which is right on all 365.
+ */
+
+/** Midnight at the start of the local day `ts` falls in. */
+function startOfDay(ts: number): number {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Local midnight `days` calendar days from the day `ts` falls in. */
+function addDays(ts: number, days: number): number {
+  const d = new Date(ts);
+  d.setDate(d.getDate() + days);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** The local clock striking `hour` on the day `ts` falls in. */
+function atHour(ts: number, hour: number): number {
+  const d = new Date(ts);
+  d.setHours(hour, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Midnight at the start of the local week (Monday) `ts` falls in. */
+function startOfWeek(ts: number): number {
+  // getDay(): 0 = Sunday. Monday-based, so Sunday is six days into its week.
+  const dow = (new Date(startOfDay(ts)).getDay() + 6) % 7;
+  return addDays(ts, -dow);
+}
+
+function startOfMonth(ts: number): number {
+  const d = new Date(ts);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Local midnight `months` calendar months from the month `ts` falls in. */
+function addMonths(ts: number, months: number): number {
+  const d = new Date(startOfMonth(ts));
+  d.setMonth(d.getMonth() + months);
+  return d.getTime();
+}
+
+/**
+ * The "when" in a spoken ask, if it has one.
+ *
+ * ORDER IS THE WHOLE IMPLEMENTATION. "Last week" has to be read before
+ * "week", and "yesterday" before "day", or a longer phrase loses to a
+ * fragment of itself. Everything here is a whole-word match so "todays" and
+ * "sunday" cannot be found inside another word.
+ *
+ * Weekday names resolve to the most recent occurrence AT OR BEFORE today, so
+ * "what we said Tuesday", spoken on a Tuesday, is this morning's meeting
+ * rather than one seven days back. Nothing here reaches into the future: a
+ * meeting that has not happened has no notes to pull in.
+ */
+export function parseRecency(query: string, now: number): RecencyWindow | null {
+  const q = query.toLowerCase();
+  const has = (re: RegExp): boolean => re.test(q);
+
+  // "The last one" — an open window whose answer is simply the newest
+  // meeting. Named first because "the last meeting" also contains no date.
+  if (has(/\b(?:last|previous|other|earlier)\s+(?:meeting|huddle|call|session|time|day)\b/)) {
+    return { from: 0, to: now, label: 'the last meeting' };
+  }
+  if (has(/\blast time\b/)) return { from: 0, to: now, label: 'the last meeting' };
+
+  if (has(/\blast week\b/)) {
+    const thisWeek = startOfWeek(now);
+    return { from: addDays(thisWeek, -7), to: thisWeek, label: 'last week' };
+  }
+  if (has(/\bthis week\b/)) return { from: startOfWeek(now), to: now, label: 'this week' };
+  if (has(/\blast month\b/)) {
+    const thisMonth = startOfMonth(now);
+    return { from: addMonths(thisMonth, -1), to: thisMonth, label: 'last month' };
+  }
+  if (has(/\byesterday\b/)) {
+    return { from: addDays(now, -1), to: startOfDay(now), label: 'yesterday' };
+  }
+  // Each part of the day is its OWN window, because the resolver takes the
+  // newest meeting inside one. Folded into a single "today" they would all
+  // answer with the latest meeting of the day, so "what did we say this
+  // morning", asked after lunch, would hand back the lunch meeting.
+  if (has(/\bthis morning\b/)) {
+    return { from: startOfDay(now), to: atHour(now, 12), label: 'this morning' };
+  }
+  if (has(/\bthis afternoon\b/)) {
+    return { from: atHour(now, 12), to: atHour(now, 17), label: 'this afternoon' };
+  }
+  if (has(/\bthis evening\b/) || has(/\btonight\b/)) {
+    return { from: atHour(now, 17), to: addDays(now, 1), label: 'this evening' };
+  }
+  if (has(/\btoday\b/)) return { from: startOfDay(now), to: now, label: 'today' };
+
+  for (let i = 0; i < WEEKDAYS.length; i++) {
+    const name = WEEKDAYS[i];
+    if (name === undefined || !has(new RegExp(`\\b${name}\\b`))) continue;
+    const back = (new Date(startOfDay(now)).getDay() - i + 7) % 7;
+    const day = addDays(now, -back);
+    return { from: day, to: addDays(day, 1), label: name[0]?.toUpperCase() + name.slice(1) };
+  }
+  return null;
+}
+
+/**
+ * What a lookup ask points at, or nothing.
+ *
+ * Titles first, across docs AND rows in one pool, so the matcher's own
+ * "the DOC about x" / "the TICKET about x" kind word can narrow it — that is
+ * `spokenKind`, and it only works when both kinds are in the pool it sees.
+ *
+ * An AMBIGUOUS title match falls through to the recency path rather than
+ * failing outright: two docs whose titles score alike are exactly the case a
+ * spoken "last week" was there to separate, and the fall-through is the only
+ * thing that lets it.
+ */
+export function resolveLookup(
+  query: string,
+  pool: { docs: readonly LookupDoc[]; tasks: readonly LookupTask[] },
+  now: number,
+): LookupHit | null {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  const candidates: TitleCandidate[] = [
+    ...pool.docs.map((d) => ({ id: d.docId, kind: 'doc' as const, title: d.title })),
+    ...pool.tasks.map((t) => ({ id: t.id, kind: 'task' as const, title: t.title })),
+  ];
+  if (candidates.length > 0) {
+    const res = resolveByTitle(trimmed, candidates);
+    if (res.kind === 'hit') {
+      const { id, kind, title } = res.match;
+      if (kind === 'doc') {
+        const doc = pool.docs.find((d) => d.docId === id);
+        return {
+          kind: 'doc',
+          docId: id,
+          title,
+          via: 'title',
+          ...(doc?.meetingAt !== undefined ? { meetingAt: doc.meetingAt } : {}),
+        };
+      }
+      if (kind === 'task') return { kind: 'task', taskId: id, title, via: 'title' };
+    }
+  }
+
+  const when = parseRecency(trimmed, now);
+  if (!when) return null;
+  let best: LookupDoc | undefined;
+  for (const doc of pool.docs) {
+    if (doc.meetingAt === undefined) continue;
+    if (doc.meetingAt < when.from || doc.meetingAt >= when.to) continue;
+    if (!best || doc.meetingAt > (best.meetingAt ?? 0)) best = doc;
+  }
+  if (!best) return null;
+  return {
+    kind: 'doc',
+    docId: best.docId,
+    title: best.title,
+    via: 'recency',
+    ...(best.meetingAt !== undefined ? { meetingAt: best.meetingAt } : {}),
+  };
+}
+
+/**
+ * The board deep link `parseWorkspaceLink` reads back as `kind: 'doc'` —
+ * root-relative, the same shape and for the same reason as `taskCaptureUrl`:
+ * it survives being read under any host the server has.
+ */
+export function docLookupUrl(workspaceId: string, docId: string): string {
+  return `/workspaces/${encodeURIComponent(workspaceId)}/docs/${encodeURIComponent(docId)}`;
+}
+
+/**
+ * Everything the board can offer a lookup, assembled from the three narrow
+ * questions the server can answer: which docs a board holds, what each is
+ * called, and when each last carried a meeting.
+ *
+ * A function rather than four lines inside `createServer` because every rule
+ * in it is a judgement worth a test — the doc the meeting is IN is not
+ * material anybody can ask to have pulled in, a doc with no title has
+ * nothing to match on and nothing to show in a link, and an unreadable
+ * meeting index costs that doc its "when" rather than costing the whole
+ * lookup its answer.
+ */
+export interface BoardLookupSources {
+  /** The docs filed on this board, or undefined when there is no such board. */
+  docIds(workspaceId: string): readonly string[] | undefined;
+  docTitle(docId: string): string | undefined;
+  /** When this doc last carried a meeting. May throw; a throw is tolerated. */
+  lastMeetingAt(docId: string): number | undefined;
+}
+
+/**
+ * The cap. A lookup ask is rare — it runs only on a tick that carried one —
+ * and each doc costs a small index read, so this is generous rather than
+ * tuned: it exists so a board that has accumulated hundreds of docs cannot
+ * turn one spoken sentence into hundreds of stats.
+ */
+export const MAX_LOOKUP_DOCS = 200;
+
+export function boardLookupDocs(
+  sources: BoardLookupSources,
+  workspaceId: string,
+  exceptDocId: string,
+): LookupDoc[] {
+  const docIds = sources.docIds(workspaceId);
+  if (!docIds) return [];
+  const out: LookupDoc[] = [];
+  for (const docId of docIds) {
+    if (out.length >= MAX_LOOKUP_DOCS) break;
+    if (docId === exceptDocId) continue;
+    const title = sources.docTitle(docId);
+    if (!title) continue;
+    let meetingAt: number | undefined;
+    try {
+      meetingAt = sources.lastMeetingAt(docId);
+    } catch {
+      // Matchable by title still; just not by when.
+    }
+    out.push({ docId, title, ...(meetingAt !== undefined ? { meetingAt } : {}) });
+  }
+  return out;
+}
+
+/**
+ * How the notes may say WHEN a linked meeting was — the speaker's own frame
+ * when they gave one ("last week"), and a plain date when the doc was found
+ * by name instead. A doc that never carried a meeting says nothing: it is a
+ * document, and dating it would invent a meeting.
+ */
+export function lookupWhen(hit: LookupHit, spoken: RecencyWindow | null): string | undefined {
+  if (hit.kind !== 'doc' || hit.meetingAt === undefined) return undefined;
+  if (hit.via === 'recency' && spoken) return spoken.label;
+  const d = new Date(hit.meetingAt);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

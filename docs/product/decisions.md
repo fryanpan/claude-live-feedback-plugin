@@ -653,3 +653,51 @@ composer and extractor with real usage fields and `count_tokens`; notes
 plateaued at 1136 chars, board of 40 rows. Transcription is $0.27 per
 meeting-hour with speaker labels, so these passes are already three times the
 meeting's transcription bill.
+
+## 2026-08-31 — Research by voice confirms on the board, not in the terminal
+
+Two intents were added to the capture call — a research ask ("go look into
+that") and a lookup ask ("pull in last week's notes"). The lookup only reads,
+so it needed nothing new. The research ask spends: an agent goes away and
+burns tokens on a report, so it must be confirmed. The question was where the
+confirmation lives.
+
+**It is a decision review item on a row filed into triage** — chosen over a
+pending line in the meeting notes, and over a terminal question. Two reasons,
+both of them about enforcement rather than politeness:
+
+- **The gate already exists and is not a promise.** An open review item makes
+  `ready-gate.ts` report `awaiting-answer`, and the row is filed at `triage`,
+  which dispatch does not work. So nothing picks it up until it is answered,
+  whatever any prompt says. A pending line in the notes has no such property:
+  it asks the next agent to be careful.
+- **The answer path already exists.** `decision.answered` wakes the board's
+  lead through `ReadyWorkNudger.reviewAnswered`; a notes-only pending state
+  would need a new watcher, and a terminal question only exists while somebody
+  is watching a terminal.
+
+**One thing this originally got wrong, kept here because it is the useful
+part.** The first version of this entry said the row was filed with no goal
+*on purpose*, because a band would make it dispatchable. `createTask` reads
+`opts.goal ?? CHORES_GOAL_ID`, so an omitted goal becomes the chores band
+regardless — the claim was false, and only an integration test against a real
+`TaskStore` (rather than the recorder the rest of the suite uses) found it.
+The row not being banded is not a safety property; the `triage` status and
+the open item are. Worth remembering the next time a design leans on what a
+caller *omits*.
+
+**Measured cost** (`scripts/intent-prompt-cost.ts`, `count_tokens` on the
+capture model): the capture system prompt goes 482 → 630 → 716 input tokens —
++148 for research, +86 for lookup, **+234 per tick**, ≈ $0.047 per
+meeting-hour at ~200 ticks, taking $0.84 to about $0.89. That is roughly twice
+the ~58-tokens-per-intent figure the 2026-08-30 decision priced an intent at,
+because both rules carry the example phrasings that teach an ask nobody states
+explicitly. The decision's conclusion is unchanged and its margin is large: as
+five separate always-on passes these two would have cost seven to twenty-seven
+times more.
+
+**What would change it:** a "not now" answer currently leaves the row in
+triage for a person to archive. If declined research rows accumulate visibly,
+react to `decision.answered` and archive the row on the `not-now` option —
+deliberately not built now, because an auto-archive on a mis-read answer is
+the harder thing to undo.

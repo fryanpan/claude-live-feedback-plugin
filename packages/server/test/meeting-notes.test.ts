@@ -871,9 +871,9 @@ describe('task capture riding the notes session', () => {
         quietMs: 1000,
         schedule,
         onNotes: () => {},
-        captureTasks: (input) => {
+        captureIntents: (input) => {
           captured.push({ docId: input.docId, turns: input.turns.map((t) => t.text) });
-          return Promise.resolve([]);
+          return Promise.resolve({ tasks: [], docs: [] });
         },
       },
       ids,
@@ -898,12 +898,12 @@ describe('task capture riding the notes session', () => {
         quietMs: 1000,
         schedule,
         onNotes: () => {},
-        captureTasks: (input) => {
+        captureIntents: (input) => {
           passes.push({
             turns: input.turns.map((t) => `${t.speaker ?? '?'}: ${t.text}`),
             prior: input.priorTurns.map((t) => `${t.speaker ?? '?'}: ${t.text}`),
           });
-          return Promise.resolve([]);
+          return Promise.resolve({ tasks: [], docs: [] });
         },
       },
       ids,
@@ -951,12 +951,21 @@ describe('task capture riding the notes session', () => {
         schedule,
         onNotes: (u) => updates.push(u),
         onError: (m) => errors.push(m),
-        captureTasks: () => {
+        captureIntents: () => {
           calls++;
           if (calls === 1) {
-            return Promise.resolve([
-              { title: 'Strip overlaps navbar', url: '/workspaces/w-b?task=t-9', status: 'todo' },
-            ]);
+            return Promise.resolve({
+              tasks: [
+                { title: 'Strip overlaps navbar', url: '/workspaces/w-b?task=t-9', status: 'todo' },
+              ],
+              docs: [
+                {
+                  title: 'Huddle 2026-08-24 14:05',
+                  url: '/workspaces/w-b/docs/d-h',
+                  when: 'last week',
+                },
+              ],
+            });
           }
           return Promise.reject(new Error('capture refused'));
         },
@@ -972,9 +981,13 @@ describe('task capture riding the notes session', () => {
     expect(inputs[0]?.taskLinks).toEqual([
       { title: 'Strip overlaps navbar', url: '/workspaces/w-b?task=t-9', status: 'todo' },
     ]);
+    expect(inputs[0]?.docLinks).toEqual([
+      { title: 'Huddle 2026-08-24 14:05', url: '/workspaces/w-b/docs/d-h', when: 'last week' },
+    ]);
     // Tick 2's capture failed: the notes still composed, linkless, and the
     // failure was reported rather than swallowed.
     expect(inputs[1]?.taskLinks).toBeUndefined();
+    expect(inputs[1]?.docLinks).toBeUndefined();
     expect(updates.map((u) => u.notes)).toEqual(['notes 1', 'notes 2']);
     expect(errors).toEqual(['capture refused']);
   });
