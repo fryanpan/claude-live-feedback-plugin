@@ -3,6 +3,22 @@ import { STATUS_COLORS } from '@feedback/core';
 /**
  * Styles for the shadow-DOM portion of the widget.
  * Kept as a TS string so the build can tree-shake it into the bundle.
+ *
+ * Comments inside the template literal SHIP — the minifier cannot strip
+ * them — and the bundle budget is hard, so the longer notes live here:
+ *
+ * - 44px touch floor (.icon-btn and the shared pill-button block): these are
+ *   the controls a phone reviewer aims at. Unconditional rather than wrapped
+ *   in a phone media query on purpose — a media query changes WHEN a rule
+ *   applies, never how strongly, so a floor stated there loses to any
+ *   equal-specificity rule later in this file. A floor that only ever grows
+ *   a target is safe to state once, for every pointer. Asserted by
+ *   tap-targets.test.ts.
+ * - .auth-required: shown when the workspace refuses an unsigned comment.
+ *   Same 44px target as the sign-in button — same action, after the fact.
+ * - .thread .last: full summary line even on a narrow panel — wrap instead
+ *   of ellipsizing, same rule as the markdown-app card lines; length is
+ *   bounded upstream.
  */
 export const widgetStyles = `
 :host { all: initial; --lf-vv-bottom: 0px; }
@@ -29,12 +45,48 @@ export const widgetStyles = `
 }
 .fab:hover { transform: scale(1.06); }
 .fab-icon { display:block; line-height: 1; }
-/* Closed shows the speech bubble; open swaps to a plain close glyph. The old
-   pencil rotated 45deg when open — a bubble tilted that way just looks broken,
-   so the swap replaces the rotation outright. */
+/* Mode ON swaps the bubble to a close glyph — the same button ends the mode. */
 .fab .fab-icon-close { display: none; font-size: 26px; }
 .fab.open .fab-icon-bubble { display: none; }
 .fab.open .fab-icon-close { display: block; }
+.fab.open { background: #1b1f23; }
+
+/* The thread list's way in, above the FAB. 44px floor. */
+.fab-list {
+  position: fixed;
+  right: max(20px, calc(env(safe-area-inset-right) + 2px));
+  bottom: calc(var(--lf-vv-bottom) + max(74px, calc(env(safe-area-inset-bottom) + 74px)));
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #fff;
+  color: #2e7dd7;
+  border: 1px solid #d1d5da;
+  cursor: pointer;
+  box-shadow: 0 3px 9px rgba(0,0,0,0.18);
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fab-list:hover { border-color: #2e7dd7; }
+.fab-list .count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 17px;
+  height: 17px;
+  border-radius: 99px;
+  background: ${STATUS_COLORS.open};
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+.fab-list .count[hidden] { display: none; }
 
 .panel {
   position: fixed;
@@ -72,12 +124,6 @@ export const widgetStyles = `
 .status-open, .status-open.status { background: #e8f5ed; color: ${STATUS_COLORS.resolved}; }
 .status-connecting { background: #fff5dc; color: #9a6700; }
 .status-closed { background: #ffe9e7; color: #a40e26; }
-/* Every button in the widget's chrome clears the 44px touch floor. These are
-   the controls a phone reviewer aims at, and they are unconditional rather
-   than wrapped in a phone media query on purpose: a media query changes WHEN
-   a rule applies, never how strongly, so a floor stated there loses to any
-   equal-specificity rule later in this file. A floor that only ever grows a
-   target is safe to state once, for every pointer. */
 .icon-btn {
   background: transparent;
   border: 0;
@@ -115,8 +161,6 @@ export const widgetStyles = `
   align-items: center;
 }
 .auth-signin:hover { border-color: #2e7dd7; color: #2e7dd7; }
-/* Shown when the workspace refuses an unsigned comment. Same 44px target as
-   the sign-in button — it is the same action, arriving after the fact. */
 .auth-required {
   font-size: 12px;
   color: #2e7dd7;
@@ -140,10 +184,10 @@ export const widgetStyles = `
 }
 .auth-signout:hover { color: #1b1f23; }
 .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
-.primary {
-  background: #2e7dd7;
-  color: #fff;
-  border: 1px solid #2e7dd7;
+/* Pill buttons share one block; only coloring differs below. */
+.primary, .cancel, .resolve, .reopen {
+  background: #fff;
+  border: 1px solid #d1d5da;
   border-radius: 6px;
   padding: 6px 12px;
   font-size: 12px;
@@ -154,33 +198,8 @@ export const widgetStyles = `
   align-items: center;
   justify-content: center;
 }
+.primary { background: #2e7dd7; color: #fff; border-color: #2e7dd7; }
 .primary:hover { filter: brightness(1.06); }
-.cancel {
-  background: #fff;
-  border: 1px solid #d1d5da;
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  min-width: 44px;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.resolve, .reopen {
-  background: #fff;
-  border: 1px solid #d1d5da;
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  min-width: 44px;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
 
 .panel-threads {
   padding: 6px;
@@ -246,8 +265,6 @@ export const widgetStyles = `
   max-height: 2em;
   overflow: hidden;
 }
-/* Full summary line even on a narrow panel: wrap instead of ellipsizing —
-   same rule as the markdown-app card lines; length is bounded upstream. */
 .thread .last { font-size: 12px; color: #1b1f23; overflow-wrap: anywhere; }
 .empty {
   padding: 16px 12px;
