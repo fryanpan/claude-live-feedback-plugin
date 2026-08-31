@@ -46,7 +46,12 @@ function fakeClient(docId: string): FakeClient {
 interface Harness {
   clients: FakeClient[];
   destroyed: number;
-  created: Array<{ parent: HTMLElement; ydoc: Y.Doc; extensions: unknown[] }>;
+  created: Array<{
+    parent: HTMLElement;
+    ydoc: Y.Doc;
+    extensions: unknown[];
+    editable: boolean | undefined;
+  }>;
   /** Resolve the pending chunk load. Nothing mounts until this is called —
    *  which is what makes the "a repaint arrives while the chunk is in
    *  flight" cases expressible at all. */
@@ -55,7 +60,7 @@ interface Harness {
   loads: number;
 }
 
-function harness(over: { withPlaceholder?: boolean } = {}) {
+function harness(over: { withPlaceholder?: boolean; canWrite?: boolean } = {}) {
   const h: Harness = {
     clients: [],
     destroyed: 0,
@@ -73,6 +78,7 @@ function harness(over: { withPlaceholder?: boolean } = {}) {
         parent: opts.parent,
         ydoc: opts.ydoc,
         extensions: opts.extraExtensions ?? [],
+        editable: opts.editable,
       });
       return {
         destroy: () => {
@@ -99,6 +105,7 @@ function harness(over: { withPlaceholder?: boolean } = {}) {
       });
     },
     user: { name: 'Jordan', color: '#2e7dd7' },
+    ...(over.canWrite === undefined ? {} : { canWrite: over.canWrite }),
   });
 
   h.land = async () => {
@@ -276,5 +283,40 @@ describe('createTaskBodyEditorHost', () => {
     expect(h.destroyed).toBe(1);
     expect(h.clients[0]?.closed).toBe(true);
     expect(vi.isMockFunction(host.sync)).toBe(false); // the real host, not a double
+  });
+});
+
+/**
+ * A description is prose over the yjs socket, which is exactly the shape of
+ * loss the write gate exists to stop: the server drops the update frames for
+ * a browser that has proven nobody and answers nothing, so an editable box
+ * would take the typing, show it, and lose it on reload with no 401 anywhere
+ * to catch it. The board awaits `/api/auth/session` before it renders, so the
+ * answer is in hand — the editor has to be built with it.
+ */
+describe('the description a signed-out reader gets', () => {
+  it('is built read-only, not built editable and locked afterwards', async () => {
+    const { host, h } = harness({ canWrite: false });
+    host.sync(target('t-1'), slot);
+    await h.land();
+
+    expect(h.created).toHaveLength(1);
+    expect(h.created[0]?.editable).toBe(false);
+  });
+
+  it('is editable for a browser the server accepts, and when nobody asked', async () => {
+    const yes = harness({ canWrite: true });
+    yes.host.sync(target('t-1'), slot);
+    await yes.h.land();
+    expect(yes.h.created[0]?.editable).toBe(true);
+
+    // Every caller that predates the gate passes nothing, and nothing means
+    // yes — the deployments with the gate off are all of them by default.
+    const other = document.createElement('div');
+    document.body.append(other);
+    const silent = harness();
+    silent.host.sync(target('t-2'), other);
+    await silent.h.land();
+    expect(silent.h.created[0]?.editable).toBe(true);
   });
 });

@@ -27,6 +27,11 @@ export interface RouterOpts {
   connectFor: (docId: string, docType: string) => FeedbackClient;
   /** The reviewer, resolved once by main() and passed to every mount. */
   user: User;
+  /** Whether the server will accept writes from this browser — resolved once
+   *  by main() (it awaits `/api/auth/session` before starting the router) and
+   *  passed to every mount, for the same reason `user` is: a surface that has
+   *  to ask for itself is a surface that is live while it asks. */
+  canWrite: boolean;
 }
 
 let opts: RouterOpts | null = null;
@@ -123,7 +128,14 @@ async function swap(docId: string): Promise<void> {
   // Registered FIRST → runs LAST on dispose, after the surface's teardown.
   scope.onCleanup(() => client.close());
 
-  const ctx: MountContext = { docId, scope, client, user: o.user, ...meta };
+  const ctx: MountContext = {
+    docId,
+    scope,
+    client,
+    user: o.user,
+    canWrite: o.canWrite,
+    ...meta,
+  };
   await o.mountFor(ctx);
   // A navigation that superseded us mid-mount already disposed this scope
   // (onCleanup then runs immediately), but dispose again to be certain.

@@ -254,6 +254,26 @@ button {
   color: #fff;
   border-color: var(--accent);
 }
+/* A control that cannot be used has to LOOK unusable. Same treatment as
+   `.comment-nav:disabled` above, hoisted to every icon button, because the
+   sign-in gate disables the edit and Suggesting toggles and they sat
+   pixel-identical to the live controls beside them. A `title` is not a
+   substitute: the primary device here is an iPad, where nothing hovers.
+   The `:hover` and pressed-state overrides are the point — without them a
+   disabled toggle still lights up under a pointer and a disabled
+   `aria-pressed` toggle still paints itself accent. */
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.icon-btn:disabled:hover {
+  background: var(--bg);
+}
+.icon-btn:disabled[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  border-color: var(--border);
+}
 /* In view mode, the editor is read-only — formatting commands are no-ops
    and the Aa toggle would just confuse. Hide it. The 💬 (threads) and
    ✏️ (edit-mode) buttons stay useful. */
@@ -1080,6 +1100,20 @@ body.hub-body {
 }
 .hub-btn:hover {
   background: var(--bg-hover);
+}
+/* Unusable has to look unusable — see `.icon-btn:disabled`. The `:hover`
+   override is the load-bearing half on a pointer device, and the reason this
+   is not left to a `title` is that the primary device here has no hover at
+   all. */
+.hub-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.hub-btn:disabled:hover {
+  background: var(--bg-panel);
+}
+.hub-btn-primary:disabled:hover {
+  background: var(--accent);
 }
 .hub-btn-primary {
   background: var(--accent);
@@ -9826,6 +9860,77 @@ a.signin-link {
     height: 50px;
     font-size: 20px;
   }
+}
+
+/* ---------- Sign-in required (a refused write, and the standing notice) ----
+   Lives in this section rather than a new banner at EOF: it is sign-in UI,
+   and it reuses the identity prompt's scrim/card wholesale — only the primary
+   action differs (an <a>, because it navigates). The bar is fixed to the
+   bottom so it never covers the top bar's controls, and it wraps rather than
+   scrolls at 430px. */
+.signin-required-go {
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.signin-required-go:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+/* An in-flow row, not an overlay. It used to be `position: fixed` under the
+   viewport top, offset by the doc topbar's measured height; on the board
+   there is no `#topbar` to measure, so it fell back to a constant and landed
+   on the action row, and at 430px on the doc it covered the H1 and the format
+   bar. A fixed box over a page covers something at some width — the fix is to
+   take space rather than to find a band that looks free. `mountSignInBar`
+   puts it under each surface's header. */
+.signin-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  /* Reads as chrome attached to the header above it, which is what it is. */
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+/* The doc shell declares its rows, so the row this bar occupies has to be
+   declared too — `#shell`'s `48px 1fr` has no track for a third child, and
+   without this the bar is laid into the topbar's 48px and clipped. */
+body.signin-gated #shell {
+  grid-template-rows: auto 48px 1fr;
+}
+/* Fallback for a surface with no header to sit under (see mountSignInBar).
+   Bottom-docked, because the top of an unknown page is the band most likely
+   to already be spoken for. */
+.signin-bar--floating {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(12px + var(--safe-bottom, 0px));
+  z-index: 900;
+  max-width: min(560px, calc(100vw - 24px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.signin-bar a {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.signin-bar a:hover,
+.signin-bar a:focus-visible {
+  text-decoration: underline;
 }
 
 /* ================= FIRST-ARRIVAL IDENTITY PROMPT ================= */

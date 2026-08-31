@@ -284,3 +284,105 @@ describe('a stored token is validated on load', () => {
     expect(el.shadowRoot!.querySelector('.auth-signout')).toBeNull();
   });
 });
+
+describe('a write the workspace refuses for want of a session', () => {
+  /** What the server answers an unsigned write with — see
+   *  server/src/middleware/write-gate.ts. */
+  const refuse = () =>
+    new Response(JSON.stringify({ error: 'sign_in_required', signInUrl: '/signin' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  it('does NOT retry anonymously — the retry gets the identical refusal', async () => {
+    // The dead-token path clears the token and posts again, which is right
+    // for a dead token and a loop for this: nothing about being anonymous
+    // makes the second attempt acceptable, and every caller ignores the
+    // response, so the comment simply vanished.
+    const mod = await importWidget();
+    fetchResponder = (url) => (url.includes('/threads') ? refuse() : new Response('{}'));
+    const el = mod.FeedbackWidget.init({ docId: 'doc-refused' });
+    await flush();
+    fetchCalls = [];
+    // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
+    const posted = await (el as any).postReply('t-1', 'hello');
+    expect(fetchCalls.filter((c) => c.url.includes('/threads')).length).toBe(1);
+    expect(posted).toBe(false);
+  });
+
+  it('tells the person, and keeps the way forward clickable rather than opening it', async () => {
+    // Popup blockers: this runs after awaiting a failed request and parsing
+    // its body, so the submit click's transient activation is long gone and
+    // a `window.open` here would be silently refused.
+    const mod = await importWidget();
+    const opened: string[] = [];
+    (window as unknown as { open: unknown }).open = (url: string) => {
+      opened.push(String(url));
+      return {} as Window;
+    };
+    fetchResponder = (url) => (url.includes('/threads') ? refuse() : new Response('{}'));
+    const el = mod.FeedbackWidget.init({ docId: 'doc-refused-ui', authOffer: true });
+    await flush();
+    // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
+    await (el as any).postReply('t-1', 'hello');
+    expect(opened.length).toBe(0);
+    const control = el.shadowRoot!.querySelector('.auth-required') as HTMLElement;
+    expect(control).toBeTruthy();
+    expect(control.textContent).toContain('Sign in');
+    // …and clicking it — which DOES carry an activation — starts the handshake.
+    control.click();
+    expect(opened.length).toBe(1);
+    expect(new URL(opened[0] as string).pathname).toBe('/widget-auth');
+  });
+
+  it('links to the workspace sign-in page on an embed with no popup offer', async () => {
+    const mod = await importWidget();
+    fetchResponder = (url) => (url.includes('/threads') ? refuse() : new Response('{}'));
+    const el = mod.FeedbackWidget.init({ docId: 'doc-refused-link' });
+    await flush();
+    // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
+    await (el as any).postReply('t-1', 'hello');
+    const link = el.shadowRoot!.querySelector('a.auth-required') as HTMLAnchorElement;
+    expect(link).toBeTruthy();
+    expect(new URL(link.href).pathname).toBe('/signin');
+  });
+
+  it('a dead TOKEN still clears and retries — the other 401 is unchanged', async () => {
+    // The positive control for the branch above: the same status code, a
+    // different body, and the old behaviour has to survive intact.
+    localStorage.setItem('cfw:authToken', 'wt1.stored-token');
+    localStorage.setItem(
+      'cfw:authUser',
+      JSON.stringify({ id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' }),
+    );
+    const mod = await importWidget();
+    let threadPosts = 0;
+    fetchResponder = (url) => {
+      if (url.includes('/api/auth/widget-session')) {
+        return new Response(
+          JSON.stringify({
+            authenticated: true,
+            user: { id: 'user-abc', name: 'Reviewer', kind: 'known', color: '#2e7dd7' },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url.includes('/threads')) {
+        threadPosts += 1;
+        return threadPosts === 1
+          ? new Response(JSON.stringify({ error: 'widget_token_invalid' }), { status: 401 })
+          : new Response(JSON.stringify({ ok: true }), {
+              headers: { 'content-type': 'application/json' },
+            });
+      }
+      return new Response('{}');
+    };
+    const el = mod.FeedbackWidget.init({ docId: 'doc-dead-token', authOffer: true });
+    await flush();
+    // biome-ignore lint/suspicious/noExplicitAny: reaching into a private for the test
+    const posted = await (el as any).postReply('t-1', 'hello');
+    expect(threadPosts).toBe(2);
+    expect(posted).toBe(true);
+    expect(localStorage.getItem('cfw:authToken')).toBeNull();
+  });
+});
