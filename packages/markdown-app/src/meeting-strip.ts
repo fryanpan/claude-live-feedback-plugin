@@ -30,6 +30,7 @@ import {
   MEETING_AUDIO_ENCODING,
   MEETING_SAMPLE_RATE,
   type MeetingServerMessage,
+  type MeetingTimingMark,
   type MeetingUnavailableReason,
   meetingSocketPath,
   parseCaptureMode,
@@ -40,6 +41,7 @@ import {
   type MeetingCaptureStart,
   startMeetingCapture,
 } from './meeting-audio.ts';
+import { type TimingSession, createTimingSession } from './meeting-timing-client.ts';
 
 /**
  * How many turns stay on the strip. Three is what fits the phone's two wrapped
@@ -113,6 +115,34 @@ export function formatElapsed(ms: number): string {
   return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
 }
 
+/**
+ * The optional timing block, all-or-nothing.
+ *
+ * A partial block would produce a sample with a leg computed from a missing
+ * number, which is worse than no sample: it would land in the percentiles
+ * looking like a measurement. Absent on every ordinary meeting.
+ */
+export function parseTimingMark(raw: unknown): MeetingTimingMark | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const t = raw as Record<string, unknown>;
+  const keys = [
+    'seq',
+    'audioEndMs',
+    'chunkAudioEndMs',
+    'recvMs',
+    'fwdMs',
+    'engineMs',
+    'sendMs',
+  ] as const;
+  const out = {} as Record<(typeof keys)[number], number>;
+  for (const key of keys) {
+    const v = t[key];
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+    out[key] = v;
+  }
+  return out;
+}
+
 /** Parse a server frame, returning null for anything malformed. */
 export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | null {
   if (typeof raw !== 'string') return null;
@@ -148,15 +178,30 @@ export function parseMeetingServerMessage(raw: unknown): MeetingServerMessage | 
       }
       return { type: 'unavailable', reason, message: str(m.message) };
     }
-    case 'transcript':
+    case 'transcript': {
       if (typeof m.turn !== 'number' || typeof m.text !== 'string') return null;
+      const timing = parseTimingMark(m.timing);
       return {
         type: 'transcript',
         turn: m.turn,
         text: m.text,
         final: m.final === true,
         ...(typeof m.speaker === 'string' && m.speaker ? { speaker: m.speaker } : {}),
+        ...(timing ? { timing } : {}),
       };
+    }
+    case 'timing_pong': {
+      const num = (v: unknown): number | null =>
+        typeof v === 'number' && Number.isFinite(v) ? v : null;
+      const id = num(m.id);
+      const clientMs = num(m.clientMs);
+      const serverRecvMs = num(m.serverRecvMs);
+      const serverSendMs = num(m.serverSendMs);
+      if (id === null || clientMs === null || serverRecvMs === null || serverSendMs === null) {
+        return null;
+      }
+      return { type: 'timing_pong', id, clientMs, serverRecvMs, serverSendMs };
+    }
     case 'stopped':
       return {
         type: 'stopped',
@@ -230,6 +275,13 @@ export interface MeetingStripOpts {
    * typed once per voice per meeting.
    */
   promptName?: (current: string) => string | null;
+  /**
+   * Measure this meeting and show the running numbers (`?timing=1`). Off on
+   * every ordinary load: nothing is constructed, no clock is read per audio
+   * frame, and the `start` frame is byte-for-byte what it was. See
+   * `meeting-timing-client.ts`.
+   */
+  timing?: boolean;
 }
 
 /**
@@ -332,8 +384,20 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
   line.className = 'meeting-caption-line';
   caption.append(line);
 
+  /**
+   * Built only for a measured meeting. The readout is a THIRD child rather
+   * than another item on the strip's one line: at 1180px the bar is 40px with
+   * the caption already claiming the middle, and at 430px the panel is two
+   * wrapped lines above the home indicator. A row of its own, present only
+   * under the flag, cannot crowd either.
+   */
+  const timing: TimingSession | null = opts.timing
+    ? createTimingSession({ now, send: (json) => socket?.send(json) })
+    : null;
+
   root.classList.add('meeting-strip');
-  root.replaceChildren(strip, caption);
+  root.classList.toggle('has-timing', timing !== null);
+  root.replaceChildren(...(timing ? [strip, caption, timing.element] : [strip, caption]));
   root.hidden = false;
 
   let state: StripState = { kind: 'idle' };
@@ -586,7 +650,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     sock.close();
   }
 
-  function handle(msg: MeetingServerMessage | null): void {
+  function handle(msg: MeetingServerMessage | null, recvMs: number): void {
     if (!msg) return;
     switch (msg.type) {
       case 'ready':
@@ -598,6 +662,9 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
         setState({ kind: 'recording', startedAt: now() });
         break;
       case 'transcript':
+        // Noted before the render and closed after it, so the DOM leg is the
+        // strip's own work and nothing else.
+        timing?.frameReceived(msg, recvMs);
         turns = rollTranscript(turns, {
           turn: msg.turn,
           text: msg.text,
@@ -605,6 +672,10 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           ...(msg.speaker !== undefined ? { speaker: msg.speaker } : {}),
         });
         renderCaption();
+        timing?.domUpdated();
+        break;
+      case 'timing_pong':
+        timing?.onPong(msg, recvMs);
         break;
       case 'unavailable':
         // The words are never coming, so the mic goes back rather than sitting
@@ -635,7 +706,11 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
     setState({ kind: 'requesting' });
     const started = await startCapture({
       onFrame: (pcm) => {
-        if (socketOpen) socket?.send(pcm);
+        if (!socketOpen) return;
+        socket?.send(pcm);
+        // Counted only when it actually goes out, so this ordinal is the same
+        // ordinal the server's ledger gives the chunk it receives.
+        timing?.frameSent();
       },
     });
     if (disposed || attempt !== generation) {
@@ -662,10 +737,19 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
           sampleRate: MEETING_SAMPLE_RATE,
           encoding: MEETING_AUDIO_ENCODING,
           mode,
+          ...(timing ? { timing: true } : {}),
         }),
       );
+      // After the start frame: the server reads the flag off it, and a ping
+      // that overtook it would be answered by a connection not yet measuring.
+      timing?.begin();
     };
-    sock.onmessage = (ev) => handle(parseMeetingServerMessage(ev.data));
+    sock.onmessage = (ev) => {
+      // The receive mark comes before the parse — the downlink ends when the
+      // bytes land, not when we have finished reading them.
+      const at = now();
+      handle(parseMeetingServerMessage(ev.data), at);
+    };
     sock.onclose = () => {
       socketOpen = false;
       releaseAudio();
@@ -707,6 +791,7 @@ export function mountMeetingStrip(opts: MeetingStripOpts): MeetingStripHandle {
       generation += 1;
       toggle.removeEventListener('click', onToggle);
       modeToggle.removeEventListener('click', onModeToggle);
+      timing?.destroy();
       releaseAudio();
       closeSocket();
       stopClock?.();

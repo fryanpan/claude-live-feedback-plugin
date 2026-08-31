@@ -20,6 +20,7 @@ import { ensureUserIdentity } from './identity-prompt.ts';
 import { wireKeyboardInset } from './keyboard-inset.ts';
 import { mountMeetingBotRow } from './meeting-bot-row.ts';
 import { mountMeetingStrip } from './meeting-strip.ts';
+import { wantsLatencyTiming } from './meeting-timing-client.ts';
 import type { MountContext } from './mount-context.ts';
 import type { MountScope } from './mount-scope.ts';
 import { startReadingTracker } from './reading-tracker.ts';
@@ -342,6 +343,10 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
         withoutHuddleStart(location.pathname + location.search + location.hash),
       );
     }
+    // `?timing=1` measures this meeting's stage latencies and shows the
+    // running numbers. Left in the address on purpose, unlike the huddle
+    // flag: a reload should keep measuring, and it opens no mic by itself —
+    // which is also why it is read after the huddle flag has been stripped.
     const strip = mountMeetingStrip({
       docId,
       root: meetingStripEl,
@@ -350,6 +355,7 @@ async function mountMarkdown(ctx: MountContext): Promise<void> {
       // fact, read from `location.search` there too, so both come off the
       // same address; see `huddleCaptureMode`.
       mode: huddleMode,
+      timing: wantsLatencyTiming(location.search),
     });
     scope.onCleanup(() => strip.destroy());
     // A sibling of the strip, not part of it: a bot has its own lifecycle and
