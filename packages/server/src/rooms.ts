@@ -1776,6 +1776,35 @@ export class Rooms {
   }
 
   /**
+   * A doc's body as markdown, WITHOUT making it resident — the read the ref
+   * backfill sweeps every doc with. A resident room is serialized in place;
+   * a non-resident one is hydrated, read, and evicted straight back out
+   * (the `indexUnindexedDocs` idiom: reading a body is not somebody opening
+   * the doc, and a sweep that left every doc resident would be a boot-cost
+   * regression). Null for a doc that does not exist or cannot load.
+   */
+  readMarkdownBody(docId: string): string | null {
+    const target = this.resolveDocId(docId);
+    const serialize = (room: DocRoom): string =>
+      contentKind(room.meta.type) === 'flat'
+        ? room.ydoc.getText('content').toString()
+        : prose.serializeFragmentToMarkdown(prose.getProseFragment(room.ydoc));
+    const resident = this.rooms.get(target);
+    if (resident) return serialize(resident);
+    if (!this.docExists(target)) return null;
+    try {
+      this.hydrateDoc(target);
+      const room = this.rooms.get(target);
+      return room ? serialize(room) : null;
+    } catch (err) {
+      console.error(`[rooms] failed to read ${target} for a body sweep:`, err);
+      return null;
+    } finally {
+      this.evictRoom(target);
+    }
+  }
+
+  /**
    * The doc-creation verb for CALLERS: they name the doc, the server decides
    * its id.
    *
