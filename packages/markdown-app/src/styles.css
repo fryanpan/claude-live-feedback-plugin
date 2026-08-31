@@ -6900,13 +6900,44 @@ body.is-reading-width #editor > .ProseMirror {
    and this button fills it. */
 .meeting-note-dismiss {
   font: inherit;
-  color: inherit;
+  /* NOT the strip's 12.5px, and not `--fg-muted`. Every other string here is
+     a readout, glanced at by the one person holding the device. This one is a
+     SCRIPT: somebody reads it out loud to a room, off an iPad at arm's
+     length, while people wait. It gets body size and body colour because it
+     is the only line in the strip with an audience. */
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--fg);
   background: none;
   border: 0;
   padding: 0;
   margin: 0;
   text-align: left;
   cursor: pointer;
+}
+/* And it needs somewhere to be that size. The caption is a fixed window —
+   1.45em here, 2.9em on a phone — measured against the strip's 12.5px, so a
+   16px sentence would be clipped by the very rule that keeps a rolling
+   transcript from growing the bar. While the announcement holds the line the
+   window is released; it closes again the moment a settled turn arrives or
+   the line is tapped away.
+
+   Keyed off `:has()` rather than a class because the button IS the state:
+   it exists only while the announcement is up, so there is nothing to keep
+   in sync. Base section on purpose — the media queries set the fixed
+   heights, and one rule at higher specificity beats both. */
+.meeting-caption:has(.meeting-note-dismiss) {
+  height: auto;
+}
+/* And the bar gives it the room, rather than clipping it at 40px. Measured:
+   one line of the sentence makes a 42px caption, and in the 721-900px band
+   where the bar is narrow it wraps to two and asks for 64. The editor pane's
+   third grid track is `auto` — the strip RESERVES its height instead of
+   covering the prose — so growing here shortens the editor by exactly this
+   much and gives it straight back. Transient by construction: the rule stops
+   applying the moment a settled turn arrives or the line is tapped away. */
+.meeting-strip:has(.meeting-note-dismiss) {
+  height: auto;
 }
 .meeting-toggle {
   flex: none;
