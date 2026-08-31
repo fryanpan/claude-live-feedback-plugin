@@ -340,6 +340,17 @@ flowchart LR
   API -.->|meeting.bot| SSE[Doc SSE channel]
 ```
 
+**Both callbacks come in on the operator's own hostname, and skip Access
+there.** `CW_PUBLIC_BASE_URL` names the tunnel address Recall dials, which is
+the hostname the host guard classifies `proxied-local` — a verified Cloudflare
+Access token before any route runs, which Recall's backend cannot present. So
+`GET /recall/<token>` and `POST /api/recall/status` are exempted from that one
+check, each only while its own credential is configured (the per-bot token,
+and `RECALL_WEBHOOK_SECRET` respectively); everything else on the hostname is
+unchanged, and every near-miss fails closed. See
+`packages/server/src/middleware/recall-callback-gate.ts` and the "operator's
+own hostname" section of docs/product/sharing.md.
+
 **What streams, and why not the audio.** Recall can forward raw per-participant
 PCM (`audio_separate_raw.data`, 16 kHz mono S16LE), which would drop straight
 into the existing engine seam. It is not what this uses. Instead Recall runs
